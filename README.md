@@ -15,6 +15,8 @@ Start here:
 - `docs/MODELING.md` – Wikibase modeling conventions
 - `ROADMAP.md` – phased build plan
 
-**Privacy:** this archive contains data about living people. The
-repository must remain private, and nothing is published or sent to
-third-party services without explicit instruction.
+**Privacy:** this repository contains only infrastructure, tooling,
+and documentation — no family records or personal data. Deployments
+built from it, however, handle data about living people: nothing in a
+deployment is published or sent to third-party services without
+explicit instruction.
