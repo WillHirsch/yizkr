@@ -49,6 +49,18 @@ The pipeline's claim JSON contract implementing this pattern is
 ranks are unrepresentable, and property/item references use manifest
 keys resolved to local ids only at write time.
 
+## Artifacts and registration
+
+- W1: media are wiki files on the instance; the artifact item points at
+  its file page via the `media file` (string) property (ADR-0004).
+- Registrar statements (`instance of`, `media file`, a fragment's
+  `part of` + page qualifier) are referenced `stated in -> the artifact
+  item itself`: an artifact asserts its own kind and composition by
+  existing. Extraction-run items use the same convention for their
+  `instance of`. Rule 1 therefore holds for every registrar/writer path.
+- Machine-proposed entities (people, places) get their `instance of`
+  statement referenced to the artifact that mentions them.
+
 ## Uncertainty and time
 
 - Use Wikibase time precision (year / month / day / decade / century).

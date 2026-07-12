@@ -1,4 +1,8 @@
-# Dependencies for ingest.claims and its tests
+# Dependencies for the ingest package and its tests
+wikibaseintegrator>=0.12,<0.13
 pydantic>=2.5
 PyYAML>=6.0
+requests>=2.31
 pytest>=8.0
+# Optional: external LLM engine (explicit opt-in — see ingest/llm.py)
+# anthropic>=0.40

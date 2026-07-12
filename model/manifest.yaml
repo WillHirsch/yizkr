@@ -231,6 +231,13 @@ properties:
     description: version-control commit hash of the pipeline software that performed the run
     datatype: string
 
+  # --- artifacts as wiki media (ADR-0004 W1) ---
+
+  media_file:
+    label: media file
+    description: title of the wiki file page (File:...) holding the digitised media of this artifact
+    datatype: string
+
 items:
   # --- core classes (docs/MODELING.md) ---
 

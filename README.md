@@ -7,7 +7,7 @@ the fragment of the source artifact that makes it – including when
 sources contradict each other.
 
 **Status:** Phase W1 in progress — infrastructure, model bootstrap,
-and claim schema done; ingestion skeleton next.
+claim schema, and ingestion skeleton done; face proposals next.
 
 Start here:
 - `CLAUDE.md` – standing instructions and non-negotiable rules
@@ -17,7 +17,8 @@ Start here:
 - `ROADMAP.md` – phased build plan
 - `deploy/` – Wikibase Suite deployment (Docker Compose + runbook)
 - `model/` – schema manifest and idempotent bootstrap script
-- `ingest/` – pipeline package (claim JSON contract so far)
+- `ingest/` – ingestion pipeline (register → transcribe → extract →
+  review → write) and the claim JSON contract
 
 **Privacy:** this repository contains only infrastructure, tooling,
 and documentation — no family records or personal data. Deployments

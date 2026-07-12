@@ -26,6 +26,7 @@ updated, and no path writes an unreferenced statement.
    transcription (LLM-vision first; HTR platform adapter stub),
    claim extractor (LLM → claim JSON), reviewer export (CSV for
    OpenRefine), and writer (claims → statements per ADR-0003).
+   *Done — see `ingest/` (plus a minimal exact-label resolve step).*
 5. **Face proposals (W1 minimal)** – detection script emitting
    candidate depicts rows into the same review CSV flow (ADR-0005).
 6. **Query library** – SPARQL queries checked in and embedded on wiki
