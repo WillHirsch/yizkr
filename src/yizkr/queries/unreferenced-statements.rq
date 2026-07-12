@@ -1,5 +1,5 @@
-# QC report: statements without any reference. Rule 1 says every statement
-# carries a reference to the artifact asserting it (ADR-0003 §3), so this
+# QC report: statements without any reference. Every statement must carry
+# a reference to the artifact asserting it (ADR-0003 §3), so this
 # report treats every row as a DEFECT to fix. Expected result: empty.
 SELECT ?entity ?entityLabel ?propertyLabel ?statement
 WHERE {

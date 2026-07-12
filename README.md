@@ -11,7 +11,7 @@ claim schema, ingestion skeleton, face proposals, and query library
 done; backup/export next.
 
 Start here:
-- `CLAUDE.md` – standing instructions and non-negotiable rules
+- `CLAUDE.md` – standing instructions for AI-assisted development
 - `docs/REQUIREMENTS.md` – the six requirements (acceptance criteria)
 - `docs/adr/` – architecture decisions and their rationale
 - `docs/MODELING.md` – Wikibase modeling conventions

@@ -1,6 +1,6 @@
 # Roadmap
 
-Tasks are sized for a single focused Claude Code session. Definition
+Tasks are sized for a single focused working session. Definition
 of done for every task: runnable, tested where applicable, docs
 updated, and no path writes an unreferenced statement.
 

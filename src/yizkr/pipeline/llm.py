@@ -1,6 +1,6 @@
 """Pluggable LLM client protocol for transcription and extraction.
 
-PRIVACY (CLAUDE.md rule 7): configuring an external client sends
+PRIVACY: configuring an external client sends
 artifact content — which may describe living people — to that
 provider. Nothing here talks to any service unless explicitly
 configured; there is no default client. The pipeline runs end-to-end
@@ -8,7 +8,8 @@ without one (text-file transcription + prepared claim files).
 
 To use Anthropic's API: install the `anthropic` package, set
 ANTHROPIC_API_KEY, and pass ``--engine llm`` to the CLI. Configuring
-the key IS the explicit instruction rule 7 requires.
+the key IS the explicit instruction the privacy principle requires
+(no personal data to third-party services otherwise; see the README).
 """
 
 from __future__ import annotations
@@ -44,8 +45,9 @@ class AnthropicClient:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise RuntimeError(
                 "ANTHROPIC_API_KEY is not set. Setting it is the explicit "
-                "opt-in required before artifact content leaves this system "
-                "(CLAUDE.md rule 7)."
+                "opt-in required before artifact content leaves this "
+                "system (privacy first: nothing goes to third-party "
+                "services without explicit instruction)."
             )
         self._client = anthropic.Anthropic()
         self.model_identifier = model or os.environ.get(

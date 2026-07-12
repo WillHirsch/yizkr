@@ -27,10 +27,11 @@ uv run yizkr publish-queries             # or: make publish-queries
   source. Rows here are a healthy resting state (ADR-0002), not errors.
 - **person-timeline** — every dated assertion about each person
   (statements, dated qualifiers such as a marriage's point in time, and
-  events participated in), plural-by-default with sources (rule 6).
+  events participated in), plural-by-default with sources (R6).
 - **places-map** — coordinates + what connects to each place; renders
   as a map view in the query UI.
-- **unreferenced-statements** — QC report; every row is a rule-1 defect
+- **unreferenced-statements** — QC report; every row is a
+  missing-reference defect
   (ADR-0003 §3). Expected result: empty.
 - **artifact-assertions** — inventory of everything each artifact
   asserts, for source re-examination.

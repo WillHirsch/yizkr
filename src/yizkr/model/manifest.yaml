@@ -20,7 +20,8 @@ mapping_page: "Project:Model mapping"
 
 # Item whose key is used as the `stated in` reference target for
 # schema-level statements (e.g. the subclass hierarchy below), satisfying
-# CLAUDE.md rule 1: the manifest itself is the source asserting them.
+# the reference requirement (ADR-0003): the manifest itself is the
+# source asserting them.
 schema_source_item: model_manifest
 
 properties:

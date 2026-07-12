@@ -1,5 +1,5 @@
 # Per-person timeline: every dated assertion about each person, with the
-# source that asserts it. Plural-by-default (rule 6): when sources disagree
+# source that asserts it. Plural-by-default (R6): when sources disagree
 # about a date, ALL attributed values appear as separate rows, labeled by
 # source — nothing is silently picked.
 # Covers: dated statements on the person (birth, death, ...), dated

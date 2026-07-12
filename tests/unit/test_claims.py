@@ -91,18 +91,18 @@ class TestBatchBasics:
             )
 
 
-class TestRuleEnforcement:
-    def test_rule1_source_is_required(self):
+class TestConventionEnforcement:
+    def test_source_is_required(self):
         claim = spouse_claim()
         del claim["source"]
         with pytest.raises(ValidationError, match="source"):
             batch(claim)
 
-    def test_rule1_source_artifact_is_required(self):
+    def test_source_artifact_is_required(self):
         with pytest.raises(ValidationError, match="artifact"):
             batch(spouse_claim(source={"page_number": "1"}))
 
-    def test_rule4_no_rank_field_exists(self):
+    def test_no_rank_field_exists(self):
         assert "rank" not in Claim.model_fields
         with pytest.raises(ValidationError):
             batch(spouse_claim(rank="preferred"))

@@ -48,7 +48,7 @@ against the live instance (run `model/bootstrap.py` first).
   `claim_id`, a content hash: sorting or filtering the sheet cannot
   mis-apply decisions, and edited claim content is detected loudly.
   **Only explicit `approve` decisions pass** — no decision means no
-  write (no auto-confirmation, CLAUDE.md).
+  write; human confirmation is part of the data flow (R3).
 - **write** — mints the extraction-run item, creates items for
   unresolved subjects (reusing exact-label matches), writes each claim
   at normal rank with two references: `stated in → artifact/fragment`
@@ -88,14 +88,14 @@ Every step exchanges `ClaimBatch` JSON. The non-negotiable rules are
 structural in the schema:
 
 - `source` (artifact + fragment locators) is a **required** field —
-  a referenceless claim cannot be represented (rule 1).
+  a referenceless claim cannot be represented (ADR-0003).
 - Batches carry `extraction_run` metadata for the second, process
-  reference (rule 2).
+  reference (ADR-0003).
 - There is **no rank field** — pipeline writes are always normal rank;
-  preferring is a curator act on the wiki (rule 4).
+  preferring is a curator act on the wiki (ADR-0002).
 - Time values carry explicit precision and calendar; ranges and
   "circa" are qualifiers, and inconsistent precision is rejected
-  rather than silently narrowed or padded (rule 5).
+  rather than silently narrowed or padded (docs/MODELING.md).
 
 Properties and vocabulary items are referenced by **manifest key**
 (`spouse`, `circa` — see `model/manifest.yaml`), never by local P/Q id:
@@ -106,7 +106,7 @@ uv run yizkr claims --json-schema           # JSON Schema, used in LLM prompts
 uv run yizkr claims --validate batch.json   # schema + manifest check a file
 ```
 
-## Privacy (rule 7)
+## Privacy
 
 No step talks to any external service by default; the whole pipeline
 runs with `textfile` + `file` engines. Choosing `--engine llm` sends
@@ -118,5 +118,5 @@ opt-in. There is no default key and no fallback.
 
 `make test` runs the offline suite (fakes for LLM and detector, no
 instance needed). `make test-live` runs the encoded end-to-end flows
-against the running stack — including the rule-3 regression that two
+against the running stack — including the overwrite regression that two
 values on one property must coexist.

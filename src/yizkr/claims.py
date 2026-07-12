@@ -6,18 +6,18 @@ exchanges claims in this format: the LLM extractor emits it, entity
 resolution rewrites references in it, the reviewer export renders it to
 CSV, and the writer turns it into Wikibase statements.
 
-The schema makes the project's non-negotiable rules structural:
+The schema makes the archive's core conventions structural:
 
-* Rule 1 (no statement without a reference): `Claim.source` is a
+* No statement without a reference (ADR-0003): `Claim.source` is a
   required field. A claim without a source artifact cannot be
   represented, parsed, or written.
-* Rule 2 (dual provenance): every batch carries
+* Dual provenance (ADR-0003): every batch carries
   `extraction_run` metadata; the writer creates an extraction-run item
   and adds the second reference to every statement it writes.
-* Rule 4 (ranks default to normal): there is deliberately NO rank
+* Ranks default to normal (ADR-0002): there is deliberately NO rank
   field. Machine writes are always normal rank; preferring/deprecating
   is a curator action on the wiki, never part of the pipeline contract.
-* Rule 5 (uncertainty is structural): time values carry explicit
+* Uncertainty is structural (docs/MODELING.md): time values carry explicit
   precision (day/month/year/decade/century) and a calendar; ranges and
   approximation are expressed with `earliest_date`/`latest_date`/
   `sourcing_circumstances` qualifiers. Nothing invites the extractor to
@@ -159,7 +159,7 @@ class TimeValue(StrictModel):
     `precision` defaults to the finest field given. Fields finer than
     the declared precision are rejected: stating "month precision" while
     supplying a day means the claim narrows or pads what the source
-    says, and rule 5 forbids both. For decades use the first year
+    says; both are forbidden (docs/MODELING.md, "Uncertainty and time"). For decades use the first year
     (1920s -> year=1920, precision=decade); same for centuries (1800).
     Ranges ("between 1930 and 1935") are NOT a precision problem: use
     earliest_date/latest_date qualifiers on the claim.
@@ -275,7 +275,7 @@ class RegionPercent(StrictModel):
 
 
 class SourceReference(StrictModel):
-    """Where the artifact asserts the claim (rule 1; ADR-0003).
+    """Where the artifact asserts the claim (ADR-0003).
 
     `artifact` names the artifact or artifact-fragment item; the
     locators narrow the pointer inside it. The excerpt supports one-click
@@ -302,7 +302,7 @@ class Claim(StrictModel):
     """One source-attributed assertion.
 
     There is intentionally no `rank` field: pipeline writes are always
-    normal rank (rule 4). `confidence` is extractor metadata for review
+    normal rank (ADR-0002). `confidence` is extractor metadata for review
     ordering; it is never written to the graph.
     """
 
@@ -315,7 +315,7 @@ class Claim(StrictModel):
 
 
 class ExtractionRunMetadata(StrictModel):
-    """Process provenance for the batch (rule 2; ADR-0003).
+    """Process provenance for the batch (ADR-0003).
 
     The writer mints one extraction-run item per batch from this and
     references every written statement to it.

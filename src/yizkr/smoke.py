@@ -6,7 +6,8 @@ the WDQS SPARQL endpoint (the wdqs-updater round-trip).
 
 Idempotent: re-runs reuse the marker item created on the first run.
 The item carries only a label and description — no statements are
-written, so no reference is required (rule 1 concerns statements).
+written, so no reference is required (the ADR-0003 reference
+requirement concerns statements).
 
 CLI: `yizkr smoke-test [--timeout SECONDS]`.
 """

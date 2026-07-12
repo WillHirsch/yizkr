@@ -7,9 +7,9 @@ mapping on the wiki page named in the manifest.
 
 Idempotent: re-running against an up-to-date instance is a no-op.
 The only statements written are the manifest's `subclass of` claims,
-each referenced `stated in -> the model manifest item` (rule 1 applies
-to schema statements too), APPENDED so no existing claim is ever
-replaced (rule 3).
+each referenced `stated in -> the model manifest item` (the reference
+requirement, ADR-0003, applies to schema statements too), APPENDED so
+no existing claim is ever replaced (statements coexist — ADR-0002).
 
 CLI: `yizkr bootstrap [--dry-run] [--manifest PATH]`.
 """
@@ -102,7 +102,7 @@ def ensure_subclass_statement(
     references.add(reference)
     claim = ItemClaim(prop_nr=subclass_pid, value=target_qid, references=references)
     # APPEND, never the REPLACE_ALL default: adding a second superclass
-    # must not delete the first (rule 3 applies to schema statements too).
+    # must not delete the first (coexistence applies to schema too).
     entity.claims.add(claim, action_if_exists=ActionIfExists.APPEND_OR_REPLACE)
     entity.write(summary="model bootstrap: subclass hierarchy")
     return "create"

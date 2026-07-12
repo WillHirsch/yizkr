@@ -1,6 +1,6 @@
-"""Live pipeline flow: register -> write, idempotency, and the rule-3
+"""Live pipeline flow: register -> write, idempotency, and the overwrite
 regression (two values on one property must COEXIST — the second write
-must never replace the first)."""
+must never replace the first; ADR-0002)."""
 
 from __future__ import annotations
 
@@ -121,8 +121,8 @@ def birth_years_on(client, qid: str) -> set[str]:
     }
 
 
-def test_rule3_conflicting_values_coexist(client, artifact):
-    """Writing a second value must never delete the first (rule 3).
+def test_conflicting_values_coexist(client, artifact):
+    """Writing a second value must never delete the first (ADR-0002).
 
     Regression for the WikibaseIntegrator REPLACE_ALL default that once
     silently overwrote a source-attributed statement.
@@ -156,11 +156,11 @@ def test_write_is_idempotent_and_dual_referenced(client, artifact):
     )
     for claims in data["claims"].values():
         for claim in claims:
-            assert claim["rank"] == "normal"  # rule 4
+            assert claim["rank"] == "normal"  # ranks default to normal
             reference_properties = {
                 pid for ref in claim["references"] for pid in ref["snaks"]
             }
-            assert properties["stated_in"] in reference_properties  # rule 1
+            assert properties["stated_in"] in reference_properties  # source ref
             assert properties["inferred_from_extraction_run"] in (
                 reference_properties
-            )  # rule 2
+            )  # process ref

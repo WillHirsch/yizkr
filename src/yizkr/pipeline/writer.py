@@ -9,8 +9,8 @@ Per batch, the writer:
 2. creates items for unresolved `local` subjects/values (reusing an
    existing item on exact label match, so re-runs never duplicate
    people), writing their `instance of` with the artifact as source;
-3. writes each claim as a statement at NORMAL rank (rule 4 — there is
-   no other option in the contract) with TWO references (rule 1 + 2):
+3. writes each claim as a statement at NORMAL rank (the contract has
+   no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / region / excerpt
      qualifiers inside the reference;
    * inferred from extraction run -> the run item;
@@ -118,7 +118,8 @@ class BatchWriter:
 
         WikibaseIntegrator's claims.add() defaults to REPLACE_ALL, which
         silently deletes existing statements on the same property — a
-        rule-3 violation (never overwrite a source-attributed statement).
+        coexistence violation (ADR-0002): a source-attributed statement
+        must never be overwritten.
         Every add in the pipeline must go through here.
         """
         from wikibaseintegrator.wbi_enums import ActionIfExists

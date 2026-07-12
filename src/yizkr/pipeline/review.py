@@ -12,8 +12,8 @@ decisions — and any edit to claim content invalidates the id loudly
 instead of silently writing altered data. Value corrections are made in
 the batch JSON (or upstream), then re-exported; the CSV only decides.
 
-No auto-confirmation: a claim with no decision is NOT approved
-(CLAUDE.md, "What NOT to do").
+No auto-confirmation: a claim with no decision is NOT approved —
+human confirmation is part of the data flow (R3, ADR-0005).
 """
 
 from __future__ import annotations

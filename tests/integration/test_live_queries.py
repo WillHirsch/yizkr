@@ -1,5 +1,5 @@
-"""Every packaged query must execute against live WDQS, and the rule-1
-invariant must hold: zero unreferenced statements, ever."""
+"""Every packaged query must execute against live WDQS, and the
+whole-graph invariant must hold: zero unreferenced statements, ever."""
 
 import pytest
 
@@ -26,7 +26,7 @@ def test_all_queries_execute(config, rendered):
 
 
 def test_no_unreferenced_statements_anywhere(config, rendered):
-    """The whole-project rule-1 invariant (ADR-0003 §3)."""
+    """The whole-project reference invariant (ADR-0003 §3)."""
     rows = run_sparql(config, rendered["unreferenced-statements"])
     offenders = [row.get("entityLabel", {}).get("value") for row in rows]
     assert rows == [], f"unreferenced statements found on: {offenders}"

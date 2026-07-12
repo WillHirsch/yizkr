@@ -15,9 +15,9 @@
   in aliases. English labels are the bootstrap's idempotency key:
   unique per entity kind, and renames must happen on the wiki and in
   the manifest together.
-- Schema-level statements (e.g. the subclass hierarchy) follow rule 1
-  too: they carry a `stated in` reference to the *model manifest*
-  item, which represents `model/manifest.yaml` — the document that
+- Schema-level statements (e.g. the subclass hierarchy) carry
+  references too (ADR-0003): a `stated in` reference to the *model
+  manifest* item, which represents `model/manifest.yaml` — the document that
   asserts them.
 
 ## Core classes (items, via "instance of")
@@ -57,7 +57,8 @@ keys resolved to local ids only at write time.
   `part of` + page qualifier) are referenced `stated in -> the artifact
   item itself`: an artifact asserts its own kind and composition by
   existing. Extraction-run items use the same convention for their
-  `instance of`. Rule 1 therefore holds for every registrar/writer path.
+  `instance of`. Every registrar/writer path therefore writes only
+  referenced statements (ADR-0003).
 - Machine-proposed entities (people, places) get their `instance of`
   statement referenced to the artifact that mentions them.
 
@@ -83,8 +84,9 @@ Artifacts do not only assert claims about people and events; they also
 *cover* regions of other domains: a map covers a geographic extent, a
 census page covers a district on a date, a letter spans two places.
 These cross-domain coverage relations (cf. Dublin Core "coverage") are
-ordinary statements on the artifact item, and rule 1 applies
-unchanged: what an artifact shows about itself is referenced
+ordinary statements on the artifact item, and the reference
+requirement (ADR-0003) applies unchanged: what an artifact shows
+about itself is referenced
 `stated in → the artifact itself` (the registrar convention above);
 coverage computed by a tool (e.g. georeferencing software) adds an
 `inferred from extraction run` reference like any machine write.

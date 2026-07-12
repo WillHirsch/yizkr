@@ -60,7 +60,7 @@ class TestRealManifest:
             assert key in manifest.properties, key
 
     def test_uncertainty_properties_present(self, manifest):
-        """Uncertainty is structural (CLAUDE.md rule 5)."""
+        """Uncertainty is structural (docs/MODELING.md)."""
         for key in ("earliest_date", "latest_date", "sourcing_circumstances"):
             assert key in manifest.properties, key
         assert "circa" in manifest.items

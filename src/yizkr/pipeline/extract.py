@@ -10,7 +10,7 @@ toward the graph.
 validation, so hand-written batches and future extraction tools get
 identical treatment.
 
-Every batch records extraction-run metadata (rule 2). Subjects the
+Every batch records extraction-run metadata (ADR-0003). Subjects the
 model proposes are `local` refs; resolution to existing items happens
 in the resolve step, never inside extraction.
 """

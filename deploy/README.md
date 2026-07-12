@@ -69,8 +69,8 @@ normally completes in well under a minute; the test waits up to
 
 ## HTTPS / public exposure (optional, off by default)
 
-Nothing in this archive is public by default (CLAUDE.md rule 7) — only
-do this deliberately. Requirements: public DNS for both hosts pointing
+Nothing in this archive is public by default (it is privacy-first) —
+only do this deliberately. Requirements: public DNS for both hosts pointing
 at this machine, ports 80/443 reachable from the internet.
 
 1. In `.env`, set `PUBLIC_SCHEME=https` **before first boot** (the

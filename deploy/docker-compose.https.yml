@@ -8,8 +8,9 @@
 #      machine and open ports 80/443.
 #   3. docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
 #
-# Privacy note (CLAUDE.md rule 7): nothing public by default. Only use this
-# overlay deliberately, and remember the archive may describe living people.
+# Privacy note: nothing public by default (privacy-first archive). Only
+# use this overlay deliberately, and remember the archive may describe
+# living people.
 
 services:
   traefik:

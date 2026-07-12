@@ -25,7 +25,7 @@ Workflow ("initial manual inputs", R5):
 Engines implement `FaceDetector`; `InsightFaceDetector` (InsightFace-
 class model, ADR-0005) is provided and entirely optional — everything
 runs offline from a saved detections file. Detection runs locally;
-nothing leaves the machine (rule 7).
+nothing leaves the machine (privacy first).
 """
 
 from __future__ import annotations

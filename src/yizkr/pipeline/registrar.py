@@ -14,7 +14,7 @@ Provenance of registrar statements: an artifact asserts its own kind
 and its own composition by existing, so `instance of`, `media file`,
 and fragment `part of` statements are referenced ``stated in -> the
 artifact item itself`` (see docs/MODELING.md, "Artifacts and
-registration"). Rule 1 holds: no statement is written unreferenced.
+registration"). No statement is written unreferenced (ADR-0003).
 
 Idempotent: re-registering the same title reuses the existing item
 (matched by exact English label) and skips statements that already
@@ -38,7 +38,8 @@ class RegistrationResult:
 
 
 def _append(entity, claim) -> None:
-    """Add a claim WITHOUT touching existing ones (rule 3): WBI's
+    """Add a claim WITHOUT touching existing ones (attributed statements
+    coexist and are never overwritten — ADR-0002): WBI's
     claims.add() defaults to REPLACE_ALL for same-property claims."""
     from wikibaseintegrator.wbi_enums import ActionIfExists
 
