@@ -1,0 +1,10 @@
+# Deployment secrets and generated config (written by first boot)
+deploy/.env
+deploy/config/LocalSettings.php
+deploy/config/wdqs-frontend-config.json
+deploy/config/wikibase-php.ini
+
+# Python
+__pycache__/
+*.pyc
+.venv/

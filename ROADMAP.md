@@ -10,6 +10,7 @@ updated, and no path writes an unreferenced statement.
    Wikibase, WDQS, Elasticsearch) with an `.env.example`, a README
    runbook for home-server deployment, and a smoke-test script that
    verifies item creation and SPARQL round-trip.
+   *Done — see `deploy/`.*
 2. **Model bootstrap** – `model/manifest.yaml` declaring the core
    properties/classes from docs/MODELING.md, plus an idempotent Python
    script (WikibaseIntegrator) that creates/updates them and records

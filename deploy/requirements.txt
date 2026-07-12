@@ -1,0 +1,3 @@
+# Dependencies for deploy/smoke_test.py
+wikibaseintegrator>=0.12,<0.13
+requests>=2.31

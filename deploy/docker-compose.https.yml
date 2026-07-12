@@ -1,0 +1,44 @@
+# Optional HTTPS overlay: public exposure with Let's Encrypt certificates.
+# Matches the upstream Wikibase Suite Deploy 7.0.0 traefik configuration.
+#
+# Usage (see README.md):
+#   1. Set PUBLIC_SCHEME=https in .env (before first boot; the scheme is baked
+#      into the WDQS concept URI).
+#   2. Point public DNS for WIKIBASE_PUBLIC_HOST and WDQS_PUBLIC_HOST at this
+#      machine and open ports 80/443.
+#   3. docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# Privacy note (CLAUDE.md rule 7): nothing public by default. Only use this
+# overlay deliberately, and remember the archive may describe living people.
+
+services:
+  traefik:
+    command:
+      - "--accesslog.format=common"
+      # http endpoint
+      - "--entrypoints.web.address=:80"
+      # https endpoint
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.asdefault"
+      - "--entrypoints.websecure.http.tls.certresolver=letsencrypt"
+      # http to https redirect
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      # ACME SSL certificate generation
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${MW_ADMIN_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      # additional traefik dynamic configuration via config file
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      # Uncomment to test SSL generation against the staging CA first, so you
+      # don't run into Let's Encrypt rate limits:
+      # - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+    ports:
+      - ${HTTPS_PORT:-443}:443
+    volumes:
+      - traefik-letsencrypt-data:/letsencrypt
+
+volumes:
+  traefik-letsencrypt-data:
