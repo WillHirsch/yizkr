@@ -86,22 +86,43 @@ def run_metadata(model_identifier: str) -> ExtractionRunMetadata:
 
 
 def _parse_response(response: str) -> dict:
-    """Tolerate code fences and stray prose around the JSON object."""
+    """Extract claim JSON from model output, tolerating code fences,
+    surrounding prose, and MULTIPLE concatenated objects (models emit
+    continuation chunks on very large extractions) — their claims
+    arrays are merged in order."""
     text = response.strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
     if fenced:
         text = fenced.group(1)
-    else:
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end == -1:
-            raise ValueError(f"no JSON object in extractor response: {text[:200]!r}")
-        text = text[start : end + 1]
-    return json.loads(text)
+    decoder = json.JSONDecoder()
+    merged: list = []
+    found = False
+    index = 0
+    while True:
+        start = text.find("{", index)
+        if start == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            index = start + 1
+            continue
+        if isinstance(obj, dict) and "claims" in obj:
+            found = True
+            merged.extend(obj.get("claims") or [])
+        index = end
+    if not found:
+        raise ValueError(
+            f"no JSON object with a 'claims' array in extractor response: "
+            f"{text[:200]!r}"
+        )
+    return {"claims": merged}
 
 
 class LlmClaimExtractor:
-    def __init__(self, client: LlmClient) -> None:
+    def __init__(self, client: LlmClient, raw_dump: Path | None = None) -> None:
         self.client = client
+        self.raw_dump = raw_dump
 
     def extract(self, transcription: Transcription, artifact_qid: str) -> ClaimBatch:
         schema = json.dumps(ClaimBatch.model_json_schema(), indent=2)
@@ -112,6 +133,12 @@ class LlmClaimExtractor:
             text=transcription.text,
         )
         response = self.client.complete(prompt)
+        if self.raw_dump is not None:
+            # Engine output is expensive; persist it before anything that
+            # can fail, so a parse/validation error is debuggable and the
+            # response recoverable.
+            self.raw_dump.parent.mkdir(parents=True, exist_ok=True)
+            self.raw_dump.write_text(response)
         payload = _parse_response(response)
         batch = ClaimBatch.model_validate(
             {

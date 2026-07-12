@@ -140,6 +140,32 @@ class TestExtract:
         assert _parse_response(fenced) == payload
         assert _parse_response(json.dumps(payload)) == payload
 
+    def test_parse_response_merges_continuation_objects(self):
+        """Very large extractions arrive as several concatenated claims
+        objects (the model continues across turns); all of them count."""
+        chunks = (
+            json.dumps({"claims": [CLAIMS[0]]})
+            + "\nContinuing with the remaining claims:\n"
+            + json.dumps({"claims": [CLAIMS[1]]})
+        )
+        merged = _parse_response(chunks)
+        assert merged == {"claims": [CLAIMS[0], CLAIMS[1]]}
+
+    def test_parse_response_ignores_json_without_claims(self):
+        text = json.dumps({"note": "irrelevant"}) + json.dumps({"claims": []})
+        assert _parse_response(text) == {"claims": []}
+        with pytest.raises(ValueError, match="claims"):
+            _parse_response(json.dumps({"note": "no claims here"}))
+
+    def test_extractor_dumps_raw_response_before_parsing(self, tmp_path):
+        """Engine output is expensive: it must be on disk even when
+        parsing/validation fails, so nothing paid-for is unrecoverable."""
+        raw = tmp_path / "deep" / "batch.json.raw.txt"
+        llm = FakeLlm("total garbage, no JSON at all")
+        with pytest.raises(ValueError):
+            LlmClaimExtractor(llm, raw_dump=raw).extract(self.transcription(), "Q23")
+        assert raw.read_text() == "total garbage, no JSON at all"
+
     def test_file_extractor_wraps_bare_claims(self, tmp_path):
         claims_file = tmp_path / "claims.json"
         claims_file.write_text(json.dumps({"claims": CLAIMS}))
@@ -324,12 +350,41 @@ class TestClaudeCodeClient:
         assert result == "the transcription"
         command, kwargs = calls[1]
         assert command[:2] == ["claude", "-p"]
+        assert command[command.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in command
         assert command[command.index("--allowedTools") + 1] == "Read"
         # prompt goes via stdin and points Read at the image
         assert str(image.resolve()) in kwargs["input"]
         assert "Transcribe this." in kwargs["input"]
         # the engine exists to use subscription auth: keys must not leak in
         assert "ANTHROPIC_API_KEY" not in kwargs["env"]
+
+    def test_reassembles_response_spanning_multiple_turns(self, monkeypatch):
+        """A long answer split across assistant turns must survive intact.
+
+        `--output-format text` prints only the final turn, silently
+        dropping the head of a multi-turn response. stream-json exposes
+        every assistant event; the client joins them all in order.
+        """
+        events = [
+            {"type": "system", "subtype": "init"},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": '{"claims": ['}]},
+            },
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "]}"}]},
+            },
+            # the terminal result event repeats only the FINAL turn's text
+            {"type": "result", "subtype": "success", "result": "]}"},
+        ]
+        stream = "\n".join(json.dumps(event) for event in events)
+        client, _ = self.make_client(
+            monkeypatch,
+            [FakeCompleted(stdout="2.1.207\n"), FakeCompleted(stdout=stream)],
+        )
+        assert client.complete("extract") == '{"claims": [\n]}'
 
     def test_nonzero_exit_raises_with_detail(self, monkeypatch):
         client, _ = self.make_client(

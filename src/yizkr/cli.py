@@ -122,6 +122,7 @@ def cmd_transcribe(args) -> int:
 
         transcriber = HtrPlatformAdapter()
     transcription = transcriber.transcribe(args.file, artifact_qid=args.artifact)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(transcription.model_dump_json(indent=2))
     print(
         f"wrote {args.out} ({len(transcription.text)} chars, "
@@ -144,8 +145,10 @@ def cmd_extract(args) -> int:
         from yizkr.pipeline.extract import LlmClaimExtractor
         from yizkr.pipeline.llm import make_client
 
-        extractor = LlmClaimExtractor(make_client(args.llm))
+        raw_dump = args.out.with_name(args.out.name + ".raw.txt")
+        extractor = LlmClaimExtractor(make_client(args.llm), raw_dump=raw_dump)
     batch = extractor.extract(transcription, artifact_qid=args.artifact)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(batch.model_dump_json(indent=2))
     print(f"wrote {args.out} ({len(batch.claims)} claims)")
     return 0
@@ -156,6 +159,7 @@ def cmd_resolve(args) -> int:
 
     _, item_labels = _client(args).label_index()
     resolved = resolve_batch(_load_batch(args.batch), item_labels)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(resolved.model_dump_json(indent=2))
     print(f"wrote {args.out}")
     return 0
@@ -164,6 +168,7 @@ def cmd_resolve(args) -> int:
 def cmd_export_review(args) -> int:
     from yizkr.pipeline.review import export_review_csv
 
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     rows = export_review_csv(_load_batch(args.batch), args.out)
     print(
         f"wrote {args.out} ({rows} rows). Fill the 'decision' column "
@@ -178,6 +183,7 @@ def cmd_apply_review(args) -> int:
     approved, warnings = apply_review(_load_batch(args.batch), args.csv)
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(approved.model_dump_json(indent=2))
     print(f"wrote {args.out} ({len(approved.claims)} approved claims)")
     return 0

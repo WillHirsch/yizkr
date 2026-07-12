@@ -23,6 +23,7 @@ Pick the model for either engine with $YIZKR_LLM_MODEL.
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
 import os
 import shutil
@@ -111,8 +112,8 @@ class ClaudeCodeClient:
         self,
         model: str | None = None,
         executable: str = "claude",
-        timeout: int = 600,
-        max_turns: int = 10,
+        timeout: int = 1200,
+        max_turns: int = 30,
     ) -> None:
         self.executable = executable
         self.model = model if model is not None else os.environ.get("YIZKR_LLM_MODEL")
@@ -141,12 +142,25 @@ class ClaudeCodeClient:
         command = [
             self.executable,
             "-p",
+            # stream-json (not text): text mode prints only the FINAL
+            # assistant message, silently dropping earlier turns when a
+            # long answer spans several. We reassemble the full response
+            # from every assistant event in the stream.
             "--output-format",
-            "text",
+            "stream-json",
+            "--verbose",  # required by the CLI for stream-json in -p mode
             "--allowedTools",
             self.ALLOWED_TOOLS,
             "--max-turns",
             str(self.max_turns),
+            # Denied tool calls still consume turns in -p mode; a planning
+            # tool grabbed mid-extraction can burn the whole cap. Forbid
+            # everything except reading the files we point at.
+            "--append-system-prompt",
+            "You are running non-interactively inside a data pipeline. "
+            "Do not use any tools except Read, and only on files named in "
+            "the prompt. No TodoWrite, no task tracking, no searching. "
+            "Produce the requested output directly in a single response.",
         ]
         if self.model:
             command += ["--model", self.model]
@@ -186,9 +200,41 @@ class ClaudeCodeClient:
                 f"claude CLI exited with {result.returncode}: {detail or 'no output'}"
                 " (not logged in? run `claude` interactively once)"
             )
-        if not result.stdout.strip():
+        text = self._assemble_stream(result.stdout)
+        if not text.strip():
             raise RuntimeError("claude CLI returned no output")
-        return result.stdout
+        return text
+
+    @staticmethod
+    def _assemble_stream(stdout: str) -> str:
+        """Concatenate assistant text from a stream-json event stream.
+
+        A long answer can span several assistant turns; every turn's text
+        is part of the response, so all of them are joined in order. Falls
+        back to the terminal result event (or raw stdout) if no assistant
+        events are present.
+        """
+        pieces: list[str] = []
+        result_text: str | None = None
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "assistant":
+                for block in event.get("message", {}).get("content", []):
+                    if block.get("type") == "text":
+                        pieces.append(block["text"])
+            elif event.get("type") == "result":
+                result_text = event.get("result")
+        if pieces:
+            return "\n".join(pieces)
+        if result_text:
+            return result_text
+        return stdout
 
     @staticmethod
     def available(executable: str = "claude") -> bool:
