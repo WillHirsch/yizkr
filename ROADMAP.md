@@ -15,6 +15,7 @@ updated, and no path writes an unreferenced statement.
    properties/classes from docs/MODELING.md, plus an idempotent Python
    script (WikibaseIntegrator) that creates/updates them and records
    the local–Wikidata property mapping on a wiki page.
+   *Done — see `model/`.*
 3. **Claim schema** – Pydantic models for the pipeline's claim JSON
    (entity refs, property, value, uncertainty fields, fragment
    locator, extraction-run metadata), with validation tests. This is

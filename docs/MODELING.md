@@ -6,11 +6,19 @@
   Wikibase properties/items in-instance.
 - Mirror Wikidata property *semantics* where a good equivalent exists
   (instance of, date of birth, spouse, residence, depicts, coordinate
-  location, start/end time, stated in...), using local P-ids. Maintain
-  a mapping table (local id – Wikidata id) as a wiki page and a YAML
-  manifest in this repo (`model/manifest.yaml`, created in W1 task 2).
+  location, start/end time, stated in...), using local P-ids. The
+  vocabulary is declared in `model/manifest.yaml` and minted by
+  `model/bootstrap.py`, which maintains the mapping table
+  (local id – Wikidata id) on the wiki page `Project:Model mapping`.
+  Local P/Q ids are per-instance and never recorded in the repo.
 - Every entity gets a label and a short description; name variants go
-  in aliases.
+  in aliases. English labels are the bootstrap's idempotency key:
+  unique per entity kind, and renames must happen on the wiki and in
+  the manifest together.
+- Schema-level statements (e.g. the subclass hierarchy) follow rule 1
+  too: they carry a `stated in` reference to the *model manifest*
+  item, which represents `model/manifest.yaml` — the document that
+  asserts them.
 
 ## Core classes (items, via "instance of")
 

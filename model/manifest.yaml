@@ -1,0 +1,346 @@
+# Model manifest: core classes and properties for the family-archive
+# knowledge graph (docs/MODELING.md, ADR-0003).
+#
+# Applied by model/bootstrap.py, which mints these as Wikibase entities
+# in-instance, idempotently: entries are matched to existing entities by
+# exact English label, so re-running never duplicates. Local P/Q ids are
+# assigned by the instance at creation time and deliberately do NOT appear
+# in this file (they differ between instances); the id mapping for a given
+# instance is recorded on the wiki page named below.
+#
+# `wikidata` fields mirror Wikidata property/item *semantics* (see
+# docs/MODELING.md). All mapped ids verified against wikidata.org.
+# Wikibase assigns ids in creation order, so keep new entries at the END
+# of their section for tidy numbering (not required for correctness).
+
+version: 1
+
+# Wiki page where bootstrap.py records the local id <-> Wikidata id mapping.
+mapping_page: "Project:Model mapping"
+
+# Item whose key is used as the `stated in` reference target for
+# schema-level statements (e.g. the subclass hierarchy below), satisfying
+# CLAUDE.md rule 1: the manifest itself is the source asserting them.
+schema_source_item: model_manifest
+
+properties:
+  instance_of:
+    label: instance of
+    description: class of which this entity is a particular example and member
+    datatype: wikibase-item
+    wikidata: P31
+
+  subclass_of:
+    label: subclass of
+    description: all instances of this class are also instances of that class
+    datatype: wikibase-item
+    wikidata: P279
+
+  part_of:
+    label: part of
+    description: this entity is a part of that entity; links an artifact fragment to its artifact
+    datatype: wikibase-item
+    wikidata: P361
+
+  # --- provenance (ADR-0003 reference pattern) ---
+
+  stated_in:
+    label: stated in
+    description: reference property; the artifact or artifact fragment that asserts the statement
+    datatype: wikibase-item
+    wikidata: P248
+
+  inferred_from_extraction_run:
+    label: inferred from extraction run
+    description: reference property; the extraction run that produced this machine-written statement
+    datatype: wikibase-item
+    wikidata: P3452
+    aliases:
+      - inferred from
+
+  page_number:
+    label: page number
+    description: locator qualifier; page(s) of the artifact the reference points into
+    datatype: string
+    wikidata: P304
+
+  relative_position_within_image:
+    label: relative position within image
+    description: locator qualifier; region of an image as a percentage bounding box "x%,y%,w%,h%" measured from the top-left corner
+    datatype: string
+    wikidata: P2677
+    aliases:
+      - image region
+
+  transcription_excerpt:
+    label: transcription excerpt
+    description: reference qualifier; short excerpt of the source text supporting human verification
+    datatype: monolingualtext
+    wikidata: P1683
+
+  # --- persons and family relations ---
+
+  date_of_birth:
+    label: date of birth
+    description: date on which the subject was born, as asserted by a source
+    datatype: time
+    wikidata: P569
+
+  date_of_death:
+    label: date of death
+    description: date on which the subject died, as asserted by a source
+    datatype: time
+    wikidata: P570
+
+  father:
+    label: father
+    description: male parent of the subject
+    datatype: wikibase-item
+    wikidata: P22
+
+  mother:
+    label: mother
+    description: female parent of the subject
+    datatype: wikibase-item
+    wikidata: P25
+
+  spouse:
+    label: spouse
+    description: the subject has the object as their spouse
+    datatype: wikibase-item
+    wikidata: P26
+
+  residence:
+    label: residence
+    description: place where the person resided
+    datatype: wikibase-item
+    wikidata: P551
+
+  living_person:
+    label: living person
+    description: privacy flag; whether the person is (possibly) living, which excludes them from public exports (docs/MODELING.md)
+    datatype: wikibase-item
+
+  # --- events ---
+
+  participant:
+    label: participant
+    description: person or group that took part in the event
+    datatype: wikibase-item
+    wikidata: P710
+
+  location:
+    label: location
+    description: place where the event or subject is located
+    datatype: wikibase-item
+    wikidata: P276
+
+  point_in_time:
+    label: point in time
+    description: date something took place or existed
+    datatype: time
+    wikidata: P585
+
+  start_time:
+    label: start time
+    description: time the subject began to exist or the statement started being valid
+    datatype: time
+    wikidata: P580
+
+  end_time:
+    label: end time
+    description: time the subject ceased to exist or the statement stopped being valid
+    datatype: time
+    wikidata: P582
+
+  time_period:
+    label: time period
+    description: named time period the subject occurred in; use instead of dates when the source speaks in periods
+    datatype: wikibase-item
+    wikidata: P2348
+
+  # --- uncertainty (docs/MODELING.md, "Uncertainty and time") ---
+
+  earliest_date:
+    label: earliest date
+    description: qualifier; earliest possible date for the statement's value, for ranges and vague sources
+    datatype: time
+    wikidata: P1319
+
+  latest_date:
+    label: latest date
+    description: qualifier; latest possible date for the statement's value, for ranges and vague sources
+    datatype: time
+    wikidata: P1326
+
+  sourcing_circumstances:
+    label: sourcing circumstances
+    description: qualifier for how a source states the value, e.g. circa; never narrow what a source says
+    datatype: wikibase-item
+    wikidata: P1480
+
+  # --- depiction (ADR-0005) ---
+
+  depicts:
+    label: depicts
+    description: person or thing depicted in the artifact; on photographs, qualified with relative position within image
+    datatype: wikibase-item
+    wikidata: P180
+
+  # --- places ---
+
+  coordinate_location:
+    label: coordinate location
+    description: geographic coordinates of the place
+    datatype: globe-coordinate
+    wikidata: P625
+
+  geonames_id:
+    label: GeoNames ID
+    description: identifier for the place in the GeoNames gazetteer
+    datatype: external-id
+    wikidata: P1566
+
+  whg_place_id:
+    label: World Historical Gazetteer place ID
+    description: identifier for the place in the World Historical Gazetteer
+    datatype: external-id
+    wikidata: P13061
+
+  periodo_id:
+    label: PeriodO period ID
+    description: identifier for the period in the PeriodO time period gazetteer
+    datatype: external-id
+    wikidata: P9350
+
+  # --- extraction runs (ADR-0003 process provenance) ---
+
+  model_identifier:
+    label: model identifier
+    description: name and version of the machine-learning model used by an extraction or detection run
+    datatype: string
+
+  pipeline_version:
+    label: pipeline version
+    description: version of the extraction pipeline (prompt and code) that performed the run
+    datatype: string
+    wikidata: P348
+
+  software_commit:
+    label: software commit
+    description: version-control commit hash of the pipeline software that performed the run
+    datatype: string
+
+items:
+  # --- core classes (docs/MODELING.md) ---
+
+  human:
+    label: human
+    description: person known to the archive
+    aliases:
+      - person
+    wikidata: Q5
+
+  place:
+    label: place
+    description: geographic place, including historical places that no longer exist
+
+  time_period_class:
+    label: time period
+    description: named span of time, linked to PeriodO definitions where applicable
+
+  event:
+    label: event
+    description: something that happened at a time, usually at a place, usually involving people
+
+  artifact:
+    label: artifact
+    description: digitised source document or object that asserts knowledge, e.g. a photograph or certificate
+
+  artifact_fragment:
+    label: artifact fragment
+    description: page, crop, or region of an artifact that a reference can point into
+    aliases:
+      - fragment
+
+  extraction_run:
+    label: extraction run
+    description: one execution of the ingestion pipeline; process-provenance target for machine-written statements
+
+  # --- event types (subclasses of event) ---
+
+  birth:
+    label: birth
+    description: event of a person being born
+    subclass_of: event
+
+  death:
+    label: death
+    description: event of a person dying
+    subclass_of: event
+
+  marriage:
+    label: marriage
+    description: event of persons marrying
+    subclass_of: event
+    wikidata: Q8445
+
+  migration:
+    label: migration
+    description: event of a person or family relocating
+    subclass_of: event
+
+  military_service:
+    label: military service
+    description: event or period of a person serving in a military force
+    subclass_of: event
+
+  # --- artifact types (subclasses of artifact) ---
+
+  photograph:
+    label: photograph
+    description: photographic artifact
+    subclass_of: artifact
+    wikidata: Q125191
+
+  certificate:
+    label: certificate
+    description: official certificate artifact, e.g. birth, marriage, or death certificate
+    subclass_of: artifact
+
+  letter:
+    label: letter
+    description: written correspondence artifact
+    subclass_of: artifact
+    wikidata: Q133492
+
+  census_page:
+    label: census page
+    description: page from a census return
+    subclass_of: artifact
+
+  newspaper_clipping:
+    label: newspaper clipping
+    description: clipping from a newspaper
+    subclass_of: artifact
+
+  # --- controlled vocabulary values ---
+
+  circa:
+    label: circa
+    description: sourcing circumstances value; the source gives the value as approximate
+    wikidata: Q5727902
+
+  "yes":
+    label: "yes"
+    description: affirmative value for flag properties such as living person
+
+  "no":
+    label: "no"
+    description: negative value for flag properties such as living person
+
+  # --- schema source (see schema_source_item above) ---
+
+  model_manifest:
+    label: model manifest
+    description: model/manifest.yaml in the project repository; the document asserting schema-level statements such as the class hierarchy

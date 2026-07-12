@@ -1,0 +1,6 @@
+# Dependencies for model/bootstrap.py and its tests
+wikibaseintegrator>=0.12,<0.13
+pydantic>=2.5
+PyYAML>=6.0
+requests>=2.31
+pytest>=8.0
