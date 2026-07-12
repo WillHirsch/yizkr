@@ -48,8 +48,23 @@ fragment locators to canvas+xywh URIs; annotation-driven curation UI.
 immich deployment; person–QID mapping table; sync bot writing depicts
 statements; family onboarding notes.
 
+## Model extensions – later
+
+Cross-domain coverage relations on artifacts (docs/MODELING.md,
+"Artifact coverage"). First up, **georeferenced maps**: a `map`
+artifact subclass plus bounding-box corner properties (NW/SE,
+globe-coordinate) so map artifacts carry their geographic extent and
+frontends can draw their outlines on interactive maps; the places-map
+query grows an artifact-outline variant. Manifest + bootstrap +
+query in one session; W2 later upgrades the flat bounding box to
+IIIF Georeference (Allmaps-style) annotations. The same pattern —
+reuse existing structured properties, reference the artifact itself
+or the producing run — stays open for temporal and subject coverage
+and other cross-domain relations.
+
 ## Frontend ladder – later
 
-Static publish tier (scheduled SPARQL → static site with map browse,
-TimelineJS feeds, galleries) → custom plural-display SPA (timeline
-rendering coexisting date claims side by side, labeled by source).
+Static publish tier (scheduled SPARQL → static site with map browse
+including georeferenced artifact outlines, TimelineJS feeds,
+galleries) → custom plural-display SPA (timeline rendering coexisting
+date claims side by side, labeled by source).

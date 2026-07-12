@@ -77,6 +77,40 @@ keys resolved to local ids only at write time.
 - Historical places that no longer exist are ordinary place items with
   their own time bounds.
 
+## Artifact coverage — cross-domain relations (planned)
+
+Artifacts do not only assert claims about people and events; they also
+*cover* regions of other domains: a map covers a geographic extent, a
+census page covers a district on a date, a letter spans two places.
+These cross-domain coverage relations (cf. Dublin Core "coverage") are
+ordinary statements on the artifact item, and rule 1 applies
+unchanged: what an artifact shows about itself is referenced
+`stated in → the artifact itself` (the registrar convention above);
+coverage computed by a tool (e.g. georeferencing software) adds an
+`inferred from extraction run` reference like any machine write.
+
+Planned first instance — **georeferenced map artifacts**:
+
+- a `map` subclass of artifact;
+- two globe-coordinate properties on the map item, `bounding box
+  north-west corner` and `bounding box south-east corner` (an
+  axis-aligned extent; Wikidata's extremum-point properties
+  P1332–P1335 are the nearest semantic precedent), so interactive
+  maps (R6) can draw the artifact's outline in place and SPARQL can
+  answer "which artifacts cover this place?";
+- W2 upgrade path: IIIF Georeference annotations (Allmaps-style
+  ground control points) refine the flat bounding box exactly as
+  IIIF canvas+xywh URIs refine percentage regions (ADR-0004) — the
+  corner properties then remain as a cheap derived summary for
+  query and display.
+
+Other domains follow the same shape rather than inventing new
+machinery: temporal coverage (the period a map *depicts*, distinct
+from when it was made) reuses `time period` / date properties, and
+subject coverage reuses `depicts`. Prefer an existing
+Wikidata-mirrored property, keep values structured (never strings),
+and reference the artifact itself or the producing run.
+
 ## Faces and depiction (see ADR-0005)
 
 - On a photograph item: depicts → person, with qualifiers:
