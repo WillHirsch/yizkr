@@ -57,13 +57,14 @@ Verifies item creation via the API and the SPARQL round-trip through
 the wdqs-updater. Idempotent — re-runs reuse the marker item it
 creates. It reads `deploy/.env` for hosts and admin credentials.
 
+From the repo root (see the root README for uv setup):
+
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python smoke_test.py
+make smoke            # = uv run yizkr smoke-test
 ```
 
 Expected output ends with `SMOKE TEST PASSED`. The WDQS round-trip
-normally completes in well under a minute; the script waits up to
+normally completes in well under a minute; the test waits up to
 5 minutes (`--timeout` to change).
 
 ## HTTPS / public exposure (optional, off by default)

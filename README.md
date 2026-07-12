@@ -17,10 +17,29 @@ Start here:
 - `docs/MODELING.md` – Wikibase modeling conventions
 - `ROADMAP.md` – phased build plan
 - `deploy/` – Wikibase Suite deployment (Docker Compose + runbook)
-- `model/` – schema manifest and idempotent bootstrap script
-- `ingest/` – ingestion pipeline (register → transcribe → extract →
-  review → write) and the claim JSON contract
-- `queries/` – SPARQL query library, published to wiki pages
+- `src/yizkr/` – the tooling package: model manifest + bootstrap
+  (`model/`), the claim JSON contract (`claims.py`), the ingestion
+  pipeline (`pipeline/`), and the SPARQL query library (`queries/`)
+- `tests/` – offline unit tests plus live integration tests
+  (`pytest -m live`, needs the running stack)
+
+## Working on the tooling
+
+Python tooling is one [uv]-managed package with a single CLI:
+
+```sh
+uv sync --dev            # or: make install
+uv run yizkr --help      # bootstrap / smoke-test / publish-queries / ingest
+make test                # offline tests
+make up bootstrap smoke  # start the stack, apply the model, verify
+make test-live           # integration tests against the running stack
+```
+
+[uv]: https://docs.astral.sh/uv/
+
+Pipeline outputs (claim batches, review CSVs, face galleries) are
+runtime state, not code — keep them under `var/` (gitignored) or
+outside the repo.
 
 **Privacy:** this repository contains only infrastructure, tooling,
 and documentation — no family records or personal data. Deployments

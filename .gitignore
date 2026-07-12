@@ -4,7 +4,13 @@ deploy/config/LocalSettings.php
 deploy/config/wdqs-frontend-config.json
 deploy/config/wikibase-php.ini
 
-# Python
+# Python / tooling
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+
+# Runtime workspace for pipeline outputs (batches, galleries, review CSVs)
+var/

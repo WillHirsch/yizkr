@@ -48,12 +48,24 @@ values and N source-attributed values, and everything still works.*
 
 ## Engineering conventions
 
-- Infrastructure: Docker Compose (Wikibase Suite and companions).
-- Pipeline and bots: Python 3.12+, `WikibaseIntegrator` for writes,
-  Pydantic for claim schemas, pytest for tests.
+- Infrastructure: Docker Compose (Wikibase Suite and companions) in
+  `deploy/`, which intentionally tracks upstream Wikibase Suite Deploy
+  file-for-file.
+- Python: one uv-managed package (`src/yizkr`, Python 3.11+), single
+  `yizkr` CLI entry point, `WikibaseIntegrator` for writes, Pydantic
+  for schemas, dependencies in `pyproject.toml` (+ `uv.lock`; heavy
+  optional engines are extras: `llm`, `faces`).
+- Tests: offline unit tests in `tests/unit` run by default; live
+  integration tests in `tests/integration` (marked `live`) run against
+  the deployed stack via `make test-live`. Substantial behavior changes
+  to write paths get a live test, not just a session's manual check.
+- Lint/format: ruff (`make lint` / `make fmt`); CI runs lint + unit
+  tests on every push.
 - Reads: SPARQL against the bundled query service.
 - Bulk human review: CSV artifacts consumable by OpenRefine.
 - Idempotency: all bootstrap/import scripts must be safely re-runnable.
+- Pipeline outputs (batches, review CSVs, galleries) are runtime state:
+  keep them in `var/` (gitignored) or outside the repo.
 - Docs move with code: update ADRs/MODELING.md in the same PR as any
   behavior change; new architectural decisions get a new ADR.
 
