@@ -348,7 +348,11 @@ def ensure_subclass_statement(wbi, item_qid: str, target_qid: str,
     claim = ItemClaim(
         prop_nr=subclass_pid, value=target_qid, references=references
     )
-    entity.claims.add(claim)
+    # APPEND, never the REPLACE_ALL default: adding a second superclass
+    # must not delete the first (rule 3 applies to schema statements too).
+    from wikibaseintegrator.wbi_enums import ActionIfExists
+
+    entity.claims.add(claim, action_if_exists=ActionIfExists.APPEND_OR_REPLACE)
     entity.write(summary="model bootstrap: subclass hierarchy")
     return "create"
 

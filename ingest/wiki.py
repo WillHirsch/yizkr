@@ -225,6 +225,24 @@ class WikiClient:
         _, item_labels = self.label_index()
         return item_labels.get(label)
 
+    # -- wiki pages ---------------------------------------------------------
+
+    def edit_page(self, title: str, text: str, summary: str) -> None:
+        """Create or fully replace a wiki page."""
+        from wikibaseintegrator import wbi_helpers
+
+        wbi_helpers.mediawiki_api_call_helper(
+            data={
+                "action": "edit",
+                "title": title,
+                "text": text,
+                "summary": summary,
+                "token": self.login.get_edit_token(),
+                "bot": "1",
+            },
+            login=self.login,
+        )
+
     # -- media upload -------------------------------------------------------
 
     def upload_file(self, path: Path, filename: Optional[str] = None,

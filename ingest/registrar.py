@@ -38,6 +38,14 @@ class RegistrationResult:
     created: bool = True
 
 
+def _append(entity, claim) -> None:
+    """Add a claim WITHOUT touching existing ones (rule 3): WBI's
+    claims.add() defaults to REPLACE_ALL for same-property claims."""
+    from wikibaseintegrator.wbi_enums import ActionIfExists
+
+    entity.claims.add(claim, action_if_exists=ActionIfExists.APPEND_OR_REPLACE)
+
+
 def _existing_claim_targets(entity, pid: str) -> set[str]:
     targets = set()
     for claim in entity.claims.get(pid) or []:
@@ -123,13 +131,15 @@ def register_artifact(
 
     changed = False
     if items[artifact_type] not in _existing_claim_targets(artifact, instance_of):
-        artifact.claims.add(
-            _item_claim(instance_of, items[artifact_type], stated_in, artifact_qid)
+        _append(
+            artifact,
+            _item_claim(instance_of, items[artifact_type], stated_in, artifact_qid),
         )
         changed = True
     if file_page and file_page not in _existing_claim_strings(artifact, media_file):
-        artifact.claims.add(
-            _string_claim(media_file, file_page, stated_in, artifact_qid)
+        _append(
+            artifact,
+            _string_claim(media_file, file_page, stated_in, artifact_qid),
         )
         changed = True
     if changed:
@@ -167,11 +177,11 @@ def _ensure_fragment(client: WikiClient, artifact_qid: str, title: str,
     fragment.descriptions.set("en", f"page {page} of {title}")
     fragment = fragment.write(summary="ingest: register fragment")
 
-    fragment.claims.add(
-        _item_claim(instance_of, fragment_class, stated_in, artifact_qid)
+    _append(
+        fragment, _item_claim(instance_of, fragment_class, stated_in, artifact_qid)
     )
     part_claim = _item_claim(part_of, artifact_qid, stated_in, artifact_qid)
     part_claim.qualifiers.add(String(prop_nr=page_number, value=str(page)))
-    fragment.claims.add(part_claim)
+    _append(fragment, part_claim)
     fragment.write(summary="ingest: fragment statements")
     return fragment.id

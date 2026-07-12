@@ -7,8 +7,8 @@ the fragment of the source artifact that makes it – including when
 sources contradict each other.
 
 **Status:** Phase W1 in progress — infrastructure, model bootstrap,
-claim schema, ingestion skeleton, and face proposals done; query
-library next.
+claim schema, ingestion skeleton, face proposals, and query library
+done; backup/export next.
 
 Start here:
 - `CLAUDE.md` – standing instructions and non-negotiable rules
@@ -20,6 +20,7 @@ Start here:
 - `model/` – schema manifest and idempotent bootstrap script
 - `ingest/` – ingestion pipeline (register → transcribe → extract →
   review → write) and the claim JSON contract
+- `queries/` – SPARQL query library, published to wiki pages
 
 **Privacy:** this repository contains only infrastructure, tooling,
 and documentation — no family records or personal data. Deployments

@@ -1,0 +1,37 @@
+# Per-person timeline: every dated assertion about each person, with the
+# source that asserts it. Plural-by-default (rule 6): when sources disagree
+# about a date, ALL attributed values appear as separate rows, labeled by
+# source — nothing is silently picked.
+# Covers: dated statements on the person (birth, death, ...), dated
+# qualifiers on the person's statements (e.g. spouse with point in time),
+# and dated events the person participated in.
+# For a single person, append e.g.: FILTER(?person = wd:Q26)
+SELECT ?person ?personLabel ?what ?date ?sourceLabel
+WHERE {
+  ?person wdt:{P:instance_of} wd:{Q:human} .
+  {
+    BIND("date of birth"@en AS ?what)
+    ?person p:{P:date_of_birth} ?st .
+    ?st ps:{P:date_of_birth} ?date .
+  } UNION {
+    BIND("date of death"@en AS ?what)
+    ?person p:{P:date_of_death} ?st .
+    ?st ps:{P:date_of_death} ?date .
+  } UNION {
+    ?person ?p ?st .
+    ?st pq:{P:point_in_time} ?date .
+    ?claimProperty wikibase:claim ?p ;
+                   rdfs:label ?what .
+    FILTER(LANG(?what) = "en")
+  } UNION {
+    ?event wdt:{P:participant} ?person ;
+           wdt:{P:instance_of} ?eventType ;
+           p:{P:point_in_time} ?st .
+    ?st ps:{P:point_in_time} ?date .
+    ?eventType rdfs:label ?what .
+    FILTER(LANG(?what) = "en")
+  }
+  OPTIONAL { ?st prov:wasDerivedFrom/pr:{P:stated_in} ?source . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+}
+ORDER BY ?personLabel ?date

@@ -1,0 +1,21 @@
+# Disagreement report — the flagship R2 view.
+# Every entity+property carrying two or more different attributed values,
+# with the source each value is stated in. Contradictions shown here are a
+# HEALTHY RESTING STATE (ADR-0002), not errors: this report exists so a
+# reader can weigh the evidence, not so someone can "fix" it.
+SELECT ?entity ?entityLabel ?propertyLabel
+       ?valueA ?valueALabel ?sourceALabel
+       ?valueB ?valueBLabel ?sourceBLabel
+WHERE {
+  ?property wikibase:claim ?p ;
+            wikibase:statementProperty ?ps .
+  ?entity ?p ?stA , ?stB .
+  ?stA ?ps ?valueA .
+  ?stB ?ps ?valueB .
+  FILTER(?valueA != ?valueB)
+  FILTER(STR(?stA) < STR(?stB))
+  OPTIONAL { ?stA prov:wasDerivedFrom/pr:{P:stated_in} ?sourceA . }
+  OPTIONAL { ?stB prov:wasDerivedFrom/pr:{P:stated_in} ?sourceB . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+}
+ORDER BY ?entityLabel ?propertyLabel

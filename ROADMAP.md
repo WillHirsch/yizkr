@@ -34,6 +34,7 @@ updated, and no path writes an unreferenced statement.
    pages: disagreement report (properties whose values differ across
    sources – the flagship R2 view), per-person timeline, places map,
    unreferenced-statement QC report.
+   *Done — see `queries/` (plus an artifact-assertions inventory).*
 7. **Backup/export** – scheduled RDF dump + media backup job, with a
    living-persons-excluded public export variant (empty for now).
 

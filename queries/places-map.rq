@@ -1,0 +1,13 @@
+# Places map: every place with coordinates, and what connects to it
+# (residences, event locations). Renders as a map in the query service UI.
+#defaultView:Map
+SELECT ?place ?placeLabel ?coords ?connection ?connectionLabel
+WHERE {
+  ?place wdt:{P:coordinate_location} ?coords .
+  OPTIONAL {
+    { ?connection wdt:{P:residence} ?place . }
+    UNION
+    { ?connection wdt:{P:location} ?place . }
+  }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+}

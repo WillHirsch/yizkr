@@ -1,0 +1,11 @@
+# QC report: statements without any reference. Rule 1 says every statement
+# carries a reference to the artifact asserting it (ADR-0003 §3), so this
+# report treats every row as a DEFECT to fix. Expected result: empty.
+SELECT ?entity ?entityLabel ?propertyLabel ?statement
+WHERE {
+  ?entity ?p ?statement .
+  ?property wikibase:claim ?p .
+  FILTER NOT EXISTS { ?statement prov:wasDerivedFrom ?anyReference . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+}
+ORDER BY ?entityLabel ?propertyLabel

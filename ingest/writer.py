@@ -106,12 +106,27 @@ class BatchWriter:
             claim.references = self._references(
                 artifact_qid=source_artifact_qid
             )
-            item.claims.add(claim)
+            self._append(item, claim)
             item.write(summary="ingest: instance of")
         result.created_items[ref.local_id] = qid
         return qid
 
     # -- WBI datavalue construction -----------------------------------------
+
+    @staticmethod
+    def _append(entity, claim) -> None:
+        """Add a claim WITHOUT touching existing ones.
+
+        WikibaseIntegrator's claims.add() defaults to REPLACE_ALL, which
+        silently deletes existing statements on the same property — a
+        rule-3 violation (never overwrite a source-attributed statement).
+        Every add in the pipeline must go through here.
+        """
+        from wikibaseintegrator.wbi_enums import ActionIfExists
+
+        entity.claims.add(
+            claim, action_if_exists=ActionIfExists.APPEND_OR_REPLACE
+        )
 
     @staticmethod
     def _item_claim(pid: str, qid: str):
@@ -235,7 +250,7 @@ class BatchWriter:
         # The run item is the document of its own execution (same
         # convention as the model manifest, docs/MODELING.md).
         claim.references = self._references(artifact_qid=item.id)
-        item.claims.add(claim)
+        self._append(item, claim)
         item.write(summary="ingest: run item statements")
         return item.id
 
@@ -299,7 +314,7 @@ class BatchWriter:
                 entity = self._entity_cache.get(
                     subject_qid
                 ) or self.client.wbi.item.get(subject_qid)
-                entity.claims.add(wbi_claim)
+                self._append(entity, wbi_claim)
                 entity.write(summary="ingest: write reviewed claim")
                 self._entity_cache[subject_qid] = self.client.wbi.item.get(
                     subject_qid
