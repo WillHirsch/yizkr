@@ -44,6 +44,11 @@ Every statement carries at least one reference with:
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item
 
+The pipeline's claim JSON contract implementing this pattern is
+`ingest/claims.py` (`ClaimBatch`): sources are required fields there,
+ranks are unrepresentable, and property/item references use manifest
+keys resolved to local ids only at write time.
+
 ## Uncertainty and time
 
 - Use Wikibase time precision (year / month / day / decade / century).

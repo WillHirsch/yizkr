@@ -20,6 +20,7 @@ updated, and no path writes an unreferenced statement.
    (entity refs, property, value, uncertainty fields, fragment
    locator, extraction-run metadata), with validation tests. This is
    the contract between extraction and writing.
+   *Done — see `ingest/claims.py`.*
 4. **Ingestion skeleton** – `ingest/` package with pluggable steps:
    artifact registrar (media upload + artifact/fragment items),
    transcription (LLM-vision first; HTR platform adapter stub),

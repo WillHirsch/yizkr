@@ -1,0 +1,4 @@
+# Dependencies for ingest.claims and its tests
+pydantic>=2.5
+PyYAML>=6.0
+pytest>=8.0

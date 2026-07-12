@@ -1,0 +1,468 @@
+#!/usr/bin/env python3
+"""Claim JSON schema: the contract between extraction and writing.
+
+Every step of the ingestion pipeline (ADR-0003, ROADMAP W1 task 4)
+exchanges claims in this format: the LLM extractor emits it, entity
+resolution rewrites references in it, the reviewer export renders it to
+CSV, and the writer turns it into Wikibase statements.
+
+The schema makes the project's non-negotiable rules structural:
+
+* Rule 1 (no statement without a reference): `Claim.source` is a
+  required field. A claim without a source artifact cannot be
+  represented, parsed, or written.
+* Rule 2 (dual provenance): every batch carries
+  `extraction_run` metadata; the writer creates an extraction-run item
+  and adds the second reference to every statement it writes.
+* Rule 4 (ranks default to normal): there is deliberately NO rank
+  field. Machine writes are always normal rank; preferring/deprecating
+  is a curator action on the wiki, never part of the pipeline contract.
+* Rule 5 (uncertainty is structural): time values carry explicit
+  precision (day/month/year/decade/century) and a calendar; ranges and
+  approximation are expressed with `earliest_date`/`latest_date`/
+  `sourcing_circumstances` qualifiers. Nothing invites the extractor to
+  round or guess.
+
+Vocabulary: `property` fields and vocabulary references hold *manifest
+keys* (e.g. ``spouse``, ``circa``) from model/manifest.yaml — stable,
+instance-independent names. `validate_against_manifest()` checks that
+keys exist and that each value's type matches the property's datatype.
+Local P/Q ids never appear in pipeline JSON (they differ per instance);
+only the writer resolves keys to ids, at write time.
+
+Entity references come in three kinds:
+
+* ``qid``   — an entity that already exists in the instance (e.g. the
+  artifact item created by the registrar before extraction).
+* ``vocab`` — a manifest item by key (e.g. ``circa``, ``yes``).
+* ``local`` — a batch-scoped placeholder (``person-1``) for an entity
+  the extractor proposes; entity resolution replaces it with a ``qid``
+  reference or leaves it for item creation during the write step.
+
+CLI:
+    python3 claims.py --json-schema          # print JSON Schema (for LLM prompts)
+    python3 claims.py --validate batch.json  # parse + manifest-check a file
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Annotated, Literal, Optional, Union
+
+import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+SCHEMA_VERSION = 1
+DEFAULT_MANIFEST = Path(__file__).resolve().parent.parent / "model" / "manifest.yaml"
+
+# Manifest keys (properties and items) use snake_case identifiers.
+ManifestKey = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$")]
+
+
+class StrictModel(BaseModel):
+    """All schema models reject unknown fields: typos must fail loudly."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+# ---------------------------------------------------------------------------
+# Entity references
+# ---------------------------------------------------------------------------
+
+
+class QidRef(StrictModel):
+    """An entity that already exists in the target instance."""
+
+    kind: Literal["qid"] = "qid"
+    qid: str = Field(pattern=r"^Q[1-9]\d*$")
+
+
+class VocabRef(StrictModel):
+    """A vocabulary item from model/manifest.yaml, by manifest key."""
+
+    kind: Literal["vocab"] = "vocab"
+    key: ManifestKey
+
+
+class LocalRef(StrictModel):
+    """A batch-scoped placeholder for an entity proposed by extraction.
+
+    `local_id` must be stable within one batch so several claims can
+    talk about the same not-yet-resolved entity. `label`, `description`
+    and `instance_of` (a manifest item key) carry what the source says,
+    to power entity resolution and item creation.
+    """
+
+    kind: Literal["local"] = "local"
+    local_id: str = Field(min_length=1)
+    label: Optional[str] = None
+    description: Optional[str] = None
+    instance_of: Optional[ManifestKey] = None
+
+
+EntityRef = Annotated[Union[QidRef, VocabRef, LocalRef], Field(discriminator="kind")]
+
+
+# ---------------------------------------------------------------------------
+# Values (discriminated on `type`; one variant per Wikibase datatype in use)
+# ---------------------------------------------------------------------------
+
+
+class ItemValue(StrictModel):
+    type: Literal["item"] = "item"
+    value: EntityRef
+
+
+class StringValue(StrictModel):
+    type: Literal["string"] = "string"
+    value: str = Field(min_length=1)
+
+
+class ExternalIdValue(StrictModel):
+    type: Literal["external-id"] = "external-id"
+    value: str = Field(min_length=1)
+
+
+class MonolingualText(StrictModel):
+    text: str = Field(min_length=1)
+    language: str = Field(pattern=r"^[a-z]{2,3}(-[a-z0-9-]+)?$")
+
+
+class MonolingualValue(StrictModel):
+    type: Literal["monolingual"] = "monolingual"
+    value: MonolingualText
+
+
+PRECISIONS = ("century", "decade", "year", "month", "day")
+WIKIBASE_PRECISION = {"century": 7, "decade": 8, "year": 9, "month": 10, "day": 11}
+CALENDAR_URI = {
+    "gregorian": "http://www.wikidata.org/entity/Q1985727",
+    "julian": "http://www.wikidata.org/entity/Q1985786",
+}
+
+
+class TimeValue(StrictModel):
+    """A date as the source states it — never rounder, never narrower.
+
+    `precision` defaults to the finest field given. Fields finer than
+    the declared precision are rejected: stating "month precision" while
+    supplying a day means the claim narrows or pads what the source
+    says, and rule 5 forbids both. For decades use the first year
+    (1920s -> year=1920, precision=decade); same for centuries (1800).
+    Ranges ("between 1930 and 1935") are NOT a precision problem: use
+    earliest_date/latest_date qualifiers on the claim.
+    """
+
+    type: Literal["time"] = "time"
+    year: int
+    month: Optional[int] = Field(default=None, ge=1, le=12)
+    day: Optional[int] = Field(default=None, ge=1, le=31)
+    precision: Optional[Literal["century", "decade", "year", "month", "day"]] = None
+    calendar: Literal["gregorian", "julian"] = "gregorian"
+
+    @field_validator("year")
+    @classmethod
+    def check_year(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("there is no year zero")
+        return value
+
+    @model_validator(mode="after")
+    def check_component_consistency(self) -> "TimeValue":
+        if self.day is not None and self.month is None:
+            raise ValueError("a day requires a month")
+        finest = "day" if self.day else "month" if self.month else "year"
+        if self.precision is None:
+            self.precision = finest
+        elif self.precision in ("century", "decade"):
+            # Coarse precisions are expressed through their first year
+            # (1920s -> year=1920), so a bare year is expected; month/day
+            # would claim more than the source says.
+            if finest != "year":
+                raise ValueError(
+                    f"precision {self.precision!r} cannot carry a {finest} "
+                    f"field (never narrow or pad what a source says)"
+                )
+        elif PRECISIONS.index(finest) > PRECISIONS.index(self.precision):
+            raise ValueError(
+                f"fields are {finest}-precise but precision says "
+                f"{self.precision!r}: drop the finer fields or fix the "
+                f"precision (never narrow or pad what a source says)"
+            )
+        elif PRECISIONS.index(finest) < PRECISIONS.index(self.precision):
+            raise ValueError(
+                f"precision {self.precision!r} requires the {self.precision} field"
+            )
+        return self
+
+    def to_wikibase(self) -> dict:
+        """Wikibase time datavalue (unspecified parts zeroed, as on Wikidata)."""
+        sign = "-" if self.year < 0 else "+"
+        return {
+            "time": f"{sign}{abs(self.year):04d}-{self.month or 0:02d}-"
+                    f"{self.day or 0:02d}T00:00:00Z",
+            "precision": WIKIBASE_PRECISION[self.precision],
+            "calendarmodel": CALENDAR_URI[self.calendar],
+        }
+
+
+class CoordinateValue(StrictModel):
+    type: Literal["coordinate"] = "coordinate"
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    precision: Optional[float] = Field(default=None, gt=0)
+
+
+Value = Annotated[
+    Union[
+        ItemValue,
+        StringValue,
+        ExternalIdValue,
+        MonolingualValue,
+        TimeValue,
+        CoordinateValue,
+    ],
+    Field(discriminator="type"),
+]
+
+# Which value type satisfies each manifest datatype.
+DATATYPE_TO_VALUE_TYPE = {
+    "wikibase-item": "item",
+    "string": "string",
+    "external-id": "external-id",
+    "monolingualtext": "monolingual",
+    "time": "time",
+    "globe-coordinate": "coordinate",
+}
+
+
+# ---------------------------------------------------------------------------
+# Source reference and locators (ADR-0003)
+# ---------------------------------------------------------------------------
+
+
+class RegionPercent(StrictModel):
+    """Percentage bounding box within an image, from the top-left corner.
+
+    Serialized for Wikibase as the P2677-style string "x%,y%,w%,h%".
+    """
+
+    x: float = Field(ge=0, lt=100)
+    y: float = Field(ge=0, lt=100)
+    width: float = Field(gt=0, le=100)
+    height: float = Field(gt=0, le=100)
+
+    @model_validator(mode="after")
+    def check_within_bounds(self) -> "RegionPercent":
+        if self.x + self.width > 100:
+            raise ValueError("region extends past the right edge (x + width > 100)")
+        if self.y + self.height > 100:
+            raise ValueError("region extends past the bottom edge (y + height > 100)")
+        return self
+
+    def as_wikibase_string(self) -> str:
+        return (
+            f"{self.x:g}%,{self.y:g}%,{self.width:g}%,{self.height:g}%"
+        )
+
+
+class SourceReference(StrictModel):
+    """Where the artifact asserts the claim (rule 1; ADR-0003).
+
+    `artifact` names the artifact or artifact-fragment item; the
+    locators narrow the pointer inside it. The excerpt supports one-click
+    human verification.
+    """
+
+    artifact: EntityRef
+    page_number: Optional[str] = None
+    region: Optional[RegionPercent] = None
+    transcription_excerpt: Optional[MonolingualText] = None
+
+
+# ---------------------------------------------------------------------------
+# Claims
+# ---------------------------------------------------------------------------
+
+
+class Qualifier(StrictModel):
+    property: ManifestKey
+    value: Value
+
+
+class Claim(StrictModel):
+    """One source-attributed assertion.
+
+    There is intentionally no `rank` field: pipeline writes are always
+    normal rank (rule 4). `confidence` is extractor metadata for review
+    ordering; it is never written to the graph.
+    """
+
+    subject: EntityRef
+    property: ManifestKey
+    value: Value
+    qualifiers: list[Qualifier] = []
+    source: SourceReference
+    confidence: Optional[float] = Field(default=None, ge=0, le=1)
+
+
+class ExtractionRunMetadata(StrictModel):
+    """Process provenance for the batch (rule 2; ADR-0003).
+
+    The writer mints one extraction-run item per batch from this and
+    references every written statement to it.
+    """
+
+    model_identifier: str = Field(min_length=1)
+    pipeline_version: str = Field(min_length=1)
+    software_commit: Optional[str] = Field(default=None, min_length=4)
+    started_at: datetime
+
+    @field_validator("started_at")
+    @classmethod
+    def check_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("started_at must be timezone-aware")
+        return value
+
+
+class ClaimBatch(StrictModel):
+    """Everything one extraction run asserts about one or more artifacts."""
+
+    schema_version: Literal[1] = SCHEMA_VERSION
+    extraction_run: ExtractionRunMetadata
+    claims: list[Claim] = []
+
+
+# ---------------------------------------------------------------------------
+# Manifest validation
+# ---------------------------------------------------------------------------
+
+
+def load_vocabulary(
+    manifest_path: Path = DEFAULT_MANIFEST,
+) -> tuple[dict[str, str], set[str]]:
+    """(property key -> datatype, item keys) from model/manifest.yaml."""
+    with open(manifest_path) as f:
+        raw = yaml.safe_load(f)
+    properties = {key: spec["datatype"] for key, spec in raw["properties"].items()}
+    items = set(raw["items"])
+    return properties, items
+
+
+def validate_against_manifest(
+    batch: ClaimBatch,
+    manifest_path: Path = DEFAULT_MANIFEST,
+    vocabulary: Optional[tuple[dict[str, str], set[str]]] = None,
+) -> list[str]:
+    """Check every key and datatype in the batch against the manifest.
+
+    Returns a list of human-readable problems (empty means valid), so a
+    pipeline step can report them all at once instead of failing one at
+    a time.
+    """
+    properties, items = (
+        vocabulary if vocabulary is not None else load_vocabulary(manifest_path)
+    )
+    errors: list[str] = []
+
+    def check_ref(ref, where: str) -> None:
+        if isinstance(ref, VocabRef) and ref.key not in items:
+            errors.append(f"{where}: unknown vocabulary item key {ref.key!r}")
+        if isinstance(ref, LocalRef) and ref.instance_of is not None \
+                and ref.instance_of not in items:
+            errors.append(
+                f"{where}: instance_of names unknown item key {ref.instance_of!r}"
+            )
+
+    def check_property_value(prop: str, value, where: str) -> None:
+        datatype = properties.get(prop)
+        if datatype is None:
+            errors.append(f"{where}: unknown property key {prop!r}")
+            return
+        expected = DATATYPE_TO_VALUE_TYPE.get(datatype)
+        if expected is None:
+            errors.append(
+                f"{where}: property {prop!r} has datatype {datatype!r}, which "
+                f"the claim schema does not support yet"
+            )
+            return
+        if value.type != expected:
+            errors.append(
+                f"{where}: property {prop!r} ({datatype}) requires a "
+                f"{expected!r} value, got {value.type!r}"
+            )
+        if isinstance(value, ItemValue):
+            check_ref(value.value, f"{where}.value")
+
+    for index, claim in enumerate(batch.claims):
+        where = f"claims[{index}]"
+        check_ref(claim.subject, f"{where}.subject")
+        check_property_value(claim.property, claim.value, where)
+        for q_index, qualifier in enumerate(claim.qualifiers):
+            check_property_value(
+                qualifier.property,
+                qualifier.value,
+                f"{where}.qualifiers[{q_index}]",
+            )
+        check_ref(claim.source.artifact, f"{where}.source.artifact")
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--json-schema",
+        action="store_true",
+        help="print the ClaimBatch JSON Schema (for LLM extraction prompts)",
+    )
+    group.add_argument(
+        "--validate",
+        type=Path,
+        metavar="FILE",
+        help="parse FILE as a claim batch and check it against the manifest",
+    )
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    args = parser.parse_args()
+
+    if args.json_schema:
+        print(json.dumps(ClaimBatch.model_json_schema(), indent=2))
+        return 0
+
+    try:
+        batch = ClaimBatch.model_validate_json(args.validate.read_text())
+    except ValidationError as exc:
+        print(f"Schema errors in {args.validate}:\n{exc}", file=sys.stderr)
+        return 1
+    problems = validate_against_manifest(batch, manifest_path=args.manifest)
+    for problem in problems:
+        print(f"manifest check: {problem}", file=sys.stderr)
+    if problems:
+        return 1
+    print(
+        f"{args.validate}: valid ({len(batch.claims)} claims, "
+        f"run {batch.extraction_run.model_identifier})"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
