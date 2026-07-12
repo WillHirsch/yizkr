@@ -324,8 +324,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--llm",
         default="anthropic",
-        help="LLM provider for --engine llm (explicit opt-in; "
-        "sends artifact content to that provider)",
+        choices=["anthropic", "claude-code"],
+        help="LLM provider for --engine llm (explicit opt-in; sends "
+        "artifact content to that provider). anthropic = API key, "
+        "token billing; claude-code = CLI login, subscription billing",
     )
     p.add_argument("--out", type=Path, default=Path("transcription.json"))
     p.set_defaults(func=cmd_transcribe)
@@ -337,7 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--claims-file", type=Path, help="prepared claims JSON (file engine)"
     )
-    p.add_argument("--llm", default="anthropic")
+    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
     p.add_argument("--out", type=Path, default=Path("batch.json"))
     p.set_defaults(func=cmd_extract)
 

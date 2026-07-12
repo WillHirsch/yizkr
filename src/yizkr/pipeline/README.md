@@ -111,8 +111,30 @@ uv run yizkr claims --validate batch.json   # schema + manifest check a file
 No step talks to any external service by default; the whole pipeline
 runs with `textfile` + `file` engines. Choosing `--engine llm` sends
 artifact content — which may describe living people — to the
-configured provider; setting the provider's API key is the explicit
-opt-in. There is no default key and no fallback.
+configured provider. There is no default credential and no fallback;
+each provider has its own explicit opt-in (below).
+
+## LLM providers (`--llm`)
+
+Two Anthropic-backed providers, differing in how usage is billed:
+
+- **`anthropic`** — the Anthropic API via the `anthropic` package
+  (`uv sync --extra llm`). Token-based billing; setting
+  `ANTHROPIC_API_KEY` is the opt-in.
+- **`claude-code`** — the Claude Code CLI in headless mode
+  (`claude -p`), using the CLI's own login, so a Claude Pro/Max
+  **subscription** covers usage instead of per-token billing. Install
+  the CLI and log in once; being logged in is the opt-in. The engine
+  strips `ANTHROPIC_API_KEY` from the child process (a stray key would
+  silently switch back to token billing — use `anthropic` if you want
+  that), restricts the CLI to the Read tool only (images are read from
+  disk for vision; nothing can be executed or written), and runs in a
+  neutral directory so no project CLAUDE.md leaks into prompts. Note
+  subscriptions have rolling usage windows rather than API rate
+  limits — fine for evening-sized ingestion runs, less suited to bulk
+  backlogs.
+
+Pick the model for either provider with `$YIZKR_LLM_MODEL`.
 
 ## Tests
 

@@ -251,3 +251,101 @@ class TestPrivacyDefaults:
 
         with pytest.raises(RuntimeError, match="explicit opt-in"):
             AnthropicClient()
+
+    def test_claude_code_requires_installed_cli(self, monkeypatch):
+        from yizkr.pipeline import llm
+
+        def missing(*args, **kwargs):
+            raise FileNotFoundError("claude")
+
+        monkeypatch.setattr(llm.subprocess, "run", missing)
+        with pytest.raises(RuntimeError, match="explicit\\s+opt-in"):
+            llm.ClaudeCodeClient()
+
+
+class FakeCompleted:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+class TestClaudeCodeClient:
+    """Subscription-billed engine: headless `claude -p` (offline, mocked)."""
+
+    def make_client(self, monkeypatch, responses):
+        """responses: list of FakeCompleted, popped per subprocess call."""
+        from yizkr.pipeline import llm
+
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return responses.pop(0)
+
+        monkeypatch.setattr(llm.subprocess, "run", fake_run)
+        monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
+        return llm.ClaudeCodeClient(), calls
+
+    def test_version_probe_and_identifier(self, monkeypatch):
+        client, calls = self.make_client(
+            monkeypatch, [FakeCompleted(stdout="2.1.207 (Claude Code)\n")]
+        )
+        assert calls[0][0] == ["claude", "--version"]
+        assert client.model_identifier == "claude-code/2.1.207"
+
+    def test_model_flag_and_identifier(self, monkeypatch):
+        monkeypatch.setenv("YIZKR_LLM_MODEL", "claude-sonnet-5")
+        from yizkr.pipeline import llm
+
+        monkeypatch.setattr(
+            llm.subprocess,
+            "run",
+            lambda *a, **k: FakeCompleted(stdout="2.1.207\n"),
+        )
+        client = llm.ClaudeCodeClient()
+        assert client.model_identifier == "claude-code/2.1.207:claude-sonnet-5"
+        assert "--model" in client._command()
+
+    def test_complete_locks_down_tools_and_strips_api_key(self, monkeypatch, tmp_path):
+        client, calls = self.make_client(
+            monkeypatch,
+            [
+                FakeCompleted(stdout="2.1.207\n"),
+                FakeCompleted(stdout="the transcription"),
+            ],
+        )
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+        image = tmp_path / "scan.png"
+        image.write_bytes(b"png")
+
+        result = client.complete("Transcribe this.", [image])
+
+        assert result == "the transcription"
+        command, kwargs = calls[1]
+        assert command[:2] == ["claude", "-p"]
+        assert command[command.index("--allowedTools") + 1] == "Read"
+        # prompt goes via stdin and points Read at the image
+        assert str(image.resolve()) in kwargs["input"]
+        assert "Transcribe this." in kwargs["input"]
+        # the engine exists to use subscription auth: keys must not leak in
+        assert "ANTHROPIC_API_KEY" not in kwargs["env"]
+
+    def test_nonzero_exit_raises_with_detail(self, monkeypatch):
+        client, _ = self.make_client(
+            monkeypatch,
+            [
+                FakeCompleted(stdout="2.1.207\n"),
+                FakeCompleted(stderr="Invalid API key", returncode=1),
+            ],
+        )
+        with pytest.raises(RuntimeError, match="Invalid API key"):
+            client.complete("hello")
+
+    def test_empty_output_raises(self, monkeypatch):
+        client, _ = self.make_client(
+            monkeypatch,
+            [FakeCompleted(stdout="2.1.207\n"), FakeCompleted(stdout="  ")],
+        )
+        with pytest.raises(RuntimeError, match="no output"):
+            client.complete("hello")
