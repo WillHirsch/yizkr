@@ -29,6 +29,7 @@ updated, and no path writes an unreferenced statement.
    *Done — see `ingest/` (plus a minimal exact-label resolve step).*
 5. **Face proposals (W1 minimal)** – detection script emitting
    candidate depicts rows into the same review CSV flow (ADR-0005).
+   *Done — see `ingest/faces.py` (detect/enroll/match commands).*
 6. **Query library** – SPARQL queries checked in and embedded on wiki
    pages: disagreement report (properties whose values differ across
    sources – the flagship R2 view), per-person timeline, places map,

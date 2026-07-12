@@ -85,6 +85,8 @@ keys resolved to local ids only at write time.
 - Reference identifies the proposer (extraction/detection run) and
   confirmation is implied by the statement existing at all – unconfirmed
   proposals live outside the graph (review queue), never in it.
+- W1 implementation: `python -m ingest detect-faces / enroll-face /
+  match-faces` (see `ingest/faces.py`), feeding the shared review flow.
 
 ## Contradictions
 

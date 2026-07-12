@@ -7,7 +7,8 @@ the fragment of the source artifact that makes it – including when
 sources contradict each other.
 
 **Status:** Phase W1 in progress — infrastructure, model bootstrap,
-claim schema, and ingestion skeleton done; face proposals next.
+claim schema, ingestion skeleton, and face proposals done; query
+library next.
 
 Start here:
 - `CLAUDE.md` – standing instructions and non-negotiable rules

@@ -6,3 +6,7 @@ requests>=2.31
 pytest>=8.0
 # Optional: external LLM engine (explicit opt-in — see ingest/llm.py)
 # anthropic>=0.40
+# Optional: local face detection engine (ADR-0005; runs entirely locally)
+# insightface>=0.7
+# onnxruntime>=1.17
+# opencv-python-headless>=4.9

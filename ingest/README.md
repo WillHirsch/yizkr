@@ -55,6 +55,33 @@ against the live instance (run `model/bootstrap.py` first).
   (with page/region/excerpt locator qualifiers) and `inferred from
   extraction run → run item`. Re-runs skip existing statements.
 
+## Face proposals (`ingest/faces.py`, ADR-0005)
+
+A face proposal is an ordinary claim — `depicts` on the photograph,
+person as value, `relative position within image` qualifier, the
+photograph as its own source — so proposals ride the same review flow
+above, and only human-confirmed identifications reach the graph, with
+dual provenance (photograph + region; detection run).
+
+The curator loop ("initial manual inputs", R5):
+
+```sh
+python -m ingest detect-faces --file photo.jpg --artifact Q29 \
+    --gallery gallery.json --detections det.json --out faces-batch.json
+python -m ingest enroll-face --detections det.json --face 0 \
+    --label "A. Person" --qid Q26 --gallery gallery.json
+python -m ingest match-faces --detections det.json \
+    --gallery gallery.json --out faces-batch.json
+# then: export-review -> decide -> apply-review -> write
+```
+
+Unmatched faces produce no claim (an unidentified face has no person
+to depict); they wait in the detections file for enrolment. Detection
+uses an InsightFace-class model running **locally** — installing the
+optional dependencies in `requirements.txt` never sends images
+anywhere. If the model-pack auto-download is blocked in your network,
+fetch `buffalo_l` manually into `~/.insightface/models/buffalo_l/`.
+
 ## The claim contract (`ingest/claims.py`)
 
 Every step exchanges `ClaimBatch` JSON. The non-negotiable rules are

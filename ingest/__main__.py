@@ -125,6 +125,51 @@ def cmd_apply_review(args) -> int:
     return 0
 
 
+def cmd_detect_faces(args) -> int:
+    from ingest.faces import Gallery, make_detector, proposals_to_batch
+
+    detector = make_detector(args.engine)
+    detection = detector.detect(args.file, artifact_qid=args.artifact)
+    args.detections.write_text(detection.model_dump_json(indent=2))
+    gallery = Gallery.load(args.gallery)
+    batch, unmatched = proposals_to_batch(detection, gallery, args.threshold)
+    args.out.write_text(batch.model_dump_json(indent=2))
+    print(f"detected {len(detection.faces)} faces -> {args.detections}")
+    print(f"wrote {args.out} ({len(batch.claims)} depicts proposals; "
+          f"{len(unmatched)} unmatched faces: {unmatched or 'none'})")
+    if unmatched:
+        print("identify unmatched faces with enroll-face, then match-faces.")
+    return 0
+
+
+def cmd_match_faces(args) -> int:
+    from ingest.faces import Gallery, load_detections, proposals_to_batch
+
+    detection = load_detections(args.detections)
+    batch, unmatched = proposals_to_batch(
+        detection, Gallery.load(args.gallery), args.threshold
+    )
+    args.out.write_text(batch.model_dump_json(indent=2))
+    print(f"wrote {args.out} ({len(batch.claims)} depicts proposals; "
+          f"{len(unmatched)} unmatched faces: {unmatched or 'none'})")
+    return 0
+
+
+def cmd_enroll_face(args) -> int:
+    from ingest.faces import Gallery, enroll_from_detections, load_detections
+
+    gallery = Gallery.load(args.gallery)
+    person = enroll_from_detections(
+        load_detections(args.detections), args.face, gallery,
+        label=args.label, qid=args.qid,
+    )
+    gallery.save(args.gallery)
+    print(f"enrolled face {args.face} as {person.label} "
+          f"({person.qid or 'no QID yet'}); "
+          f"{len(person.embeddings)} embedding(s) in gallery")
+    return 0
+
+
 def cmd_write(args) -> int:
     from ingest.writer import BatchWriter
 
@@ -194,6 +239,40 @@ def main() -> int:
     p.add_argument("--csv", type=Path, required=True)
     p.add_argument("--out", type=Path, default=Path("approved.json"))
     p.set_defaults(func=cmd_apply_review)
+
+    p = sub.add_parser("detect-faces",
+                       help="detect faces in a photo -> depicts proposals "
+                            "(ADR-0005)")
+    p.add_argument("--file", type=Path, required=True, help="photo file")
+    p.add_argument("--artifact", required=True,
+                   help="QID of the registered photograph item")
+    p.add_argument("--engine", choices=["insightface"], default="insightface")
+    p.add_argument("--gallery", type=Path, default=Path("gallery.json"))
+    p.add_argument("--threshold", type=float, default=0.4,
+                   help="cosine similarity cutoff for suggestions")
+    p.add_argument("--detections", type=Path, default=Path("detections.json"),
+                   help="output: all faces + embeddings (for enroll-face)")
+    p.add_argument("--out", type=Path, default=Path("faces-batch.json"),
+                   help="output: claim batch for the review flow")
+    p.set_defaults(func=cmd_detect_faces)
+
+    p = sub.add_parser("match-faces",
+                       help="re-match saved detections against the gallery")
+    p.add_argument("--detections", type=Path, required=True)
+    p.add_argument("--gallery", type=Path, default=Path("gallery.json"))
+    p.add_argument("--threshold", type=float, default=0.4)
+    p.add_argument("--out", type=Path, default=Path("faces-batch.json"))
+    p.set_defaults(func=cmd_match_faces)
+
+    p = sub.add_parser("enroll-face",
+                       help="curator: state the identity of a detected face")
+    p.add_argument("--detections", type=Path, required=True)
+    p.add_argument("--face", type=int, required=True,
+                   help="face index within the detections file")
+    p.add_argument("--label", required=True, help="person's English label")
+    p.add_argument("--qid", help="person item QID, if it exists")
+    p.add_argument("--gallery", type=Path, default=Path("gallery.json"))
+    p.set_defaults(func=cmd_enroll_face)
 
     p = sub.add_parser("write", help="write approved claims as statements")
     p.add_argument("--batch", type=Path, required=True)
