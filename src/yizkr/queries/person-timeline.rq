@@ -18,8 +18,13 @@ WHERE {
     ?person p:{P:date_of_death} ?st .
     ?st ps:{P:date_of_death} ?date .
   } UNION {
+    # dated qualifiers: an instant (point in time) or the start/end of a
+    # state (marriage start, residence end, ...)
+    VALUES ?dateQualifier {
+      pq:{P:point_in_time} pq:{P:start_time} pq:{P:end_time}
+    }
     ?person ?p ?st .
-    ?st pq:{P:point_in_time} ?date .
+    ?st ?dateQualifier ?date .
     ?claimProperty wikibase:claim ?p ;
                    rdfs:label ?what .
     FILTER(LANG(?what) = "en")

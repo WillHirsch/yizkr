@@ -1,10 +1,13 @@
 """Claim extraction step: transcription -> ClaimBatch JSON.
 
-`LlmClaimExtractor` prompts an LLM with the claim JSON Schema and the
-transcription; the response is parsed and validated against the schema
-AND the model manifest before it goes anywhere. Anything that fails
-validation fails the step — malformed machine output must never limp
-toward the graph.
+`LlmClaimExtractor` prompts an LLM with the claim JSON Schema, the
+manifest vocabulary, and the transcription; the response is parsed and
+validated against the schema AND the model manifest before it goes
+anywhere. Validation is per claim: claims that pass proceed (to human
+review — nothing machine-written reaches the graph unreviewed), claims
+that fail are reported as rejects with their reasons. Malformed machine
+output must never limp toward the graph, but one bad claim must not
+discard an expensive extraction either.
 
 `ClaimFileExtractor` passes a prepared claim file through the same
 validation, so hand-written batches and future extraction tools get
@@ -27,6 +30,7 @@ import yizkr
 from yizkr.claims import (
     ClaimBatch,
     ExtractionRunMetadata,
+    load_vocabulary,
     validate_against_manifest,
 )
 from yizkr.pipeline.llm import LlmClient
@@ -48,8 +52,12 @@ Rules — these mirror the archive's non-negotiable conventions:
   references (stable local_id per entity within this batch, label as
   written, instance_of from: human, place, event, birth, death, marriage,
   migration, military_service).
-- Use only property keys and vocabulary item keys that appear in the JSON
-  Schema description below; values must match the property's datatype.
+- Use ONLY these property keys (property key: datatype), for claims and
+  qualifiers alike — a claim naming any other key is discarded. If the
+  document asserts something no listed property expresses, skip it:
+{property_keys}
+- Vocabulary item keys available for "vocab" references:
+{item_keys}
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
 
 Output ONLY a JSON object with a "claims" array (no prose, no code fences),
@@ -89,13 +97,21 @@ def _parse_response(response: str) -> dict:
     """Extract claim JSON from model output, tolerating code fences,
     surrounding prose, and MULTIPLE concatenated objects (models emit
     continuation chunks on very large extractions) — their claims
-    arrays are merged in order."""
+    arrays are merged in order.
+
+    Salvage fallback: a response that spans several turns can carry an
+    inexact seam (tokens dropped where the model resumed), which corrupts
+    the enclosing object. Every *individual* claim object that still
+    decodes is then collected instead — one bad seam must not discard an
+    entire expensive extraction. Duplicate claims (models sometimes
+    overlap at a resume point) are dropped."""
     text = response.strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
     if fenced:
         text = fenced.group(1)
     decoder = json.JSONDecoder()
     merged: list = []
+    salvaged: list = []
     found = False
     index = 0
     while True:
@@ -110,24 +126,82 @@ def _parse_response(response: str) -> dict:
         if isinstance(obj, dict) and "claims" in obj:
             found = True
             merged.extend(obj.get("claims") or [])
+        elif isinstance(obj, dict) and "subject" in obj and "property" in obj:
+            salvaged.append(obj)
         index = end
-    if not found:
+    if not found and not salvaged:
         raise ValueError(
-            f"no JSON object with a 'claims' array in extractor response: "
-            f"{text[:200]!r}"
+            f"no claim JSON in extractor response (neither a 'claims' "
+            f"object nor loose claim objects): {text[:200]!r}"
         )
-    return {"claims": merged}
+    claims = merged + salvaged
+    deduped: list = []
+    for claim in claims:
+        if claim not in deduped:
+            deduped.append(claim)
+    return {"claims": deduped}
+
+
+def salvage_valid_claims(
+    claims: list, extraction_run: dict
+) -> tuple[ClaimBatch, list[dict]]:
+    """Partition raw claim dicts into a valid ClaimBatch and rejects.
+
+    Machine output is expensive and reviewed by a human either way, so a
+    claim that fails schema or manifest validation must not sink the
+    claims that pass: the valid subset proceeds to review, the rejects
+    are reported (each with its reasons) for diagnosis.
+    """
+    vocabulary = load_vocabulary()
+    valid: list = []
+    rejects: list[dict] = []
+    for claim in claims:
+        try:
+            batch = ClaimBatch.model_validate(
+                {"extraction_run": extraction_run, "claims": [claim]}
+            )
+        except Exception as exc:  # pydantic ValidationError, in short form
+            rejects.append({"claim": claim, "problems": [str(exc)]})
+            continue
+        problems = validate_against_manifest(batch, vocabulary=vocabulary)
+        if problems:
+            rejects.append({"claim": claim, "problems": problems})
+        else:
+            valid.append(claim)
+    return (
+        ClaimBatch.model_validate({"extraction_run": extraction_run, "claims": valid}),
+        rejects,
+    )
+
+
+def vocabulary_prompt_lines() -> tuple[str, str]:
+    """Render the manifest vocabulary for the extraction prompt."""
+    properties, items = load_vocabulary()
+    property_lines = "\n".join(
+        f"  {key}: {datatype}" for key, datatype in sorted(properties.items())
+    )
+    item_lines = "  " + ", ".join(sorted(items))
+    return property_lines, item_lines
 
 
 class LlmClaimExtractor:
-    def __init__(self, client: LlmClient, raw_dump: Path | None = None) -> None:
+    def __init__(
+        self,
+        client: LlmClient,
+        raw_dump: Path | None = None,
+        rejects_dump: Path | None = None,
+    ) -> None:
         self.client = client
         self.raw_dump = raw_dump
+        self.rejects_dump = rejects_dump
 
     def extract(self, transcription: Transcription, artifact_qid: str) -> ClaimBatch:
         schema = json.dumps(ClaimBatch.model_json_schema(), indent=2)
+        property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
             schema=schema,
+            property_keys=property_keys,
+            item_keys=item_keys,
             artifact_qid=artifact_qid,
             language=transcription.language,
             text=transcription.text,
@@ -140,19 +214,23 @@ class LlmClaimExtractor:
             self.raw_dump.parent.mkdir(parents=True, exist_ok=True)
             self.raw_dump.write_text(response)
         payload = _parse_response(response)
-        batch = ClaimBatch.model_validate(
-            {
-                "extraction_run": run_metadata(self.client.model_identifier).model_dump(
-                    mode="json"
-                ),
-                "claims": payload.get("claims", []),
-            }
+        batch, rejects = salvage_valid_claims(
+            payload.get("claims", []),
+            run_metadata(self.client.model_identifier).model_dump(mode="json"),
         )
-        problems = validate_against_manifest(batch)
-        if problems:
+        if self.rejects_dump is not None:
+            if rejects:
+                self.rejects_dump.parent.mkdir(parents=True, exist_ok=True)
+                self.rejects_dump.write_text(json.dumps(rejects, indent=2))
+            else:
+                self.rejects_dump.unlink(missing_ok=True)  # no stale rejects
+        if not batch.claims:
+            detail = "\n  ".join(
+                problem for reject in rejects[:20] for problem in reject["problems"]
+            )
             raise ValueError(
-                "extractor output failed manifest validation:\n  "
-                + "\n  ".join(problems)
+                f"every extracted claim failed validation "
+                f"({len(rejects)} rejects):\n  {detail}"
             )
         return batch
 

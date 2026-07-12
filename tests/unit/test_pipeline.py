@@ -129,9 +129,34 @@ class TestExtract:
         with pytest.raises(ValueError, match="shoe_size"):
             LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
 
+    def test_llm_extractor_salvages_valid_claims_around_bad_ones(self, tmp_path):
+        """One invalid claim must not discard the whole (expensive)
+        extraction: the valid subset proceeds, rejects and reasons land
+        in the rejects dump for diagnosis."""
+        mixed = [CLAIMS[0], dict(CLAIMS[1], property="shoe_size"), CLAIMS[1]]
+        rejects_path = tmp_path / "batch.json.rejected.json"
+        llm = FakeLlm(json.dumps({"claims": mixed}))
+        batch = LlmClaimExtractor(llm, rejects_dump=rejects_path).extract(
+            self.transcription(), "Q23"
+        )
+        assert len(batch.claims) == 2
+        rejects = json.loads(rejects_path.read_text())
+        assert len(rejects) == 1
+        assert "shoe_size" in rejects[0]["problems"][0]
+        assert rejects[0]["claim"]["property"] == "shoe_size"
+
+    def test_llm_extractor_prompt_enumerates_vocabulary(self):
+        """The model can only comply with 'use only manifest keys' if the
+        prompt actually lists them."""
+        llm = FakeLlm(json.dumps({"claims": CLAIMS}))
+        LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        assert "date_of_birth: time" in llm.prompts[0]
+        assert "place_of_birth: wikibase-item" in llm.prompts[0]
+        assert "circa" in llm.prompts[0]
+
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")
-        with pytest.raises(ValueError, match="no JSON object"):
+        with pytest.raises(ValueError, match="no claim JSON"):
             LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
 
     def test_parse_response_tolerates_fences_and_prose(self):
@@ -150,6 +175,22 @@ class TestExtract:
         )
         merged = _parse_response(chunks)
         assert merged == {"claims": [CLAIMS[0], CLAIMS[1]]}
+
+    def test_parse_response_salvages_claims_from_corrupt_wrapper(self):
+        """An inexact continuation seam corrupts the enclosing claims
+        object; every individual claim that still decodes is salvaged,
+        with resume-point duplicates dropped."""
+        corrupt = (
+            '{"schema_version": 1, "claims": [\n'
+            + json.dumps(CLAIMS[0])
+            + ',\n{"subject": {"kind": "loc'  # seam: truncated mid-claim
+            + "\n"
+            + json.dumps(CLAIMS[1])
+            + ",\n"
+            + json.dumps(CLAIMS[1])  # model overlapped on resume
+            + "\n]}"
+        )
+        assert _parse_response(corrupt) == {"claims": [CLAIMS[0], CLAIMS[1]]}
 
     def test_parse_response_ignores_json_without_claims(self):
         text = json.dumps({"note": "irrelevant"}) + json.dumps({"claims": []})
@@ -384,7 +425,9 @@ class TestClaudeCodeClient:
             monkeypatch,
             [FakeCompleted(stdout="2.1.207\n"), FakeCompleted(stdout=stream)],
         )
-        assert client.complete("extract") == '{"claims": [\n]}'
+        # joined with NO separator: an exact mid-token resume must
+        # reconstruct the original text byte-for-byte
+        assert client.complete("extract") == '{"claims": []}'
 
     def test_nonzero_exit_raises_with_detail(self, monkeypatch):
         client, _ = self.make_client(

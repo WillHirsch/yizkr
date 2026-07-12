@@ -3,10 +3,21 @@
 # with the source each value is stated in. Contradictions shown here are a
 # HEALTHY RESTING STATE (ADR-0002), not errors: this report exists so a
 # reader can weigh the evidence, not so someone can "fix" it.
+#
+# Only properties that can hold at most one true value per person are
+# candidates for disagreement. Properties that legitimately accumulate
+# values over a life (spouse, residence, ...) are excluded — two spouses
+# from one source are remarriages, not a contradiction.
 SELECT ?entity ?entityLabel ?propertyLabel
        ?valueA ?valueALabel ?sourceALabel
        ?valueB ?valueBLabel ?sourceBLabel
 WHERE {
+  VALUES ?property {
+    wd:{P:date_of_birth} wd:{P:date_of_death}
+    wd:{P:place_of_birth} wd:{P:place_of_death}
+    wd:{P:father} wd:{P:mother}
+    wd:{P:coordinate_location} wd:{P:geonames_id} wd:{P:whg_place_id}
+  }
   ?property wikibase:claim ?p ;
             wikibase:statementProperty ?ps .
   ?entity ?p ?stA , ?stB .

@@ -231,7 +231,11 @@ class ClaudeCodeClient:
             elif event.get("type") == "result":
                 result_text = event.get("result")
         if pieces:
-            return "\n".join(pieces)
+            # Join with no separator: when a turn resumes exactly where
+            # the previous one stopped (possibly mid-token), direct
+            # concatenation reconstructs the original text; any inserted
+            # whitespace could corrupt a seam inside a JSON string/number.
+            return "".join(pieces)
         if result_text:
             return result_text
         return stdout

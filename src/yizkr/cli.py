@@ -146,11 +146,22 @@ def cmd_extract(args) -> int:
         from yizkr.pipeline.llm import make_client
 
         raw_dump = args.out.with_name(args.out.name + ".raw.txt")
-        extractor = LlmClaimExtractor(make_client(args.llm), raw_dump=raw_dump)
+        rejects_dump = args.out.with_name(args.out.name + ".rejected.json")
+        extractor = LlmClaimExtractor(
+            make_client(args.llm), raw_dump=raw_dump, rejects_dump=rejects_dump
+        )
     batch = extractor.extract(transcription, artifact_qid=args.artifact)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(batch.model_dump_json(indent=2))
     print(f"wrote {args.out} ({len(batch.claims)} claims)")
+    rejects_path = getattr(extractor, "rejects_dump", None)
+    if rejects_path is not None and rejects_path.exists():
+        rejected = len(json.loads(rejects_path.read_text()))
+        print(
+            f"warning: {rejected} claims failed validation and were NOT "
+            f"written; reasons in {rejects_path}",
+            file=sys.stderr,
+        )
     return 0
 
 

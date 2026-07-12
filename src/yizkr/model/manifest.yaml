@@ -93,6 +93,26 @@ properties:
     datatype: time
     wikidata: P570
 
+  place_of_birth:
+    label: place of birth
+    description: place where the subject was born, as asserted by a source
+    datatype: wikibase-item
+    wikidata: P19
+
+  place_of_death:
+    label: place of death
+    description: place where the subject died, as asserted by a source
+    datatype: wikibase-item
+    wikidata: P20
+
+  age_at_death:
+    label: age at death
+    description: >-
+      age at death exactly as asserted by a source (qualifier on date of
+      death). Redundant with birth/death dates but still a source
+      assertion; kept verbatim, never derived. No Wikidata equivalent.
+    datatype: string
+
   father:
     label: father
     description: male parent of the subject

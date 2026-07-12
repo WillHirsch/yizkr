@@ -67,6 +67,12 @@ keys resolved to local ids only at write time.
 - Use Wikibase time precision (year / month / day / decade / century).
 - Ranges and vagueness: earliest date / latest date qualifiers.
 - "circa": sourcing circumstances qualifier.
+- Redundant-but-asserted values (e.g. "age: 62" alongside a death date)
+  are kept verbatim as qualifiers (`age at death`), never derived or
+  dropped: sources assert them, so the archive records them.
+- Ambiguous date formats (03-05-1950: 3 May or March 5?) must not be
+  silently disambiguated; extraction should downgrade to the precision
+  actually supported or leave the claim to a curator.
 - Named periods: statements may point to time-period items rather than
   dates; period items link to PeriodO ids.
 - Never narrow a source's vagueness to make data "cleaner".
@@ -130,6 +136,12 @@ and reference the artifact itself or the producing run.
   statements at **normal rank**, each with its own references.
 - Rank changes are curator actions, logged by MediaWiki history, and
   optional forever.
+- Disagreement *reporting* applies only to properties that can hold at
+  most one true value per subject (dates/places of birth and death,
+  parents, a place's identity properties). Properties that legitimately
+  accumulate values over a life — spouse, residence — are multi-valued
+  by nature: two spouses asserted by one source are remarriages, not a
+  contradiction (their start/end qualifiers tell them apart).
 
 ## Living persons and privacy
 

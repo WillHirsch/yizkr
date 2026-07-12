@@ -38,6 +38,32 @@ updated, and no path writes an unreferenced statement.
 7. **Backup/export** – scheduled RDF dump + media backup job, with a
    living-persons-excluded public export variant (empty for now).
 
+### Hardening items from the first trial ingestion
+
+8. **Chunked extraction** – dense documents (a 60-person family tree)
+   overflow a single model response; continuation turns are reassembled
+   and salvaged today, but per-fragment extraction with batch merge is
+   the structural fix. Include retry/partial-progress and a
+   `--from-raw` re-parse path so recovered raw dumps never require
+   paying for a second run.
+9. **Cross-document entity reconciliation** – exact-label resolve
+   duplicates people across documents ("Samuel Genserowski" vs "Samuel
+   Moses Genserowski"). Alias-aware candidate matching feeding the
+   review flow (or an OpenRefine reconciliation recipe) before any bulk
+   ingestion.
+10. **Living-person policy at ingestion** – contemporary documents
+    yield living-person claims with no flagging. Vocabulary-by-omission
+    (no email/phone properties) is deliberate policy; add an
+    ingestion-time counterpart: review CSV warns when a subject has no
+    death data and recent activity, and the `living person` flag gets
+    set as part of curation. Vocabulary session for the observed gaps:
+    occupation, sibling, cause of death (quantity datatype support for
+    ages/counts).
+11. **Review corrections** – the CSV review flow is approve/reject
+    only; ambiguous machine readings (date-format ambiguity) currently
+    force rejection. Add an edit/correction column that produces a
+    curator-attributed replacement claim.
+
 ## Phase W2 (IIIF tier) – later
 
 Cantaloupe + OpenSeadragon/Mirador; W3C annotation store; migrate
