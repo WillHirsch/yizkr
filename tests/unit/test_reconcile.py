@@ -103,6 +103,34 @@ class TestBlocking:
         ]
         assert [c.qid for c in block_candidates(alex, extended)["e5"]] == ["Q124"]
 
+    def test_graph_pair_blocking_is_also_prefix_aware(self):
+        """Same rule for roster x roster pairs: 'Alex' vs 'Alexander …'
+        must be adjudicated, not silently unblocked."""
+        from yizkr.pipeline.reconcile import propose_graph_pairs
+
+        pair_roster = [
+            RosterEntity(qid="Q170", label="Alex", kind="human"),
+            RosterEntity(qid="Q124", label="Alexander Samuel Genserowsky", kind="human"),
+        ]
+        response = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "entity_id": "Q170",
+                        "qid": "Q124",
+                        "verdict": "uncertain",
+                        "confidence": 0.5,
+                        "evidence": "clipped form",
+                    }
+                ),
+                json.dumps({"done": True, "proposals_emitted": 1}),
+            ]
+        )
+        llm = ScriptedLlm(response)
+        proposals = propose_graph_pairs(llm, pair_roster)
+        assert [(p.entity_id, p.qid) for p in proposals] == [("Q170", "Q124")]
+        assert "Alexander Samuel Genserowsky" in llm.prompts[0]
+
 
 class TestAdjudication:
     def response(self, extra_lines=()):

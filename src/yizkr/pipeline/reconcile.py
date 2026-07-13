@@ -456,7 +456,9 @@ def propose_graph_pairs(
         for second in roster[index + 1 :]:
             if first.kind != second.kind:
                 continue
-            if first_tokens & _name_tokens(second.label, *second.aliases):
+            if _tokens_overlap(
+                first_tokens, _name_tokens(second.label, *second.aliases)
+            ):
                 pairs.append((first, second))
     if not pairs:
         return []
