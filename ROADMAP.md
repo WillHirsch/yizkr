@@ -57,6 +57,8 @@ updated, and no path writes an unreferenced statement.
    matches resolve to existing items before write; a separate
    occasional pass proposes merges/`said to be the same as` for
    duplicates already in the graph.
+   *Done — see `pipeline/reconcile.py`; `ingest reconcile`,
+   `resolve --equivalences`, `reconcile-graph`.*
 10. **Living-person policy at ingestion** – contemporary documents
     yield living-person claims with no flagging. Vocabulary-by-omission
     (no email/phone properties) is deliberate policy; add an
