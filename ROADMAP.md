@@ -46,6 +46,7 @@ updated, and no path writes an unreferenced statement.
    structural fix. Specified in ADR-0006 (semantic segmentation →
    packed chunks → NDJSON emission with sentinel → deterministic merge;
    per-chunk state with resume, subsuming raw-dump re-parse).
+   *Done — see `pipeline/chunking.py`; `ingest extract --strategy`.*
 9. **Cross-document entity reconciliation** – exact-label resolve
    duplicates people across documents ("Samuel Genserowski" vs "Samuel
    Moses Genserowski"). Alias-aware candidate matching feeding the

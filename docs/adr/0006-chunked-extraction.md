@@ -1,6 +1,10 @@
 # ADR-0006: Semantically chunked claim extraction
 
-Status: proposed (specified; implementation pending)
+Status: accepted (implemented in `pipeline/chunking.py`; validated by
+re-extracting the first trial's family tree chunked and diffing against
+the reviewed single-shot batch — 99% of facts identical, the remainder
+explained: richer symmetric spouse claims, and an ambiguous date
+correctly downgraded to year precision instead of silently guessed)
 
 ## Context
 
