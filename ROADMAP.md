@@ -37,6 +37,8 @@ updated, and no path writes an unreferenced statement.
    *Done — see `queries/` (plus an artifact-assertions inventory).*
 7. **Backup/export** – scheduled RDF dump + media backup job, with a
    living-persons-excluded public export variant (empty for now).
+   *Done — see `backup.py`; `yizkr backup` (database + media + RDF +
+   conservative public export), cron runbook in deploy/README.md.*
 
 ### Hardening items from the first trial ingestion
 

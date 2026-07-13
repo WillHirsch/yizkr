@@ -95,12 +95,61 @@ in `docker-compose.https.yml` to avoid rate limits.
 - **Upgrades:** images are pinned to major versions (`wikibase:7`,
   `wdqs:2`, ...). Before upgrading majors, read the upstream release
   notes — MediaWiki upgrades can require `update.php` runs. Take a
-  backup first (backup/export job is W1 task 7).
+  backup first (`yizkr backup`, below).
 - **Generated config:** first boot writes `config/LocalSettings.php`,
   `config/wdqs-frontend-config.json`, and `config/wikibase-php.ini`
   (all gitignored). Local settings tweaks go in
   `config/Extensions.php` / `LocalSettings.d` overrides, not upstream
   files.
+
+### Backups and the public export
+
+`yizkr backup` (run from the repo root, stack up) writes a timestamped
+directory under `var/backups/` containing:
+
+- `database.sql.gz` — mariadb dump. **The authoritative backup**:
+  items, statements, full edit history, users.
+- `media.tar.gz` — uploaded artifact files.
+- `full.nt.gz` — complete RDF dump. Portable export; also what a full
+  WDQS reload imports (WDQS state itself is derived and not backed up).
+- `public.nt.gz` + `public-exclusions.json` — the living-persons-
+  excluded export (R7). Conservative by construction: a person is
+  included only on positive evidence they are not living (a death
+  record, birth beyond the 100-year cutoff, or an explicit curator
+  `living person = no`); *unknown means excluded*. Every triple that
+  mentions an excluded person is dropped — including other people's
+  claims about them and orphaned provenance nodes — and transcription
+  excerpts (raw source quotations) never enter the public tier at all.
+  The exclusions file records who was excluded and why, for curator
+  review. Nothing here publishes anything: the file is an artifact you
+  may choose to publish.
+
+Schedule it with cron on the host, e.g. nightly at 03:15 keeping two
+weeks:
+
+```cron
+15 3 * * * cd /path/to/yizkr && uv run yizkr backup --keep 14 >> var/backups/backup.log 2>&1
+```
+
+Copy `var/backups/` off-machine (rsync, restic, a NAS — anything);
+a backup that lives only on the server it backs up is not a backup.
+
+**Restore** (new or broken instance):
+
+```sh
+docker compose up -d                     # fresh stack, healthy
+gunzip -c database.sql.gz | docker compose exec -T mysql \
+  mariadb -u"$DB_USER" -p"$DB_PASS" "$DB_NAME"
+docker compose exec -T wikibase tar -C /var/www/html -xzf - < media.tar.gz
+docker compose exec wikibase php maintenance/run.php update --quick
+# rebuild the query service from the restored wiki:
+docker compose stop wdqs wdqs-updater
+docker volume rm yizkr-wikibase_wdqs-data
+docker compose up -d
+```
+
+(the WDQS updater replays recent changes; for large graphs import
+`full.nt.gz` via loadData.sh instead — see the wdqs image docs.)
 
 ### Resetting
 

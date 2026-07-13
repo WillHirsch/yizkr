@@ -52,6 +52,29 @@ def cmd_smoke_test(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    from yizkr.backup import run_backup
+
+    manifest = run_backup(
+        Config.load(args.env_file),
+        backup_root=args.out,
+        deploy_dir=args.deploy_dir,
+        compose_files=args.compose_file or None,
+        skip_media=args.skip_media,
+        public_export=not args.no_public_export,
+        cutoff_years=args.cutoff_years,
+        keep=args.keep,
+    )
+    for name, info in manifest["components"].items():
+        detail = "".join(
+            f", {key}={value}" for key, value in info.items() if key != "file"
+        )
+        print(f"{name}: {args.out / manifest['timestamp'] / info['file']}{detail}")
+    if manifest["pruned"]:
+        print(f"pruned old backups: {', '.join(manifest['pruned'])}")
+    return 0
+
+
 def cmd_publish_queries(args) -> int:
     from yizkr.queries.publish import publish_queries
 
@@ -391,6 +414,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_publish_queries)
+
+    p = sub.add_parser(
+        "backup",
+        help="database + media + RDF dump, and a living-persons-excluded "
+        "public export (W1 task 7)",
+    )
+    p.add_argument("--out", type=Path, default=Path("var/backups"))
+    p.add_argument("--deploy-dir", type=Path, default=Path("deploy"))
+    p.add_argument(
+        "--compose-file",
+        action="append",
+        metavar="FILE",
+        help="compose file(s) relative to --deploy-dir (repeatable; "
+        "default docker-compose.yml)",
+    )
+    p.add_argument("--skip-media", action="store_true")
+    p.add_argument(
+        "--no-public-export",
+        action="store_true",
+        help="skip the living-persons-excluded export",
+    )
+    p.add_argument(
+        "--cutoff-years",
+        type=int,
+        default=100,
+        metavar="N",
+        help="without death evidence or a curator flag, only people born "
+        "more than N years ago enter the public export (default 100)",
+    )
+    p.add_argument(
+        "--keep",
+        type=int,
+        default=0,
+        metavar="N",
+        help="prune to the newest N backups (0 = keep everything)",
+    )
+    p.set_defaults(func=cmd_backup)
 
     p = sub.add_parser(
         "reconcile-graph",

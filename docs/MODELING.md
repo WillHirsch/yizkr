@@ -162,3 +162,10 @@ and reference the artifact itself or the producing run.
 - Property: "living person" flag (or inferred from absence of death
   data + birth recency); flagged entities are excluded from every
   public export, dump, or publish tier by default.
+- The public export (`yizkr backup`) applies this conservatively:
+  a person enters it only on positive evidence they are not living —
+  a death record, birth beyond a 100-year cutoff, or an explicit
+  curator `living person = no`. Unknown means excluded. Exclusion
+  removes every mention (other people's claims about them, orphaned
+  provenance nodes), and transcription excerpts — raw source
+  quotations, which can name anyone — never enter the public tier.

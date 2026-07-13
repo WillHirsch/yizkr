@@ -110,7 +110,9 @@ class TestBlocking:
 
         pair_roster = [
             RosterEntity(qid="Q170", label="Alex", kind="human"),
-            RosterEntity(qid="Q124", label="Alexander Samuel Genserowsky", kind="human"),
+            RosterEntity(
+                qid="Q124", label="Alexander Samuel Genserowsky", kind="human"
+            ),
         ]
         response = "\n".join(
             [
