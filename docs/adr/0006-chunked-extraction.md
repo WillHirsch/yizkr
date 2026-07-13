@@ -80,17 +80,60 @@ degraded (offset chunking), never fatal.
 ### 2. Packing
 
 Units are greedy-packed in document order into chunks whose combined
-text stays under an input budget (`--chunk-budget`, default 2,000
-chars — with ~16× amplification that keeps expected output well under
-one turn). A single unit larger than the budget becomes its own chunk;
-the reassembly nets from the trial remain as backstop for that case.
+*assigned-unit* text stays under a budget (`--chunk-budget`, default
+2,000 chars). The budget bounds the text a chunk call must emit claims
+for — and therefore its expected output (~16× amplification keeps it
+well under one turn) — not the context the call sees, which is the
+full document (§3). A single unit larger than the budget becomes its
+own chunk; the reassembly nets from the trial remain as backstop for
+that case.
 
 ### 3. Per-chunk extraction calls
 
-Each chunk prompt carries: artifact QID and language; the deduplicated
-`context` strings of its units; the unit texts (with line numbers); the
-manifest vocabulary (as today); and the claim schema. Two contract
-changes relative to the current prompt:
+The constraint chunking addresses is **output** size; input size was
+never the problem (the failing document was 8 KB). Chunk calls
+therefore keep the *full document* in context and bound only what each
+call is asked to emit. Context is supplied in one of three modes, best
+available first:
+
+1. **Forked conversation (default).** The segmentation call opens a
+   conversation whose first turn contains the entire transcription;
+   each chunk call is an independent *fork* of that conversation with
+   the follow-up "emit claims for unit(s) X only". Every fork sees the
+   full document **and the segmentation turn itself** — the complete
+   unit roster with canonical labels, which directly improves the
+   label-keyed merge (a fork says "Rosa Genserowski" where an isolated
+   call would say "Rosa"). Because all forks share a byte-identical
+   prefix, prompt caching prices the document at cache-read rates after
+   the first call: full-context accuracy at roughly compressed-context
+   cost.
+   Mechanics per engine — `claude-code`: run segmentation with an
+   explicit `--session-id`, then each chunk as
+   `claude -p --resume <sid> --fork-session` (verified: forks branch
+   from the same prefix without seeing each other's turns; the explicit
+   session id is required because a nested CLI otherwise *inherits the
+   parent's session id from the environment*). `anthropic`: replay the
+   same messages array (document turn, segmentation response) with a
+   `cache_control` breakpoint after the segmentation response — a
+   stateless fork.
+2. **Full document inline.** Engines without conversation support
+   resend the transcription in each independent call. Functionally
+   identical to forking (identical prefixes may still hit server-side
+   caches); just no cache guarantee.
+3. **Compressed context (degraded / very-large-document mode).** Only
+   the chunk's unit texts plus the segmentation's `context` strings,
+   as a fallback when the transcription itself is too large to carry
+   per call (long-context attention degradation, cost). This is why
+   `SegmentationUnit.context` exists even though mode 1 does not need
+   it — segmentation produces it for free and it keeps mode 3 viable.
+
+Each chunk prompt additionally carries: artifact QID and language, the
+manifest vocabulary (as today), the claim schema, and a hard
+instruction to emit claims **only** for the assigned units — with the
+full document visible, drift into neighbouring units is possible;
+the sentinel count and merge dedupe bound the damage.
+
+Two contract changes relative to the current prompt:
 
 - **NDJSON emission**: one complete claim JSON object per line, no
   wrapper object, no prose. Seams between turns then fall *between*
@@ -101,9 +144,10 @@ changes relative to the current prompt:
   mismatch marks the chunk incomplete → retry. This converts silent
   truncation into a detected, retryable failure.
 
-Entities defined outside the chunk (e.g. a parent named only in
-`context`) are referenced as local refs with labels exactly as written;
-identity is resolved downstream by label, not within the chunk.
+Entities defined outside the chunk's assigned units (e.g. a parent
+named elsewhere in the document) are referenced as local refs with
+labels exactly as written; identity is resolved downstream by label,
+not within the chunk.
 
 ### 4. Merge
 
@@ -132,10 +176,15 @@ All intermediate state lives beside the output (runtime state, so under
 
     <out>.chunks/
       segmentation.json     # the accepted DocumentSegmentation
-      manifest.json         # per-chunk status: pending/ok/failed(+reason)
+      manifest.json         # per-chunk status: pending/ok/failed(+reason);
+                            # segmentation conversation/session id for forking
       <chunk>.raw.txt       # verbatim engine response, written pre-parse
       <chunk>.ndjson        # parsed, validated claims
       <chunk>.rejects.json  # per-chunk validation rejects
+
+If a `--resume` finds the recorded segmentation session no longer
+available for forking, remaining chunks drop to context mode 2 (full
+document inline) — resumption never requires re-running segmentation.
 
 - Chunks run sequentially in v1 (subscription rate limits); the design
   keeps chunks independent so parallel execution is a flag away later.
@@ -176,7 +225,15 @@ works with any `LlmClient`.
 - More calls per document, each small; wall-clock may rise slightly,
   and prompt overhead (schema + vocabulary repeated per chunk) is
   accepted for now — a slimmed per-chunk schema is a later
-  optimization.
+  optimization. Forking makes the *document* portion of that overhead
+  cache-priced.
+- The `LlmClient` protocol grows an optional conversation capability
+  (open a conversation, fork it with a follow-up); engines that lack it
+  transparently fall back to context mode 2. Independently of this ADR,
+  the `claude-code` engine must isolate child sessions (explicit
+  `--session-id`, scrub inherited session environment) — discovered
+  while verifying fork feasibility: a nested CLI silently adopts its
+  parent's session id.
 - Every stage is inspectable and replayable from the state dir, which
   also gives folder-level orchestration (ROADMAP item 8) a natural
   unit of progress to track.
