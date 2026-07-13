@@ -1,14 +1,17 @@
-"""Offline tests for chunked extraction (ADR-0006). No instance, no LLM."""
+"""Offline tests for chunked extraction (ADR-0006/0007). No instance, no LLM."""
 
 import json
 
 import pytest
 
+from yizkr.claims import EntityRecord
 from yizkr.pipeline.chunking import (
     ChunkedClaimExtractor,
     ChunkIncomplete,
     DocumentSegmentation,
     SegmentationUnit,
+    normalize_to_manifest,
+    pack_entities,
     pack_units,
     parse_chunk_response,
     prefix_local_ids,
@@ -25,6 +28,7 @@ DOC = "\n".join(
         "Dinner is at 7pm.",  # 4: logistics
     ]
 )
+LINE_LENGTH = len(DOC.splitlines()[1])  # per-entity evidence size
 
 
 def claim(local_id: str, label: str, year: int) -> dict:
@@ -56,6 +60,31 @@ def ndjson(claims: list[dict], emitted: int | None = None) -> str:
         )
     )
     return "\n".join(lines)
+
+
+def entity_manifest_json() -> str:
+    return json.dumps(
+        {
+            "entities": [
+                {
+                    "id": "e1",
+                    "label": "Anna Example",
+                    "aliases": ["Anna"],
+                    "kind": "human",
+                    "summary": "b. 1900 Springfield",
+                    "mention_lines": [2],
+                },
+                {
+                    "id": "e2",
+                    "label": "Bern Example",
+                    "aliases": [],
+                    "kind": "human",
+                    "summary": "b. 1902 Springfield",
+                    "mention_lines": [3],
+                },
+            ]
+        }
+    )
 
 
 def segmentation_json() -> str:
@@ -160,6 +189,12 @@ class TestPacking:
     def units(self):
         return DocumentSegmentation.model_validate_json(segmentation_json()).units
 
+    def entities(self):
+        return [
+            EntityRecord.model_validate(record)
+            for record in json.loads(entity_manifest_json())["entities"]
+        ]
+
     def test_skips_non_extract_units(self):
         chunks = pack_units(self.units(), DOC.splitlines(), budget=10_000)
         assert [[u.id for u in chunk] for chunk in chunks] == [["u2", "u3"]]
@@ -169,97 +204,122 @@ class TestPacking:
         chunks = pack_units(self.units(), DOC.splitlines(), budget=line_length)
         assert [[u.id for u in chunk] for chunk in chunks] == [["u2"], ["u3"]]
 
-    def test_oversized_unit_gets_own_chunk(self):
-        chunks = pack_units(self.units(), DOC.splitlines(), budget=1)
-        assert len(chunks) == 2
+    def test_entities_pack_by_mention_evidence(self):
+        chunks = pack_entities(self.entities(), DOC.splitlines(), budget=LINE_LENGTH)
+        assert [[e.id for e in chunk] for chunk in chunks] == [["e1"], ["e2"]]
+        chunks = pack_entities(self.entities(), DOC.splitlines(), budget=10_000)
+        assert [[e.id for e in chunk] for chunk in chunks] == [["e1", "e2"]]
+
+    def test_entities_without_mentions_use_flat_estimate(self):
+        entities = self.entities()
+        for entity in entities:
+            entity.mention_lines = []
+        chunks = pack_entities(entities, DOC.splitlines(), budget=10_000)
+        assert len(chunks) == 1
 
 
 class TestChunkResponseContract:
     def test_sentinel_required(self):
         with pytest.raises(ChunkIncomplete, match="sentinel"):
-            parse_chunk_response(json.dumps(claim("p1", "Anna Example", 1900)))
+            parse_chunk_response(json.dumps(claim("e1", "Anna Example", 1900)))
 
     def test_sentinel_count_must_match(self):
         with pytest.raises(ChunkIncomplete, match="says 5"):
-            parse_chunk_response(ndjson([claim("p1", "Anna Example", 1900)], emitted=5))
+            parse_chunk_response(ndjson([claim("e1", "Anna Example", 1900)], emitted=5))
 
     def test_valid_ndjson_parses(self):
-        claims = parse_chunk_response(ndjson([claim("p1", "Anna Example", 1900)]))
+        claims = parse_chunk_response(ndjson([claim("e1", "Anna Example", 1900)]))
         assert len(claims) == 1
 
 
-class TestPrefixLocalIds:
-    def test_prefixes_subject_value_and_qualifier_refs(self):
-        raw = {
-            "subject": {"kind": "local", "local_id": "p1", "label": "A"},
+class TestLocalRefRewrites:
+    def raw_claim(self) -> dict:
+        return {
+            "subject": {"kind": "local", "local_id": "e1", "label": "Anna"},
             "property": "spouse",
             "value": {
                 "type": "item",
-                "value": {"kind": "local", "local_id": "p2", "label": "B"},
+                "value": {"kind": "local", "local_id": "e2", "label": "B"},
             },
             "qualifiers": [
                 {
                     "property": "location",
                     "value": {
                         "type": "item",
-                        "value": {"kind": "local", "local_id": "pl1", "label": "X"},
+                        "value": {"kind": "local", "local_id": "e9", "label": "X"},
                     },
                 }
             ],
             "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
         }
-        fixed = prefix_local_ids(raw, "c001")
-        assert fixed["subject"]["local_id"] == "c001:p1"
-        assert fixed["value"]["value"]["local_id"] == "c001:p2"
-        assert fixed["qualifiers"][0]["value"]["value"]["local_id"] == "c001:pl1"
-        # qid refs and the original dict untouched
+
+    def test_prefix_walks_subject_value_and_qualifiers(self):
+        fixed = prefix_local_ids(self.raw_claim(), "c001")
+        assert fixed["subject"]["local_id"] == "c001:e1"
+        assert fixed["value"]["value"]["local_id"] == "c001:e2"
+        assert fixed["qualifiers"][0]["value"]["value"]["local_id"] == "c001:e9"
         assert fixed["source"]["artifact"] == {"kind": "qid", "qid": "Q23"}
-        assert raw["subject"]["local_id"] == "p1"
+
+    def test_normalize_sets_canonical_label_and_kind(self):
+        records = {
+            "e1": EntityRecord(id="e1", label="Anna Example", kind="human"),
+            "e2": EntityRecord(id="e2", label="Bern Example", kind="human"),
+        }
+        fixed = normalize_to_manifest(self.raw_claim(), records)
+        assert fixed["subject"]["label"] == "Anna Example"
+        assert fixed["subject"]["instance_of"] == "human"
+        assert fixed["value"]["value"]["label"] == "Bern Example"
+        # unknown id untouched: validation rejects it later
+        assert fixed["qualifiers"][0]["value"]["value"]["label"] == "X"
 
 
-class TestChunkedExtractor:
+class TestEntityFirstExtractor:
     def extractor(self, llm, tmp_path, **kwargs):
         return ChunkedClaimExtractor(llm, state_dir=tmp_path / "state", **kwargs)
 
     def test_fork_flow_end_to_end(self, tmp_path):
-        """Segmentation opens a conversation; each chunk is a fork that
-        sees only unit instructions (document context arrives via the
-        fork, not the prompt); ids come back chunk-prefixed."""
+        """The manifest opens a conversation; each chunk is a fork
+        assigned entities; ids stay manifest-scoped; labels normalize
+        to canonical; the manifest travels in the batch."""
         llm = ScriptedLlm(
             [
-                segmentation_json(),  # open_conversation
-                ndjson([claim("p1", "Anna Example", 1900)]),  # fork c001
-                ndjson([claim("p1", "Bern Example", 1902)]),  # fork c002
+                entity_manifest_json(),  # open_conversation
+                ndjson([claim("e1", "Anna", 1900)]),  # fork c001 (alias label)
+                ndjson([claim("e2", "Bern Example", 1902)]),  # fork c002
             ]
         )
-        extractor = self.extractor(llm, tmp_path, budget=len(DOC.splitlines()[1]))
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
 
         assert [call[0] for call in llm.calls] == ["open", "fork", "fork"]
         assert extractor.failed_chunks == []
-        assert len(batch.claims) == 2
-        assert {c.subject.local_id for c in batch.claims} == {"c001:p1", "c002:p1"}
-        # fork prompts rely on conversation context, not an inline document
+        assert not extractor.used_fallback_manifest
+        assert {c.subject.local_id for c in batch.claims} == {"e1", "e2"}
+        # alias label normalized to the manifest's canonical form
+        anna = next(c for c in batch.claims if c.subject.local_id == "e1")
+        assert anna.subject.label == "Anna Example"
+        # the manifest travels with the batch (reconcile needs it)
+        assert [entity.id for entity in batch.entities] == ["e1", "e2"]
+        # fork prompts carry the assignment, not an inline document
         assert "Full transcription" not in llm.calls[1][1]
-        assert "Anna Example" in llm.calls[1][1]
-        # state persisted
+        assert "e1 = Anna Example" in llm.calls[1][1]  # roster in every chunk
         state = tmp_path / "state"
         manifest = json.loads((state / "manifest.json").read_text())
+        assert manifest["strategy"] == "entity"
         assert manifest["context_mode"] == "fork"
         assert manifest["session_id"] == "session-abc"
-        assert manifest["chunks"]["c001"]["status"] == "ok"
         coverage = json.loads((state / "coverage.json").read_text())
-        assert coverage["units_without_matching_subject"] == []
-        assert coverage["unsegmented_line_ranges"] == [[4, 4]]
+        assert coverage["entities_without_claims"] == []
+        assert (state / "entity-manifest.json").exists()
 
     def test_plain_client_gets_inline_document(self, tmp_path):
         llm = PlainLlm(
             [
-                segmentation_json(),
+                entity_manifest_json(),
                 ndjson(
                     [
-                        claim("p1", "Anna Example", 1900),
-                        claim("p2", "Bern Example", 1902),
+                        claim("e1", "Anna Example", 1900),
+                        claim("e2", "Bern Example", 1902),
                     ]
                 ),
             ]
@@ -267,23 +327,38 @@ class TestChunkedExtractor:
         extractor = self.extractor(llm, tmp_path, budget=10_000)
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
-        # chunk prompt carries the whole numbered transcription inline
         assert "Full transcription" in llm.calls[1][1]
         assert "1: Family record" in llm.calls[1][1]
 
-    def test_sentinel_mismatch_retries_then_succeeds(self, tmp_path):
-        good = ndjson([claim("p1", "Anna Example", 1900)])
+    def test_invented_entity_id_is_rejected(self, tmp_path):
+        """A claim naming an id outside the manifest is a detectable
+        defect, never a silent duplicate."""
         llm = ScriptedLlm(
             [
-                segmentation_json(),
-                ndjson([claim("p1", "Anna Example", 1900)], emitted=9),  # bad
-                good,  # retry
-                ndjson([claim("p1", "Bern Example", 1902)]),
+                entity_manifest_json(),
+                ndjson(
+                    [claim("e1", "Anna Example", 1900), claim("e99", "Nobody", 1800)]
+                ),
+                ndjson([claim("e2", "Bern Example", 1902)]),
             ]
         )
-        extractor = self.extractor(
-            llm, tmp_path, budget=len(DOC.splitlines()[1]), retries=1
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
+        batch = extractor.extract(transcription(), "Q23")
+        assert {c.subject.local_id for c in batch.claims} == {"e1", "e2"}
+        rejects = json.loads((tmp_path / "state" / "rejects.json").read_text())
+        assert len(rejects) == 1
+        assert "entity manifest" in rejects[0]["problems"][0]
+
+    def test_sentinel_mismatch_retries_then_succeeds(self, tmp_path):
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna Example", 1900)], emitted=9),  # bad
+                ndjson([claim("e1", "Anna Example", 1900)]),  # retry
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
         )
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
         assert extractor.failed_chunks == []
@@ -291,46 +366,19 @@ class TestChunkedExtractor:
     def test_failed_chunk_yields_partial_batch(self, tmp_path):
         llm = ScriptedLlm(
             [
-                segmentation_json(),
+                entity_manifest_json(),
                 RuntimeError("engine down"),  # c001 attempt 1 (fork)
                 RuntimeError("engine down"),  # c001 attempt 1 (inline fallback)
                 RuntimeError("engine down"),  # c001 attempt 2 (inline)
-                ndjson([claim("p1", "Bern Example", 1902)]),  # c002
+                ndjson([claim("e2", "Bern Example", 1902)]),  # c002
             ]
         )
-        extractor = self.extractor(
-            llm, tmp_path, budget=len(DOC.splitlines()[1]), retries=1
-        )
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
         batch = extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c001"]
         assert [c.subject.label for c in batch.claims] == ["Bern Example"]
         manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
         assert manifest["chunks"]["c001"]["status"].startswith("failed")
-
-    def test_segmentation_fallback_windows_and_inline_mode(self, tmp_path):
-        """Two invalid segmentations -> line windows, no forking (the
-        rejected segmentation turn must not be planted in chunk
-        context), document sent inline."""
-        llm = ScriptedLlm(
-            [
-                "not json at all",  # segmentation attempt 1
-                json.dumps({"units": [{"id": "x"}]}),  # attempt 2: invalid
-                ndjson(
-                    [
-                        claim("p1", "Anna Example", 1900),
-                        claim("p2", "Bern Example", 1902),
-                    ]
-                ),
-            ]
-        )
-        extractor = self.extractor(llm, tmp_path, budget=10_000)
-        batch = extractor.extract(transcription(), "Q23")
-        assert extractor.used_fallback_segmentation
-        assert len(batch.claims) == 2
-        # chunk ran as complete(), not fork(), with the document inline
-        assert llm.calls[-1][0] == "complete"
-        assert "Full transcription" in llm.calls[-1][1]
-        assert (tmp_path / "state" / "segmentation-fallback.txt").exists()
 
     def test_resume_reuses_parsed_and_reparses_raw(self, tmp_path):
         """Resume must not re-invoke the model for chunks whose output
@@ -338,41 +386,38 @@ class TestChunkedExtractor:
         second model run."""
         first = ScriptedLlm(
             [
-                segmentation_json(),
-                ndjson([claim("p1", "Anna Example", 1900)]),  # c001 ok
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna Example", 1900)]),  # c001 ok
                 RuntimeError("timeout"),  # c002 fails (fork)
                 RuntimeError("timeout"),  # c002 fails (inline)
                 RuntimeError("timeout"),  # c002 retry
             ]
         )
-        extractor = self.extractor(
-            first, tmp_path, budget=len(DOC.splitlines()[1]), retries=1
-        )
+        extractor = self.extractor(first, tmp_path, budget=LINE_LENGTH, retries=1)
         extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c002"]
 
-        # simulate: c002's raw actually arrived but parsing had failed;
-        # a valid raw file now exists on disk
+        # simulate: c002's raw arrived but parsing had failed; a valid
+        # raw file now exists on disk
         (tmp_path / "state" / "c002.raw.txt").write_text(
-            ndjson([claim("p1", "Bern Example", 1902)])
+            ndjson([claim("e2", "Bern Example", 1902)])
         )
         second = ScriptedLlm([])  # NO responses: no model call allowed
-        extractor = self.extractor(
-            second, tmp_path, budget=len(DOC.splitlines()[1]), resume=True
-        )
+        extractor = self.extractor(second, tmp_path, budget=LINE_LENGTH, resume=True)
         batch = extractor.extract(transcription(), "Q23")
         assert second.calls == []
         assert len(batch.claims) == 2
+        assert [entity.id for entity in batch.entities] == ["e1", "e2"]
         assert extractor.failed_chunks == []
 
     def test_resume_with_changed_transcription_starts_fresh(self, tmp_path):
         llm = ScriptedLlm(
             [
-                segmentation_json(),
+                entity_manifest_json(),
                 ndjson(
                     [
-                        claim("p1", "Anna Example", 1900),
-                        claim("p2", "Bern Example", 1902),
+                        claim("e1", "Anna Example", 1900),
+                        claim("e2", "Bern Example", 1902),
                     ]
                 ),
             ]
@@ -385,41 +430,94 @@ class TestChunkedExtractor:
         extractor = self.extractor(llm, tmp_path, budget=10_000, resume=True)
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
-        assert llm.calls[0][0] == "open"  # segmentation re-ran
+        assert llm.calls[0][0] == "open"  # phase 1 re-ran
 
-    def test_duplicate_claims_across_chunks_collapse(self, tmp_path):
-        """Focus drift: both chunks emit Anna's birth. After id
-        prefixing the dicts differ only by local id — dedupe happens on
-        the exact post-prefix claim, so cross-chunk near-duplicates
-        coexist (they carry different ids) and land in review, while
-        WITHIN a chunk exact duplicates collapse."""
-        duplicated = [
-            claim("p1", "Anna Example", 1900),
-            claim("p1", "Anna Example", 1900),
-        ]
+    def test_duplicate_claims_collapse(self, tmp_path):
+        """Focus drift: two chunks emitting the same claim (identical
+        after label normalization) collapse to one at merge."""
         llm = ScriptedLlm(
             [
-                segmentation_json(),
-                ndjson(duplicated),
-                ndjson([claim("p1", "Bern Example", 1902)]),
+                entity_manifest_json(),
+                ndjson(
+                    [claim("e1", "Anna Example", 1900), claim("e1", "Anna", 1900)]
+                ),  # alias variant normalizes into an exact duplicate
+                ndjson([claim("e2", "Bern Example", 1902)]),
             ]
         )
-        extractor = self.extractor(llm, tmp_path, budget=len(DOC.splitlines()[1]))
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
-        assert len(batch.claims) == 2  # within-chunk duplicate collapsed
+        assert len(batch.claims) == 2
 
     def test_invalid_claims_land_in_rejects(self, tmp_path):
-        bad = dict(claim("p1", "Anna Example", 1900), property="shoe_size")
+        bad = dict(claim("e1", "Anna Example", 1900), property="shoe_size")
         llm = ScriptedLlm(
             [
-                segmentation_json(),
-                ndjson([claim("p1", "Anna Example", 1900), bad]),
-                ndjson([claim("p1", "Bern Example", 1902)]),
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna Example", 1900), bad]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
             ]
         )
-        extractor = self.extractor(llm, tmp_path, budget=len(DOC.splitlines()[1]))
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
         rejects = json.loads((tmp_path / "state" / "rejects.json").read_text())
         assert len(rejects) == 1
         assert "shoe_size" in rejects[0]["problems"][0]
+
+
+class TestFallbackLadder:
+    def extractor(self, llm, tmp_path, **kwargs):
+        return ChunkedClaimExtractor(llm, state_dir=tmp_path / "state", **kwargs)
+
+    def test_bad_manifest_falls_back_to_line_segmentation(self, tmp_path):
+        """Manifest unusable twice -> line-range segmentation runs, with
+        chunk-prefixed ids and no manifest in the batch."""
+        llm = ScriptedLlm(
+            [
+                "no manifest here",  # manifest attempt 1
+                json.dumps({"entities": [{"id": "x"}]}),  # attempt 2: invalid
+                segmentation_json(),  # line-range segmentation
+                ndjson(
+                    [
+                        claim("p1", "Anna Example", 1900),
+                        claim("p2", "Bern Example", 1902),
+                    ]
+                ),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000)
+        batch = extractor.extract(transcription(), "Q23")
+        assert extractor.used_fallback_manifest
+        assert not extractor.used_fallback_segmentation
+        assert batch.entities == []
+        assert {c.subject.local_id for c in batch.claims} == {"c001:p1", "c001:p2"}
+        manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
+        assert manifest["strategy"] == "line-range"
+        assert (tmp_path / "state" / "manifest-fallback.txt").exists()
+
+    def test_full_fallback_to_offset_windows(self, tmp_path):
+        """Manifest AND segmentation unusable -> offset windows, no
+        forking (rejected turns must not be planted in chunk context),
+        document sent inline."""
+        llm = ScriptedLlm(
+            [
+                "junk",  # manifest 1
+                "junk",  # manifest 2
+                "junk",  # segmentation 1
+                "junk",  # segmentation 2
+                ndjson(
+                    [
+                        claim("p1", "Anna Example", 1900),
+                        claim("p2", "Bern Example", 1902),
+                    ]
+                ),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000)
+        batch = extractor.extract(transcription(), "Q23")
+        assert extractor.used_fallback_manifest
+        assert extractor.used_fallback_segmentation
+        assert len(batch.claims) == 2
+        assert llm.calls[-1][0] == "complete"
+        assert "Full transcription" in llm.calls[-1][1]
+        assert (tmp_path / "state" / "segmentation-fallback.txt").exists()

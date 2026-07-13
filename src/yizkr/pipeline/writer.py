@@ -31,6 +31,7 @@ from yizkr.claims import (
     Claim,
     ClaimBatch,
     CoordinateValue,
+    EntityRecord,
     EntityRef,
     ExternalIdValue,
     ItemValue,
@@ -63,6 +64,9 @@ class BatchWriter:
         self.dry_run = dry_run
         self.properties, self.items = client.vocabulary()
         self._entity_cache: dict[str, object] = {}
+        # entity manifest of the batch being written (ADR-0007):
+        # local_id -> EntityRecord; set per write_batch call
+        self._entity_records: dict[str, EntityRecord] = {}
 
     # -- reference resolution ---------------------------------------------
 
@@ -82,33 +86,72 @@ class BatchWriter:
     ) -> str:
         if ref.local_id in result.created_items:
             return result.created_items[ref.local_id]
-        if not ref.label:
+        record = self._entity_records.get(ref.local_id)
+        # the entity manifest (ADR-0007) is authoritative when present:
+        # canonical label, kind, summary, and the document's aliases
+        label = record.label if record else ref.label
+        description = (record.summary or None) if record else ref.description
+        instance_of = record.kind if record else ref.instance_of
+        aliases = record.aliases if record else []
+        if record and record.qid:
+            # reviewed equivalence: attach to the existing item and
+            # contribute this document's aliases to it
+            self._ensure_aliases(record.qid, [record.label, *aliases])
+            result.created_items[ref.local_id] = record.qid
+            return record.qid
+        if not label:
             raise ValueError(
                 f"local ref {ref.local_id!r} has no label; cannot create an "
                 f"item for it (resolve it to a QID or add a label)"
             )
-        existing = self.client.find_item_by_label(ref.label)
+        existing = self.client.find_item_by_label(label)
         if existing:
+            if aliases:
+                self._ensure_aliases(existing, aliases)
             result.created_items[ref.local_id] = existing
             return existing
         if self.dry_run:
             result.created_items[ref.local_id] = f"(new:{ref.local_id})"
             return result.created_items[ref.local_id]
         item = self.client.wbi.item.new()
-        item.labels.set("en", ref.label)
-        if ref.description:
-            item.descriptions.set("en", ref.description)
+        item.labels.set("en", label)
+        if description:
+            item.descriptions.set("en", description)
+        if aliases:
+            item.aliases.set("en", aliases)
         item = item.write(summary="ingest: entity proposed by extraction")
         qid = item.id
-        if ref.instance_of and source_artifact_qid:
+        if instance_of and source_artifact_qid:
             claim = self._item_claim(
-                self.properties["instance_of"], self.items[ref.instance_of]
+                self.properties["instance_of"], self.items[instance_of]
             )
             claim.references = self._references(artifact_qid=source_artifact_qid)
             self._append(item, claim)
             item.write(summary="ingest: instance of")
         result.created_items[ref.local_id] = qid
         return qid
+
+    def _ensure_aliases(self, qid: str, aliases: list[str]) -> None:
+        """Append this document's name variants to an existing item.
+
+        Idempotent and append-only (MODELING.md: name variants live in
+        aliases; matching quality compounds per ingested document). The
+        item's own label never counts as a missing alias.
+        """
+        if self.dry_run or not aliases:
+            return
+        item = self.client.wbi.item.get(qid)
+        label = str(item.labels.get("en") or "")
+        existing = {str(alias) for alias in (item.aliases.get("en") or [])}
+        missing = [
+            alias
+            for alias in aliases
+            if alias and alias != label and alias not in existing
+        ]
+        if not missing:
+            return
+        item.aliases.set("en", sorted(existing | set(missing)))
+        item.write(summary="ingest: aliases from document entity manifest")
 
     # -- WBI datavalue construction -----------------------------------------
 
@@ -288,6 +331,7 @@ class BatchWriter:
     # -- main entry ------------------------------------------------------------
 
     def write_batch(self, batch: ClaimBatch) -> WriteResult:
+        self._entity_records = {record.id: record for record in batch.entities}
         result = WriteResult(run_qid=self.ensure_run_item(batch))
         for claim in batch.claims:
             artifact_qid = self._resolve_ref(

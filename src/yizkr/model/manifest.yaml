@@ -113,6 +113,16 @@ properties:
       assertion; kept verbatim, never derived. No Wikidata equivalent.
     datatype: string
 
+  said_to_be_the_same_as:
+    label: said to be the same as
+    description: >-
+      this item and the object are said to be the same entity, per the
+      cited sources — a contestable, source-attributed identity
+      judgement (ADR-0007), used when a curator prefers a statement
+      over an item merge
+    datatype: wikibase-item
+    wikidata: P460
+
   father:
     label: father
     description: male parent of the subject

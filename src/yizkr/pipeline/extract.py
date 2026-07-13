@@ -192,7 +192,7 @@ def _normalize_claim_shape(claim: dict) -> dict:
 
 
 def salvage_valid_claims(
-    claims: list, extraction_run: dict
+    claims: list, extraction_run: dict, entities: list[dict] | None = None
 ) -> tuple[ClaimBatch, list[dict]]:
     """Partition raw claim dicts into a valid ClaimBatch and rejects.
 
@@ -200,8 +200,27 @@ def salvage_valid_claims(
     claim that fails schema or manifest validation must not sink the
     claims that pass: the valid subset proceeds to review, the rejects
     are reported (each with its reasons) for diagnosis.
+
+    With `entities` (an entity manifest, ADR-0007), local refs naming
+    ids outside the manifest are rejected, and the manifest travels in
+    the returned batch.
     """
     vocabulary = load_vocabulary()
+    entities = entities or []
+    if entities:
+        # manifest-level defects poison every claim; check them once,
+        # loudly, before per-claim triage
+        manifest_only = ClaimBatch.model_validate(
+            {"extraction_run": extraction_run, "entities": entities}
+        )
+        manifest_problems = validate_against_manifest(
+            manifest_only, vocabulary=vocabulary
+        )
+        if manifest_problems:
+            raise ValueError(
+                "entity manifest failed validation:\n  "
+                + "\n  ".join(manifest_problems)
+            )
     valid: list = []
     rejects: list[dict] = []
     for claim in claims:
@@ -209,7 +228,11 @@ def salvage_valid_claims(
             claim = _normalize_claim_shape(claim)
         try:
             batch = ClaimBatch.model_validate(
-                {"extraction_run": extraction_run, "claims": [claim]}
+                {
+                    "extraction_run": extraction_run,
+                    "claims": [claim],
+                    "entities": entities,
+                }
             )
         except Exception as exc:  # pydantic ValidationError, in short form
             rejects.append({"claim": claim, "problems": [str(exc)]})
@@ -220,7 +243,13 @@ def salvage_valid_claims(
         else:
             valid.append(claim)
     return (
-        ClaimBatch.model_validate({"extraction_run": extraction_run, "claims": valid}),
+        ClaimBatch.model_validate(
+            {
+                "extraction_run": extraction_run,
+                "claims": valid,
+                "entities": entities,
+            }
+        ),
         rejects,
     )
 

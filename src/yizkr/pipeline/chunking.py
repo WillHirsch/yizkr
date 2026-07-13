@@ -23,7 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ClaimBatch, EntityRecord, load_vocabulary
 from yizkr.pipeline.extract import (
     run_metadata,
     salvage_valid_claims,
@@ -151,11 +151,6 @@ Rules — these mirror the archive's non-negotiable conventions:
   format — downgrade to the precision actually supported.
 - Every claim MUST include the source reference: artifact QID {artifact_qid},
   plus page number and a short verbatim transcription excerpt supporting it.
-- Refer to people, places, and events with "local" references (stable
-  local_id per entity within this response, label as written —
-  prefer the fullest name the document gives for a person anywhere,
-  instance_of from: human, place, event, birth, death, marriage,
-  migration, military_service).
 - Use ONLY these property keys (property key: datatype), for claims and
   qualifiers alike — a claim naming any other key is discarded. If the
   document asserts something no listed property expresses, skip it:
@@ -163,6 +158,27 @@ Rules — these mirror the archive's non-negotiable conventions:
 - Vocabulary item keys available for "vocab" references:
 {item_keys}
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
+
+{assignment_block}
+
+Output NDJSON: one complete claim JSON object per line — no wrapper
+object, no code fences, no prose. Each claim matches the "Claim"
+definition of this JSON Schema:
+
+{schema}
+
+After the last claim, end with exactly one final line:
+{{"done": true, "claims_emitted": N}}
+where N is the number of claim lines you emitted.
+{document_block}"""
+
+
+LINE_ASSIGNMENT_BLOCK = """\
+Refer to people, places, and events with "local" references (stable
+local_id per entity within this response, label as written — prefer the
+fullest name the document gives for a person anywhere, instance_of
+from: human, place, event, birth, death, marriage, migration,
+military_service).
 
 Extract claims ONLY for the assigned units below — nothing from other
 parts of the document, even though you can see them. Use the rest of
@@ -175,18 +191,53 @@ Do not skip a claim because its object or evidence lies partly outside
 your units.
 
 Assigned units:
-{units_block}
+{units_block}"""
 
-Output NDJSON: one complete claim JSON object per line — no wrapper
-object, no code fences, no prose. Each claim matches the "Claim"
-definition of this JSON Schema:
 
-{schema}
+ENTITY_ASSIGNMENT_BLOCK = """\
+Refer to EVERY entity — subjects and objects alike — with a "local"
+reference whose local_id is the entity's manifest id and whose label is
+the manifest's canonical label. Ids outside the manifest are rejected.
+The full manifest (id = canonical label):
+{roster_block}
 
-After the last claim, end with exactly one final line:
-{{"done": true, "claims_emitted": N}}
-where N is the number of claim lines you emitted.
-{document_block}"""
+Emit every claim whose SUBJECT is one of your ASSIGNED entities below —
+and only those. Relations to entities outside your assignment (their
+parents, spouses, locations) still belong to you when your entity is
+the subject; refer to the other entity by its manifest id. Do not emit
+claims whose subject is not assigned to you, and do not emit
+instance_of claims (the manifest's kind already records it).
+
+Assigned entities:
+{entities_block}"""
+
+
+ENTITY_MANIFEST_PROMPT = """\
+You are preparing a genealogical claim extraction. First pass: read the
+whole transcription and produce a manifest of EVERY distinct entity it
+mentions — people, places, and events (births, deaths, marriages,
+migrations, military service). Unify aliases: one entity that appears
+as "Rosa Genserowski", "Rosa", and "our great grandmother" is ONE
+manifest entry whose label is the fullest form the document gives and
+whose aliases list every other form, verbatim.
+
+Output ONE JSON object, no prose, no code fences:
+{{"entities": [{{"id": "e01", "label": "<canonical, fullest form>",
+"aliases": ["<other forms, verbatim>", ...], "kind": "<one of: {kinds}>",
+"summary": "<one line: who/what this is, with key dates/relations>",
+"mention_lines": [<line numbers where it is mentioned>]}}, ...]}}
+
+Rules:
+- One entry per real-world entity, however many aliases it has.
+- ids must be unique. Do NOT include a "qid" field.
+- Prefer completeness: an entity mentioned once still gets an entry.
+- summary is evidence for later identity matching: pack it with the
+  document's key facts (born/died/married when-where, parents, spouse).
+
+Transcription of artifact {artifact_qid} (language: {language}):
+
+{numbered_text}
+"""
 
 
 class ChunkIncomplete(Exception):
@@ -240,28 +291,89 @@ def pack_units(
     return chunks
 
 
-def prefix_local_ids(claim: dict, prefix: str) -> dict:
-    """Chunk-namespace every local id so ids never collide across
-    chunks. Same-label unification stays with the label-keyed resolve/
-    write machinery — identity is not decided here."""
-
-    def fix(ref: Any) -> None:
-        if isinstance(ref, dict) and ref.get("kind") == "local" and "local_id" in ref:
-            ref["local_id"] = f"{prefix}:{ref['local_id']}"
-
+def _rewrite_local_refs(claim: dict, fix) -> dict:
+    """Deep-copy a claim dict and apply `fix` to every local ref in it."""
     fixed = json.loads(json.dumps(claim))  # deep copy, JSON-native
-    fix(fixed.get("subject"))
+
+    def visit(ref: Any) -> None:
+        if isinstance(ref, dict) and ref.get("kind") == "local" and "local_id" in ref:
+            fix(ref)
+
+    visit(fixed.get("subject"))
     value = fixed.get("value")
     if isinstance(value, dict):
-        fix(value.get("value"))
+        visit(value.get("value"))
     for qualifier in fixed.get("qualifiers") or []:
         if isinstance(qualifier, dict) and isinstance(qualifier.get("value"), dict):
-            fix(qualifier["value"].get("value"))
+            visit(qualifier["value"].get("value"))
     source = fixed.get("source")
     if isinstance(source, dict):
-        fix(source.get("artifact"))
-        fix(source.get("fragment"))
+        visit(source.get("artifact"))
+        visit(source.get("fragment"))
     return fixed
+
+
+def pack_entities(
+    entities: list[EntityRecord],
+    text_lines: list[str],
+    budget: int = DEFAULT_CHUNK_BUDGET,
+) -> list[list[EntityRecord]]:
+    """Greedy-pack entities, in manifest order, under the output budget.
+
+    An entity's size is its evidence volume (total text of its mention
+    lines) when mention_lines is usable, else a flat estimate — the
+    budget bounds what a chunk must emit claims about, not what it
+    sees.
+    """
+    flat_estimate = max(1, budget // 10)
+    chunks: list[list[EntityRecord]] = []
+    current: list[EntityRecord] = []
+    current_size = 0
+    for entity in entities:
+        lines = [
+            number for number in entity.mention_lines if 1 <= number <= len(text_lines)
+        ]
+        size = (
+            sum(len(text_lines[number - 1]) for number in lines)
+            if lines
+            else flat_estimate
+        )
+        if current and current_size + size > budget:
+            chunks.append(current)
+            current, current_size = [], 0
+        current.append(entity)
+        current_size += size
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def normalize_to_manifest(claim: dict, records: dict[str, EntityRecord]) -> dict:
+    """Normalize local refs to the manifest: canonical label, kind.
+
+    Labels identify entities, so they take the manifest's canonical
+    form; transcription excerpts stay verbatim — they quote the source.
+    Unknown ids are left untouched for validation to reject.
+    """
+
+    def fix(ref: dict) -> None:
+        record = records.get(ref.get("local_id"))
+        if record is not None:
+            ref["label"] = record.label
+            ref["instance_of"] = record.kind
+
+    return _rewrite_local_refs(claim, fix)
+
+
+def prefix_local_ids(claim: dict, prefix: str) -> dict:
+    """Chunk-namespace every local id so ids never collide across
+    chunks (line-range fallback path only — entity-first ids are
+    document-scoped manifest ids). Same-label unification stays with
+    the label-keyed resolve/write machinery — identity is not decided
+    here."""
+    return _rewrite_local_refs(
+        claim, lambda ref: ref.update(local_id=f"{prefix}:{ref['local_id']}")
+    )
 
 
 class ChunkedClaimExtractor:
@@ -288,6 +400,9 @@ class ChunkedClaimExtractor:
         self.retries = retries
         self.resume = resume
         self.failed_chunks: list[str] = []
+        # entity manifest unusable -> line-range segmentation was used
+        self.used_fallback_manifest = False
+        # line-range segmentation also unusable -> offset windows
         self.used_fallback_segmentation = False
 
     # -- state helpers ---------------------------------------------------
@@ -300,7 +415,84 @@ class ChunkedClaimExtractor:
         path = self.state_dir / name
         return path.read_text() if path.exists() else None
 
-    # -- segmentation ----------------------------------------------------
+    # -- phase 1a: entity manifest (ADR-0007, the default) ----------------
+
+    def _entity_manifest(
+        self, transcription: Transcription, artifact_qid: str
+    ) -> tuple[list[EntityRecord] | None, Any]:
+        """Returns (entities, conversation handle) or (None, None).
+
+        (None, None) means the manifest was unusable after a retry; the
+        caller falls back to line-range segmentation. As with
+        segmentation fallback, no handle survives a rejected manifest —
+        forking would plant known-bad output in every chunk's context.
+        """
+        line_count = len(transcription.text.splitlines())
+        prompt = ENTITY_MANIFEST_PROMPT.format(
+            kinds="human, place, event, birth, death, marriage, "
+            "migration, military_service",
+            artifact_qid=artifact_qid,
+            language=transcription.language,
+            numbered_text=number_lines(transcription.text),
+        )
+        handle = None
+        last_error = "engine has no conversation support"
+        for _attempt in range(2):
+            try:
+                if isinstance(self.client, ConversationalLlmClient):
+                    response, handle = self.client.open_conversation(prompt)
+                else:
+                    response = self.client.complete(prompt)
+            except Exception as exc:
+                last_error, handle = str(exc), None
+                continue
+            entities, problems = self._parse_entity_manifest(response, line_count)
+            if entities is not None and not problems:
+                return entities, handle
+            last_error, handle = "; ".join(problems or ["unparseable"]), None
+        self.used_fallback_manifest = True
+        self._write(
+            "manifest-fallback.txt",
+            f"entity manifest fell back to line-range segmentation: {last_error}\n",
+        )
+        return None, None
+
+    @staticmethod
+    def _parse_entity_manifest(
+        response: str, line_count: int
+    ) -> tuple[list[EntityRecord] | None, list[str]]:
+        _, item_keys = load_vocabulary()
+        for obj in scan_json_objects(response):
+            if "entities" not in obj:
+                continue
+            try:
+                records = []
+                for raw in obj["entities"] or []:
+                    data = dict(raw)
+                    data.pop("qid", None)  # resolution state, never model-set
+                    records.append(EntityRecord.model_validate(data))
+            except Exception as exc:
+                return None, [str(exc)[:300]]
+            problems: list[str] = []
+            if not records:
+                problems.append("empty entity list")
+            seen: set[str] = set()
+            for record in records:
+                if record.id in seen:
+                    problems.append(f"duplicate entity id {record.id!r}")
+                seen.add(record.id)
+                if record.kind not in item_keys:
+                    problems.append(f"entity {record.id}: unknown kind {record.kind!r}")
+                # mention lines are best-effort: clamp, don't reject
+                record.mention_lines = [
+                    number
+                    for number in record.mention_lines
+                    if 1 <= number <= line_count
+                ]
+            return records, problems
+        return None, ["no JSON object with an 'entities' array"]
+
+    # -- phase 1b: line-range segmentation (fallback tier) -----------------
 
     def _segment(
         self, transcription: Transcription, artifact_qid: str
@@ -374,6 +566,36 @@ class ChunkedClaimExtractor:
 
     # -- chunk calls -----------------------------------------------------
 
+    def _document_block(
+        self, transcription: Transcription, artifact_qid: str, inline: bool
+    ) -> str:
+        if not inline:
+            return ""
+        return (
+            f"\nFull transcription of artifact {artifact_qid} for "
+            f"context (extract ONLY for your assignment):\n\n"
+            f"{number_lines(transcription.text)}\n"
+        )
+
+    def _render_chunk_prompt(
+        self,
+        assignment_block: str,
+        transcription: Transcription,
+        artifact_qid: str,
+        inline_document: bool,
+    ) -> str:
+        property_keys, item_keys = vocabulary_prompt_lines()
+        return CHUNK_PROMPT.format(
+            artifact_qid=artifact_qid,
+            property_keys=property_keys,
+            item_keys=item_keys,
+            assignment_block=assignment_block,
+            schema=json.dumps(ClaimBatch.model_json_schema(), indent=2),
+            document_block=self._document_block(
+                transcription, artifact_qid, inline_document
+            ),
+        )
+
     def _chunk_prompt(
         self,
         chunk_units: list[SegmentationUnit],
@@ -382,8 +604,6 @@ class ChunkedClaimExtractor:
         artifact_qid: str,
         inline_document: bool,
     ) -> str:
-        property_keys, item_keys = vocabulary_prompt_lines()
-        schema = json.dumps(ClaimBatch.model_json_schema(), indent=2)
         units_block = "\n\n".join(
             f"- unit {unit.id} ({unit.label}; lines "
             f"{unit.first_line}-{unit.last_line})"
@@ -391,21 +611,48 @@ class ChunkedClaimExtractor:
             + f"\n  text:\n{unit_text(text_lines, unit)}"
             for unit in chunk_units
         )
-        if inline_document:
-            document_block = (
-                f"\nFull transcription of artifact {artifact_qid} for "
-                f"context (extract ONLY from the assigned units):\n\n"
-                f"{number_lines(transcription.text)}\n"
-            )
-        else:
-            document_block = ""
-        return CHUNK_PROMPT.format(
-            artifact_qid=artifact_qid,
-            property_keys=property_keys,
-            item_keys=item_keys,
-            units_block=units_block,
-            schema=schema,
-            document_block=document_block,
+        return self._render_chunk_prompt(
+            LINE_ASSIGNMENT_BLOCK.format(units_block=units_block),
+            transcription,
+            artifact_qid,
+            inline_document,
+        )
+
+    def _entity_chunk_prompt(
+        self,
+        chunk_entities: list[EntityRecord],
+        all_entities: list[EntityRecord],
+        text_lines: list[str],
+        transcription: Transcription,
+        artifact_qid: str,
+        inline_document: bool,
+    ) -> str:
+        roster_block = "\n".join(
+            f"  {entity.id} = {entity.label}" for entity in all_entities
+        )
+
+        def mention_text(entity: EntityRecord) -> str:
+            lines = [
+                f"    {number}: {text_lines[number - 1]}"
+                for number in entity.mention_lines
+            ]
+            return "\n  mentions:\n" + "\n".join(lines) if lines else ""
+
+        entities_block = "\n\n".join(
+            f"- {entity.id}: {entity.label}"
+            + (f" (aliases: {', '.join(entity.aliases)})" if entity.aliases else "")
+            + f"; kind: {entity.kind}"
+            + (f"\n  {entity.summary}" if entity.summary else "")
+            + mention_text(entity)
+            for entity in chunk_entities
+        )
+        return self._render_chunk_prompt(
+            ENTITY_ASSIGNMENT_BLOCK.format(
+                roster_block=roster_block, entities_block=entities_block
+            ),
+            transcription,
+            artifact_qid,
+            inline_document,
         )
 
     def _run_chunk(
@@ -442,31 +689,44 @@ class ChunkedClaimExtractor:
         fingerprint = hashlib.sha256(transcription.text.encode()).hexdigest()
 
         manifest: dict = {"transcription_sha256": fingerprint, "chunks": {}}
+        entities: list[EntityRecord] | None = None
         segmentation: DocumentSegmentation | None = None
         handle: Any = None
         if self.resume:
             previous_raw = self._read("manifest.json")
             previous = json.loads(previous_raw) if previous_raw else None
-            segmentation_raw = self._read("segmentation.json")
-            if (
-                previous
-                and previous.get("transcription_sha256") == fingerprint
-                and segmentation_raw
-            ):
-                segmentation = DocumentSegmentation.model_validate_json(
-                    segmentation_raw
-                )
-                manifest = previous
+            if previous and previous.get("transcription_sha256") == fingerprint:
+                entity_raw = self._read("entity-manifest.json")
+                segmentation_raw = self._read("segmentation.json")
+                if entity_raw:
+                    entities = [
+                        EntityRecord.model_validate(record)
+                        for record in json.loads(entity_raw)
+                    ]
+                    manifest = previous
+                elif segmentation_raw:
+                    segmentation = DocumentSegmentation.model_validate_json(
+                        segmentation_raw
+                    )
+                    manifest = previous
                 # the recorded session may be gone; resumption drops to
-                # inline context rather than re-running segmentation
+                # inline context rather than re-running phase 1
                 handle = None
-        if segmentation is None:
-            segmentation, handle = self._segment(transcription, artifact_qid)
-            self._write("segmentation.json", segmentation.model_dump_json(indent=2))
+        if entities is None and segmentation is None:
+            entities, handle = self._entity_manifest(transcription, artifact_qid)
+            if entities is not None:
+                self._write(
+                    "entity-manifest.json",
+                    json.dumps([record.model_dump() for record in entities], indent=2),
+                )
+            else:
+                segmentation, handle = self._segment(transcription, artifact_qid)
+                self._write("segmentation.json", segmentation.model_dump_json(indent=2))
 
         inline_document = (
             handle is None and len(transcription.text) <= INLINE_DOCUMENT_LIMIT
         )
+        manifest["strategy"] = "entity" if entities is not None else "line-range"
         manifest["context_mode"] = (
             "fork"
             if handle is not None
@@ -477,30 +737,49 @@ class ChunkedClaimExtractor:
         if handle is not None and not isinstance(handle, list | dict):
             manifest["session_id"] = str(handle)
 
-        chunks = pack_units(segmentation.units, text_lines, self.budget)
+        if entities is not None:
+            records = {record.id: record for record in entities}
+            chunk_groups: list[list] = pack_entities(entities, text_lines, self.budget)
+
+            def build_prompt(group: list, inline: bool) -> str:
+                return self._entity_chunk_prompt(
+                    group, entities, text_lines, transcription, artifact_qid, inline
+                )
+
+            def member_ids(group: list) -> list[str]:
+                return [record.id for record in group]
+
+            def transform(claim: dict, chunk_id: str) -> dict:
+                return normalize_to_manifest(claim, records)
+
+            entities_payload = [record.model_dump() for record in entities]
+        else:
+            chunk_groups = pack_units(segmentation.units, text_lines, self.budget)
+
+            def build_prompt(group: list, inline: bool) -> str:
+                return self._chunk_prompt(
+                    group, text_lines, transcription, artifact_qid, inline
+                )
+
+            def member_ids(group: list) -> list[str]:
+                return [unit.id for unit in group]
+
+            def transform(claim: dict, chunk_id: str) -> dict:
+                return prefix_local_ids(claim, chunk_id)
+
+            entities_payload = []
+
         self.failed_chunks = []
         raw_claims: list[dict] = []
-        for index, chunk_units in enumerate(chunks, start=1):
+        for index, group in enumerate(chunk_groups, start=1):
             chunk_id = f"c{index:03d}"
             chunk_state = manifest["chunks"].setdefault(
-                chunk_id, {"units": [unit.id for unit in chunk_units]}
+                chunk_id, {"members": member_ids(group)}
             )
             parsed = self._reusable_claims(chunk_id)
             if parsed is None:
-                prompt = self._chunk_prompt(
-                    chunk_units,
-                    text_lines,
-                    transcription,
-                    artifact_qid,
-                    inline_document=False,
-                )
-                fallback_prompt = self._chunk_prompt(
-                    chunk_units,
-                    text_lines,
-                    transcription,
-                    artifact_qid,
-                    inline_document=inline_document,
-                )
+                prompt = build_prompt(group, False)
+                fallback_prompt = build_prompt(group, inline_document)
                 try:
                     parsed = self._run_chunk(chunk_id, prompt, handle, fallback_prompt)
                 except Exception as exc:
@@ -512,7 +791,7 @@ class ChunkedClaimExtractor:
             chunk_state["status"] = "ok"
             chunk_state["claims"] = len(parsed)
             self._write("manifest.json", json.dumps(manifest, indent=2))
-            raw_claims.extend(prefix_local_ids(claim, chunk_id) for claim in parsed)
+            raw_claims.extend(transform(claim, chunk_id) for claim in parsed)
 
         deduped: list[dict] = []
         for claim in raw_claims:
@@ -522,10 +801,14 @@ class ChunkedClaimExtractor:
         batch, rejects = salvage_valid_claims(
             deduped,
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
+            entities=entities_payload,
         )
         if rejects:
             self._write("rejects.json", json.dumps(rejects, indent=2))
-        self._write_coverage(segmentation, batch, len(text_lines))
+        if entities is not None:
+            self._write_entity_coverage(entities, batch, text_lines)
+        else:
+            self._write_coverage(segmentation, batch, len(text_lines))
         if not batch.claims and (self.failed_chunks or rejects):
             raise ValueError(
                 f"chunked extraction produced no valid claims "
@@ -551,6 +834,57 @@ class ChunkedClaimExtractor:
             self._write(f"{chunk_id}.ndjson", "\n".join(map(json.dumps, claims)))
             return claims
         return None
+
+    def _write_entity_coverage(
+        self,
+        entities: list[EntityRecord],
+        batch: ClaimBatch,
+        text_lines: list[str],
+    ) -> None:
+        """Advisory completeness report, entity flavour (ADR-0007).
+
+        Replaces the line-audit: flags manifest entities with zero
+        claims, and lines that carry name-shaped tokens matching no
+        manifest label/alias (a possibly-missed entity)."""
+        subject_ids = {
+            claim.subject.local_id
+            for claim in batch.claims
+            if hasattr(claim.subject, "local_id")
+        }
+        name_tokens = {
+            token.lower()
+            for entity in entities
+            for name in [entity.label, *entity.aliases]
+            for token in name.split()
+            if len(token) >= 3
+        }
+        unmatched_lines = []
+        for number, line in enumerate(text_lines, start=1):
+            capitalized = [
+                token.strip(".,;:()")
+                for token in line.split()
+                if token[:1].isupper() and len(token.strip(".,;:()")) >= 3
+            ]
+            if capitalized and not any(
+                token.lower() in name_tokens for token in capitalized
+            ):
+                unmatched_lines.append(number)
+        self._write(
+            "coverage.json",
+            json.dumps(
+                {
+                    "strategy": "entity",
+                    "entities_total": len(entities),
+                    "entities_without_claims": [
+                        entity.id for entity in entities if entity.id not in subject_ids
+                    ],
+                    "lines_matching_no_entity": unmatched_lines,
+                    "distinct_subject_ids": sorted(subject_ids),
+                    "failed_chunks": self.failed_chunks,
+                },
+                indent=2,
+            ),
+        )
 
     def _write_coverage(
         self, segmentation: DocumentSegmentation, batch: ClaimBatch, line_count: int

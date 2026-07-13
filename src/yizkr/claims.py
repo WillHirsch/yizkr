@@ -334,12 +334,36 @@ class ExtractionRunMetadata(StrictModel):
         return value
 
 
+class EntityRecord(StrictModel):
+    """One document-scoped entity from the extraction's entity manifest
+    (ADR-0007).
+
+    The manifest is produced by extraction's first turn and unifies
+    every alias a document uses for an entity under one `id`; claims
+    refer to entities by these ids. `qid` is resolution state: the
+    reconcile/resolve steps set it when a human approves an equivalence
+    to an existing item, and the writer then attaches claims (and the
+    document's aliases) to that item instead of minting a duplicate.
+    """
+
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)  # canonical: fullest form the document gives
+    aliases: list[str] = []
+    kind: ManifestKey
+    summary: str = ""
+    mention_lines: list[int] = []
+    qid: str | None = Field(default=None, pattern=r"^Q[1-9]\d*$")
+
+
 class ClaimBatch(StrictModel):
     """Everything one extraction run asserts about one or more artifacts."""
 
     schema_version: Literal[1] = SCHEMA_VERSION
     extraction_run: ExtractionRunMetadata
     claims: list[Claim] = []
+    # entity manifest (ADR-0007); empty for batches from older flows.
+    # When present, every local ref must name one of these ids.
+    entities: list[EntityRecord] = []
 
 
 # ---------------------------------------------------------------------------
@@ -373,17 +397,32 @@ def validate_against_manifest(
     )
     errors: list[str] = []
 
+    entity_ids: set[str] = {entity.id for entity in batch.entities}
+    seen_entity_ids: set[str] = set()
+    for e_index, entity in enumerate(batch.entities):
+        where = f"entities[{e_index}]"
+        if entity.id in seen_entity_ids:
+            errors.append(f"{where}: duplicate entity id {entity.id!r}")
+        seen_entity_ids.add(entity.id)
+        if entity.kind not in items:
+            errors.append(f"{where}: kind names unknown item key {entity.kind!r}")
+
     def check_ref(ref, where: str) -> None:
         if isinstance(ref, VocabRef) and ref.key not in items:
             errors.append(f"{where}: unknown vocabulary item key {ref.key!r}")
-        if (
-            isinstance(ref, LocalRef)
-            and ref.instance_of is not None
-            and ref.instance_of not in items
-        ):
-            errors.append(
-                f"{where}: instance_of names unknown item key {ref.instance_of!r}"
-            )
+        if isinstance(ref, LocalRef):
+            if ref.instance_of is not None and ref.instance_of not in items:
+                errors.append(
+                    f"{where}: instance_of names unknown item key {ref.instance_of!r}"
+                )
+            # ADR-0007: with an entity manifest present, an unknown local
+            # id is an invented entity — a detectable defect, never a
+            # silent duplicate
+            if entity_ids and ref.local_id not in entity_ids:
+                errors.append(
+                    f"{where}: local id {ref.local_id!r} not in the "
+                    f"batch's entity manifest"
+                )
 
     def check_property_value(prop: str, value, where: str) -> None:
         datatype = properties.get(prop)

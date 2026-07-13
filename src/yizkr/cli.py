@@ -193,11 +193,74 @@ def cmd_extract(args) -> int:
 def cmd_resolve(args) -> int:
     from yizkr.pipeline.resolve import resolve_batch
 
+    batch = _load_batch(args.batch)
+    if args.equivalences:
+        from yizkr.pipeline.reconcile import (
+            apply_equivalences,
+            read_approved_equivalences,
+        )
+
+        approved = read_approved_equivalences(args.equivalences)
+        batch = apply_equivalences(batch, approved)
+        print(f"applied {len(approved)} approved equivalences")
     _, item_labels = _client(args).label_index()
-    resolved = resolve_batch(_load_batch(args.batch), item_labels)
+    resolved = resolve_batch(batch, item_labels)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(resolved.model_dump_json(indent=2))
     print(f"wrote {args.out}")
+    return 0
+
+
+def cmd_reconcile(args) -> int:
+    from yizkr.pipeline.llm import make_client
+    from yizkr.pipeline.reconcile import (
+        adjudicate,
+        block_candidates,
+        export_equivalences_csv,
+        fetch_roster,
+    )
+
+    batch = _load_batch(args.batch)
+    if not batch.entities:
+        sys.exit(
+            f"{args.batch} carries no entity manifest; reconcile needs a "
+            f"batch from entity-first extraction (ADR-0007)"
+        )
+    config = Config.load(args.env_file)
+    roster = fetch_roster(WikiClient(config), config)
+    candidates = block_candidates(batch.entities, roster)
+    print(
+        f"roster: {len(roster)} graph entities; candidates for "
+        f"{len(candidates)} of {len(batch.entities)} document entities"
+    )
+    proposals = adjudicate(make_client(args.llm), batch.entities, candidates, batch)
+    rows = export_equivalences_csv(proposals, batch.entities, roster, args.out)
+    print(
+        f"wrote {args.out} ({rows} proposals). Fill the 'decision' column "
+        f"with approve/reject, then pass --equivalences to resolve. "
+        f"Nothing takes effect without your approval."
+    )
+    return 0
+
+
+def cmd_reconcile_graph(args) -> int:
+    from yizkr.pipeline.llm import make_client
+    from yizkr.pipeline.reconcile import (
+        export_graph_pairs_csv,
+        fetch_roster,
+        propose_graph_pairs,
+    )
+
+    config = Config.load(args.env_file)
+    roster = fetch_roster(WikiClient(config), config)
+    proposals = propose_graph_pairs(make_client(args.llm), roster)
+    rows = export_graph_pairs_csv(proposals, roster, args.out)
+    print(
+        f"wrote {args.out} ({rows} pairs from a {len(roster)}-entity "
+        f"roster). Approved pairs are executed BY YOU: merge the items "
+        f"on the wiki, or add a referenced 'said to be the same as' "
+        f"statement where the equivalence is itself a judgement."
+    )
     return 0
 
 
@@ -329,6 +392,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_publish_queries)
 
+    p = sub.add_parser(
+        "reconcile-graph",
+        help="propose duplicate pairs among EXISTING items (ADR-0007); "
+        "execution of approved pairs stays a curator action",
+    )
+    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument("--out", type=Path, default=Path("graph-equivalences.csv"))
+    p.set_defaults(func=cmd_reconcile_graph)
+
     p = sub.add_parser("claims", help="claim-contract utilities")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -402,9 +474,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_extract)
 
     p = isub.add_parser(
+        "reconcile",
+        help="propose entity equivalences against the graph (ADR-0007)",
+    )
+    p.add_argument("--batch", type=Path, required=True)
+    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument("--out", type=Path, default=Path("equivalences.csv"))
+    p.set_defaults(func=cmd_reconcile)
+
+    p = isub.add_parser(
         "resolve", help="match local refs to existing items (exact label)"
     )
     p.add_argument("--batch", type=Path, required=True)
+    p.add_argument(
+        "--equivalences",
+        type=Path,
+        help="reviewed equivalences CSV from `ingest reconcile`; approved "
+        "rows resolve to existing items before label matching",
+    )
     p.add_argument("--out", type=Path, default=Path("resolved.json"))
     p.set_defaults(func=cmd_resolve)
 
