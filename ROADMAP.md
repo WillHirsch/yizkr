@@ -42,10 +42,10 @@ updated, and no path writes an unreferenced statement.
 
 8. **Chunked extraction** – dense documents (a 60-person family tree)
    overflow a single model response; continuation turns are reassembled
-   and salvaged today, but per-fragment extraction with batch merge is
-   the structural fix. Include retry/partial-progress and a
-   `--from-raw` re-parse path so recovered raw dumps never require
-   paying for a second run.
+   and salvaged today, but per-unit extraction with batch merge is the
+   structural fix. Specified in ADR-0006 (semantic segmentation →
+   packed chunks → NDJSON emission with sentinel → deterministic merge;
+   per-chunk state with resume, subsuming raw-dump re-parse).
 9. **Cross-document entity reconciliation** – exact-label resolve
    duplicates people across documents ("Samuel Genserowski" vs "Samuel
    Moses Genserowski"). Alias-aware candidate matching feeding the
