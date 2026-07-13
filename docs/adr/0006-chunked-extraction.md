@@ -75,7 +75,10 @@ in the run manifest.
 Segmentation output is tiny (KBs) and single-turn-safe. If the call
 fails or returns an invalid segmentation after one retry, fall back to
 fixed-size line-boundary windows with empty context and a warning —
-degraded (offset chunking), never fatal.
+degraded (offset chunking), never fatal. On this fallback, chunk calls
+use context mode 2 (§3), never mode 1: forking a conversation whose
+segmentation turn was rejected would plant known-bad output in every
+chunk's context.
 
 ### 2. Packing
 
