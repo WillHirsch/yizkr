@@ -447,3 +447,38 @@ class TestClaudeCodeClient:
         )
         with pytest.raises(RuntimeError, match="no output"):
             client.complete("hello")
+
+    def test_complete_isolates_session(self, monkeypatch):
+        """Every one-shot call passes its own fresh --session-id: a
+        nested CLI otherwise inherits the parent's session id from the
+        environment, and concurrent pipeline calls would collide."""
+        client, calls = self.make_client(
+            monkeypatch,
+            [FakeCompleted(stdout="2.1.207\n"), FakeCompleted(stdout="hi")],
+        )
+        client.complete("hello")
+        command = calls[1][0]
+        session_id = command[command.index("--session-id") + 1]
+        assert len(session_id) == 36  # a fresh UUID, not inherited
+
+    def test_conversation_open_and_fork(self, monkeypatch):
+        """open_conversation pins a session id; fork resumes it with
+        --fork-session so the original session is never mutated."""
+        client, calls = self.make_client(
+            monkeypatch,
+            [
+                FakeCompleted(stdout="2.1.207\n"),
+                FakeCompleted(stdout="segmented"),
+                FakeCompleted(stdout="chunk claims"),
+            ],
+        )
+        response, handle = client.open_conversation("segment this")
+        assert response == "segmented"
+        open_command = calls[1][0]
+        assert open_command[open_command.index("--session-id") + 1] == handle
+
+        assert client.fork(handle, "extract unit u1") == "chunk claims"
+        fork_command = calls[2][0]
+        assert fork_command[fork_command.index("--resume") + 1] == handle
+        assert "--fork-session" in fork_command
+        assert "--session-id" not in fork_command

@@ -142,14 +142,30 @@ def cmd_extract(args) -> int:
 
         extractor = ClaimFileExtractor(args.claims_file)
     else:
+        from yizkr.pipeline.chunking import (
+            AUTO_CHUNK_THRESHOLD,
+            ChunkedClaimExtractor,
+        )
         from yizkr.pipeline.extract import LlmClaimExtractor
         from yizkr.pipeline.llm import make_client
 
-        raw_dump = args.out.with_name(args.out.name + ".raw.txt")
-        rejects_dump = args.out.with_name(args.out.name + ".rejected.json")
-        extractor = LlmClaimExtractor(
-            make_client(args.llm), raw_dump=raw_dump, rejects_dump=rejects_dump
+        chunked = args.strategy == "chunked" or (
+            args.strategy == "auto" and len(transcription.text) > AUTO_CHUNK_THRESHOLD
         )
+        if chunked:
+            extractor = ChunkedClaimExtractor(
+                make_client(args.llm),
+                state_dir=args.out.with_name(args.out.name + ".chunks"),
+                budget=args.chunk_budget,
+                retries=args.chunk_retries,
+                resume=args.resume,
+            )
+        else:
+            raw_dump = args.out.with_name(args.out.name + ".raw.txt")
+            rejects_dump = args.out.with_name(args.out.name + ".rejected.json")
+            extractor = LlmClaimExtractor(
+                make_client(args.llm), raw_dump=raw_dump, rejects_dump=rejects_dump
+            )
     batch = extractor.extract(transcription, artifact_qid=args.artifact)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(batch.model_dump_json(indent=2))
@@ -162,6 +178,15 @@ def cmd_extract(args) -> int:
             f"written; reasons in {rejects_path}",
             file=sys.stderr,
         )
+    failed = getattr(extractor, "failed_chunks", None)
+    if failed:
+        print(
+            f"warning: {len(failed)} chunks failed after retries "
+            f"({', '.join(failed)}); batch is PARTIAL — re-run with "
+            f"--resume to retry only those chunks",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 
@@ -358,6 +383,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
     p.add_argument("--out", type=Path, default=Path("batch.json"))
+    p.add_argument(
+        "--strategy",
+        choices=["auto", "single", "chunked"],
+        default="auto",
+        help="chunked extraction (ADR-0006): auto picks chunked for "
+        "large transcriptions; state lives in <out>.chunks/",
+    )
+    p.add_argument("--chunk-budget", type=int, default=2000, metavar="CHARS")
+    p.add_argument("--chunk-retries", type=int, default=2, metavar="N")
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="reuse chunk state from a previous run; only missing/"
+        "failed chunks are re-run (persisted raw responses are "
+        "re-parsed before re-invoking the model)",
+    )
     p.set_defaults(func=cmd_extract)
 
     p = isub.add_parser(

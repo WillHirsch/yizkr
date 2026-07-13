@@ -60,8 +60,12 @@ Rules — these mirror the archive's non-negotiable conventions:
 {item_keys}
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
 
-Output ONLY a JSON object with a "claims" array (no prose, no code fences),
-where each claim matches the "Claim" definition of this JSON Schema:
+Output NDJSON: one complete claim JSON object per line — no wrapper
+object, no code fences, no prose. Each claim matches the "Claim"
+definition of the JSON Schema below. After the last claim, end with
+exactly one final line:
+{{"done": true, "claims_emitted": N}}
+where N is the number of claim lines you emitted.
 
 {schema}
 
@@ -93,26 +97,18 @@ def run_metadata(model_identifier: str) -> ExtractionRunMetadata:
     )
 
 
-def _parse_response(response: str) -> dict:
-    """Extract claim JSON from model output, tolerating code fences,
-    surrounding prose, and MULTIPLE concatenated objects (models emit
-    continuation chunks on very large extractions) — their claims
-    arrays are merged in order.
+def scan_json_objects(response: str) -> list[dict]:
+    """Every JSON object decodable from model output, in order.
 
-    Salvage fallback: a response that spans several turns can carry an
-    inexact seam (tokens dropped where the model resumed), which corrupts
-    the enclosing object. Every *individual* claim object that still
-    decodes is then collected instead — one bad seam must not discard an
-    entire expensive extraction. Duplicate claims (models sometimes
-    overlap at a resume point) are dropped."""
+    Tolerates code fences, surrounding prose, NDJSON, and corrupt
+    regions (scanning resumes after any undecodable span). Objects
+    nested inside a decoded object are not yielded separately."""
     text = response.strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
     if fenced:
         text = fenced.group(1)
     decoder = json.JSONDecoder()
-    merged: list = []
-    salvaged: list = []
-    found = False
+    objects: list[dict] = []
     index = 0
     while True:
         start = text.find("{", index)
@@ -123,16 +119,36 @@ def _parse_response(response: str) -> dict:
         except json.JSONDecodeError:
             index = start + 1
             continue
-        if isinstance(obj, dict) and "claims" in obj:
+        if isinstance(obj, dict):
+            objects.append(obj)
+        index = end
+    return objects
+
+
+def _parse_response(response: str) -> dict:
+    """Extract claim JSON from model output.
+
+    Accepts NDJSON claim lines (the current contract), a wrapped
+    {"claims": [...]} object or several concatenated ones (older
+    contract / continuation chunks), or any mix. Salvage property: a
+    response that spans several turns can carry an inexact seam that
+    corrupts an enclosing object — every individual claim object that
+    still decodes is collected regardless, so one bad seam cannot
+    discard an entire expensive extraction. Duplicates (models overlap
+    at resume points) are dropped."""
+    merged: list = []
+    salvaged: list = []
+    found = False
+    for obj in scan_json_objects(response):
+        if "claims" in obj:
             found = True
             merged.extend(obj.get("claims") or [])
-        elif isinstance(obj, dict) and "subject" in obj and "property" in obj:
+        elif "subject" in obj and "property" in obj:
             salvaged.append(obj)
-        index = end
     if not found and not salvaged:
         raise ValueError(
             f"no claim JSON in extractor response (neither a 'claims' "
-            f"object nor loose claim objects): {text[:200]!r}"
+            f"object nor loose claim objects): {response.strip()[:200]!r}"
         )
     claims = merged + salvaged
     deduped: list = []

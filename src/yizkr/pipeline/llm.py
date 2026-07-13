@@ -23,15 +23,17 @@ Pick the model for either engine with $YIZKR_LLM_MODEL.
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import mimetypes
 import os
 import shutil
 import subprocess
 import tempfile
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, runtime_checkable
 
 
 class LlmClient(Protocol):
@@ -42,6 +44,23 @@ class LlmClient(Protocol):
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
         """Return the model's text response for a prompt (+ optional images)."""
         ...
+
+
+@runtime_checkable
+class ConversationalLlmClient(Protocol):
+    """Optional capability: conversations that can be forked (ADR-0006).
+
+    `open_conversation` sends the first turn and returns the response
+    plus an opaque handle. Each `fork` continues from that SAME prefix
+    independently — forks never see each other's turns. Because every
+    fork shares a byte-identical prefix, prompt caching prices the
+    shared context at cache-read rates. Callers must treat fork
+    failures as recoverable (fall back to resending context inline).
+    """
+
+    def open_conversation(self, prompt: str) -> tuple[str, Any]: ...
+
+    def fork(self, handle: Any, prompt: str) -> str: ...
 
 
 class AnthropicClient:
@@ -81,12 +100,37 @@ class AnthropicClient:
                 }
             )
         content.append({"type": "text", "text": prompt})
+        return self._create([{"role": "user", "content": content}])
+
+    def _create(self, messages: list[dict]) -> str:
         response = self._client.messages.create(
             model=self.model_identifier,
             max_tokens=4096,
-            messages=[{"role": "user", "content": content}],
+            messages=messages,
         )
         return "".join(block.text for block in response.content if block.type == "text")
+
+    def open_conversation(self, prompt: str) -> tuple[str, Any]:
+        """Stateless conversations: the handle IS the message prefix."""
+        first_turn = {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        response = self._create([first_turn])
+        handle = [
+            first_turn,
+            {"role": "assistant", "content": [{"type": "text", "text": response}]},
+        ]
+        return response, handle
+
+    def fork(self, handle: Any, prompt: str) -> str:
+        """Replay the shared prefix with a cache breakpoint, add one turn.
+
+        Every fork sends a byte-identical prefix, so the cache_control
+        marker on its last block makes the document + earlier turns
+        cache reads instead of fresh input tokens.
+        """
+        messages = copy.deepcopy(handle)
+        messages[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
+        messages.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
+        return self._create(messages)
 
 
 class ClaudeCodeClient:
@@ -185,9 +229,27 @@ class ClaudeCodeClient:
                 "First use the Read tool to examine these image files:\n"
                 f"{listing}\n\n{prompt}"
             )
+        # Explicit fresh session id: a nested CLI otherwise adopts the
+        # session id from its parent's environment, so concurrent
+        # pipeline calls would collide on one session.
+        return self._run(["--session-id", str(uuid.uuid4())], full_prompt)
+
+    def open_conversation(self, prompt: str) -> tuple[str, Any]:
+        """First turn of a forkable session; the handle is its session id."""
+        session_id = str(uuid.uuid4())
+        response = self._run(["--session-id", session_id], prompt)
+        return response, session_id
+
+    def fork(self, handle: Any, prompt: str) -> str:
+        """One follow-up turn on a FORK of the session — the original
+        session is never mutated, so every fork branches from the same
+        prefix and forks never see each other's turns."""
+        return self._run(["--resume", str(handle), "--fork-session"], prompt)
+
+    def _run(self, extra_args: list[str], prompt: str) -> str:
         result = subprocess.run(
-            self._command(),
-            input=full_prompt,  # stdin avoids ARG_MAX limits on large prompts
+            self._command() + extra_args,
+            input=prompt,  # stdin avoids ARG_MAX limits on large prompts
             capture_output=True,
             text=True,
             timeout=self.timeout,
