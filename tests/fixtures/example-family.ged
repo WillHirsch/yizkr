@@ -1,0 +1,58 @@
+0 HEAD
+1 SOUR Example Genealogy Suite
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Anna Maria /Beispiel/
+1 NAME Anna /Muster/
+1 SEX F
+1 BIRT
+2 DATE 12 AUG 1885
+2 PLAC Springfield, Example County
+1 DEAT
+2 DATE BEF 8 MAY 1945
+2 PLAC Lakeside, Example County
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Bern /Beispiel/
+1 SEX M
+1 BIRT
+2 DATE ABT 1880
+1 DEAT
+2 DATE MAR 1950
+1 FAMS @F1@
+1 OCCU Cigar maker
+0 @I3@ INDI
+1 NAME Carla /Beispiel/
+1 SEX F
+1 BIRT
+2 DATE BET 1910 AND 1912
+2 PLAC Springfield, Example County
+1 FAMC @F1@
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Dov /Muster/
+1 SEX M
+1 BIRT
+2 DATE 1908
+1 FAMS @F2@
+0 @I5@ INDI
+1 NAME Nameless Placeholder
+1 BIRT
+2 DATE SOMEDAY MAYBE
+0 @F1@ FAM
+1 HUSB @I2@
+1 WIFE @I1@
+1 CHIL @I3@
+1 MARR
+2 DATE 2 APR 1902
+2 PLAC Springfield, Example County
+0 @F2@ FAM
+1 HUSB @I4@
+1 WIFE @I3@
+1 MARR
+2 DATE 30 JUL 1935
+1 DIV
+2 DATE 10 OCT 1939
+0 TRLR

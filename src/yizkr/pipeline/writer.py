@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 
 from yizkr.claims import (
@@ -247,10 +248,11 @@ class BatchWriter:
             )
         if claim is not None and claim.source.transcription_excerpt:
             excerpt = claim.source.transcription_excerpt
-            text = excerpt.text
+            # excerpts are verification aids: Wikibase caps text values
+            # at 400 chars and forbids newlines in monolingual text —
+            # normalize visibly, never fail the write
+            text = excerpt.text.replace("\n", " | ")
             if len(text) > 400:
-                # Wikibase hard-caps text values at 400 chars; excerpts
-                # are verification aids — clip visibly, never fail the write
                 text = text[:397].rsplit(" ", 1)[0] + "…"
             source_ref.add(
                 MonolingualText(
@@ -260,7 +262,8 @@ class BatchWriter:
                 )
             )
         references.add(source_ref)
-        if run_qid is not None:
+        # dry-run mints no run item; its placeholder cannot be referenced
+        if run_qid is not None and re.fullmatch(r"Q[1-9]\d*", run_qid):
             run_ref = Reference()
             run_ref.add(
                 Item(
@@ -354,6 +357,17 @@ class BatchWriter:
                 claim.source.artifact, result, source_artifact_qid=None
             )
             subject_qid = self._resolve_ref(claim.subject, result, artifact_qid)
+            if self.dry_run:
+                # planning pass: resolve every ref so created_items is
+                # complete, then count — WBI datavalues cannot hold the
+                # (new:...) placeholders dry-run materialization returns
+                if isinstance(claim.value, ItemValue):
+                    self._resolve_ref(claim.value.value, result, artifact_qid)
+                for qualifier in claim.qualifiers:
+                    if isinstance(qualifier.value, ItemValue):
+                        self._resolve_ref(qualifier.value.value, result, artifact_qid)
+                result.written += 1
+                continue
             wbi_claim = self._to_wbi_claim(
                 claim.property, claim.value, result, artifact_qid
             )

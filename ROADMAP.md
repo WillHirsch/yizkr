@@ -90,6 +90,12 @@ updated, and no path writes an unreferenced statement.
     GEDCOM → ClaimBatch adapter feeding the existing validation/review
     pipeline via `ClaimFileExtractor`. Exact, complete, free,
     reproducible; the Ancestry family tree becomes its first fixture.
+    *Done — see `pipeline/gedcom.py`; `yizkr ingest gedcom`. Names,
+    aliases, birth/death dates+places, parentage, marriages/divorces;
+    GEDCOM uncertainty (ABT/BEF/AFT/BET) maps to structural qualifiers;
+    unparseable dates warn, never guess; unsupported tags counted.
+    Fixture is fictional (the repo carries no personal data) — export
+    the real Ancestry GEDCOM and run it through when ready.*
 14. **Parallel chunk execution** – chunks are independent by design;
     v1 runs them sequentially. Add a concurrency flag (the 49-chunk
     travel-notes run made the wall-clock cost concrete). Same session:

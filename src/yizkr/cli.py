@@ -247,6 +247,31 @@ def cmd_resolve(args) -> int:
     return 0
 
 
+def cmd_gedcom(args) -> int:
+    from yizkr.pipeline.gedcom import adapt_gedcom
+
+    result = adapt_gedcom(args.file.read_text(), artifact_qid=args.artifact)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(result.batch.model_dump_json(indent=2))
+    print(
+        f"wrote {args.out} ({len(result.batch.claims)} claims, "
+        f"{len(result.batch.entities)} entities) — deterministic, no LLM; "
+        f"flows through reconcile/review/write as usual"
+    )
+    for warning in result.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if result.unsupported_tags:
+        print(
+            "unsupported GEDCOM tags (counted, not extracted): "
+            + ", ".join(
+                f"{tag}x{count}"
+                for tag, count in sorted(result.unsupported_tags.items())
+            ),
+            file=sys.stderr,
+        )
+    return 0
+
+
 def cmd_reconcile(args) -> int:
     from yizkr.pipeline.llm import make_client
     from yizkr.pipeline.reconcile import (
@@ -559,6 +584,15 @@ def build_parser() -> argparse.ArgumentParser:
         "re-parsed before re-invoking the model)",
     )
     p.set_defaults(func=cmd_extract)
+
+    p = isub.add_parser(
+        "gedcom",
+        help="deterministic GEDCOM export -> claim batch (no LLM; item 13)",
+    )
+    p.add_argument("--file", type=Path, required=True, help="GEDCOM file (.ged)")
+    p.add_argument("--artifact", required=True, help="registered artifact QID")
+    p.add_argument("--out", type=Path, default=Path("batch.json"))
+    p.set_defaults(func=cmd_gedcom)
 
     p = isub.add_parser(
         "reconcile",
