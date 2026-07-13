@@ -49,9 +49,14 @@ updated, and no path writes an unreferenced statement.
    *Done — see `pipeline/chunking.py`; `ingest extract --strategy`.*
 9. **Cross-document entity reconciliation** – exact-label resolve
    duplicates people across documents ("Samuel Genserowski" vs "Samuel
-   Moses Genserowski"). Alias-aware candidate matching feeding the
-   review flow (or an OpenRefine reconciliation recipe) before any bulk
-   ingestion.
+   Moses Genserowski"). Specified in ADR-0007: entity-first extraction
+   (per-document alias-unified entity manifests, which also make claim
+   ownership structural within chunks), then deterministic candidate
+   blocking + LLM relational adjudication against a prefetched graph
+   roster, emitting equivalence proposals for human review — approved
+   matches resolve to existing items before write; a separate
+   occasional pass proposes merges/`said to be the same as` for
+   duplicates already in the graph.
 10. **Living-person policy at ingestion** – contemporary documents
     yield living-person claims with no flagging. Vocabulary-by-omission
     (no email/phone properties) is deliberate policy; add an

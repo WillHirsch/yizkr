@@ -130,6 +130,20 @@ and reference the artifact itself or the producing run.
 - W1 implementation: `python -m ingest detect-faces / enroll-face /
   match-faces` (see `ingest/faces.py`), feeding the shared review flow.
 
+## Identity and reconciliation (ADR-0007)
+
+- Every ingested document contributes its name variants as item
+  **aliases** (append-only); matching quality compounds per document.
+- Machine-proposed equivalences (within or across documents) are
+  reviewed by a human before they take effect — identity is never
+  auto-confirmed. Approved matches resolve new claims to the existing
+  item rather than minting a duplicate.
+- Where equivalence of two *existing* items is itself a judgement a
+  source supports, it is an ordinary referenced statement:
+  `said to be the same as` (Wikidata P460), citing the artifacts whose
+  content supports the identification and the reconciliation run.
+  True duplicates are curator-merged instead.
+
 ## Contradictions
 
 - Competing values for the same property coexist as separate
