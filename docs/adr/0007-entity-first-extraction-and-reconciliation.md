@@ -1,6 +1,15 @@
 # ADR-0007: Entity-first extraction and entity reconciliation
 
-Status: proposed (specified; implementation pending)
+Status: accepted (implemented: `pipeline/chunking.py` entity path,
+`pipeline/reconcile.py`, writer alias handling; validated live — the
+travel notes' entity manifest unified aliases and even disambiguated
+the document's two Davids unaided; document-side reconciliation
+proposed the correct family-tree items for Rosa/Alex/Samuel at
+0.75–0.95 on relational evidence, flagging the trial's duplicate items
+as duplicates; the graph-side pass proposed all four known duplicate
+pairs and correctly rejected the two-Davids trap as different
+generations; approved equivalences applied through
+`resolve --equivalences` end to end)
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
