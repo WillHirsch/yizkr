@@ -59,18 +59,56 @@ updated, and no path writes an unreferenced statement.
    duplicates already in the graph.
    *Done — see `pipeline/reconcile.py`; `ingest reconcile`,
    `resolve --equivalences`, `reconcile-graph`.*
-10. **Living-person policy at ingestion** – contemporary documents
-    yield living-person claims with no flagging. Vocabulary-by-omission
-    (no email/phone properties) is deliberate policy; add an
-    ingestion-time counterpart: review CSV warns when a subject has no
-    death data and recent activity, and the `living person` flag gets
-    set as part of curation. Vocabulary session for the observed gaps:
-    occupation, sibling, cause of death (quantity datatype support for
-    ages/counts).
+10. **Living-person policy at ingestion** – partially done: the entity
+    manifest's `extract: false` flag (ADR-0007) keeps logistics-context
+    people out of extraction. Still open: review CSV warns when a
+    subject has no death data and recent activity, and the
+    `living person` flag gets set as part of curation. Vocabulary
+    session for the observed gaps: artifact types (genealogical
+    report, address book), occupation, sibling, cause of death
+    (quantity datatype support for ages/counts).
 11. **Review corrections** – the CSV review flow is approve/reject
     only; ambiguous machine readings (date-format ambiguity) currently
     force rejection. Add an edit/correction column that produces a
     curator-attributed replacement claim.
+12. **Travel-notes re-ingestion + duplicate cleanup** – re-extract the
+    travel notes entity-first (the trial batch predates the `extract`
+    flag and wrote duplicate people), apply the already-reviewed
+    equivalences, and write — the first live exercise of the writer's
+    alias-append path. Execute the four approved duplicate merges from
+    `reconcile-graph` (Samuel, Rosa, Alex, Salomon) and review the
+    place candidates.
+13. **GEDCOM adapter** – structured genealogy exports must never ride
+    the generative path (ADR-0006 context): a deterministic
+    GEDCOM → ClaimBatch adapter feeding the existing validation/review
+    pipeline via `ClaimFileExtractor`. Exact, complete, free,
+    reproducible; the Ancestry family tree becomes its first fixture.
+14. **Parallel chunk execution** – chunks are independent by design;
+    v1 runs them sequentially. Add a concurrency flag (the 49-chunk
+    travel-notes run made the wall-clock cost concrete). Same session:
+    batch the reconciliation adjudication call — 369 pairs through one
+    response is the same output-bound fragility ADR-0006 removed from
+    extraction, one level up.
+15. **Folder/batch orchestration** – `yizkr ingest run <folder>`:
+    register → transcribe → extract → reconcile → resolve → pause for
+    review → write, with per-document state (the chunk manifest
+    already provides the progress unit) and safe re-runs.
+16. **Second trial: the untested half** – a real photograph through
+    the faces/depicts flow (never live-run), a handwritten certificate
+    (HTR is a stub; triage the gap), and a German-language document.
+    Gate further feature work on its findings, as the first trial
+    gated this batch.
+
+### Agreed working order
+
+7 (backup) → 12 (re-ingestion + merges) → 13 (GEDCOM) → 14 (parallel
+chunks + batched adjudication) → 15 (folder orchestration) → 16
+(photo/certificate/German trial). Items 10 and 11 ride along with
+whichever of these first touches the review flow. Deferred by explicit
+ADR decision, revisit on trigger: MCP/agentic graph access (roster
+outgrows a prompt, or interactive curation), slimmed per-chunk prompt
+schema, automated `said to be the same as` writing (curator-only by
+design), modeling guidance for collective manifest entities.
 
 ## Phase W2 (IIIF tier) – later
 
