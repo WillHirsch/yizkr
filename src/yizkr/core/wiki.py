@@ -72,7 +72,12 @@ class WikiClient:
     # -- entity lookup (lag-free page enumeration) --------------------------
 
     def list_entity_ids(self) -> list[str]:
-        """All P/Q entity ids on the instance."""
+        """All live P/Q entity ids on the instance.
+
+        Redirects (merged items, ADR-0007) are excluded here: a
+        redirect's entity data resolves to its target, so counting it
+        would produce phantom duplicate labels downstream.
+        """
         ids: set[str] = set()
         # Properties live in namespace 122; items on Wikibase Suite live in
         # main (0); 120 covers installs with a dedicated Item namespace.
@@ -83,6 +88,7 @@ class WikiClient:
                     "action": "query",
                     "list": "allpages",
                     "apnamespace": namespace,
+                    "apfilterredir": "nonredirects",
                     "aplimit": "500",
                 }
                 if continue_token:
