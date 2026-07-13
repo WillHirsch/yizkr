@@ -167,6 +167,12 @@ Rules — these mirror the archive's non-negotiable conventions:
 Extract claims ONLY for the assigned units below — nothing from other
 parts of the document, even though you can see them. Use the rest of
 the document only as context (identity, relationships, spellings).
+Ownership rule: every claim whose SUBJECT is a person/place/event of an
+assigned unit belongs to you, including relations to entities outside
+the unit — a unit person's father/mother from the enclosing tree
+structure or the unit's context line, their spouse, their instance_of.
+Do not skip a claim because its object or evidence lies partly outside
+your units.
 
 Assigned units:
 {units_block}

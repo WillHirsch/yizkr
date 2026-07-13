@@ -198,6 +198,25 @@ class TestExtract:
         with pytest.raises(ValueError, match="claims"):
             _parse_response(json.dumps({"note": "no claims here"}))
 
+    def test_nested_time_values_are_flattened_not_rejected(self):
+        """Models sometimes wrap time values like item values
+        ({"type": "time", "value": {"year": ...}}); the content is
+        unambiguous, so it is repaired rather than rejected."""
+        nested = dict(
+            CLAIMS[1],
+            value={"type": "time", "value": {"year": 1910, "month": 5}},
+            qualifiers=[
+                {
+                    "property": "latest_date",
+                    "value": {"type": "time", "value": {"year": 1911}},
+                }
+            ],
+        )
+        llm = FakeLlm(json.dumps({"claims": [nested]}))
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        assert batch.claims[0].value.year == 1910
+        assert batch.claims[0].qualifiers[0].value.year == 1911
+
     def test_extractor_dumps_raw_response_before_parsing(self, tmp_path):
         """Engine output is expensive: it must be on disk even when
         parsing/validation fails, so nothing paid-for is unrecoverable."""

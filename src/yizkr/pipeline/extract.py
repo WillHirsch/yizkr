@@ -25,6 +25,7 @@ import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import yizkr
 from yizkr.claims import (
@@ -158,6 +159,38 @@ def _parse_response(response: str) -> dict:
     return {"claims": deduped}
 
 
+def _normalize_claim_shape(claim: dict) -> dict:
+    """Repair a mechanical output-shape slip models actually make.
+
+    Item values nest under "value" ({"type": "item", "value": {...}}),
+    and models sometimes wrap time values the same way:
+    {"type": "time", "value": {"year": ...}} instead of the flat
+    {"type": "time", "year": ...} the schema requires. The content is
+    unambiguous, so flatten rather than reject 10 minutes of output.
+    """
+
+    def flatten(value: Any) -> Any:
+        if (
+            isinstance(value, dict)
+            and value.get("type") == "time"
+            and isinstance(value.get("value"), dict)
+            and "year" in value["value"]
+        ):
+            return {"type": "time", **value["value"]}
+        return value
+
+    fixed = dict(claim)
+    fixed["value"] = flatten(claim.get("value"))
+    if isinstance(claim.get("qualifiers"), list):
+        fixed["qualifiers"] = [
+            {**qualifier, "value": flatten(qualifier.get("value"))}
+            if isinstance(qualifier, dict)
+            else qualifier
+            for qualifier in claim["qualifiers"]
+        ]
+    return fixed
+
+
 def salvage_valid_claims(
     claims: list, extraction_run: dict
 ) -> tuple[ClaimBatch, list[dict]]:
@@ -172,6 +205,8 @@ def salvage_valid_claims(
     valid: list = []
     rejects: list[dict] = []
     for claim in claims:
+        if isinstance(claim, dict):
+            claim = _normalize_claim_shape(claim)
         try:
             batch = ClaimBatch.model_validate(
                 {"extraction_run": extraction_run, "claims": [claim]}
