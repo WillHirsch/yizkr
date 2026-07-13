@@ -75,6 +75,19 @@ def cmd_backup(args) -> int:
     return 0
 
 
+def cmd_merge_items(args) -> int:
+    client = _client(args)
+    for qid in (args.from_qid, args.to_qid):
+        if not client.fetch_entities([qid]).get(qid):
+            sys.exit(f"{qid} does not exist")
+    client.merge_items(args.from_qid, args.to_qid, summary=args.summary)
+    print(
+        f"merged {args.from_qid} into {args.to_qid}; {args.from_qid} is "
+        f"now a redirect"
+    )
+    return 0
+
+
 def cmd_publish_queries(args) -> int:
     from yizkr.queries.publish import publish_queries
 
@@ -414,6 +427,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_publish_queries)
+
+    p = sub.add_parser(
+        "merge-items",
+        help="merge one item into another (curator action; one explicit "
+        "pair per invocation — ADR-0007)",
+    )
+    p.add_argument("from_qid", metavar="FROM_QID")
+    p.add_argument("to_qid", metavar="TO_QID")
+    p.add_argument(
+        "--summary",
+        default="curator: reviewed duplicate merge (ADR-0007)",
+        help="edit summary recorded in item history",
+    )
+    p.set_defaults(func=cmd_merge_items)
 
     p = sub.add_parser(
         "backup",

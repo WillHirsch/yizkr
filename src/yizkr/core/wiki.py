@@ -199,6 +199,82 @@ class WikiClient:
             login=self.login,
         )
 
+    def merge_items(self, from_qid: str, to_qid: str, summary: str) -> None:
+        """Merge one item into another; the source becomes a redirect.
+
+        A curator action (ADR-0007): callers name one explicit pair per
+        call — never bulk CSV automation. Wikibase refuses merges with
+        conflicting same-language labels, so the source's label is
+        first preserved as an alias on the target and then aligned;
+        statements (with their references), aliases, and sitelinks move
+        to the target. Other items' statements that point at the source
+        keep pointing at the redirect, which WDQS follows.
+        """
+        from wikibaseintegrator import wbi_helpers
+
+        def api(data: dict) -> None:
+            wbi_helpers.mediawiki_api_call_helper(
+                data={**data, "token": self.login.get_edit_token(), "bot": "1"},
+                login=self.login,
+            )
+
+        source = self.wbi.item.get(from_qid)
+        target = self.wbi.item.get(to_qid)
+        source_label = str(source.labels.get("en") or "")
+        target_label = str(target.labels.get("en") or "")
+        if source_label and source_label != target_label:
+            # preserve the source's name as an alias on the target, then
+            # strip the source's label/description (an empty value in
+            # wbsetlabel/wbsetdescription REMOVES the term) so the merge
+            # has no term conflicts and genuinely empties the source
+            aliases = {str(alias) for alias in (target.aliases.get("en") or [])}
+            if source_label not in aliases:
+                target.aliases.set("en", sorted(aliases | {source_label}))
+                target.write(summary=f"merge: preserve label of {from_qid} as alias")
+            api(
+                {
+                    "action": "wbsetlabel",
+                    "id": from_qid,
+                    "language": "en",
+                    "value": "",
+                    "summary": f"merge: clear label before merging into {to_qid}",
+                }
+            )
+        if str(source.descriptions.get("en") or ""):
+            api(
+                {
+                    "action": "wbsetdescription",
+                    "id": from_qid,
+                    "language": "en",
+                    "value": "",
+                    "summary": f"merge: clear description before merging into {to_qid}",
+                }
+            )
+        wbi_helpers.mediawiki_api_call_helper(
+            data={
+                "action": "wbmergeitems",
+                "fromid": from_qid,
+                "toid": to_qid,
+                "ignoreconflicts": "description",
+                "summary": summary,
+                "token": self.login.get_edit_token(),
+                "bot": "1",
+            },
+            login=self.login,
+        )
+        # wbmergeitems moves content but does not redirect the emptied
+        # source (the wiki UI issues this as a second call, and so do we)
+        wbi_helpers.mediawiki_api_call_helper(
+            data={
+                "action": "wbcreateredirect",
+                "from": from_qid,
+                "to": to_qid,
+                "token": self.login.get_edit_token(),
+                "bot": "1",
+            },
+            login=self.login,
+        )
+
     # -- media upload -------------------------------------------------------
 
     def upload_file(
