@@ -91,6 +91,10 @@ class BatchWriter:
         # canonical label, kind, summary, and the document's aliases
         label = record.label if record else ref.label
         description = (record.summary or None) if record else ref.description
+        if description and len(description) > 250:
+            # MediaWiki hard-caps descriptions at 250 chars; the summary
+            # is a convenience, not an assertion — clip at a word break
+            description = description[:247].rsplit(" ", 1)[0] + "…"
         instance_of = record.kind if record else ref.instance_of
         aliases = record.aliases if record else []
         if record and record.qid:
@@ -243,10 +247,15 @@ class BatchWriter:
             )
         if claim is not None and claim.source.transcription_excerpt:
             excerpt = claim.source.transcription_excerpt
+            text = excerpt.text
+            if len(text) > 400:
+                # Wikibase hard-caps text values at 400 chars; excerpts
+                # are verification aids — clip visibly, never fail the write
+                text = text[:397].rsplit(" ", 1)[0] + "…"
             source_ref.add(
                 MonolingualText(
                     prop_nr=self.properties["transcription_excerpt"],
-                    text=excerpt.text,
+                    text=text,
                     language=excerpt.language,
                 )
             )
@@ -332,6 +341,13 @@ class BatchWriter:
 
     def write_batch(self, batch: ClaimBatch) -> WriteResult:
         self._entity_records = {record.id: record for record in batch.entities}
+        # reviewed equivalences (ADR-0007): resolve replaced these
+        # entities' refs with QIDs, so materialization never sees them —
+        # contribute the document's aliases to the existing items here
+        if not self.dry_run:
+            for record in batch.entities:
+                if record.qid:
+                    self._ensure_aliases(record.qid, [record.label, *record.aliases])
         result = WriteResult(run_qid=self.ensure_run_item(batch))
         for claim in batch.claims:
             artifact_qid = self._resolve_ref(

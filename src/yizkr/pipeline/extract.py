@@ -188,6 +188,19 @@ def _normalize_claim_shape(claim: dict) -> dict:
             else qualifier
             for qualifier in claim["qualifiers"]
         ]
+    # excerpts are verification aids ("short" per ADR-0003) and Wikibase
+    # caps text values at 400 chars; clip visibly rather than lose the claim
+    source = fixed.get("source")
+    if isinstance(source, dict):
+        excerpt = source.get("transcription_excerpt")
+        if isinstance(excerpt, dict) and len(excerpt.get("text") or "") > 400:
+            fixed["source"] = {
+                **source,
+                "transcription_excerpt": {
+                    **excerpt,
+                    "text": excerpt["text"][:397].rsplit(" ", 1)[0] + "…",
+                },
+            }
     return fixed
 
 

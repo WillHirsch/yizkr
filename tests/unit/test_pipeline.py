@@ -217,6 +217,23 @@ class TestExtract:
         assert batch.claims[0].value.year == 1910
         assert batch.claims[0].qualifiers[0].value.year == 1911
 
+    def test_over_length_excerpts_are_clipped_not_fatal(self):
+        """Wikibase caps text values at 400 chars; an excerpt is a
+        verification aid, so it is clipped visibly instead of losing
+        the claim (or failing the write)."""
+        long_claim = dict(
+            CLAIMS[1],
+            source={
+                "artifact": {"kind": "qid", "qid": "Q23"},
+                "transcription_excerpt": {"text": "word " * 100, "language": "en"},
+            },
+        )
+        llm = FakeLlm(json.dumps({"claims": [long_claim]}))
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        text = batch.claims[0].source.transcription_excerpt.text
+        assert len(text) <= 400
+        assert text.endswith("…")
+
     def test_extractor_dumps_raw_response_before_parsing(self, tmp_path):
         """Engine output is expensive: it must be on disk even when
         parsing/validation fails, so nothing paid-for is unrecoverable."""

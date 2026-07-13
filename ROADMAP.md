@@ -80,6 +80,11 @@ updated, and no path writes an unreferenced statement.
     alias-append path. Execute the four approved duplicate merges from
     `reconcile-graph` (Samuel, Rosa, Alex, Salomon) and review the
     place candidates.
+    *Done — merges executed via `yizkr merge-items`; re-ingestion
+    resolved 41 reviewed equivalences and appended document aliases to
+    the merged items; graph now has zero duplicate person labels.
+    Remaining place/stub candidates (Portland pair, Charlotte stub
+    Q183) left for a future curation pass.*
 13. **GEDCOM adapter** – structured genealogy exports must never ride
     the generative path (ADR-0006 context): a deterministic
     GEDCOM → ClaimBatch adapter feeding the existing validation/review
