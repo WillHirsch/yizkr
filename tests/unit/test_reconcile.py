@@ -94,6 +94,15 @@ class TestBlocking:
         lone = [EntityRecord(id="e9", label="Zzyzx Qwx", kind="human")]
         assert block_candidates(lone, roster()) == {}
 
+    def test_prefix_forms_block(self):
+        """'Alex' must reach the adjudicator against 'Alexander …' —
+        clipped forms are how family documents refer to people."""
+        alex = [EntityRecord(id="e5", label="Alex", kind="human")]
+        extended = roster() + [
+            RosterEntity(qid="Q124", label="Alexander Samuel Genserowsky", kind="human")
+        ]
+        assert [c.qid for c in block_candidates(alex, extended)["e5"]] == ["Q124"]
+
 
 class TestAdjudication:
     def response(self, extra_lines=()):

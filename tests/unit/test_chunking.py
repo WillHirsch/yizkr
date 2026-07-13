@@ -217,6 +217,14 @@ class TestPacking:
         chunks = pack_entities(entities, DOC.splitlines(), budget=10_000)
         assert len(chunks) == 1
 
+    def test_non_extract_entities_are_skipped(self):
+        """extract=false entities (logistics people, boilerplate) are
+        recorded for audit but never assigned to a chunk."""
+        entities = self.entities()
+        entities[0].extract = False
+        chunks = pack_entities(entities, DOC.splitlines(), budget=10_000)
+        assert [[e.id for e in chunk] for chunk in chunks] == [["e2"]]
+
 
 class TestChunkResponseContract:
     def test_sentinel_required(self):

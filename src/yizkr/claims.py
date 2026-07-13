@@ -352,6 +352,11 @@ class EntityRecord(StrictModel):
     kind: ManifestKey
     summary: str = ""
     mention_lines: list[int] = []
+    # False = recorded for audit but NOT extracted: entities appearing
+    # only in non-assertive context (logistics, boilerplate) or whose
+    # claims the archive does not want (contemporary living people in
+    # incidental roles). Mirrors SegmentationUnit.extract.
+    extract: bool = True
     qid: str | None = Field(default=None, pattern=r"^Q[1-9]\d*$")
 
 

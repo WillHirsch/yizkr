@@ -225,12 +225,18 @@ Output ONE JSON object, no prose, no code fences:
 {{"entities": [{{"id": "e01", "label": "<canonical, fullest form>",
 "aliases": ["<other forms, verbatim>", ...], "kind": "<one of: {kinds}>",
 "summary": "<one line: who/what this is, with key dates/relations>",
-"mention_lines": [<line numbers where it is mentioned>]}}, ...]}}
+"mention_lines": [<line numbers where it is mentioned>],
+"extract": <true, or false — see below>}}, ...]}}
 
 Rules:
 - One entry per real-world entity, however many aliases it has.
 - ids must be unique. Do NOT include a "qid" field.
 - Prefer completeness: an entity mentioned once still gets an entry.
+- extract=false for entities that appear ONLY in non-assertive context:
+  travel/event logistics, room or seating assignments, contemporary
+  trip participants, boilerplate. They are recorded for audit but no
+  claims are extracted about them. Entities the document asserts
+  historical/genealogical facts about get extract=true.
 - summary is evidence for later identity matching: pack it with the
   document's key facts (born/died/married when-where, parents, spouse).
 
@@ -330,6 +336,8 @@ def pack_entities(
     current: list[EntityRecord] = []
     current_size = 0
     for entity in entities:
+        if not entity.extract:
+            continue
         lines = [
             number for number in entity.mention_lines if 1 <= number <= len(text_lines)
         ]
@@ -875,8 +883,13 @@ class ChunkedClaimExtractor:
                 {
                     "strategy": "entity",
                     "entities_total": len(entities),
+                    "entities_not_extracted": [
+                        entity.id for entity in entities if not entity.extract
+                    ],
                     "entities_without_claims": [
-                        entity.id for entity in entities if entity.id not in subject_ids
+                        entity.id
+                        for entity in entities
+                        if entity.extract and entity.id not in subject_ids
                     ],
                     "lines_matching_no_entity": unmatched_lines,
                     "distinct_subject_ids": sorted(subject_ids),

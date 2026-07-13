@@ -75,20 +75,33 @@ ROSTER_QUERY = """\
 SELECT ?item ?itemLabel ?kindLabel
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
        (SAMPLE(?birthDate) AS ?birth) (SAMPLE(?deathDate) AS ?death)
-       (GROUP_CONCAT(DISTINCT ?spouseLabel; separator="|") AS ?spouses)
-       (GROUP_CONCAT(DISTINCT ?fatherLabel; separator="|") AS ?fathers)
-       (GROUP_CONCAT(DISTINCT ?motherLabel; separator="|") AS ?mothers)
+       (SAMPLE(?birthEventDate) AS ?eventBirth)
+       (SAMPLE(?deathEventDate) AS ?eventDeath)
+       (GROUP_CONCAT(DISTINCT ?spouseDesc; separator="|") AS ?spouses)
+       (GROUP_CONCAT(DISTINCT ?fatherDesc; separator="|") AS ?fathers)
+       (GROUP_CONCAT(DISTINCT ?motherDesc; separator="|") AS ?mothers)
 WHERE {{
   ?item wdt:{instance_of} ?kind .
   OPTIONAL {{ ?item skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
   OPTIONAL {{ ?item wdt:{date_of_birth} ?birthDate . }}
   OPTIONAL {{ ?item wdt:{date_of_death} ?deathDate . }}
-  OPTIONAL {{ ?item wdt:{spouse}/rdfs:label ?spouseLabel .
-              FILTER(LANG(?spouseLabel) = "en") }}
-  OPTIONAL {{ ?item wdt:{father}/rdfs:label ?fatherLabel .
-              FILTER(LANG(?fatherLabel) = "en") }}
-  OPTIONAL {{ ?item wdt:{mother}/rdfs:label ?motherLabel .
-              FILTER(LANG(?motherLabel) = "en") }}
+  # dates asserted via event items (participant in a birth/death event)
+  OPTIONAL {{ ?birthEvent wdt:{participant} ?item ;
+                          wdt:{instance_of} wd:{birth_item} ;
+                          wdt:{point_in_time} ?birthEventDate . }}
+  OPTIONAL {{ ?deathEvent wdt:{participant} ?item ;
+                          wdt:{instance_of} wd:{death_item} ;
+                          wdt:{point_in_time} ?deathEventDate . }}
+  # relation labels carry QIDs: bare labels are ambiguous (two Davids)
+  OPTIONAL {{ ?item wdt:{spouse} ?spouseItem . ?spouseItem rdfs:label ?spouseLabel .
+              FILTER(LANG(?spouseLabel) = "en")
+              BIND(CONCAT(?spouseLabel, " (", STRAFTER(STR(?spouseItem), "entity/"), ")") AS ?spouseDesc) }}
+  OPTIONAL {{ ?item wdt:{father} ?fatherItem . ?fatherItem rdfs:label ?fatherLabel .
+              FILTER(LANG(?fatherLabel) = "en")
+              BIND(CONCAT(?fatherLabel, " (", STRAFTER(STR(?fatherItem), "entity/"), ")") AS ?fatherDesc) }}
+  OPTIONAL {{ ?item wdt:{mother} ?motherItem . ?motherItem rdfs:label ?motherLabel .
+              FILTER(LANG(?motherLabel) = "en")
+              BIND(CONCAT(?motherLabel, " (", STRAFTER(STR(?motherItem), "entity/"), ")") AS ?motherDesc) }}
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
 GROUP BY ?item ?itemLabel ?kindLabel
@@ -107,6 +120,10 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
         spouse=properties["spouse"],
         father=properties["father"],
         mother=properties["mother"],
+        participant=properties["participant"],
+        point_in_time=properties["point_in_time"],
+        birth_item=items["birth"],
+        death_item=items["death"],
     )
     url = (
         config.sparql_url
@@ -132,8 +149,9 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                 label=field(binding, "itemLabel"),
                 aliases=split(binding, "aliases"),
                 kind=kind_label_to_key.get(kind_label, kind_label),
-                birth=field(binding, "birth")[:10],
-                death=field(binding, "death")[:10],
+                # direct statements win; event-derived dates fill gaps
+                birth=(field(binding, "birth") or field(binding, "eventBirth"))[:10],
+                death=(field(binding, "death") or field(binding, "eventDeath"))[:10],
                 spouses=split(binding, "spouses"),
                 fathers=split(binding, "fathers"),
                 mothers=split(binding, "mothers"),
@@ -151,12 +169,21 @@ def _name_tokens(*names: str) -> set[str]:
     }
 
 
+def _tokens_overlap(first: set[str], second: set[str]) -> bool:
+    """Prefix-aware token match: 'Alex' must block against 'Alexander'
+    (nicknames and clipped forms are how family documents refer to
+    people)."""
+    if first & second:
+        return True
+    return any(a.startswith(b) or b.startswith(a) for a in first for b in second)
+
+
 def block_candidates(
     entities: list[EntityRecord], roster: list[RosterEntity]
 ) -> dict[str, list[RosterEntity]]:
     """Deterministic candidate generation: shared kind + shared name
-    token. The LLM never free-searches the graph; it only adjudicates
-    the candidates this produces (auditability)."""
+    token (prefix-aware). The LLM never free-searches the graph; it
+    only adjudicates the candidates this produces (auditability)."""
     candidates: dict[str, list[RosterEntity]] = {}
     for entity in entities:
         tokens = _name_tokens(entity.label, *entity.aliases)
@@ -164,7 +191,9 @@ def block_candidates(
             roster_entity
             for roster_entity in roster
             if roster_entity.kind == entity.kind
-            and tokens & _name_tokens(roster_entity.label, *roster_entity.aliases)
+            and _tokens_overlap(
+                tokens, _name_tokens(roster_entity.label, *roster_entity.aliases)
+            )
         ]
         if matches:
             candidates[entity.id] = matches
