@@ -95,6 +95,59 @@ def cmd_publish_queries(args) -> int:
     return 0
 
 
+def cmd_reconcile_places(args) -> int:
+    from yizkr.pipeline.places import (
+        adjudicate_places,
+        apply_containment,
+        build_worklist,
+        comma_parent_candidates,
+        export_places_csv,
+        fetch_competing_pairs,
+        fetch_places,
+    )
+
+    config = Config.load(args.env_file)
+    client = WikiClient(config)
+    if args.apply:
+        summary = apply_containment(client, config, args.apply, "curator-reviewed")
+        for note in summary["notes"]:
+            print(f"note: {note}", file=sys.stderr)
+        print(
+            f"containment written: {summary['written']}, already present: "
+            f"{summary['skipped']}"
+            + (f", run item {summary['run_qid']}" if summary["run_qid"] else "")
+        )
+        remaining = len(fetch_competing_pairs(client, config))
+        print(
+            f"{remaining} competing place pair(s) still unresolved — re-run "
+            f"`yizkr reconcile-places` to derive the next (smaller) worklist."
+        )
+        return 0
+
+    from yizkr.pipeline.llm import make_client
+
+    places = fetch_places(client, config)
+    competing = fetch_competing_pairs(client, config)
+    comma = comma_parent_candidates(places)
+    worklist = build_worklist(places, competing, comma)
+    print(
+        f"places: {len(places)}; unresolved competing pairs: {len(competing)}; "
+        f"comma-parent candidates: {len(comma)}; questions after transitive "
+        f"elimination + dedupe: {len(worklist)}"
+    )
+    if not worklist:
+        print("nothing to adjudicate — the hierarchy already answers everything")
+        return 0
+    proposals = adjudicate_places(make_client(args.llm), worklist, places)
+    rows = export_places_csv(proposals, worklist, places, args.out)
+    print(
+        f"wrote {args.out} ({rows} proposals). Fill the 'decision' column, "
+        f"then re-run with --apply. Containment rows write referenced "
+        f"part_of statements; 'same' rows stay curator-executed."
+    )
+    return 0
+
+
 def cmd_publish_site(args) -> int:
     from yizkr.staticsite import publish_site
 
@@ -564,6 +617,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
     p.add_argument("--out", type=Path, default=Path("graph-equivalences.csv"))
     p.set_defaults(func=cmd_reconcile_graph)
+
+    p = sub.add_parser(
+        "reconcile-places",
+        help="propose place containment for unresolved competing values "
+        "(ADR-0009); approved edges write referenced part_of statements",
+    )
+    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument("--out", type=Path, default=Path("place-hierarchy.csv"))
+    p.add_argument(
+        "--apply",
+        type=Path,
+        help="reviewed CSV: write approved containment rows and report "
+        "what transitive elimination removed",
+    )
+    p.set_defaults(func=cmd_reconcile_places)
 
     p = sub.add_parser(
         "publish-site",

@@ -89,6 +89,13 @@ keys resolved to local ids only at write time.
   store external ids and coordinate location.
 - Historical places that no longer exist are ordinary place items with
   their own time bounds.
+- Containment between places (`part_of`) is world knowledge, not a
+  source assertion: proposed by `yizkr reconcile-places` (ADR-0009),
+  human-approved, cycle-guarded, and referenced to the pass's run item
+  (process provenance; a GeoNames-imported edge adds `stated in` → the
+  GeoNames dataset item). The inconsistency report suppresses value
+  pairs connected by a `(location|part_of)+` path — differences of
+  resolution, not contradictions.
 
 ## Artifact coverage — cross-domain relations (planned)
 

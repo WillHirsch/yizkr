@@ -188,6 +188,19 @@ updated, and no path writes an unreferenced statement.
     GeoNames/coordinate reconciliation (docs/MODELING.md "Places"),
     which lights up the site's map page. Every approval sharpens the
     inconsistency report and the map at once.
+    *Hierarchy half done — `yizkr reconcile-places` (ADR-0009):
+    demand-driven worklist (the report's own unresolved place pairs +
+    deterministic comma-parent candidates), spine-first ordering,
+    five-verdict adjudication, review CSV, cycle-guarded referenced
+    `part_of` writes, transitive elimination between rounds. First
+    live run: 26 questions round one, 25 edges approved and written,
+    ONE question left in round two — the genuine Guildford/Sheffield
+    contradiction; the report dropped from 12 rows to 10 with both
+    Steinstrasse rows resolving themselves, and the site's places
+    page now renders the containment tree. Still open: GeoNames
+    reconciliation (IDs, coordinates, imported admin hierarchy) —
+    designed in ADR-0009, activates when a `GEONAMES_USERNAME` is
+    configured (needs a registered GeoNames account).*
 
 ### Agreed working order
 

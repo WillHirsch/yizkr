@@ -148,6 +148,19 @@ WHERE {{
 ORDER BY ?artifactLabel
 """
 
+# place containment edges — the places page's tree (ADR-0009: a
+# visible hierarchy is a self-auditing one)
+PLACE_TREE_QUERY = """\
+SELECT ?child ?childLabel ?parent
+WHERE {{
+  ?child wdt:{instance_of} wd:{place} .
+  ?child rdfs:label ?childLabel . FILTER(LANG(?childLabel) = "en")
+  OPTIONAL {{ ?child (wdt:{part_of}|wdt:{location}) ?parent .
+              ?parent wdt:{instance_of} wd:{place} . }}
+}}
+ORDER BY ?childLabel
+"""
+
 # what each artifact asserts — the artifact page's evidence table
 ASSERTIONS_QUERY = """\
 SELECT ?artifact ?subject ?subjectLabel ?propLabel ?value ?valueLabel ?precision
@@ -293,6 +306,7 @@ class SiteBuilder:
         gallery = self.run(self._library_query("photo-gallery"))
         inconsistencies = self.run(self._library_query("disagreement-report"))
         places = self.run(self._library_query("places-map"))
+        place_tree = self.run(self._instance_query(PLACE_TREE_QUERY))
         artifacts = self.run(self._instance_query(ARTIFACTS_QUERY))
         assertions = self.run(self._instance_query(ASSERTIONS_QUERY))
 
@@ -318,7 +332,7 @@ class SiteBuilder:
         self._write("timeline.html", self.timeline_page(timeline))
         self._write("timeline.json", self.timeline_feed(timeline))
         self._write("gallery.html", self.gallery_page(gallery))
-        self._write("places.html", self.places_page(places))
+        self._write("places.html", self.places_page(places, place_tree))
         self._write("inconsistencies.html", self.inconsistencies_page(inconsistencies))
         return {
             "out": str(self.out),
@@ -582,7 +596,7 @@ class SiteBuilder:
             body.append("<p>No photographs in the graph yet.</p>")
         return page("Gallery", "".join(body))
 
-    def places_page(self, rows: list[dict]) -> str:
+    def places_page(self, rows: list[dict], tree_rows: list[dict] | None = None) -> str:
         body = ["<h1>Places</h1>"]
         with_coordinates = [row for row in rows if cell(row, "coords")]
         if not with_coordinates:
@@ -591,6 +605,7 @@ class SiteBuilder:
                 "statement yet — the map lights up once places are reconciled "
                 "to coordinates (GeoNames pass, see docs/MODELING.md)</p>"
             )
+        body.append(self.place_tree_html(tree_rows or []))
         body.append(
             "<table><tr><th>Place</th><th>Coordinates</th><th>Connected to</th></tr>"
         )
@@ -607,6 +622,55 @@ class SiteBuilder:
             )
         body.append("</table>")
         return page("Places", "".join(body))
+
+    def place_tree_html(self, tree_rows: list[dict]) -> str:
+        """Nested containment tree (ADR-0009): a visible hierarchy is a
+        self-auditing one. Places with no recorded container list last."""
+        if not tree_rows:
+            return ""
+        labels: dict[str, str] = {}
+        children: dict[str, list[str]] = defaultdict(list)
+        parented: set[str] = set()
+        for row in tree_rows:
+            child = qid_of(row, "child")
+            labels[child] = cell(row, "childLabel") or child
+            parent = qid_of(row, "parent")
+            if parent:
+                if child not in children[parent]:
+                    children[parent].append(child)
+                parented.add(child)
+
+        def render(qid: str, seen: frozenset) -> str:
+            if qid in seen:  # cycle safety in display
+                return ""
+            label = esc(labels.get(qid, qid))
+            below = "".join(
+                render(child, seen | {qid})
+                for child in sorted(
+                    children.get(qid, []), key=lambda q: labels.get(q, q)
+                )
+            )
+            return f"<li>{label}{f'<ul>{below}</ul>' if below else ''}</li>"
+
+        roots = sorted(
+            (qid for qid in labels if qid not in parented and children.get(qid)),
+            key=lambda q: labels.get(q, q),
+        )
+        unplaced = sorted(
+            (qid for qid in labels if qid not in parented and not children.get(qid)),
+            key=lambda q: labels.get(q, q),
+        )
+        parts = ["<h2>Containment</h2><ul>"]
+        parts += [render(qid, frozenset()) for qid in roots]
+        parts.append("</ul>")
+        if unplaced:
+            parts.append(
+                f'<p class="sub">{len(unplaced)} place(s) with no recorded '
+                "container yet: "
+                + "; ".join(esc(labels[qid]) for qid in unplaced)
+                + "</p>"
+            )
+        return "".join(parts)
 
     def inconsistencies_page(self, rows: list[dict]) -> str:
         body = [
