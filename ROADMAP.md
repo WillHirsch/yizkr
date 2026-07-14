@@ -211,9 +211,22 @@ reuse existing structured properties, reference the artifact itself
 or the producing run — stays open for temporal and subject coverage
 and other cross-domain relations.
 
-## Frontend ladder – later
+## Frontend ladder – in progress
 
-Static publish tier (scheduled SPARQL → static site with map browse
-including georeferenced artifact outlines, TimelineJS feeds,
-galleries) → custom plural-display SPA (timeline rendering coexisting
-date claims side by side, labeled by source).
+Rung 1 — *done*: the published query library opens directly into the
+query service's visual result views (`#defaultView:Timeline` on the
+person timeline — validated rendering coexisting source-labeled dates
+side by side; `Map` on the places map, empty until places gain
+`coordinate location` statements; the photo-gallery query emits
+instance-hosted image URLs, but the stock query GUI's ImageGrid
+hardcodes Commons FilePath URLs, so it renders as a link table there
+and feeds rung 2's gallery instead).
+
+Rung 2 — next: static publish tier, generating FROM THE LIVE SPARQL
+ENDPOINT (decided; the public-export variant stays available for any
+internet-facing build): scheduled queries → static site with person
+pages (plural source-labeled values), map browse including
+georeferenced artifact outlines, TimelineJS feeds, galleries.
+
+Rung 3 — later: custom plural-display SPA (timeline rendering
+coexisting date claims side by side, labeled by source).

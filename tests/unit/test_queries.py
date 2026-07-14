@@ -18,6 +18,7 @@ EXPECTED_QUERIES = {
     "disagreement-report",
     "person-timeline",
     "places-map",
+    "photo-gallery",
     "unreferenced-statements",
     "artifact-assertions",
 }

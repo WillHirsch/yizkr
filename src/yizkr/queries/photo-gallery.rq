@@ -1,0 +1,23 @@
+# Photo gallery: every photograph artifact with its media file and a
+# direct image URL (R6). Includes photographs derived from compound
+# artifacts (ADR-0008 — e.g. images embedded in presentations), so
+# gallery items carry their provenance: the containing artifact appears
+# as the connection. The image URL is built from the instance's own
+# host, so the query works on any deployment without editing.
+# NOTE: the query-service ImageGrid view hardcodes Commons FilePath
+# URLs and cannot render self-hosted media; this query feeds the static
+# site's gallery (ROADMAP, frontend ladder) and renders here as a table
+# with clickable image links.
+SELECT ?photo ?photoLabel ?image ?containerLabel
+WHERE {
+  ?photo wdt:{P:instance_of} wd:{Q:photograph} ;
+         wdt:{P:media_file} ?file .
+  OPTIONAL { ?photo wdt:{P:part_of} ?container . }
+  BIND(IRI(CONCAT(
+    STRBEFORE(STR(?photo), "/entity/"),
+    "/wiki/Special:FilePath/",
+    ENCODE_FOR_URI(STRAFTER(?file, "File:"))
+  )) AS ?image)
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+}
+ORDER BY ?photoLabel

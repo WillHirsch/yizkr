@@ -6,6 +6,7 @@
 # qualifiers on the person's statements (e.g. spouse with point in time),
 # and dated events the person participated in.
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
+#defaultView:Timeline
 SELECT ?person ?personLabel ?what ?date ?sourceLabel
 WHERE {
   ?person wdt:{P:instance_of} wd:{Q:human} .
