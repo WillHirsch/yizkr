@@ -78,6 +78,30 @@ class TestDates:
         assert parse_gedcom_date("SOMEDAY MAYBE") == (None, [])
         assert parse_gedcom_date("ABT UNKNOWNVILLE") == (None, [])
 
+    def test_full_month_names(self):
+        # hand-maintained trees spell months out; still unambiguous
+        assert parse_gedcom_date("9 August 1861")[0] == {
+            "type": "time", "year": 1861, "month": 8, "day": 9, "precision": "day",
+        }  # fmt: skip
+        assert parse_gedcom_date("September 1899")[0]["month"] == 9
+        assert parse_gedcom_date("13 Sept 1923")[0]["month"] == 9
+
+    def test_month_first_order_with_named_month(self):
+        assert parse_gedcom_date("January 1 1860")[0] == {
+            "type": "time", "year": 1860, "month": 1, "day": 1, "precision": "day",
+        }  # fmt: skip
+
+    def test_german_month_names(self):
+        assert parse_gedcom_date("27 März 1910")[0] == {
+            "type": "time", "year": 1910, "month": 3, "day": 27, "precision": "day",
+        }  # fmt: skip
+        assert parse_gedcom_date("1 Dezember 1900")[0]["month"] == 12
+
+    def test_lowercase_keywords(self):
+        value, quals = parse_gedcom_date("abt 1837")
+        assert value["year"] == 1837
+        assert quals[0]["property"] == "sourcing_circumstances"
+
 
 class TestAdapter:
     def test_batch_is_manifest_valid_and_deterministic(self):
@@ -156,3 +180,54 @@ class TestAdapter:
     def test_unsupported_tags_are_counted_not_silent(self):
         result = fixture_result()
         assert result.unsupported_tags.get("OCCU") == 1
+
+
+RESI_GEDCOM = """\
+0 @I1@ INDI
+1 NAME Dora /Muster/
+1 RESI
+2 DATE 1939
+2 PLAC Surrey, England
+1 RESI
+2 PLAC Guildford, Surrey, England
+1 RESI
+2 DATE SOMEDAY MAYBE
+2 PLAC Nowhere
+1 RESI
+2 DATE 1950
+0 TRLR
+"""
+
+
+class TestResidence:
+    def test_dated_residence_carries_point_in_time(self):
+        batch = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23").batch
+        dated = [
+            c
+            for c in claims_for(batch, "i1", "residence")
+            if any(q.property == "point_in_time" for q in c.qualifiers)
+        ]
+        assert len(dated) == 1
+        (qualifier,) = dated[0].qualifiers
+        assert qualifier.value.year == 1939
+        place = next(e for e in batch.entities if e.id == dated[0].value.value.local_id)
+        assert place.label == "Surrey, England"
+        assert place.kind == "place"
+
+    def test_undated_residence_has_no_qualifiers(self):
+        batch = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23").batch
+        undated = [c for c in claims_for(batch, "i1", "residence") if not c.qualifiers]
+        # the unparsed-date residence also ends up bare (date omitted)
+        assert len(undated) == 2
+
+    def test_unparsed_residence_date_warns_and_omits(self):
+        result = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23")
+        assert any(
+            "SOMEDAY MAYBE" in w and "point_in_time omitted" in w
+            for w in result.warnings
+        )
+
+    def test_residence_without_place_warns_and_skips(self):
+        result = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23")
+        assert any("RESI without PLAC" in w for w in result.warnings)
+        assert len(claims_for(result.batch, "i1", "residence")) == 3

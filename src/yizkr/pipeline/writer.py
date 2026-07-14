@@ -14,8 +14,14 @@ Per batch, the writer:
    * stated in -> artifact, with page number / region / excerpt
      qualifiers inside the reference;
    * inferred from extraction run -> the run item;
-4. skips statements that already exist with the same property and value
-   (safe re-run), counting them as skipped.
+4. when a statement with the same property, value, AND qualifiers
+   already exists: if it is not yet referenced to this claim's
+   artifact, the claim's references are APPENDED to it (an agreeing
+   second source is knowledge — R2 records who asserts a fact, not
+   just the fact); if the artifact reference is already present the
+   claim is skipped (safe re-run). Same value but different
+   qualifiers is a different assertion and coexists as its own
+   statement (ADR-0002).
 
 Nothing here auto-approves: the writer expects the output of
 `apply_review` and trusts the human decision that produced it.
@@ -51,6 +57,9 @@ class WriteResult:
     run_qid: str
     written: int = 0
     skipped: int = 0
+    # existing same-value statements that gained this batch's source
+    # reference (an agreeing second source)
+    referenced: int = 0
     created_items: dict[str, str] = field(default_factory=dict)  # local_id -> QID
 
 
@@ -309,36 +318,77 @@ class BatchWriter:
 
     # -- statement existence check -------------------------------------------
 
-    def _statement_exists(self, subject_qid: str, wbi_claim) -> bool:
+    def _find_matching_statement(self, subject_qid: str, wbi_claim):
+        """The existing statement equal to this claim, or None.
+
+        Equal means same property, same mainsnak value, AND the same
+        qualifiers: a same-value claim with different qualifiers (a
+        marriage date on a spouse statement, a residence date) is a
+        DIFFERENT assertion and must coexist as its own statement
+        (ADR-0002), never be swallowed by a bare-value match.
+        """
         if subject_qid.startswith("(new:"):
-            return False
+            return None
         if subject_qid not in self._entity_cache:
             self._entity_cache[subject_qid] = self.client.wbi.item.get(subject_qid)
         entity = self._entity_cache[subject_qid]
         prop = wbi_claim.mainsnak.property_number
         new_value = wbi_claim.mainsnak.datavalue.get("value")
+        new_qualifiers = self._qualifier_snapshot(wbi_claim)
         for existing in entity.claims.get(prop) or []:
             existing_value = (existing.mainsnak.datavalue or {}).get("value")
-            if self._values_equal(existing_value, new_value):
-                return True
-        return False
+            if self._values_equal(existing_value, new_value) and (
+                self._qualifier_snapshot(existing) == new_qualifiers
+            ):
+                return existing
+        return None
+
+    @classmethod
+    def _qualifier_snapshot(cls, wbi_claim) -> list:
+        """Order-independent, hash-independent view of the qualifiers."""
+        snapshot = []
+        for prop, snaks in wbi_claim.qualifiers.qualifiers.items():
+            for snak in snaks:
+                value = (snak.datavalue or {}).get("value")
+                snapshot.append(
+                    (prop, json.dumps(cls._value_key(value), sort_keys=True))
+                )
+        return sorted(snapshot)
 
     @staticmethod
-    def _values_equal(a, b) -> bool:
-        if isinstance(a, dict) and isinstance(b, dict):
+    def _value_key(value):
+        """The identity-relevant part of a datavalue (drops hashes,
+        display-only fields, and unset optionals)."""
+        if isinstance(value, dict):
             keys = (
                 {"id"}
-                if "id" in a
+                if "id" in value
                 else {"time", "precision", "calendarmodel"}
-                if "time" in a
+                if "time" in value
                 else {"latitude", "longitude"}
-                if "latitude" in a
+                if "latitude" in value
                 else {"text", "language"}
-                if "text" in a
-                else set(a)
+                if "text" in value
+                else set(value)
             )
-            return all(a.get(k) == b.get(k) for k in keys)
+            return {key: value.get(key) for key in keys}
+        return value
+
+    @classmethod
+    def _values_equal(cls, a, b) -> bool:
+        if isinstance(a, dict) and isinstance(b, dict):
+            return all(a.get(k) == b.get(k) for k in cls._value_key(a))
         return a == b
+
+    def _has_artifact_reference(self, wbi_claim, artifact_qid: str) -> bool:
+        """Does any reference block cite `stated in -> artifact_qid`?"""
+        stated_in = self.properties["stated_in"]
+        for reference in wbi_claim.references.references:
+            for snak in reference.snaks.get(stated_in) or []:
+                value = (snak.datavalue or {}).get("value") or {}
+                if isinstance(value, dict) and value.get("id") == artifact_qid:
+                    return True
+        return False
 
     # -- main entry ------------------------------------------------------------
 
@@ -376,8 +426,22 @@ class BatchWriter:
                     qualifier.property, qualifier.value, result, artifact_qid
                 )
                 wbi_claim.qualifiers.add(qualifier_claim)
-            if self._statement_exists(subject_qid, wbi_claim):
-                result.skipped += 1
+            existing = self._find_matching_statement(subject_qid, wbi_claim)
+            if existing is not None:
+                if self._has_artifact_reference(existing, artifact_qid):
+                    result.skipped += 1
+                    continue
+                # an agreeing second source: the statement stays one
+                # statement, and gains this claim's references (R2 —
+                # who asserts a fact is knowledge, not just the fact)
+                for reference in self._references(
+                    artifact_qid=artifact_qid, run_qid=result.run_qid, claim=claim
+                ).references:
+                    existing.references.add(reference)
+                entity = self._entity_cache[subject_qid]
+                entity.write(summary="ingest: additional source for existing statement")
+                self._entity_cache[subject_qid] = self.client.wbi.item.get(subject_qid)
+                result.referenced += 1
                 continue
             wbi_claim.references = self._references(
                 artifact_qid=artifact_qid, run_qid=result.run_qid, claim=claim

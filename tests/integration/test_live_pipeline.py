@@ -164,3 +164,56 @@ def test_write_is_idempotent_and_dual_referenced(client, artifact):
             assert properties["inferred_from_extraction_run"] in (
                 reference_properties
             )  # process ref
+
+
+def stated_in_values(client, person_qid: str, year_time: str) -> tuple[int, set[str]]:
+    """(statement count for the year, set of stated-in artifact QIDs)."""
+    properties, _ = client.vocabulary()
+    data = client.api_get(
+        {
+            "action": "wbgetclaims",
+            "entity": person_qid,
+            "property": properties["date_of_birth"],
+        }
+    )
+    matching = [
+        claim
+        for claims in data["claims"].values()
+        for claim in claims
+        if claim["mainsnak"]["datavalue"]["value"]["time"] == year_time
+    ]
+    sources = {
+        snak["datavalue"]["value"]["id"]
+        for claim in matching
+        for ref in claim.get("references", [])
+        for snak in ref["snaks"].get(properties["stated_in"], [])
+    }
+    return len(matching), sources
+
+
+def test_agreeing_second_source_appends_reference(client, artifact):
+    """A second source asserting the SAME value must not vanish: the
+    existing statement gains that source's reference block (R2 — who
+    asserts a fact is knowledge), and stays one statement."""
+    second = register_artifact(
+        client,
+        media_path=None,
+        artifact_type="certificate",
+        title=f"{ARTIFACT_TITLE} (second source)",
+        description="written by tests/integration; safe to delete",
+    )
+    writer = BatchWriter(client)
+    result = writer.write_batch(birth_batch(second.artifact_qid, 1901))
+    assert result.written == 0
+    assert result.referenced == 1
+    person_qid = result.created_items["person-1"]
+
+    count, sources = stated_in_values(client, person_qid, "+1901-00-00T00:00:00Z")
+    assert count == 1  # still one statement, not a duplicate
+    assert {artifact.artifact_qid, second.artifact_qid} <= sources
+
+    # re-running the same batch is a no-op (reference already present)
+    rerun = BatchWriter(client).write_batch(birth_batch(second.artifact_qid, 1901))
+    assert rerun.written == 0
+    assert rerun.referenced == 0
+    assert rerun.skipped == 1

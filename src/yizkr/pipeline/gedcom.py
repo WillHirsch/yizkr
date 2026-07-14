@@ -21,9 +21,12 @@ Source-first conventions carry over unchanged:
 
 Supported today (the fields family-tree exports actually carry):
 individuals (names -> label + aliases), birth/death dates and places,
-parent-child relations, marriages (date, place) and divorces
-(end time). Unsupported tags are counted and reported, not silently
-dropped.
+residences (place, dated when the record is), parent-child relations,
+marriages (date, place) and divorces (end time). Dates accept the
+GEDCOM-standard English abbreviations plus what hand-maintained trees
+actually contain: full English and German month names, and month-first
+order when the month is named. Unsupported tags are counted and
+reported, not silently dropped.
 """
 
 from __future__ import annotations
@@ -37,6 +40,14 @@ from yizkr.pipeline.extract import run_metadata
 MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
     "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+    # real exports carry hand-typed dates beyond the GEDCOM standard's
+    # English abbreviations; full names are just as unambiguous
+    "JANUARY": 1, "FEBRUARY": 2, "MARCH": 3, "APRIL": 4, "JUNE": 6,
+    "JULY": 7, "AUGUST": 8, "SEPT": 9, "SEPTEMBER": 9, "OCTOBER": 10,
+    "NOVEMBER": 11, "DECEMBER": 12,
+    # German month names (they name the month; nothing is guessed)
+    "JANUAR": 1, "FEBRUAR": 2, "MÄRZ": 3, "MAERZ": 3, "MAI": 5,
+    "JUNI": 6, "JULI": 7, "OKTOBER": 10, "DEZEMBER": 12,
 }  # fmt: skip
 
 ADAPTER_IDENTIFIER = "gedcom-adapter"
@@ -115,11 +126,18 @@ def parse_gedcom(text: str) -> list[Record]:
 
 
 def _parse_plain_date(text: str) -> dict | None:
-    """'12 AUG 1885' / 'AUG 1885' / '1885' -> flat time value dict."""
+    """'12 AUG 1885' / 'AUG 1885' / '1885' -> flat time value dict.
+
+    Month-first order ('January 1 1860') is accepted too: the month is
+    named, not numbered, so there is nothing ambiguous to guess.
+    """
     parts = text.strip().upper().split()
     try:
         if len(parts) == 3:
-            day, month, year = int(parts[0]), MONTHS[parts[1]], int(parts[2])
+            if parts[0] in MONTHS:
+                month, day, year = MONTHS[parts[0]], int(parts[1]), int(parts[2])
+            else:
+                day, month, year = int(parts[0]), MONTHS[parts[1]], int(parts[2])
             return {"type": "time", "year": year, "month": month, "day": day,
                     "precision": "day"}  # fmt: skip
         if len(parts) == 2:
@@ -210,7 +228,7 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     warnings: list[str] = []
     unsupported: dict[str, int] = {}
 
-    HANDLED_INDI = {"NAME", "SEX", "BIRT", "DEAT", "FAMC", "FAMS"}
+    HANDLED_INDI = {"NAME", "SEX", "BIRT", "DEAT", "RESI", "FAMC", "FAMS"}
     HANDLED_FAM = {"HUSB", "WIFE", "CHIL", "MARR", "DIV"}
     for record in individuals.values():
         for child in record.children:
@@ -313,6 +331,33 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
             event_claims(xref, birth, "date_of_birth", "place_of_birth")
         if death:
             event_claims(xref, death, "date_of_death", "place_of_death")
+        for residence in record.all("RESI"):
+            place = residence.text("PLAC")
+            if not place:
+                warnings.append(
+                    f"line {residence.line_number}: RESI without PLAC — "
+                    "no residence claim emitted"
+                )
+                continue
+            quals = []
+            date_record = residence.first("DATE")
+            if date_record:
+                value, date_quals = parse_gedcom_date(date_record.value)
+                if value is None:
+                    warnings.append(
+                        f"line {date_record.line_number}: unparsed residence "
+                        f"date {date_record.value!r} — point_in_time omitted"
+                    )
+                else:
+                    quals.append({"property": "point_in_time", "value": value})
+                    quals.extend(date_quals)
+            claim(
+                person_id(xref),
+                "residence",
+                {"type": "item", "value": local(place_entity(place))},
+                residence,
+                quals,
+            )
 
     # families -> parentage and spouse claims
     for fam in families.values():

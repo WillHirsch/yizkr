@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -319,7 +320,14 @@ def adjudicate(
 ) -> list[Proposal]:
     """Batched LLM calls over the blocked pairs -> verified proposals."""
     proposals: list[Proposal] = []
-    for chunk in _batch_candidates(candidates, batch_pairs):
+    chunks = _batch_candidates(candidates, batch_pairs)
+    total_pairs = sum(len(matches) for matches in candidates.values())
+    print(
+        f"adjudicating {total_pairs} pairs in {len(chunks)} "
+        f"batch(es) of <= {batch_pairs}",
+        file=sys.stderr,
+    )
+    for index, chunk in enumerate(chunks, start=1):
         entities_block = "\n".join(
             f"- {entity.id}: {entity.label}"
             + (f" (aliases: {', '.join(entity.aliases)})" if entity.aliases else "")
@@ -348,7 +356,13 @@ def adjudicate(
             for entity_id, matches in chunk.items()
             for roster_entity in matches
         }
-        proposals.extend(_parse_proposals(response, valid_pairs))
+        parsed = _parse_proposals(response, valid_pairs)
+        print(
+            f"  batch {index}/{len(chunks)}: {len(valid_pairs)} pairs -> "
+            f"{len(parsed)} proposals (sentinel ok)",
+            file=sys.stderr,
+        )
+        proposals.extend(parsed)
     return proposals
 
 
@@ -442,9 +456,21 @@ def apply_equivalences(batch: ClaimBatch, approved: dict[str, str]) -> ClaimBatc
         ]
         return claim.model_copy(update=updates)
 
+    # two document entities approved to the SAME item (a source with
+    # internally duplicated records) can leave byte-identical claims;
+    # collapse them here, where identity collapses (the ADR-0006 merge
+    # invariant, applied post-equivalence)
+    resolved_claims = []
+    seen: set[str] = set()
+    for claim in (resolve_claim(claim) for claim in batch.claims):
+        key = claim.model_dump_json()
+        if key not in seen:
+            seen.add(key)
+            resolved_claims.append(claim)
+
     return batch.model_copy(
         update={
-            "claims": [resolve_claim(claim) for claim in batch.claims],
+            "claims": resolved_claims,
             "entities": [
                 entity.model_copy(update={"qid": approved[entity.id]})
                 if entity.id in approved

@@ -142,8 +142,13 @@ gunzip -c database.sql.gz | docker compose exec -T mysql \
   mariadb -u"$DB_USER" -p"$DB_PASS" "$DB_NAME"
 docker compose exec -T wikibase tar -C /var/www/html -xzf - < media.tar.gz
 docker compose exec wikibase php maintenance/run.php update --quick
+# rebuild the search index (derived state; wbsearchentities and every
+# label lookup are empty until this runs):
+docker compose exec wikibase php maintenance/run.php \
+  /var/www/html/extensions/CirrusSearch/maintenance/ForceSearchIndex.php
 # rebuild the query service from the restored wiki:
 docker compose stop wdqs wdqs-updater
+docker compose rm -f wdqs wdqs-updater   # stopped containers pin the volume
 docker volume rm yizkr-wikibase_wdqs-data
 docker compose up -d
 ```

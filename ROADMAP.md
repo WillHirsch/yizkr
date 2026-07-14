@@ -102,6 +102,13 @@ updated, and no path writes an unreferenced statement.
     batch the reconciliation adjudication call — 369 pairs through one
     response is the same output-bound fragility ADR-0006 removed from
     extraction, one level up.
+    *Done — `ingest extract --chunk-concurrency N`; adjudication batched at
+    ≤40 pairs per call. Batched adjudication live-tested by the real
+    Ancestry GEDCOM ingestion (item 13's first real file): 540 blocked
+    pairs split into 15 batches, every per-batch sentinel validated.
+    Parallel chunk extraction cannot be exercised by a GEDCOM (the
+    deterministic adapter makes no LLM chunk calls); it stays covered
+    by unit tests until the next narrative document is ingested.*
 15. **Folder/batch orchestration** – `yizkr ingest run <folder>`:
     register → transcribe → extract → reconcile → resolve → pause for
     review → write, with per-document state (the chunk manifest

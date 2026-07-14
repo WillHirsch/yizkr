@@ -286,3 +286,24 @@ class TestApplyEquivalences:
         # original untouched
         assert isinstance(original.claims[0].subject, LocalRef)
         assert original.entities[0].qid is None
+
+    def test_identical_claims_collapse_after_equivalence(self):
+        # two document entities (duplicated records in the source) both
+        # approved to one item leave byte-identical claims: collapse
+        twin = dict(spouse_claim(), subject={"kind": "local", "local_id": "e3"})
+        entity_list = [
+            *entities(),
+            EntityRecord(id="e3", label="Rosa", kind="human"),
+        ]
+        original = batch(claims=[spouse_claim(), twin], entity_list=entity_list)
+        applied = apply_equivalences(original, {"e1": "Q40", "e3": "Q40"})
+        assert len(applied.claims) == 1
+        assert applied.claims[0].subject == QidRef(qid="Q40")
+
+    def test_distinct_claims_survive_equivalence(self):
+        # same subject item but different values must both remain
+        other = dict(spouse_claim(), value={"type": "string", "value": "x"})
+        applied = apply_equivalences(
+            batch(claims=[spouse_claim(), other]), {"e1": "Q40"}
+        )
+        assert len(applied.claims) == 2

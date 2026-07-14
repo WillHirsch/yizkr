@@ -9,5 +9,14 @@
 
 $wgFileExtensions = array_merge(
     $wgFileExtensions,
-    [ 'pdf', 'tif', 'tiff' ]
+    [ 'pdf', 'tif', 'tiff', 'ged' ]
 );
+
+// GEDCOM exports (.ged) are the artifact itself for structured
+// genealogy ingestion (ROADMAP item 13). MediaWiki's MIME map does not
+// know the extension, so uploads fail the extension/MIME consistency
+// check ("does not match the detected MIME type text/plain") unless the
+// analyzer is taught that a .ged file is plain text.
+$wgHooks['MimeMagicInit'][] = function ( $mimeMagic ) {
+    $mimeMagic->addExtraTypes( 'text/plain ged' );
+};
