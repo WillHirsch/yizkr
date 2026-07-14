@@ -362,6 +362,12 @@ items:
     description: clipping from a newspaper
     subclass_of: artifact
 
+  presentation:
+    label: presentation
+    description: slide-deck artifact; a compound container whose slides are fragments and whose embedded media are derived artifacts (ADR-0008)
+    subclass_of: artifact
+    wikidata: Q604733
+
   # --- controlled vocabulary values ---
 
   circa:

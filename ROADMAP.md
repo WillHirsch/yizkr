@@ -160,6 +160,22 @@ updated, and no path writes an unreferenced statement.
     installable, so the flow is runnable as soon as suitable files
     land in the Yizkr Drive folder.*
 
+17. **Compound artifacts: PPTX decks** – slide decks carry embedded
+    media (scans of photographs and documents) plus slide-scoped
+    narrative. Deterministic unpacking (ADR-0008): the deck registers
+    as a `presentation` with one fragment per slide; each embedded
+    image becomes its own artifact item (`part_of` the deck, slide
+    qualifier, every statement referenced `stated in → the deck`);
+    the transcription is built slide-by-slide with `[Slide N]`
+    markers so claim locators carry the slide number. Non-image
+    media (video/audio) are counted and reported, image-first in W1.
+    *Done — see `pipeline/presentation.py`; `.pptx` in
+    `yizkr ingest run`. Validated live with a synthetic deck
+    (fragments, derived-media provenance, slide-scoped locators,
+    idempotent re-run); the real family decks await accessible
+    copies in the Yizkr Drive folder, alongside the item-16 photo
+    and German-document legs.*
+
 ### Agreed working order
 
 7 (backup) → 12 (re-ingestion + merges) → 13 (GEDCOM) → 14 (parallel

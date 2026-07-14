@@ -125,6 +125,23 @@ subject coverage reuses `depicts`. Prefer an existing
 Wikidata-mirrored property, keep values structured (never strings),
 and reference the artifact itself or the producing run.
 
+## Compound artifacts (see ADR-0008)
+
+- A container artifact (first case: `presentation`, a slide deck)
+  keeps the standard registrar shape: its slides ARE page fragments
+  (`part_of` + `page number` qualifier), and claim locators reuse
+  `page_number` as the slide number.
+- Each embedded medium becomes its own artifact item ("<deck title> —
+  <media name>"; `instance of` photograph for raster images), with one
+  `part_of` → the container per slide it appears on, slide-number
+  qualified. Derived items are gallery- and faces-flow material in
+  their own right.
+- Every statement on a derived item is referenced `stated in → the
+  container` — a compound artifact asserts its own composition, the
+  same convention as fragments and registrar statements above.
+- Unpacking is deterministic (documented ZIP+XML), never generative;
+  only claim extraction from the slide text uses an LLM.
+
 ## Faces and depiction (see ADR-0005)
 
 - On a photograph item: depicts → person, with qualifiers:

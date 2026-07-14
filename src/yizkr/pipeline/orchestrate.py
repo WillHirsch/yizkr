@@ -45,7 +45,10 @@ from yizkr.core.wiki import WikiClient
 GEDCOM_SUFFIXES = {".ged"}
 TEXT_SUFFIXES = {".txt", ".md"}
 MEDIA_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
-SUPPORTED_SUFFIXES = GEDCOM_SUFFIXES | TEXT_SUFFIXES | MEDIA_SUFFIXES
+PRESENTATION_SUFFIXES = {".pptx"}
+SUPPORTED_SUFFIXES = (
+    GEDCOM_SUFFIXES | TEXT_SUFFIXES | MEDIA_SUFFIXES | PRESENTATION_SUFFIXES
+)
 
 # document statuses, in pipeline order
 REGISTERED = "registered"
@@ -173,14 +176,50 @@ class Orchestrator:
     def _step_register(self, doc: DocumentRun) -> str:
         from yizkr.pipeline.registrar import register_artifact
 
+        artifact_type = self.artifact_type
+        pages = 0
+        if doc.source.suffix.lower() in PRESENTATION_SUFFIXES:
+            # a deck is a compound artifact: its slides ARE the page
+            # fragments (ADR-0008), so claim locators point into slides
+            artifact_type = "presentation"
+            pages = len(self._presentation(doc).slides)
         result = register_artifact(
             self.client,
             media_path=doc.source,
-            artifact_type=self.artifact_type,
+            artifact_type=artifact_type,
             title=doc.state.title,
             description=f"ingested by `yizkr ingest run` from {doc.source.name}",
+            pages=pages,
         )
         return result.artifact_qid
+
+    def _presentation(self, doc: DocumentRun):
+        from yizkr.pipeline.presentation import unpack_pptx
+
+        if not hasattr(self, "_presentation_cache"):
+            self._presentation_cache: dict[str, object] = {}
+        key = str(doc.source)
+        if key not in self._presentation_cache:
+            self._presentation_cache[key] = unpack_pptx(doc.source)
+        return self._presentation_cache[key]
+
+    def _step_derive_media(self, doc: DocumentRun) -> dict[str, str]:
+        from yizkr.pipeline.presentation import register_derived_media
+
+        content = self._presentation(doc)
+        for suffix, count in content.skipped_media.items():
+            self.log(
+                f"  {doc.source.name}: {count} embedded {suffix} media "
+                f"skipped (image media only in W1)",
+                file=sys.stderr,
+            )
+        return register_derived_media(
+            self.client,
+            deck_qid=doc.state.artifact_qid,
+            deck_title=doc.state.title,
+            content=content,
+            workdir=doc.dir / "media",
+        )
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
         if doc.source.suffix.lower() in GEDCOM_SUFFIXES:
@@ -216,6 +255,19 @@ class Orchestrator:
 
         if doc.transcription.exists():
             return Transcription.model_validate_json(doc.transcription.read_text())
+        if doc.source.suffix.lower() in PRESENTATION_SUFFIXES:
+            # deterministic: slide text is data in the file, not an
+            # image to read; [Slide N] markers scope the claim locators
+            from yizkr.pipeline.presentation import slide_transcript
+
+            transcription = Transcription(
+                artifact_qid=doc.state.artifact_qid,
+                text=slide_transcript(self._presentation(doc)),
+                language=self.language,
+                engine="pptx-adapter",
+            )
+            doc.transcription.write_text(transcription.model_dump_json(indent=2))
+            return transcription
         if doc.source.suffix.lower() in TEXT_SUFFIXES:
             from yizkr.pipeline.transcribe import TextFileTranscriber
 
@@ -348,6 +400,14 @@ class Orchestrator:
             doc.state.status = REGISTERED
             doc.save()
             self.log(f"  registered as {doc.state.artifact_qid}")
+
+        if doc.source.suffix.lower() in PRESENTATION_SUFFIXES and not (
+            doc.state.detail or {}
+        ).get("derived_media"):
+            derived = self._step_derive_media(doc)
+            doc.state.detail = (doc.state.detail or {}) | {"derived_media": derived}
+            doc.save()
+            self.log(f"  derived media: {len(derived)} item(s)")
 
         if not doc.batch.exists():
             batch = self._step_batch(doc)

@@ -9,7 +9,7 @@
 
 $wgFileExtensions = array_merge(
     $wgFileExtensions,
-    [ 'pdf', 'tif', 'tiff', 'ged', 'txt', 'md' ]
+    [ 'pdf', 'tif', 'tiff', 'ged', 'txt', 'md', 'pptx' ]
 );
 
 // GEDCOM exports (.ged) are the artifact itself for structured
