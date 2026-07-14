@@ -21,8 +21,15 @@ WHERE {
   ?property wikibase:claim ?p ;
             wikibase:statementProperty ?ps .
   ?entity ?p ?stA , ?stB .
-  ?stA ?ps ?valueA .
-  ?stB ?ps ?valueB .
+  ?stA ?ps ?rawValueA .
+  ?stB ?ps ?rawValueB .
+  # canonicalize through item-merge redirects: a statement written
+  # before a merge still points at the redirect, and that indirection
+  # is not a disagreement
+  OPTIONAL { ?rawValueA <http://www.w3.org/2002/07/owl#sameAs> ?canonicalA . }
+  OPTIONAL { ?rawValueB <http://www.w3.org/2002/07/owl#sameAs> ?canonicalB . }
+  BIND(COALESCE(?canonicalA, ?rawValueA) AS ?valueA)
+  BIND(COALESCE(?canonicalB, ?rawValueB) AS ?valueB)
   FILTER(?valueA != ?valueB)
   FILTER(STR(?stA) < STR(?stB))
   OPTIONAL { ?stA prov:wasDerivedFrom/pr:{P:stated_in} ?sourceA . }
