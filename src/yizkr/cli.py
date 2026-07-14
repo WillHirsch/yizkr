@@ -95,6 +95,20 @@ def cmd_publish_queries(args) -> int:
     return 0
 
 
+def cmd_publish_site(args) -> int:
+    from yizkr.staticsite import publish_site
+
+    summary = publish_site(Config.load(args.env_file), args.out, clean=args.clean)
+    print(json.dumps(summary, indent=2))
+    print(
+        "NOTE: built from the LIVE graph — includes living people; serve on "
+        "the LAN only (e.g. `python -m http.server -d {out}`).".format(
+            out=summary["out"]
+        )
+    )
+    return 0
+
+
 def cmd_claims(args) -> int:
     from pydantic import ValidationError
 
@@ -547,6 +561,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
     p.add_argument("--out", type=Path, default=Path("graph-equivalences.csv"))
     p.set_defaults(func=cmd_reconcile_graph)
+
+    p = sub.add_parser(
+        "publish-site",
+        help="render the live graph to a static site (frontend ladder rung 2; "
+        "LAN/private — includes living people)",
+    )
+    p.add_argument("--out", type=Path, default=Path("var/site"))
+    p.add_argument(
+        "--clean", action="store_true", help="remove the output directory first"
+    )
+    p.set_defaults(func=cmd_publish_site)
 
     p = sub.add_parser("claims", help="claim-contract utilities")
     group = p.add_mutually_exclusive_group(required=True)

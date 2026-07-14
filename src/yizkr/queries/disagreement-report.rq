@@ -8,9 +8,9 @@
 # candidates for disagreement. Properties that legitimately accumulate
 # values over a life (spouse, residence, ...) are excluded — two spouses
 # from one source are remarriages, not a contradiction.
-SELECT ?entity ?entityLabel ?propertyLabel
-       ?valueA ?valueALabel ?sourceALabel
-       ?valueB ?valueBLabel ?sourceBLabel
+SELECT DISTINCT ?entity ?entityLabel ?propertyLabel
+       ?valueA ?valueALabel ?precisionA ?sourceALabel
+       ?valueB ?valueBLabel ?precisionB ?sourceBLabel
 WHERE {
   VALUES ?property {
     wd:{P:date_of_birth} wd:{P:date_of_death}
@@ -32,6 +32,13 @@ WHERE {
   BIND(COALESCE(?canonicalB, ?rawValueB) AS ?valueB)
   FILTER(?valueA != ?valueB)
   FILTER(STR(?stA) < STR(?stB))
+  # stated precision for time values: display must never pad or narrow
+  OPTIONAL { ?stA ?vpA ?nodeA .
+             ?nodeA wikibase:timeValue ?rawValueA ;
+                    wikibase:timePrecision ?precisionA . }
+  OPTIONAL { ?stB ?vpB ?nodeB .
+             ?nodeB wikibase:timeValue ?rawValueB ;
+                    wikibase:timePrecision ?precisionB . }
   OPTIONAL { ?stA prov:wasDerivedFrom/pr:{P:stated_in} ?sourceA . }
   OPTIONAL { ?stB prov:wasDerivedFrom/pr:{P:stated_in} ?sourceB . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }

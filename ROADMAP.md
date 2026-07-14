@@ -222,11 +222,19 @@ instance-hosted image URLs, but the stock query GUI's ImageGrid
 hardcodes Commons FilePath URLs, so it renders as a link table there
 and feeds rung 2's gallery instead).
 
-Rung 2 — next: static publish tier, generating FROM THE LIVE SPARQL
-ENDPOINT (decided; the public-export variant stays available for any
-internet-facing build): scheduled queries → static site with person
-pages (plural source-labeled values), map browse including
-georeferenced artifact outlines, TimelineJS feeds, galleries.
+Rung 2 — *done*: `yizkr publish-site` renders the LIVE SPARQL endpoint
+(decided; an internet-facing build must instead come from the
+living-persons-excluded public export — later variant) to a
+self-contained static site under var/site: person pages showing every
+attributed value side by side with its source label and stated
+precision (never padded), living badges, the timeline (page +
+TimelineJS-format feed), the photo gallery (ADR-0008 derived media
+with provenance), the disagreement report, and a places index that
+becomes a map once places carry coordinates (GeoNames pass still
+open; map tiles also need a privacy decision — no third-party
+requests are made today). No CDN assets; serve on the LAN, e.g.
+`python -m http.server -d var/site`. Georeferenced artifact outlines
+arrive with the map-artifact model extension.
 
 Rung 3 — later: custom plural-display SPA (timeline rendering
 coexisting date claims side by side, labeled by source).

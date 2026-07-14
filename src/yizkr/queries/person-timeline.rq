@@ -7,7 +7,7 @@
 # and dated events the person participated in.
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
 #defaultView:Timeline
-SELECT ?person ?personLabel ?what ?date ?sourceLabel
+SELECT DISTINCT ?person ?personLabel ?what ?date ?precision ?sourceLabel
 WHERE {
   ?person wdt:{P:instance_of} wd:{Q:human} .
   {
@@ -36,6 +36,13 @@ WHERE {
     ?st ps:{P:point_in_time} ?date .
     ?eventType rdfs:label ?what .
     FILTER(LANG(?what) = "en")
+  }
+  # the date's stated precision (works for statement and qualifier value
+  # nodes alike): display must never pad what a source said
+  OPTIONAL {
+    ?st ?anyValuePredicate ?valueNode .
+    ?valueNode wikibase:timeValue ?date ;
+               wikibase:timePrecision ?precision .
   }
   OPTIONAL { ?st prov:wasDerivedFrom/pr:{P:stated_in} ?source . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }

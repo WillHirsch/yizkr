@@ -131,6 +131,18 @@ weeks:
 15 3 * * * cd /path/to/yizkr && uv run yizkr backup --keep 14 >> var/backups/backup.log 2>&1
 ```
 
+The static site (frontend ladder rung 2) regenerates the same way —
+nightly after the backup, for example:
+
+```cron
+45 3 * * * cd /path/to/yizkr && uv run yizkr publish-site --clean >> var/site.log 2>&1
+```
+
+`var/site` is built from the LIVE graph and therefore includes living
+people: serve it on the LAN only (any static server works, e.g.
+`python -m http.server -d var/site 8080`). An internet-facing variant
+must be built from the public export instead.
+
 Copy `var/backups/` off-machine (rsync, restic, a NAS — anything);
 a backup that lives only on the server it backs up is not a backup.
 
