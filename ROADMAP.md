@@ -139,6 +139,26 @@ updated, and no path writes an unreferenced statement.
     (HTR is a stub; triage the gap), and a German-language document.
     Gate further feature work on its findings, as the first trial
     gated this batch.
+    *Certificate leg done — two real GRO birth certificates (one typed
+    1958 register copy, one fully handwritten 1988 entry) through
+    `ingest run` end to end. HTR triage: LLM-vision transcribed the
+    cursive register entry essentially perfectly; the one substantive
+    error was a surname misread in DEGRADED TYPESCRIPT ("Weisbrock"),
+    caught at review and fixed by correcting the transcription and
+    re-running — the HTR platform adapter stays an unneeded stub for
+    this material class. Findings fixed in the same pass: (a) the
+    orchestrator extracted small documents single-shot, which produces
+    no entity manifest and therefore silently skipped reconciliation —
+    it now always extracts entity-first; (b) upstream redos left stale
+    downstream outputs and could mis-open review gates — dependencies
+    are now make-style, and a reviewed file older than its CSV no
+    longer counts as consent. First live use of the `living` column
+    (three flags set). Photo and German legs still open: the candidate
+    photographs and German documents on Drive are unreachable from
+    this session (files exceed the connector's transfer cap or sit in
+    shared folders it cannot index); the faces extra is verified
+    installable, so the flow is runnable as soon as suitable files
+    land in the Yizkr Drive folder.*
 
 ### Agreed working order
 

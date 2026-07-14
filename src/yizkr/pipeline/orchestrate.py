@@ -13,15 +13,21 @@ every document as far as it can and then STOPS at the human gates:
   (same convention for claim decisions, corrections, and the living
   flag — R3: human confirmation is part of the data flow).
 
-A reviewed file's PRESENCE is the gate: the orchestrator never
-interprets a half-filled CSV as consent. Documents whose reconcile
-produced no proposals skip the first gate (there is nothing to review).
+A reviewed file's PRESENCE (and freshness) is the gate: the
+orchestrator never interprets a half-filled CSV as consent, and a
+reviewed file older than the CSV it reviews is a decision about
+superseded rows, not consent for the current ones. Documents whose
+reconcile produced no proposals skip the first gate (there is nothing
+to review).
 
 State lives beside the outputs in the state directory (runtime state —
 keep it under var/ or outside the repo; the repo carries no personal
 data). Every step's output is a plain file, so any step can be
-inspected, corrected upstream, or re-run by deleting its output.
-Re-running a completed document is a no-op (the writer is idempotent).
+inspected, corrected upstream, or re-run by deleting its output;
+dependencies are make-style (a corrected transcription re-extracts, a
+re-extracted batch invalidates every derived file, a re-reviewed CSV
+re-writes). Re-running a completed document is a no-op (the writer is
+idempotent).
 """
 
 from __future__ import annotations
@@ -228,22 +234,22 @@ class Orchestrator:
         return transcription
 
     def _step_extract(self, doc: DocumentRun, transcription) -> ClaimBatch:
-        from yizkr.pipeline.chunking import AUTO_CHUNK_THRESHOLD, ChunkedClaimExtractor
-        from yizkr.pipeline.extract import LlmClaimExtractor
+        from yizkr.pipeline.chunking import ChunkedClaimExtractor
         from yizkr.pipeline.llm import make_client
 
-        if len(transcription.text) > AUTO_CHUNK_THRESHOLD:
-            extractor = ChunkedClaimExtractor(
-                make_client(self.llm),
-                state_dir=doc.batch.with_name(doc.batch.name + ".chunks"),
-                resume=True,
-            )
-        else:
-            extractor = LlmClaimExtractor(
-                make_client(self.llm),
-                raw_dump=doc.batch.with_name(doc.batch.name + ".raw.txt"),
-                rejects_dump=doc.batch.with_name(doc.batch.name + ".rejected.json"),
-            )
+        # always entity-first (ADR-0007), even for documents that fit a
+        # single call: reconciliation NEEDS the entity manifest, and a
+        # small document without one silently mints duplicates instead
+        # of being adjudicated against the graph (found by the second
+        # trial — a birth certificate's "Donald Bennett" must reach the
+        # adjudicator, not become a second Donald). Chunking a small
+        # document costs a few extra calls and is never incorrect
+        # (ADR-0006 §7).
+        extractor = ChunkedClaimExtractor(
+            make_client(self.llm),
+            state_dir=doc.batch.with_name(doc.batch.name + ".chunks"),
+            resume=True,
+        )
         batch = extractor.extract(transcription, artifact_qid=doc.state.artifact_qid)
         failed = getattr(extractor, "failed_chunks", None)
         if failed:
@@ -345,6 +351,11 @@ class Orchestrator:
 
         if not doc.batch.exists():
             batch = self._step_batch(doc)
+            # an upstream redo invalidates everything derived from the
+            # old batch — stale machine outputs must never gate or write
+            for stale in (doc.equivalences, doc.resolved, doc.review,
+                          doc.approved, doc.write_result):  # fmt: skip
+                stale.unlink(missing_ok=True)
             doc.batch.write_text(batch.model_dump_json(indent=2))
             doc.state.status = BATCHED
             doc.save()
@@ -352,24 +363,29 @@ class Orchestrator:
         else:
             batch = ClaimBatch.model_validate_json(doc.batch.read_text())
 
-        if batch.entities and not doc.equivalences.exists():
+        if batch.entities and not _fresh(doc.equivalences, doc.batch):
             proposals = self._step_reconcile(doc, batch)
             self.log(f"  reconcile: {proposals} proposals")
 
         needs_equivalence_review = (
             doc.equivalences.exists()
             and _csv_has_rows(doc.equivalences)
-            and not doc.equivalences_reviewed.exists()
+            and not _fresh(doc.equivalences_reviewed, doc.equivalences)
         )
         if needs_equivalence_review:
             doc.state.status = AWAITING_EQUIVALENCES
             self.log(
                 f"  waiting: review {doc.equivalences} and save decisions as "
                 f"{doc.equivalences_reviewed.name}"
+                + (
+                    " (existing reviewed file predates the current CSV)"
+                    if doc.equivalences_reviewed.exists()
+                    else ""
+                )
             )
             return doc.state.status
 
-        if not doc.resolved.exists():
+        if not _fresh(doc.resolved, doc.batch, doc.equivalences_reviewed):
             resolved = self._step_resolve(doc, batch)
             doc.resolved.write_text(resolved.model_dump_json(indent=2))
             doc.state.status = RESOLVED
@@ -377,19 +393,24 @@ class Orchestrator:
         else:
             resolved = ClaimBatch.model_validate_json(doc.resolved.read_text())
 
-        if not doc.review.exists():
+        if not _fresh(doc.review, doc.resolved):
             rows = self._step_export_review(doc, resolved)
             self.log(f"  review CSV: {rows} rows")
 
-        if not doc.review_reviewed.exists():
+        if not _fresh(doc.review_reviewed, doc.review):
             doc.state.status = AWAITING_CLAIMS
             self.log(
                 f"  waiting: review {doc.review} and save decisions as "
                 f"{doc.review_reviewed.name}"
+                + (
+                    " (existing reviewed file predates the current CSV)"
+                    if doc.review_reviewed.exists()
+                    else ""
+                )
             )
             return doc.state.status
 
-        if not doc.write_result.exists():
+        if not _fresh(doc.write_result, doc.review_reviewed, doc.resolved):
             summary = self._step_write(doc, resolved)
             doc.write_result.write_text(json.dumps(summary, indent=2))
             doc.state.detail = (doc.state.detail or {}) | {"write": summary}
@@ -407,9 +428,6 @@ class Orchestrator:
             return 0
         for doc in docs:
             self.log(f"{doc.source.name} [{doc.state.status}]")
-            if doc.state.status == WRITTEN and doc.write_result.exists():
-                self.log("  already written; nothing to do")
-                continue
             self.advance(doc)
 
         self.log("")
@@ -422,6 +440,23 @@ class Orchestrator:
         if any(doc.state.status.startswith("awaiting") for doc in docs):
             return 2
         return 0
+
+
+def _fresh(output: Path, *inputs: Path) -> bool:
+    """Is `output` present and at least as new as every existing input?
+
+    The make-style dependency rule behind safe re-runs: a redone
+    upstream step (a corrected transcription, a re-reviewed CSV) makes
+    everything downstream stale, including the human gates — a reviewed
+    file older than the CSV it reviews is a decision about superseded
+    rows, not consent for the current ones.
+    """
+    if not output.exists():
+        return False
+    output_mtime = output.stat().st_mtime
+    return all(
+        not path.exists() or path.stat().st_mtime <= output_mtime for path in inputs
+    )
 
 
 def _csv_has_rows(path: Path) -> bool:

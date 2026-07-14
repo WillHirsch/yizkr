@@ -280,3 +280,57 @@ class TestIsolationAndDiscovery:
         assert slugify("Hirsch Family Tree") == "Hirsch-Family-Tree"
         assert "/" not in slugify("weird/name")
         assert slugify("..") == "document"
+
+
+class TestFreshness:
+    """Make-style dependencies: upstream redos invalidate downstream
+    outputs AND the human gates (found by the second trial — a corrected
+    transcription must force re-extraction, re-review, re-write)."""
+
+    def completed_run(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        return orchestrator
+
+    def test_upstream_redo_invalidates_derived_files_and_gates(self, tmp_path):
+        orchestrator = self.completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        doc.batch.unlink()  # curator corrected the transcription upstream
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        # stale reviewed files did NOT open the gates
+        assert doc.state.status == AWAITING_EQUIVALENCES
+        assert not doc.resolved.exists()
+        assert not doc.write_result.exists()
+
+    def test_stale_reviewed_file_is_not_consent(self, tmp_path):
+        import os
+
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        # the reviewed file predates a regenerated CSV
+        past = doc.equivalences.stat().st_mtime + 10
+        os.utime(doc.equivalences, (past, past))
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+
+    def test_re_reviewed_claims_rewrite(self, tmp_path):
+        import os
+
+        orchestrator = self.completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        writes_before = len([c for c in orchestrator.calls if c.startswith("write")])
+        future = doc.write_result.stat().st_mtime + 10
+        os.utime(doc.review_reviewed, (future, future))
+        assert orchestrator.run() == 0
+        writes_after = len([c for c in orchestrator.calls if c.startswith("write")])
+        assert writes_after == writes_before + 1
