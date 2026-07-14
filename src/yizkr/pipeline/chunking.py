@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -401,12 +403,19 @@ class ChunkedClaimExtractor:
         budget: int = DEFAULT_CHUNK_BUDGET,
         retries: int = 2,
         resume: bool = False,
+        concurrency: int = 1,
     ) -> None:
         self.client = client
         self.state_dir = state_dir
         self.budget = budget
         self.retries = retries
         self.resume = resume
+        # chunks are independent by design (ADR-0006); >1 runs their
+        # engine calls in parallel threads. Forks of one session are
+        # safe to run concurrently: each fork branches into its own
+        # new session without mutating the original.
+        self.concurrency = max(1, concurrency)
+        self._state_lock = threading.Lock()
         self.failed_chunks: list[str] = []
         # entity manifest unusable -> line-range segmentation was used
         self.used_fallback_manifest = False
@@ -778,12 +787,14 @@ class ChunkedClaimExtractor:
             entities_payload = []
 
         self.failed_chunks = []
-        raw_claims: list[dict] = []
-        for index, group in enumerate(chunk_groups, start=1):
-            chunk_id = f"c{index:03d}"
-            chunk_state = manifest["chunks"].setdefault(
-                chunk_id, {"members": member_ids(group)}
-            )
+        chunk_ids = [f"c{index:03d}" for index in range(1, len(chunk_groups) + 1)]
+        for chunk_id, group in zip(chunk_ids, chunk_groups, strict=True):
+            manifest["chunks"].setdefault(chunk_id, {"members": member_ids(group)})
+
+        def run_one(chunk_id: str, group: list) -> list[dict] | None:
+            """One chunk end to end; returns parsed claims or None on
+            failure. Thread-safe: per-chunk files are exclusive to this
+            call, shared manifest state goes through the lock."""
             parsed = self._reusable_claims(chunk_id)
             if parsed is None:
                 prompt = build_prompt(group, False)
@@ -791,15 +802,28 @@ class ChunkedClaimExtractor:
                 try:
                     parsed = self._run_chunk(chunk_id, prompt, handle, fallback_prompt)
                 except Exception as exc:
-                    chunk_state["status"] = f"failed: {str(exc)[:200]}"
-                    self.failed_chunks.append(chunk_id)
-                    self._write("manifest.json", json.dumps(manifest, indent=2))
-                    continue
+                    with self._state_lock:
+                        manifest["chunks"][chunk_id]["status"] = (
+                            f"failed: {str(exc)[:200]}"
+                        )
+                        self.failed_chunks.append(chunk_id)
+                        self._write("manifest.json", json.dumps(manifest, indent=2))
+                    return None
                 self._write(f"{chunk_id}.ndjson", "\n".join(map(json.dumps, parsed)))
-            chunk_state["status"] = "ok"
-            chunk_state["claims"] = len(parsed)
-            self._write("manifest.json", json.dumps(manifest, indent=2))
-            raw_claims.extend(transform(claim, chunk_id) for claim in parsed)
+            with self._state_lock:
+                manifest["chunks"][chunk_id]["status"] = "ok"
+                manifest["chunks"][chunk_id]["claims"] = len(parsed)
+                self._write("manifest.json", json.dumps(manifest, indent=2))
+            return parsed
+
+        with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
+            outcomes = list(pool.map(run_one, chunk_ids, chunk_groups))
+        self.failed_chunks.sort()
+
+        raw_claims: list[dict] = []
+        for chunk_id, parsed in zip(chunk_ids, outcomes, strict=True):
+            if parsed is not None:
+                raw_claims.extend(transform(claim, chunk_id) for claim in parsed)
 
         deduped: list[dict] = []
         for claim in raw_claims:

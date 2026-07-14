@@ -151,15 +151,23 @@ def parse_gedcom_date(text: str) -> tuple[dict | None, list[dict]]:
         return (value, circa) if value else (None, [])
     if upper.startswith("BEF "):
         value = _parse_plain_date(raw[4:])
-        return (value, [{"property": "latest_date", "value": value}]) if value else (
-            None,
-            [],
+        return (
+            (value, [{"property": "latest_date", "value": value}])
+            if value
+            else (
+                None,
+                [],
+            )
         )
     if upper.startswith("AFT "):
         value = _parse_plain_date(raw[4:])
-        return (value, [{"property": "earliest_date", "value": value}]) if value else (
-            None,
-            [],
+        return (
+            (value, [{"property": "earliest_date", "value": value}])
+            if value
+            else (
+                None,
+                [],
+            )
         )
     between = re.fullmatch(
         r"(?:BET|FROM)\s+(.+?)\s+(?:AND|TO)\s+(.+)", raw, re.IGNORECASE
@@ -339,7 +347,10 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                     quals.append(
                         {
                             "property": "location",
-                            "value": {"type": "item", "value": local(place_entity(place))},
+                            "value": {
+                                "type": "item",
+                                "value": local(place_entity(place)),
+                            },
                         }
                     )
             divorce = fam.first("DIV")

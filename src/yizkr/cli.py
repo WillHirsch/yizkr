@@ -82,8 +82,7 @@ def cmd_merge_items(args) -> int:
             sys.exit(f"{qid} does not exist")
     client.merge_items(args.from_qid, args.to_qid, summary=args.summary)
     print(
-        f"merged {args.from_qid} into {args.to_qid}; {args.from_qid} is "
-        f"now a redirect"
+        f"merged {args.from_qid} into {args.to_qid}; {args.from_qid} is now a redirect"
     )
     return 0
 
@@ -195,6 +194,7 @@ def cmd_extract(args) -> int:
                 budget=args.chunk_budget,
                 retries=args.chunk_retries,
                 resume=args.resume,
+                concurrency=args.chunk_concurrency,
             )
         else:
             raw_dump = args.out.with_name(args.out.name + ".raw.txt")
@@ -576,6 +576,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--chunk-budget", type=int, default=2000, metavar="CHARS")
     p.add_argument("--chunk-retries", type=int, default=2, metavar="N")
+    p.add_argument(
+        "--chunk-concurrency",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run up to N chunk calls in parallel (chunks are "
+        "independent; default 1 = sequential)",
+    )
     p.add_argument(
         "--resume",
         action="store_true",

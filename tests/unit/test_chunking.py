@@ -473,6 +473,90 @@ class TestEntityFirstExtractor:
         assert "shoe_size" in rejects[0]["problems"][0]
 
 
+class KeyedLlm:
+    """Thread-safe fake for concurrent chunks: responses selected by
+    which assigned entity id appears in the prompt (pop-order fakes are
+    racy under concurrency)."""
+
+    model_identifier = "fake-model"
+
+    def __init__(self, manifest_response: str, by_entity: dict[str, str]) -> None:
+        self.manifest_response = manifest_response
+        self.by_entity = by_entity
+        import threading
+
+        self._lock = threading.Lock()
+        self.concurrent_peak = 0
+        self._active = 0
+
+    def open_conversation(self, prompt):
+        return self.manifest_response, "session-abc"
+
+    def fork(self, handle, prompt):
+        import time
+
+        with self._lock:
+            self._active += 1
+            self.concurrent_peak = max(self.concurrent_peak, self._active)
+        time.sleep(0.05)  # widen the overlap window
+        try:
+            for entity_id, response in self.by_entity.items():
+                if f"- {entity_id}:" in prompt:
+                    return response
+            raise AssertionError(f"no scripted response for prompt: {prompt[:80]}")
+        finally:
+            with self._lock:
+                self._active -= 1
+
+    def complete(self, prompt, image_paths=()):  # pragma: no cover
+        raise AssertionError("concurrent test expects fork calls")
+
+
+class TestParallelChunks:
+    def test_concurrent_chunks_merge_identically(self, tmp_path):
+        llm = KeyedLlm(
+            entity_manifest_json(),
+            {
+                "e1": ndjson([claim("e1", "Anna Example", 1900)]),
+                "e2": ndjson([claim("e2", "Bern Example", 1902)]),
+            },
+        )
+        extractor = ChunkedClaimExtractor(
+            llm,
+            state_dir=tmp_path / "state",
+            budget=LINE_LENGTH,  # -> one chunk per entity
+            concurrency=2,
+        )
+        batch = extractor.extract(transcription(), "Q23")
+        assert extractor.failed_chunks == []
+        # claims arrive in chunk order regardless of completion order
+        assert [c.subject.local_id for c in batch.claims] == ["e1", "e2"]
+        assert llm.concurrent_peak == 2  # the calls genuinely overlapped
+        manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
+        assert all(c["status"] == "ok" for c in manifest["chunks"].values())
+
+    def test_concurrent_failure_isolates_to_its_chunk(self, tmp_path):
+        llm = KeyedLlm(
+            entity_manifest_json(),
+            {
+                "e1": ndjson([claim("e1", "Anna Example", 1900)], emitted=9),  # bad
+                "e2": ndjson([claim("e2", "Bern Example", 1902)]),
+            },
+        )
+        # KeyedLlm has no complete(); disable the inline fallback path by
+        # keeping fork alive — retries return the same bad response
+        extractor = ChunkedClaimExtractor(
+            llm,
+            state_dir=tmp_path / "state",
+            budget=LINE_LENGTH,
+            retries=1,
+            concurrency=2,
+        )
+        batch = extractor.extract(transcription(), "Q23")
+        assert extractor.failed_chunks == ["c001"]
+        assert [c.subject.label for c in batch.claims] == ["Bern Example"]
+
+
 class TestFallbackLadder:
     def extractor(self, llm, tmp_path, **kwargs):
         return ChunkedClaimExtractor(llm, state_dir=tmp_path / "state", **kwargs)

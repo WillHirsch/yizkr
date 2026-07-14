@@ -260,41 +260,35 @@ class Proposal(BaseModel):
     evidence: str = ""
 
 
-def adjudicate(
-    client: LlmClient,
-    entities: list[EntityRecord],
-    candidates: dict[str, list[RosterEntity]],
-    batch: ClaimBatch,
-) -> list[Proposal]:
-    """One LLM call over all blocked pairs -> verified Proposal list."""
-    if not candidates:
-        return []
-    entities_block = "\n".join(
-        f"- {entity.id}: {entity.label}"
-        + (f" (aliases: {', '.join(entity.aliases)})" if entity.aliases else "")
-        + f"; kind: {entity.kind}"
-        + (f"; {entity.summary}" if entity.summary else "")
-        + (f"\n  facts: {facts}" if (facts := entity_facts(batch, entity.id)) else "")
-        for entity in entities
-        if entity.id in candidates
-    )
-    candidates_block = "\n".join(
-        f"- for {entity_id}: {roster_entity.facts()}"
-        for entity_id, matches in candidates.items()
-        for roster_entity in matches
-    )
-    response = client.complete(
-        ADJUDICATION_PROMPT.format(
-            entities_block=entities_block, candidates_block=candidates_block
-        )
-    )
+# Pairs per adjudication call. Bounds each response — the same
+# output-size constraint chunked extraction enforces (ADR-0006), one
+# level up: an unbatched call over a large roster is the multi-turn
+# fragility all over again.
+ADJUDICATION_BATCH_PAIRS = 40
+
+
+def _batch_candidates(
+    candidates: dict[str, list[RosterEntity]], batch_pairs: int
+) -> list[dict[str, list[RosterEntity]]]:
+    """Split by entity, keeping each entity's candidates together —
+    the adjudicator compares a candidate against its alternatives."""
+    batches: list[dict[str, list[RosterEntity]]] = []
+    current: dict[str, list[RosterEntity]] = {}
+    count = 0
+    for entity_id, matches in candidates.items():
+        if current and count + len(matches) > batch_pairs:
+            batches.append(current)
+            current, count = {}, 0
+        current[entity_id] = matches
+        count += len(matches)
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _parse_proposals(response: str, valid_pairs: set[tuple[str, str]]):
     proposals: list[Proposal] = []
     sentinel = None
-    valid_pairs = {
-        (entity_id, roster_entity.qid)
-        for entity_id, matches in candidates.items()
-        for roster_entity in matches
-    }
     for obj in scan_json_objects(response):
         if obj.get("done") is True:
             sentinel = obj.get("proposals_emitted")
@@ -308,10 +302,53 @@ def adjudicate(
         if proposal.verdict not in ("same", "uncertain", "distinct"):
             continue
         # the adjudicator may only rule on pairs it was given
-        if (proposal.entity_id, proposal.qid) in valid_pairs:
+        pair = (proposal.entity_id, proposal.qid)
+        if pair in valid_pairs or pair[::-1] in valid_pairs:
             proposals.append(proposal)
     if sentinel is None:
         raise ValueError("adjudication response carried no terminal sentinel")
+    return proposals
+
+
+def adjudicate(
+    client: LlmClient,
+    entities: list[EntityRecord],
+    candidates: dict[str, list[RosterEntity]],
+    batch: ClaimBatch,
+    batch_pairs: int = ADJUDICATION_BATCH_PAIRS,
+) -> list[Proposal]:
+    """Batched LLM calls over the blocked pairs -> verified proposals."""
+    proposals: list[Proposal] = []
+    for chunk in _batch_candidates(candidates, batch_pairs):
+        entities_block = "\n".join(
+            f"- {entity.id}: {entity.label}"
+            + (f" (aliases: {', '.join(entity.aliases)})" if entity.aliases else "")
+            + f"; kind: {entity.kind}"
+            + (f"; {entity.summary}" if entity.summary else "")
+            + (
+                f"\n  facts: {facts}"
+                if (facts := entity_facts(batch, entity.id))
+                else ""
+            )
+            for entity in entities
+            if entity.id in chunk
+        )
+        candidates_block = "\n".join(
+            f"- for {entity_id}: {roster_entity.facts()}"
+            for entity_id, matches in chunk.items()
+            for roster_entity in matches
+        )
+        response = client.complete(
+            ADJUDICATION_PROMPT.format(
+                entities_block=entities_block, candidates_block=candidates_block
+            )
+        )
+        valid_pairs = {
+            (entity_id, roster_entity.qid)
+            for entity_id, matches in chunk.items()
+            for roster_entity in matches
+        }
+        proposals.extend(_parse_proposals(response, valid_pairs))
     return proposals
 
 
@@ -442,9 +479,12 @@ Pairs:
 
 
 def propose_graph_pairs(
-    client: LlmClient, roster: list[RosterEntity]
+    client: LlmClient,
+    roster: list[RosterEntity],
+    batch_pairs: int = ADJUDICATION_BATCH_PAIRS,
 ) -> list[Proposal]:
-    """Blocked roster x roster pairs -> adjudicated duplicate proposals.
+    """Blocked roster x roster pairs -> adjudicated duplicate proposals,
+    in bounded batches per call.
 
     Executing an approved pair is a curator action (item merge, or a
     referenced `said to be the same as` statement) — deliberately not
@@ -462,32 +502,17 @@ def propose_graph_pairs(
                 pairs.append((first, second))
     if not pairs:
         return []
-    pairs_block = "\n".join(
-        f"- {first.facts()}\n  vs {second.facts()}" for first, second in pairs
-    )
-    response = client.complete(
-        GRAPH_ADJUDICATION_PROMPT.format(pairs_block=pairs_block)
-    )
-    valid_pairs = {(first.qid, second.qid) for first, second in pairs}
-    proposals = []
-    sentinel = None
-    for obj in scan_json_objects(response):
-        if obj.get("done") is True:
-            sentinel = obj.get("proposals_emitted")
-            continue
-        if "entity_id" not in obj or "qid" not in obj:
-            continue
-        try:
-            proposal = Proposal.model_validate(obj)
-        except Exception:
-            continue
-        pair = (proposal.entity_id, proposal.qid)
-        if proposal.verdict in ("same", "uncertain", "distinct") and (
-            pair in valid_pairs or pair[::-1] in valid_pairs
-        ):
-            proposals.append(proposal)
-    if sentinel is None:
-        raise ValueError("adjudication response carried no terminal sentinel")
+    proposals: list[Proposal] = []
+    for start in range(0, len(pairs), batch_pairs):
+        chunk = pairs[start : start + batch_pairs]
+        pairs_block = "\n".join(
+            f"- {first.facts()}\n  vs {second.facts()}" for first, second in chunk
+        )
+        response = client.complete(
+            GRAPH_ADJUDICATION_PROMPT.format(pairs_block=pairs_block)
+        )
+        valid_pairs = {(first.qid, second.qid) for first, second in chunk}
+        proposals.extend(_parse_proposals(response, valid_pairs))
     return proposals
 
 

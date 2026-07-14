@@ -194,6 +194,50 @@ class TestAdjudication:
         assert adjudicate(llm, entities(), {}, batch()) == []
         assert llm.prompts == []
 
+    def test_batched_adjudication_bounds_each_call(self):
+        """The response size is bounded like chunk output (ADR-0006, one
+        level up): pairs split across calls, each with its own sentinel,
+        and each prompt carries only its batch's entities."""
+
+        class QueueLlm(ScriptedLlm):
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.prompts = []
+
+            def complete(self, prompt, image_paths=()):
+                self.prompts.append(prompt)
+                return self.responses.pop(0)
+
+        first = "\n".join(
+            [
+                json.dumps({"entity_id": "e1", "qid": "Q40", "verdict": "same"}),
+                json.dumps({"entity_id": "e1", "qid": "Q77", "verdict": "distinct"}),
+                json.dumps({"done": True, "proposals_emitted": 2}),
+            ]
+        )
+        second = "\n".join(
+            [
+                json.dumps({"entity_id": "e2", "qid": "Q90", "verdict": "same"}),
+                json.dumps({"done": True, "proposals_emitted": 1}),
+            ]
+        )
+        llm = QueueLlm([first, second])
+        proposals = adjudicate(
+            llm,
+            entities(),
+            block_candidates(entities(), roster()),
+            batch(),
+            batch_pairs=2,  # e1 has 2 candidates, e2 has 1 -> two calls
+        )
+        assert len(llm.prompts) == 2
+        assert "Springfield" not in llm.prompts[0]  # e2 not in batch 1
+        assert "Rosa" not in llm.prompts[1]  # e1 not in batch 2
+        assert [(p.entity_id, p.qid) for p in proposals] == [
+            ("e1", "Q40"),
+            ("e1", "Q77"),
+            ("e2", "Q90"),
+        ]
+
 
 class TestEquivalencesCsv:
     def proposals(self):
