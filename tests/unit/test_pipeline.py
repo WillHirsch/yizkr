@@ -340,6 +340,171 @@ class TestReviewRoundTrip:
         assert claim_id(first) == claim_id(again)
 
 
+class TestLivingWarning:
+    """ROADMAP item 10: the review CSV warns about possibly-living subjects."""
+
+    def test_no_death_and_recent_activity_warns(self, tmp_path):
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(batch(), csv_path, cutoff_year=1920)
+        with open(csv_path, newline="") as f:
+            rows = list(__import__("csv").DictReader(f))
+        # spouse claim carries point_in_time 1933 >= cutoff; no death data
+        assert all("possibly living" in row["warning"] for row in rows)
+
+    def test_death_data_suppresses_warning(self, tmp_path):
+        source = batch()
+        death = source.claims[1].model_copy(
+            update={
+                "property": "date_of_death",
+                "value": source.claims[1].value.model_copy(update={"year": 1980}),
+            }
+        )
+        source = source.model_copy(update={"claims": [*source.claims, death]})
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path, cutoff_year=1920)
+        with open(csv_path, newline="") as f:
+            rows = list(__import__("csv").DictReader(f))
+        assert all(row["warning"] == "" for row in rows)
+
+    def test_graph_death_knowledge_suppresses_warning(self, tmp_path):
+        source = batch()
+        qid_subject = source.claims[0].model_copy(update={"subject": QidRef(qid="Q99")})
+        source = source.model_copy(update={"claims": [qid_subject]})
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path, known_deaths={"Q99"}, cutoff_year=1920)
+        with open(csv_path, newline="") as f:
+            rows = list(__import__("csv").DictReader(f))
+        assert rows[0]["warning"] == ""
+
+    def test_old_activity_does_not_warn(self, tmp_path):
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(batch(), csv_path, cutoff_year=1990)
+        with open(csv_path, newline="") as f:
+            rows = list(__import__("csv").DictReader(f))
+        assert all(row["warning"] == "" for row in rows)
+
+
+class TestCorrections:
+    """ROADMAP item 11: the correction column produces curator claims."""
+
+    def test_date_correction_replaces_value_and_marks_curated(self, tmp_path):
+        source = batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+
+        def correct_birth(rows):
+            for row in rows:
+                row["decision"] = "approve"
+                if row["property"] == "date_of_birth":
+                    row["correction"] = "1910-05-12"
+            return rows
+
+        TestReviewRoundTrip.edit_csv(csv_path, correct_birth)
+        approved, warnings = apply_review(source, csv_path)
+        assert warnings == []
+        (birth,) = [c for c in approved.claims if c.property == "date_of_birth"]
+        assert (birth.value.year, birth.value.month, birth.value.day) == (1910, 5, 12)
+        assert birth.value.precision == "day"
+        assert birth.curated is True
+        (spouse,) = [c for c in approved.claims if c.property == "spouse"]
+        assert spouse.curated is False
+
+    def test_ambiguous_date_correction_is_refused(self, tmp_path):
+        source = batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+
+        def correct_badly(rows):
+            for row in rows:
+                row["decision"] = "approve"
+                if row["property"] == "date_of_birth":
+                    row["correction"] = "03/05/1950"
+            return rows
+
+        TestReviewRoundTrip.edit_csv(csv_path, correct_badly)
+        approved, warnings = apply_review(source, csv_path)
+        assert [c.property for c in approved.claims] == ["spouse"]
+        assert any("not an unambiguous date" in w for w in warnings)
+
+    def test_item_values_cannot_be_text_corrected(self, tmp_path):
+        source = batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+
+        def correct_spouse(rows):
+            for row in rows:
+                row["decision"] = "approve"
+                if row["property"] == "spouse":
+                    row["correction"] = "Someone Else"
+            return rows
+
+        TestReviewRoundTrip.edit_csv(csv_path, correct_spouse)
+        approved, warnings = apply_review(source, csv_path)
+        assert [c.property for c in approved.claims] == ["date_of_birth"]
+        assert any("cannot be corrected as text" in w for w in warnings)
+
+
+class TestLivingFlag:
+    """ROADMAP item 10: `living` column sets the privacy flag as curation."""
+
+    def test_living_yes_emits_curated_flag_claim(self, tmp_path):
+        source = batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+
+        def flag_living(rows):
+            for row in rows:
+                row["decision"] = "approve"
+            rows[0]["living"] = "yes"
+            return rows
+
+        TestReviewRoundTrip.edit_csv(csv_path, flag_living)
+        approved, warnings = apply_review(source, csv_path)
+        assert warnings == []
+        (flag,) = [c for c in approved.claims if c.property == "living_person"]
+        assert flag.curated is True
+        assert flag.value.value.key == "yes"
+        assert flag.subject == source.claims[0].subject
+        # referenced to the artifact whose review prompted it, no locator
+        assert flag.source.artifact.qid == "Q23"
+        assert flag.source.transcription_excerpt is None
+
+    def test_flag_rides_even_on_rejected_rows(self, tmp_path):
+        """Rejecting a misread claim must not lose the living flag."""
+        source = batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+
+        def reject_but_flag(rows):
+            for row in rows:
+                row["decision"] = "reject"
+            rows[0]["living"] = "no"
+            return rows
+
+        TestReviewRoundTrip.edit_csv(csv_path, reject_but_flag)
+        approved, warnings = apply_review(source, csv_path)
+        (flag,) = approved.claims
+        assert flag.property == "living_person"
+        assert flag.value.value.key == "no"
+
+    def test_conflicting_flags_warn_and_do_nothing(self, tmp_path):
+        source = batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+
+        def conflict(rows):
+            for row in rows:
+                row["decision"] = "approve"
+            rows[0]["living"] = "yes"
+            rows[1]["living"] = "no"
+            return rows
+
+        TestReviewRoundTrip.edit_csv(csv_path, conflict)
+        approved, warnings = apply_review(source, csv_path)
+        assert not any(c.property == "living_person" for c in approved.claims)
+        assert any("conflicting living flags" in w for w in warnings)
+
+
 class TestPrivacyDefaults:
     def test_no_default_llm_client(self):
         from yizkr.pipeline.llm import make_client

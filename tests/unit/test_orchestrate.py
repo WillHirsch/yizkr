@@ -1,0 +1,282 @@
+"""Offline tests for folder orchestration (ROADMAP item 15).
+
+The heavy steps are replaced with scripted fakes; what is under test is
+the state machine: per-document state, the two human gates, resume, and
+per-document failure isolation.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+
+from yizkr.claims import ClaimBatch
+from yizkr.pipeline.orchestrate import (
+    AWAITING_CLAIMS,
+    AWAITING_EQUIVALENCES,
+    FAILED,
+    WRITTEN,
+    DocumentRun,
+    Orchestrator,
+    slugify,
+)
+from yizkr.pipeline.reconcile import EQUIVALENCE_FIELDS
+from yizkr.pipeline.review import CSV_COLUMNS, export_review_csv
+
+RUN = {
+    "model_identifier": "fake-model",
+    "pipeline_version": "0.1.0",
+    "started_at": "2026-07-14T09:00:00Z",
+}
+
+
+def make_batch(entities=True) -> ClaimBatch:
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "claims": [
+                {
+                    "subject": {"kind": "local", "local_id": "e1", "label": "Anna"},
+                    "property": "date_of_birth",
+                    "value": {"type": "time", "year": 1901},
+                    "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+                }
+            ],
+            "entities": [{"id": "e1", "label": "Anna", "kind": "human"}]
+            if entities
+            else [],
+        }
+    )
+
+
+class ScriptedOrchestrator(Orchestrator):
+    """Every wiki/LLM-touching step replaced with a scripted fake."""
+
+    def __init__(self, *args, proposals=1, fail_step=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.proposals = proposals
+        self.fail_step = fail_step
+        self.calls: list[str] = []
+
+    def _step_register(self, doc):
+        self.calls.append(f"register:{doc.source.name}")
+        if self.fail_step == "register":
+            raise RuntimeError("wiki down")
+        return "Q100"
+
+    def _step_batch(self, doc):
+        self.calls.append(f"batch:{doc.source.name}")
+        if doc.source.suffix == ".ged":
+            return super()._step_batch(doc)  # exercises the real adapter
+        return make_batch()
+
+    def _step_reconcile(self, doc, batch):
+        self.calls.append(f"reconcile:{doc.source.name}")
+        with open(doc.equivalences, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=EQUIVALENCE_FIELDS)
+            writer.writeheader()
+            for index in range(self.proposals):
+                writer.writerow(
+                    {
+                        "entity_id": "e1",
+                        "entity_label": "Anna",
+                        "qid": f"Q{40 + index}",
+                        "qid_label": "Anna Maria",
+                        "verdict": "same",
+                        "confidence": 0.9,
+                        "evidence": "same spouse",
+                        "decision": "",
+                    }
+                )
+        return self.proposals
+
+    def _step_resolve(self, doc, batch):
+        self.calls.append(f"resolve:{doc.source.name}")
+        return batch
+
+    def _step_export_review(self, doc, batch):
+        self.calls.append(f"export:{doc.source.name}")
+        return export_review_csv(batch, doc.review)
+
+    def _step_write(self, doc, batch):
+        self.calls.append(f"write:{doc.source.name}")
+        return {
+            "run_qid": "Q999",
+            "written": len(batch.claims),
+            "skipped": 0,
+            "referenced": 0,
+            "created_items": {},
+            "approved_claims": len(batch.claims),
+        }
+
+
+def quiet(*args, **kwargs):
+    pass
+
+
+def make_run(tmp_path, name="letter.txt", **kwargs):
+    folder = tmp_path / "docs"
+    folder.mkdir(exist_ok=True)
+    (folder / name).write_text("Anna was born in 1901.")
+    orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet, **kwargs)
+    return orchestrator
+
+
+def approve_all_equivalences(doc: DocumentRun) -> None:
+    with open(doc.equivalences, newline="") as f:
+        rows = list(csv.DictReader(f))
+    for row in rows:
+        row["decision"] = "approve"
+    with open(doc.equivalences_reviewed, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=EQUIVALENCE_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def approve_all_claims(doc: DocumentRun) -> None:
+    with open(doc.review, newline="") as f:
+        rows = list(csv.DictReader(f))
+    for row in rows:
+        row["decision"] = "approve"
+    with open(doc.review_reviewed, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+class TestGates:
+    def test_pauses_at_equivalence_gate(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+        assert doc.equivalences.exists()
+        assert "write:letter.txt" not in orchestrator.calls
+
+    def test_reviewed_equivalences_advance_to_claim_gate(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_CLAIMS
+        assert doc.review.exists()
+
+    def test_reviewed_claims_reach_write(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+        assert json.loads(doc.write_result.read_text())["written"] == 1
+
+    def test_no_proposals_skip_equivalence_gate(self, tmp_path):
+        orchestrator = make_run(tmp_path, proposals=0)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_CLAIMS  # straight to claim review
+
+    def test_half_filled_equivalences_csv_is_not_consent(self, tmp_path):
+        """Only the reviewed file's PRESENCE opens the gate."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        with open(doc.equivalences, newline="") as f:
+            rows = list(csv.DictReader(f))
+        rows[0]["decision"] = "approve"
+        with open(doc.equivalences, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=EQUIVALENCE_FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+
+
+class TestResume:
+    def test_steps_are_not_repeated_on_rerun(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        calls_after_first = list(orchestrator.calls)
+        orchestrator.run()  # still waiting: nothing new should execute
+        repeated = orchestrator.calls[len(calls_after_first) :]
+        assert not any(call.startswith(("register", "batch")) for call in repeated)
+
+    def test_written_document_is_a_noop(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        orchestrator.run()
+        before = list(orchestrator.calls)
+        assert orchestrator.run() == 0
+        assert orchestrator.calls == before
+
+    def test_state_survives_new_orchestrator(self, tmp_path):
+        first = make_run(tmp_path)
+        first.run()
+        (doc,) = first.documents()
+        approve_all_equivalences(doc)
+        second = ScriptedOrchestrator(first.folder, first.state_dir, log=quiet)
+        second.run()
+        (doc,) = second.documents()
+        assert doc.state.status == AWAITING_CLAIMS
+        assert doc.state.artifact_qid == "Q100"
+        # register was not repeated
+        assert "register:letter.txt" not in second.calls
+
+
+class TestIsolationAndDiscovery:
+    def test_failure_in_one_document_does_not_stop_others(self, tmp_path):
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "a-good.txt").write_text("text")
+        (folder / "b-bad.txt").write_text("text")
+
+        class OneBad(ScriptedOrchestrator):
+            def _step_batch(self, doc):
+                if "bad" in doc.source.name:
+                    raise RuntimeError("boom")
+                return super()._step_batch(doc)
+
+        orchestrator = OneBad(folder, tmp_path / "state", log=quiet)
+        assert orchestrator.run() == 1  # failure wins the exit code
+        good, bad = orchestrator.documents()
+        assert good.state.status == AWAITING_EQUIVALENCES
+        assert bad.state.status == FAILED
+        assert "boom" in bad.state.error
+
+    def test_unsupported_files_are_skipped(self, tmp_path):
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "notes.txt").write_text("text")
+        (folder / "data.xlsx").write_text("not a document")
+        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        assert [d.source.name for d in orchestrator.documents()] == ["notes.txt"]
+
+    def test_gedcom_routes_through_deterministic_adapter(self, tmp_path):
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "family.ged").write_text(
+            "0 @I1@ INDI\n1 NAME Anna /Beispiel/\n1 BIRT\n2 DATE 1901\n0 TRLR\n"
+        )
+        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        saved = ClaimBatch.model_validate_json(doc.batch.read_text())
+        assert saved.extraction_run.model_identifier == "gedcom-adapter"
+        assert saved.entities[0].label == "Anna Beispiel"
+
+    def test_slugify_keeps_paths_safe(self):
+        assert slugify("Hirsch Family Tree") == "Hirsch-Family-Tree"
+        assert "/" not in slugify("weird/name")
+        assert slugify("..") == "document"

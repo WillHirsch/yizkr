@@ -7,8 +7,10 @@ the fragment of the source artifact that makes it – including when
 sources contradict each other.
 
 **Status:** Phase W1 in progress — infrastructure, model bootstrap,
-claim schema, ingestion skeleton, face proposals, and query library
-done; backup/export next.
+claim schema, ingestion pipeline (chunked extraction, GEDCOM adapter,
+reconciliation, review with corrections, folder orchestration via
+`yizkr ingest run`), face proposals, query library, and backup/export
+done; second ingestion trial (photos/HTR/German) next.
 
 Start here:
 - `CLAUDE.md` – standing instructions for AI-assisted development

@@ -329,10 +329,29 @@ def cmd_export_review(args) -> int:
     from yizkr.pipeline.review import export_review_csv
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    rows = export_review_csv(_load_batch(args.batch), args.out)
+    # graph knowledge for the living-person warning (best-effort: the
+    # export still works offline, the warning is just batch-local then)
+    known_deaths: set[str] | None = None
+    try:
+        from yizkr.pipeline.reconcile import fetch_roster
+
+        config = Config.load(args.env_file)
+        known_deaths = {
+            entity.qid
+            for entity in fetch_roster(WikiClient(config), config)
+            if entity.death
+        }
+    except Exception as exc:
+        print(
+            f"note: no graph connection ({exc}); living-person warnings "
+            f"use batch data only",
+            file=sys.stderr,
+        )
+    rows = export_review_csv(_load_batch(args.batch), args.out, known_deaths)
     print(
-        f"wrote {args.out} ({rows} rows). Fill the 'decision' column "
-        f"with approve/reject, then run apply-review."
+        f"wrote {args.out} ({rows} rows). Fill 'decision' (approve/reject), "
+        f"optionally 'correction' (unambiguous replacement value) and "
+        f"'living' (yes/no privacy flag), then run apply-review."
     )
     return 0
 
@@ -359,6 +378,22 @@ def cmd_write(args) -> int:
     if args.dry_run:
         print("(dry run: nothing written)")
     return 0
+
+
+def cmd_run(args) -> int:
+    from yizkr.pipeline.orchestrate import Orchestrator
+
+    if not args.folder.is_dir():
+        sys.exit(f"{args.folder} is not a directory")
+    state_dir = args.state or Path("var/runs") / args.folder.resolve().name
+    return Orchestrator(
+        args.folder,
+        state_dir,
+        llm=args.llm,
+        artifact_type=args.type,
+        language=args.language,
+        env_file=args.env_file,
+    ).run()
 
 
 def cmd_detect_faces(args) -> int:
@@ -639,6 +674,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--batch", type=Path, required=True)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_write)
+
+    p = isub.add_parser(
+        "run",
+        help="walk a folder through the whole pipeline, pausing at the "
+        "review gates; re-run to resume (item 15)",
+    )
+    p.add_argument("folder", type=Path, help="folder of documents to ingest")
+    p.add_argument(
+        "--state",
+        type=Path,
+        help="state/output directory (default var/runs/<folder name>)",
+    )
+    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument(
+        "--type",
+        default="artifact",
+        help="manifest item key for registered artifacts (default artifact)",
+    )
+    p.add_argument("--language", default="en")
+    p.set_defaults(func=cmd_run)
 
     p = isub.add_parser(
         "detect-faces", help="detect faces in a photo -> depicts proposals"

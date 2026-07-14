@@ -44,6 +44,12 @@ Every statement carries at least one reference with:
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item
 
+Curator-attributed statements (a value correction or a curation flag
+from the review CSV) carry the `stated in → artifact` reference only:
+process provenance is for machine writes, and a human decision's
+process is the MediaWiki edit history. The pipeline marks these with
+the claim contract's `curated` flag.
+
 The pipeline's claim JSON contract implementing this pattern is
 `ingest/claims.py` (`ClaimBatch`): sources are required fields there,
 ranks are unrepresentable, and property/item references use manifest
@@ -162,6 +168,11 @@ and reference the artifact itself or the producing run.
 - Property: "living person" flag (or inferred from absence of death
   data + birth recency); flagged entities are excluded from every
   public export, dump, or publish tier by default.
+- The flag is set during claim review: the review CSV warns when a
+  subject has no death data (in the batch or the graph) and activity
+  within the 100-year cutoff, and its `living` column (yes/no) writes
+  the flag as a curated claim referenced to the artifact whose review
+  prompted it.
 - The public export (`yizkr backup`) applies this conservatively:
   a person enters it only on positive evidence they are not living —
   a death record, birth beyond a 100-year cutoff, or an explicit

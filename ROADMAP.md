@@ -69,10 +69,22 @@ updated, and no path writes an unreferenced statement.
     session for the observed gaps: artifact types (genealogical
     report, address book), occupation, sibling, cause of death
     (quantity datatype support for ages/counts).
+    *Review-flow half done (rode along with item 15): the review CSV's
+    `warning` column flags subjects with no death data (batch- and
+    graph-aware) and activity within the 100-year cutoff, and its
+    `living` column sets the `living person` flag as a curated claim.
+    The vocabulary session (burial place from the GEDCOM's BURI,
+    occupation, sibling, cause of death, quantities) is still open.*
 11. **Review corrections** – the CSV review flow is approve/reject
     only; ambiguous machine readings (date-format ambiguity) currently
     force rejection. Add an edit/correction column that produces a
     curator-attributed replacement claim.
+    *Done (rode along with item 15) — the review CSV's `correction`
+    column replaces a misread value on approval: unambiguous ISO dates
+    and plain text (item identities stay in the equivalence flow).
+    Corrected claims are curator-attributed: artifact reference kept,
+    no extraction-run reference (ADR-0003 — process provenance is for
+    machine writes); live test asserts the reference shape.*
 12. **Travel-notes re-ingestion + duplicate cleanup** – re-extract the
     travel notes entity-first (the trial batch predates the `extract`
     flag and wrote duplicate people), apply the already-reviewed
@@ -113,6 +125,15 @@ updated, and no path writes an unreferenced statement.
     register → transcribe → extract → reconcile → resolve → pause for
     review → write, with per-document state (the chunk manifest
     already provides the progress unit) and safe re-runs.
+    *Done — see `pipeline/orchestrate.py`. Each invocation advances
+    every document as far as the two human gates allow (equivalences,
+    claims); a gate opens only when the reviewer saves a
+    `*.reviewed.csv` beside the exported CSV — presence is consent,
+    half-filled files are not. GEDCOMs route through the deterministic
+    adapter; per-document failures don't stop the folder; re-running a
+    written document is a no-op. Validated live end to end (register →
+    extract → review pause → write appended an agreeing-source
+    reference; re-run no-op).*
 16. **Second trial: the untested half** – a real photograph through
     the faces/depicts flow (never live-run), a handwritten certificate
     (HTR is a stub; triage the gap), and a German-language document.

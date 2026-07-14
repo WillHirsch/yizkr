@@ -426,6 +426,10 @@ class BatchWriter:
                     qualifier.property, qualifier.value, result, artifact_qid
                 )
                 wbi_claim.qualifiers.add(qualifier_claim)
+            # curated claims are human writes: artifact reference only,
+            # no extraction-run reference (ADR-0003 — process provenance
+            # is for machine writes)
+            run_qid = None if claim.curated else result.run_qid
             existing = self._find_matching_statement(subject_qid, wbi_claim)
             if existing is not None:
                 if self._has_artifact_reference(existing, artifact_qid):
@@ -435,7 +439,7 @@ class BatchWriter:
                 # statement, and gains this claim's references (R2 —
                 # who asserts a fact is knowledge, not just the fact)
                 for reference in self._references(
-                    artifact_qid=artifact_qid, run_qid=result.run_qid, claim=claim
+                    artifact_qid=artifact_qid, run_qid=run_qid, claim=claim
                 ).references:
                     existing.references.add(reference)
                 entity = self._entity_cache[subject_qid]
@@ -444,7 +448,7 @@ class BatchWriter:
                 result.referenced += 1
                 continue
             wbi_claim.references = self._references(
-                artifact_qid=artifact_qid, run_qid=result.run_qid, claim=claim
+                artifact_qid=artifact_qid, run_qid=run_qid, claim=claim
             )
             if not self.dry_run:
                 entity = self._entity_cache.get(

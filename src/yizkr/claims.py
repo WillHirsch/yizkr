@@ -304,6 +304,12 @@ class Claim(StrictModel):
     There is intentionally no `rank` field: pipeline writes are always
     normal rank (ADR-0002). `confidence` is extractor metadata for review
     ordering; it is never written to the graph.
+
+    `curated` marks a claim (re)stated by the human reviewer — a value
+    correction or a curation flag from the review CSV. Curated claims
+    keep their `stated in -> artifact` reference but carry no
+    `inferred from extraction run` reference: process provenance is for
+    machine writes (ADR-0003), and this statement's process was a human.
     """
 
     subject: EntityRef
@@ -312,6 +318,7 @@ class Claim(StrictModel):
     qualifiers: list[Qualifier] = []
     source: SourceReference
     confidence: float | None = Field(default=None, ge=0, le=1)
+    curated: bool = False
 
 
 class ExtractionRunMetadata(StrictModel):

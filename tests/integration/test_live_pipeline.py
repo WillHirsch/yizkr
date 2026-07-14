@@ -205,7 +205,8 @@ def test_agreeing_second_source_appends_reference(client, artifact):
     writer = BatchWriter(client)
     result = writer.write_batch(birth_batch(second.artifact_qid, 1901))
     assert result.written == 0
-    assert result.referenced == 1
+    # first suite run appends the reference; later runs find it present
+    assert (result.referenced, result.skipped) in ((1, 0), (0, 1))
     person_qid = result.created_items["person-1"]
 
     count, sources = stated_in_values(client, person_qid, "+1901-00-00T00:00:00Z")
@@ -217,3 +218,35 @@ def test_agreeing_second_source_appends_reference(client, artifact):
     assert rerun.written == 0
     assert rerun.referenced == 0
     assert rerun.skipped == 1
+
+
+def test_curated_claim_carries_no_run_reference(client, artifact):
+    """A curator-attributed claim (correction / living flag) is a human
+    write: artifact reference only, no extraction-run reference
+    (ADR-0003 — process provenance is for machine writes)."""
+    batch = birth_batch(artifact.artifact_qid, 1990)
+    death = batch.claims[0].model_copy(
+        update={"property": "date_of_death", "curated": True}
+    )
+    curated_batch = batch.model_copy(update={"claims": [death]})
+    writer = BatchWriter(client)
+    result = writer.write_batch(curated_batch)
+    person_qid = result.created_items["person-1"]
+
+    properties, _ = client.vocabulary()
+    data = client.api_get(
+        {
+            "action": "wbgetclaims",
+            "entity": person_qid,
+            "property": properties["date_of_death"],
+        }
+    )
+    (claim,) = [
+        claim
+        for claims in data["claims"].values()
+        for claim in claims
+        if claim["mainsnak"]["datavalue"]["value"]["time"].startswith("+1990")
+    ]
+    reference_properties = {pid for ref in claim["references"] for pid in ref["snaks"]}
+    assert properties["stated_in"] in reference_properties
+    assert properties["inferred_from_extraction_run"] not in reference_properties
