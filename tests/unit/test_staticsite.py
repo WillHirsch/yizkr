@@ -74,7 +74,7 @@ STATEMENTS = [
         "st": uri("s1"),
         "value": time_literal("+1873-05-10T00:00:00Z"),
         "precision": literal("11"),
-        "sources": literal("family tree PDF"),
+        "sources": literal("Q23~family tree PDF"),
         "qualifierTexts": literal(""),
     },
     {
@@ -83,7 +83,7 @@ STATEMENTS = [
         "st": uri("s2"),
         "value": time_literal("+1874-01-01T00:00:00Z"),
         "precision": literal("9"),
-        "sources": literal("travel notes"),
+        "sources": literal("Q29~travel notes"),
         "qualifierTexts": literal("sourcing circumstances: circa"),
     },
     {
@@ -92,7 +92,7 @@ STATEMENTS = [
         "st": uri("s3"),
         "value": uri("Q9"),
         "valueLabel": literal("Salomon Rothholz"),
-        "sources": literal("family tree PDF|marriage record"),
+        "sources": literal("Q23~family tree PDF|Q31~marriage record"),
         "qualifierTexts": literal("start time: 1901"),
     },
     {
@@ -101,7 +101,7 @@ STATEMENTS = [
         "st": uri("s4"),
         "value": uri("Q1"),
         "valueLabel": literal("human"),
-        "sources": literal("family tree PDF"),
+        "sources": literal("Q23~family tree PDF"),
         "qualifierTexts": literal(""),
     },
 ]
@@ -112,7 +112,29 @@ TIMELINE = [
         "personLabel": literal("Rosa Genserowski"),
         "what": literal("date of birth"),
         "date": time_literal("+1873-05-10T00:00:00Z"),
+        "source": uri("Q23"),
         "sourceLabel": literal("family tree PDF"),
+    }
+]
+
+ARTIFACTS = [
+    {
+        "artifact": uri("Q23"),
+        "artifactLabel": literal("family tree PDF"),
+        "artifactDescription": literal("five generations"),
+        "kindLabel": literal("artifact"),
+        "file": literal("File:Family-tree.pdf"),
+    }
+]
+
+ASSERTIONS = [
+    {
+        "artifact": uri("Q23"),
+        "subject": uri("Q7"),
+        "subjectLabel": literal("Rosa Genserowski"),
+        "propLabel": literal("date of birth"),
+        "value": time_literal("+1873-05-10T00:00:00Z"),
+        "precision": literal("11"),
     }
 ]
 
@@ -146,9 +168,11 @@ def build(tmp_path, vocabulary, responses):
 
 RESPONSES = {
     "GROUP_CONCAT(DISTINCT ?alias": PEOPLE,
-    "wikibase:statementProperty": STATEMENTS,
-    "date of birth": TIMELINE,  # person-timeline template contains this literal
-    "Special:FilePath": GALLERY,
+    "GROUP_CONCAT(DISTINCT ?qualifierText": STATEMENTS,
+    'date of birth"@en': TIMELINE,  # person-timeline UNION arm marker
+    "Special:FilePath": GALLERY,  # photo-gallery builds this URL
+    "?kind wdt:": ARTIFACTS,  # artifacts query walks the subclass path
+    "?st prov:wasDerivedFrom/pr:": ASSERTIONS,  # assertions query (not ?stA/?stB)
 }
 
 
@@ -163,8 +187,9 @@ class TestPersonPage:
         assert ">1874<" in text or "1874" in text  # year precision, not padded
         assert "1874-01-01" not in text  # precision respected
         assert "travel notes" in text
-        # multi-source statement lists both sources
-        assert "family tree PDF; marriage record" in text
+        # multi-source statement links BOTH sources to artifact pages
+        assert '<a href="../artifacts/Q23.html">family tree PDF</a>' in text
+        assert '<a href="../artifacts/Q31.html">marriage record</a>' in text
         # qualifiers rendered
         assert "start time: 1901" in text
         # item values link to the person page of the target
@@ -199,6 +224,26 @@ class TestSections:
         feed = json.loads((site / "timeline.json").read_text())
         assert feed["events"][0]["start_date"]["year"] == "1873"
         assert "per family tree PDF" in feed["events"][0]["text"]["text"]
+
+    def test_artifact_page_has_download_and_assertions(self, tmp_path, vocabulary):
+        site, summary = build(tmp_path, vocabulary, RESPONSES)
+        assert summary["artifacts"] == 1
+        text = (site / "artifacts/Q23.html").read_text()
+        # raw-content download link
+        assert "Special:FilePath/Family-tree.pdf" in text
+        assert "download the original" in text
+        # assertions table with precision-correct value and person link
+        assert '<a href="../people/Q7.html">Rosa Genserowski</a>' in text
+        assert "1873-05-10" in text
+        # index links the artifact page
+        index = (site / "index.html").read_text()
+        assert 'href="artifacts/Q23.html"' in index
+
+    def test_inconsistencies_page_renamed(self, tmp_path, vocabulary):
+        site, _ = build(tmp_path, vocabulary, RESPONSES)
+        assert (site / "inconsistencies.html").exists()
+        assert not (site / "disagreements.html").exists()
+        assert "Inconsistencies" in (site / "index.html").read_text()
 
     def test_gallery_renders_images_with_provenance(self, tmp_path, vocabulary):
         site, _ = build(tmp_path, vocabulary, RESPONSES)

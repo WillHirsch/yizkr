@@ -263,6 +263,50 @@ class TestEquivalencesCsv:
         path.write_text(text)
         assert read_approved_equivalences(path) == {"e1": "Q40"}
 
+    def test_aliases_visible_and_prunable_at_review(self, tmp_path):
+        """An approval is also an alias contribution (the writer appends
+        the document's aliases to the matched item), so the CSV must show
+        them and honor the reviewer's pruning — a form's MOTHER label
+        must be deletable before it pollutes the graph."""
+        from yizkr.pipeline.reconcile import read_reviewed_aliases
+
+        path = tmp_path / "equivalences.csv"
+        noisy = [
+            EntityRecord(
+                id="e1",
+                label="Rosa",
+                aliases=["our great grandmother", "MOTHER"],
+                kind="human",
+            )
+        ]
+        export_equivalences_csv(self.proposals(), noisy, roster(), path)
+        content = path.read_text()
+        assert "our great grandmother|MOTHER" in content  # visible to reviewer
+        # the reviewer prunes the role label and approves
+        content = content.replace(
+            "our great grandmother|MOTHER", "our great grandmother"
+        )
+        content = content.replace("same spouse,", "same spouse,approve")
+        path.write_text(content)
+        approved = read_approved_equivalences(path)
+        reviewed = read_reviewed_aliases(path)
+        assert reviewed == {"e1": ["our great grandmother"]}
+        applied = apply_equivalences(batch(entity_list=noisy), approved, reviewed)
+        (entity,) = applied.entities
+        assert entity.qid == "Q40"
+        assert entity.aliases == ["our great grandmother"]  # MOTHER pruned
+
+    def test_old_csvs_without_aliases_column_still_apply(self, tmp_path):
+        from yizkr.pipeline.reconcile import read_reviewed_aliases
+
+        path = tmp_path / "old.csv"
+        path.write_text(
+            "entity_id,qid,verdict,confidence,evidence,decision\n"
+            "e1,Q40,same,0.9,same spouse,approve\n"
+        )
+        assert read_approved_equivalences(path) == {"e1": "Q40"}
+        assert read_reviewed_aliases(path) == {}
+
     def test_conflicting_approvals_raise(self, tmp_path):
         path = tmp_path / "equivalences.csv"
         export_equivalences_csv(self.proposals(), entities(), roster(), path)

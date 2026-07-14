@@ -335,12 +335,15 @@ class Orchestrator:
         from yizkr.pipeline.reconcile import (
             apply_equivalences,
             read_approved_equivalences,
+            read_reviewed_aliases,
         )
         from yizkr.pipeline.resolve import resolve_batch
 
         if doc.equivalences_reviewed.exists():
             approved = read_approved_equivalences(doc.equivalences_reviewed)
-            batch = apply_equivalences(batch, approved)
+            batch = apply_equivalences(
+                batch, approved, read_reviewed_aliases(doc.equivalences_reviewed)
+            )
             self.log(f"  applied {len(approved)} approved equivalences")
         _, item_labels = self.client.label_index()
         return resolve_batch(batch, item_labels)

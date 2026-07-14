@@ -100,7 +100,9 @@ WHERE {{
   OPTIONAL {{
     ?st prov:wasDerivedFrom ?reference .
     ?reference pr:{stated_in} ?source .
-    ?source rdfs:label ?sourceLabel . FILTER(LANG(?sourceLabel) = "en")
+    ?source rdfs:label ?sourceLabelRaw . FILTER(LANG(?sourceLabelRaw) = "en")
+    BIND(CONCAT(STRAFTER(STR(?source), "/entity/"), "~", ?sourceLabelRaw)
+         AS ?sourceLabel)
   }}
   OPTIONAL {{
     ?st ?pq ?qualifierValue .
@@ -136,7 +138,7 @@ ORDER BY ?person ?propLabel
 """
 
 ARTIFACTS_QUERY = """\
-SELECT ?artifact ?artifactLabel ?kindLabel ?file
+SELECT ?artifact ?artifactLabel ?artifactDescription ?kindLabel ?file
 WHERE {{
   ?artifact wdt:{instance_of} ?kind .
   ?kind wdt:{subclass_of}* wd:{artifact} .
@@ -144,6 +146,28 @@ WHERE {{
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
 ORDER BY ?artifactLabel
+"""
+
+# what each artifact asserts — the artifact page's evidence table
+ASSERTIONS_QUERY = """\
+SELECT ?artifact ?subject ?subjectLabel ?propLabel ?value ?valueLabel ?precision
+WHERE {{
+  ?st prov:wasDerivedFrom/pr:{stated_in} ?artifact .
+  ?subject ?p ?st .
+  ?prop wikibase:claim ?p ;
+        wikibase:statementProperty ?ps ;
+        rdfs:label ?propLabel .
+  FILTER(LANG(?propLabel) = "en")
+  ?st ?ps ?value .
+  OPTIONAL {{ ?subject rdfs:label ?subjectLabel . FILTER(LANG(?subjectLabel) = "en") }}
+  OPTIONAL {{ ?value rdfs:label ?valueLabel . FILTER(LANG(?valueLabel) = "en") }}
+  OPTIONAL {{
+    ?prop wikibase:statementValue ?psv .
+    ?st ?psv ?valueNode .
+    ?valueNode wikibase:timePrecision ?precision .
+  }}
+}}
+ORDER BY ?artifact ?subjectLabel ?propLabel
 """
 
 CSS = """\
@@ -187,7 +211,7 @@ NAV = (
     '<a href="{root}timeline.html">Timeline</a>'
     '<a href="{root}gallery.html">Gallery</a>'
     '<a href="{root}places.html">Places</a>'
-    '<a href="{root}disagreements.html">Disagreements</a></nav>'
+    '<a href="{root}inconsistencies.html">Inconsistencies</a></nav>'
 )
 
 
@@ -267,33 +291,59 @@ class SiteBuilder:
         statements = self.run(self._instance_query(STATEMENTS_QUERY))
         timeline = self.run(self._library_query("person-timeline"))
         gallery = self.run(self._library_query("photo-gallery"))
-        disagreements = self.run(self._library_query("disagreement-report"))
+        inconsistencies = self.run(self._library_query("disagreement-report"))
         places = self.run(self._library_query("places-map"))
         artifacts = self.run(self._instance_query(ARTIFACTS_QUERY))
+        assertions = self.run(self._instance_query(ASSERTIONS_QUERY))
 
         by_person: dict[str, list[dict]] = defaultdict(list)
         for row in statements:
             by_person[qid_of(row, "person")].append(row)
+        by_artifact: dict[str, list[dict]] = defaultdict(list)
+        for row in assertions:
+            by_artifact[qid_of(row, "artifact")].append(row)
 
         for row in people:
             qid = qid_of(row, "person")
             self._write(
                 f"people/{qid}.html", self.person_page(row, by_person.get(qid, []))
             )
+        for row in artifacts:
+            qid = qid_of(row, "artifact")
+            self._write(
+                f"artifacts/{qid}.html",
+                self.artifact_page(row, by_artifact.get(qid, [])),
+            )
         self._write("index.html", self.index_page(people, artifacts))
         self._write("timeline.html", self.timeline_page(timeline))
         self._write("timeline.json", self.timeline_feed(timeline))
         self._write("gallery.html", self.gallery_page(gallery))
         self._write("places.html", self.places_page(places))
-        self._write("disagreements.html", self.disagreements_page(disagreements))
+        self._write("inconsistencies.html", self.inconsistencies_page(inconsistencies))
         return {
             "out": str(self.out),
             "people": len(people),
             "statements": len(statements),
+            "artifacts": len(artifacts),
             "timeline_rows": len(timeline),
             "gallery_items": len(gallery),
-            "disagreements": len(disagreements),
+            "inconsistencies": len(inconsistencies),
         }
+
+    def source_links(self, encoded: str, root: str = "../") -> str:
+        """'Q23~label|Q29~label' -> comma-separated artifact-page links."""
+        links = []
+        for pair in encoded.split("|"):
+            if not pair:
+                continue
+            qid, _, label = pair.partition("~")
+            if qid.startswith("Q") and label:
+                links.append(
+                    f'<a href="{root}artifacts/{esc(qid)}.html">{esc(label)}</a>'
+                )
+            else:
+                links.append(esc(label or qid))
+        return "; ".join(links)
 
     def person_page(self, person: dict, statements: list[dict]) -> str:
         qid = qid_of(person, "person")
@@ -350,10 +400,68 @@ class SiteBuilder:
             rendered += (
                 f' <span class="qualifiers">({esc("; ".join(qualifiers))})</span>'
             )
-        sources = [s for s in cell(row, "sources").split("|") if s]
+        sources = self.source_links(cell(row, "sources"))
         if sources:
-            rendered += f'<span class="source">{esc("; ".join(sources))}</span>'
+            rendered += f'<span class="source">{sources}</span>'
         return rendered
+
+    def artifact_page(self, artifact: dict, assertions: list[dict]) -> str:
+        qid = qid_of(artifact, "artifact")
+        label = cell(artifact, "artifactLabel") or qid
+        body = [f"<h1>{esc(label)}</h1>"]
+        subtitle = " · ".join(
+            part
+            for part in (
+                esc(cell(artifact, "kindLabel")),
+                esc(cell(artifact, "artifactDescription")),
+            )
+            if part
+        )
+        if subtitle:
+            body.append(f'<p class="sub">{subtitle}</p>')
+        file_name = cell(artifact, "file")
+        if file_name:
+            href = (
+                f"{self.config.wikibase_url}/wiki/Special:FilePath/"
+                + urllib.parse.quote(file_name.removeprefix("File:"))
+            )
+            body.append(
+                f'<p><a href="{esc(href)}">⬇ download the original '
+                f"({esc(file_name.removeprefix('File:'))})</a></p>"
+            )
+        if assertions:
+            body.append(f"<h2>What this artifact asserts ({len(assertions)})</h2>")
+            body.append("<table><tr><th>About</th><th>Property</th><th>Value</th></tr>")
+            for row in assertions:
+                subject_qid = qid_of(row, "subject")
+                subject = esc(cell(row, "subjectLabel") or subject_qid)
+                if subject_qid.startswith("Q"):
+                    subject = f'<a href="../people/{subject_qid}.html">{subject}</a>'
+                value = row.get("value", {})
+                raw = value.get("value", "")
+                if value.get("datatype", "").endswith("dateTime"):
+                    shown = esc(format_time(raw, cell(row, "precision")))
+                else:
+                    shown = esc(
+                        cell(row, "valueLabel")
+                        or (
+                            raw.rsplit("/", 1)[-1]
+                            if value.get("type") == "uri"
+                            else raw
+                        )
+                    )
+                body.append(
+                    f"<tr><td>{subject}</td>"
+                    f"<td>{esc(cell(row, 'propLabel'))}</td><td>{shown}</td></tr>"
+                )
+            body.append("</table>")
+        else:
+            body.append("<p>No statements reference this artifact yet.</p>")
+        body.append(
+            f'<p class="sub"><a href="{esc(self.config.wikibase_url)}/wiki/Item:{qid}">'
+            f"curate {qid} in the wiki</a></p>"
+        )
+        return page(label, "".join(body), root="../")
 
     def index_page(self, people: list[dict], artifacts: list[dict]) -> str:
         body = ["<h1>Family archive</h1>"]
@@ -375,16 +483,11 @@ class SiteBuilder:
             "</ul><h2>Artifacts</h2><table><tr><th>Artifact</th><th>Kind</th></tr>"
         )
         for row in artifacts:
-            label = esc(cell(row, "artifactLabel") or qid_of(row, "artifact"))
-            file_name = cell(row, "file")
-            if file_name:
-                href = (
-                    f"{self.config.wikibase_url}/wiki/Special:FilePath/"
-                    + urllib.parse.quote(file_name.removeprefix("File:"))
-                )
-                label = f'<a href="{esc(href)}">{label}</a>'
+            qid = qid_of(row, "artifact")
+            label = esc(cell(row, "artifactLabel") or qid)
             body.append(
-                f"<tr><td>{label}</td><td>{esc(cell(row, 'kindLabel'))}</td></tr>"
+                f'<tr><td><a href="artifacts/{qid}.html">{label}</a></td>'
+                f"<td>{esc(cell(row, 'kindLabel'))}</td></tr>"
             )
         body.append("</table>")
         return page("Family archive", "".join(body))
@@ -405,17 +508,19 @@ class SiteBuilder:
                 current_year = year
                 body.append(f'<div class="year">{esc(year)}</div>')
             person = qid_of(row, "person")
+            source_qid = qid_of(row, "source")
+            source_label = cell(row, "sourceLabel")
+            source = (
+                f'<span class="source"><a href="artifacts/{esc(source_qid)}.html">'
+                f"{esc(source_label)}</a></span>"
+                if source_label and source_qid.startswith("Q")
+                else ""
+            )
             body.append(
                 '<div class="entry">'
                 f"{esc(format_time(date, cell(row, 'precision')))} — "
                 f'<a href="people/{person}.html">{esc(cell(row, "personLabel"))}</a>, '
-                f"{esc(cell(row, 'what'))}"
-                + (
-                    f'<span class="source">{esc(cell(row, "sourceLabel"))}</span>'
-                    if cell(row, "sourceLabel")
-                    else ""
-                )
-                + "</div>"
+                f"{esc(cell(row, 'what'))}" + source + "</div>"
             )
         body.append("</div>")
         return page("Timeline", "".join(body))
@@ -503,12 +608,14 @@ class SiteBuilder:
         body.append("</table>")
         return page("Places", "".join(body))
 
-    def disagreements_page(self, rows: list[dict]) -> str:
+    def inconsistencies_page(self, rows: list[dict]) -> str:
         body = [
-            "<h1>Disagreements</h1>",
+            "<h1>Inconsistencies</h1>",
             '<p class="sub">properties where sources disagree — the archive\'s '
             "flagship view (ADR-0002): coexistence is the healthy resting "
-            "state, and this page exists so a reader can weigh the evidence</p>",
+            "state, and this page exists so a reader can weigh the evidence. "
+            "Differences of resolution are suppressed once the graph records "
+            "the containment between the places involved.</p>",
             "<table><tr><th>Who/what</th><th>Property</th>"
             "<th>Value A</th><th>per</th><th>Value B</th><th>per</th></tr>",
         ]
@@ -528,12 +635,14 @@ class SiteBuilder:
                 f"<tr><td>{esc(cell(row, 'entityLabel'))}</td>"
                 f"<td>{esc(cell(row, 'propertyLabel'))}</td>"
                 f"<td>{rendered(row, 'A')}</td>"
-                f'<td class="source" style="font-style:italic">{esc(cell(row, "sourceALabel"))}</td>'
+                f'<td class="source" style="font-style:italic">'
+                f"{self.source_links(cell(row, 'sourcesA'), root='')}</td>"
                 f"<td>{rendered(row, 'B')}</td>"
-                f'<td class="source" style="font-style:italic">{esc(cell(row, "sourceBLabel"))}</td></tr>'
+                f'<td class="source" style="font-style:italic">'
+                f"{self.source_links(cell(row, 'sourcesB'), root='')}</td></tr>"
             )
         body.append("</table>")
-        return page("Disagreements", "".join(body))
+        return page("Inconsistencies", "".join(body))
 
 
 def publish_site(config: Config, out_dir: Path, clean: bool = False) -> dict:

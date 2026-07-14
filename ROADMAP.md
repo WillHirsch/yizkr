@@ -176,6 +176,19 @@ updated, and no path writes an unreferenced statement.
     copies in the Yizkr Drive folder, alongside the item-16 photo
     and German-document legs.*
 
+18. **Place hierarchy & coordinates pass** – the inconsistency report
+    now suppresses differences of RESOLUTION deterministically when
+    the graph records containment (`location`/`part_of` paths: a
+    maternity home located in the town another source names is not a
+    contradiction). What does not exist yet is the pass that PROPOSES
+    that containment: blocking + LLM adjudication over place × place
+    (the ADR-0007 reconcile shape), emitting `part_of`/`location`
+    proposals for human review — "Steinstrasse 16 is within Berlin",
+    "Sheffield, South Yorkshire = Sheffield, Yorkshire". Same session:
+    GeoNames/coordinate reconciliation (docs/MODELING.md "Places"),
+    which lights up the site's map page. Every approval sharpens the
+    inconsistency report and the map at once.
+
 ### Agreed working order
 
 7 (backup) → 12 (re-ingestion + merges) → 13 (GEDCOM) → 14 (parallel

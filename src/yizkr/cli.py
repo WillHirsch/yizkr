@@ -248,10 +248,13 @@ def cmd_resolve(args) -> int:
         from yizkr.pipeline.reconcile import (
             apply_equivalences,
             read_approved_equivalences,
+            read_reviewed_aliases,
         )
 
         approved = read_approved_equivalences(args.equivalences)
-        batch = apply_equivalences(batch, approved)
+        batch = apply_equivalences(
+            batch, approved, read_reviewed_aliases(args.equivalences)
+        )
         print(f"applied {len(approved)} approved equivalences")
     _, item_labels = _client(args).label_index()
     resolved = resolve_batch(batch, item_labels)

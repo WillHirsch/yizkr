@@ -221,7 +221,11 @@ mentions — people, places, and events (births, deaths, marriages,
 migrations, military service). Unify aliases: one entity that appears
 as "Rosa Genserowski", "Rosa", and "our great grandmother" is ONE
 manifest entry whose label is the fullest form the document gives and
-whose aliases list every other form, verbatim.
+whose aliases list every other form, verbatim. Aliases are ways the
+document REFERS TO the entity — in form-like documents (certificates,
+registers), field and section labels such as MOTHER, FATHER, CHILD,
+INFORMANT, BRIDE name a ROLE, not the person: never record them as
+aliases.
 
 Output ONE JSON object, no prose, no code fences:
 {{"entities": [{{"id": "e01", "label": "<canonical, fullest form>",

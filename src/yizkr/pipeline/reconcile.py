@@ -369,6 +369,7 @@ def adjudicate(
 EQUIVALENCE_FIELDS = [
     "entity_id",
     "entity_label",
+    "aliases",
     "qid",
     "qid_label",
     "verdict",
@@ -385,18 +386,26 @@ def export_equivalences_csv(
     path: Path,
 ) -> int:
     """Proposals -> review CSV. `distinct` verdicts are included (a
-    reviewer can overrule the machine in either direction)."""
-    entity_labels = {entity.id: entity.label for entity in entities}
+    reviewer can overrule the machine in either direction).
+
+    The `aliases` column shows the document aliases that approval will
+    APPEND to the matched item — an approval is also an alias
+    contribution, so the reviewer must see (and may prune) it: delete
+    a bad entry from the cell and only the rest are appended.
+    """
+    entity_index = {entity.id: entity for entity in entities}
     roster_labels = {roster_entity.qid: roster_entity.label for roster_entity in roster}
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=EQUIVALENCE_FIELDS)
         writer.writeheader()
         for proposal in proposals:
+            entity = entity_index.get(proposal.entity_id)
             writer.writerow(
                 {
                     "entity_id": proposal.entity_id,
-                    "entity_label": entity_labels.get(proposal.entity_id, ""),
+                    "entity_label": entity.label if entity else "",
+                    "aliases": "|".join(entity.aliases) if entity else "",
                     "qid": proposal.qid,
                     "qid_label": roster_labels.get(proposal.qid, ""),
                     "verdict": proposal.verdict,
@@ -430,11 +439,43 @@ def read_approved_equivalences(path: Path) -> dict[str, str]:
     return approved
 
 
-def apply_equivalences(batch: ClaimBatch, approved: dict[str, str]) -> ClaimBatch:
+def read_reviewed_aliases(path: Path) -> dict[str, list[str]]:
+    """entity_id -> the alias list as the reviewer left it, for approved
+    rows of a CSV that carries the `aliases` column.
+
+    The reviewer prunes bad machine aliases (a form's MOTHER label is a
+    role, not a name) by deleting them from the cell; the writer then
+    appends only what survived review. CSVs from before the column
+    existed yield nothing — the batch's aliases apply unchanged.
+    """
+    reviewed: dict[str, list[str]] = {}
+    with open(path, newline="") as handle:
+        reader = csv.DictReader(handle)
+        if "aliases" not in (reader.fieldnames or []):
+            return {}
+        for row in reader:
+            if row.get("decision", "").strip().lower() != "approve":
+                continue
+            reviewed[row["entity_id"]] = [
+                alias.strip()
+                for alias in row.get("aliases", "").split("|")
+                if alias.strip()
+            ]
+    return reviewed
+
+
+def apply_equivalences(
+    batch: ClaimBatch,
+    approved: dict[str, str],
+    reviewed_aliases: dict[str, list[str]] | None = None,
+) -> ClaimBatch:
     """Rewrite approved entities to their existing items.
 
     Sets EntityRecord.qid (the writer appends the document's aliases to
     that item) and replaces local refs with qid refs in every claim.
+    `reviewed_aliases` (from the CSV's aliases column) overrides an
+    approved entity's alias list — what the reviewer pruned is never
+    appended.
     """
 
     def resolve_ref(ref):
@@ -468,15 +509,18 @@ def apply_equivalences(batch: ClaimBatch, approved: dict[str, str]) -> ClaimBatc
             seen.add(key)
             resolved_claims.append(claim)
 
+    def updated_entity(entity):
+        if entity.id not in approved:
+            return entity
+        update: dict = {"qid": approved[entity.id]}
+        if reviewed_aliases is not None and entity.id in reviewed_aliases:
+            update["aliases"] = reviewed_aliases[entity.id]
+        return entity.model_copy(update=update)
+
     return batch.model_copy(
         update={
             "claims": resolved_claims,
-            "entities": [
-                entity.model_copy(update={"qid": approved[entity.id]})
-                if entity.id in approved
-                else entity
-                for entity in batch.entities
-            ],
+            "entities": [updated_entity(entity) for entity in batch.entities],
         }
     )
 

@@ -22,7 +22,7 @@ def test_summary_counts_are_plausible(site):
     _, summary = site
     assert summary["people"] >= 100
     assert summary["statements"] >= 500
-    assert summary["disagreements"] >= 1
+    assert summary["inconsistencies"] >= 1
 
 
 def test_person_pages_show_coexisting_values_with_sources(site):
@@ -45,3 +45,24 @@ def test_gallery_and_timeline_render(site):
     timeline = (out / "timeline.html").read_text()
     assert 'class="entry"' in timeline
     assert (out / "timeline.json").exists()
+
+
+def test_sources_hyperlink_to_artifact_pages_with_downloads(site):
+    out, _ = site
+    person = (out / "people/Q77.html").read_text()
+    assert '"../artifacts/Q' in person  # source labels are links
+    # the GEDCOM artifact page exists, offers the raw file, lists claims
+    artifact = (out / "artifacts/Q229.html").read_text()
+    assert "download the original" in artifact
+    assert "What this artifact asserts" in artifact
+
+
+def test_inconsistencies_suppress_recorded_containment(site):
+    out, _ = site
+    text = (out / "inconsistencies.html").read_text()
+    # Shrubbery Maternity Home is recorded as located in High Wycombe:
+    # a difference of resolution, not an inconsistency
+    assert "Shrubbery" not in text
+    # genuine disagreements remain, with linked sources
+    assert "Guildford" in text
+    assert 'href="artifacts/Q' in text

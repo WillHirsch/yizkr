@@ -1,16 +1,21 @@
-# Disagreement report — the flagship R2 view.
+# Inconsistency report — the flagship R2 view.
 # Every entity+property carrying two or more different attributed values,
-# with the source each value is stated in. Contradictions shown here are a
+# with the sources each value is stated in. Values shown here are a
 # HEALTHY RESTING STATE (ADR-0002), not errors: this report exists so a
 # reader can weigh the evidence, not so someone can "fix" it.
 #
 # Only properties that can hold at most one true value per person are
-# candidates for disagreement. Properties that legitimately accumulate
-# values over a life (spouse, residence, ...) are excluded — two spouses
-# from one source are remarriages, not a contradiction.
-SELECT DISTINCT ?entity ?entityLabel ?propertyLabel
-       ?valueA ?valueALabel ?precisionA ?sourceALabel
-       ?valueB ?valueBLabel ?precisionB ?sourceBLabel
+# candidates. Properties that legitimately accumulate values over a life
+# (spouse, residence, ...) are excluded — two spouses from one source are
+# remarriages, not a contradiction. Values that differ only in
+# RESOLUTION are suppressed when the graph knows the containment (a
+# maternity home located in the town another source names): recording
+# that hierarchy is what makes this report sharpen over time.
+SELECT ?entity ?entityLabel ?propertyLabel
+       ?valueA ?valueALabel ?precisionA
+       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceA), "/entity/"), "~", ?sourceALabelRaw); separator="|") AS ?sourcesA)
+       ?valueB ?valueBLabel ?precisionB
+       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceB), "/entity/"), "~", ?sourceBLabelRaw); separator="|") AS ?sourcesB)
 WHERE {
   VALUES ?property {
     wd:{P:date_of_birth} wd:{P:date_of_death}
@@ -25,13 +30,17 @@ WHERE {
   ?stB ?ps ?rawValueB .
   # canonicalize through item-merge redirects: a statement written
   # before a merge still points at the redirect, and that indirection
-  # is not a disagreement
+  # is not an inconsistency
   OPTIONAL { ?rawValueA <http://www.w3.org/2002/07/owl#sameAs> ?canonicalA . }
   OPTIONAL { ?rawValueB <http://www.w3.org/2002/07/owl#sameAs> ?canonicalB . }
   BIND(COALESCE(?canonicalA, ?rawValueA) AS ?valueA)
   BIND(COALESCE(?canonicalB, ?rawValueB) AS ?valueB)
   FILTER(?valueA != ?valueB)
   FILTER(STR(?stA) < STR(?stB))
+  # a value CONTAINED in the other (per the graph's own location /
+  # part-of knowledge) is a difference of resolution, not substance
+  FILTER NOT EXISTS { ?valueA (wdt:{P:location}|wdt:{P:part_of})+ ?valueB . }
+  FILTER NOT EXISTS { ?valueB (wdt:{P:location}|wdt:{P:part_of})+ ?valueA . }
   # stated precision for time values: display must never pad or narrow
   OPTIONAL { ?stA ?vpA ?nodeA .
              ?nodeA wikibase:timeValue ?rawValueA ;
@@ -39,8 +48,20 @@ WHERE {
   OPTIONAL { ?stB ?vpB ?nodeB .
              ?nodeB wikibase:timeValue ?rawValueB ;
                     wikibase:timePrecision ?precisionB . }
-  OPTIONAL { ?stA prov:wasDerivedFrom/pr:{P:stated_in} ?sourceA . }
-  OPTIONAL { ?stB prov:wasDerivedFrom/pr:{P:stated_in} ?sourceB . }
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+  OPTIONAL { ?stA prov:wasDerivedFrom/pr:{P:stated_in} ?sourceA .
+             ?sourceA rdfs:label ?sourceALabelRaw .
+             FILTER(LANG(?sourceALabelRaw) = "en") }
+  OPTIONAL { ?stB prov:wasDerivedFrom/pr:{P:stated_in} ?sourceB .
+             ?sourceB rdfs:label ?sourceBLabelRaw .
+             FILTER(LANG(?sourceBLabelRaw) = "en") }
+  # labels bound directly (the label service is unreliable under
+  # GROUP BY); literal values simply have no label
+  OPTIONAL { ?entity rdfs:label ?entityLabel . FILTER(LANG(?entityLabel) = "en") }
+  OPTIONAL { ?property rdfs:label ?propertyLabel . FILTER(LANG(?propertyLabel) = "en") }
+  OPTIONAL { ?valueA rdfs:label ?valueALabel . FILTER(LANG(?valueALabel) = "en") }
+  OPTIONAL { ?valueB rdfs:label ?valueBLabel . FILTER(LANG(?valueBLabel) = "en") }
 }
+GROUP BY ?entity ?entityLabel ?propertyLabel
+         ?valueA ?valueALabel ?precisionA
+         ?valueB ?valueBLabel ?precisionB
 ORDER BY ?entityLabel ?propertyLabel

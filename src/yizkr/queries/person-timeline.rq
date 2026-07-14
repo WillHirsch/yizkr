@@ -7,7 +7,7 @@
 # and dated events the person participated in.
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
 #defaultView:Timeline
-SELECT DISTINCT ?person ?personLabel ?what ?date ?precision ?sourceLabel
+SELECT DISTINCT ?person ?personLabel ?what ?date ?precision ?source ?sourceLabel
 WHERE {
   ?person wdt:{P:instance_of} wd:{Q:human} .
   {
