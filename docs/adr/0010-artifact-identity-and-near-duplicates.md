@@ -75,17 +75,34 @@ not by name:
 - **no media to hash** (re-registration of an existing artifact) → fall
   back to the label key, unchanged.
 
-The orchestrator adds a **per-run content dedup** ahead of the expensive
-steps: it hashes each file at the top of `advance`, and a file whose
-bytes were already claimed by an earlier document in the run is marked
-`duplicate` and is *not* transcribed, extracted, or written. The check
-runs on every pass (before the register guard) so the canonical keeps
-its claim across re-runs and the decision is stable; the
-alphabetically-first file is canonical, deterministically.
+The orchestrator adds **content dedup** ahead of the expensive steps. It
+hashes each file at the top of `advance`, and a file whose bytes were
+already claimed is marked `duplicate` and is *not* transcribed,
+extracted, or written. "Already claimed" spans two scopes:
+
+- **within the run** — an earlier document in the same folder pass
+  (alphabetically-first is canonical, deterministically);
+- **across runs** — a document ingested to completion (`written`) in a
+  prior run. `run()` pre-seeds the run's seen-hashes from persisted
+  per-document state (`_prior_written_hashes`), so a renamed identical
+  file added later is recognised before any LLM pass, not merely deduped
+  at the graph by the writer afterwards. Only `written` documents seed
+  the map: an unfinished prior run must never block a fresh attempt from
+  completing. The per-document `content_sha1` lives in runtime state
+  (var/), not the graph — so it degrades gracefully (re-extract, writer
+  still dedups) if that state is cleared.
+
+The persisted hash also makes the pipeline notice a **changed source**:
+if a file's bytes differ from the hash last processed under that name,
+its old artifact/claims/reviews describe different content (a distinct
+artifact), so the document is reset and re-ingested rather than trusting
+stale derived state. This closes a hole the cross-run skip would
+otherwise expose — a stale hash causing a genuinely-new file to be
+skipped as a "duplicate" of content no longer in the graph.
 
 Together these close the "two items, one blob" leak (correctness) and
-skip redundant LLM passes for renamed-identical files in a batch
-(efficiency), which were the two concrete costs.
+skip redundant LLM passes for renamed-identical files both within a
+batch and across runs (efficiency), which were the concrete costs.
 
 ### 2 & 3. Near-duplicates and versions (deferred, designed here)
 
@@ -123,11 +140,10 @@ the hash key above is built to carry them.
 - **Cost.** `string_statement_index` enumerates the instance per
   registration (like the existing label index); at archive scale this is
   the same order as work the registrar already does, and the
-  orchestrator's per-run hash dedup avoids most redundant registrations.
-  A cross-run "already fully ingested under a new name" file is still
-  correct (the hash key reuses the item and the writer dedups the
-  claims) but is not yet *skipped* before its LLM pass — a future
-  optimization, not a correctness gap.
+  orchestrator's hash dedup avoids most redundant registrations. A file
+  already fully ingested under a different name — whether earlier in the
+  same run or in a prior one — is now recognised and skipped before its
+  transcription/extraction pass, not merely deduped at the writer.
 - **Not solved yet:** re-encodes, re-scans, crops/uncrops, and the
   corroboration-inflation they cause remain until parts 2 & 3 land. The
   inconsistency report and galleries treat them as distinct artifacts

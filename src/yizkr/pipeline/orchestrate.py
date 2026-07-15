@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +74,10 @@ class DocumentState:
     artifact_qid: str | None = None
     error: str | None = None
     detail: dict | None = None
+    # SHA-1 of the source bytes last processed (ADR-0010): the content
+    # identity, so a renamed copy is recognised across runs and a changed
+    # source forces a re-ingest.
+    content_sha1: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> DocumentState:
@@ -408,12 +413,25 @@ class Orchestrator:
         doc.dir.mkdir(parents=True, exist_ok=True)
         doc.state.error = None
 
-        # content-identity dedup within the run (ADR-0010): claim this
-        # file's bytes; if an earlier document already claimed them, this
-        # is the same artifact and needs no register/transcribe/extract.
-        # Runs every pass (before the artifact_qid guard) so the canonical
-        # keeps its claim on re-runs and the decision stays stable.
         content_sha1 = hashlib.sha1(doc.source.read_bytes()).hexdigest()
+
+        # source bytes changed since this document was last processed: the
+        # old artifact, claims, and reviews describe DIFFERENT content
+        # (ADR-0010 — different bytes are a different artifact), so start
+        # the document over rather than trusting stale derived state.
+        if doc.state.content_sha1 and doc.state.content_sha1 != content_sha1:
+            shutil.rmtree(doc.dir, ignore_errors=True)
+            doc.dir.mkdir(parents=True, exist_ok=True)
+            doc.state = DocumentState(file=str(doc.source), title=doc.source.stem)
+            self.log(f"  {doc.source.name}: content changed; re-ingesting")
+        doc.state.content_sha1 = content_sha1
+
+        # content-identity dedup (ADR-0010): claim this file's bytes; if an
+        # earlier document in this run — or one already ingested to
+        # completion in a PRIOR run (see run()'s pre-seed) — already claimed
+        # them, this is the same artifact and needs no register/transcribe/
+        # extract/write. Runs every pass (before the artifact_qid guard) so
+        # the canonical keeps its claim on re-runs and the decision is stable.
         canonical = self._seen_hashes.get(content_sha1)
         if canonical is not None and canonical != doc.source.name:
             doc.state.status = DUPLICATE
@@ -511,12 +529,41 @@ class Orchestrator:
         doc.state.status = WRITTEN
         return doc.state.status
 
+    def _prior_written_hashes(self) -> dict[str, str]:
+        """content SHA-1 -> filename of a document already ingested to
+        completion in a prior run (ADR-0010).
+
+        Lets a renamed identical file be recognised and skipped BEFORE any
+        expensive step, not merely deduped at the graph by the writer.
+        Reads persisted per-document state (runtime state in var/, not a
+        second store of assertions), so it degrades gracefully: if that
+        state is cleared, the file is simply re-extracted and the writer
+        still dedups. Only WRITTEN documents seed the map — an unfinished
+        prior run must not block a fresh attempt from completing.
+        """
+        seen: dict[str, str] = {}
+        if not self.state_dir.exists():
+            return seen
+        for sub in sorted(self.state_dir.iterdir()):
+            state_file = sub / "state.json"
+            if not state_file.exists():
+                continue
+            try:
+                state = DocumentState.load(state_file)
+            except (TypeError, ValueError):  # malformed/foreign state: skip
+                continue
+            if state.status == WRITTEN and state.content_sha1:
+                seen.setdefault(state.content_sha1, Path(state.file).name)
+        return seen
+
     def run(self) -> int:
         docs = self.documents()
         if not docs:
             self.log(f"no supported documents in {self.folder}")
             return 0
-        self._seen_hashes = {}  # content dedup is per-run (ADR-0010)
+        # seed with content already fully ingested in prior runs, so a
+        # renamed copy skips the pipeline (cross-run dedup, ADR-0010)
+        self._seen_hashes = self._prior_written_hashes()
         for doc in docs:
             self.log(f"{doc.source.name} [{doc.state.status}]")
             self.advance(doc)

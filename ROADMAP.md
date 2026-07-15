@@ -220,13 +220,17 @@ updated, and no path writes an unreferenced statement.
     *Content-hash key done: a `media SHA-1` property keys artifact
     identity — identical bytes are one item however named (alternate
     filename → alias), a colliding title over different content is
-    disambiguated, and the orchestrator skips transcription/extraction
-    for duplicate files in a run (a `duplicate` document state).
-    Lag-free lookup (`WikiClient.string_statement_index`), live-tested
-    both ways. Still open (designed, deferred): perceptual-hash
-    near-duplicate detection, an artifact-equivalence review queue
-    mirroring ADR-0007, and a `version of` relation whose confirmation
-    teaches the writer to treat two versions as one source.*
+    disambiguated. The orchestrator skips transcription/extraction for
+    duplicate files (a `duplicate` document state) both WITHIN a run and
+    ACROSS runs: it persists each document's content hash and pre-seeds
+    from prior completed docs, so a renamed copy of already-ingested
+    content is recognised before any LLM pass; a changed source under an
+    old name is detected and re-ingested. Lag-free lookup
+    (`WikiClient.string_statement_index`), live-tested end to end. Still
+    open (designed, deferred): perceptual-hash near-duplicate detection,
+    an artifact-equivalence review queue mirroring ADR-0007, and a
+    `version of` relation whose confirmation teaches the writer to treat
+    two versions as one source.*
 
 ### Agreed working order
 

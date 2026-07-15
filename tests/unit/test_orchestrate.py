@@ -332,6 +332,70 @@ class TestContentDedup:
         _, copy = second.documents()
         assert copy.state.status == DUPLICATE
 
+    def _complete(self, orchestrator):
+        """Drive the run's single document all the way to WRITTEN."""
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+
+    def test_cross_run_identical_file_skips_extraction(self, tmp_path):
+        # a file fully ingested in a prior run, re-encountered under a new
+        # name in a later run, must be recognised before any LLM step
+        folder = self._folder(tmp_path)
+        (folder / "original.txt").write_text("Anna was born in 1901.")
+        first = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        self._complete(first)
+
+        (folder / "renamed-scan.txt").write_text("Anna was born in 1901.")
+        second = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        second.run()
+        original, renamed = second.documents()
+        assert renamed.source.name == "renamed-scan.txt"
+        assert renamed.state.status == DUPLICATE
+        assert renamed.state.detail["duplicate_of"] == "original.txt"
+        # the copy is never registered, transcribed, or extracted
+        assert not any(c.endswith("renamed-scan.txt") for c in second.calls)
+
+    def test_cross_run_skip_needs_a_completed_prior(self, tmp_path):
+        # an UNFINISHED prior document must not block a fresh identical
+        # file from completing the ingestion
+        folder = self._folder(tmp_path)
+        (folder / "stalled.txt").write_text("Anna was born in 1901.")
+        first = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        first.run()  # stops at the equivalence gate, never WRITTEN
+        (stalled,) = first.documents()
+        assert stalled.state.status == AWAITING_EQUIVALENCES
+
+        (folder / "fresh.txt").write_text("Anna was born in 1901.")
+        second = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        second.run()
+        # nothing WRITTEN yet, so both are live; in-run dedup still keeps
+        # the alphabetically-first ("fresh") canonical and the other a dup
+        by_name = {d.source.name: d for d in second.documents()}
+        assert by_name["fresh.txt"].state.status != DUPLICATE
+        assert "batch:fresh.txt" in second.calls
+
+    def test_changed_content_forces_reingest(self, tmp_path):
+        folder = self._folder(tmp_path)
+        source = folder / "record.txt"
+        source.write_text("Anna was born in 1901.")
+        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        self._complete(orchestrator)
+
+        source.write_text("Bernard was born in 1880.")  # same name, new bytes
+        again = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        again.run()
+        (doc,) = again.documents()
+        # the stale WRITTEN state was discarded and the document re-worked
+        assert "register:record.txt" in again.calls
+        assert "batch:record.txt" in again.calls
+        assert doc.state.status != DUPLICATE
+
 
 class TestFreshness:
     """Make-style dependencies: upstream redos invalidate downstream
