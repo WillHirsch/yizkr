@@ -187,6 +187,43 @@ class WikiClient:
         _, item_labels = self.label_index()
         return item_labels.get(label)
 
+    def string_statement_index(self, property_pid: str) -> dict[str, str]:
+        """Map {statement string value -> entity id} for one property.
+
+        Lag-free like `label_index` (enumerates the API, never the search
+        index or query service), so it is a safe idempotency key even for
+        an entity written moments earlier. Used as a content-identity key
+        for artifacts: the media SHA-1 that dedups re-uploads of the same
+        bytes under different filenames (ADR-0010).
+
+        If two entities carry the same value the numerically-earliest id
+        wins deterministically — that is the very duplicate the hash key
+        exists to prevent, surfaced for the near-duplicate pass rather
+        than fatal here (unlike labels, which fail loudly).
+        """
+        ids = self.list_entity_ids()
+        candidates: dict[str, list[str]] = {}
+        for start in range(0, len(ids), 50):
+            batch = ids[start : start + 50]
+            data = self.api_get(
+                {
+                    "action": "wbgetentities",
+                    "ids": "|".join(batch),
+                    "props": "claims",
+                }
+            )
+            for entity_id, entity in data.get("entities", {}).items():
+                for claim in entity.get("claims", {}).get(property_pid, []):
+                    value = (claim.get("mainsnak", {}).get("datavalue") or {}).get(
+                        "value"
+                    )
+                    if isinstance(value, str):
+                        candidates.setdefault(value, []).append(entity_id)
+        return {
+            value: min(matches, key=lambda qid: int(qid[1:]))
+            for value, matches in candidates.items()
+        }
+
     # -- wiki pages ---------------------------------------------------------
 
     def edit_page(self, title: str, text: str, summary: str) -> None:

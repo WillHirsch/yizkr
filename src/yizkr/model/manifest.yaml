@@ -308,6 +308,18 @@ properties:
     description: title of the wiki file page (File:...) holding the digitised media of this artifact
     datatype: string
 
+  media_sha1:
+    label: media SHA-1
+    description: >-
+      SHA-1 content hash (hex) of the artifact's digitised media; the
+      content-identity key that dedups re-uploads of the same bytes
+      under different filenames (ADR-0010)
+    datatype: string
+    wikidata: P4092
+    aliases:
+      - checksum
+      - content hash
+
 items:
   # --- core classes (docs/MODELING.md) ---
 

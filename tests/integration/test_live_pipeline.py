@@ -20,7 +20,10 @@ ARTIFACT_TITLE = "Integration-test certificate"
 PERSON_LABEL = "Integration Test Person"
 
 
-def tiny_png(tmp_path):
+def png_bytes(fill: bytes = b"\x32\x32\xc8") -> bytes:
+    """A minimal valid 4x4 PNG; varying `fill` (an RGB triple) varies the
+    content hash, so callers can make identical or distinct images."""
+
     def chunk(tag, data):
         payload = tag + data
         return (
@@ -29,15 +32,18 @@ def tiny_png(tmp_path):
             + struct.pack(">I", zlib.crc32(payload))
         )
 
-    raw = b"".join(b"\x00" + b"\x32\x32\xc8" * 4 for _ in range(4))
-    png = (
+    raw = b"".join(b"\x00" + fill * 4 for _ in range(4))
+    return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
         + chunk(b"IDAT", zlib.compress(raw))
         + chunk(b"IEND", b"")
     )
+
+
+def tiny_png(tmp_path):
     path = tmp_path / "integration-test-certificate.png"
-    path.write_bytes(png)
+    path.write_bytes(png_bytes())
     return path
 
 
@@ -103,6 +109,81 @@ def test_register_is_idempotent(client, artifact):
     assert again.created is False
     assert again.artifact_qid == artifact.artifact_qid
     assert again.fragment_qids == artifact.fragment_qids
+
+
+def _sha1_values(client, qid):
+    properties, _ = client.vocabulary()
+    data = client.api_get(
+        {"action": "wbgetclaims", "entity": qid, "property": properties["media_sha1"]}
+    )
+    return [
+        claim["mainsnak"]["datavalue"]["value"]
+        for claims in data["claims"].values()
+        for claim in claims
+    ]
+
+
+def test_identical_bytes_new_name_reuse_one_artifact(client, tmp_path):
+    """ADR-0010: the same bytes under a different filename resolve to the
+    one artifact item (keyed on content hash, not the title), and the new
+    filename is kept as an alias — no duplicate item sharing a blob."""
+    content = png_bytes(fill=b"\x11\x77\x22")
+    first_path = tmp_path / "hash-key-original.png"
+    first_path.write_bytes(content)
+    first = register_artifact(
+        client,
+        media_path=first_path,
+        artifact_type="photograph",
+        title="Hash Key Original",
+    )
+
+    second_path = tmp_path / "hash-key-copy.png"  # identical bytes, new name
+    second_path.write_bytes(content)
+    second = register_artifact(
+        client,
+        media_path=second_path,
+        artifact_type="photograph",
+        title="Hash Key Copy",
+    )
+
+    assert second.artifact_qid == first.artifact_qid  # one artifact, not two
+    assert second.created is False
+    # the content hash is stored once
+    assert len(_sha1_values(client, first.artifact_qid)) == 1
+    # the alternate filename-title became an alias
+    item = client.wbi.item.get(first.artifact_qid)
+    aliases = {str(alias) for alias in (item.aliases.get("en") or [])}
+    assert "Hash Key Copy" in aliases
+
+
+def test_same_title_different_content_stays_distinct(client, tmp_path):
+    """A re-scan/re-encode (different bytes) under a title that already
+    names other content must not collapse onto it: labels stay unique via
+    a content-tag suffix, and the two remain separate artifacts for the
+    near-duplicate pass to relate later."""
+    path_a = tmp_path / "collide-a.png"
+    path_a.write_bytes(png_bytes(fill=b"\x01\x02\x03"))
+    a = register_artifact(
+        client,
+        media_path=path_a,
+        artifact_type="photograph",
+        title="Collision Title",
+    )
+
+    path_b = tmp_path / "collide-b.png"  # DIFFERENT bytes, same intended title
+    path_b.write_bytes(png_bytes(fill=b"\xaa\xbb\xcc"))
+    b = register_artifact(
+        client,
+        media_path=path_b,
+        artifact_type="photograph",
+        title="Collision Title",
+    )
+
+    assert b.artifact_qid != a.artifact_qid
+    label_a = str(client.wbi.item.get(a.artifact_qid).labels.get("en"))
+    label_b = str(client.wbi.item.get(b.artifact_qid).labels.get("en"))
+    assert label_a == "Collision Title"
+    assert label_b.startswith("Collision Title [")  # disambiguated
 
 
 def birth_years_on(client, qid: str) -> set[str]:

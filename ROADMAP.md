@@ -211,6 +211,23 @@ updated, and no path writes an unreferenced statement.
     designed in ADR-0009, activates when a `GEONAMES_USERNAME` is
     configured (needs a registered GeoNames account).*
 
+19. **Artifact identity & near-duplicate handling** – ingestion in
+    real batches re-encounters the same source: exact copies, renames,
+    re-encodes, re-scans, crops. Three problems with different answers
+    (ADR-0010): bit-identical (a hash decides), near-identical (a
+    curator decides), and confirmed alternate versions (must stop
+    counting as independent corroboration).
+    *Content-hash key done: a `media SHA-1` property keys artifact
+    identity — identical bytes are one item however named (alternate
+    filename → alias), a colliding title over different content is
+    disambiguated, and the orchestrator skips transcription/extraction
+    for duplicate files in a run (a `duplicate` document state).
+    Lag-free lookup (`WikiClient.string_statement_index`), live-tested
+    both ways. Still open (designed, deferred): perceptual-hash
+    near-duplicate detection, an artifact-equivalence review queue
+    mirroring ADR-0007, and a `version of` relation whose confirmation
+    teaches the writer to treat two versions as one source.*
+
 ### Agreed working order
 
 7 (backup) → 12 (re-ingestion + merges) → 13 (GEDCOM) → 14 (parallel

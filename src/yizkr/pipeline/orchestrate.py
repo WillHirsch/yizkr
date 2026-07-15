@@ -32,6 +32,7 @@ idempotent).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -58,6 +59,10 @@ RESOLVED = "resolved"
 AWAITING_CLAIMS = "awaiting claim review"
 WRITTEN = "written"
 FAILED = "failed"
+# a file whose bytes were already claimed by an earlier document in the
+# same run: identical content is one artifact, so it is not transcribed,
+# extracted, or written again (ADR-0010)
+DUPLICATE = "duplicate"
 
 
 @dataclass
@@ -135,6 +140,9 @@ class Orchestrator:
         self.log = log
         self._config: Config | None = None
         self._client: WikiClient | None = None
+        # content SHA-1 -> the run's canonical filename for it, so a later
+        # identical file is recognised before any expensive step (ADR-0010)
+        self._seen_hashes: dict[str, str] = {}
 
     # -- lazy connections --------------------------------------------------
 
@@ -400,6 +408,23 @@ class Orchestrator:
         doc.dir.mkdir(parents=True, exist_ok=True)
         doc.state.error = None
 
+        # content-identity dedup within the run (ADR-0010): claim this
+        # file's bytes; if an earlier document already claimed them, this
+        # is the same artifact and needs no register/transcribe/extract.
+        # Runs every pass (before the artifact_qid guard) so the canonical
+        # keeps its claim on re-runs and the decision stays stable.
+        content_sha1 = hashlib.sha1(doc.source.read_bytes()).hexdigest()
+        canonical = self._seen_hashes.get(content_sha1)
+        if canonical is not None and canonical != doc.source.name:
+            doc.state.status = DUPLICATE
+            doc.state.detail = (doc.state.detail or {}) | {"duplicate_of": canonical}
+            self.log(
+                f"  identical content to {canonical}; skipping (one artifact "
+                f"per distinct file, ADR-0010)"
+            )
+            return DUPLICATE
+        self._seen_hashes[content_sha1] = doc.source.name
+
         if doc.state.artifact_qid is None:
             doc.state.artifact_qid = self._step_register(doc)
             doc.state.status = REGISTERED
@@ -491,6 +516,7 @@ class Orchestrator:
         if not docs:
             self.log(f"no supported documents in {self.folder}")
             return 0
+        self._seen_hashes = {}  # content dedup is per-run (ADR-0010)
         for doc in docs:
             self.log(f"{doc.source.name} [{doc.state.status}]")
             self.advance(doc)

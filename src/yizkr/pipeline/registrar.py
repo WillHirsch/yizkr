@@ -16,13 +16,19 @@ and fragment `part of` statements are referenced ``stated in -> the
 artifact item itself`` (see docs/MODELING.md, "Artifacts and
 registration"). No statement is written unreferenced (ADR-0003).
 
-Idempotent: re-registering the same title reuses the existing item
-(matched by exact English label) and skips statements that already
-exist; re-uploading identical media is a no-op.
+Idempotent, keyed on content (ADR-0010): when media is present the
+artifact item is matched by its SHA-1 content hash first, so the same
+bytes under a different filename reuse the one item (the alternate
+filename is kept as an alias) instead of minting a duplicate that
+shares a blob. Falls back to the exact English label when there is no
+media to hash (re-registration). Statements that already exist are
+skipped; re-uploading identical media is a no-op (MediaWiki dedups the
+blob by SHA-1).
 """
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -109,25 +115,64 @@ def register_artifact(
     part_of = properties["part_of"]
     stated_in = properties["stated_in"]
     media_file = properties["media_file"]
+    media_sha1 = properties["media_sha1"]
     page_number = properties["page_number"]
 
     file_page: str | None = None
+    content_sha1: str | None = None
     if media_path is not None:
+        # hash before upload: the content identity is the file's bytes,
+        # independent of the name MediaWiki files it under (ADR-0010)
+        content_sha1 = hashlib.sha1(media_path.read_bytes()).hexdigest()
         file_page = client.upload_file(media_path)
 
-    # -- artifact item (reuse by exact label) -----------------------------
-    existing_qid = client.find_item_by_label(title)
+    # -- locate the artifact item: content hash is the identity key -------
+    # Identical bytes are one artifact however they are named. With media
+    # present the hash decides; the label is consulted only to adopt a
+    # pre-ADR-0010 artifact that has no hash yet (same title, backfilled
+    # below). A same-title item that already carries a DIFFERENT hash is
+    # genuinely different content and must not be collapsed onto. With no
+    # media to hash, the label is the key (unchanged behaviour).
+    reused_by_hash = False
+    existing_qid = None
+    if content_sha1 is not None:
+        existing_qid = client.string_statement_index(media_sha1).get(content_sha1)
+        reused_by_hash = existing_qid is not None
+        if existing_qid is None:
+            labelled = client.find_item_by_label(title)
+            if labelled is not None and not _existing_claim_strings(
+                client.wbi.item.get(labelled), media_sha1
+            ):
+                existing_qid = labelled  # legacy artifact: adopt and backfill
+    else:
+        existing_qid = client.find_item_by_label(title)
+
     if existing_qid:
         artifact = client.wbi.item.get(existing_qid)
         created = False
     else:
+        # new content. Labels are unique per kind (the wiki's idempotency
+        # convention), so if this title already names DIFFERENT content,
+        # disambiguate with a short content tag rather than collide.
+        label = title
+        if content_sha1 is not None and client.find_item_by_label(title):
+            label = f"{title} [{content_sha1[:8]}]"
         artifact = client.wbi.item.new()
-        artifact.labels.set("en", title)
+        artifact.labels.set("en", label)
         if description:
             artifact.descriptions.set("en", description)
         artifact = artifact.write(summary="ingest: register artifact")
         created = True
     artifact_qid = artifact.id
+
+    # same bytes under a new filename: keep the new name as an alias
+    # (name variants live in aliases — docs/MODELING.md)
+    if reused_by_hash:
+        current_label = str(artifact.labels.get("en") or "")
+        aliases = {str(alias) for alias in (artifact.aliases.get("en") or [])}
+        if title != current_label and title not in aliases:
+            artifact.aliases.set("en", sorted(aliases | {title}))
+            artifact.write(summary="ingest: alternate filename as alias")
 
     changed = False
     if items[artifact_type] not in _existing_claim_targets(artifact, instance_of):
@@ -140,6 +185,16 @@ def register_artifact(
         _append(
             artifact,
             _string_claim(media_file, file_page, stated_in, artifact_qid),
+        )
+        changed = True
+    # backfill the content hash (also covers artifacts registered before
+    # ADR-0010, and matched here by label)
+    if content_sha1 and content_sha1 not in _existing_claim_strings(
+        artifact, media_sha1
+    ):
+        _append(
+            artifact,
+            _string_claim(media_sha1, content_sha1, stated_in, artifact_qid),
         )
         changed = True
     if changed:

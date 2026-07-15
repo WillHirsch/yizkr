@@ -71,6 +71,23 @@ keys resolved to local ids only at write time.
 - Machine-proposed entities (people, places) get their `instance of`
   statement referenced to the artifact that mentions them.
 
+## Artifact identity (see ADR-0010)
+
+- An artifact's identity is its **content**, not its filename. Every
+  artifact with media carries a `media SHA-1` statement (hex SHA-1 of
+  the bytes), referenced `stated in → the artifact itself`. The
+  registrar keys on this hash — identical bytes are one artifact item
+  however they are named, and an alternate filename becomes an alias.
+  Bit-identical media is never stored, itemised, or extracted twice.
+- Labels stay unique per kind: when a title already names *different*
+  content, the new artifact's label is disambiguated with a short
+  content tag (`"<title> [<sha1[:8]>]"`) rather than colliding.
+- **Near-duplicates are not identities.** Re-encodings, re-scans, and
+  crops have different bytes and are (for now) distinct artifacts;
+  linking confirmed alternate versions is a curator judgement through a
+  future review queue and a `version of` relation (ADR-0010), never an
+  automatic merge — the same rule as person identity (ADR-0007).
+
 ## Uncertainty and time
 
 - Use Wikibase time precision (year / month / day / decade / century).

@@ -14,6 +14,7 @@ from yizkr.claims import ClaimBatch
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     AWAITING_EQUIVALENCES,
+    DUPLICATE,
     FAILED,
     WRITTEN,
     DocumentRun,
@@ -239,8 +240,10 @@ class TestIsolationAndDiscovery:
     def test_failure_in_one_document_does_not_stop_others(self, tmp_path):
         folder = tmp_path / "docs"
         folder.mkdir()
-        (folder / "a-good.txt").write_text("text")
-        (folder / "b-bad.txt").write_text("text")
+        # distinct content so the dedup (ADR-0010) treats them as two
+        # artifacts — this test is about failure isolation, not dedup
+        (folder / "a-good.txt").write_text("good text")
+        (folder / "b-bad.txt").write_text("bad text")
 
         class OneBad(ScriptedOrchestrator):
             def _step_batch(self, doc):
@@ -280,6 +283,54 @@ class TestIsolationAndDiscovery:
         assert slugify("Hirsch Family Tree") == "Hirsch-Family-Tree"
         assert "/" not in slugify("weird/name")
         assert slugify("..") == "document"
+
+
+class TestContentDedup:
+    """ADR-0010: identical bytes are one artifact — a re-encoded or
+    renamed copy in the same folder is not processed twice."""
+
+    def _folder(self, tmp_path):
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        return folder
+
+    def test_identical_files_processed_once(self, tmp_path):
+        folder = self._folder(tmp_path)
+        (folder / "a-original.txt").write_text("same bytes")
+        (folder / "b-copy.txt").write_text("same bytes")  # identical content
+        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        orchestrator.run()
+        original, copy = orchestrator.documents()
+        # the alphabetically-first file is canonical; only it is worked on
+        assert "register:a-original.txt" in orchestrator.calls
+        assert "batch:a-original.txt" in orchestrator.calls
+        assert not any(c.endswith("b-copy.txt") for c in orchestrator.calls)
+        assert copy.state.status == DUPLICATE
+        assert copy.state.detail["duplicate_of"] == "a-original.txt"
+
+    def test_distinct_content_both_processed(self, tmp_path):
+        folder = self._folder(tmp_path)
+        (folder / "one.txt").write_text("first document")
+        (folder / "two.txt").write_text("second document")
+        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        orchestrator.run()
+        assert "batch:one.txt" in orchestrator.calls
+        assert "batch:two.txt" in orchestrator.calls
+        assert all(d.state.status != DUPLICATE for d in orchestrator.documents())
+
+    def test_dedup_decision_is_stable_across_reruns(self, tmp_path):
+        folder = self._folder(tmp_path)
+        (folder / "a-original.txt").write_text("same bytes")
+        (folder / "b-copy.txt").write_text("same bytes")
+        first = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        first.run()
+        # a fresh orchestrator (new run) must reach the same verdict, and
+        # must not re-do the canonical's expensive steps
+        second = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        second.run()
+        assert not any(c.endswith("b-copy.txt") for c in second.calls)
+        _, copy = second.documents()
+        assert copy.state.status == DUPLICATE
 
 
 class TestFreshness:
