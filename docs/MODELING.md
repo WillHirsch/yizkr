@@ -204,10 +204,38 @@ and reference the artifact itself or the producing run.
 - W1 implementation: `python -m ingest detect-faces / enroll-face /
   match-faces` (see `ingest/faces.py`), feeding the shared review flow.
 
+## Names (see ADR-0011)
+
+Names are modelled in **two layers**:
+
+- **Aliases** (the entity's label + `altLabel`s) remain the flat,
+  append-only, *unreferenced* index that reconciliation blocks on and
+  label lookup uses. Every name form a document uses goes here.
+- **Typed name statements** are the source-first record, used when a
+  source states a name's *kind*. Each is an ordinary referenced claim
+  (monolingual text, source's wording kept verbatim) and may be dated
+  with `start time` / `point in time` (a formal change is a dated
+  event):
+  - `birth name` (P1477) — name/maiden name given at birth;
+  - `married name` (P2562) — family name taken on marriage;
+  - `nickname` (P1449) — informal/pet name or "aka";
+  - `official name` (P1448) — a formally adopted or legally changed name.
+- An *ordinary* untyped name is NOT restated as a claim — it lives in
+  the label/aliases only. Typing adds structure where a source marks it;
+  it never narrows or infers (a maiden name is recorded only when the
+  source says so, never derived from gender + marriage).
+- The GEDCOM adapter emits these from NAME TYPE, the NICK and `_MARNM`
+  tags, and the universal inline convention (a quoted or parenthetical
+  token is a nickname). Typed names also feed reconciliation: a married
+  name matching another's birth name (a marriage name change) is strong
+  identity evidence.
+
 ## Identity and reconciliation (ADR-0007)
 
 - Every ingested document contributes its name variants as item
   **aliases** (append-only); matching quality compounds per document.
+  Where a source *types* a name (birth, married, nickname, official),
+  it is additionally recorded as a referenced statement — see "Names".
 - Machine-proposed equivalences (within or across documents) are
   reviewed by a human before they take effect — identity is never
   auto-confirmed. Approved matches resolve new claims to the existing

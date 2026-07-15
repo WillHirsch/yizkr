@@ -449,3 +449,73 @@ def test_item10_vocabulary_writes_and_is_idempotent(client, artifact):
         value["id"] for value in claim_values(occupation_qid, "instance_of")
     }
     assert items["occupation_class"] in occupation_classes
+
+
+def names_batch(artifact_qid: str) -> ClaimBatch:
+    """A person carrying typed name claims (ADR-0011)."""
+    subject = {
+        "kind": "local",
+        "local_id": "person-1",
+        "label": PERSON_LABEL,
+        "instance_of": "human",
+    }
+    source = {
+        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "page_number": "1",
+        "transcription_excerpt": {"text": "née, later, known as", "language": "en"},
+    }
+
+    def name(prop, text):
+        return {
+            "subject": subject,
+            "property": prop,
+            "value": {"type": "monolingual", "value": {"text": text, "language": "en"}},
+            "source": source,
+        }
+
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": {
+                "model_identifier": "integration-test",
+                "pipeline_version": "0.0.0",
+                "started_at": datetime.now(UTC).isoformat(),
+            },
+            "claims": [
+                name("birth_name", "Integration Testerson"),
+                name("married_name", "Integration Person"),
+                name("nickname", "Iggy"),
+            ],
+        }
+    )
+
+
+def test_typed_names_write_and_round_trip(client, artifact):
+    """ADR-0011: typed name claims write end to end as referenced
+    monolingual statements, keep the source's wording, and re-run clean."""
+    writer = BatchWriter(client)
+    first = writer.write_batch(names_batch(artifact.artifact_qid))
+    person_qid = first.created_items["person-1"]
+
+    rerun = BatchWriter(client).write_batch(names_batch(artifact.artifact_qid))
+    assert rerun.written == 0
+    assert rerun.skipped == 3
+
+    properties, _ = client.vocabulary()
+
+    def one(prop_key):
+        data = client.api_get(
+            {
+                "action": "wbgetclaims",
+                "entity": person_qid,
+                "property": properties[prop_key],
+            }
+        )
+        (claim,) = [c for cs in data["claims"].values() for c in cs]
+        assert properties["stated_in"] in {
+            pid for ref in claim["references"] for pid in ref["snaks"]
+        }
+        return claim["mainsnak"]["datavalue"]["value"]
+
+    assert one("birth_name") == {"text": "Integration Testerson", "language": "en"}
+    assert one("married_name") == {"text": "Integration Person", "language": "en"}
+    assert one("nickname") == {"text": "Iggy", "language": "en"}

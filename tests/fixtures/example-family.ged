@@ -5,7 +5,10 @@
 1 CHAR UTF-8
 0 @I1@ INDI
 1 NAME Anna Maria /Beispiel/
+2 TYPE birth
+2 NICK Annie
 1 NAME Anna /Muster/
+2 TYPE married
 1 SEX F
 1 BIRT
 2 DATE 12 AUG 1885
@@ -47,6 +50,14 @@
 1 NAME Nameless Placeholder
 1 BIRT
 2 DATE SOMEDAY MAYBE
+0 @I6@ INDI
+1 NAME Rosa (Rosie) /Weiss/
+1 NAME Rosalind /Weiss/
+2 TYPE official
+1 SEX F
+1 BIRT
+2 DATE 1912
+1 _MARNM Rosa Braun
 0 @F1@ FAM
 1 HUSB @I2@
 1 WIFE @I1@

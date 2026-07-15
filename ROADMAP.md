@@ -232,6 +232,25 @@ updated, and no path writes an unreferenced statement.
     `version of` relation whose confirmation teaches the writer to treat
     two versions as one source.*
 
+20. **Typed, referenced names** – names lived only as the entity label
+    and a flat, untyped, unreferenced alias bag, so the model could not
+    say a string was a birth name vs a married name vs a nickname — the
+    very typing that resolves alias questions — nor attribute a name to
+    a source (in tension with the reference rule).
+    *Done (ADR-0011): four monolingual properties — `birth name`
+    (P1477), `married name` (P2562), `nickname` (P1449), `official name`
+    (P1448) — as a second layer over the alias index (aliases stay the
+    match substrate). The GEDCOM adapter emits them deterministically
+    from NAME TYPE, the NICK and `_MARNM` tags, and the universal inline
+    convention (quoted/parenthetical token = nickname), each referenced
+    to its record; a plainly-named person gets no name claim. The
+    reconciler consumes typed names as evidence on both sides — batch
+    entities via the existing fact rendering, graph items via an
+    extended roster query — with prompt guidance that a married/birth
+    name correspondence signals identity. Live-validated end to end.
+    Deferred: given/family-name components (P735/P734) as name items,
+    and promoting the primary untyped name to a referenced statement.*
+
 ### Agreed working order
 
 7 (backup) → 12 (re-ingestion + merges) → 13 (GEDCOM) → 14 (parallel

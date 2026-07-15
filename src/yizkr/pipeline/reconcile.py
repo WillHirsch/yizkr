@@ -52,6 +52,10 @@ class RosterEntity(BaseModel):
     spouses: list[str] = []
     fathers: list[str] = []
     mothers: list[str] = []
+    birth_names: list[str] = []
+    married_names: list[str] = []
+    nicknames: list[str] = []
+    official_names: list[str] = []
 
     def facts(self) -> str:
         parts = [f"{self.qid} {self.label!r}"]
@@ -59,6 +63,14 @@ class RosterEntity(BaseModel):
             parts.append(f"aliases: {', '.join(self.aliases)}")
         if self.kind:
             parts.append(f"kind: {self.kind}")
+        if self.birth_names:
+            parts.append(f"birth name: {', '.join(self.birth_names)}")
+        if self.married_names:
+            parts.append(f"married name: {', '.join(self.married_names)}")
+        if self.nicknames:
+            parts.append(f"nickname: {', '.join(self.nicknames)}")
+        if self.official_names:
+            parts.append(f"official name: {', '.join(self.official_names)}")
         if self.birth:
             parts.append(f"born: {self.birth}")
         if self.death:
@@ -81,9 +93,17 @@ SELECT ?item ?itemLabel ?kindLabel
        (GROUP_CONCAT(DISTINCT ?spouseDesc; separator="|") AS ?spouses)
        (GROUP_CONCAT(DISTINCT ?fatherDesc; separator="|") AS ?fathers)
        (GROUP_CONCAT(DISTINCT ?motherDesc; separator="|") AS ?mothers)
+       (GROUP_CONCAT(DISTINCT ?birthName; separator="|") AS ?birthNames)
+       (GROUP_CONCAT(DISTINCT ?marriedName; separator="|") AS ?marriedNames)
+       (GROUP_CONCAT(DISTINCT ?nick; separator="|") AS ?nicknames)
+       (GROUP_CONCAT(DISTINCT ?officialName; separator="|") AS ?officialNames)
 WHERE {{
   ?item wdt:{instance_of} ?kind .
   OPTIONAL {{ ?item skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
+  OPTIONAL {{ ?item wdt:{birth_name} ?birthName . }}
+  OPTIONAL {{ ?item wdt:{married_name} ?marriedName . }}
+  OPTIONAL {{ ?item wdt:{nickname} ?nick . }}
+  OPTIONAL {{ ?item wdt:{official_name} ?officialName . }}
   OPTIONAL {{ ?item wdt:{date_of_birth} ?birthDate . }}
   OPTIONAL {{ ?item wdt:{date_of_death} ?deathDate . }}
   # dates asserted via event items (participant in a birth/death event)
@@ -123,6 +143,10 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
         mother=properties["mother"],
         participant=properties["participant"],
         point_in_time=properties["point_in_time"],
+        birth_name=properties["birth_name"],
+        married_name=properties["married_name"],
+        nickname=properties["nickname"],
+        official_name=properties["official_name"],
         birth_item=items["birth"],
         death_item=items["death"],
     )
@@ -156,6 +180,10 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                 spouses=split(binding, "spouses"),
                 fathers=split(binding, "fathers"),
                 mothers=split(binding, "mothers"),
+                birth_names=split(binding, "birthNames"),
+                married_names=split(binding, "marriedNames"),
+                nicknames=split(binding, "nicknames"),
+                official_names=split(binding, "officialNames"),
             )
         )
     return roster
@@ -218,6 +246,8 @@ def entity_facts(batch: ClaimBatch, entity_id: str) -> str:
                 for part in (value.year, value.month, value.day)
                 if part is not None
             )
+        elif value.type == "monolingual":
+            rendered = value.value.text  # names, causes: just the text
         else:
             rendered = str(getattr(value, "value", value))
         lines.append(f"{claim.property}: {rendered}")
@@ -231,7 +261,10 @@ entity as each candidate already in the graph. Weigh RELATIONAL
 evidence over spelling: the same spouse, the same parents, compatible
 birth/death dates, or an alias relationship between names is strong;
 a shared surname alone is weak. People recur across family documents
-under fuller or shorter names.
+under fuller or shorter names. Typed names are strong evidence when they
+line up: one entity's married name equalling another's birth/maiden name
+(a name change on marriage), or a shared nickname, points to identity —
+a differing birth name to distinctness.
 
 Verdicts: "same" (confident identity), "uncertain" (plausible, needs
 the reviewer's judgement), "distinct" (different entities).

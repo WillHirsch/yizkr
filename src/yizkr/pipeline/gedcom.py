@@ -20,7 +20,12 @@ Source-first conventions carry over unchanged:
   never a guess.
 
 Supported today (the fields family-tree exports actually carry):
-individuals (names -> label + aliases), birth/death dates and places,
+individuals (names -> label + aliases, PLUS typed referenced name
+claims: NAME TYPE birth/maiden/married/aka/official, the NICK subtag,
+the non-standard _MARNM tag, and the universal inline convention where a
+quoted or parenthetical token is a nickname — "Frederick (Fred) George",
+"Gerhard 'Bubi' Weissrock"; docs/MODELING.md "Names"), birth/death dates
+and places,
 cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
 the record is), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
@@ -218,6 +223,44 @@ def _clean_name(name: str) -> str:
     return re.sub(r"\s+", " ", name.replace("/", " ")).strip()
 
 
+# GEDCOM NAME TYPE (5.5.1 §, plus common tool values) -> typed-name
+# property. Only types the source states are recorded; an absent or
+# unrecognised TYPE leaves the name as a plain label/alias, never guessed.
+_NAME_TYPE_PROPERTY = {
+    "birth": "birth_name",
+    "maiden": "birth_name",
+    "married": "married_name",
+    "marriage": "married_name",
+    "aka": "nickname",
+    "nick": "nickname",
+    "nickname": "nickname",
+    "official": "official_name",
+    "legal": "official_name",
+    "change": "official_name",
+    "immigrant": "official_name",
+    "adopted": "official_name",
+}
+
+# a quoted or single-word parenthetical token inside a name is the near-
+# universal genealogy convention for a nickname ("Frederick (Fred) George",
+# "Gerhard 'Bubi' Weissrock") — the only way this data expresses them.
+_QUOTED_NAME = re.compile(r"[‘'\"“]([^‘’'\"“”]+)[’'\"”]")
+_PAREN_NAME = re.compile(r"\(([^)]+)\)")
+
+
+def _inline_nicknames(name: str) -> list[str]:
+    """Quoted / parenthetical nickname tokens within a display name."""
+    found = [m.group(1).strip() for m in _QUOTED_NAME.finditer(name)]
+    found += [m.group(1).strip() for m in _PAREN_NAME.finditer(name)]
+    # conservative: a real nickname is short and not a date/note like
+    # "(born 1900)" — at most two words, no digits
+    return [
+        token
+        for token in found
+        if token and len(token.split()) <= 2 and not any(c.isdigit() for c in token)
+    ]
+
+
 @dataclass
 class AdapterResult:
     batch: ClaimBatch
@@ -234,7 +277,7 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     unsupported: dict[str, int] = {}
 
     HANDLED_INDI = {
-        "NAME", "SEX", "BIRT", "DEAT", "BURI", "OCCU", "NCHI",
+        "NAME", "_MARNM", "SEX", "BIRT", "DEAT", "BURI", "OCCU", "NCHI",
         "RESI", "FAMC", "FAMS",
     }  # fmt: skip
     HANDLED_FAM = {"HUSB", "WIFE", "CHIL", "MARR", "DIV"}
@@ -343,6 +386,46 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                 event,
             )
 
+    def monolingual(text: str) -> dict:
+        return {"type": "monolingual", "value": {"text": text, "language": "en"}}
+
+    def name_claims(xref: str, record: Record) -> None:
+        """Typed, referenced name claims (docs/MODELING.md "Names").
+
+        The item's label/aliases remain the flat match index; this adds
+        the source's OWN name typing (NAME TYPE, NICK, _MARNM) plus the
+        universal inline-nickname convention, each attributed to the
+        GEDCOM record that states it.
+        """
+        emitted_nicknames: set[str] = set()
+
+        def add_nickname(text: str, name_record: Record) -> None:
+            if text and text not in emitted_nicknames:
+                emitted_nicknames.add(text)
+                claim(person_id(xref), "nickname", monolingual(text), name_record)
+
+        for name_record in record.all("NAME"):
+            if not name_record.value:
+                continue
+            cleaned = _clean_name(name_record.value)
+            prop = _NAME_TYPE_PROPERTY.get(name_record.text("TYPE").strip().lower())
+            if prop == "nickname":
+                add_nickname(cleaned, name_record)  # the whole aka IS the nickname
+            elif prop:
+                claim(person_id(xref), prop, monolingual(cleaned), name_record)
+            add_nickname(name_record.text("NICK").strip(), name_record)
+            for inline in _inline_nicknames(cleaned):
+                add_nickname(inline, name_record)
+        # non-standard married-name tag some tools emit at the INDI level
+        for marnm in record.all("_MARNM"):
+            if marnm.value:
+                claim(
+                    person_id(xref),
+                    "married_name",
+                    monolingual(_clean_name(marnm.value)),
+                    marnm,
+                )
+
     # individuals -> entities + birth/death claims
     for xref, record in individuals.items():
         names = [_clean_name(name.value) for name in record.all("NAME") if name.value]
@@ -365,6 +448,7 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                 "mention_lines": [record.line_number],
             }
         )
+        name_claims(xref, record)
         if birth:
             event_claims(xref, birth, "date_of_birth", "place_of_birth")
         if death:

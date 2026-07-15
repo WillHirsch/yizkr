@@ -79,6 +79,41 @@ properties:
     datatype: monolingualtext
     wikidata: P1683
 
+  # --- names (typed and referenced; the item's aliases stay the flat,
+  # unreferenced match index — see docs/MODELING.md "Names") ---
+
+  birth_name:
+    label: birth name
+    description: >-
+      full name a person was given at birth, as asserted by a source
+      (a maiden name is a birth name); kept verbatim in the source's
+      wording
+    datatype: monolingualtext
+    wikidata: P1477
+
+  married_name:
+    label: married name
+    description: family name a person took on marriage, as asserted by a source
+    datatype: monolingualtext
+    wikidata: P2562
+
+  nickname:
+    label: nickname
+    description: >-
+      informal or familiar name a source uses for the person (a
+      diminutive, a pet name, an "aka"); never their formal name
+    datatype: monolingualtext
+    wikidata: P1449
+
+  official_name:
+    label: official name
+    description: >-
+      a formally adopted or legally changed name, as asserted by a
+      source (e.g. after a deed poll or naturalisation); date the
+      change with start time / point in time qualifiers
+    datatype: monolingualtext
+    wikidata: P1448
+
   # --- persons and family relations ---
 
   date_of_birth:

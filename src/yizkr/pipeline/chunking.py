@@ -159,6 +159,11 @@ Rules — these mirror the archive's non-negotiable conventions:
 {property_keys}
 - Vocabulary item keys available for "vocab" references:
 {item_keys}
+- A person's ordinary name lives in their entity-manifest label and
+  aliases; do NOT restate it as a claim. Use the typed name properties
+  only when the source marks a name's TYPE: birth_name (a name/maiden
+  name given at birth), married_name (taken on marriage), nickname (an
+  informal/pet name or "aka"), official_name (a formal or legal change).
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
 
 {assignment_block}

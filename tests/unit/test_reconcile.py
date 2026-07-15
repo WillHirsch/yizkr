@@ -11,6 +11,7 @@ from yizkr.pipeline.reconcile import (
     adjudicate,
     apply_equivalences,
     block_candidates,
+    entity_facts,
     export_equivalences_csv,
     read_approved_equivalences,
 )
@@ -82,6 +83,44 @@ class ScriptedLlm:
     def complete(self, prompt, image_paths=()):
         self.prompts.append(prompt)
         return self.response
+
+
+def name_claim(prop: str, text: str, subject: str = "e1") -> dict:
+    return {
+        "subject": {"kind": "local", "local_id": subject, "label": "Rosa"},
+        "property": prop,
+        "value": {"type": "monolingual", "value": {"text": text, "language": "en"}},
+        "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+    }
+
+
+class TestTypedNameEvidence:
+    """ADR-0011: typed names surface as adjudication evidence, both sides."""
+
+    def test_roster_facts_include_typed_names(self):
+        entity = RosterEntity(
+            qid="Q40",
+            label="Rosa Rothholz",
+            kind="human",
+            birth_names=["Rosa Genserowski"],
+            married_names=["Rosa Rothholz"],
+            nicknames=["Rosie"],
+        )
+        facts = entity.facts()
+        assert "birth name: Rosa Genserowski" in facts
+        assert "married name: Rosa Rothholz" in facts
+        assert "nickname: Rosie" in facts
+
+    def test_entity_facts_renders_monolingual_names_plainly(self):
+        facts = entity_facts(batch(claims=[name_claim("birth_name", "Rosa G")]), "e1")
+        assert "birth_name: Rosa G" in facts
+        assert "language=" not in facts  # not a pydantic repr
+
+    def test_batch_name_claim_reaches_the_adjudication_prompt(self):
+        llm = ScriptedLlm(json.dumps({"done": True, "proposals_emitted": 0}))
+        source = batch(claims=[name_claim("birth_name", "Rosa Genserowski")])
+        adjudicate(llm, entities(), block_candidates(entities(), roster()), source)
+        assert "Rosa Genserowski" in llm.prompts[0]
 
 
 class TestBlocking:

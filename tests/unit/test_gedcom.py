@@ -32,7 +32,9 @@ class TestParser:
     def test_nesting_and_xrefs(self):
         roots = parse_gedcom(FIXTURE.read_text())
         indi = [r for r in roots if r.tag == "INDI"]
-        assert [r.xref for r in indi] == ["@I1@", "@I2@", "@I3@", "@I4@", "@I5@"]
+        assert [r.xref for r in indi] == [
+            "@I1@", "@I2@", "@I3@", "@I4@", "@I5@", "@I6@",
+        ]  # fmt: skip
         birth = indi[0].first("BIRT")
         assert birth.text("DATE") == "12 AUG 1885"
         assert birth.text("PLAC") == "Springfield, Example County"
@@ -251,6 +253,68 @@ class TestVocabulary:
         )
         assert any("NCHI" in w and "not a number" in w for w in result.warnings)
         assert not claims_for(result.batch, "i1", "number_of_children")
+
+
+class TestTypedNames:
+    """Typed, referenced name claims alongside the flat label/alias index."""
+
+    def _name(self, batch, subject, prop):
+        return [c.value.value.text for c in claims_for(batch, subject, prop)]
+
+    def test_name_type_birth_and_married(self):
+        batch = fixture_result().batch
+        assert self._name(batch, "i1", "birth_name") == ["Anna Maria Beispiel"]
+        assert self._name(batch, "i1", "married_name") == ["Anna Muster"]
+
+    def test_nick_subtag_becomes_nickname(self):
+        batch = fixture_result().batch
+        assert self._name(batch, "i1", "nickname") == ["Annie"]
+
+    def test_inline_parenthetical_nickname_extracted(self):
+        # "Rosa (Rosie) Weiss" -> nickname "Rosie", label keeps the full form
+        batch = fixture_result().batch
+        assert self._name(batch, "i6", "nickname") == ["Rosie"]
+        rosa = next(e for e in batch.entities if e.id == "i6")
+        assert rosa.label == "Rosa (Rosie) Weiss"
+
+    def test_name_type_official(self):
+        batch = fixture_result().batch
+        assert self._name(batch, "i6", "official_name") == ["Rosalind Weiss"]
+
+    def test_marnm_tag_becomes_married_name(self):
+        batch = fixture_result().batch
+        assert "Rosa Braun" in self._name(batch, "i6", "married_name")
+
+    def test_name_claims_carry_a_reference(self):
+        batch = fixture_result().batch
+        for prop in ("birth_name", "married_name", "nickname", "official_name"):
+            for claim in [c for c in batch.claims if c.property == prop]:
+                assert claim.source.artifact.qid == "Q23"
+                assert claim.value.type == "monolingual"
+
+    def test_plain_name_emits_no_name_claim(self):
+        # a person with an untyped, unquoted name stays label/alias only
+        batch = fixture_result().batch
+        for prop in ("birth_name", "married_name", "nickname", "official_name"):
+            assert not claims_for(batch, "i4", prop)  # Dov Muster
+
+    def test_label_and_aliases_unchanged_by_typing(self):
+        # the two-layer design: typing adds claims, never disturbs the
+        # label/alias match index
+        batch = fixture_result().batch
+        anna = next(e for e in batch.entities if e.id == "i1")
+        assert anna.label == "Anna Maria Beispiel"
+        assert anna.aliases == ["Anna Muster"]
+
+    def test_explicit_type_gedcom_maiden_and_aka(self):
+        batch = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME Mary /Jones/\n2 TYPE maiden\n"
+            "1 NAME Mary /Smith/\n2 TYPE aka\n0 TRLR\n",
+            artifact_qid="Q23",
+        ).batch
+        assert self._name(batch, "i1", "birth_name") == ["Mary Jones"]
+        # an 'aka' name is recorded whole as a nickname
+        assert self._name(batch, "i1", "nickname") == ["Mary Smith"]
 
 
 RESI_GEDCOM = """\
