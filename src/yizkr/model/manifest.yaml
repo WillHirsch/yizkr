@@ -152,6 +152,45 @@ properties:
     description: privacy flag; whether the person is (possibly) living, which excludes them from public exports (docs/MODELING.md)
     datatype: wikibase-item
 
+  sibling:
+    label: sibling
+    description: >-
+      the subject has the object as a sibling, as asserted by a source —
+      never derived from shared parents (a source asserting both
+      parent relations has not asserted siblinghood)
+    datatype: wikibase-item
+    wikidata: P3373
+
+  occupation:
+    label: occupation
+    description: >-
+      occupation or profession of the person; values are occupation
+      items whose labels keep the source's exact wording
+    datatype: wikibase-item
+    wikidata: P106
+
+  burial_place:
+    label: place of burial
+    description: place where the subject is buried, as asserted by a source
+    datatype: wikibase-item
+    wikidata: P119
+
+  cause_of_death:
+    label: cause of death
+    description: >-
+      cause of death exactly as the source words it, with its language.
+      Wikidata models P509 with items; the archive keeps the verbatim
+      prose of certificates and registers instead — never normalized
+      or translated
+    datatype: monolingualtext
+    wikidata: P509
+
+  number_of_children:
+    label: number of children
+    description: number of children of the person, as counted by a source
+    datatype: quantity
+    wikidata: P1971
+
   # --- events ---
 
   participant:
@@ -305,6 +344,11 @@ items:
     label: extraction run
     description: one execution of the ingestion pipeline; process-provenance target for machine-written statements
 
+  occupation_class:
+    label: occupation
+    description: occupation or profession named by sources; the value class for the occupation property, with labels kept in the source's wording
+    wikidata: Q12737077
+
   # --- event types (subclasses of event) ---
 
   birth:
@@ -367,6 +411,17 @@ items:
     description: slide-deck artifact; a compound container whose slides are fragments and whose embedded media are derived artifacts (ADR-0008)
     subclass_of: artifact
     wikidata: Q604733
+
+  genealogical_report:
+    label: genealogical report
+    description: structured genealogical report or database export, e.g. a GEDCOM family-tree export or a generated descendants report
+    subclass_of: artifact
+
+  address_book:
+    label: address book
+    description: address book or directory artifact listing people with addresses and contact details
+    subclass_of: artifact
+    wikidata: Q367035
 
   # --- controlled vocabulary values ---
 

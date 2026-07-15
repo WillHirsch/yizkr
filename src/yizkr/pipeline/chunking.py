@@ -176,11 +176,12 @@ where N is the number of claim lines you emitted.
 
 
 LINE_ASSIGNMENT_BLOCK = """\
-Refer to people, places, and events with "local" references (stable
-local_id per entity within this response, label as written — prefer the
-fullest name the document gives for a person anywhere, instance_of
-from: human, place, event, birth, death, marriage, migration,
-military_service).
+Refer to people, places, events, and occupations with "local"
+references (stable local_id per entity within this response, label as
+written — prefer the fullest name the document gives for a person
+anywhere, instance_of from: human, place, event, birth, death,
+marriage, migration, military_service, occupation_class). An
+occupation value keeps the source's exact wording as its label.
 
 Extract claims ONLY for the assigned units below — nothing from other
 parts of the document, even though you can see them. Use the rest of
@@ -217,8 +218,10 @@ Assigned entities:
 ENTITY_MANIFEST_PROMPT = """\
 You are preparing a genealogical claim extraction. First pass: read the
 whole transcription and produce a manifest of EVERY distinct entity it
-mentions — people, places, and events (births, deaths, marriages,
-migrations, military service). Unify aliases: one entity that appears
+mentions — people, places, events (births, deaths, marriages,
+migrations, military service), and occupations or professions it names
+for people (kind occupation_class, label in the source's exact
+wording). Unify aliases: one entity that appears
 as "Rosa Genserowski", "Rosa", and "our great grandmother" is ONE
 manifest entry whose label is the fullest form the document gives and
 whose aliases list every other form, verbatim. Aliases are ways the
@@ -451,7 +454,7 @@ class ChunkedClaimExtractor:
         line_count = len(transcription.text.splitlines())
         prompt = ENTITY_MANIFEST_PROMPT.format(
             kinds="human, place, event, birth, death, marriage, "
-            "migration, military_service",
+            "migration, military_service, occupation_class",
             artifact_qid=artifact_qid,
             language=transcription.language,
             numbered_text=number_lines(transcription.text),

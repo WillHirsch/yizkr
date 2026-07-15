@@ -45,6 +45,7 @@ from yizkr.claims import (
     LocalRef,
     MonolingualValue,
     QidRef,
+    QuantityValue,
     StringValue,
     TimeValue,
     VocabRef,
@@ -197,6 +198,7 @@ class BatchWriter:
             GlobeCoordinate,
             Item,
             MonolingualText,
+            Quantity,
             String,
             Time,
         )
@@ -230,6 +232,8 @@ class BatchWriter:
                 longitude=value.longitude,
                 precision=value.precision or 0.0001,
             )
+        if isinstance(value, QuantityValue):
+            return Quantity(prop_nr=pid, amount=value.to_wikibase()["amount"])
         raise TypeError(f"unhandled value {value!r}")
 
     def _references(
@@ -369,6 +373,8 @@ class BatchWriter:
                 if "latitude" in value
                 else {"text", "language"}
                 if "text" in value
+                else {"amount", "unit"}
+                if "amount" in value
                 else set(value)
             )
             return {key: value.get(key) for key in keys}

@@ -250,3 +250,121 @@ def test_curated_claim_carries_no_run_reference(client, artifact):
     reference_properties = {pid for ref in claim["references"] for pid in ref["snaks"]}
     assert properties["stated_in"] in reference_properties
     assert properties["inferred_from_extraction_run"] not in reference_properties
+
+
+def vocabulary_batch(artifact_qid: str) -> ClaimBatch:
+    """One claim per item-10 vocabulary addition (quantity, monolingual
+    cause, occupation item, burial place)."""
+    subject = {
+        "kind": "local",
+        "local_id": "person-1",
+        "label": PERSON_LABEL,
+        "instance_of": "human",
+    }
+    source = {
+        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "page_number": "1",
+        "transcription_excerpt": {
+            "text": "occupation, burial, cause of death, children",
+            "language": "en",
+        },
+    }
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": {
+                "model_identifier": "integration-test",
+                "pipeline_version": "0.0.0",
+                "started_at": datetime.now(UTC).isoformat(),
+            },
+            "claims": [
+                {
+                    "subject": subject,
+                    "property": "occupation",
+                    "value": {
+                        "type": "item",
+                        "value": {
+                            "kind": "local",
+                            "local_id": "occ-1",
+                            "label": "Integration test occupation",
+                            "instance_of": "occupation_class",
+                        },
+                    },
+                    "source": source,
+                },
+                {
+                    "subject": subject,
+                    "property": "burial_place",
+                    "value": {
+                        "type": "item",
+                        "value": {
+                            "kind": "local",
+                            "local_id": "pl-1",
+                            "label": "Integration Test Cemetery",
+                            "instance_of": "place",
+                        },
+                    },
+                    "source": source,
+                },
+                {
+                    "subject": subject,
+                    "property": "cause_of_death",
+                    "value": {
+                        "type": "monolingual",
+                        "value": {
+                            "text": "integration test cause",
+                            "language": "en",
+                        },
+                    },
+                    "source": source,
+                },
+                {
+                    "subject": subject,
+                    "property": "number_of_children",
+                    "value": {"type": "quantity", "amount": 2},
+                    "source": source,
+                },
+            ],
+        }
+    )
+
+
+def test_item10_vocabulary_writes_and_is_idempotent(client, artifact):
+    """Item-10 vocabulary (occupation, burial place, cause of death,
+    number of children) writes end to end: the quantity datavalue and
+    verbatim monolingual cause round-trip, the occupation item is an
+    instance of the occupation class, and a re-run writes nothing."""
+    writer = BatchWriter(client)
+    first = writer.write_batch(vocabulary_batch(artifact.artifact_qid))
+    person_qid = first.created_items["person-1"]
+    occupation_qid = first.created_items["occ-1"]
+
+    rerun = BatchWriter(client).write_batch(vocabulary_batch(artifact.artifact_qid))
+    assert rerun.written == 0
+    assert rerun.skipped == 4
+
+    properties, items = client.vocabulary()
+
+    def claim_values(entity, prop_key):
+        data = client.api_get(
+            {
+                "action": "wbgetclaims",
+                "entity": entity,
+                "property": properties[prop_key],
+            }
+        )
+        return [
+            claim["mainsnak"]["datavalue"]["value"]
+            for claims in data["claims"].values()
+            for claim in claims
+        ]
+
+    (quantity,) = claim_values(person_qid, "number_of_children")
+    assert quantity["amount"] == "+2"
+    (cause,) = claim_values(person_qid, "cause_of_death")
+    assert cause == {"text": "integration test cause", "language": "en"}
+    burial_targets = {value["id"] for value in claim_values(person_qid, "burial_place")}
+    assert first.created_items["pl-1"] in burial_targets
+    occupation_classes = {
+        value["id"] for value in claim_values(occupation_qid, "instance_of")
+    }
+    assert items["occupation_class"] in occupation_classes

@@ -27,7 +27,10 @@
 - time period (linked to PeriodO definitions where applicable)
 - event (birth, marriage, migration, military service, ...)
 - artifact (subclasses: photograph, certificate, letter, census page,
-  newspaper clipping, ...)
+  newspaper clipping, presentation, genealogical report, address
+  book, ...)
+- occupation (values of the `occupation` property; labels keep the
+  source's wording)
 - artifact fragment (a page, crop, or region of an artifact)
 - extraction run (one pipeline execution: model name+version, date,
   prompt/pipeline version, software commit)
@@ -82,6 +85,30 @@ keys resolved to local ids only at write time.
 - Named periods: statements may point to time-period items rather than
   dates; period items link to PeriodO ids.
 - Never narrow a source's vagueness to make data "cleaner".
+
+## Occupations, causes, counts (trial-observed vocabulary)
+
+- **occupation** (P106 semantics) is item-valued: occupations recur
+  across people and documents, so they reconcile like places do. The
+  occupation item's label keeps the source's exact wording ("Cigar
+  maker", "Journeyman Baker"); cross-document variants unify through
+  aliases and the ordinary equivalence review, never by normalizing
+  the label.
+- **cause of death** (P509 semantics) is monolingual text, kept
+  verbatim in the source's language. Wikidata models causes as items;
+  certificates and registers assert prose ("1. Chronic nephritis
+  2. Cardiac failure"), and the archive records exactly that.
+- **sibling** (P3373) is written only when a source asserts
+  siblinghood. It is never derived from shared parents — a source
+  asserting two parent relations has asserted parentage, nothing more.
+- **quantity** values (first use: number of children, P1971) are
+  unitless numbers for source-asserted counts. A count is a claim like
+  any other: competing counts coexist, and corrections in the review
+  CSV take a plain number. `age at death` stays a verbatim string
+  qualifier (above) — it records wording, not arithmetic.
+- **place of burial** (P119) is an ordinary place-valued property;
+  burial places join the place hierarchy pass (ADR-0009) like any
+  other place.
 
 ## Places
 

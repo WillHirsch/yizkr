@@ -443,6 +443,21 @@ class TestCorrections:
         assert [c.property for c in approved.claims] == ["date_of_birth"]
         assert any("cannot be corrected as text" in w for w in warnings)
 
+    def test_quantity_correction_takes_plain_numbers_only(self):
+        from yizkr.pipeline.review import _parse_correction
+
+        data = batch().claims[1].model_dump(mode="json")
+        data["property"] = "number_of_children"
+        data["value"] = {"type": "quantity", "amount": 3}
+        count = ClaimBatch.model_validate(
+            {"extraction_run": RUN, "claims": [data]}
+        ).claims[0]
+        corrected = _parse_correction(count, "4")
+        assert corrected.value.amount == 4
+        assert corrected.curated is True
+        with pytest.raises(ValueError, match="not a number"):
+            _parse_correction(count, "several")
+
 
 class TestLivingFlag:
     """ROADMAP item 10: `living` column sets the privacy flag as curation."""

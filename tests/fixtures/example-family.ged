@@ -13,6 +13,10 @@
 1 DEAT
 2 DATE BEF 8 MAY 1945
 2 PLAC Lakeside, Example County
+1 BURI
+2 DATE 1945
+2 PLAC Lakeside Cemetery, Example County
+1 NCHI 1
 1 FAMS @F1@
 0 @I2@ INDI
 1 NAME Bern /Beispiel/
@@ -21,8 +25,10 @@
 2 DATE ABT 1880
 1 DEAT
 2 DATE MAR 1950
+2 CAUS Heart failure
 1 FAMS @F1@
 1 OCCU Cigar maker
+1 EDUC Example Academy
 0 @I3@ INDI
 1 NAME Carla /Beispiel/
 1 SEX F

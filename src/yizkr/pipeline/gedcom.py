@@ -21,8 +21,13 @@ Source-first conventions carry over unchanged:
 
 Supported today (the fields family-tree exports actually carry):
 individuals (names -> label + aliases), birth/death dates and places,
-residences (place, dated when the record is), parent-child relations,
-marriages (date, place) and divorces (end time). Dates accept the
+cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
+the record is), occupations (OCCU, minted as occupation items with the
+source's wording), number of children (NCHI), residences (place, dated
+when the record is), parent-child relations, marriages (date, place)
+and divorces (end time). Sibling relations are deliberately NOT
+derived from shared parents: the export asserts parentage, not
+siblinghood (docs/MODELING.md — never derive). Dates accept the
 GEDCOM-standard English abbreviations plus what hand-maintained trees
 actually contain: full English and German month names, and month-first
 order when the month is named. Unsupported tags are counted and
@@ -228,7 +233,10 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     warnings: list[str] = []
     unsupported: dict[str, int] = {}
 
-    HANDLED_INDI = {"NAME", "SEX", "BIRT", "DEAT", "RESI", "FAMC", "FAMS"}
+    HANDLED_INDI = {
+        "NAME", "SEX", "BIRT", "DEAT", "BURI", "OCCU", "NCHI",
+        "RESI", "FAMC", "FAMS",
+    }  # fmt: skip
     HANDLED_FAM = {"HUSB", "WIFE", "CHIL", "MARR", "DIV"}
     for record in individuals.values():
         for child in record.children:
@@ -242,6 +250,7 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     entities: list[dict] = []
     claims: list[dict] = []
     place_ids: dict[str, str] = {}
+    occupation_ids: dict[str, str] = {}
 
     def source(record: Record) -> dict:
         # monolingual text values forbid newlines; keep each GEDCOM line
@@ -270,6 +279,19 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
             )
         return place_ids[name]
 
+    def occupation_entity(name: str) -> str:
+        if name not in occupation_ids:
+            occupation_ids[name] = f"oc{len(occupation_ids) + 1}"
+            entities.append(
+                {
+                    "id": occupation_ids[name],
+                    "label": name,
+                    "kind": "occupation_class",
+                    "summary": "occupation named in the GEDCOM export",
+                }
+            )
+        return occupation_ids[name]
+
     def local(entity_id: str) -> dict:
         return {"kind": "local", "local_id": entity_id}
 
@@ -284,6 +306,22 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                 "confidence": 1.0,
             }
         )
+
+    def dated_qualifiers(event: Record, context: str) -> list[dict]:
+        """point_in_time (+uncertainty) qualifiers from an event's DATE."""
+        quals: list[dict] = []
+        date_record = event.first("DATE")
+        if date_record:
+            value, date_quals = parse_gedcom_date(date_record.value)
+            if value is None:
+                warnings.append(
+                    f"line {date_record.line_number}: unparsed {context} "
+                    f"date {date_record.value!r} — point_in_time omitted"
+                )
+            else:
+                quals.append({"property": "point_in_time", "value": value})
+                quals.extend(date_quals)
+        return quals
 
     def event_claims(indi_xref: str, event: Record, date_prop: str, place_prop: str):
         date_record = event.first("DATE")
@@ -331,6 +369,74 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
             event_claims(xref, birth, "date_of_birth", "place_of_birth")
         if death:
             event_claims(xref, death, "date_of_death", "place_of_death")
+            # cause of death stays verbatim prose (docs/MODELING.md);
+            # "en" matches the export's language, like the excerpts
+            cause = death.text("CAUS")
+            if cause:
+                claim(
+                    person_id(xref),
+                    "cause_of_death",
+                    {
+                        "type": "monolingual",
+                        "value": {"text": cause, "language": "en"},
+                    },
+                    death,
+                )
+        for burial in record.all("BURI"):
+            place = burial.text("PLAC")
+            if not place:
+                warnings.append(
+                    f"line {burial.line_number}: BURI without PLAC — "
+                    "no burial claim emitted"
+                )
+                continue
+            claim(
+                person_id(xref),
+                "burial_place",
+                {"type": "item", "value": local(place_entity(place))},
+                burial,
+                dated_qualifiers(burial, "burial"),
+            )
+        for occupation in record.all("OCCU"):
+            name = occupation.value.strip()
+            if not name:
+                warnings.append(
+                    f"line {occupation.line_number}: OCCU without a value — "
+                    "no occupation claim emitted"
+                )
+                continue
+            quals = dated_qualifiers(occupation, "occupation")
+            place = occupation.text("PLAC")
+            if place:
+                quals.append(
+                    {
+                        "property": "location",
+                        "value": {"type": "item", "value": local(place_entity(place))},
+                    }
+                )
+            claim(
+                person_id(xref),
+                "occupation",
+                {"type": "item", "value": local(occupation_entity(name))},
+                occupation,
+                quals,
+            )
+        nchi = record.first("NCHI")
+        if nchi:
+            try:
+                count = int(nchi.value.strip())
+            except ValueError:
+                warnings.append(
+                    f"line {nchi.line_number}: NCHI {nchi.value!r} is not a "
+                    "number — no number_of_children claim emitted"
+                )
+            else:
+                claim(
+                    person_id(xref),
+                    "number_of_children",
+                    {"type": "quantity", "amount": count},
+                    nchi,
+                )
         for residence in record.all("RESI"):
             place = residence.text("PLAC")
             if not place:
@@ -339,24 +445,12 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                     "no residence claim emitted"
                 )
                 continue
-            quals = []
-            date_record = residence.first("DATE")
-            if date_record:
-                value, date_quals = parse_gedcom_date(date_record.value)
-                if value is None:
-                    warnings.append(
-                        f"line {date_record.line_number}: unparsed residence "
-                        f"date {date_record.value!r} — point_in_time omitted"
-                    )
-                else:
-                    quals.append({"property": "point_in_time", "value": value})
-                    quals.extend(date_quals)
             claim(
                 person_id(xref),
                 "residence",
                 {"type": "item", "value": local(place_entity(place))},
                 residence,
-                quals,
+                dated_qualifiers(residence, "residence"),
             )
 
     # families -> parentage and spouse claims

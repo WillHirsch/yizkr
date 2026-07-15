@@ -72,9 +72,18 @@ updated, and no path writes an unreferenced statement.
     *Review-flow half done (rode along with item 15): the review CSV's
     `warning` column flags subjects with no death data (batch- and
     graph-aware) and activity within the 100-year cutoff, and its
-    `living` column sets the `living person` flag as a curated claim.
-    The vocabulary session (burial place from the GEDCOM's BURI,
-    occupation, sibling, cause of death, quantities) is still open.*
+    `living` column sets the `living person` flag as a curated claim.*
+    *Vocabulary session done: `place of burial` (P119), `occupation`
+    (P106; item-valued, labels verbatim, occupations reconcile like
+    places), `sibling` (P3373; asserted only, never derived from
+    parentage), `cause of death` (P509 semantics; verbatim monolingual
+    prose), `number of children` (P1971) riding the new quantity
+    datatype support (schema, writer, review corrections); artifact
+    classes `genealogical report` and `address book`. GEDCOM adapter
+    now maps BURI/OCCU/NCHI/DEAT.CAUS, and `.ged` files register as
+    genealogical reports. Live-validated end to end, and the one real
+    BURI in the Ancestry export — Irma Charlotte Serelman's Golders
+    Green burial — is in the graph through the standard review flow.*
 11. **Review corrections** – the CSV review flow is approve/reject
     only; ambiguous machine readings (date-format ambiguity) currently
     force rejection. Add an edit/correction column that produces a

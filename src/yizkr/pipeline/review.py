@@ -8,7 +8,8 @@ fill:
 * `decision` — approve / reject (nothing passes without it);
 * `correction` — a replacement value for an approved claim the machine
   misread (ROADMAP item 11): dates as `YYYY`, `YYYY-MM` or `YYYY-MM-DD`
-  (never an ambiguous format), plain text for string values. The
+  (never an ambiguous format), plain text for string values, a plain
+  number for quantity values. The
   corrected claim is curator-attributed: it keeps the artifact
   reference but no extraction-run reference (ADR-0003 — process
   provenance is for machine writes);
@@ -50,6 +51,7 @@ from yizkr.claims import (
     MonolingualText,
     MonolingualValue,
     QidRef,
+    QuantityValue,
     StringValue,
     TimeValue,
     VocabRef,
@@ -122,6 +124,8 @@ def _describe_value(value) -> str:
         return f"{text}{suffix}{calendar}"
     if isinstance(value, MonolingualValue):
         return f"{value.value.text} [{value.value.language}]"
+    if isinstance(value, QuantityValue):
+        return f"{value.amount:g}"
     if hasattr(value, "latitude"):
         return f"{value.latitude}, {value.longitude}"
     return str(value.value)
@@ -257,8 +261,9 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
     """A curator's replacement value -> corrected, curator-attributed claim.
 
     Supported: time values in unambiguous ISO forms (`1885`, `1885-08`,
-    `1885-08-12`) and plain text for string / external-id / monolingual
-    values. Item corrections are not expressible as text — reject the
+    `1885-08-12`), plain text for string / external-id / monolingual
+    values, and plain numbers for quantity values. Item corrections are
+    not expressible as text — reject the
     claim and fix identity through the equivalence flow instead.
     Raises ValueError with a reviewer-readable message otherwise.
     """
@@ -280,6 +285,15 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
         corrected = MonolingualValue(
             value=MonolingualText(text=text, language=value.value.language)
         )
+    elif isinstance(value, QuantityValue):
+        try:
+            amount = int(text) if re.fullmatch(r"[+-]?\d+", text) else float(text)
+        except ValueError:
+            raise ValueError(
+                f"correction {text!r} is not a number (quantity values "
+                f"take a plain number)"
+            ) from None
+        corrected = value.model_copy(update={"amount": amount})
     elif hasattr(value, "value") and isinstance(getattr(value, "value", None), str):
         corrected = value.model_copy(update={"value": text})
     else:

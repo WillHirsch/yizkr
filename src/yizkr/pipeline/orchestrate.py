@@ -183,6 +183,8 @@ class Orchestrator:
             # fragments (ADR-0008), so claim locators point into slides
             artifact_type = "presentation"
             pages = len(self._presentation(doc).slides)
+        elif doc.source.suffix.lower() in GEDCOM_SUFFIXES:
+            artifact_type = "genealogical_report"
         result = register_artifact(
             self.client,
             media_path=doc.source,

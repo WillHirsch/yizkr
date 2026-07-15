@@ -179,7 +179,78 @@ class TestAdapter:
 
     def test_unsupported_tags_are_counted_not_silent(self):
         result = fixture_result()
-        assert result.unsupported_tags.get("OCCU") == 1
+        assert result.unsupported_tags.get("EDUC") == 1
+        assert "OCCU" not in result.unsupported_tags
+
+
+class TestVocabulary:
+    """Item-10 fields: burial, occupation, cause of death, child count."""
+
+    def test_burial_place_with_point_in_time(self):
+        batch = fixture_result().batch
+        (burial,) = claims_for(batch, "i1", "burial_place")
+        place = next(e for e in batch.entities if e.id == burial.value.value.local_id)
+        assert place.label == "Lakeside Cemetery, Example County"
+        assert place.kind == "place"
+        (qualifier,) = burial.qualifiers
+        assert qualifier.property == "point_in_time"
+        assert qualifier.value.year == 1945
+
+    def test_occupation_becomes_verbatim_item(self):
+        batch = fixture_result().batch
+        (occupation,) = claims_for(batch, "i2", "occupation")
+        entity = next(
+            e for e in batch.entities if e.id == occupation.value.value.local_id
+        )
+        assert entity.label == "Cigar maker"
+        assert entity.kind == "occupation_class"
+
+    def test_cause_of_death_stays_verbatim(self):
+        batch = fixture_result().batch
+        (cause,) = claims_for(batch, "i2", "cause_of_death")
+        assert cause.value.value.text == "Heart failure"
+        assert "2 CAUS Heart failure" in cause.source.transcription_excerpt.text
+
+    def test_number_of_children_is_a_quantity(self):
+        batch = fixture_result().batch
+        (count,) = claims_for(batch, "i1", "number_of_children")
+        assert count.value.type == "quantity"
+        assert count.value.amount == 1
+
+    def test_no_sibling_claims_are_derived(self):
+        # the export asserts parentage, never siblinghood (docs/MODELING.md)
+        batch = fixture_result().batch
+        assert not [c for c in batch.claims if c.property == "sibling"]
+
+    def test_burial_without_place_warns_and_skips(self):
+        result = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 1900\n0 TRLR\n",
+            artifact_qid="Q23",
+        )
+        assert any("BURI without PLAC" in w for w in result.warnings)
+        assert not claims_for(result.batch, "i1", "burial_place")
+
+    def test_dated_and_placed_occupation_carries_qualifiers(self):
+        batch = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME A /B/\n1 OCCU Baker\n2 DATE 1901\n"
+            "2 PLAC Springfield\n0 TRLR\n",
+            artifact_qid="Q23",
+        ).batch
+        (occupation,) = claims_for(batch, "i1", "occupation")
+        quals = {q.property: q for q in occupation.qualifiers}
+        assert quals["point_in_time"].value.year == 1901
+        place = next(
+            e for e in batch.entities if e.id == quals["location"].value.value.local_id
+        )
+        assert place.label == "Springfield"
+
+    def test_unparseable_child_count_warns_not_guesses(self):
+        result = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME A /B/\n1 NCHI several\n0 TRLR\n",
+            artifact_qid="Q23",
+        )
+        assert any("NCHI" in w and "not a number" in w for w in result.warnings)
+        assert not claims_for(result.batch, "i1", "number_of_children")
 
 
 RESI_GEDCOM = """\

@@ -208,6 +208,20 @@ class TestOtherValues:
         with pytest.raises(ValidationError):
             batch(spouse_claim(value={"type": "boolean", "value": True}))
 
+    def test_quantity_round_trip_and_serialization(self):
+        from yizkr.claims import QuantityValue
+
+        parsed = batch(
+            spouse_claim(
+                property="number_of_children",
+                value={"type": "quantity", "amount": 3},
+            )
+        )
+        value = parsed.claims[0].value
+        assert isinstance(value, QuantityValue)
+        # unitless Wikibase quantity, sign always explicit
+        assert value.to_wikibase() == {"amount": "+3", "unit": "1"}
+
 
 class TestManifestValidation:
     """The real manifest is the vocabulary; these bind contract to model."""
@@ -270,11 +284,22 @@ class TestManifestValidation:
         assert problems == []
 
     def test_unsupported_datatype_reported_not_crash(self):
-        vocabulary = ({"spouse": "quantity"}, set())
+        vocabulary = ({"spouse": "url"}, set())
         problems = validate_against_manifest(
             batch(spouse_claim()), vocabulary=vocabulary
         )
         assert any("does not support yet" in p for p in problems)
+
+    def test_quantity_property_accepts_only_quantity_values(self):
+        problems = validate_against_manifest(
+            batch(
+                spouse_claim(
+                    property="number_of_children",
+                    value={"type": "string", "value": "3"},
+                )
+            )
+        )
+        assert any("requires a 'quantity' value" in p for p in problems)
 
     def test_real_manifest_datatypes_all_supported(self):
         """Every datatype the manifest uses must be expressible in claims."""

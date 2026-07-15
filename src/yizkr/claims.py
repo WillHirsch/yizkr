@@ -225,13 +225,30 @@ class CoordinateValue(StrictModel):
     precision: float | None = Field(default=None, gt=0)
 
 
+class QuantityValue(StrictModel):
+    """A count or measure exactly as the source states it.
+
+    W1 quantities are unitless (ages, child counts); a source that
+    gives a unit or a range keeps it verbatim in string/qualifier form
+    instead of a lossy conversion.
+    """
+
+    type: Literal["quantity"] = "quantity"
+    amount: int | float
+
+    def to_wikibase(self) -> dict:
+        """Wikibase quantity datavalue ('1' is the unitless unit)."""
+        return {"amount": f"{self.amount:+g}", "unit": "1"}
+
+
 Value = Annotated[
     ItemValue
     | StringValue
     | ExternalIdValue
     | MonolingualValue
     | TimeValue
-    | CoordinateValue,
+    | CoordinateValue
+    | QuantityValue,
     Field(discriminator="type"),
 ]
 
@@ -243,6 +260,7 @@ DATATYPE_TO_VALUE_TYPE = {
     "monolingualtext": "monolingual",
     "time": "time",
     "globe-coordinate": "coordinate",
+    "quantity": "quantity",
 }
 
 

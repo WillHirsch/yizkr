@@ -334,3 +334,28 @@ class TestFreshness:
         assert orchestrator.run() == 0
         writes_after = len([c for c in orchestrator.calls if c.startswith("write")])
         assert writes_after == writes_before + 1
+
+
+class TestRegisterArtifactType:
+    """Suffix-specific artifact classes at registration (item 10)."""
+
+    def test_ged_registers_as_genealogical_report(self, tmp_path, monkeypatch):
+        import yizkr.pipeline.registrar as registrar
+
+        seen = []
+
+        class Result:
+            artifact_qid = "Q1"
+
+        def fake_register(client, **kwargs):
+            seen.append(kwargs["artifact_type"])
+            return Result()
+
+        monkeypatch.setattr(registrar, "register_artifact", fake_register)
+        source = tmp_path / "tree.ged"
+        source.write_text("0 HEAD\n0 TRLR\n")
+        orchestrator = Orchestrator(tmp_path, tmp_path / "state")
+        orchestrator._client = object()  # the fake never touches the wiki
+        doc = DocumentRun(source, tmp_path / "state")
+        assert orchestrator._step_register(doc) == "Q1"
+        assert seen == ["genealogical_report"]
