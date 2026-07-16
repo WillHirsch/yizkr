@@ -379,6 +379,26 @@ class TestEntityFirstExtractor:
         assert coverage["entities_without_claims"] == []
         assert (state / "entity-manifest.json").exists()
 
+    def test_progress_logging_reports_each_chunk(self, tmp_path):
+        """Chunked extraction emits per-chunk progress; otherwise a large
+        document is silent for minutes (the `log` callback is a no-op when
+        not supplied, so other callers are unaffected)."""
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna", 1900)]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
+        )
+        logs: list[str] = []
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, log=logs.append)
+        extractor.extract(transcription(), "Q23")
+
+        assert any("scanning document for entities" in line for line in logs)
+        assert any("extract: 2 entities, 2 chunk(s)" in line for line in logs)
+        chunk_lines = [line for line in logs if line.strip().startswith("chunk ")]
+        assert chunk_lines == ["  chunk 1/2 (1 claim)", "  chunk 2/2 (1 claim)"]
+
     def test_plain_client_gets_inline_document(self, tmp_path):
         llm = PlainLlm(
             [

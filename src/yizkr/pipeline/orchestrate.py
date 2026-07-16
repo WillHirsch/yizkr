@@ -137,6 +137,7 @@ class Orchestrator:
         artifact_type: str = "artifact",
         language: str = "auto",
         fallback_language: str = "en",
+        chunk_concurrency: int = 3,
         env_file: Path | None = None,
         log=print,
     ) -> None:
@@ -146,6 +147,7 @@ class Orchestrator:
         self.artifact_type = artifact_type
         self.language = language
         self.fallback_language = fallback_language
+        self.chunk_concurrency = chunk_concurrency
         self.env_file = env_file
         self.log = log
         self._config: Config | None = None
@@ -345,6 +347,8 @@ class Orchestrator:
             make_client(self.llm),
             state_dir=doc.batch.with_name(doc.batch.name + ".chunks"),
             resume=True,
+            concurrency=self.chunk_concurrency,
+            log=self.log,
         )
         batch = extractor.extract(transcription, artifact_qid=doc.state.artifact_qid)
         failed = getattr(extractor, "failed_chunks", None)

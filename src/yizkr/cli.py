@@ -469,6 +469,7 @@ def cmd_run(args) -> int:
         artifact_type=args.type,
         language=args.language,
         fallback_language=args.fallback_language,
+        chunk_concurrency=args.chunk_concurrency,
         env_file=args.env_file,
     ).run()
 
@@ -818,6 +819,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="en",
         help="language tag for documents too short to auto-detect "
         "(default en); ignored when --language is an explicit code",
+    )
+    p.add_argument(
+        "--chunk-concurrency",
+        type=int,
+        default=3,
+        metavar="N",
+        help="run up to N extraction chunks in parallel per document "
+        "(chunks are independent; default 3). Lower it if the engine "
+        "rate-limits; 1 is fully sequential",
     )
     p.set_defaults(func=cmd_run)
 

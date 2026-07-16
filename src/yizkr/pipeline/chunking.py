@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -477,6 +478,7 @@ class ChunkedClaimExtractor:
         retries: int = 2,
         resume: bool = False,
         concurrency: int = 1,
+        log: Callable[[str], None] | None = None,
     ) -> None:
         self.client = client
         self.state_dir = state_dir
@@ -488,6 +490,10 @@ class ChunkedClaimExtractor:
         # safe to run concurrently: each fork branches into its own
         # new session without mutating the original.
         self.concurrency = max(1, concurrency)
+        # progress feedback (chunked extraction is otherwise silent for
+        # minutes on a large document); a no-op when no logger is given.
+        self._log = log if log is not None else (lambda _message: None)
+        self._chunks_done = 0
         self._state_lock = threading.Lock()
         self.failed_chunks: list[str] = []
         # open-schema gaps (ADR-0013): relations no property expresses,
@@ -507,6 +513,22 @@ class ChunkedClaimExtractor:
     def _read(self, name: str) -> str | None:
         path = self.state_dir / name
         return path.read_text() if path.exists() else None
+
+    def _note_chunk_done(
+        self, total: int, *, ok: bool, claims: int = 0, resumed: bool = False
+    ) -> None:
+        """Emit a running `chunk k/total` progress line as each chunk
+        finishes. Called from worker threads; the counter is locked."""
+        with self._state_lock:
+            self._chunks_done += 1
+            done = self._chunks_done
+        if not ok:
+            tag = "failed"
+        else:
+            plural = "" if claims == 1 else "s"
+            prefix = "resumed, " if resumed else ""
+            tag = f"{prefix}{claims} claim{plural}"
+        self._log(f"  chunk {done}/{total} ({tag})")
 
     # -- phase 1a: entity manifest (ADR-0007, the default) ----------------
 
@@ -808,6 +830,7 @@ class ChunkedClaimExtractor:
                 # inline context rather than re-running phase 1
                 handle = None
         if entities is None and segmentation is None:
+            self._log("  scanning document for entities...")
             entities, handle = self._entity_manifest(transcription, artifact_qid)
             if entities is not None:
                 self._write(
@@ -869,11 +892,19 @@ class ChunkedClaimExtractor:
         for chunk_id, group in zip(chunk_ids, chunk_groups, strict=True):
             manifest["chunks"].setdefault(chunk_id, {"members": member_ids(group)})
 
+        total = len(chunk_ids)
+        self._chunks_done = 0
+        if entities is not None:
+            self._log(f"  extract: {len(entities)} entities, {total} chunk(s)")
+        else:
+            self._log(f"  extract: {total} chunk(s) (line-range fallback)")
+
         def run_one(chunk_id: str, group: list) -> list[dict] | None:
             """One chunk end to end; returns parsed claims or None on
             failure. Thread-safe: per-chunk files are exclusive to this
             call, shared manifest state goes through the lock."""
             parsed = self._reusable_claims(chunk_id)
+            resumed = parsed is not None
             if parsed is None:
                 prompt = build_prompt(group, False)
                 fallback_prompt = build_prompt(group, inline_document)
@@ -886,12 +917,14 @@ class ChunkedClaimExtractor:
                         )
                         self.failed_chunks.append(chunk_id)
                         self._write("manifest.json", json.dumps(manifest, indent=2))
+                    self._note_chunk_done(total, ok=False)
                     return None
                 self._write(f"{chunk_id}.ndjson", "\n".join(map(json.dumps, parsed)))
             with self._state_lock:
                 manifest["chunks"][chunk_id]["status"] = "ok"
                 manifest["chunks"][chunk_id]["claims"] = len(parsed)
                 self._write("manifest.json", json.dumps(manifest, indent=2))
+            self._note_chunk_done(total, ok=True, claims=len(parsed), resumed=resumed)
             return parsed
 
         with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
