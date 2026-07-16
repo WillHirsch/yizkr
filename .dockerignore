@@ -1,0 +1,14 @@
+# Keep the build context small and free of runtime/personal data. The image
+# only needs the package sources and dependency manifests (see Dockerfile).
+.git
+.github
+var
+deploy
+docs
+tests
+scratchpad
+**/__pycache__
+*.pyc
+.venv
+.ruff_cache
+.pytest_cache

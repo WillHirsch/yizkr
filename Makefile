@@ -1,7 +1,9 @@
 # Development and operations verbs. Connection settings: deploy/.env.
 UV ?= uv
+# Single-host run with in-network hostname resolution (no /etc/hosts edit).
+COMPOSE_LOCAL = docker compose -f docker-compose.yml -f docker-compose.localhost.yml
 
-.PHONY: install test test-live lint fmt up down bootstrap smoke publish-queries
+.PHONY: install test test-live lint fmt up down up-local cli bootstrap smoke publish-queries
 
 install:            ## create/update the uv-managed venv (with dev tools)
 	$(UV) sync --dev
@@ -25,6 +27,12 @@ up:                 ## start the Wikibase Suite stack
 
 down:               ## stop the stack (data persists in volumes)
 	cd deploy && docker compose down
+
+up-local:           ## start the stack; hostnames resolve in-network (no /etc/hosts)
+	cd deploy && $(COMPOSE_LOCAL) up -d --wait
+
+cli:                ## run a yizkr command in-network, e.g. make cli ARGS="smoke-test"
+	cd deploy && $(COMPOSE_LOCAL) --profile cli run --rm yizkr $(ARGS)
 
 bootstrap:          ## apply model/manifest.yaml to the instance
 	$(UV) run yizkr bootstrap

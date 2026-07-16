@@ -51,6 +51,51 @@ Once healthy:
 > boot, changing hosts, scheme, admin or DB credentials requires a
 > reset (below). Pick hostnames you can keep.
 
+## Run on a single host without editing /etc/hosts
+
+The two hostnames exist so traefik can tell the wiki and query service
+apart (it routes by `Host` header) — they do not require two machines, and
+they do not require touching your system's `/etc/hosts`. The overlay
+`docker-compose.localhost.yml` makes traefik answer to both names *inside*
+the Docker network (via network aliases) and adds a containerised `yizkr`
+CLI that runs there, so every command that talks to the stack resolves the
+names with no host configuration.
+
+Set the two hostnames and `PUBLIC_SCHEME=http` in `.env` as usual (any
+names work; if you are restoring a backup, reuse the names it was created
+under so the baked concept URIs match — see Restore). Then:
+
+```sh
+make up-local                 # stack up; hostnames resolve in-network
+make cli ARGS="smoke-test"     # then bootstrap, backup, publish-site, ...
+make cli ARGS="bootstrap"
+```
+
+`make cli` runs the `yizkr` image built from the repo's `Dockerfile` (base
+package + the `llm` extra). To ingest, mount the input folder into the
+one-off container:
+
+```sh
+cd deploy && docker compose -f docker-compose.yml -f docker-compose.localhost.yml \
+    --profile cli run --rm -v /path/to/documents:/data \
+    yizkr ingest run /data --llm anthropic --language auto
+```
+
+(`--llm claude-code` needs that CLI, which is not in the image — run those
+ingests from the host.)
+
+The DB/media restore steps (below) use `docker compose exec mysql|wikibase`
+and run *inside* containers, so they never needed host DNS in the first
+place; the overlay is about the `yizkr` HTTP client.
+
+**The browser is the only client still outside Docker's DNS.** To view the
+live wiki / query UIs without host config: browse the static site instead
+(`make cli ARGS="publish-site"`, then serve `var/site` on a plain port — no
+hostnames at all); or use `*.localhost` names, which browsers resolve to
+loopback automatically (but that is a different concept URI than a `.lan`
+backup, so only for a fresh instance); or add the two `/etc/hosts` lines
+just for the browser.
+
 ## Smoke test
 
 Verifies item creation via the API and the SPARQL round-trip through

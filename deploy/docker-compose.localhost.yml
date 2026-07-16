@@ -1,0 +1,42 @@
+# Overlay: run the whole stack on a single host with NO edits to the host's
+# /etc/hosts. traefik routes by Host header, so the wiki and query service
+# each need a resolvable name — but inside the Docker network traefik answers
+# to both via network aliases, and a containerised `yizkr` CLI runs there and
+# resolves them. Only a browser (outside Docker's DNS) still needs the names;
+# see README.md ("Run on a single host") for the options.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.localhost.yml up -d --wait
+#   docker compose -f docker-compose.yml -f docker-compose.localhost.yml \
+#       --profile cli run --rm yizkr smoke-test
+#
+# (or the make targets: `make up-local`, `make cli ARGS="smoke-test"`)
+
+services:
+  # traefik answers to the two public hostnames inside the Docker network,
+  # so in-network clients reach it by name and it still routes by Host header.
+  traefik:
+    networks:
+      default:
+        aliases:
+          - ${WIKIBASE_PUBLIC_HOST}
+          - ${WDQS_PUBLIC_HOST}
+
+  # The yizkr CLI, on the same network. `profiles` keeps it out of plain
+  # `up`; invoke one-off commands with `run --rm`.
+  yizkr:
+    profiles: ["cli"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      # In-network, traefik always listens on 80. .env's HTTP_PORT is the
+      # host-published port and must not leak into the CLI's derived URLs
+      # (the concept URI is hostname-only, so it is unaffected either way).
+      HTTP_PORT: "80"
+    volumes:
+      # backups and the generated static site land on the host tree
+      - ../var:/app/var
+    depends_on:
+      - wikibase
+      - wdqs
