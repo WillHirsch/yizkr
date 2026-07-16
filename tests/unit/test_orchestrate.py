@@ -461,7 +461,9 @@ class TestTranscribeLanguage:
         (folder / name).write_text(text)
         source = folder / name
         doc = DocumentRun(source, tmp_path / "state")
-        doc.dir.mkdir(parents=True, exist_ok=True)  # register does this in the real flow
+        doc.dir.mkdir(
+            parents=True, exist_ok=True
+        )  # register does this in the real flow
         doc.state.artifact_qid = "Q1"
         return doc
 
