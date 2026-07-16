@@ -262,6 +262,25 @@ class TestManifestValidation:
         problems = validate_against_manifest(batch(claim))
         assert any("wizard" in p for p in problems)
 
+    def test_kinship_fallback_and_sex_validate(self):
+        # ADR-0014: `relative` + a verbatim `kinship_type` string qualifier,
+        # and sex_or_gender pointing at the male/female vocab items
+        claim = spouse_claim(
+            property="relative",
+            qualifiers=[
+                {
+                    "property": "kinship_type",
+                    "value": {"type": "string", "value": "maternal aunt"},
+                }  # fmt: skip
+            ],
+        )
+        sex = spouse_claim(
+            property="sex_or_gender",
+            value={"type": "item", "value": {"kind": "vocab", "key": "female"}},
+            qualifiers=[],
+        )
+        assert validate_against_manifest(batch(claim, sex)) == []
+
     def test_open_schema_entity_validates(self):
         # ADR-0013: an unclassified entity with a type hint is valid
         parsed = ClaimBatch.model_validate(

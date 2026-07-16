@@ -224,6 +224,15 @@ class TestVocabulary:
         batch = fixture_result().batch
         assert not [c for c in batch.claims if c.property == "sibling"]
 
+    def test_sex_maps_to_sex_or_gender(self):
+        # ADR-0014: SEX -> sex_or_gender (male/female vocab), for the
+        # kinship calculus. i1 is F, i2 is M in the fixture.
+        batch = fixture_result().batch
+        (anna_sex,) = claims_for(batch, "i1", "sex_or_gender")
+        assert anna_sex.value.value.key == "female"
+        (bern_sex,) = claims_for(batch, "i2", "sex_or_gender")
+        assert bern_sex.value.value.key == "male"
+
     def test_burial_without_place_warns_and_skips(self):
         result = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 1900\n0 TRLR\n",

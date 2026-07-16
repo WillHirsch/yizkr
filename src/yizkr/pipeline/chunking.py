@@ -164,6 +164,14 @@ Rules — these mirror the archive's non-negotiable conventions:
   only when the source marks a name's TYPE: birth_name (a name/maiden
   name given at birth), married_name (taken on marriage), nickname (an
   informal/pet name or "aka"), official_name (a formal or legal change).
+- Kinship: use ONLY the primitives father, mother, spouse, sibling,
+  child. Do NOT invent properties for compound relations (aunt, cousin,
+  grandmother, brother-in-law) — those are derived from the primitives.
+  If a source states a compound relation you cannot reduce to a
+  primitive (e.g. "maternal aunt" with the connecting parent unknown),
+  use `relative` with a `kinship_type` qualifier holding the source's
+  exact words. Record `sex_or_gender` (male/female vocab) when a source
+  gives it.
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
 
 {assignment_block}
@@ -239,7 +247,13 @@ an AGENT that employs, helps, hires, or is registered/taxed; kind
 organization, NOT place — an organization has a location, it is not
 one), events (births, deaths, marriages, migrations, military service),
 and occupations or professions it names for people (kind
-occupation_class, label in the source's exact wording). Unify aliases:
+occupation_class, label in the source's exact wording). Also: a named
+family or household ("the Wulffs") is a `family`; a ship is a `vessel`;
+a cited law, decree, gazette, or register is a `legal_instrument`; a
+regiment or brigade is a `military_unit`. A forced removal is a
+`deportation` event, a detention an `imprisonment` event, a freeing a
+`release` event (each an event with a person participant, a place, and
+a date) — not a place or a bare relation. Unify aliases:
 one entity that appears
 as "Rosa Genserowski", "Rosa", and "our great grandmother" is ONE
 manifest entry whose label is the fullest form the document gives and
@@ -508,9 +522,10 @@ class ChunkedClaimExtractor:
         """
         line_count = len(transcription.text.splitlines())
         prompt = ENTITY_MANIFEST_PROMPT.format(
-            kinds="human, place, organization, event, birth, death, "
-            "marriage, migration, military_service, occupation_class, "
-            "unclassified_entity",
+            kinds="human, place, organization, family, vessel, "
+            "legal_instrument, military_unit, event, birth, death, "
+            "marriage, migration, military_service, deportation, "
+            "imprisonment, release, occupation_class, unclassified_entity",
             artifact_qid=artifact_qid,
             language=transcription.language,
             numbered_text=number_lines(transcription.text),

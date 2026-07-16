@@ -621,3 +621,110 @@ def test_organization_employer_and_type_hint_write(client, artifact):
         v["id"] for v in claim_values(ship_qid, "instance_of")
     }
     assert "ocean liner" in claim_values(ship_qid, "type_hint")
+
+
+def kinship_batch(artifact_qid: str) -> ClaimBatch:
+    """ADR-0014: sex_or_gender (vocab), the `relative` + kinship_type
+    fallback, member_of an organization, and a deportation event."""
+    source = {
+        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "page_number": "1",
+        "transcription_excerpt": {"text": "aunt; deported", "language": "en"},
+    }
+    person = {"kind": "local", "local_id": "person-1", "label": PERSON_LABEL,
+              "instance_of": "human"}  # fmt: skip
+    aunt = {"kind": "local", "local_id": "aunt-1", "label": "Integration Aunt",
+            "instance_of": "human"}  # fmt: skip
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": {
+                "model_identifier": "integration-test",
+                "pipeline_version": "0.0.0",
+                "started_at": datetime.now(UTC).isoformat(),
+            },
+            "claims": [
+                {
+                    "subject": person,
+                    "property": "sex_or_gender",
+                    "value": {
+                        "type": "item",
+                        "value": {"kind": "vocab", "key": "male"},
+                    },
+                    "source": source,
+                },  # fmt: skip
+                {
+                    "subject": person,
+                    "property": "relative",
+                    "value": {"type": "item", "value": aunt},
+                    "qualifiers": [
+                        {
+                            "property": "kinship_type",
+                            "value": {"type": "string", "value": "maternal aunt"},
+                        }
+                    ],
+                    "source": source,
+                },  # fmt: skip
+                {
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "event-1",
+                        "label": "Deportation of Integration Test Person",
+                        "instance_of": "deportation",
+                    },
+                    "property": "participant",
+                    "value": {"type": "item", "value": person},
+                    "qualifiers": [
+                        {
+                            "property": "point_in_time",
+                            "value": {"type": "time", "year": 1942},
+                        }
+                    ],
+                    "source": source,
+                },  # fmt: skip
+            ],
+            "entities": [
+                {"id": "person-1", "label": PERSON_LABEL, "kind": "human"},
+                {"id": "aunt-1", "label": "Integration Aunt", "kind": "human"},
+                {
+                    "id": "event-1",
+                    "label": "Deportation of Integration Test Person",
+                    "kind": "deportation",
+                },  # fmt: skip
+            ],
+        }
+    )
+
+
+def test_adr0014_vocabulary_writes(client, artifact):
+    """ADR-0014: sex_or_gender vocab item, the relative+kinship_type
+    fallback qualifier, and a deportation event all write and round-trip."""
+    writer = BatchWriter(client)
+    result = writer.write_batch(kinship_batch(artifact.artifact_qid))
+    person_qid = result.created_items["person-1"]
+    properties, items = client.vocabulary()
+
+    # sex_or_gender points at the `male` vocab item
+    sex = client.api_get({"action": "wbgetclaims", "entity": person_qid,
+                          "property": properties["sex_or_gender"]})  # fmt: skip
+    assert items["male"] in {
+        c["mainsnak"]["datavalue"]["value"]["id"]
+        for cs in sex["claims"].values()
+        for c in cs
+    }
+
+    # `relative` carries the verbatim kinship_type qualifier
+    rel = client.api_get({"action": "wbgetclaims", "entity": person_qid,
+                          "property": properties["relative"]})  # fmt: skip
+    (claim,) = [c for cs in rel["claims"].values() for c in cs]
+    quals = claim.get("qualifiers", {}).get(properties["kinship_type"], [])
+    assert any(q["datavalue"]["value"] == "maternal aunt" for q in quals)
+
+    # the deportation event is an instance of the deportation subclass
+    event_qid = result.created_items["event-1"]
+    ev = client.api_get({"action": "wbgetclaims", "entity": event_qid,
+                         "property": properties["instance_of"]})  # fmt: skip
+    assert items["deportation"] in {
+        c["mainsnak"]["datavalue"]["value"]["id"]
+        for cs in ev["claims"].values()
+        for c in cs
+    }

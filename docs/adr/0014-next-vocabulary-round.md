@@ -1,6 +1,13 @@
 # ADR-0014: Next vocabulary round (authored by the harness)
 
-Status: proposed (forks marked ★ need a ruling before implementation)
+Status: accepted — all four ★ forks resolved as recommended (kinship
+`relative`+verbatim-type fallback; persecution as event subclasses;
+co-residence derived + a `gave refuge to` property; singleton
+monument/dynasty classes deferred). Implemented: manifest vocabulary,
+extractor guidance, GEDCOM `SEX`→`sex_or_gender`, and the
+`queries/kinship.rq` derivation starter. The full pairwise kinship
+calculus (degrees: great-, once-removed, half-) remains a frontend
+build over the same primitives.
 
 ## Context
 

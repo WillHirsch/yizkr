@@ -1,0 +1,105 @@
+# Derived kinship (ADR-0014): how each person is related to a subject,
+# COMPUTED from the primitive edges (father, mother, spouse, sibling,
+# child) — never stored. Second-order relations (grandparent, aunt/uncle,
+# cousin, in-law) are property PATHS; the same term set describes any
+# pair, so a frontend reuses this to answer "how are A and B related?".
+#
+# Gendered terms (father vs mother, aunt vs uncle) come from
+# `sex_or_gender`; where sex is unknown the neutral term is used — never
+# guessed. This starter covers the common relations; degrees ("great-",
+# "once removed", half- vs full) are a frontend extension over the same
+# primitives.
+#
+# For one subject, append e.g.:  FILTER(?subject = wd:Q26)
+SELECT DISTINCT ?subject ?subjectLabel ?relative ?relativeLabel ?relationship
+WHERE {
+  ?subject wdt:{P:instance_of} wd:{Q:human} .
+
+  {
+    # --- first order (X father Y ⇒ Y is X's father, so the edge's
+    #     SUBJECT is the child) ----------------------------------------
+    { ?subject wdt:{P:father}|wdt:{P:mother} ?relative . BIND("parent" AS ?base) }
+    UNION { ?relative wdt:{P:father}|wdt:{P:mother} ?subject . BIND("child" AS ?base) }
+    UNION { ?subject wdt:{P:child} ?relative . BIND("child" AS ?base) }
+    UNION { ?subject wdt:{P:spouse}|^wdt:{P:spouse} ?relative . BIND("spouse" AS ?base) }
+    UNION {
+      ?subject wdt:{P:sibling}|^wdt:{P:sibling} ?relative .
+      BIND("sibling" AS ?base)
+    }
+    UNION {
+      # sibling derived from a shared parent (self excluded below)
+      ?subject wdt:{P:father}|wdt:{P:mother} ?p .
+      ?relative wdt:{P:father}|wdt:{P:mother} ?p .
+      BIND("sibling" AS ?base)
+    }
+    # --- second order ------------------------------------------------
+    UNION {
+      ?subject (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:father}|wdt:{P:mother}) ?relative .
+      BIND("grandparent" AS ?base)
+    }
+    UNION {
+      ?relative (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:father}|wdt:{P:mother}) ?subject .
+      BIND("grandchild" AS ?base)
+    }
+    UNION {
+      # parent's sibling (aunt/uncle), incl. its spouse (by marriage)
+      ?subject (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:sibling}|^wdt:{P:sibling}) ?relative .
+      BIND("pibling" AS ?base)
+    }
+    UNION {
+      # sibling's child (niece/nephew)
+      ?subject (wdt:{P:sibling}|^wdt:{P:sibling})/(^wdt:{P:father}|^wdt:{P:mother}) ?relative .
+      BIND("nibling" AS ?base)
+    }
+    UNION {
+      # first cousin: parent's sibling's child
+      ?subject (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:sibling}|^wdt:{P:sibling})/(^wdt:{P:father}|^wdt:{P:mother}) ?relative .
+      BIND("cousin" AS ?base)
+    }
+    # --- by marriage -------------------------------------------------
+    UNION {
+      ?subject wdt:{P:spouse}/(wdt:{P:father}|wdt:{P:mother}) ?relative .
+      BIND("parent-in-law" AS ?base)
+    }
+    UNION {
+      ?subject (wdt:{P:sibling}|^wdt:{P:sibling})/wdt:{P:spouse} ?relative .
+      BIND("sibling-in-law" AS ?base)
+    }
+    UNION {
+      ?subject wdt:{P:spouse}/(wdt:{P:sibling}|^wdt:{P:sibling}) ?relative .
+      BIND("sibling-in-law" AS ?base)
+    }
+    # --- source-asserted compound relation (the `relative` fallback) --
+    UNION {
+      ?subject p:{P:relative} ?rst .
+      ?rst ps:{P:relative} ?relative .
+      OPTIONAL { ?rst pq:{P:kinship_type} ?asserted }
+      BIND(COALESCE(?asserted, "relative") AS ?base)
+    }
+  }
+
+  FILTER(?relative != ?subject)
+  OPTIONAL { ?relative wdt:{P:sex_or_gender} ?sex . }
+  # gender token, unbound-safe: an unknown/absent sex yields "n" (neutral)
+  # rather than erroring the whole expression
+  BIND(IF(BOUND(?sex),
+          IF(?sex = wd:{Q:male}, "m", IF(?sex = wd:{Q:female}, "f", "n")),
+          "n") AS ?g)
+
+  # map (base relation, gender) to a term; "n" gives the neutral form
+  BIND(
+    IF(?base = "parent",  IF(?g = "m", "father", IF(?g = "f", "mother", "parent")),
+    IF(?base = "child",   IF(?g = "m", "son", IF(?g = "f", "daughter", "child")),
+    IF(?base = "sibling", IF(?g = "m", "brother", IF(?g = "f", "sister", "sibling")),
+    IF(?base = "grandparent", IF(?g = "m", "grandfather", IF(?g = "f", "grandmother", "grandparent")),
+    IF(?base = "grandchild", IF(?g = "m", "grandson", IF(?g = "f", "granddaughter", "grandchild")),
+    IF(?base = "pibling", IF(?g = "m", "uncle", IF(?g = "f", "aunt", "aunt or uncle")),
+    IF(?base = "nibling", IF(?g = "m", "nephew", IF(?g = "f", "niece", "niece or nephew")),
+    IF(?base = "spouse", IF(?g = "m", "husband", IF(?g = "f", "wife", "spouse")),
+    IF(?base = "parent-in-law", IF(?g = "m", "father-in-law", IF(?g = "f", "mother-in-law", "parent-in-law")),
+    IF(?base = "sibling-in-law", IF(?g = "m", "brother-in-law", IF(?g = "f", "sister-in-law", "sibling-in-law")),
+    ?base)))))))))) AS ?relationship)
+
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+}
+ORDER BY ?subjectLabel ?relationship ?relativeLabel

@@ -87,6 +87,30 @@ class TestRealManifest:
         assert "unclassified_entity" in manifest.items
         assert manifest.properties["type_hint"].datatype == "string"
 
+    def test_kinship_primitives_and_fallback(self, manifest):
+        """ADR-0014: kinship is primitives + a generic `relative` fallback."""
+        for key in ("father", "mother", "spouse", "sibling", "child"):
+            assert manifest.properties[key].datatype == "wikibase-item", key
+        assert manifest.properties["relative"].datatype == "wikibase-item"
+        assert manifest.properties["kinship_type"].datatype == "string"
+        # sex_or_gender + its values, the calculus prerequisite
+        assert manifest.properties["sex_or_gender"].datatype == "wikibase-item"
+        assert "male" in manifest.items and "female" in manifest.items
+
+    def test_persecution_events_and_new_classes(self, manifest):
+        """ADR-0014: persecution is events; recurring hints became classes."""
+        for key in ("deportation", "imprisonment", "release"):
+            assert manifest.items[key].subclass_of == "event", key
+        for key in ("family", "vessel", "legal_instrument", "military_unit"):
+            assert key in manifest.items, key
+
+    def test_person_attribute_properties(self, manifest):
+        """ADR-0014: attributes/affiliations backed by the gap log."""
+        for key in ("country_of_citizenship", "educated_at", "member_of",
+                    "gave_refuge_to"):  # fmt: skip
+            assert manifest.properties[key].datatype == "wikibase-item", key
+        assert manifest.properties["religion"].datatype == "monolingualtext"
+
     def test_schema_source_has_no_superclass(self, manifest):
         """The manifest item is a reference target, not part of the taxonomy."""
         assert manifest.items[manifest.schema_source_item].subclass_of is None

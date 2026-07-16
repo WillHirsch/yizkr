@@ -31,6 +31,10 @@
   book, ...)
 - organization (an agent — company, bank, committee, government body,
   school, congregation; distinct from place — see ADR-0012)
+- family (a named family or household unit — ADR-0014)
+- vessel (a ship; e.g. an emigration vessel — ADR-0014)
+- legal instrument (a cited law, decree, gazette, or register — ADR-0014)
+- military unit (a regiment, brigade — ADR-0014)
 - occupation (values of the `occupation` property; labels keep the
   source's wording)
 - unclassified entity (the open-schema holding class — see ADR-0013)
@@ -249,6 +253,41 @@ Names are modelled in **two layers**:
   token is a nickname). Typed names also feed reconciliation: a married
   name matching another's birth name (a marriage name change) is strong
   identity evidence.
+
+## Kinship (see ADR-0014)
+
+Kinship is modelled in **three layers**, so the graph stays a thin
+primitive network and the *same* term set describes any pair:
+
+- **Primitive edges (stored, source-attributed):** `father` (P22),
+  `mother` (P25), `spouse` (P26), `sibling` (P3373), `child` (P40).
+  `sex_or_gender` (P21; `male`/`female`) is stored alongside — the
+  calculus needs it to gender terms. `sibling` stays asserted-not-
+  derived (a source may assert siblinghood directly) yet is *also*
+  derivable from shared parents; both coexist.
+- **A derivation calculus (query/frontend layer — NOT vocabulary):**
+  second-order relations (grandparent, aunt/uncle, cousin, in-law) are
+  property PATHS over the primitives, mapped to a shared gendered term
+  set. See `queries/kinship.rq`; the full pairwise calculus with degrees
+  (great-, once-removed, half-) is a frontend build over the same
+  primitives. Never store a derivable relation.
+- **A source-asserted compound fallback:** `relative` (P1038) with a
+  verbatim `kinship_type` qualifier holds a compound relation a source
+  states but that primitives cannot yet capture unambiguously ("maternal
+  aunt", connecting parent unknown; blood vs marriage undetermined —
+  never narrowed). One property, not one per relation; the calculus and
+  this qualifier share the same term set, so asserted and derived
+  relationships describe uniformly and coexist (a match corroborates, a
+  mismatch is an ordinary inconsistency).
+
+## Persecution and displacement as events (see ADR-0014)
+
+Forced removal, detention, and freeing are **events**, not relations:
+`deportation`, `imprisonment`, and `release` are event subclasses that
+reuse the event machinery (`participant` → person, `location` →
+destination, `point_in_time`/`start_time`/`end_time`). "Deported to Riga
+in 1942" is a deportation event, never a `deported to` property — the
+same shape as the reconciled deportation events already in the graph.
 
 ## Identity and reconciliation (ADR-0007)
 

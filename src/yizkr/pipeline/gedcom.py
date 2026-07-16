@@ -449,6 +449,17 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
             }
         )
         name_claims(xref, record)
+        # SEX -> sex_or_gender (the kinship calculus needs it for gendered
+        # terms, ADR-0014); only the unambiguous M/F are mapped
+        sex = record.text("SEX").strip().upper()
+        sex_value = {"M": "male", "F": "female"}.get(sex)
+        if sex_value:
+            claim(
+                person_id(xref),
+                "sex_or_gender",
+                {"type": "item", "value": {"kind": "vocab", "key": sex_value}},
+                record.first("SEX"),
+            )
         if birth:
             event_claims(xref, birth, "date_of_birth", "place_of_birth")
         if death:

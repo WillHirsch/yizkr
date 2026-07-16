@@ -176,6 +176,41 @@ properties:
     datatype: wikibase-item
     wikidata: P26
 
+  child:
+    label: child
+    description: >-
+      the subject has the object as a child (kinship primitive, ADR-0014);
+      the inverse of father/mother, stored when a source frames the
+      relation from the parent's side
+    datatype: wikibase-item
+    wikidata: P40
+
+  relative:
+    label: relative
+    description: >-
+      generic kinship fallback (ADR-0014): a source-asserted compound
+      relation (aunt, cousin, in-law) that primitives cannot yet capture
+      unambiguously; qualify with kinship type, verbatim
+    datatype: wikibase-item
+    wikidata: P1038
+
+  kinship_type:
+    label: kinship type
+    description: >-
+      qualifier on `relative`: the relationship exactly as a source
+      words it ("maternal aunt", "cousin", "brother-in-law") — the
+      frontend maps it to the derived-kinship term set (ADR-0014)
+    datatype: string
+
+  sex_or_gender:
+    label: sex or gender
+    description: >-
+      sex or gender of the person as asserted by a source; the
+      prerequisite for the kinship calculus to derive gendered terms
+      (aunt vs uncle, grandmother vs grandfather) — ADR-0014
+    datatype: wikibase-item
+    wikidata: P21
+
   residence:
     label: residence
     description: place where the person resided
@@ -234,6 +269,42 @@ properties:
     description: number of children of the person, as counted by a source
     datatype: quantity
     wikidata: P1971
+
+  # --- person attributes & affiliations (ADR-0014) ---
+
+  country_of_citizenship:
+    label: country of citizenship
+    description: the country (a place) whose citizen the subject is, as asserted by a source
+    datatype: wikibase-item
+    wikidata: P27
+
+  religion:
+    label: religion or worldview
+    description: >-
+      religion or denomination as a source words it, verbatim and in its
+      language (never normalized) — mirrors the cause-of-death treatment
+    datatype: monolingualtext
+    wikidata: P140
+
+  educated_at:
+    label: educated at
+    description: organization (school, college) the person was educated at, as asserted by a source
+    datatype: wikibase-item
+    wikidata: P69
+
+  member_of:
+    label: member of
+    description: organization the person is or was a member of, as asserted by a source
+    datatype: wikibase-item
+    wikidata: P463
+
+  gave_refuge_to:
+    label: gave refuge to
+    description: >-
+      the subject provided a home or refuge to the object person
+      (ADR-0014); asymmetric hospitality — co-residence ("lived with")
+      is instead derived from a shared residence
+    datatype: wikibase-item
 
   # --- events ---
 
@@ -400,6 +471,36 @@ items:
       - institution
     wikidata: Q43229
 
+  family:
+    label: family
+    description: >-
+      a named family or household unit ("the Wulffs", "the Franklin
+      family") — a collective of related people (ADR-0014); members
+      attach via kinship or `member of`
+    wikidata: Q8436
+
+  vessel:
+    label: vessel
+    description: a ship or boat, e.g. an emigration vessel (ADR-0014)
+    aliases:
+      - ship
+    wikidata: Q11446
+
+  legal_instrument:
+    label: legal instrument
+    description: >-
+      a law, decree, statute, gazette, or official register cited by a
+      source (ADR-0014) — e.g. the Reichsabgabenordnung, Reichsgesetzblatt
+    aliases:
+      - law
+      - statute
+    wikidata: Q1298668
+
+  military_unit:
+    label: military unit
+    description: an organized military formation, e.g. a regiment or brigade (ADR-0014)
+    wikidata: Q176799
+
   time_period_class:
     label: time period
     description: named span of time, linked to PeriodO definitions where applicable
@@ -463,6 +564,24 @@ items:
     description: event or period of a person serving in a military force
     subclass_of: event
 
+  deportation:
+    label: deportation
+    description: >-
+      event of a person being forcibly deported (ADR-0014); participant +
+      destination (location) + date, e.g. deportation to a ghetto or camp
+    subclass_of: event
+    wikidata: Q2249676
+
+  imprisonment:
+    label: imprisonment
+    description: event or period of a person being imprisoned or detained (ADR-0014); participant + location + dates
+    subclass_of: event
+
+  release:
+    label: release
+    description: event of a person being released from detention or imprisonment (ADR-0014)
+    subclass_of: event
+
   # --- artifact types (subclasses of artifact) ---
 
   photograph:
@@ -523,6 +642,16 @@ items:
   "no":
     label: "no"
     description: negative value for flag properties such as living person
+
+  male:
+    label: male
+    description: sex-or-gender value; the kinship calculus uses it for gendered terms (ADR-0014)
+    wikidata: Q6581097
+
+  female:
+    label: female
+    description: sex-or-gender value; the kinship calculus uses it for gendered terms (ADR-0014)
+    wikidata: Q6581072
 
   # --- schema source (see schema_source_item above) ---
 
