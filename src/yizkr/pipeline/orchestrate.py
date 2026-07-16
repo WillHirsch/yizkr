@@ -109,6 +109,9 @@ class DocumentRun:
         self.review_reviewed = self.dir / "review.reviewed.csv"
         self.approved = self.dir / "batch.approved.json"
         self.write_result = self.dir / "write.json"
+        # open-schema harness (ADR-0013)
+        self.gaps = self.dir / "gaps.csv"
+        self.critique = self.dir / "critique.json"
         if self.state_path.exists():
             self.state = DocumentState.load(self.state_path)
         else:
@@ -372,7 +375,69 @@ class Orchestrator:
             for entity in fetch_roster(self.client, self.config)
             if entity.death
         }
-        return export_review_csv(batch, doc.review, known_deaths=known_deaths)
+        return export_review_csv(
+            batch,
+            doc.review,
+            known_deaths=known_deaths,
+            critique_notes=self._critique_notes(doc),
+        )
+
+    # -- open-schema harness (ADR-0013) --------------------------------------
+
+    def _surface_gaps(self, doc: DocumentRun) -> None:
+        """Render the extractor's gap log to a per-document review CSV."""
+        source = doc.batch.with_name(doc.batch.name + ".chunks") / "gaps.ndjson"
+        if not source.exists():
+            return
+        gaps = [
+            json.loads(line) for line in source.read_text().splitlines() if line.strip()
+        ]
+        if not gaps:
+            return
+        import csv as _csv
+
+        with open(doc.gaps, "w", newline="") as handle:
+            writer = _csv.DictWriter(
+                handle, fieldnames=["subject", "predicate", "object", "evidence"]
+            )
+            writer.writeheader()
+            writer.writerows(gaps)
+        self.log(
+            f"  gaps: {len(gaps)} relation(s) no property expresses "
+            f"(review {doc.gaps.name})"
+        )
+
+    def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
+        from yizkr.pipeline.critique import run_critique
+        from yizkr.pipeline.llm import make_client
+
+        findings = run_critique(make_client(self.llm), batch)
+        doc.critique.write_text(
+            json.dumps([f.model_dump() for f in findings], indent=2)
+        )
+        if findings:
+            self.log(f"  critique: {len(findings)} concern(s) flagged for review")
+            for finding in findings[:6]:
+                self.log(f"    - {finding.target}: {finding.issue}", file=sys.stderr)
+        return findings
+
+    def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
+        """entity local_id -> concatenated critic concerns, for the review
+        CSV warning column."""
+        if not doc.critique.exists():
+            return {}
+        notes: dict[str, str] = {}
+        for finding in json.loads(doc.critique.read_text()):
+            target = finding.get("target", "")
+            # "e01", "e01 alias: X", or "claim: e01 prop" -> the entity id
+            tokens = target.replace("claim:", "").split()
+            entity_id = tokens[0] if tokens else ""
+            if entity_id:
+                note = f"critique: {finding.get('issue', '')}"
+                notes[entity_id] = (
+                    f"{notes[entity_id]}; {note}" if entity_id in notes else note
+                )
+        return notes
 
     def _step_write(self, doc: DocumentRun, batch: ClaimBatch) -> dict:
         from yizkr.pipeline.review import apply_review
@@ -462,12 +527,18 @@ class Orchestrator:
             # an upstream redo invalidates everything derived from the
             # old batch — stale machine outputs must never gate or write
             for stale in (doc.equivalences, doc.resolved, doc.review,
-                          doc.approved, doc.write_result):  # fmt: skip
+                          doc.approved, doc.write_result,
+                          doc.gaps, doc.critique):  # fmt: skip
                 stale.unlink(missing_ok=True)
             doc.batch.write_text(batch.model_dump_json(indent=2))
             doc.state.status = BATCHED
             doc.save()
             self.log(f"  batch: {len(batch.claims)} claims")
+            # open-schema harness (ADR-0013): surface unmappable relations
+            # and run the extraction critic once per batch generation
+            self._surface_gaps(doc)
+            if doc.source.suffix.lower() not in GEDCOM_SUFFIXES:
+                self._step_critique(doc, batch)
         else:
             batch = ClaimBatch.model_validate_json(doc.batch.read_text())
 

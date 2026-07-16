@@ -262,6 +262,24 @@ class TestManifestValidation:
         problems = validate_against_manifest(batch(claim))
         assert any("wizard" in p for p in problems)
 
+    def test_open_schema_entity_validates(self):
+        # ADR-0013: an unclassified entity with a type hint is valid
+        parsed = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "entities": [
+                    {
+                        "id": "e01",
+                        "label": "SS Rotterdam",
+                        "kind": "unclassified_entity",
+                        "type_hint": "ship",
+                    }
+                ],
+            }
+        )
+        assert validate_against_manifest(parsed) == []
+        assert parsed.entities[0].type_hint == "ship"
+
     def test_all_problems_reported_at_once(self):
         problems = validate_against_manifest(
             batch(

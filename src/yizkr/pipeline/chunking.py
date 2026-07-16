@@ -174,19 +174,29 @@ definition of this JSON Schema:
 
 {schema}
 
-After the last claim, end with exactly one final line:
-{{"done": true, "claims_emitted": N}}
-where N is the number of claim lines you emitted.
+If the source asserts a RELATION that NO listed property expresses (e.g.
+"deported to", "imprisoned at", "employed by" when no such property is
+listed), do NOT force it into a wrong property and do NOT silently drop
+it: emit a GAP line instead —
+{{"gap": {{"subject": "<local_id or name>", "predicate": "<the relation, verbatim>",
+"object": "<local_id, name, or literal>", "evidence": "<short excerpt>"}}}}
+Gaps are reviewed to grow the vocabulary; they are never invented and
+never used when a real property fits.
+
+After the last line, end with exactly one final line:
+{{"done": true, "claims_emitted": N, "gaps_emitted": M}}
+where N and M count the claim and gap lines you emitted.
 {document_block}"""
 
 
 LINE_ASSIGNMENT_BLOCK = """\
-Refer to people, places, events, and occupations with "local"
-references (stable local_id per entity within this response, label as
-written — prefer the fullest name the document gives for a person
-anywhere, instance_of from: human, place, event, birth, death,
-marriage, migration, military_service, occupation_class). An
-occupation value keeps the source's exact wording as its label.
+Refer to people, places, organizations, events, and occupations with
+"local" references (stable local_id per entity within this response,
+label as written — prefer the fullest name the document gives for a
+person anywhere, instance_of from: human, place, organization, event,
+birth, death, marriage, migration, military_service, occupation_class).
+An organization (company, committee, agency) is an agent, never a place.
+An occupation value keeps the source's exact wording as its label.
 
 Extract claims ONLY for the assigned units below — nothing from other
 parts of the document, even though you can see them. Use the rest of
@@ -223,10 +233,14 @@ Assigned entities:
 ENTITY_MANIFEST_PROMPT = """\
 You are preparing a genealogical claim extraction. First pass: read the
 whole transcription and produce a manifest of EVERY distinct entity it
-mentions — people, places, events (births, deaths, marriages,
-migrations, military service), and occupations or professions it names
-for people (kind occupation_class, label in the source's exact
-wording). Unify aliases: one entity that appears
+mentions — people, places, organizations (a company, bank, committee,
+government body, school, or congregation — anything the source treats as
+an AGENT that employs, helps, hires, or is registered/taxed; kind
+organization, NOT place — an organization has a location, it is not
+one), events (births, deaths, marriages, migrations, military service),
+and occupations or professions it names for people (kind
+occupation_class, label in the source's exact wording). Unify aliases:
+one entity that appears
 as "Rosa Genserowski", "Rosa", and "our great grandmother" is ONE
 manifest entry whose label is the fullest form the document gives and
 whose aliases list every other form, verbatim. Aliases are ways the
@@ -240,11 +254,20 @@ Output ONE JSON object, no prose, no code fences:
 "aliases": ["<other forms, verbatim>", ...], "kind": "<one of: {kinds}>",
 "summary": "<one line: who/what this is, with key dates/relations>",
 "mention_lines": [<line numbers where it is mentioned>],
+"type_hint": "<only when kind is unclassified_entity — see below>",
 "extract": <true, or false — see below>}}, ...]}}
 
 Rules:
 - One entry per real-world entity, however many aliases it has.
 - ids must be unique. Do NOT include a "qid" field.
+- NEVER force an entity into a wrong-but-adjacent kind. A company,
+  bank, committee, or agency is an `organization`, NOT a place and NOT a
+  person. If an entity clearly exists but NO listed kind fits it (a
+  ship, a regiment, a building that is not a settlement), use kind
+  `unclassified_entity` and set `type_hint` to what it actually is
+  ("ship", "military regiment"). This is a LAST resort — use a real
+  kind whenever one fits; `unclassified_entity` without a type_hint is
+  invalid.
 - Prefer completeness: an entity mentioned once still gets an entry.
 - extract=false for entities that appear ONLY in non-assertive context:
   travel/event logistics, room or seating assignments, contemporary
@@ -282,6 +305,30 @@ def parse_chunk_response(response: str) -> list[dict]:
     if sentinel != len(claims):
         raise ChunkIncomplete(f"sentinel says {sentinel} claims, parsed {len(claims)}")
     return claims
+
+
+def parse_chunk_gaps(response: str) -> list[dict]:
+    """Gap lines (ADR-0013): relations no property expresses, surfaced
+    for review, never written to the graph.
+
+    A gap line is ``{"gap": {"subject", "predicate", "object",
+    "evidence"?}}``. Malformed gaps are dropped silently — a gap is an
+    advisory signal, never a gate, so it must never fail a chunk (that is
+    the sentinel's job, and gaps are counted separately in it).
+    """
+    gaps: list[dict] = []
+    for obj in scan_json_objects(response):
+        gap = obj.get("gap")
+        if isinstance(gap, dict) and gap.get("subject") and gap.get("predicate"):
+            gaps.append(
+                {
+                    "subject": str(gap.get("subject", "")),
+                    "predicate": str(gap.get("predicate", "")),
+                    "object": str(gap.get("object", "")),
+                    "evidence": str(gap.get("evidence", "")),
+                }
+            )
+    return gaps
 
 
 def pack_units(
@@ -429,6 +476,9 @@ class ChunkedClaimExtractor:
         self.concurrency = max(1, concurrency)
         self._state_lock = threading.Lock()
         self.failed_chunks: list[str] = []
+        # open-schema gaps (ADR-0013): relations no property expresses,
+        # collected per run for review; never written to the graph
+        self.gaps: list[dict] = []
         # entity manifest unusable -> line-range segmentation was used
         self.used_fallback_manifest = False
         # line-range segmentation also unusable -> offset windows
@@ -458,8 +508,9 @@ class ChunkedClaimExtractor:
         """
         line_count = len(transcription.text.splitlines())
         prompt = ENTITY_MANIFEST_PROMPT.format(
-            kinds="human, place, event, birth, death, marriage, "
-            "migration, military_service, occupation_class",
+            kinds="human, place, organization, event, birth, death, "
+            "marriage, migration, military_service, occupation_class, "
+            "unclassified_entity",
             artifact_qid=artifact_qid,
             language=transcription.language,
             numbered_text=number_lines(transcription.text),
@@ -833,9 +884,18 @@ class ChunkedClaimExtractor:
         self.failed_chunks.sort()
 
         raw_claims: list[dict] = []
+        gaps: list[dict] = []
         for chunk_id, parsed in zip(chunk_ids, outcomes, strict=True):
             if parsed is not None:
                 raw_claims.extend(transform(claim, chunk_id) for claim in parsed)
+                # gaps come from the persisted raw response, so they cost
+                # no extra model call and survive resume (ADR-0013)
+                raw = self._read(f"{chunk_id}.raw.txt")
+                if raw:
+                    gaps.extend(parse_chunk_gaps(raw))
+        self.gaps = gaps
+        if gaps:
+            self._write("gaps.ndjson", "\n".join(map(json.dumps, gaps)))
 
         deduped: list[dict] = []
         for claim in raw_claims:

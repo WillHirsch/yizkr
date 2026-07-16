@@ -204,6 +204,15 @@ properties:
     datatype: wikibase-item
     wikidata: P106
 
+  employer:
+    label: employer
+    description: >-
+      organization the person works or worked for, as asserted by a
+      source; orthogonal to occupation (what they do vs whom they work
+      for) — ADR-0012. Date with start/end time qualifiers
+    datatype: wikibase-item
+    wikidata: P108
+
   burial_place:
     label: place of burial
     description: place where the subject is buried, as asserted by a source
@@ -355,6 +364,17 @@ properties:
       - checksum
       - content hash
 
+  # --- open-schema harness (ADR-0013) ---
+
+  type_hint:
+    label: type hint
+    description: >-
+      free-text note of what an unclassified entity actually is
+      ("company", "ship", "regiment"), recorded when no modelled kind
+      fits — the input to the next vocabulary round, never a substitute
+      for a real class
+    datatype: string
+
 items:
   # --- core classes (docs/MODELING.md) ---
 
@@ -368,6 +388,17 @@ items:
   place:
     label: place
     description: geographic place, including historical places that no longer exist
+
+  organization:
+    label: organization
+    description: >-
+      an organization acting as an agent — company, bank, committee,
+      government body, school, or congregation (ADR-0012); distinct from
+      place (it has a location, it is not one), typed by primary role
+    aliases:
+      - company
+      - institution
+    wikidata: Q43229
 
   time_period_class:
     label: time period
@@ -395,6 +426,14 @@ items:
     label: occupation
     description: occupation or profession named by sources; the value class for the occupation property, with labels kept in the source's wording
     wikidata: Q12737077
+
+  unclassified_entity:
+    label: unclassified entity
+    description: >-
+      open-schema holding class (ADR-0013): a real entity a source
+      asserts exists but that no modelled kind can express yet, kept
+      queryable (with a type hint) to drive vocabulary growth without
+      mistyping it as a person or place
 
   # --- event types (subclasses of event) ---
 

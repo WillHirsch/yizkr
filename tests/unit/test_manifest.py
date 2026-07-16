@@ -76,6 +76,17 @@ class TestRealManifest:
         ):
             assert key in manifest.items, key
 
+    def test_organization_class_and_employer(self, manifest):
+        """ADR-0012: organizations are agents, distinct from place."""
+        assert "organization" in manifest.items
+        assert manifest.items["organization"].subclass_of is None  # top-level
+        assert manifest.properties["employer"].datatype == "wikibase-item"
+
+    def test_open_schema_holding_class_and_type_hint(self, manifest):
+        """ADR-0013: the escape hatch's holding class and hint property."""
+        assert "unclassified_entity" in manifest.items
+        assert manifest.properties["type_hint"].datatype == "string"
+
     def test_schema_source_has_no_superclass(self, manifest):
         """The manifest item is a reference target, not part of the taxonomy."""
         assert manifest.items[manifest.schema_source_item].subclass_of is None

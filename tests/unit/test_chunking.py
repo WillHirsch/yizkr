@@ -13,6 +13,7 @@ from yizkr.pipeline.chunking import (
     normalize_to_manifest,
     pack_entities,
     pack_units,
+    parse_chunk_gaps,
     parse_chunk_response,
     prefix_local_ids,
     unit_text,
@@ -238,6 +239,64 @@ class TestChunkResponseContract:
     def test_valid_ndjson_parses(self):
         claims = parse_chunk_response(ndjson([claim("e1", "Anna Example", 1900)]))
         assert len(claims) == 1
+
+    def test_gap_lines_and_extended_sentinel_do_not_break_claims(self):
+        # ADR-0013: gap lines + gaps_emitted in the sentinel are ignored
+        # by the claim parser (non-breaking), and the claim count still
+        # matches the sentinel's claims_emitted
+        response = "\n".join(
+            [
+                json.dumps(claim("e1", "Anna Example", 1900)),
+                json.dumps(
+                    {
+                        "gap": {
+                            "subject": "e1",
+                            "predicate": "deported to",
+                            "object": "Riga",
+                            "evidence": "...",
+                        }
+                    }
+                ),  # fmt: skip
+                json.dumps({"done": True, "claims_emitted": 1, "gaps_emitted": 1}),
+            ]
+        )
+        claims = parse_chunk_response(response)
+        assert len(claims) == 1
+
+
+class TestGapChannel:
+    """ADR-0013: relations no property expresses, surfaced not written."""
+
+    def test_gap_line_parsed(self):
+        response = "\n".join(
+            [
+                json.dumps(claim("e1", "Anna Example", 1900)),
+                json.dumps(
+                    {
+                        "gap": {
+                            "subject": "e1",
+                            "predicate": "imprisoned at",
+                            "object": "Sachsenhausen",
+                            "evidence": "held there",
+                        }
+                    }
+                ),  # fmt: skip
+                json.dumps({"done": True, "claims_emitted": 1, "gaps_emitted": 1}),
+            ]
+        )
+        (gap,) = parse_chunk_gaps(response)
+        assert gap["predicate"] == "imprisoned at"
+        assert gap["object"] == "Sachsenhausen"
+
+    def test_malformed_gaps_dropped_never_raise(self):
+        response = "\n".join(
+            [
+                json.dumps({"gap": {"predicate": "no subject"}}),  # missing subject
+                json.dumps({"gap": "not an object"}),
+                json.dumps({"done": True, "claims_emitted": 0, "gaps_emitted": 0}),
+            ]
+        )
+        assert parse_chunk_gaps(response) == []
 
 
 class TestLocalRefRewrites:

@@ -366,6 +366,23 @@ class TestLivingWarning:
             rows = list(__import__("csv").DictReader(f))
         assert all(row["warning"] == "" for row in rows)
 
+    def test_critique_notes_merge_into_warning_column(self, tmp_path):
+        # ADR-0013: the critic's concerns for an entity ride the review
+        # CSV warning column, alongside any living-person warning
+        csv_path = tmp_path / "review.csv"
+        # notes arrive already formatted (the orchestrator adds "critique:")
+        export_review_csv(
+            batch(),
+            csv_path,
+            cutoff_year=2100,  # suppress living warnings to isolate the note
+            critique_notes={"person-1": "critique: role label 'MOTHER' is not a name"},
+        )
+        with open(csv_path, newline="") as f:
+            rows = list(__import__("csv").DictReader(f))
+        person1_rows = [r for r in rows if "person-1" in r["subject"]]
+        assert person1_rows
+        assert all("critique:" in r["warning"] for r in person1_rows)
+
     def test_graph_death_knowledge_suppresses_warning(self, tmp_path):
         source = batch()
         qid_subject = source.claims[0].model_copy(update={"subject": QidRef(qid="Q99")})

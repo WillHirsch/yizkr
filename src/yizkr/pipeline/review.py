@@ -216,9 +216,16 @@ def export_review_csv(
     path: Path,
     known_deaths: set[str] | None = None,
     cutoff_year: int | None = None,
+    critique_notes: dict[str, str] | None = None,
 ) -> int:
-    """Write the review CSV; returns the number of rows."""
+    """Write the review CSV; returns the number of rows.
+
+    `critique_notes` (ADR-0013): entity local_id -> concern from the
+    extraction critic, merged into the `warning` column so the curator
+    sees flagged mistypes/role-aliases at this gate.
+    """
     warnings = living_warnings(batch, known_deaths, cutoff_year)
+    critique_notes = critique_notes or {}
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         writer.writeheader()
@@ -244,7 +251,16 @@ def export_review_csv(
                     "confidence": claim.confidence
                     if claim.confidence is not None
                     else "",
-                    "warning": warnings.get(_subject_key(claim), ""),
+                    "warning": "; ".join(
+                        note
+                        for note in (
+                            warnings.get(_subject_key(claim), ""),
+                            critique_notes.get(
+                                getattr(claim.subject, "local_id", None) or "", ""
+                            ),
+                        )
+                        if note
+                    ),
                     "decision": "",
                     "correction": "",
                     "living": "",

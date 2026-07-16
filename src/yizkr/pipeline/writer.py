@@ -143,6 +143,16 @@ class BatchWriter:
             claim.references = self._references(artifact_qid=source_artifact_qid)
             self._append(item, claim)
             item.write(summary="ingest: instance of")
+        # open-schema escape hatch (ADR-0013): record what an unclassified
+        # entity actually is, so the gap is queryable, not lost
+        type_hint = record.type_hint if record else None
+        if type_hint and source_artifact_qid:
+            from wikibaseintegrator.datatypes import String
+
+            hint = String(prop_nr=self.properties["type_hint"], value=type_hint)
+            hint.references = self._references(artifact_qid=source_artifact_qid)
+            self._append(item, hint)
+            item.write(summary="ingest: type hint (unclassified entity)")
         result.created_items[ref.local_id] = qid
         return qid
 

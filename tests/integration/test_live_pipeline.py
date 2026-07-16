@@ -519,3 +519,105 @@ def test_typed_names_write_and_round_trip(client, artifact):
     assert one("birth_name") == {"text": "Integration Testerson", "language": "en"}
     assert one("married_name") == {"text": "Integration Person", "language": "en"}
     assert one("nickname") == {"text": "Iggy", "language": "en"}
+
+
+def harness_batch(artifact_qid: str) -> ClaimBatch:
+    """An organization + employer relation, and an unclassified entity
+    carrying a type hint (ADR-0012 / ADR-0013)."""
+    source = {
+        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "page_number": "1",
+        "transcription_excerpt": {"text": "worked at the mill", "language": "en"},
+    }
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": {
+                "model_identifier": "integration-test",
+                "pipeline_version": "0.0.0",
+                "started_at": datetime.now(UTC).isoformat(),
+            },
+            "claims": [
+                {
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "person-1",
+                        "label": PERSON_LABEL,
+                        "instance_of": "human",
+                    },  # fmt: skip
+                    "property": "employer",
+                    "value": {
+                        "type": "item",
+                        "value": {
+                            "kind": "local",
+                            "local_id": "org-1",
+                            "label": "Integration Test Mill AG",
+                            "instance_of": "organization",
+                        },
+                    },  # fmt: skip
+                    "source": source,
+                },
+                {
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "ship-1",
+                        "label": "SS Integration",
+                        "instance_of": "unclassified_entity",
+                    },  # fmt: skip
+                    "property": "point_in_time",
+                    "value": {"type": "time", "year": 1912},
+                    "source": source,
+                },
+            ],
+            "entities": [
+                {"id": "person-1", "label": PERSON_LABEL, "kind": "human"},
+                {
+                    "id": "org-1",
+                    "label": "Integration Test Mill AG",
+                    "kind": "organization",
+                },  # fmt: skip
+                {
+                    "id": "ship-1",
+                    "label": "SS Integration",
+                    "kind": "unclassified_entity",
+                    "type_hint": "ocean liner",
+                },  # fmt: skip
+            ],
+        }
+    )
+
+
+def test_organization_employer_and_type_hint_write(client, artifact):
+    """ADR-0012/0013: an organization is written and linked by employer;
+    an unclassified entity is written under the holding class with its
+    type hint — never mistyped as a person or place."""
+    writer = BatchWriter(client)
+    result = writer.write_batch(harness_batch(artifact.artifact_qid))
+    person_qid = result.created_items["person-1"]
+    org_qid = result.created_items["org-1"]
+    ship_qid = result.created_items["ship-1"]
+    properties, items = client.vocabulary()
+
+    def claim_values(entity, prop_key):
+        data = client.api_get(
+            {
+                "action": "wbgetclaims",
+                "entity": entity,
+                "property": properties[prop_key],
+            }  # fmt: skip
+        )
+        return [
+            c["mainsnak"]["datavalue"]["value"]
+            for cs in data["claims"].values()
+            for c in cs
+        ]
+
+    # employer links the person to the organization item
+    assert org_qid in {v["id"] for v in claim_values(person_qid, "employer")}
+    assert items["organization"] in {
+        v["id"] for v in claim_values(org_qid, "instance_of")
+    }
+    # the unclassified entity is held under the holding class, hint recorded
+    assert items["unclassified_entity"] in {
+        v["id"] for v in claim_values(ship_qid, "instance_of")
+    }
+    assert "ocean liner" in claim_values(ship_qid, "type_hint")

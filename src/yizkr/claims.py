@@ -382,6 +382,11 @@ class EntityRecord(StrictModel):
     # claims the archive does not want (contemporary living people in
     # incidental roles). Mirrors SegmentationUnit.extract.
     extract: bool = True
+    # open-schema escape hatch (ADR-0013): free-text note of what an
+    # entity actually is when kind is `unclassified_entity` (no modelled
+    # kind fits). Written as a `type_hint` string statement; drives the
+    # next vocabulary round instead of the entity being mistyped.
+    type_hint: str | None = None
     qid: str | None = Field(default=None, pattern=r"^Q[1-9]\d*$")
 
 

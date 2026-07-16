@@ -29,8 +29,11 @@
 - artifact (subclasses: photograph, certificate, letter, census page,
   newspaper clipping, presentation, genealogical report, address
   book, ...)
+- organization (an agent — company, bank, committee, government body,
+  school, congregation; distinct from place — see ADR-0012)
 - occupation (values of the `occupation` property; labels keep the
   source's wording)
+- unclassified entity (the open-schema holding class — see ADR-0013)
 - artifact fragment (a page, crop, or region of an artifact)
 - extraction run (one pipeline execution: model name+version, date,
   prompt/pipeline version, software commit)
@@ -87,6 +90,23 @@ keys resolved to local ids only at write time.
   linking confirmed alternate versions is a curator judgement through a
   future review queue and a `version of` relation (ADR-0010), never an
   automatic merge — the same rule as person identity (ADR-0007).
+
+## Organizations (see ADR-0012)
+
+- An `organization` is an agent — a company, bank, committee, government
+  body, school, or congregation. It is **distinct from `place`**: an
+  organization has a `location`, it is not one. Typed by primary role —
+  a source that treats an entity as an agent (employs, is deregistered,
+  helps, hires) makes it an organization; one that treats it as a
+  location (born at, died at, lives in) makes it a place. Dual-nature
+  entities (a hospital that is also a birthplace) pick their dominant
+  use in the document; genuine dual `instance of` is deferred.
+- `employer` (P108) links a person to an organization, orthogonal to
+  `occupation`: what someone does (occupation, an occupation item) and
+  whom they work for (employer, an organization item) are independent,
+  separately-referenced claims. Date employment with start/end time.
+- Organization labels keep the source's wording; normalisation is a
+  curator edit, never an extraction guess.
 
 ## Uncertainty and time
 
