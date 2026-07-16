@@ -470,6 +470,8 @@ def cmd_run(args) -> int:
         language=args.language,
         fallback_language=args.fallback_language,
         chunk_concurrency=args.chunk_concurrency,
+        extract_effort=args.extract_effort,
+        review_effort=args.review_effort,
         env_file=args.env_file,
     ).run()
 
@@ -828,6 +830,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="run up to N extraction chunks in parallel per document "
         "(chunks are independent; default 3). Lower it if the engine "
         "rate-limits; 1 is fully sequential",
+    )
+    effort_choices = ["low", "medium", "high", "xhigh", "max"]
+    p.add_argument(
+        "--extract-effort",
+        choices=effort_choices,
+        default="low",
+        help="reasoning effort for the mechanical bulk steps "
+        "(transcription, extraction). Default low — these are high-volume "
+        "and deep thinking there is wasted (claude-code engine only)",
+    )
+    p.add_argument(
+        "--review-effort",
+        choices=effort_choices,
+        default="high",
+        help="reasoning effort for the judgment steps (adjudication/"
+        "equivalence, critique). Default high — low-volume, high-stakes "
+        "decisions worth the thinking (claude-code engine only)",
     )
     p.set_defaults(func=cmd_run)
 

@@ -585,7 +585,23 @@ class TestClaudeCodeClient:
 
         monkeypatch.setattr(llm.subprocess, "run", fake_run)
         monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
+        monkeypatch.delenv("YIZKR_LLM_EFFORT", raising=False)
         return llm.ClaudeCodeClient(), calls
+
+    def test_effort_flag(self, monkeypatch):
+        monkeypatch.delenv("YIZKR_LLM_EFFORT", raising=False)
+        from yizkr.pipeline import llm
+
+        monkeypatch.setattr(
+            llm.subprocess, "run", lambda *a, **k: FakeCompleted(stdout="2.1.207\n")
+        )
+        # no effort configured -> no flag (unchanged default behaviour)
+        assert "--effort" not in llm.ClaudeCodeClient()._command()
+        # explicit effort -> passed through as `--effort <level>`
+        cmd = llm.ClaudeCodeClient(effort="low")._command()
+        assert cmd[cmd.index("--effort") + 1] == "low"
+        # make_client threads it for the claude-code engine
+        assert "--effort" in llm.make_client("claude-code", effort="medium")._command()
 
     def test_version_probe_and_identifier(self, monkeypatch):
         client, calls = self.make_client(

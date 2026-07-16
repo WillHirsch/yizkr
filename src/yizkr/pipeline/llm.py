@@ -158,11 +158,19 @@ class ClaudeCodeClient:
         executable: str = "claude",
         timeout: int = 1200,
         max_turns: int = 30,
+        effort: str | None = None,
     ) -> None:
         self.executable = executable
         self.model = model if model is not None else os.environ.get("YIZKR_LLM_MODEL")
         self.timeout = timeout
         self.max_turns = max_turns
+        # reasoning effort (low..max). Adaptive-reasoning models ignore
+        # MAX_THINKING_TOKENS, so this is the lever that stops mechanical
+        # steps (transcription, extraction) burning 100k+ thinking tokens
+        # per call while judgment steps (adjudication, critique) keep high.
+        self.effort = (
+            effort if effort is not None else os.environ.get("YIZKR_LLM_EFFORT")
+        )
         try:
             version = subprocess.run(
                 [self.executable, "--version"],
@@ -208,6 +216,8 @@ class ClaudeCodeClient:
         ]
         if self.model:
             command += ["--model", self.model]
+        if self.effort:
+            command += ["--effort", self.effort]
         return command
 
     @staticmethod
@@ -307,12 +317,16 @@ class ClaudeCodeClient:
         return shutil.which(executable) is not None
 
 
-def make_client(engine: str) -> LlmClient:
-    """CLI engine name -> client. Extend here when adding providers."""
+def make_client(engine: str, *, effort: str | None = None) -> LlmClient:
+    """CLI engine name -> client. Extend here when adding providers.
+
+    ``effort`` is the claude-code reasoning level (low..max); it has no
+    effect on the anthropic API path yet, so it is only threaded there.
+    """
     if engine == "anthropic":
         return AnthropicClient()
     if engine == "claude-code":
-        return ClaudeCodeClient()
+        return ClaudeCodeClient(effort=effort)
     raise ValueError(
         f"unknown LLM engine {engine!r}; available: anthropic (API key, "
         f"token billing), claude-code (CLI login, subscription billing) — "

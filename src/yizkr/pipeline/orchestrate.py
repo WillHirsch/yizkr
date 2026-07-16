@@ -138,6 +138,8 @@ class Orchestrator:
         language: str = "auto",
         fallback_language: str = "en",
         chunk_concurrency: int = 3,
+        extract_effort: str = "low",
+        review_effort: str = "high",
         env_file: Path | None = None,
         log=print,
     ) -> None:
@@ -148,6 +150,11 @@ class Orchestrator:
         self.language = language
         self.fallback_language = fallback_language
         self.chunk_concurrency = chunk_concurrency
+        # reasoning effort per phase: mechanical bulk steps (transcription,
+        # extraction) run low; judgment steps (adjudication, critique) run
+        # high — where the thinking is cheap and the decision matters.
+        self.extract_effort = extract_effort
+        self.review_effort = review_effort
         self.env_file = env_file
         self.log = log
         self._config: Config | None = None
@@ -307,7 +314,7 @@ class Orchestrator:
                 from yizkr.pipeline.transcribe import LlmVisionTranscriber
 
                 transcriber = LlmVisionTranscriber(
-                    make_client(self.llm),
+                    make_client(self.llm, effort=self.extract_effort),
                     language=self.language,
                     fallback_language=self.fallback_language,
                 )
@@ -344,7 +351,7 @@ class Orchestrator:
         # document costs a few extra calls and is never incorrect
         # (ADR-0006 §7).
         extractor = ChunkedClaimExtractor(
-            make_client(self.llm),
+            make_client(self.llm, effort=self.extract_effort),
             state_dir=doc.batch.with_name(doc.batch.name + ".chunks"),
             resume=True,
             concurrency=self.chunk_concurrency,
@@ -371,7 +378,12 @@ class Orchestrator:
         roster = fetch_roster(self.client, self.config)
         candidates = block_candidates(batch.entities, roster)
         proposals = (
-            adjudicate(make_client(self.llm), batch.entities, candidates, batch)
+            adjudicate(
+                make_client(self.llm, effort=self.review_effort),
+                batch.entities,
+                candidates,
+                batch,
+            )
             if candidates
             else []
         )
@@ -441,7 +453,7 @@ class Orchestrator:
         from yizkr.pipeline.critique import run_critique
         from yizkr.pipeline.llm import make_client
 
-        findings = run_critique(make_client(self.llm), batch)
+        findings = run_critique(make_client(self.llm, effort=self.review_effort), batch)
         doc.critique.write_text(
             json.dumps([f.model_dump() for f in findings], indent=2)
         )
