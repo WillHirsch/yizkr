@@ -71,6 +71,13 @@ class ScriptedOrchestrator(Orchestrator):
             return super()._step_batch(doc)  # exercises the real adapter
         return make_batch()
 
+    def _step_critique(self, doc, batch):
+        # ADR-0013's extraction critic invokes the LLM; the offline
+        # state-machine tests stub it out, like every other heavy step,
+        # so they never reach for a client (CI has none).
+        self.calls.append(f"critique:{doc.source.name}")
+        return []
+
     def _step_reconcile(self, doc, batch):
         self.calls.append(f"reconcile:{doc.source.name}")
         with open(doc.equivalences, "w", newline="") as f:
