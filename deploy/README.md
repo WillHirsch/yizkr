@@ -77,12 +77,16 @@ one-off container:
 
 ```sh
 cd deploy && docker compose -f docker-compose.yml -f docker-compose.localhost.yml \
-    --profile cli run --rm -v /path/to/documents:/data \
+    --profile cli run --rm --user "$(id -u):$(id -g)" -v /path/to/documents:/data \
     yizkr ingest run /data --llm anthropic --language auto
 ```
 
-(`--llm claude-code` needs that CLI, which is not in the image — run those
-ingests from the host.)
+`--user "$(id -u):$(id -g)"` makes the outputs the CLI writes into `../var`
+land with your ownership rather than root's. `make cli` / `make up-local`
+supply this automatically (via the `user:` line in the overlay); pass it
+explicitly on raw `docker compose run` invocations. (`--llm claude-code`
+needs that CLI, which is not in the image — run those ingests from the
+host.)
 
 The DB/media restore steps (below) use `docker compose exec mysql|wikibase`
 and run *inside* containers, so they never needed host DNS in the first

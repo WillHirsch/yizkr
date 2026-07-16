@@ -2,6 +2,10 @@
 UV ?= uv
 # Single-host run with in-network hostname resolution (no /etc/hosts edit).
 COMPOSE_LOCAL = docker compose -f docker-compose.yml -f docker-compose.localhost.yml
+# Feed the host uid/gid to the containerised CLI so files it writes into the
+# ../var bind mount are owned by you, not root (compose reads ${UID}/${GID}).
+export UID := $(shell id -u)
+export GID := $(shell id -g)
 
 .PHONY: install test test-live lint fmt up down up-local cli bootstrap smoke publish-queries
 

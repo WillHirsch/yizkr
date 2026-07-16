@@ -25,6 +25,12 @@ services:
   # `up`; invoke one-off commands with `run --rm`.
   yizkr:
     profiles: ["cli"]
+    # Run as the host user so files the CLI writes into the ../var bind
+    # mount are owned by you, not root. `make cli` / `make up-local` feed
+    # UID/GID; a raw `docker compose run` should add --user (UID is a
+    # readonly bash var, so it can't be set inline) or export UID/GID.
+    # Falls back to root only if neither is provided.
+    user: "${UID:-0}:${GID:-0}"
     build:
       context: ..
       dockerfile: Dockerfile
