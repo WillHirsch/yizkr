@@ -49,7 +49,12 @@ Every statement carries at least one reference with:
 - locator qualifier(s): page number, and/or region given as a
   percentage bounding box "x%,y%,w%,h%" (W1/W3) or a IIIF
   canvas+xywh URI (W2)
-- optional short transcription excerpt supporting human verification
+- optional short transcription excerpt supporting human verification,
+  tagged with the language it is written in (BCP-47). `yizkr ingest run`
+  detects each document's language from its transcription by default
+  (`--language auto`, ADR-0015), so a mixed-language folder tags each
+  excerpt correctly; the extractor may still tag individual excerpts in
+  their own language (a quoted passage in another tongue)
 
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item

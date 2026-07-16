@@ -451,6 +451,62 @@ class TestFreshness:
         assert writes_after == writes_before + 1
 
 
+class TestTranscribeLanguage:
+    """Whole-folder ingestion detects each document's language (offline,
+    via the text-file engine — no LLM needed to exercise the wiring)."""
+
+    def _doc(self, tmp_path, name, text):
+        folder = tmp_path / "docs"
+        folder.mkdir(exist_ok=True)
+        (folder / name).write_text(text)
+        source = folder / name
+        doc = DocumentRun(source, tmp_path / "state")
+        doc.dir.mkdir(parents=True, exist_ok=True)  # register does this in the real flow
+        doc.state.artifact_qid = "Q1"
+        return doc
+
+    def test_auto_detects_per_document(self, tmp_path):
+        german = (
+            "Berlin, den 8. Dezember 1937. Sehr geehrter Herr Direktor, "
+            "hiermit bestaetige ich den Empfang Ihres Schreibens. Die "
+            "Steuerangelegenheit ist geklaert und der Betrag beglichen."
+        )
+        english = (
+            "I was born in Berlin in 1929, the youngest of three children. "
+            "My father ran a small flour mill and my earliest memories are "
+            "of the smell of grain and the turning of the great wheels."
+        )
+        # one orchestrator, default language (auto), two languages in a folder
+        orch = Orchestrator(tmp_path / "docs", tmp_path / "state", log=quiet)
+        de = orch._step_transcribe(self._doc(tmp_path, "brief.txt", german))
+        en = orch._step_transcribe(self._doc(tmp_path, "memoir.txt", english))
+        assert de.language == "de"
+        assert en.language == "en"
+
+    def test_explicit_language_forces_and_records_source(self, tmp_path):
+        german = "Sehr geehrter Herr Direktor, die Steuerangelegenheit."
+        orch = Orchestrator(
+            tmp_path / "docs", tmp_path / "state", language="fr", log=quiet
+        )
+        doc = self._doc(tmp_path, "brief.txt", german)
+        transcription = orch._step_transcribe(doc)
+        assert transcription.language == "fr"  # forced, not detected
+        assert doc.state.detail["language"]["source"] == "override"
+
+    def test_short_document_uses_fallback(self, tmp_path):
+        orch = Orchestrator(
+            tmp_path / "docs",
+            tmp_path / "state",
+            language="auto",
+            fallback_language="de",
+            log=quiet,
+        )
+        doc = self._doc(tmp_path, "receipt.txt", "1937")  # too short to detect
+        transcription = orch._step_transcribe(doc)
+        assert transcription.language == "de"
+        assert doc.state.detail["language"]["source"] == "fallback"
+
+
 class TestRegisterArtifactType:
     """Suffix-specific artifact classes at registration (item 10)."""
 

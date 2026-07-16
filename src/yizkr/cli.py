@@ -211,13 +211,19 @@ def cmd_transcribe(args) -> int:
             sys.exit("--engine textfile requires --text-file")
         from yizkr.pipeline.transcribe import TextFileTranscriber
 
-        transcriber = TextFileTranscriber(args.text_file, language=args.language)
+        transcriber = TextFileTranscriber(
+            args.text_file,
+            language=args.language,
+            fallback_language=args.fallback_language,
+        )
     elif args.engine == "llm":
         from yizkr.pipeline.llm import make_client
         from yizkr.pipeline.transcribe import LlmVisionTranscriber
 
         transcriber = LlmVisionTranscriber(
-            make_client(args.llm), language=args.language
+            make_client(args.llm),
+            language=args.language,
+            fallback_language=args.fallback_language,
         )
     else:  # htr
         from yizkr.pipeline.transcribe import HtrPlatformAdapter
@@ -462,6 +468,7 @@ def cmd_run(args) -> int:
         llm=args.llm,
         artifact_type=args.type,
         language=args.language,
+        fallback_language=args.fallback_language,
         env_file=args.env_file,
     ).run()
 
@@ -677,7 +684,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--text-file", type=Path, help="existing transcription (textfile engine)"
     )
-    p.add_argument("--language", default="en")
+    p.add_argument(
+        "--language",
+        default="auto",
+        help="document language (default 'auto' detects from the text); "
+        "an explicit code like de forces it",
+    )
+    p.add_argument(
+        "--fallback-language",
+        default="en",
+        help="language tag when auto-detection is inconclusive (default en)",
+    )
     p.add_argument(
         "--llm",
         default="anthropic",
@@ -788,7 +805,20 @@ def build_parser() -> argparse.ArgumentParser:
         default="artifact",
         help="manifest item key for registered artifacts (default artifact)",
     )
-    p.add_argument("--language", default="en")
+    p.add_argument(
+        "--language",
+        default="auto",
+        help="document language, e.g. de, en (tags source excerpts). "
+        "default 'auto' detects it per file from the transcription — a "
+        "mixed-language folder needs no per-file split; an explicit code "
+        "forces it for every file",
+    )
+    p.add_argument(
+        "--fallback-language",
+        default="en",
+        help="language tag for documents too short to auto-detect "
+        "(default en); ignored when --language is an explicit code",
+    )
     p.set_defaults(func=cmd_run)
 
     p = isub.add_parser(

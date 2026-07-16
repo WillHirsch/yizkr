@@ -333,6 +333,75 @@ def test_curated_claim_carries_no_run_reference(client, artifact):
     assert properties["inferred_from_extraction_run"] not in reference_properties
 
 
+def test_detected_language_tags_excerpt_reference(client, artifact):
+    """ADR-0015: a document the pipeline detects as non-English writes its
+    source excerpt with that language tag. The detected code (here `de`,
+    chosen by the real detector, not hand-set) must round-trip through the
+    reference snak — proving Wikibase accepts a detected tag end to end."""
+    from yizkr.pipeline.language import AUTO, resolve_language
+
+    german = (
+        "Geboren am dritten Maerz neunzehnhundertneunundzwanzig in Berlin, "
+        "gestorben im Jahr neunzehnhundertfuenfundvierzig in Theresienstadt."
+    )
+    resolution = resolve_language(german, AUTO)
+    assert resolution.code == "de"  # the pipeline picks the language itself
+
+    batch = ClaimBatch.model_validate(
+        {
+            "extraction_run": {
+                "model_identifier": "integration-test",
+                "pipeline_version": "0.0.0",
+                "started_at": datetime.now(UTC).isoformat(),
+            },
+            "claims": [
+                {
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "person-1",
+                        "label": PERSON_LABEL,
+                        "instance_of": "human",
+                    },
+                    "property": "date_of_birth",
+                    "value": {"type": "time", "year": 1929},
+                    "source": {
+                        "artifact": {"kind": "qid", "qid": artifact.artifact_qid},
+                        "page_number": "1",
+                        "transcription_excerpt": {
+                            "text": german[:60],
+                            "language": resolution.code,
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    result = BatchWriter(client).write_batch(batch)
+    person_qid = result.created_items["person-1"]
+
+    properties, _ = client.vocabulary()
+    excerpt_pid = properties["transcription_excerpt"]
+    data = client.api_get(
+        {
+            "action": "wbgetclaims",
+            "entity": person_qid,
+            "property": properties["date_of_birth"],
+        }
+    )
+    # find the excerpt this test wrote (by its German wording) and confirm
+    # its reference snak carries the detected `de` tag
+    excerpts = [
+        snak["datavalue"]["value"]
+        for claims in data["claims"].values()
+        for claim in claims
+        for ref in claim.get("references", [])
+        for snak in ref["snaks"].get(excerpt_pid, [])
+    ]
+    german_excerpts = [e for e in excerpts if e["text"].startswith("Geboren")]
+    assert german_excerpts, "the German excerpt was not written"
+    assert all(e["language"] == "de" for e in german_excerpts)
+
+
 def vocabulary_batch(artifact_qid: str) -> ClaimBatch:
     """One claim per item-10 vocabulary addition (quantity, monolingual
     cause, occupation item, burial place)."""

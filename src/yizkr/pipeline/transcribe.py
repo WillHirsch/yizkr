@@ -23,6 +23,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from yizkr.pipeline.language import LanguageResolution, resolve_language
 from yizkr.pipeline.llm import LlmClient
 
 TRANSCRIPTION_PROMPT = """\
@@ -50,18 +51,29 @@ class Transcriber(Protocol):
 
 
 class LlmVisionTranscriber:
-    def __init__(self, client: LlmClient, language: str = "en") -> None:
+    def __init__(
+        self,
+        client: LlmClient,
+        language: str = "en",
+        fallback_language: str = "en",
+    ) -> None:
         self.client = client
         self.language = language
+        self.fallback_language = fallback_language
+        # the resolution behind the last transcribe(), for callers to log
+        self.last_resolution: LanguageResolution | None = None
 
     def transcribe(
         self, media_path: Path, artifact_qid: str | None = None
     ) -> Transcription:
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
+        self.last_resolution = resolve_language(
+            text, self.language, fallback=self.fallback_language
+        )
         return Transcription(
             artifact_qid=artifact_qid,
             text=text,
-            language=self.language,
+            language=self.last_resolution.code,
             engine=f"llm-vision:{self.client.model_identifier}",
         )
 
@@ -69,17 +81,28 @@ class LlmVisionTranscriber:
 class TextFileTranscriber:
     """Wrap an existing transcription file (manual or external tool)."""
 
-    def __init__(self, text_file: Path, language: str = "en") -> None:
+    def __init__(
+        self,
+        text_file: Path,
+        language: str = "en",
+        fallback_language: str = "en",
+    ) -> None:
         self.text_file = text_file
         self.language = language
+        self.fallback_language = fallback_language
+        self.last_resolution: LanguageResolution | None = None
 
     def transcribe(
         self, media_path: Path, artifact_qid: str | None = None
     ) -> Transcription:
+        text = self.text_file.read_text()
+        self.last_resolution = resolve_language(
+            text, self.language, fallback=self.fallback_language
+        )
         return Transcription(
             artifact_qid=artifact_qid,
-            text=self.text_file.read_text(),
-            language=self.language,
+            text=text,
+            language=self.last_resolution.code,
             engine=f"text-file:{self.text_file.name}",
         )
 

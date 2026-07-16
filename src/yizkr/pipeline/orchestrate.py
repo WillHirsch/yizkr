@@ -135,7 +135,8 @@ class Orchestrator:
         *,
         llm: str = "claude-code",
         artifact_type: str = "artifact",
-        language: str = "en",
+        language: str = "auto",
+        fallback_language: str = "en",
         env_file: Path | None = None,
         log=print,
     ) -> None:
@@ -144,6 +145,7 @@ class Orchestrator:
         self.llm = llm
         self.artifact_type = artifact_type
         self.language = language
+        self.fallback_language = fallback_language
         self.env_file = env_file
         self.log = log
         self._config: Config | None = None
@@ -269,6 +271,7 @@ class Orchestrator:
         return result.batch
 
     def _step_transcribe(self, doc: DocumentRun):
+        from yizkr.pipeline.language import resolve_language
         from yizkr.pipeline.transcribe import Transcription
 
         if doc.transcription.exists():
@@ -278,28 +281,51 @@ class Orchestrator:
             # image to read; [Slide N] markers scope the claim locators
             from yizkr.pipeline.presentation import slide_transcript
 
+            text = slide_transcript(self._presentation(doc))
+            resolution = resolve_language(
+                text, self.language, fallback=self.fallback_language
+            )
             transcription = Transcription(
                 artifact_qid=doc.state.artifact_qid,
-                text=slide_transcript(self._presentation(doc)),
-                language=self.language,
+                text=text,
+                language=resolution.code,
                 engine="pptx-adapter",
             )
-            doc.transcription.write_text(transcription.model_dump_json(indent=2))
-            return transcription
-        if doc.source.suffix.lower() in TEXT_SUFFIXES:
-            from yizkr.pipeline.transcribe import TextFileTranscriber
-
-            transcriber = TextFileTranscriber(doc.source, language=self.language)
         else:
-            from yizkr.pipeline.llm import make_client
-            from yizkr.pipeline.transcribe import LlmVisionTranscriber
+            if doc.source.suffix.lower() in TEXT_SUFFIXES:
+                from yizkr.pipeline.transcribe import TextFileTranscriber
 
-            transcriber = LlmVisionTranscriber(
-                make_client(self.llm), language=self.language
+                transcriber = TextFileTranscriber(
+                    doc.source,
+                    language=self.language,
+                    fallback_language=self.fallback_language,
+                )
+            else:
+                from yizkr.pipeline.llm import make_client
+                from yizkr.pipeline.transcribe import LlmVisionTranscriber
+
+                transcriber = LlmVisionTranscriber(
+                    make_client(self.llm),
+                    language=self.language,
+                    fallback_language=self.fallback_language,
+                )
+            transcription = transcriber.transcribe(
+                doc.source, artifact_qid=doc.state.artifact_qid
             )
-        transcription = transcriber.transcribe(
-            doc.source, artifact_qid=doc.state.artifact_qid
-        )
+            resolution = transcriber.last_resolution
+        # detection is a per-document choice with real graph effect (the
+        # excerpt language tag): record it, and surface it when it was
+        # inferred rather than forced, so a wrong guess is reviewable.
+        if resolution is not None:
+            doc.state.detail = (doc.state.detail or {}) | {
+                "language": {
+                    "code": resolution.code,
+                    "source": resolution.source,
+                    "confidence": resolution.confidence,
+                }
+            }
+            if self.language == "auto":
+                self.log(f"  {doc.source.name}: language {resolution.describe()}")
         doc.transcription.write_text(transcription.model_dump_json(indent=2))
         return transcription
 
