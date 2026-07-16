@@ -285,6 +285,25 @@ primitive network and the *same* term set describes any pair:
   relationships describe uniformly and coexist (a match corroborates, a
   mismatch is an ordinary inconsistency).
 
+## Residence and co-residence (see ADR-0014)
+
+`residence` (P551) is directed **person → place** and multi-valued: each
+co-resident is the subject of their own referenced statement pointing at
+the same place item, with its own date qualifiers. The place is never the
+subject; there is no household statement enumerating occupants.
+
+- **Attribution on extraction.** An address stated on a form is asserted
+  for the person the field names (e.g. the informant on a birth
+  certificate), not for everyone the document mentions. One person's
+  stated address is never propagated onto others as their residence; a
+  dependent's residence inferred from a relative's address (a newborn at
+  the parents' address) is recorded only at lowered confidence.
+- **Co-residence is derived, never stored.** "Lived with" is a PATH —
+  two people with overlapping residences at the same place over
+  overlapping time — computed in the query/frontend layer, exactly like
+  kinship. No `co-resides-with` edge. (Asymmetric sheltering — "gave
+  refuge to" — is the separate, non-derivable case ADR-0014 tracks.)
+
 ## Persecution and displacement as events (see ADR-0014)
 
 Forced removal, detention, and freeing are **events**, not relations:

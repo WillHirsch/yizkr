@@ -173,6 +173,14 @@ Rules — these mirror the archive's non-negotiable conventions:
   use `relative` with a `kinship_type` qualifier holding the source's
   exact words. Record `sex_or_gender` (male/female vocab) when a source
   gives it.
+- Residence: an address stated on a form is asserted for the person that
+  field names (e.g. the informant/applicant on a certificate), NOT for
+  everyone the document mentions. Do not copy one person's stated address
+  onto others as their own `residence` — co-residence ("lived with") is
+  derived later from separately-sourced residences over overlapping time,
+  never asserted here. If you do record a dependent's residence from a
+  relative's address (e.g. a newborn at the parents' address), lower its
+  confidence to mark the inference.
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
 
 {assignment_block}
@@ -248,7 +256,10 @@ an AGENT that employs, helps, hires, or is registered/taxed; kind
 organization, NOT place — an organization has a location, it is not
 one), events (births, deaths, marriages, migrations, military service),
 and occupations or professions it names for people (kind
-occupation_class, label in the source's exact wording). Also: a named
+occupation_class, label in the source's exact wording). A hospital,
+clinic, school, or congregation is an `organization` even when the
+source names it only as WHERE an event happened (a place of birth or
+death): an organization HAS a location, it is not one. Also: a named
 family or household ("the Wulffs") is a `family`; a ship is a `vessel`;
 a cited law, decree, gazette, or register is a `legal_instrument`; a
 regiment or brigade is a `military_unit`. A forced removal is a
@@ -289,6 +300,13 @@ Rules:
   trip participants, boilerplate. They are recorded for audit but no
   claims are extracted about them. Entities the document asserts
   historical/genealogical facts about get extract=true.
+- On official certificates and registers the administrative apparatus is
+  boilerplate: the registrar, officiant, or witness who certifies the
+  record; the issuing authority (e.g. a General Register Office); and the
+  register or certificate the document cites as its own source are all
+  extract=false. They attest the record — they are not its genealogical
+  subject. (A witness or officiant who is ALSO a relative of the subject
+  is the exception: extract=true for the relationship.)
 - summary is evidence for later identity matching: pack it with the
   document's key facts (born/died/married when-where, parents, spouse).
 
