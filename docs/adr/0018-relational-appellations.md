@@ -1,0 +1,167 @@
+# ADR-0018: Relational and perspectival appellations
+
+Status: **proposed** — pending a ruling on the forks below. No code yet.
+
+## Context
+
+Ingestion routes relational references to a person — "our great
+grandmother", "meine Oma", "Tante Rosa", "my husband", "the deceased" —
+into that person's **alias bag**. The entity-manifest extraction prompt
+instructs it directly; its worked example unifies `"Rosa Genserowski"`,
+`"Rosa"`, and `"our great grandmother"` into one entry whose aliases list
+"every other form, verbatim".
+
+That is the wrong home, on three axes at once. ADR-0011 defines aliases as
+"a flat, untyped, append-only bag of name strings" that carry "no
+reference, qualifier, or rank". A relational reference is:
+
+- **not a name** — "great grandmother" is a *description*, and the alias
+  bag asserts it as an appellation *of* Rosa without saying so;
+- **perspectival** — "our" / "meine" is relative to a speaker; the term is
+  meaningless without the viewpoint the alias bag discards;
+- **unreferenced** — no record of *who* used it or *which source*.
+
+The cost is visible as **critic traffic**: `critique.py` is built to flag
+"a descriptive phrase ('my husband', 'the deceased', 'our friends')
+recorded as if it were a name". So every such alias draws an adversarial
+finding to the review gate — the critic correctly objecting to a modelling
+error the extractor was *told* to make. Fixing the model removes the
+traffic at its source rather than triaging it downstream.
+
+There is also an opportunity. A perspectival reference carries the very
+context — the ego, the "our" — that lets a *later* bare reference ("Grandpa
+took me…", "Tante said…") be resolved to a specific person. Captured as an
+absolute alias, that context is thrown away; captured perspectivally, it
+becomes a resolution key.
+
+## Decision
+
+A relational reference to a person is **never an alias**. It is one of two
+things, and the extractor routes it accordingly:
+
+### (A) A derivable kinship description → `relative` + `kinship_type`
+
+"our great grandmother", "meine Oma", "mein Onkel", "cousin Sara" assert a
+**kinship relation** to an ego. These reuse the existing ADR-0014
+machinery with no new vocabulary: `Rosa —relative→ <ego> ; kinship_type =
+"great grandmother"`, referenced to the artifact. The ego (the "our") is
+the *object* of the statement, so the viewpoint is captured structurally,
+and the frontend re-renders the term from the derivation calculus
+(gendered, degreed) rather than storing a string on the person.
+
+### (B) A non-derivable appellation → a new perspectival property
+
+"Tante Rosa" where Rosa is no aunt (a courtesy title), "Bubele" (a pet
+name), a family-specific term of address — these are genuine appellations
+but not literal kinship. They get a **new, first-class, referenced
+statement on the referent**:
+
+- **`referred_to_as`** (monolingualtext) — the appellation, verbatim, in
+  the source's wording. Mirrors the spirit of Wikidata **P1810 "subject
+  named as"** (the term a specific context uses for a subject); it is
+  deliberately *not* `nickname` (P1449), which is an *absolute* informal
+  personal name ("Fred", "Bubi") and would re-import the perspective
+  problem.
+- **`perspective`** (wikibase-item, qualifier, **optional**) — the person
+  or `family` (ADR-0014) from whose viewpoint the appellation applies (the
+  ego). Omitted when the only viewpoint is the source's own, which the
+  statement's artifact reference already carries.
+
+So "X is known to Y as Z" is `X —referred_to_as→ "Z" ; perspective = Y`,
+referenced to the artifact that records it.
+
+### The routing rule (conservative by default)
+
+Promote to (A) only when the source supports a **literal** kinship reading;
+otherwise use (B). `relative` + `kinship_type` *asserts a kinship edge*, so
+sending a courtesy "Tante" there would fabricate a relation. `referred_to_as`
+asserts only that the term was used — it never narrows or invents (rules 5
+& 6). When in doubt, (B) is safe. Aliases keep only genuine **name** forms
+(spellings, maiden/married names); the label stays the fullest real name.
+
+### Reciprocal / dyadic naming (each party names the other)
+
+The model must hold the case where *both* members of a pair have a
+relational name for the other worth recording — a grandmother known to her
+grandchild as "Oma" while the grandchild is known to her as "Bubele"; two
+sisters who each call the other "Schwesterchen". This falls out of the
+design because **every appellation is a statement whose SUBJECT is the
+referent and whose perspective is the other party**:
+
+- The two directions are **two independent statements on two different
+  subjects** — `grandmother —referred_to_as→ "Oma" ; perspective =
+  grandchild` and `grandchild —referred_to_as→ "Bubele" ; perspective =
+  grandmother`. There is no dyad object to build and nothing to keep in
+  sync; the subject/perspective pair distinguishes them.
+- A **symmetric term** ("Schwesterchen" both ways) is still two statements,
+  disambiguated by subject — never one conflated value. Neither shadows the
+  other.
+- A reciprocal pair may be **mixed type**: "Oma" is derivable kinship → (A)
+  on one side, "Bubele" is a pet name → (B) on the other. The two
+  mechanisms compose without special-casing.
+- For the (A)/kinship direction, the **inverse is derived, not stored**:
+  if `grandchild —relative→ grandmother` is recorded, the calculus yields
+  the grandmother→grandchild direction, so a reciprocal kinship pair need
+  be asserted only once (recording both is allowed but redundant — a
+  match, per ADR-0014, corroborates).
+- One source frequently records **both directions at once** ("your loving
+  Oma" over a signature, a letter that names writer and recipient); both
+  statements cite the same artifact, kept apart by subject + perspective.
+
+### Decoding otherwise-context-free references
+
+The two layers give two resolution paths, and the **ego is the key** each
+one needs:
+
+- **Compositional terms** ("Grandpa said…") decode by **kinship derivation
+  given the ego**: query the person who is grandfather-of-ego over the
+  primitive graph. This resolves references the source never spelled out,
+  as long as the viewpoint is anchored — the anchor the alias bag discarded
+  and this model preserves.
+- **Idiosyncratic terms** decode via the `referred_to_as` + `perspective`
+  statements as an explicit table: the same "Tante" that denotes different
+  women across families' letters resolves correctly because the perspective
+  scopes it.
+
+### Neutral coexistence and privacy
+
+Both properties are multi-valued and source-attributed: many people may
+call one person many things, each appellation its own referenced statement
+at normal rank, none canonical (ADR-0002). Appellations of living people
+are personal data and ride the existing living-person exclusion (ADR
+MODELING.md) — no special handling, but noted.
+
+## What needs your ruling (★ forks)
+
+1. **`perspective` value type / name.** Qualifier `perspective` taking a
+   person-or-`family` item *(recommended)*; or a narrower `referrer`
+   restricted to a person; or record the ego only as free text when it is
+   not an entity. (Recommended: item-valued, optional, person-or-family.)
+2. **(A) vs (B) boundary.** Route literal kinship terms to `relative` +
+   `kinship_type` and reserve `referred_to_as` for non-kinship appellations
+   *(recommended)*; or send *all* relational references — including "Oma" —
+   to `referred_to_as` and let only explicit relations feed kinship (simpler
+   extractor, but loses the kinship signal from the most common terms).
+3. **Ego-identification policy.** How aggressively to resolve the "our"/"my"
+   ego: to the document's author/informant when derivable, to a `family`
+   item, or leave `perspective` empty and lean on the source reference when
+   the ego is not a modelled entity. (Recommended: fill when an entity is
+   available; otherwise omit — never guess an ego.)
+4. **Retro-fit.** Whether to sweep existing role/relational aliases already
+   written to the graph into these forms, or apply the new model only to
+   future ingests and let a `reconcile`-style pass propose migrations.
+
+## Consequences
+
+- The critic stops flagging relational references (they are no longer
+  mis-typed as names), removing a standing source of review-gate traffic.
+- Aliases regain their meaning as a name-match index; reconciliation
+  blocking no longer carries perspective-free descriptive strings that
+  never match anything.
+- The archive gains a queryable appellation layer and, with the ego
+  anchored, the ability to resolve bare relational references — including
+  ones no single source disambiguates.
+- One new property (`referred_to_as`) and one qualifier (`perspective`);
+  the derivable-kinship path reuses ADR-0014 unchanged. Extraction-prompt
+  and critic changes follow in implementation, in the same PR as this ADR's
+  acceptance (docs move with code).
