@@ -551,6 +551,16 @@ class ChunkedClaimExtractor:
         path = self.state_dir / name
         return path.read_text() if path.exists() else None
 
+    def _append(self, name: str, line: str) -> None:
+        """Append one line to a sidecar; never truncates. A later
+        successful re-run overwrites manifest.json/raw.txt/ndjson, so the
+        reason a chunk first failed is lost everywhere it is recorded by
+        _write. Failure sidecars are append-only and never rewritten on
+        success, so that reason survives the recovery that hides it."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        with (self.state_dir / name).open("a") as handle:
+            handle.write(line + "\n")
+
     def _note_chunk_done(
         self, total: int, *, ok: bool, claims: int = 0, resumed: bool = False
     ) -> None:
@@ -948,12 +958,33 @@ class ChunkedClaimExtractor:
                 try:
                     parsed = self._run_chunk(chunk_id, prompt, handle, fallback_prompt)
                 except Exception as exc:
+                    reason = f"{type(exc).__name__}: {exc}"
+                    # a truncation leaves its unparseable response in
+                    # raw.txt; a call failure left nothing this run
+                    truncated = (
+                        self._read(f"{chunk_id}.raw.txt")
+                        if isinstance(exc, ChunkIncomplete)
+                        else None
+                    )
                     with self._state_lock:
                         manifest["chunks"][chunk_id]["status"] = (
-                            f"failed: {str(exc)[:200]}"
+                            f"failed: {reason[:200]}"
                         )
                         self.failed_chunks.append(chunk_id)
                         self._write("manifest.json", json.dumps(manifest, indent=2))
+                        # durable record: outlives the successful re-run
+                        # that overwrites manifest.json and raw.txt
+                        self._append(
+                            f"{chunk_id}.fail.ndjson",
+                            json.dumps(
+                                {
+                                    "chunk": chunk_id,
+                                    "attempts": self.retries + 1,
+                                    "error": reason,
+                                    "raw": truncated,
+                                }
+                            ),
+                        )
                     self._note_chunk_done(total, ok=False)
                     return None
                 self._write(f"{chunk_id}.ndjson", "\n".join(map(json.dumps, parsed)))

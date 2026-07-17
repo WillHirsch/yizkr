@@ -187,6 +187,8 @@ All intermediate state lives beside the output (runtime state, so under
                             # segmentation conversation/session id for forking
       <chunk>.raw.txt       # verbatim engine response, written pre-parse
       <chunk>.ndjson        # parsed, validated claims
+      <chunk>.fail.ndjson   # append-only failure log (reason + last raw);
+                            # survives a re-run that recovers the chunk
       <chunk>.rejects.json  # per-chunk validation rejects
 
 If a `--resume` finds the recorded segmentation session no longer
@@ -198,7 +200,11 @@ document inline) — resumption never requires re-running segmentation.
 - Per-chunk retries (`--chunk-retries`, default 2). A chunk that still
   fails does not abort the run: the batch is written from the chunks
   that succeeded, failures are listed in `manifest.json` and on stderr,
-  and the exit code is non-zero.
+  and the exit code is non-zero. A later recovering `--resume` flips that
+  chunk's `manifest.json` status back to `ok` and overwrites its
+  `raw.txt`; the append-only `<chunk>.fail.ndjson` sidecar is never
+  rewritten, so the original failure reason (and any truncated response)
+  survives the recovery that hides it everywhere else.
 - `--resume` re-runs only chunks without valid parsed output. Because
   raw responses persist per chunk, resume re-parses existing raw text
   before re-invoking the model — a parser fix never costs a second

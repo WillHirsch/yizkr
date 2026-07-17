@@ -467,6 +467,59 @@ class TestEntityFirstExtractor:
         manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
         assert manifest["chunks"]["c001"]["status"].startswith("failed")
 
+    def test_failed_chunk_sidecar_survives_recovery(self, tmp_path):
+        """The reason a chunk first failed lives in an append-only sidecar
+        that a later successful re-run does not overwrite."""
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                RuntimeError("engine down"),  # c001 attempt 1 (fork)
+                RuntimeError("engine down"),  # c001 attempt 1 (inline fallback)
+                RuntimeError("engine down"),  # c001 attempt 2 (inline)
+                ndjson([claim("e2", "Bern Example", 1902)]),  # c002
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
+        extractor.extract(transcription(), "Q23")
+        sidecar = tmp_path / "state" / "c001.fail.ndjson"
+        record = json.loads(sidecar.read_text().splitlines()[0])
+        assert record["chunk"] == "c001"
+        assert record["attempts"] == 2
+        assert "engine down" in record["error"]
+        assert record["raw"] is None  # a call failure left no response
+
+        # recover c001 on resume from its now-valid raw; no model call
+        (tmp_path / "state" / "c001.raw.txt").write_text(
+            ndjson([claim("e1", "Anna Example", 1900)])
+        )
+        second = ScriptedLlm([])
+        extractor = self.extractor(second, tmp_path, budget=LINE_LENGTH, resume=True)
+        extractor.extract(transcription(), "Q23")
+        assert second.calls == []
+        manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
+        assert manifest["chunks"]["c001"]["status"] == "ok"  # recovered
+        assert record["error"] in sidecar.read_text()  # ...record survives
+
+    def test_truncated_chunk_sidecar_captures_raw(self, tmp_path):
+        """A truncation records the unparseable response, which raw.txt
+        would otherwise lose to the recovering re-run."""
+        bad = ndjson([claim("e1", "Anna Example", 1900)], emitted=9)  # short sentinel
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                bad,  # c001 attempt 1 (fork)
+                bad,  # c001 attempt 2 (fork)
+                ndjson([claim("e2", "Bern Example", 1902)]),  # c002
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
+        extractor.extract(transcription(), "Q23")
+        record = json.loads(
+            (tmp_path / "state" / "c001.fail.ndjson").read_text().splitlines()[0]
+        )
+        assert "ChunkIncomplete" in record["error"]
+        assert record["raw"] == bad
+
     def test_resume_reuses_parsed_and_reparses_raw(self, tmp_path):
         """Resume must not re-invoke the model for chunks whose output
         (parsed or raw) already exists — a parser fix never costs a
