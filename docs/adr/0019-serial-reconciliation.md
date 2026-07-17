@@ -1,7 +1,9 @@
 # ADR-0019: Serial, sequenced artifact reconciliation
 
-Status: **proposed** — rulings recorded below; residual forks marked ★. No
-code yet.
+Status: **accepted** — design settled (strict serial, two gates per
+artifact, stateless re-run advances); implementation pending. Supersedes an
+earlier draft that batched the claim gate — see §3 for why that and a
+combined single gate were both rejected.
 
 ## Context
 
@@ -74,34 +76,56 @@ row on the later artifact — decided once, in context. This composes with the
 impossibility filter and containment closure (ADR-0017), which are richer
 the more the graph holds, so pruning improves as the run proceeds.
 
-### 3. Batch-review affordance: decouple the two gates
+### 3. The existing two gates per artifact, unchanged
 
-Only the **identity** gate carries the cross-artifact dependency (reconcile
-needs prior entities to exist); **claim** correctness does not. Serial mode
-exploits this to keep a batch-review convenience:
+Each artifact keeps both review gates in their existing order — identity
+(`equivalences`), then, after `resolve`, claims (`review`) — and is written
+in full before the next artifact reconciles.
 
-- The **identity gate stays per-artifact and in sequence.** On approval, the
-  artifact's entities are materialised as an **identity skeleton** — the
-  item, its label/aliases, and `instance of`, referenced to the artifact —
-  so the next artifact reconciles against them. Identity is settled at this
-  gate, which is exactly what the skeleton records.
-- The **claim gate is collected and reviewed once, at the end of the run**,
-  across all artifacts. A final write pass attaches the approved,
-  source-referenced claims to the already-materialised items.
+Two rejected alternatives, and why each fails:
 
-This restores "review all the facts together" (one mode-switch instead of
-alternating identity/claims per artifact) without weakening the serial
-identity resolution. It requires a **two-phase write** (identity skeleton at
-the identity gate, claims at the batched claim gate) — the notable
-implementation cost, and the ★ fork below. A bare skeleton whose every claim
-is later rejected is an acceptable stub: the source did mention the entity,
-and its `instance of`/label carry the artifact reference.
+- **Batching the claim gate to end-of-run** (an earlier draft) would defer
+  claim writes, so during the identity phase every prior entity is a *thin
+  skeleton* — name and kind only, no dates or relations. Later artifacts
+  would then match against bare names, which is exactly the low-confidence
+  case the sequencing is meant to avoid: reconcile weighs relational
+  evidence, and claims can only be written after review (R3), so rich
+  context requires per-artifact claim review. Batching cancels the
+  sequencing benefit and adds a two-phase write for it.
+- **Combining the two gates into one review per artifact** would present
+  claims *before* `resolve` runs, so claims would be reviewed on the
+  un-collapsed set (identity resolution collapses byte-identical claims from
+  two locals mapping to one item, `apply_equivalences`) and against
+  still-provisional entities. Identity-first exists precisely so claim
+  review lands on the leanest, settled set; combining inflates the human's
+  claim workload. Rejected.
 
-Nothing here weakens R3/ADR-0007: identity is still human-confirmed at the
-per-artifact gate, no claim is written without an explicit `approve`, and
-the skeleton is only ever written *after* its identity gate is approved.
+So serial mode is *only* a change to the run **order** — the per-artifact
+pipeline (reconcile → identity gate → resolve → export-review → claim gate →
+write) is untouched. Both gates stay human-confirmed; nothing about R3 /
+ADR-0007 changes.
 
-### 4. `reconcile-graph` retained, demoted
+### 4. Stateless re-run stays the advance mechanism
+
+`--serial` keeps the pipeline's stateless, file-based shape: each
+`ingest run` re-derives what to do from the on-disk state and the live
+graph, advances the sequence as far as the gates allow, and stops. The
+human saves a reviewed CSV and **re-runs to advance** — so a serial run
+takes roughly two re-invocations per artifact (identity gate, then claim
+gate), versus the advance-all default's ~3 total.
+
+This is deliberate, not a limitation to engineer away. The stateless core
+gives correctness-by-reconstruction (no long-lived process state to drift),
+full auditability (every intermediate is an inspectable/correctable file),
+and crash-safe resumption. The re-run frequency is a *surface* concern, and
+the right place to remove it is a thin stateful layer **on top** — the
+planned human frontend, or a future optional `--watch`/`--loop` mode that
+re-invokes when a reviewed CSV appears — driving the stateless core rather
+than replacing it. That layer is out of scope here; this ADR only requires
+that the docs state plainly that advancing the process currently means
+re-running `ingest run`.
+
+### 5. `reconcile-graph` retained, demoted
 
 `reconcile-graph` is **kept as an explicit cleanup command**, not deleted —
 it still catches pre-existing duplicates, duplicates across *separate* runs,
@@ -116,28 +140,19 @@ not a within-artifact one.)
 
 1. **Opt-in.** `--serial` is a flag; the existing advance-all run stays the
    default and behaves exactly as today. (Whether serial later becomes the
-   default is deferred — ship it opt-in and revisit with usage. ★)
-2. **Batch affordance included.** The claim gate is batched at end-of-run via
-   the gate decoupling above, since it is compatible with serial identity
-   resolution and directly serves the minimise-review goal.
+   default is deferred — ship it opt-in and revisit with usage.)
+2. **Two gates per artifact, unchanged; not batched, not combined.** Claim
+   review must land on the resolved, minimal set (identity-first keeps it
+   lean), and each artifact must be fully written for the next to see rich
+   context — so both gates stay, in order, per artifact. §3 records why
+   batching and combining were rejected.
 3. **Greedy-overlap sequencing**, offline, from the extraction manifests,
    order persisted for resumable runs.
-4. **Docs in scope.** `pipeline/README.md` is reworked as part of this
+4. **Stateless re-run stays the advance mechanism** (§4); the frontend or a
+   future `--watch` mode is the convenience layer, out of scope here.
+5. **Docs in scope.** `pipeline/README.md` is reworked as part of this
    change (see Consequences) — including the `reconcile-graph` role it
-   currently omits.
-
-★ **Residual forks**
-
-- **Batched-claims write mechanism.** Two-phase write — identity skeleton at
-  the identity gate, claims at the batched claim gate *(recommended:
-  Wikibase-native, no provisional-identity bookkeeping)* — versus an
-  in-memory "pending roster" that defers all writes to the end and resolves
-  cross-artifact provisional matches at write time (avoids two-phase write
-  but must track un-written entity identity across the run).
-- **Strict-serial fallback.** If the two-phase write proves too invasive to
-  land at once, ship `--serial` first as *strict* (both gates inline per
-  artifact, no claim batching) and add the batched claim gate second. The
-  serial identity resolution — the main win — stands either way.
+   currently omits, and a plain statement that advancing = re-run.
 
 ## Consequences
 
@@ -145,12 +160,17 @@ not a within-artifact one.)
   mint-then-merge double review and the routine post-folder `reconcile-graph`
   backlog are eliminated for `--serial` runs. `reconcile-graph` survives as
   an occasional cleanup tool.
-- Human review of a `--serial` run is **sequential for identity** (finish an
-  artifact's identity gate before the next reconciles) and **batched for
-  claims** (one gate at the end). This is a deliberate rhythm change from
-  advance-all's "all identity gates, then all claim gates".
+- A `--serial` run takes roughly **two re-invocations per artifact** (identity
+  gate, then claim gate) versus the advance-all default's ~3 total — accepted
+  as a surface cost the frontend/`--watch` layer removes, not a reason to
+  make the core stateful (§4). Review *decisions*, the thing being minimised,
+  go down (no duplicate cross-artifact review); re-*runs* go up.
 - No extra model cost — the same number of reconcile calls, reordered; the
   sequencer is offline.
+- Implementation is small: the per-artifact pipeline is untouched; only the
+  run-loop ordering (extract-all → sequence → process-in-order, stopping at
+  the first unwritten artifact) and the offline sequencer are new. No
+  two-phase write, no combined gate.
 - **Documentation is part of this change, not a follow-up.**
   `pipeline/README.md` today documents the per-document steps but does **not**
   explain `reconcile-graph` at all — so a reader cannot tell how entities
@@ -158,9 +178,9 @@ not a within-artifact one.)
   motivated this ADR. The implementing PR must rework that document to: (a)
   describe `reconcile-graph`'s role in the *current* default mode (the
   separate cross-artifact dedup pass) so today's behaviour is finally
-  complete; and (b) add `--serial` — the sequencer, the per-artifact identity
-  gate, the batched claim gate, and `reconcile-graph`'s demotion to cleanup —
-  as a first-class alternative to the default loop, with the mermaid diagram
-  extended or paired to show both.
+  complete; and (b) add `--serial` — the sequencer, the per-artifact two-gate
+  sequence, advancing-by-re-run, and `reconcile-graph`'s demotion to cleanup
+  — as a first-class alternative to the default loop, with the mermaid
+  diagram extended or paired to show both.
 - The advance-all default is untouched, so nothing regresses for existing
   runs or tests; `--serial` adds paths, it does not alter the old one.
