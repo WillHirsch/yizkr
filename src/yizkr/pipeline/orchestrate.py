@@ -37,6 +37,8 @@ import json
 import re
 import shutil
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -142,6 +144,7 @@ class Orchestrator:
         review_effort: str = "high",
         extract_model: str | None = None,
         serial: bool = False,
+        extract_concurrency: int = 1,
         env_file: Path | None = None,
         log=print,
     ) -> None:
@@ -169,6 +172,13 @@ class Orchestrator:
         # reconciles — so cross-artifact identity resolves inline at the
         # per-artifact gates instead of in a separate reconcile-graph pass.
         self.serial = serial
+        # how many documents to extract (transcribe + chunked extract) at
+        # once during serial mode's up-front extract-all phase. Multiplies
+        # with chunk_concurrency, so keep the product sane for the engine's
+        # rate/usage limits. Wiki writes (register/derive) are serialised by
+        # a lock, so only the LLM-heavy extraction actually overlaps.
+        self.extract_concurrency = max(1, extract_concurrency)
+        self._wiki_lock = threading.Lock()
         self.env_file = env_file
         self.log = log
         self._config: Config | None = None
@@ -576,7 +586,10 @@ class Orchestrator:
         self._seen_hashes[content_sha1] = doc.source.name
 
         if doc.state.artifact_qid is None:
-            doc.state.artifact_qid = self._step_register(doc)
+            # register is a wiki write; the lock keeps concurrent extract-all
+            # documents (extract_concurrency > 1) from racing on the client.
+            with self._wiki_lock:
+                doc.state.artifact_qid = self._step_register(doc)
             doc.state.status = REGISTERED
             doc.save()
             self.log(f"  registered as {doc.state.artifact_qid}")
@@ -584,7 +597,8 @@ class Orchestrator:
         if doc.source.suffix.lower() in PRESENTATION_SUFFIXES and not (
             doc.state.detail or {}
         ).get("derived_media"):
-            derived = self._step_derive_media(doc)
+            with self._wiki_lock:  # register_derived_media also writes items
+                derived = self._step_derive_media(doc)
             doc.state.detail = (doc.state.detail or {}) | {"derived_media": derived}
             doc.save()
             self.log(f"  derived media: {len(derived)} item(s)")
@@ -738,9 +752,18 @@ class Orchestrator:
         the returned order, hubs first (ADR-0019)."""
         from yizkr.pipeline.sequencing import sequence_documents
 
+        # Settle content-dedup (ADR-0010) BEFORE any parallel extraction, so
+        # concurrent _advance calls only ever READ the seen-hashes map (the
+        # first document in discovery order with a given hash is canonical) —
+        # never two identical files both registering.
         for doc in docs:
-            self.log(f"{doc.source.name} [{doc.state.status}]")
-            self.advance(doc, stop_after_extract=True)
+            try:
+                sha1 = hashlib.sha1(doc.source.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            self._seen_hashes.setdefault(sha1, doc.source.name)
+
+        self._extract_all(docs)
         keyed = {doc.source.name: self._entity_keys(doc) for doc in docs}
         by_name = {doc.source.name: doc for doc in docs}
         ordered = [by_name[name] for name in sequence_documents(list(keyed.items()))]
@@ -750,6 +773,24 @@ class Orchestrator:
             + "\n"
         )
         return ordered
+
+    def _extract_all(self, docs: list[DocumentRun]) -> None:
+        """Extract every document up front (transcribe + chunked extract),
+        `extract_concurrency` documents at a time. Chunks within a document
+        already run `chunk_concurrency`-wide, so total concurrent LLM calls
+        is the product — the caller keeps it sane for the engine's limits.
+        Wiki writes stay serialised (the `_wiki_lock` in `_advance`)."""
+
+        def extract_one(doc: DocumentRun) -> None:
+            self.log(f"{doc.source.name} [{doc.state.status}]")
+            self.advance(doc, stop_after_extract=True)
+
+        if self.extract_concurrency == 1:
+            for doc in docs:
+                extract_one(doc)
+            return
+        with ThreadPoolExecutor(max_workers=self.extract_concurrency) as pool:
+            list(pool.map(extract_one, docs))
 
     def _entity_keys(self, doc: DocumentRun) -> set[str]:
         """Name-token keys of a document's extractable entities, for the

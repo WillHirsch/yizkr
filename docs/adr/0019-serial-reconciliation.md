@@ -1,10 +1,11 @@
 # ADR-0019: Serial, sequenced artifact reconciliation
 
 Status: **accepted** — implemented (`ingest run --serial`, the greedy
-sequencer, `pipeline/README.md` rework). Strict serial, two gates per
-artifact, stateless re-run advances. Supersedes an earlier draft that
-batched the claim gate — see §3 for why that and a combined single gate
-were both rejected.
+sequencer, `--extract-concurrency` for the parallel extract-all phase, and
+the `pipeline/README.md` rework). Strict serial, two gates per artifact,
+stateless re-run advances. Supersedes an earlier draft that batched the
+claim gate — see §3 for why that and a combined single gate were both
+rejected.
 
 ## Context
 

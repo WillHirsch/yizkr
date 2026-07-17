@@ -588,3 +588,34 @@ class TestSerialMode:
         orch.run()
         assert "reconcile:a.txt" in orch.calls
         assert "reconcile:b.txt" in orch.calls
+
+    def test_extract_concurrency_extracts_every_document(self, tmp_path):
+        # --extract-concurrency parallelises the extract-all phase; all
+        # documents must still be extracted, and the serial invariant holds.
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "a.txt").write_text("Anna was born in 1901.")
+        (folder / "b.txt").write_text("Bella was born in 1902.")
+        orch = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet, serial=True, extract_concurrency=2
+        )
+        orch.run()
+        assert "batch:a.txt" in orch.calls and "batch:b.txt" in orch.calls
+        # only one document reconciles (the next waits for it to be written)
+        reconciled = [c for c in orch.calls if c.startswith("reconcile:")]
+        assert len(reconciled) == 1
+
+    def test_extract_concurrency_still_dedups_identical_files(self, tmp_path):
+        # ADR-0010 content-dedup must survive parallel extraction: two
+        # identical files -> one artifact, one extraction.
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "a.txt").write_text("identical bytes")
+        (folder / "b.txt").write_text("identical bytes")
+        orch = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet, serial=True, extract_concurrency=2
+        )
+        orch.run()
+        statuses = {d.source.name: d.state.status for d in orch.documents()}
+        assert DUPLICATE in statuses.values()
+        assert len([c for c in orch.calls if c.startswith("batch:")]) == 1

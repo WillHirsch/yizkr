@@ -496,6 +496,7 @@ def cmd_run(args) -> int:
         if args.extract_model != "inherit"
         else None,
         serial=args.serial,
+        extract_concurrency=args.extract_concurrency,
         env_file=args.env_file,
     ).run()
 
@@ -854,6 +855,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="run up to N extraction chunks in parallel per document "
         "(chunks are independent; default 3). Lower it if the engine "
         "rate-limits; 1 is fully sequential",
+    )
+    p.add_argument(
+        "--extract-concurrency",
+        type=int,
+        default=1,
+        metavar="N",
+        help="with --serial, extract N documents in parallel during the "
+        "up-front extract-all phase (default 1). Multiplies with "
+        "--chunk-concurrency (N x chunks concurrent LLM calls), so keep the "
+        "product within the engine's limits; wiki writes stay serialised. "
+        "No effect without --serial",
     )
     effort_choices = ["low", "medium", "high", "xhigh", "max"]
     p.add_argument(

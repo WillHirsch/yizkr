@@ -159,6 +159,15 @@ that gap:
   `ingest run`** after you save a reviewed CSV; a future frontend (or a
   `--watch` mode) will drive those re-runs for you.
 
+  Serial extracts every artifact up front (the sequencer needs all the
+  manifests). That phase is parallelisable: `--extract-concurrency N`
+  transcribes/extracts N artifacts at once. It multiplies with
+  `--chunk-concurrency` (N × chunks concurrent LLM calls), so keep the
+  product within your engine's limits — modest on the subscription
+  `claude-code` engine (rolling usage windows), higher on `anthropic`
+  (API rate limits). Wiki writes stay serialised, so only the LLM-heavy
+  extraction overlaps. Default 1.
+
 ## Face proposals (`ingest/faces.py`, ADR-0005)
 
 A face proposal is an ordinary claim — `depicts` on the photograph,
