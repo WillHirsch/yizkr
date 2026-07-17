@@ -425,6 +425,15 @@ class TestImpossiblePair:
         b = rf(qid="Q2", label="Chris")
         assert impossible_pair(_facts(a), _facts(b)) == "kinship-edge"
 
+    @pytest.mark.parametrize(
+        "field_name",
+        ["father_qids", "mother_qids", "spouse_qids", "child_qids", "sibling_qids"],
+    )
+    def test_every_kinship_relation_feeds_the_filter(self, field_name):
+        a = rf(qid="Q1", label="Sam", **{field_name: ["Q2"]})
+        b = rf(qid="Q2", label="Sam")
+        assert impossible_pair(_facts(a), _facts(b)) == "kinship-edge"
+
     def test_unrelated_same_name_is_not_impossible(self):
         a = rf(qid="Q1", label="Rosa")
         b = rf(qid="Q2", label="Rosa")
@@ -465,40 +474,36 @@ class TestImpossiblePair:
         # same closure, but humans — never a containment prune
         assert impossible_pair(_facts(a), _facts(b), containment=containment) is None
 
-    def test_disjoint_lifespan(self):
-        dead = rf(qid="Q1", label="Sam", death="1910-01-01")
-        later = rf(qid="Q2", label="Sam", birth="1936-06-02")
-        assert impossible_pair(_facts(dead), _facts(later)) == "disjoint-lifespan"
-        assert impossible_pair(_facts(later), _facts(dead)) == "disjoint-lifespan"
+    def test_equal_labels_are_never_pruned_by_containment(self):
+        # eponymous nesting: "New York" the city sits inside "New York" the
+        # state. A batch "New York" vs a graph "New York" that happens to be
+        # contained in a same-named place may be the SAME place — never prune.
+        containment = PlaceContainment({"Q60": {"Q1384"}}, {"Q1384": "New York"})
+        batch_ny = _batch_pair_facts(
+            EntityRecord(id="e1", label="New York", kind="place"), None
+        )
+        city = _facts(rf(qid="Q60", label="New York", kind="place"))
+        assert impossible_pair(batch_ny, city, containment=containment) is None
 
-    def test_overlapping_lifespan_is_not_impossible(self):
-        a = rf(qid="Q1", label="Sam", birth="1900", death="1970")
-        b = rf(qid="Q2", label="Sam", birth="1905", death="1975")
+    def test_date_disagreement_is_never_impossible(self):
+        # contradictory dates coexist (ADR-0002); they are surfaced to the
+        # human, never pruned — the filter has no temporal rule at all.
+        a = rf(qid="Q1", label="Sam", birth="1900", death="1910")
+        b = rf(qid="Q2", label="Sam", birth="1936", death="1990")
         assert impossible_pair(_facts(a), _facts(b)) is None
-
-    def test_lifespan_tolerance_protects_coarse_dates(self):
-        # a one-year gap is within tolerance — never pruned (rule 5)
-        a = rf(qid="Q1", label="Sam", death="1910")
-        b = rf(qid="Q2", label="Sam", birth="1911")
-        assert impossible_pair(_facts(a), _facts(b)) is None
-
-    def test_missing_dates_are_never_impossible(self):
-        a = rf(qid="Q1", label="Sam")  # no dates at all
-        b = rf(qid="Q2", label="Sam", birth="1935")
-        assert impossible_pair(_facts(a), _facts(b)) is None
-
-    def test_post_mortem_activity(self):
-        # died 1938, but the other is active (a living act) in 1945
-        dead = rf(qid="Q1", label="Samuel", death="1938-12-13")
-        active = rf(qid="Q2", label="Samuel", last_activity="1945-09-01")
-        assert impossible_pair(_facts(dead), _facts(active)) == "post-mortem-activity"
 
     def test_symmetry_of_truthiness(self):
-        a = rf(qid="Q1", label="Sam", death="1910")
-        b = rf(qid="Q2", label="Sam", birth="1936")
-        assert bool(impossible_pair(_facts(a), _facts(b))) == bool(
-            impossible_pair(_facts(b), _facts(a))
+        son = rf(qid="Q1", label="Sam", father_qids=["Q2"])
+        father = rf(qid="Q2", label="Sam")
+        assert bool(impossible_pair(_facts(son), _facts(father))) == bool(
+            impossible_pair(_facts(father), _facts(son))
         )
+
+    def test_predicate_does_no_io(self):
+        # pure function — no client, no network; a plain call returns
+        a = rf(qid="Q1", label="Sam", father_qids=["Q2"])
+        b = rf(qid="Q2", label="Sam")
+        assert impossible_pair(_facts(a), _facts(b)) == "kinship-edge"
 
 
 class TestBlockingWithImpossibility:
@@ -511,37 +516,54 @@ class TestBlockingWithImpossibility:
         # without the closure the tenuous "Poland" token still blocks it
         assert block_candidates(places, roster_places)["e1"][0].qid == "Q66"
         # with it, the impossible pair is pruned -> e1 has no candidates
-        assert (
-            block_candidates(places, roster_places, containment=containment) == {}
-        )
+        assert block_candidates(places, roster_places, containment=containment) == {}
 
-    def test_disjoint_lifespan_candidate_pruned_via_batch_dates(self):
-        entity = EntityRecord(id="e1", label="Samuel Wolff", kind="human")
+    def test_batch_kinship_qidref_prunes_candidate(self):
+        # a batch entity whose father is ALREADY the graph candidate (a
+        # QidRef) cannot be that same candidate — pruned before adjudication.
+        entity = EntityRecord(id="e1", label="Salomon Rothholz", kind="human")
         b = batch(
             claims=[
                 {
                     "subject": {"kind": "local", "local_id": "e1"},
-                    "property": "date_of_birth",
-                    "value": {"type": "time", "year": 1936, "precision": "year"},
+                    "property": "father",
+                    "value": {"type": "item", "value": {"kind": "qid", "qid": "Q84"}},
                     "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
                 }
             ],
             entity_list=[entity],
         )
         roster_people = [
-            RosterEntity(
-                qid="Q84", label="Samuel Genserowsky", kind="human", death="1910"
-            )
+            RosterEntity(qid="Q84", label="Salomon Rothholz", kind="human")
         ]
-        # Samuel born 1936 cannot be Samuel who died 1910
         assert block_candidates([entity], roster_people, batch=b) == {}
-        # but with no batch dates the pair survives to the human
+        # without the batch (no resolved father) the pair survives to review
         assert block_candidates([entity], roster_people)["e1"][0].qid == "Q84"
+
+    def test_graph_pair_pruning_drops_impossible_pairs(self):
+        # roster x roster: a father edge between two same-name items means
+        # the graph-dedup pass never even asks the model about them.
+        from yizkr.pipeline.reconcile import propose_graph_pairs
+
+        pair_roster = [
+            RosterEntity(qid="Q1", label="Sam Cohen", kind="human", father_qids=["Q2"]),
+            RosterEntity(qid="Q2", label="Sam Cohen", kind="human"),
+        ]
+
+        class _Boom:
+            model_identifier = "fake"
+
+            def complete(self, *a, **k):  # must never be called
+                raise AssertionError("adjudicator called on an impossible pair")
+
+        assert propose_graph_pairs(_Boom(), pair_roster) == []
 
 
 class TestContainmentHandoff:
     def _proposal(self, **kw) -> Proposal:
-        base = dict(entity_id="Q66", qid="Q10", verdict="distinct", evidence="camp in Poland")
+        base = dict(
+            entity_id="Q66", qid="Q10", verdict="distinct", evidence="camp in Poland"
+        )
         base.update(kw)
         return Proposal(**base)
 
@@ -586,4 +608,22 @@ class TestContainmentHandoff:
                 [self._proposal(contained_in="Q999")], self._roster()
             )
             == []
+        )
+
+    def test_non_place_pair_never_produces_a_row(self):
+        # a stray contained_in on a person/org pair must not reach
+        # reconcile-places (which would write a bogus part_of edge)
+        people = [
+            RosterEntity(qid="Q66", label="Anna", kind="human"),
+            RosterEntity(qid="Q10", label="Anna B", kind="human"),
+        ]
+        assert (
+            place_containment_proposals([self._proposal(contained_in="Q10")], people)
+            == []
+        )
+
+    def test_unknown_qid_pair_never_produces_a_row(self):
+        # both members must be known roster places
+        assert (
+            place_containment_proposals([self._proposal(contained_in="Q10")], []) == []
         )

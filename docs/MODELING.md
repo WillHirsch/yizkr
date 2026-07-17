@@ -330,12 +330,14 @@ same shape as the reconciled deportation events already in the graph.
   True duplicates are curator-merged instead.
 - Candidate pairs the graph already **proves distinct** are pruned
   before adjudication (ADR-0017): an irreflexive kinship edge between
-  them, one place transitively inside the other, or lifespans that
-  cannot be one life. This is recall-safe — it drops only pairs the
-  graph's own referenced statements contradict, never merely dissimilar
-  ones; unknowns stay live candidates. A rejected equivalence that is
-  really a containment (a camp within a country) is handed to
-  reconcile-places as a `part_of` proposal rather than discarded.
+  them, or one place transitively inside the other. This is recall-safe
+  — it drops only pairs the graph's own referenced statements
+  structurally contradict, never merely dissimilar ones; unknowns stay
+  live candidates. Deliberately excluded is a date disagreement: that is
+  healthy coexistence (ADR-0002) to surface, not proof of distinctness.
+  A rejected equivalence that is really a containment (a camp within a
+  country) is handed to reconcile-places as a `part_of` proposal rather
+  than discarded.
 
 ## Contradictions
 

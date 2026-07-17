@@ -395,7 +395,9 @@ def cmd_reconcile_graph(args) -> int:
     client = WikiClient(config)
     roster = fetch_roster(client, config)
     containment = fetch_place_containment(client, config)
-    proposals = propose_graph_pairs(make_client(args.llm), roster, containment=containment)
+    proposals = propose_graph_pairs(
+        make_client(args.llm), roster, containment=containment
+    )
     rows = export_graph_pairs_csv(proposals, roster, args.out)
     print(
         f"wrote {args.out} ({rows} pairs from a {len(roster)}-entity "

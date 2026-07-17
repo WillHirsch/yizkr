@@ -31,10 +31,10 @@ blocking just never reads them.
 ### 1. A deterministic `impossible_pair(a, b)` predicate
 
 Applied inside `block_candidates` (new-document × graph) and
-`propose_graph_pairs` (graph × graph). It prunes a blocked pair when a hard
-graph fact makes identity impossible. Three rules, each **recall-safe** —
-they fire only on pairs the graph's own referenced statements contradict,
-never on pairs that are merely dissimilar:
+`propose_graph_pairs` (graph × graph). It prunes a blocked pair when a
+**structural** graph fact makes identity impossible. Two rules, each
+**recall-safe** — they fire only on pairs the graph's own referenced
+statements contradict, never on pairs that are merely dissimilar:
 
 1. **Irreflexive kinship edge.** One candidate names the other via
    `father`/`mother`/`spouse`/`child`/`sibling`. The roster query now
@@ -44,26 +44,50 @@ never on pairs that are merely dissimilar:
    (ADR-0009). Read once per pass as an injected oracle (mirroring
    `plan_containment`'s `creates_cycle` seam), so the predicate needs no
    SPARQL and is unit-tested with a lambda. A not-yet-written batch place
-   (no QID) is matched by label against the candidate's container labels.
-3. **Temporal impossibility.** One dies before the other is born
-   (disjoint lifespan), or one is active in a *living* act (any dated
-   non-death event) after the other's death. A one-year tolerance protects
-   coarse dates — uncertainty is never narrowed into a prune (rule 5).
+   (no QID) is matched by label against the candidate's container labels —
+   but never when the two share a label, since eponymous nesting is real
+   ("New York" the city inside "New York" the state) and an equal label may
+   be the *same* place, not its container.
 
-Unknowns are never impossible: a missing date, kind, or relation leaves the
-pair a live candidate for the human (rules 5 & 6 forbid silently
-narrowing). The predicate does zero I/O; the graph facts it reads are
-themselves referenced assertions — it reads them, never writes.
+Unknowns are never impossible: a missing kind or relation leaves the pair a
+live candidate for the human (rules 5 & 6 forbid silently narrowing). The
+predicate does zero I/O; the graph facts it reads are themselves referenced
+assertions — it reads them, never writes.
+
+### Rejected: a temporal rule
+
+An earlier draft added a third rule — prune when lifespans cannot overlap
+(one dies before the other is born, or acts after the other's death). An
+adversarial review rejected it as **not recall-safe in this archive**, for
+reasons that go to the project's core:
+
+- A date disagreement between two candidates is not evidence of
+  distinctness — it is the **healthy coexisting state** the whole store is
+  built to hold (ADR-0002). Two sources giving different death years for
+  one victim is exactly what reconciliation must *surface* to a human, not
+  silently prune.
+- Dates carry **precision** — a "decade" is ten years, a "century" a
+  hundred — and comparing them as points would narrow a source's vagueness
+  (rule 5). A decade-precision death "the 1920s" is fully compatible with a
+  birth in 1926; a point comparison would wrongly rule it out.
+- Posthumous dates (memorials, reburials) and earlier death *estimates*
+  are routine here, so "active after death" is not a safe signal.
+
+So there is no temporal rule. Contradictory dates go to adjudication, where
+the model and the reviewer weigh them — never to a silent prune.
 
 ### 2. Rejected-containment → `part_of` hand-off
 
 The graph-dedup adjudicator (`propose_graph_pairs`) may now, on a
-`distinct` verdict where one item is spatially inside the other, return the
-container's QID. Those become `a_within_b` rows in the reconcile-places CSV
-format (`yizkr reconcile-graph` writes `<out>-containment.csv`), so
-`reconcile-places --apply` writes the referenced `part_of` edge after human
-review (ADR-0009 — containment is world knowledge with its own run
-provenance, never a per-document write, and never auto-applied).
+`distinct` verdict where one **place** is spatially inside the other,
+return the container's QID. Those become `a_within_b` rows in the
+reconcile-places CSV format (`yizkr reconcile-graph` writes
+`<out>-containment.csv`), so `reconcile-places --apply` writes the
+referenced `part_of` edge after human review (ADR-0009 — containment is
+world knowledge with its own run provenance, never a per-document write,
+and never auto-applied). Only pairs where both members are places produce a
+row, so a stray `contained_in` on a person or organization pair can never
+reach the place-hierarchy writer.
 
 This closes a loop: the graph-dedup pass *discovers* a containment the
 graph lacked → a human approves it → the `part_of` edge is written → rule 2
@@ -72,14 +96,14 @@ future run. Review noise becomes hierarchy signal.
 
 ## Consequences
 
-- Fewer adjudication calls and far fewer `distinct` review rows: the two
-  motivating pairs never reach the model or the CSV once the containing
-  facts exist. Recall is unaffected — only graph-contradicted pairs are
-  dropped, and the filter degrades gracefully (no closure / no batch dates
-  ⇒ it simply prunes less, never wrongly).
-- The roster query grows five kinship-QID aggregates, child/sibling
-  fetches, and a last-activity max; one extra query per pass builds the
-  containment closure. On a family-archive-sized graph this is negligible.
+- Fewer adjudication calls and far fewer `distinct` review rows: the
+  containment pair never reaches the model or the CSV once the `part_of`
+  edge exists. Recall is unaffected — only structurally-contradicted pairs
+  are dropped, and the filter degrades gracefully (no closure / no resolved
+  kin ⇒ it simply prunes less, never wrongly).
+- The roster query grows five kinship-QID aggregates and child/sibling
+  fetches; one extra query per pass builds the containment closure. On a
+  family-archive-sized graph this is negligible.
 - The ingest path prunes **existing** containment deterministically; a
   containment the graph still lacks surfaces where it is writeable — the
   graph-dedup pass over written items — rather than against a batch entity

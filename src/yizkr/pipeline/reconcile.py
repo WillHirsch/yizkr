@@ -64,9 +64,6 @@ class RosterEntity(BaseModel):
     mother_qids: list[str] = []
     child_qids: list[str] = []
     sibling_qids: list[str] = []
-    # latest dated NON-death activity (living act) — a person cannot act
-    # after another's death, so this bounds temporal identity (ADR-0017).
-    last_activity: str = ""
 
     @property
     def kin_qids(self) -> set[str]:
@@ -128,7 +125,6 @@ SELECT ?item ?itemLabel ?kindLabel
        (GROUP_CONCAT(DISTINCT STRAFTER(STR(?motherItem), "entity/"); separator="|") AS ?motherQids)
        (GROUP_CONCAT(DISTINCT STRAFTER(STR(?childItem), "entity/"); separator="|") AS ?childQids)
        (GROUP_CONCAT(DISTINCT STRAFTER(STR(?siblingItem), "entity/"); separator="|") AS ?siblingQids)
-       (MAX(?activityDate) AS ?lastActivity)
 WHERE {{
   ?item wdt:{instance_of} ?kind .
   OPTIONAL {{ ?item skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
@@ -145,14 +141,6 @@ WHERE {{
   OPTIONAL {{ ?deathEvent wdt:{participant} ?item ;
                           wdt:{instance_of} wd:{death_item} ;
                           wdt:{point_in_time} ?deathEventDate . }}
-  # latest dated NON-death event the item took part in: a living act
-  # (marriage, migration, release...). Bounds temporal identity — nobody
-  # acts after they die, so activity past a candidate's death rules the
-  # pair out (ADR-0017). Death events are excluded (a burial is posthumous).
-  OPTIONAL {{ ?activityEvent wdt:{participant} ?item ;
-                             wdt:{point_in_time} ?activityDate ;
-                             wdt:{instance_of} ?activityKind .
-              FILTER(?activityKind != wd:{death_item}) }}
   # relation labels carry QIDs: bare labels are ambiguous (two Davids)
   OPTIONAL {{ ?item wdt:{spouse} ?spouseItem . ?spouseItem rdfs:label ?spouseLabel .
               FILTER(LANG(?spouseLabel) = "en")
@@ -235,7 +223,6 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                 mother_qids=split(binding, "motherQids"),
                 child_qids=split(binding, "childQids"),
                 sibling_qids=split(binding, "siblingQids"),
-                last_activity=(field(binding, "lastActivity"))[:10],
             )
         )
     return roster
@@ -262,24 +249,27 @@ def _tokens_overlap(first: set[str], second: set[str]) -> bool:
 # -- impossibility filter (ADR-0017) -----------------------------------------
 #
 # A shared name token blocks two entities as candidates, but the graph may
-# already assert a fact that makes identity IMPOSSIBLE — a kinship edge
-# between them, one place transitively inside the other, or lifespans that
-# cannot be one life. Pruning those before adjudication saves an LLM call
-# and a review row, and is RECALL-SAFE: it only drops pairs the graph's own
-# referenced statements contradict, never a pair that is merely dissimilar.
-# Unknowns are never impossible (rule 5: uncertainty is structural).
+# already assert a fact that makes identity IMPOSSIBLE — an irreflexive
+# kinship edge between them, or one place transitively inside the other.
+# Pruning those before adjudication saves an LLM call and a review row, and
+# is RECALL-SAFE: it drops only pairs the graph's own referenced statements
+# structurally contradict, never a pair that is merely dissimilar.
+#
+# Deliberately NOT a rule: a DATE contradiction between two candidates.
+# Contradictory dates across sources are a healthy resting state, not proof
+# of distinctness (ADR-0002, neutral coexistence) — the reviewer must see
+# them, and they carry precision the filter would have to narrow to compare
+# (a "decade" is ten years, not its first; ADR-0002 forbids narrowing).
+# Temporal disagreement is surfaced to adjudication, never pruned.
 
 PLACE_KIND = "place"
 KINSHIP_PROPERTIES = ("father", "mother", "spouse", "child", "sibling")
-# slack for coarse/uncertain dates: never prune two lifespans that are only
-# a year apart — a source's year may be imprecise (rule 5).
-LIFESPAN_TOLERANCE_YEARS = 1
 
 CONTAINMENT_QUERY = """\
 SELECT ?place ?ancestor ?ancestorLabel WHERE {{
   ?place wdt:{instance_of} wd:{place_item} .
   ?place (wdt:{part_of}|wdt:{location})+ ?ancestor .
-  ?ancestor rdfs:label ?ancestorLabel . FILTER(LANG(?ancestorLabel) = "en")
+  OPTIONAL {{ ?ancestor rdfs:label ?ancestorLabel . FILTER(LANG(?ancestorLabel) = "en") }}
 }}"""
 
 
@@ -293,9 +283,7 @@ class PlaceContainment:
     pair out.
     """
 
-    def __init__(
-        self, ancestors: dict[str, set[str]], labels: dict[str, str]
-    ) -> None:
+    def __init__(self, ancestors: dict[str, set[str]], labels: dict[str, str]) -> None:
         self._ancestors = ancestors
         self._labels = labels
 
@@ -304,13 +292,14 @@ class PlaceContainment:
         return container_qid in self._ancestors.get(contained_qid, set())
 
     def container_labels(self, qid: str) -> set[str]:
-        """Labels of every place that transitively contains ``qid`` — used
-        to rule out a not-yet-written batch place (no QID) against a graph
-        candidate strictly inside a place of the batch entity's name."""
+        """Non-empty labels of every place that transitively contains
+        ``qid`` — used to rule out a not-yet-written batch place (no QID)
+        against a graph candidate strictly inside a place of the batch
+        entity's name."""
         return {
-            self._labels[ancestor]
+            label
             for ancestor in self._ancestors.get(qid, set())
-            if ancestor in self._labels
+            if (label := self._labels.get(ancestor))
         }
 
 
@@ -335,8 +324,12 @@ def fetch_place_containment(client: WikiClient, config: Config) -> PlaceContainm
     for binding in bindings:
         place = binding["place"]["value"].rsplit("/", 1)[-1]
         ancestor = binding["ancestor"]["value"].rsplit("/", 1)[-1]
+        # the ancestor QID is always captured (drives the QID-form prune);
+        # its label is OPTIONAL in the query, kept only when present
         ancestors.setdefault(place, set()).add(ancestor)
-        labels[ancestor] = binding.get("ancestorLabel", {}).get("value", "")
+        label = binding.get("ancestorLabel", {}).get("value", "")
+        if label:
+            labels[ancestor] = label
     return PlaceContainment(ancestors, labels)
 
 
@@ -353,9 +346,6 @@ class _PairFacts:
     label: str
     qid: str | None = None
     kin_qids: set[str] = field(default_factory=set)
-    birth: str = ""
-    death: str = ""
-    last_activity: str = ""
 
 
 def _roster_pair_facts(roster_entity: RosterEntity) -> _PairFacts:
@@ -364,9 +354,6 @@ def _roster_pair_facts(roster_entity: RosterEntity) -> _PairFacts:
         label=roster_entity.label,
         qid=roster_entity.qid,
         kin_qids=roster_entity.kin_qids,
-        birth=roster_entity.birth,
-        death=roster_entity.death,
-        last_activity=roster_entity.last_activity,
     )
 
 
@@ -374,24 +361,11 @@ def _batch_pair_facts(entity: EntityRecord, batch: ClaimBatch | None) -> _PairFa
     """Facts for a not-yet-written batch entity, from its own claims.
 
     A batch entity references others by local id; only relations to items
-    ALREADY in the graph (a QidRef) contribute kin_qids. Dates come from
-    the entity's own time-valued claims; the latest non-death date is its
-    activity bound.
-    """
+    ALREADY in the graph (a QidRef) contribute kin_qids — those are the
+    only ones the graph-side candidate can be compared against."""
     facts = _PairFacts(kind=entity.kind, label=entity.label, qid=entity.qid)
     if batch is None:
         return facts
-
-    def _iso(time_value) -> str:
-        return "-".join(
-            f"{part:02d}" if index else f"{part:04d}"
-            for index, part in enumerate(
-                (time_value.year, time_value.month, time_value.day)
-            )
-            if part is not None
-        )
-
-    activity: list[str] = []
     for claim in batch.claims:
         if getattr(claim.subject, "local_id", None) != entity.id:
             continue
@@ -402,28 +376,7 @@ def _batch_pair_facts(entity: EntityRecord, batch: ClaimBatch | None) -> _PairFa
             and isinstance(value.value, QidRef)
         ):
             facts.kin_qids.add(value.value.qid)
-        elif getattr(value, "type", None) == "time":
-            if claim.property == "date_of_birth":
-                facts.birth = _iso(value)
-            elif claim.property == "date_of_death":
-                facts.death = _iso(value)
-            else:
-                activity.append(_iso(value))
-        # a living act's date is usually a point-in-time qualifier (a
-        # marriage, a move); count those too — but never the earliest/latest
-        # precision qualifiers on the birth/death dates themselves.
-        if claim.property not in ("date_of_birth", "date_of_death"):
-            for qualifier in claim.qualifiers:
-                if getattr(qualifier.value, "type", None) == "time":
-                    activity.append(_iso(qualifier.value))
-    if activity:
-        facts.last_activity = max(activity)
     return facts
-
-
-def _year(iso: str) -> int | None:
-    head = (iso or "")[:4]
-    return int(head) if head.isdigit() else None
 
 
 def impossible_pair(
@@ -434,10 +387,11 @@ def impossible_pair(
 ) -> str | None:
     """Reason two candidates CANNOT be the same entity, or None.
 
-    Deterministic, symmetric, no I/O. Fires only on hard graph facts:
-    an irreflexive kinship edge, transitive place containment, or lifespans
-    that cannot overlap. Anything softer stays a candidate for the human
-    (rules 5 & 6 forbid silently narrowing)."""
+    Deterministic, symmetric, no I/O. Fires only on STRUCTURAL graph facts
+    that identity would contradict — an irreflexive kinship edge, or one
+    place transitively inside the other. Anything softer (including a date
+    disagreement, which is a healthy coexisting state, ADR-0002) stays a
+    candidate for the human; rules 5 & 6 forbid silently narrowing."""
     # R1: an irreflexive kinship edge between them (you are never your own
     # parent, child, sibling, or spouse).
     if a.qid and a.qid in b.kin_qids:
@@ -446,31 +400,25 @@ def impossible_pair(
         return "kinship-edge"
     # R2: transitive place containment (a place is not its own container).
     if containment is not None and a.kind == PLACE_KIND and b.kind == PLACE_KIND:
-        if a.qid and b.qid and (
-            containment.contains(a.qid, b.qid) or containment.contains(b.qid, a.qid)
+        if (
+            a.qid
+            and b.qid
+            and (
+                containment.contains(a.qid, b.qid) or containment.contains(b.qid, a.qid)
+            )
         ):
             return "place-containment"
-        # label form: a batch place (no QID) named like a container of the
-        # graph candidate — e.g. new "Poland" vs the graph's Chełmno camp.
-        if b.qid and a.label and a.label in containment.container_labels(b.qid):
-            return "place-containment"
-        if a.qid and b.label and b.label in containment.container_labels(a.qid):
-            return "place-containment"
-    # R3: temporal impossibility.
-    a_birth, a_death = _year(a.birth), _year(a.death)
-    b_birth, b_death = _year(b.birth), _year(b.death)
-    a_last, b_last = _year(a.last_activity), _year(b.last_activity)
-    tol = LIFESPAN_TOLERANCE_YEARS
-    # disjoint lifespan: one dies before the other is born.
-    if a_death is not None and b_birth is not None and a_death < b_birth - tol:
-        return "disjoint-lifespan"
-    if b_death is not None and a_birth is not None and b_death < a_birth - tol:
-        return "disjoint-lifespan"
-    # post-mortem activity: one is active (a living act) after the other died.
-    if a_death is not None and b_last is not None and a_death < b_last - tol:
-        return "post-mortem-activity"
-    if b_death is not None and a_last is not None and b_death < a_last - tol:
-        return "post-mortem-activity"
+        # label form: one candidate is named exactly like a CONTAINER of the
+        # other — e.g. a new "Poland" (no QID) vs the graph's Chełmno camp,
+        # which sits inside a place labelled "Poland". Skip when the two
+        # share a label: eponymous nested places exist ("New York" the city
+        # inside "New York" the state), so an equal label may be the SAME
+        # place, not its container — never prune that (recall-safe).
+        if a.label != b.label:
+            if b.qid and a.label and a.label in containment.container_labels(b.qid):
+                return "place-containment"
+            if a.qid and b.label and b.label in containment.container_labels(a.qid):
+                return "place-containment"
     return None
 
 
@@ -861,12 +809,12 @@ For every pair below, output one NDJSON line:
 "confidence": <0-1>, "evidence": "<one sentence naming the deciding facts>"}}
 No wrapper object, no code fences, no prose.
 
-CONTAINMENT: if you rule a pair "distinct" AND one is a place or
-organization spatially INSIDE the other (a camp within a country, a
-street within a town), add `"contained_in": "<QID of the LARGER,
-containing one>"` to that line. This is not identity — it records a
-part-of relation the graph may be missing, for a separate review. Only
-add it when one genuinely contains the other.
+CONTAINMENT: if you rule a pair "distinct" AND both are PLACES with one
+spatially INSIDE the other (a camp within a country, a street within a
+town), add `"contained_in": "<QID of the LARGER, containing place>"` to
+that line. This is not identity — it records a part-of relation the graph
+may be missing, for a separate review. Only add it for two places where
+one genuinely contains the other; never for people or organizations.
 
 After the last line, end with exactly one final line:
 {{"done": true, "proposals_emitted": N}}
@@ -971,8 +919,13 @@ def place_containment_proposals(
     reconcile-places CSV format, so `reconcile-places --apply` writes the
     referenced part_of edge after human review. The graph gains the
     containment the equivalence pass discovered; future reconcile passes
-    then prune the pair deterministically via the impossibility filter."""
-    labels = {roster_entity.qid: roster_entity.label for roster_entity in roster}
+    then prune the pair deterministically via the impossibility filter.
+
+    Only pairs where BOTH members are places produce rows — `part_of` is a
+    place-hierarchy edge, and a stray `contained_in` on a non-place pair
+    must never reach reconcile-places (which would write a bogus edge)."""
+    by_qid = {roster_entity.qid: roster_entity for roster_entity in roster}
+    labels = {qid: entity.label for qid, entity in by_qid.items()}
     rows: list[dict] = []
     for proposal in proposals:
         parent = proposal.contained_in
@@ -981,6 +934,10 @@ def place_containment_proposals(
         pair = {proposal.entity_id, proposal.qid}
         if parent not in pair or len(pair) != 2:
             # the container must be exactly one of the adjudicated pair
+            continue
+        # both members must be known places (guard against a mis-emitted
+        # contained_in on a person/organization pair)
+        if any(qid not in by_qid or by_qid[qid].kind != PLACE_KIND for qid in pair):
             continue
         (child,) = pair - {parent}
         rows.append(
