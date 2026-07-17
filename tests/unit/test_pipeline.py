@@ -603,6 +603,25 @@ class TestClaudeCodeClient:
         # make_client threads it for the claude-code engine
         assert "--effort" in llm.make_client("claude-code", effort="medium")._command()
 
+    def test_make_client_threads_model_override(self, monkeypatch):
+        # per-phase model override (ADR-0016): make_client(model=...) sets
+        # the client's model regardless of $YIZKR_LLM_MODEL, and None
+        # inherits the env as before.
+        monkeypatch.setenv("YIZKR_LLM_MODEL", "claude-opus-4-8")
+        from yizkr.pipeline import llm
+
+        monkeypatch.setattr(
+            llm.subprocess, "run", lambda *a, **k: FakeCompleted(stdout="2.1.207\n")
+        )
+        overridden = llm.make_client("claude-code", model="claude-sonnet-5")
+        cmd = overridden._command()
+        assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
+        # None -> inherit the run's main model from the environment
+        inherited = llm.make_client("claude-code", model=None)
+        assert inherited._command()[inherited._command().index("--model") + 1] == (
+            "claude-opus-4-8"
+        )
+
     def test_version_probe_and_identifier(self, monkeypatch):
         client, calls = self.make_client(
             monkeypatch, [FakeCompleted(stdout="2.1.207 (Claude Code)\n")]

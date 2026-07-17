@@ -317,16 +317,21 @@ class ClaudeCodeClient:
         return shutil.which(executable) is not None
 
 
-def make_client(engine: str, *, effort: str | None = None) -> LlmClient:
+def make_client(
+    engine: str, *, effort: str | None = None, model: str | None = None
+) -> LlmClient:
     """CLI engine name -> client. Extend here when adding providers.
 
     ``effort`` is the claude-code reasoning level (low..max); it has no
     effect on the anthropic API path yet, so it is only threaded there.
+    ``model`` overrides the model for this client (a per-phase override,
+    e.g. a disciplined extraction model distinct from the run's main
+    model); ``None`` inherits $YIZKR_LLM_MODEL as before.
     """
     if engine == "anthropic":
-        return AnthropicClient()
+        return AnthropicClient(model=model)
     if engine == "claude-code":
-        return ClaudeCodeClient(effort=effort)
+        return ClaudeCodeClient(model=model, effort=effort)
     raise ValueError(
         f"unknown LLM engine {engine!r}; available: anthropic (API key, "
         f"token billing), claude-code (CLI login, subscription billing) — "

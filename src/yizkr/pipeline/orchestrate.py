@@ -140,6 +140,7 @@ class Orchestrator:
         chunk_concurrency: int = 3,
         extract_effort: str = "low",
         review_effort: str = "high",
+        extract_model: str | None = None,
         env_file: Path | None = None,
         log=print,
     ) -> None:
@@ -155,6 +156,13 @@ class Orchestrator:
         # high — where the thinking is cheap and the decision matters.
         self.extract_effort = extract_effort
         self.review_effort = review_effort
+        # per-phase model: claim extraction is a high-volume, structured
+        # task where source discipline (extract only what the source
+        # asserts) matters more than raw capability, so it can run a
+        # distinct model from the run's main one — which stays on the
+        # judgment steps (adjudication, critique). None inherits the main
+        # model. See docs/adr/0016.
+        self.extract_model = extract_model
         self.env_file = env_file
         self.log = log
         self._config: Config | None = None
@@ -351,7 +359,7 @@ class Orchestrator:
         # document costs a few extra calls and is never incorrect
         # (ADR-0006 §7).
         extractor = ChunkedClaimExtractor(
-            make_client(self.llm, effort=self.extract_effort),
+            make_client(self.llm, effort=self.extract_effort, model=self.extract_model),
             state_dir=doc.batch.with_name(doc.batch.name + ".chunks"),
             resume=True,
             concurrency=self.chunk_concurrency,

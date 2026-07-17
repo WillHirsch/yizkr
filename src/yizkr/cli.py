@@ -472,6 +472,10 @@ def cmd_run(args) -> int:
         chunk_concurrency=args.chunk_concurrency,
         extract_effort=args.extract_effort,
         review_effort=args.review_effort,
+        # "inherit" (or empty) means: don't override — use the main model
+        extract_model=(args.extract_model or None)
+        if args.extract_model != "inherit"
+        else None,
         env_file=args.env_file,
     ).run()
 
@@ -847,6 +851,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="reasoning effort for the judgment steps (adjudication/"
         "equivalence, critique). Default high — low-volume, high-stakes "
         "decisions worth the thinking (claude-code engine only)",
+    )
+    p.add_argument(
+        "--extract-model",
+        default="claude-sonnet-5",
+        metavar="MODEL",
+        help="model for the claim-extraction step only; the run's main "
+        "model ($YIZKR_LLM_MODEL) still drives transcription and the "
+        "judgment steps. Default claude-sonnet-5 — extraction rewards "
+        "source discipline over raw capability (ADR-0016). Pass 'inherit' "
+        "to use the run's main model for extraction too",
     )
     p.set_defaults(func=cmd_run)
 
