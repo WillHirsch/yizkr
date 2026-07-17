@@ -495,6 +495,7 @@ def cmd_run(args) -> int:
         extract_model=(args.extract_model or None)
         if args.extract_model != "inherit"
         else None,
+        serial=args.serial,
         env_file=args.env_file,
     ).run()
 
@@ -880,6 +881,15 @@ def build_parser() -> argparse.ArgumentParser:
         "judgment steps. Default claude-sonnet-5 — extraction rewards "
         "source discipline over raw capability (ADR-0016). Pass 'inherit' "
         "to use the run's main model for extraction too",
+    )
+    p.add_argument(
+        "--serial",
+        action="store_true",
+        help="reconcile artifacts one at a time, hubs first, each fully "
+        "written before the next reconciles — so cross-artifact identity is "
+        "resolved at the per-artifact review gates instead of a separate "
+        "reconcile-graph pass (ADR-0019). Advance by re-running after each "
+        "review; ~2 re-runs per artifact",
     )
     p.set_defaults(func=cmd_run)
 

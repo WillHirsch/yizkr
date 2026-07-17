@@ -141,6 +141,7 @@ class Orchestrator:
         extract_effort: str = "low",
         review_effort: str = "high",
         extract_model: str | None = None,
+        serial: bool = False,
         env_file: Path | None = None,
         log=print,
     ) -> None:
@@ -163,6 +164,11 @@ class Orchestrator:
         # judgment steps (adjudication, critique). None inherits the main
         # model. See docs/adr/0016.
         self.extract_model = extract_model
+        # serial mode (ADR-0019): process artifacts one at a time, in a
+        # greedy-overlap sequence, each fully written before the next
+        # reconciles — so cross-artifact identity resolves inline at the
+        # per-artifact gates instead of in a separate reconcile-graph pass.
+        self.serial = serial
         self.env_file = env_file
         self.log = log
         self._config: Config | None = None
@@ -516,10 +522,14 @@ class Orchestrator:
 
     # -- the state machine ----------------------------------------------------
 
-    def advance(self, doc: DocumentRun) -> str:
-        """Advance one document as far as the gates allow; returns status."""
+    def advance(self, doc: DocumentRun, *, stop_after_extract: bool = False) -> str:
+        """Advance one document as far as the gates allow; returns status.
+
+        ``stop_after_extract`` returns once the batch (entity manifest)
+        exists, before reconcile — the serial sequencer needs every
+        document's manifest before it can order them."""
         try:
-            return self._advance(doc)
+            return self._advance(doc, stop_after_extract=stop_after_extract)
         except Exception as exc:  # per-document isolation: others continue
             doc.state.status = FAILED
             doc.state.error = f"{type(exc).__name__}: {exc}"
@@ -531,7 +541,7 @@ class Orchestrator:
         finally:
             doc.save()
 
-    def _advance(self, doc: DocumentRun) -> str:
+    def _advance(self, doc: DocumentRun, *, stop_after_extract: bool = False) -> str:
         doc.dir.mkdir(parents=True, exist_ok=True)
         doc.state.error = None
 
@@ -598,6 +608,12 @@ class Orchestrator:
                 self._step_critique(doc, batch)
         else:
             batch = ClaimBatch.model_validate_json(doc.batch.read_text())
+
+        # serial mode extracts every document first (so the sequencer has all
+        # the manifests), then processes them in order — stop here on the
+        # extract-only pass, before any reconcile touches the graph.
+        if stop_after_extract:
+            return doc.state.status
 
         if batch.entities and not _fresh(doc.equivalences, doc.batch):
             proposals = self._step_reconcile(doc, batch)
@@ -692,20 +708,62 @@ class Orchestrator:
         # seed with content already fully ingested in prior runs, so a
         # renamed copy skips the pipeline (cross-run dedup, ADR-0010)
         self._seen_hashes = self._prior_written_hashes()
+
+        if self.serial:
+            docs = self._serial_sequence(docs)
         for doc in docs:
             self.log(f"{doc.source.name} [{doc.state.status}]")
-            self.advance(doc)
+            status = self.advance(doc)
+            # serial (ADR-0019): the next artifact must not reconcile until
+            # this one is written, so stop at the first that isn't done. The
+            # human clears its gate and re-runs to advance the sequence.
+            if self.serial and status not in (WRITTEN, DUPLICATE):
+                self.log(f"  (serial) paused until {doc.source.name} is written")
+                break
 
         self.log("")
-        counts: dict[str, int] = {}
         for doc in docs:
-            counts[doc.state.status] = counts.get(doc.state.status, 0) + 1
             self.log(f"{doc.state.status:32} {doc.source.name}")
         if any(doc.state.status == FAILED for doc in docs):
             return 1
         if any(doc.state.status.startswith("awaiting") for doc in docs):
             return 2
         return 0
+
+    def _serial_sequence(self, docs: list[DocumentRun]) -> list[DocumentRun]:
+        """Extract every document, then order them by greedy entity overlap.
+
+        Extraction must run for all documents up front (the sequencer reads
+        their manifests); the actual reconcile/review/write then proceeds in
+        the returned order, hubs first (ADR-0019)."""
+        from yizkr.pipeline.sequencing import sequence_documents
+
+        for doc in docs:
+            self.log(f"{doc.source.name} [{doc.state.status}]")
+            self.advance(doc, stop_after_extract=True)
+        keyed = {doc.source.name: self._entity_keys(doc) for doc in docs}
+        by_name = {doc.source.name: doc for doc in docs}
+        ordered = [by_name[name] for name in sequence_documents(list(keyed.items()))]
+        self.log(
+            "\nserial order (most connective first): "
+            + ", ".join(doc.source.name for doc in ordered)
+            + "\n"
+        )
+        return ordered
+
+    def _entity_keys(self, doc: DocumentRun) -> set[str]:
+        """Name-token keys of a document's extractable entities, for the
+        overlap sequencer — the same signal reconcile blocks on."""
+        from yizkr.pipeline.reconcile import _name_tokens
+
+        if not doc.batch.exists():
+            return set()
+        batch = ClaimBatch.model_validate_json(doc.batch.read_text())
+        keys: set[str] = set()
+        for entity in batch.entities:
+            if entity.extract:
+                keys |= _name_tokens(entity.label, *entity.aliases)
+        return keys
 
 
 def _fresh(output: Path, *inputs: Path) -> bool:

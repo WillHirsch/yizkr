@@ -14,6 +14,7 @@ from yizkr.claims import ClaimBatch
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     AWAITING_EQUIVALENCES,
+    BATCHED,
     DUPLICATE,
     FAILED,
     WRITTEN,
@@ -539,3 +540,51 @@ class TestRegisterArtifactType:
         doc = DocumentRun(source, tmp_path / "state")
         assert orchestrator._step_register(doc) == "Q1"
         assert seen == ["genealogical_report"]
+
+
+class TestSerialMode:
+    """--serial (ADR-0019): one artifact at a time, each written before the
+    next reconciles, so cross-artifact identity resolves at the gates."""
+
+    def _two_doc_folder(self, tmp_path):
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "a.txt").write_text("Anna was born in 1901.")
+        (folder / "b.txt").write_text("Bella was born in 1902.")
+        return ScriptedOrchestrator(folder, tmp_path / "state", log=quiet, serial=True)
+
+    def test_extracts_all_then_reconciles_only_the_first(self, tmp_path):
+        orch = self._two_doc_folder(tmp_path)
+        assert orch.run() == 2
+        docs = {d.source.name: d for d in orch.documents()}
+        # every document is extracted (the sequencer needs the manifests)
+        assert "batch:a.txt" in orch.calls and "batch:b.txt" in orch.calls
+        # but only the first-in-sequence reconciles; the next stays queued
+        assert "reconcile:a.txt" in orch.calls
+        assert "reconcile:b.txt" not in orch.calls
+        assert docs["a.txt"].state.status == AWAITING_EQUIVALENCES
+        assert docs["b.txt"].state.status == BATCHED
+
+    def test_next_reconciles_only_after_the_first_is_written(self, tmp_path):
+        orch = self._two_doc_folder(tmp_path)
+        orch.run()
+        approve_all_equivalences({d.source.name: d for d in orch.documents()}["a.txt"])
+        orch.run()  # a advances to its claim gate; b must NOT reconcile yet
+        assert "reconcile:b.txt" not in orch.calls
+        approve_all_claims({d.source.name: d for d in orch.documents()}["a.txt"])
+        orch.run()  # a is written; only now does b reconcile
+        docs = {d.source.name: d for d in orch.documents()}
+        assert docs["a.txt"].state.status == WRITTEN
+        assert docs["b.txt"].state.status == AWAITING_EQUIVALENCES
+        assert "reconcile:b.txt" in orch.calls
+
+    def test_default_mode_advances_every_document_in_one_pass(self, tmp_path):
+        # contrast: without --serial, both documents reach the gate at once
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "a.txt").write_text("Anna was born in 1901.")
+        (folder / "b.txt").write_text("Bella was born in 1902.")
+        orch = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        orch.run()
+        assert "reconcile:a.txt" in orch.calls
+        assert "reconcile:b.txt" in orch.calls

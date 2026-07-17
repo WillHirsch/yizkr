@@ -114,6 +114,51 @@ re-running one step in isolation — but for a normal ingest you only ever run
   (with page/region/excerpt locator qualifiers) and `inferred from
   extraction run → run item`. Re-runs skip existing statements.
 
+## Resolving entities across artifacts
+
+Reconcile (Gate 1) matches a document's entities against **everything
+already in the graph**, so it resolves the new document against artifacts
+from *earlier* runs. What it does **not** see, by default, are the other
+documents in the *same* folder run: the loop takes every document to Gate 1
+in one pass, before any is written, so siblings are invisible to each other
+and two artifacts naming one person land as two items. Two mechanisms close
+that gap:
+
+- **`yizkr reconcile-graph`** — a separate, curator-run pass that proposes
+  duplicate *pairs among items already in the graph* (across every artifact
+  and prior run). You review the proposals like an equivalences CSV;
+  approved pairs are executed by you — a wiki item merge, or a referenced
+  `said to be the same as` statement (identity of two existing items is a
+  contestable judgement, ADR-0007). This is how "the Donald from the census"
+  and "the Donald from the letter" become one item under the default flow:
+  run it **after** a folder ingest to consolidate cross-artifact duplicates.
+
+- **`yizkr ingest run --serial`** (ADR-0019) — processes artifacts one at a
+  time, most-connective first (a greedy overlap of their entity names, so a
+  family tree or GEDCOM leads), each **fully written before the next
+  reconciles**. A later artifact's "Donald" then matches the earlier,
+  already-rich "Donald Bennett Hirsch" at its *own* Gate 1 — resolved once,
+  in context, with no duplicate to merge later. This removes the routine
+  need for `reconcile-graph`; keep that command for occasional cleanup
+  (pre-existing dups, cross-run dups, and within-artifact dups the
+  extraction manifest missed — serial is a *cross*-artifact fix).
+
+  ```mermaid
+  flowchart LR
+      x["extract EVERY<br/>artifact"] --> s["sequence<br/>(hubs first)"]
+      s --> a1["artifact 1<br/>· 2 gates · write"]
+      a1 --> a2["artifact 2<br/>· 2 gates · write"]
+      a2 --> a3["artifact 3 …<br/>each sees the prior"]
+  ```
+
+  The trade is rhythm, not decisions: because each artifact must be written
+  before the next reconciles, a serial run advances **one artifact per pass**
+  — clear its two gates, re-run, next artifact. That is more re-invocations
+  than the default's ~3, but **fewer review decisions** (no cross-artifact
+  duplicate is ever reviewed twice). **Advancing the process = re-running
+  `ingest run`** after you save a reviewed CSV; a future frontend (or a
+  `--watch` mode) will drive those re-runs for you.
+
 ## Face proposals (`ingest/faces.py`, ADR-0005)
 
 A face proposal is an ordinary claim — `depicts` on the photograph,
