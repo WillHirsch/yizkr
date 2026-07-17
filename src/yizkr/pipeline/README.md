@@ -1,21 +1,62 @@
 # Ingestion pipeline (`yizkr.pipeline`)
 
-Pluggable steps that take an artifact from digitised file to reviewed,
-source-referenced statements in the graph (R3, ADR-0003). Every step
-reads and writes plain files, so a run can pause for review, be
-inspected, and resume:
+Takes an artifact from a digitised file to reviewed, source-referenced
+statements in the graph (R3, ADR-0003). Every step reads and writes plain
+files, so a run pauses for review, can be inspected, and resumes.
+
+## The ingest loop: one command, two gates, repeat
+
+`yizkr ingest run <folder>` is the whole workflow. It advances every
+document in the folder as far as it can, then **stops at a human review
+gate** and prints what to do. Fill in the gate's CSV, run the *same command
+again*, and it picks up where it paused — repeat until every document
+reports `written`.
 
 ```
-register ──► transcribe ──► extract ──► resolve ──► export-review
-   │                                                     │
-   │                                          (human fills decision column)
-   ▼                                                     ▼
-media + artifact/fragment items          apply-review ──► write
-                                                            │
-                                                            ▼
-                                          statements, dual-referenced,
-                                          normal rank (ADR-0003)
+  yizkr ingest run <folder>
+        │   per document, automatically:
+        ▼
+  register → transcribe → extract → reconcile ─────►  🚦 GATE 1: identity
+                             │        (match this doc's people/            │
+                    critique + gaps    places against the graph)           │
+                    flag likely errors                                     │
+   ┌───────────────────────────────────────────────────────────────────────┘
+   │  fill  <doc>/equivalences.csv  →  save as  equivalences.reviewed.csv
+   ▼
+  resolve → export-review ─────►  🚦 GATE 2: claims
+                                    │  fill <doc>/review.csv → save review.reviewed.csv
+                                    ▼
+                                  write ─────►  statements in the graph
+                                               (dual-referenced, normal rank)
 ```
+
+**The two gates**
+
+- **Gate 1 — identity** (`awaiting equivalences review`): *is each person or
+  place in this document the same as one already in the graph?* Fill the
+  `decision` column of `<doc>/equivalences.csv` and save it as
+  `equivalences.reviewed.csv`. A document with nothing to match skips this
+  gate.
+- **Gate 2 — claims** (`awaiting claim review`): *are these extracted facts
+  correct, and who is a living person?* Fill `<doc>/review.csv` and save as
+  `review.reviewed.csv`.
+
+**What keeps it safe.** A gate opens only when its `*.reviewed.csv` exists
+*and* is newer than the CSV it reviews — edit the source CSV and the gate
+re-arms. No reviewed file, nothing writes; identity is never auto-confirmed
+and no claim reaches the graph without an explicit `approve` (R3, ADR-0007).
+
+**Reading a run.** Each document prints a status — `awaiting equivalences
+review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done), or
+`failed` (errored; just re-run to retry). The exit code summarises the
+batch: `0` all written, `2` something awaits you, `1` something failed.
+Re-running is always safe: finished work is skipped, and a corrected
+upstream file re-does only what depends on it (make-style freshness).
+
+State for each document lives in `var/runs/<folder>/<doc>/` — every stage's
+output is a plain file you can open, correct, or delete to force a redo.
+GEDCOM (`.ged`) files take a deterministic adapter in place of
+transcribe/extract; the gates, resolve, and write are identical.
 
 ```sh
 uv sync --dev            # from the repo root
@@ -26,7 +67,12 @@ Connection settings come from `deploy/.env` (same variables as the
 smoke test); the vocabulary comes from `model/manifest.yaml` resolved
 against the live instance (run `model/bootstrap.py` first).
 
-## Steps
+## The stages, individually
+
+The stages below are what `ingest run` orchestrates for you. Each is also a
+standalone `yizkr ingest <step>` command (see `--help`) for debugging or
+re-running one step in isolation — but for a normal ingest you only ever run
+`ingest run` and fill the two gates above.
 
 - **register** — uploads media (idempotent by content), ensures the
   artifact item (`instance of`, `media file`) and optional page
@@ -40,9 +86,17 @@ against the live instance (run `model/bootstrap.py` first).
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
   same validation).
-- **resolve** — replaces `local` refs whose label exactly matches an
-  existing item; anything fuzzier is left for the human reviewer, who
-  sees `NEW:<local_id>` vs a QID in the CSV.
+- **reconcile** — blocks the document's entities against a roster of the
+  whole graph (shared kind + name token, minus pairs a graph fact proves
+  cannot match, ADR-0017), then an LLM adjudicates each candidate as
+  same / uncertain / distinct. The proposals are **Gate 1**
+  (`equivalences.csv`); only your `approve` rows take effect, because a
+  wrong merge corrupts every downstream attribution (identity is never
+  auto-confirmed, ADR-0007). A document with no proposals skips the gate.
+- **resolve** — applies the approved equivalences, then replaces remaining
+  `local` refs whose label exactly matches an existing item; anything
+  fuzzier is left for the reviewer, who sees `NEW:<local_id>` vs a QID in
+  the claim CSV.
 - **export-review / apply-review** — one CSV row per claim for
   OpenRefine or any spreadsheet (R4). Rows are matched back by
   `claim_id`, a content hash: sorting or filtering the sheet cannot
