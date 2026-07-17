@@ -28,6 +28,7 @@ import json
 import sys
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -56,6 +57,31 @@ class RosterEntity(BaseModel):
     married_names: list[str] = []
     nicknames: list[str] = []
     official_names: list[str] = []
+    # raw related-entity QIDs for the impossibility filter (ADR-0017):
+    # a kinship edge between two candidates proves they are two people.
+    spouse_qids: list[str] = []
+    father_qids: list[str] = []
+    mother_qids: list[str] = []
+    child_qids: list[str] = []
+    sibling_qids: list[str] = []
+    # latest dated NON-death activity (living act) — a person cannot act
+    # after another's death, so this bounds temporal identity (ADR-0017).
+    last_activity: str = ""
+
+    @property
+    def kin_qids(self) -> set[str]:
+        """QIDs this item is joined to by any irreflexive kinship edge."""
+        return {
+            qid
+            for qid in (
+                *self.spouse_qids,
+                *self.father_qids,
+                *self.mother_qids,
+                *self.child_qids,
+                *self.sibling_qids,
+            )
+            if qid
+        }
 
     def facts(self) -> str:
         parts = [f"{self.qid} {self.label!r}"]
@@ -97,6 +123,12 @@ SELECT ?item ?itemLabel ?kindLabel
        (GROUP_CONCAT(DISTINCT ?marriedName; separator="|") AS ?marriedNames)
        (GROUP_CONCAT(DISTINCT ?nick; separator="|") AS ?nicknames)
        (GROUP_CONCAT(DISTINCT ?officialName; separator="|") AS ?officialNames)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?spouseItem), "entity/"); separator="|") AS ?spouseQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?fatherItem), "entity/"); separator="|") AS ?fatherQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?motherItem), "entity/"); separator="|") AS ?motherQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?childItem), "entity/"); separator="|") AS ?childQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?siblingItem), "entity/"); separator="|") AS ?siblingQids)
+       (MAX(?activityDate) AS ?lastActivity)
 WHERE {{
   ?item wdt:{instance_of} ?kind .
   OPTIONAL {{ ?item skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
@@ -113,6 +145,14 @@ WHERE {{
   OPTIONAL {{ ?deathEvent wdt:{participant} ?item ;
                           wdt:{instance_of} wd:{death_item} ;
                           wdt:{point_in_time} ?deathEventDate . }}
+  # latest dated NON-death event the item took part in: a living act
+  # (marriage, migration, release...). Bounds temporal identity — nobody
+  # acts after they die, so activity past a candidate's death rules the
+  # pair out (ADR-0017). Death events are excluded (a burial is posthumous).
+  OPTIONAL {{ ?activityEvent wdt:{participant} ?item ;
+                             wdt:{point_in_time} ?activityDate ;
+                             wdt:{instance_of} ?activityKind .
+              FILTER(?activityKind != wd:{death_item}) }}
   # relation labels carry QIDs: bare labels are ambiguous (two Davids)
   OPTIONAL {{ ?item wdt:{spouse} ?spouseItem . ?spouseItem rdfs:label ?spouseLabel .
               FILTER(LANG(?spouseLabel) = "en")
@@ -123,6 +163,10 @@ WHERE {{
   OPTIONAL {{ ?item wdt:{mother} ?motherItem . ?motherItem rdfs:label ?motherLabel .
               FILTER(LANG(?motherLabel) = "en")
               BIND(CONCAT(?motherLabel, " (", STRAFTER(STR(?motherItem), "entity/"), ")") AS ?motherDesc) }}
+  # child and sibling are fetched for their QIDs only (the impossibility
+  # filter reads them; the adjudicator's prose uses father/mother/spouse).
+  OPTIONAL {{ ?item wdt:{child} ?childItem . }}
+  OPTIONAL {{ ?item wdt:{sibling} ?siblingItem . }}
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
 GROUP BY ?item ?itemLabel ?kindLabel
@@ -141,6 +185,8 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
         spouse=properties["spouse"],
         father=properties["father"],
         mother=properties["mother"],
+        child=properties["child"],
+        sibling=properties["sibling"],
         participant=properties["participant"],
         point_in_time=properties["point_in_time"],
         birth_name=properties["birth_name"],
@@ -184,6 +230,12 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                 married_names=split(binding, "marriedNames"),
                 nicknames=split(binding, "nicknames"),
                 official_names=split(binding, "officialNames"),
+                spouse_qids=split(binding, "spouseQids"),
+                father_qids=split(binding, "fatherQids"),
+                mother_qids=split(binding, "motherQids"),
+                child_qids=split(binding, "childQids"),
+                sibling_qids=split(binding, "siblingQids"),
+                last_activity=(field(binding, "lastActivity"))[:10],
             )
         )
     return roster
@@ -207,21 +259,251 @@ def _tokens_overlap(first: set[str], second: set[str]) -> bool:
     return any(a.startswith(b) or b.startswith(a) for a in first for b in second)
 
 
+# -- impossibility filter (ADR-0017) -----------------------------------------
+#
+# A shared name token blocks two entities as candidates, but the graph may
+# already assert a fact that makes identity IMPOSSIBLE — a kinship edge
+# between them, one place transitively inside the other, or lifespans that
+# cannot be one life. Pruning those before adjudication saves an LLM call
+# and a review row, and is RECALL-SAFE: it only drops pairs the graph's own
+# referenced statements contradict, never a pair that is merely dissimilar.
+# Unknowns are never impossible (rule 5: uncertainty is structural).
+
+PLACE_KIND = "place"
+KINSHIP_PROPERTIES = ("father", "mother", "spouse", "child", "sibling")
+# slack for coarse/uncertain dates: never prune two lifespans that are only
+# a year apart — a source's year may be imprecise (rule 5).
+LIFESPAN_TOLERANCE_YEARS = 1
+
+CONTAINMENT_QUERY = """\
+SELECT ?place ?ancestor ?ancestorLabel WHERE {{
+  ?place wdt:{instance_of} wd:{place_item} .
+  ?place (wdt:{part_of}|wdt:{location})+ ?ancestor .
+  ?ancestor rdfs:label ?ancestorLabel . FILTER(LANG(?ancestorLabel) = "en")
+}}"""
+
+
+class PlaceContainment:
+    """Transitive place-containment closure, read once from the graph.
+
+    ``ancestors[q]`` is every place that transitively CONTAINS ``q`` (via
+    ``(part_of|location)+`` — the same closure the reconcile-places pass
+    uses, ADR-0009). A place is never identical to a place strictly
+    containing it, so a containment edge between two candidates rules the
+    pair out.
+    """
+
+    def __init__(
+        self, ancestors: dict[str, set[str]], labels: dict[str, str]
+    ) -> None:
+        self._ancestors = ancestors
+        self._labels = labels
+
+    def contains(self, container_qid: str, contained_qid: str) -> bool:
+        """Does ``container_qid`` transitively contain ``contained_qid``?"""
+        return container_qid in self._ancestors.get(contained_qid, set())
+
+    def container_labels(self, qid: str) -> set[str]:
+        """Labels of every place that transitively contains ``qid`` — used
+        to rule out a not-yet-written batch place (no QID) against a graph
+        candidate strictly inside a place of the batch entity's name."""
+        return {
+            self._labels[ancestor]
+            for ancestor in self._ancestors.get(qid, set())
+            if ancestor in self._labels
+        }
+
+
+def fetch_place_containment(client: WikiClient, config: Config) -> PlaceContainment:
+    """One SPARQL query -> the transitive place-containment closure."""
+    properties, items = client.vocabulary()
+    query = prefix_block(config.concept_uri) + CONTAINMENT_QUERY.format(
+        instance_of=properties["instance_of"],
+        part_of=properties["part_of"],
+        location=properties["location"],
+        place_item=items[PLACE_KIND],
+    )
+    url = (
+        config.sparql_url
+        + "?"
+        + urllib.parse.urlencode({"query": query, "format": "json"})
+    )
+    with urllib.request.urlopen(url, timeout=120) as response:
+        bindings = json.load(response)["results"]["bindings"]
+    ancestors: dict[str, set[str]] = {}
+    labels: dict[str, str] = {}
+    for binding in bindings:
+        place = binding["place"]["value"].rsplit("/", 1)[-1]
+        ancestor = binding["ancestor"]["value"].rsplit("/", 1)[-1]
+        ancestors.setdefault(place, set()).add(ancestor)
+        labels[ancestor] = binding.get("ancestorLabel", {}).get("value", "")
+    return PlaceContainment(ancestors, labels)
+
+
+@dataclass
+class _PairFacts:
+    """The subset of an entity's graph facts the impossibility filter reads.
+
+    Built from a RosterEntity (graph side) or an EntityRecord + its batch
+    claims (new-document side). ``qid`` is None for a batch entity not yet
+    written — its containment is matched by label instead.
+    """
+
+    kind: str
+    label: str
+    qid: str | None = None
+    kin_qids: set[str] = field(default_factory=set)
+    birth: str = ""
+    death: str = ""
+    last_activity: str = ""
+
+
+def _roster_pair_facts(roster_entity: RosterEntity) -> _PairFacts:
+    return _PairFacts(
+        kind=roster_entity.kind,
+        label=roster_entity.label,
+        qid=roster_entity.qid,
+        kin_qids=roster_entity.kin_qids,
+        birth=roster_entity.birth,
+        death=roster_entity.death,
+        last_activity=roster_entity.last_activity,
+    )
+
+
+def _batch_pair_facts(entity: EntityRecord, batch: ClaimBatch | None) -> _PairFacts:
+    """Facts for a not-yet-written batch entity, from its own claims.
+
+    A batch entity references others by local id; only relations to items
+    ALREADY in the graph (a QidRef) contribute kin_qids. Dates come from
+    the entity's own time-valued claims; the latest non-death date is its
+    activity bound.
+    """
+    facts = _PairFacts(kind=entity.kind, label=entity.label, qid=entity.qid)
+    if batch is None:
+        return facts
+
+    def _iso(time_value) -> str:
+        return "-".join(
+            f"{part:02d}" if index else f"{part:04d}"
+            for index, part in enumerate(
+                (time_value.year, time_value.month, time_value.day)
+            )
+            if part is not None
+        )
+
+    activity: list[str] = []
+    for claim in batch.claims:
+        if getattr(claim.subject, "local_id", None) != entity.id:
+            continue
+        value = claim.value
+        if (
+            claim.property in KINSHIP_PROPERTIES
+            and isinstance(value, ItemValue)
+            and isinstance(value.value, QidRef)
+        ):
+            facts.kin_qids.add(value.value.qid)
+        elif getattr(value, "type", None) == "time":
+            if claim.property == "date_of_birth":
+                facts.birth = _iso(value)
+            elif claim.property == "date_of_death":
+                facts.death = _iso(value)
+            else:
+                activity.append(_iso(value))
+        # a living act's date is usually a point-in-time qualifier (a
+        # marriage, a move); count those too — but never the earliest/latest
+        # precision qualifiers on the birth/death dates themselves.
+        if claim.property not in ("date_of_birth", "date_of_death"):
+            for qualifier in claim.qualifiers:
+                if getattr(qualifier.value, "type", None) == "time":
+                    activity.append(_iso(qualifier.value))
+    if activity:
+        facts.last_activity = max(activity)
+    return facts
+
+
+def _year(iso: str) -> int | None:
+    head = (iso or "")[:4]
+    return int(head) if head.isdigit() else None
+
+
+def impossible_pair(
+    a: _PairFacts,
+    b: _PairFacts,
+    *,
+    containment: PlaceContainment | None = None,
+) -> str | None:
+    """Reason two candidates CANNOT be the same entity, or None.
+
+    Deterministic, symmetric, no I/O. Fires only on hard graph facts:
+    an irreflexive kinship edge, transitive place containment, or lifespans
+    that cannot overlap. Anything softer stays a candidate for the human
+    (rules 5 & 6 forbid silently narrowing)."""
+    # R1: an irreflexive kinship edge between them (you are never your own
+    # parent, child, sibling, or spouse).
+    if a.qid and a.qid in b.kin_qids:
+        return "kinship-edge"
+    if b.qid and b.qid in a.kin_qids:
+        return "kinship-edge"
+    # R2: transitive place containment (a place is not its own container).
+    if containment is not None and a.kind == PLACE_KIND and b.kind == PLACE_KIND:
+        if a.qid and b.qid and (
+            containment.contains(a.qid, b.qid) or containment.contains(b.qid, a.qid)
+        ):
+            return "place-containment"
+        # label form: a batch place (no QID) named like a container of the
+        # graph candidate — e.g. new "Poland" vs the graph's Chełmno camp.
+        if b.qid and a.label and a.label in containment.container_labels(b.qid):
+            return "place-containment"
+        if a.qid and b.label and b.label in containment.container_labels(a.qid):
+            return "place-containment"
+    # R3: temporal impossibility.
+    a_birth, a_death = _year(a.birth), _year(a.death)
+    b_birth, b_death = _year(b.birth), _year(b.death)
+    a_last, b_last = _year(a.last_activity), _year(b.last_activity)
+    tol = LIFESPAN_TOLERANCE_YEARS
+    # disjoint lifespan: one dies before the other is born.
+    if a_death is not None and b_birth is not None and a_death < b_birth - tol:
+        return "disjoint-lifespan"
+    if b_death is not None and a_birth is not None and b_death < a_birth - tol:
+        return "disjoint-lifespan"
+    # post-mortem activity: one is active (a living act) after the other died.
+    if a_death is not None and b_last is not None and a_death < b_last - tol:
+        return "post-mortem-activity"
+    if b_death is not None and a_last is not None and b_death < a_last - tol:
+        return "post-mortem-activity"
+    return None
+
+
 def block_candidates(
-    entities: list[EntityRecord], roster: list[RosterEntity]
+    entities: list[EntityRecord],
+    roster: list[RosterEntity],
+    *,
+    batch: ClaimBatch | None = None,
+    containment: PlaceContainment | None = None,
 ) -> dict[str, list[RosterEntity]]:
     """Deterministic candidate generation: shared kind + shared name
-    token (prefix-aware). The LLM never free-searches the graph; it
-    only adjudicates the candidates this produces (auditability)."""
+    token (prefix-aware), minus pairs the graph proves impossible
+    (ADR-0017). The LLM never free-searches the graph; it only adjudicates
+    the candidates this produces (auditability).
+
+    ``batch`` supplies each entity's own claims (dates, resolved kin) for
+    the impossibility filter; ``containment`` the place-containment closure.
+    Both optional — without them the filter simply prunes less."""
     candidates: dict[str, list[RosterEntity]] = {}
     for entity in entities:
         tokens = _name_tokens(entity.label, *entity.aliases)
+        entity_pair_facts = _batch_pair_facts(entity, batch)
         matches = [
             roster_entity
             for roster_entity in roster
             if roster_entity.kind == entity.kind
             and _tokens_overlap(
                 tokens, _name_tokens(roster_entity.label, *roster_entity.aliases)
+            )
+            and not impossible_pair(
+                entity_pair_facts,
+                _roster_pair_facts(roster_entity),
+                containment=containment,
             )
         ]
         if matches:
@@ -292,6 +574,11 @@ class Proposal(BaseModel):
     verdict: str  # same | uncertain | distinct
     confidence: float | None = None
     evidence: str = ""
+    # hand-off (ADR-0017): on a `distinct` verdict where one item is
+    # spatially/organizationally INSIDE the other, the QID of the CONTAINER.
+    # A rejected equivalence that is really a containment feeds a part_of
+    # proposal to reconcile-places instead of being discarded.
+    contained_in: str | None = None
 
 
 # Pairs per adjudication call. Bounds each response — the same
@@ -572,8 +859,16 @@ Verdicts: "same", "uncertain", "distinct".
 For every pair below, output one NDJSON line:
 {{"entity_id": "<QID A>", "qid": "<QID B>", "verdict": "same|uncertain|distinct",
 "confidence": <0-1>, "evidence": "<one sentence naming the deciding facts>"}}
-No wrapper object, no code fences, no prose. After the last line, end
-with exactly one final line:
+No wrapper object, no code fences, no prose.
+
+CONTAINMENT: if you rule a pair "distinct" AND one is a place or
+organization spatially INSIDE the other (a camp within a country, a
+street within a town), add `"contained_in": "<QID of the LARGER,
+containing one>"` to that line. This is not identity — it records a
+part-of relation the graph may be missing, for a separate review. Only
+add it when one genuinely contains the other.
+
+After the last line, end with exactly one final line:
 {{"done": true, "proposals_emitted": N}}
 
 Pairs:
@@ -585,9 +880,13 @@ def propose_graph_pairs(
     client: LlmClient,
     roster: list[RosterEntity],
     batch_pairs: int = ADJUDICATION_BATCH_PAIRS,
+    *,
+    containment: PlaceContainment | None = None,
 ) -> list[Proposal]:
     """Blocked roster x roster pairs -> adjudicated duplicate proposals,
-    in bounded batches per call.
+    in bounded batches per call. Pairs the graph proves impossible
+    (kinship edge, existing containment, disjoint lifespan) are pruned
+    before adjudication (ADR-0017).
 
     Executing an approved pair is a curator action (item merge, or a
     referenced `said to be the same as` statement) — deliberately not
@@ -599,10 +898,17 @@ def propose_graph_pairs(
         for second in roster[index + 1 :]:
             if first.kind != second.kind:
                 continue
-            if _tokens_overlap(
+            if not _tokens_overlap(
                 first_tokens, _name_tokens(second.label, *second.aliases)
             ):
-                pairs.append((first, second))
+                continue
+            if impossible_pair(
+                _roster_pair_facts(first),
+                _roster_pair_facts(second),
+                containment=containment,
+            ):
+                continue
+            pairs.append((first, second))
     if not pairs:
         return []
     proposals: list[Proposal] = []
@@ -653,3 +959,54 @@ def export_graph_pairs_csv(
                 }
             )
     return len(proposals)
+
+
+def place_containment_proposals(
+    proposals: list[Proposal], roster: list[RosterEntity]
+) -> list[dict]:
+    """Rejected-equivalence containments -> reconcile-places rows (ADR-0017).
+
+    A `distinct` proposal whose `contained_in` names one of its pair as the
+    container becomes an `a_within_b` row (child within parent) in the
+    reconcile-places CSV format, so `reconcile-places --apply` writes the
+    referenced part_of edge after human review. The graph gains the
+    containment the equivalence pass discovered; future reconcile passes
+    then prune the pair deterministically via the impossibility filter."""
+    labels = {roster_entity.qid: roster_entity.label for roster_entity in roster}
+    rows: list[dict] = []
+    for proposal in proposals:
+        parent = proposal.contained_in
+        if proposal.verdict != "distinct" or not parent:
+            continue
+        pair = {proposal.entity_id, proposal.qid}
+        if parent not in pair or len(pair) != 2:
+            # the container must be exactly one of the adjudicated pair
+            continue
+        (child,) = pair - {parent}
+        rows.append(
+            {
+                "qid_a": child,
+                "label_a": labels.get(child, ""),
+                "qid_b": parent,
+                "label_b": labels.get(parent, ""),
+                "question": f"reconcile flagged {child} as contained in {parent}",
+                "verdict": "a_within_b",
+                "confidence": proposal.confidence,
+                "evidence": proposal.evidence,
+                "decision": "",
+            }
+        )
+    return rows
+
+
+def export_place_containment_csv(rows: list[dict], path: Path) -> int:
+    """Write containment hand-off rows in the reconcile-places CSV format,
+    so `reconcile-places --apply <path>` consumes them after review."""
+    from yizkr.pipeline.places import CSV_FIELDS
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)

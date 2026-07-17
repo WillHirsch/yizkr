@@ -380,11 +380,18 @@ class Orchestrator:
             adjudicate,
             block_candidates,
             export_equivalences_csv,
+            fetch_place_containment,
             fetch_roster,
         )
 
         roster = fetch_roster(self.client, self.config)
-        candidates = block_candidates(batch.entities, roster)
+        # the transitive place-containment closure lets blocking prune pairs
+        # the graph proves impossible (a camp inside a country is not the
+        # country) before adjudication (ADR-0017)
+        containment = fetch_place_containment(self.client, self.config)
+        candidates = block_candidates(
+            batch.entities, roster, batch=batch, containment=containment
+        )
         proposals = (
             adjudicate(
                 make_client(self.llm, effort=self.review_effort),

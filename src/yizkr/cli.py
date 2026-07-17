@@ -384,13 +384,18 @@ def cmd_reconcile_graph(args) -> int:
     from yizkr.pipeline.llm import make_client
     from yizkr.pipeline.reconcile import (
         export_graph_pairs_csv,
+        export_place_containment_csv,
+        fetch_place_containment,
         fetch_roster,
+        place_containment_proposals,
         propose_graph_pairs,
     )
 
     config = Config.load(args.env_file)
-    roster = fetch_roster(WikiClient(config), config)
-    proposals = propose_graph_pairs(make_client(args.llm), roster)
+    client = WikiClient(config)
+    roster = fetch_roster(client, config)
+    containment = fetch_place_containment(client, config)
+    proposals = propose_graph_pairs(make_client(args.llm), roster, containment=containment)
     rows = export_graph_pairs_csv(proposals, roster, args.out)
     print(
         f"wrote {args.out} ({rows} pairs from a {len(roster)}-entity "
@@ -398,6 +403,18 @@ def cmd_reconcile_graph(args) -> int:
         f"on the wiki, or add a referenced 'said to be the same as' "
         f"statement where the equivalence is itself a judgement."
     )
+    # hand-off (ADR-0017): distinct pairs the adjudicator flagged as one
+    # containing the other become part_of proposals for reconcile-places.
+    containment_rows = place_containment_proposals(proposals, roster)
+    if containment_rows:
+        out = args.out.with_name(args.out.stem + "-containment.csv")
+        export_place_containment_csv(containment_rows, out)
+        print(
+            f"wrote {out} ({len(containment_rows)} containment proposal(s) "
+            f"discovered while rejecting equivalences). Review, then apply "
+            f"with `yizkr reconcile-places --apply {out}` to write the "
+            f"part_of edges — which then prune these pairs from future runs."
+        )
     return 0
 
 
