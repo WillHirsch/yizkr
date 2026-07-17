@@ -12,23 +12,28 @@ gate** and prints what to do. Fill in the gate's CSV, run the *same command
 again*, and it picks up where it paused — repeat until every document
 reports `written`.
 
+```mermaid
+flowchart TD
+    run(["yizkr ingest run &lt;folder&gt;"]) --> register
+
+    subgraph auto ["per document, automatically"]
+        register[register] --> transcribe[transcribe] --> extract[extract] --> reconcile[reconcile]
+        extract -. advise .-> critique["critique + gaps<br/>(flag likely errors)"]
+    end
+
+    reconcile --> gate1{{"🚦 GATE 1 · identity<br/>fill equivalences.csv<br/>→ equivalences.reviewed.csv"}}
+    gate1 --> resolve[resolve] --> export[export-review]
+    export --> gate2{{"🚦 GATE 2 · claims<br/>fill review.csv<br/>→ review.reviewed.csv"}}
+    gate2 --> write[write] --> outcome[("statements in the graph<br/>dual-referenced, normal rank")]
+
+    classDef gate fill:#fde68a,stroke:#b45309,color:#1f2937;
+    classDef store fill:#dbeafe,stroke:#1e40af,color:#1f2937;
+    class gate1,gate2 gate
+    class outcome store
 ```
-  yizkr ingest run <folder>
-        │   per document, automatically:
-        ▼
-  register → transcribe → extract → reconcile ─────►  🚦 GATE 1: identity
-                             │        (match this doc's people/            │
-                    critique + gaps    places against the graph)           │
-                    flag likely errors                                     │
-   ┌───────────────────────────────────────────────────────────────────────┘
-   │  fill  <doc>/equivalences.csv  →  save as  equivalences.reviewed.csv
-   ▼
-  resolve → export-review ─────►  🚦 GATE 2: claims
-                                    │  fill <doc>/review.csv → save review.reviewed.csv
-                                    ▼
-                                  write ─────►  statements in the graph
-                                               (dual-referenced, normal rank)
-```
+
+The two amber hexagons are the human gates — the run pauses there until you
+save the reviewed CSV, then continues on the next `ingest run`.
 
 **The two gates**
 
