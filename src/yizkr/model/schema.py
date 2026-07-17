@@ -41,7 +41,9 @@ class ManifestProperty(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str = Field(min_length=1)
-    description: str = Field(min_length=1)
+    # Wikibase caps entity descriptions at 250 characters; fail at
+    # manifest-load time rather than mid-write against the instance.
+    description: str = Field(min_length=1, max_length=250)
     datatype: Datatype
     aliases: list[str] = []
     wikidata: str | None = Field(default=None, pattern=r"^P\d+$")
@@ -51,7 +53,9 @@ class ManifestItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str = Field(min_length=1)
-    description: str = Field(min_length=1)
+    # Wikibase caps entity descriptions at 250 characters; fail at
+    # manifest-load time rather than mid-write against the instance.
+    description: str = Field(min_length=1, max_length=250)
     aliases: list[str] = []
     wikidata: str | None = Field(default=None, pattern=r"^Q\d+$")
     subclass_of: str | None = None

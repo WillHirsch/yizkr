@@ -171,6 +171,14 @@ class TestValidators:
         with pytest.raises(ValidationError):
             Manifest.model_validate(raw)
 
+    def test_overlong_description_rejected(self):
+        # Wikibase caps descriptions at 250 chars; catch it at load time
+        # rather than mid-write against the instance.
+        raw = minimal_raw()
+        raw["properties"]["stated_in"]["description"] = "x" * 251
+        with pytest.raises(ValidationError, match="at most 250"):
+            Manifest.model_validate(raw)
+
 
 class TestMappingPage:
     def test_wikitext_contains_ids_and_links(self, manifest):
