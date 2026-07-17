@@ -259,6 +259,23 @@ Names are modelled in **two layers**:
   name matching another's birth name (a marriage name change) is strong
   identity evidence.
 
+**Relational and perspectival appellations are NOT names** (ADR-0018).
+"our great grandmother", "meine Oma", "Tante Rosa", "my husband" describe
+a relationship or viewpoint, so they never enter the alias bag. A literal
+kinship term is a `relative` + `kinship_type` claim with the ego as
+object (§Kinship); a courtesy title or family/pet name is a
+`referred_to_as` (P1810) statement on the referent — verbatim, source-
+referenced — qualified by `perspective` (the person/family ego) when the
+ego is a modelled entity, and unqualified otherwise. Both are
+multi-valued and coexist (ADR-0002): many people may call one person many
+things. Because each appellation is a statement whose *subject* is the
+referent and whose `perspective` is the other party, reciprocal naming (a
+grandmother "Oma" to a grandchild who is "Bubele" to her) is just two
+independent statements — no dyad object, and the kinship inverse is
+derived, not stored. With the ego anchored, a later bare reference
+resolves: compositional terms by kinship derivation, idiosyncratic ones
+via the appellation table.
+
 ## Kinship (see ADR-0014)
 
 Kinship is modelled in **three layers**, so the graph stays a thin

@@ -1,6 +1,9 @@
 # ADR-0018: Relational and perspectival appellations
 
-Status: **proposed** — pending a ruling on the forks below. No code yet.
+Status: **accepted** — implemented (manifest `referred_to_as` +
+`perspective`, extraction-prompt routing, critic update). No retro-fit:
+the model applies to a clean re-ingest, not a migration of existing rows
+(see Rulings).
 
 ## Context
 
@@ -70,6 +73,28 @@ statement on the referent**:
 So "X is known to Y as Z" is `X —referred_to_as→ "Z" ; perspective = Y`,
 referenced to the artifact that records it.
 
+#### The `family` perspective-holder is opportunistic, never fabricated
+
+A `family` item enters the graph exactly like any other entity — the
+entity-manifest pass mints one **only when a source names a collective**
+("the Wulffs", "the Rothholz family", "the Schimpf couple"), after which
+it flows through reconcile → review → write and its members attach via
+kinship or `member of`. A bare possessive — "*our* great grandmother",
+"*meine* Oma" — is a pronoun, not a named collective, and must **never**
+mint a family (that would be inventing an entity from a pronoun, exactly
+the guessing rules 5–6 forbid). Consequently `perspective` points at a
+family only when ADR-0014's extractor has *independently* named that
+family; the appellation layer is never a back-door reason to create one.
+
+Where a family item *does* legitimately exist, it is the **preferred**
+perspective value over any single ego: a later "our Oma" from that family
+then resolves transitively to any member's grandmother, not just one
+person's. Where no named collective exists, `perspective` falls back to a
+specific person (the author/informant, when identifiable) or is left
+empty — leaning on the source reference for viewpoint. (Family membership
+rides `member of`, whose scope is widened here to include a `family`, not
+only an organization, so "who is *in* the Rothholz family" is recordable.)
+
 ### The routing rule (conservative by default)
 
 Promote to (A) only when the source supports a **literal** kinship reading;
@@ -131,25 +156,25 @@ at normal rank, none canonical (ADR-0002). Appellations of living people
 are personal data and ride the existing living-person exclusion (ADR
 MODELING.md) — no special handling, but noted.
 
-## What needs your ruling (★ forks)
+## Rulings
 
-1. **`perspective` value type / name.** Qualifier `perspective` taking a
-   person-or-`family` item *(recommended)*; or a narrower `referrer`
-   restricted to a person; or record the ego only as free text when it is
-   not an entity. (Recommended: item-valued, optional, person-or-family.)
-2. **(A) vs (B) boundary.** Route literal kinship terms to `relative` +
-   `kinship_type` and reserve `referred_to_as` for non-kinship appellations
-   *(recommended)*; or send *all* relational references — including "Oma" —
-   to `referred_to_as` and let only explicit relations feed kinship (simpler
-   extractor, but loses the kinship signal from the most common terms).
-3. **Ego-identification policy.** How aggressively to resolve the "our"/"my"
-   ego: to the document's author/informant when derivable, to a `family`
-   item, or leave `perspective` empty and lean on the source reference when
-   the ego is not a modelled entity. (Recommended: fill when an entity is
-   available; otherwise omit — never guess an ego.)
-4. **Retro-fit.** Whether to sweep existing role/relational aliases already
-   written to the graph into these forms, or apply the new model only to
-   future ingests and let a `reconcile`-style pass propose migrations.
+1. **`perspective` value type.** Item-valued, optional, taking a **person
+   or a `family`** — the family value used only when the collective is
+   independently named (see above), never fabricated from a pronoun.
+2. **(A) vs (B) boundary.** Route **literal** kinship terms to `relative` +
+   `kinship_type` (ego as object); reserve `referred_to_as` for
+   non-kinship appellations. Courtesy and idiosyncratic terms default to
+   (B), which asserts only that the term was used and so never invents a
+   relation.
+3. **Ego-identification policy.** Fill `perspective` when an entity (person
+   or named family) is available; otherwise **omit it** and lean on the
+   source reference. Never guess an ego, and never mint an entity to have
+   one.
+4. **No retro-fit.** The model applies to future ingests only; existing
+   role/relational aliases already in the graph are **not** migrated. The
+   combined noise from recently-fixed extraction/review pathologies (this
+   one included) makes a **single clean re-ingest from scratch** more
+   efficient than a migration pass, so none is built.
 
 ## Consequences
 
@@ -161,7 +186,8 @@ MODELING.md) — no special handling, but noted.
 - The archive gains a queryable appellation layer and, with the ego
   anchored, the ability to resolve bare relational references — including
   ones no single source disambiguates.
-- One new property (`referred_to_as`) and one qualifier (`perspective`);
-  the derivable-kinship path reuses ADR-0014 unchanged. Extraction-prompt
-  and critic changes follow in implementation, in the same PR as this ADR's
-  acceptance (docs move with code).
+- One new property (`referred_to_as`) and one qualifier (`perspective`),
+  plus a widened `member of` (now person → organization *or* family); the
+  derivable-kinship path reuses ADR-0014 unchanged.
+- No migration code: the next run is a clean re-ingest, so the model takes
+  effect corpus-wide without a retro-fit pass.

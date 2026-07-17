@@ -36,12 +36,19 @@ Flag, as a genuine concern only:
   agency, school) typed as `place` or `human`; a place typed as
   `human`; a person typed as a place;
 - an alias that is a ROLE or FORM-FIELD label, not a name — MOTHER,
-  FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS — or a descriptive
-  phrase ("my husband", "the deceased", "our friends") recorded as if it
-  were a name;
+  FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS — or a relational /
+  perspectival reference ("my husband", "our great grandmother", "Oma",
+  "Tante Rosa", "the deceased") recorded as if it were a name. These are
+  not names: suggest recording the term as `relative` + `kinship_type`
+  (a literal kinship term) or `referred_to_as` (a courtesy/pet name),
+  NOT as an alias (ADR-0018);
 - an entity marked `unclassified_entity` that clearly fits a real kind
   (the escape hatch was used when it should not have been);
 - a claim whose property is plainly misapplied.
+
+A relational appellation CORRECTLY recorded as a `referred_to_as` claim,
+or a kinship term as `relative` + `kinship_type`, is right — do not flag
+it.
 
 Entities (id | kind | label | aliases):
 {entities_block}

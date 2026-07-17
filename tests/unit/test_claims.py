@@ -229,6 +229,34 @@ class TestManifestValidation:
     def test_realistic_batch_passes_against_real_manifest(self):
         assert validate_against_manifest(batch(spouse_claim())) == []
 
+    def test_referred_to_as_appellation_with_perspective_is_valid(self):
+        # ADR-0018: a perspectival appellation is a monolingual statement on
+        # the referent, qualified by the ego (a person/family item).
+        appellation = {
+            "subject": {
+                "kind": "local",
+                "local_id": "person-1",
+                "label": "Rosa",
+                "instance_of": "human",
+            },
+            "property": "referred_to_as",
+            "value": {
+                "type": "monolingual",
+                "value": {"text": "Oma", "language": "de"},
+            },
+            "qualifiers": [
+                {
+                    "property": "perspective",
+                    "value": {
+                        "type": "item",
+                        "value": {"kind": "local", "local_id": "person-2"},
+                    },
+                }
+            ],
+            "source": source(),
+        }
+        assert validate_against_manifest(batch(appellation)) == []
+
     def test_unknown_property_reported(self):
         problems = validate_against_manifest(batch(spouse_claim(property="shoe_size")))
         assert problems == ["claims[0]: unknown property key 'shoe_size'"]

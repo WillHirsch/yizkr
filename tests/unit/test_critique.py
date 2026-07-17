@@ -94,6 +94,15 @@ class TestCritique:
         assert run_critique(llm, empty) == []
         assert llm.prompts == []  # no wasted call
 
+    def test_prompt_carries_appellation_routing_guidance(self):
+        # ADR-0018: the critic tells the model where a relational term
+        # belongs (relative / referred_to_as), not just to drop it.
+        llm = ScriptedLlm(response([]))
+        run_critique(llm, batch())
+        prompt = llm.prompts[0]
+        assert "referred_to_as" in prompt
+        assert "relative" in prompt and "kinship_type" in prompt
+
     def test_malformed_findings_dropped_never_raise(self):
         llm = ScriptedLlm(
             "\n".join(

@@ -114,6 +114,20 @@ properties:
     datatype: monolingualtext
     wikidata: P1448
 
+  referred_to_as:
+    label: referred to as
+    description: >-
+      a relational or perspectival appellation a source uses for the
+      subject that is NEITHER a formal name NOR a derivable kinship term
+      (a courtesy title like "Tante Rosa" where Rosa is no aunt, a
+      family pet name, an idiosyncratic term of address) — verbatim, in
+      the source's wording; qualify with `perspective` when the ego it is
+      relative to is known (ADR-0018). A literal kinship description
+      ("our great grandmother") is a `relative` + `kinship_type` claim,
+      not this; an ordinary name form stays a label/alias.
+    datatype: monolingualtext
+    wikidata: P1810
+
   # --- persons and family relations ---
 
   date_of_birth:
@@ -201,6 +215,17 @@ properties:
       words it ("maternal aunt", "cousin", "brother-in-law") — the
       frontend maps it to the derived-kinship term set (ADR-0014)
     datatype: string
+
+  perspective:
+    label: perspective
+    description: >-
+      qualifier on `referred_to_as`: the person or family from whose
+      viewpoint the appellation applies (the ego it is relative to,
+      e.g. the grandchild who calls the subject "Oma") — ADR-0018.
+      Optional; omit when the ego is not a modelled entity, leaning on
+      the statement's source reference for viewpoint. Never mint an
+      entity to fill it.
+    datatype: wikibase-item
 
   sex_or_gender:
     label: sex or gender
@@ -294,7 +319,9 @@ properties:
 
   member_of:
     label: member of
-    description: organization the person is or was a member of, as asserted by a source
+    description: >-
+      organization or family the person is or was a member of, as
+      asserted by a source (ADR-0014 families / ADR-0018)
     datatype: wikibase-item
     wikidata: P463
 

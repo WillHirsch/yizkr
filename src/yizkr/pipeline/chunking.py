@@ -173,6 +173,21 @@ Rules — these mirror the archive's non-negotiable conventions:
   use `relative` with a `kinship_type` qualifier holding the source's
   exact words. Record `sex_or_gender` (male/female vocab) when a source
   gives it.
+- Relational / perspectival appellations (ADR-0018): a reference like
+  "our great grandmother", "meine Oma", "Tante Rosa", "my husband" is
+  NOT a name and never an alias. Two cases:
+  * If it is a LITERAL kinship term, record the kinship — `relative` +
+    `kinship_type` (the term verbatim) with the OTHER party (the "our" /
+    "my" ego) as the object, or a primitive when reducible.
+  * If it is a courtesy title or family/pet name that is NOT a literal
+    relation (a "Tante" who is no aunt, "Bubele"), record it as
+    `referred_to_as` (the term verbatim), and add a `perspective`
+    qualifier naming the ego (the person or family whose viewpoint it is)
+    ONLY when that ego is an entity you can point to. Omit `perspective`
+    when the ego is a bare "our"/"we" with no named person or family —
+    never invent an entity to fill it.
+  When unsure whether a term is literal kinship, prefer `referred_to_as`
+  (it asserts only that the term was used, never a relation).
 - Residence: an address stated on a form is asserted for the person that
   field names (e.g. the informant/applicant on a certificate), NOT for
   everyone the document mentions. Do not copy one person's stated address
@@ -265,15 +280,19 @@ a cited law, decree, gazette, or register is a `legal_instrument`; a
 regiment or brigade is a `military_unit`. A forced removal is a
 `deportation` event, a detention an `imprisonment` event, a freeing a
 `release` event (each an event with a person participant, a place, and
-a date) — not a place or a bare relation. Unify aliases:
-one entity that appears
-as "Rosa Genserowski", "Rosa", and "our great grandmother" is ONE
+a date) — not a place or a bare relation. Unify aliases: one entity that
+appears as "Rosa Genserowski", "Rosa", and "R. Genserowski" is ONE
 manifest entry whose label is the fullest form the document gives and
-whose aliases list every other form, verbatim. Aliases are ways the
-document REFERS TO the entity — in form-like documents (certificates,
-registers), field and section labels such as MOTHER, FATHER, CHILD,
-INFORMANT, BRIDE name a ROLE, not the person: never record them as
-aliases.
+whose aliases list every other NAME form, verbatim. Aliases are actual
+NAMES the document uses for the entity. They are NOT:
+- role or form-field labels — MOTHER, FATHER, CHILD, INFORMANT, BRIDE,
+  WITNESS name a ROLE, not the person;
+- relational or perspectival references — "our great grandmother", "my
+  husband", "Tante Rosa", "Oma", "the deceased". These describe a
+  relationship or viewpoint, not a name; they are captured as claims at
+  extraction, not as aliases (a literal kinship term becomes `relative` +
+  `kinship_type`; a courtesy/pet name becomes `referred_to_as`). Never
+  record any of these as an alias (ADR-0018).
 
 Output ONE JSON object, no prose, no code fences:
 {{"entities": [{{"id": "e01", "label": "<canonical, fullest form>",
