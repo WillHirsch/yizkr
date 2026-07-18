@@ -119,7 +119,12 @@ gate), versus the advance-all default's ~3 total.
 This is deliberate, not a limitation to engineer away. The stateless core
 gives correctness-by-reconstruction (no long-lived process state to drift),
 full auditability (every intermediate is an inspectable/correctable file),
-and crash-safe resumption. The re-run frequency is a *surface* concern, and
+and crash-safe resumption. Because each run re-derives status from the
+durable artifacts, a transient downstream failure (e.g. the graph
+unreachable at write time) leaves a `failed` marker that the next re-run
+clears and advances past — a valid cached batch means extraction
+succeeded — so a fixed environment self-heals without manual state
+surgery. The re-run frequency is a *surface* concern, and
 the right place to remove it is a thin stateful layer **on top** — the
 planned human frontend, or a future optional `--watch`/`--loop` mode that
 re-invokes when a reviewed CSV appears — driving the stateless core rather

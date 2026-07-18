@@ -243,6 +243,30 @@ class TestResume:
         # register was not repeated
         assert "register:letter.txt" not in second.calls
 
+    def test_cached_batch_rerun_clears_stale_failed(self, tmp_path):
+        # serial mode extracts every doc up front (stop_after_extract),
+        # returning BEFORE the reconcile gates that recompute status. So a
+        # stale FAILED from a prior downstream outage (e.g. a write-time
+        # DNS failure) would be echoed as-is on every re-run unless the
+        # cached-batch branch clears it — the batch proves extraction
+        # succeeded, so "failed" is wrong.
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()  # produce a valid cached batch
+        (doc,) = orchestrator.documents()
+        assert doc.batch.exists()
+        doc.state.status = FAILED  # simulate the prior downstream outage
+        doc.state.error = None
+        doc.save()
+
+        # the extract-only pass no longer echoes the stale failure...
+        (doc,) = orchestrator.documents()
+        assert orchestrator.advance(doc, stop_after_extract=True) == BATCHED
+        assert doc.state.status == BATCHED
+        # ...and a full re-run advances to the gate instead of failing
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+
 
 class TestIsolationAndDiscovery:
     def test_failure_in_one_document_does_not_stop_others(self, tmp_path):

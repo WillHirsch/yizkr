@@ -622,6 +622,15 @@ class Orchestrator:
                 self._step_critique(doc, batch)
         else:
             batch = ClaimBatch.model_validate_json(doc.batch.read_text())
+            # a valid cached batch means extraction succeeded, so a
+            # FAILED status is stale — left by a later step (e.g. a
+            # write-time outage) on a prior run. Clear it to BATCHED so a
+            # re-run reports the true state and flows on into reconcile,
+            # instead of echoing the old failure forever (the downstream
+            # gates re-derive the real status from here).
+            if doc.state.status == FAILED:
+                doc.state.status = BATCHED
+                doc.save()
 
         # serial mode extracts every document first (so the sequencer has all
         # the manifests), then processes them in order — stop here on the
