@@ -336,14 +336,24 @@ Transcription of artifact {artifact_qid} (language: {language}):
 
 
 class ChunkIncomplete(Exception):
-    """Chunk response unusable: missing/mismatched sentinel, no claims."""
+    """Chunk response truncated: cut off before its terminal sentinel."""
 
 
-def parse_chunk_response(response: str) -> list[dict]:
-    """NDJSON claims + required sentinel; raises ChunkIncomplete.
+def parse_chunk_response(
+    response: str, warn: Callable[[str], None] | None = None
+) -> list[dict]:
+    """NDJSON claims + a terminal sentinel that proves completeness.
 
-    The sentinel converts silent truncation into a detected, retryable
-    failure: chunk retries are cheap, unlike whole-document retries.
+    A missing sentinel means the output was cut off mid-stream (silent
+    truncation) and raises ChunkIncomplete — cheap to retry, unlike a
+    whole-document retry.
+
+    The sentinel's self-reported ``claims_emitted`` is advisory only.
+    Models routinely miscount a dense chunk's claims by one or more, and
+    a present sentinel already proves nothing was truncated — so a count
+    mismatch keeps every parsed claim and is only surfaced via ``warn``.
+    Rejecting a complete, valid response over an off-by-one self-count
+    would discard the whole chunk's extraction (see ADR-0006).
     """
     claims: list[dict] = []
     sentinel: int | None = None
@@ -354,8 +364,11 @@ def parse_chunk_response(response: str) -> list[dict]:
             claims.append(obj)
     if sentinel is None:
         raise ChunkIncomplete("no terminal sentinel — response truncated?")
-    if sentinel != len(claims):
-        raise ChunkIncomplete(f"sentinel says {sentinel} claims, parsed {len(claims)}")
+    if sentinel != len(claims) and warn is not None:
+        warn(
+            f"    claim count mismatch: sentinel reported {sentinel}, "
+            f"kept {len(claims)} parsed (response complete)"
+        )
     return claims
 
 
@@ -841,7 +854,7 @@ class ChunkedClaimExtractor:
                 continue
             self._write(f"{chunk_id}.raw.txt", response)
             try:
-                return parse_chunk_response(response)
+                return parse_chunk_response(response, warn=self._log)
             except ChunkIncomplete as exc:
                 last_error = exc
         raise last_error
@@ -1048,7 +1061,7 @@ class ChunkedClaimExtractor:
         raw = self._read(f"{chunk_id}.raw.txt")
         if raw is not None:
             try:
-                claims = parse_chunk_response(raw)
+                claims = parse_chunk_response(raw, warn=self._log)
             except ChunkIncomplete:
                 return None
             self._write(f"{chunk_id}.ndjson", "\n".join(map(json.dumps, claims)))

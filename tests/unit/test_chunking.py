@@ -232,9 +232,16 @@ class TestChunkResponseContract:
         with pytest.raises(ChunkIncomplete, match="sentinel"):
             parse_chunk_response(json.dumps(claim("e1", "Anna Example", 1900)))
 
-    def test_sentinel_count_must_match(self):
-        with pytest.raises(ChunkIncomplete, match="says 5"):
-            parse_chunk_response(ndjson([claim("e1", "Anna Example", 1900)], emitted=5))
+    def test_count_mismatch_keeps_claims_and_warns(self):
+        # a present sentinel proves completeness; a miscounted
+        # claims_emitted keeps every parsed claim and only warns
+        warnings: list[str] = []
+        claims = parse_chunk_response(
+            ndjson([claim("e1", "Anna Example", 1900)], emitted=5),
+            warn=warnings.append,
+        )
+        assert len(claims) == 1
+        assert warnings and "reported 5" in warnings[0]
 
     def test_valid_ndjson_parses(self):
         claims = parse_chunk_response(ndjson([claim("e1", "Anna Example", 1900)]))
@@ -436,12 +443,15 @@ class TestEntityFirstExtractor:
         assert len(rejects) == 1
         assert "entity manifest" in rejects[0]["problems"][0]
 
-    def test_sentinel_mismatch_retries_then_succeeds(self, tmp_path):
+    def test_truncation_retries_then_succeeds(self, tmp_path):
+        # a missing sentinel is real truncation: retryable, unlike a
+        # count mismatch (which keeps its claims — next test)
+        truncated = json.dumps(claim("e1", "Anna Example", 1900))  # no sentinel
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([claim("e1", "Anna Example", 1900)], emitted=9),  # bad
-                ndjson([claim("e1", "Anna Example", 1900)]),  # retry
+                truncated,  # c001 attempt 1 (fork) — cut off
+                ndjson([claim("e1", "Anna Example", 1900)]),  # c001 retry
                 ndjson([claim("e2", "Bern Example", 1902)]),
             ]
         )
@@ -449,6 +459,26 @@ class TestEntityFirstExtractor:
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
         assert extractor.failed_chunks == []
+
+    def test_count_mismatch_chunk_accepted_without_retry(self, tmp_path):
+        # the c007/c019 case: a complete response whose sentinel
+        # undercounts is kept as-is and does NOT burn a retry
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna Example", 1900)], emitted=99),  # miscount
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
+        batch = extractor.extract(transcription(), "Q23")
+        assert extractor.failed_chunks == []
+        assert {c.subject.label for c in batch.claims} == {
+            "Anna Example",
+            "Bern Example",
+        }
+        # one fork per chunk — the miscount triggered no retry
+        assert sum(1 for method, _ in llm.calls if method == "fork") == 2
 
     def test_failed_chunk_yields_partial_batch(self, tmp_path):
         llm = ScriptedLlm(
@@ -501,14 +531,14 @@ class TestEntityFirstExtractor:
         assert record["error"] in sidecar.read_text()  # ...record survives
 
     def test_truncated_chunk_sidecar_captures_raw(self, tmp_path):
-        """A truncation records the unparseable response, which raw.txt
-        would otherwise lose to the recovering re-run."""
-        bad = ndjson([claim("e1", "Anna Example", 1900)], emitted=9)  # short sentinel
+        """A truncation (no terminal sentinel) records the unparseable
+        response, which raw.txt would otherwise lose to a re-run."""
+        cut = json.dumps(claim("e1", "Anna Example", 1900))  # no sentinel
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                bad,  # c001 attempt 1 (fork)
-                bad,  # c001 attempt 2 (fork)
+                cut,  # c001 attempt 1 (fork)
+                cut,  # c001 attempt 2 (fork)
                 ndjson([claim("e2", "Bern Example", 1902)]),  # c002
             ]
         )
@@ -517,8 +547,8 @@ class TestEntityFirstExtractor:
         record = json.loads(
             (tmp_path / "state" / "c001.fail.ndjson").read_text().splitlines()[0]
         )
-        assert "ChunkIncomplete" in record["error"]
-        assert record["raw"] == bad
+        assert "truncated" in record["error"]
+        assert record["raw"] == cut
 
     def test_resume_reuses_parsed_and_reparses_raw(self, tmp_path):
         """Resume must not re-invoke the model for chunks whose output
@@ -671,12 +701,13 @@ class TestParallelChunks:
         llm = KeyedLlm(
             entity_manifest_json(),
             {
-                "e1": ndjson([claim("e1", "Anna Example", 1900)], emitted=9),  # bad
+                # truncated (no sentinel) → fails every retry
+                "e1": json.dumps(claim("e1", "Anna Example", 1900)),
                 "e2": ndjson([claim("e2", "Bern Example", 1902)]),
             },
         )
         # KeyedLlm has no complete(); disable the inline fallback path by
-        # keeping fork alive — retries return the same bad response
+        # keeping fork alive — retries return the same truncated response
         extractor = ChunkedClaimExtractor(
             llm,
             state_dir=tmp_path / "state",

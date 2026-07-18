@@ -138,7 +138,7 @@ Each chunk prompt additionally carries: artifact QID and language, the
 manifest vocabulary (as today), the claim schema, and a hard
 instruction to emit claims **only** for the assigned units — with the
 full document visible, drift into neighbouring units is possible;
-the sentinel count and merge dedupe bound the damage.
+merge dedupe and validation bound the damage.
 
 Two contract changes relative to the current prompt:
 
@@ -147,9 +147,13 @@ Two contract changes relative to the current prompt:
   units of meaning, and the parser is trivial. (The single-shot
   strategy adopts NDJSON too.)
 - **Terminal sentinel**: the final line must be
-  `{"done": true, "claims_emitted": N}`. A missing sentinel or a count
-  mismatch marks the chunk incomplete → retry. This converts silent
-  truncation into a detected, retryable failure.
+  `{"done": true, "claims_emitted": N}`. Its *presence* proves the
+  response was not cut off: a **missing** sentinel is silent truncation,
+  so the chunk is marked incomplete and retried. The self-reported `N`
+  is advisory only — models routinely miscount a dense chunk by one or
+  more, so a count mismatch keeps every parsed claim and merely warns.
+  Rejecting a complete, valid response over an off-by-one self-count
+  would discard the whole chunk's extraction.
 
 Entities defined outside the chunk's assigned units (e.g. a parent
 named elsewhere in the document) are referenced as local refs with
