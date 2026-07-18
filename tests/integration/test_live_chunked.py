@@ -24,7 +24,7 @@ Record of the Example family, prepared 1990.
     2. Carla Example  b: abt 1922 in Springfield.
 
 Note to readers: coffee and biscuits are served in the reading room.
-"""
+"""  # noqa: E501
 
 
 def test_chunked_extraction_end_to_end(tmp_path):
@@ -42,7 +42,9 @@ def test_chunked_extraction_end_to_end(tmp_path):
     assert not extractor.used_fallback_manifest  # entity-first path ran
     # three people, several facts each; exact counts are model-dependent
     labels = {
-        claim.subject.label for claim in batch.claims if hasattr(claim.subject, "label")
+        claim.subject.label
+        for claim in batch.claims
+        if hasattr(claim.subject, "label")
     }
     assert any("Anna" in label for label in labels)
     assert any("Carla" in label for label in labels)

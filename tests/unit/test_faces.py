@@ -53,11 +53,15 @@ def gallery_with_a(qid="Q26") -> Gallery:
 
 class TestGeometry:
     def test_pixel_to_percent(self):
-        region = to_region(PixelBox(x=100, y=50, width=200, height=250), 1000, 500)
+        region = to_region(
+            PixelBox(x=100, y=50, width=200, height=250), 1000, 500
+        )
         assert region.as_wikibase_string() == "10%,10%,20%,50%"
 
     def test_overflowing_box_is_clipped_not_widened(self):
-        region = to_region(PixelBox(x=950, y=480, width=100, height=100), 1000, 500)
+        region = to_region(
+            PixelBox(x=950, y=480, width=100, height=100), 1000, 500
+        )
         assert region.x + region.width <= 100
         assert region.y + region.height <= 100
 
@@ -104,7 +108,9 @@ class TestGallery:
 
     def test_enroll_from_detections_unknown_index(self):
         with pytest.raises(ValueError, match="no face with index 7"):
-            enroll_from_detections(detection(face(0, A)), 7, Gallery(), label="X")
+            enroll_from_detections(
+                detection(face(0, A)), 7, Gallery(), label="X"
+            )
 
 
 class TestProposals:
@@ -123,7 +129,9 @@ class TestProposals:
         assert claim.source.artifact == QidRef(qid="Q30")
         assert claim.source.region.as_wikibase_string() == "10%,10%,20%,50%"
         assert 0 < claim.confidence <= 1
-        assert batch.extraction_run.model_identifier == ("face-detection:fake-detector")
+        assert batch.extraction_run.model_identifier == (
+            "face-detection:fake-detector"
+        )
         # rides the same contract: manifest validation passes
         assert validate_against_manifest(batch) == []
 

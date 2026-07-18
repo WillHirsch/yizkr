@@ -65,7 +65,9 @@ def create_item(config: Config) -> str:
 
     wbi_config["MEDIAWIKI_API_URL"] = f"{config.wikibase_url}/w/api.php"
     wbi_config["USER_AGENT"] = USER_AGENT
-    login = wbi_login.Clientlogin(user=config.admin_name, password=config.admin_pass)
+    login = wbi_login.Clientlogin(
+        user=config.admin_name, password=config.admin_pass
+    )
     wbi = WikibaseIntegrator(login=login)
     item = wbi.item.new()
     item.labels.set(language="en", value=SMOKE_LABEL)

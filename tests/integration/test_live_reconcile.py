@@ -33,7 +33,12 @@ TOWN = "Yizkr Reconcile-Test Town"
 
 
 def _local(local_id: str, label: str, kind: str) -> dict:
-    return {"kind": "local", "local_id": local_id, "label": label, "instance_of": kind}
+    return {
+        "kind": "local",
+        "local_id": local_id,
+        "label": label,
+        "instance_of": kind,
+    }
 
 
 def _source(artifact_qid: str, excerpt: str) -> dict:

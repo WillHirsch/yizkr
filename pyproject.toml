@@ -32,6 +32,7 @@ yizkr = "yizkr.cli:main"
 dev = [
     "pytest>=8.0",
     "ruff>=0.8",
+    "pre-commit>=3.5",
 ]
 
 [build-system]
@@ -49,7 +50,7 @@ markers = ["live: requires a running Wikibase Suite stack and deploy/.env"]
 addopts = "-m 'not live'"
 
 [tool.ruff]
-line-length = 88
+line-length = 79
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -62,6 +63,5 @@ select = [
     "SIM",      # simplify
 ]
 ignore = [
-    "E501",     # long lines in docstrings/comments; formatter handles code
     "SIM108",   # ternary is not always clearer
 ]

@@ -40,7 +40,7 @@ Entity references come in three kinds:
   reference or leaves it for item creation during the write step.
 
 CLI:
-    python3 claims.py --json-schema          # print JSON Schema (for LLM prompts)
+    python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
     python3 claims.py --validate batch.json  # parse + manifest-check a file
 """
 
@@ -112,7 +112,9 @@ class LocalRef(StrictModel):
     instance_of: ManifestKey | None = None
 
 
-EntityRef = Annotated[QidRef | VocabRef | LocalRef, Field(discriminator="kind")]
+EntityRef = Annotated[
+    QidRef | VocabRef | LocalRef, Field(discriminator="kind")
+]
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +148,13 @@ class MonolingualValue(StrictModel):
 
 
 PRECISIONS = ("century", "decade", "year", "month", "day")
-WIKIBASE_PRECISION = {"century": 7, "decade": 8, "year": 9, "month": 10, "day": 11}
+WIKIBASE_PRECISION = {
+    "century": 7,
+    "decade": 8,
+    "year": 9,
+    "month": 10,
+    "day": 11,
+}
 CALENDAR_URI = {
     "gregorian": "http://www.wikidata.org/entity/Q1985727",
     "julian": "http://www.wikidata.org/entity/Q1985786",
@@ -159,8 +167,9 @@ class TimeValue(StrictModel):
     `precision` defaults to the finest field given. Fields finer than
     the declared precision are rejected: stating "month precision" while
     supplying a day means the claim narrows or pads what the source
-    says; both are forbidden (docs/MODELING.md, "Uncertainty and time"). For decades use the first year
-    (1920s -> year=1920, precision=decade); same for centuries (1800).
+    says; both are forbidden (docs/MODELING.md, "Uncertainty and
+    time"). For decades use the first year (1920s -> year=1920,
+    precision=decade); same for centuries (1800).
     Ranges ("between 1930 and 1935") are NOT a precision problem: use
     earliest_date/latest_date qualifiers on the claim.
     """
@@ -169,7 +178,9 @@ class TimeValue(StrictModel):
     year: int
     month: int | None = Field(default=None, ge=1, le=12)
     day: int | None = Field(default=None, ge=1, le=31)
-    precision: Literal["century", "decade", "year", "month", "day"] | None = None
+    precision: Literal["century", "decade", "year", "month", "day"] | None = (
+        None
+    )
     calendar: Literal["gregorian", "julian"] = "gregorian"
 
     @field_validator("year")
@@ -203,12 +214,14 @@ class TimeValue(StrictModel):
             )
         elif PRECISIONS.index(finest) < PRECISIONS.index(self.precision):
             raise ValueError(
-                f"precision {self.precision!r} requires the {self.precision} field"
+                f"precision {self.precision!r} requires the "
+                f"{self.precision} field"
             )
         return self
 
     def to_wikibase(self) -> dict:
-        """Wikibase time datavalue (unspecified parts zeroed, as on Wikidata)."""
+        """Wikibase time datavalue (unspecified parts zeroed, as on
+        Wikidata)."""
         sign = "-" if self.year < 0 else "+"
         return {
             "time": f"{sign}{abs(self.year):04d}-{self.month or 0:02d}-"
@@ -283,9 +296,13 @@ class RegionPercent(StrictModel):
     @model_validator(mode="after")
     def check_within_bounds(self) -> RegionPercent:
         if self.x + self.width > 100:
-            raise ValueError("region extends past the right edge (x + width > 100)")
+            raise ValueError(
+                "region extends past the right edge (x + width > 100)"
+            )
         if self.y + self.height > 100:
-            raise ValueError("region extends past the bottom edge (y + height > 100)")
+            raise ValueError(
+                "region extends past the bottom edge (y + height > 100)"
+            )
         return self
 
     def as_wikibase_string(self) -> str:
@@ -372,7 +389,9 @@ class EntityRecord(StrictModel):
     """
 
     id: str = Field(min_length=1)
-    label: str = Field(min_length=1)  # canonical: fullest form the document gives
+    label: str = Field(
+        min_length=1
+    )  # canonical: fullest form the document gives
     aliases: list[str] = []
     kind: ManifestKey
     summary: str = ""
@@ -411,7 +430,9 @@ def load_vocabulary(
 ) -> tuple[dict[str, str], set[str]]:
     """(property key -> datatype, item keys) from the model manifest."""
     raw = yaml.safe_load(read_manifest_data(manifest_path))
-    properties = {key: spec["datatype"] for key, spec in raw["properties"].items()}
+    properties = {
+        key: spec["datatype"] for key, spec in raw["properties"].items()
+    }
     items = set(raw["items"])
     return properties, items
 
@@ -428,7 +449,9 @@ def validate_against_manifest(
     a time.
     """
     properties, items = (
-        vocabulary if vocabulary is not None else load_vocabulary(manifest_path)
+        vocabulary
+        if vocabulary is not None
+        else load_vocabulary(manifest_path)
     )
     errors: list[str] = []
 
@@ -440,7 +463,9 @@ def validate_against_manifest(
             errors.append(f"{where}: duplicate entity id {entity.id!r}")
         seen_entity_ids.add(entity.id)
         if entity.kind not in items:
-            errors.append(f"{where}: kind names unknown item key {entity.kind!r}")
+            errors.append(
+                f"{where}: kind names unknown item key {entity.kind!r}"
+            )
 
     def check_ref(ref, where: str) -> None:
         if isinstance(ref, VocabRef) and ref.key not in items:
@@ -448,7 +473,8 @@ def validate_against_manifest(
         if isinstance(ref, LocalRef):
             if ref.instance_of is not None and ref.instance_of not in items:
                 errors.append(
-                    f"{where}: instance_of names unknown item key {ref.instance_of!r}"
+                    f"{where}: instance_of names unknown item key "
+                    f"{ref.instance_of!r}"
                 )
             # ADR-0007: with an entity manifest present, an unknown local
             # id is an invented entity — a detectable defect, never a

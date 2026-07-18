@@ -136,7 +136,9 @@ def register_artifact(
     reused_by_hash = False
     existing_qid = None
     if content_sha1 is not None:
-        existing_qid = client.string_statement_index(media_sha1).get(content_sha1)
+        existing_qid = client.string_statement_index(media_sha1).get(
+            content_sha1
+        )
         reused_by_hash = existing_qid is not None
         if existing_qid is None:
             labelled = client.find_item_by_label(title)
@@ -175,13 +177,19 @@ def register_artifact(
             artifact.write(summary="ingest: alternate filename as alias")
 
     changed = False
-    if items[artifact_type] not in _existing_claim_targets(artifact, instance_of):
+    if items[artifact_type] not in _existing_claim_targets(
+        artifact, instance_of
+    ):
         _append(
             artifact,
-            _item_claim(instance_of, items[artifact_type], stated_in, artifact_qid),
+            _item_claim(
+                instance_of, items[artifact_type], stated_in, artifact_qid
+            ),
         )
         changed = True
-    if file_page and file_page not in _existing_claim_strings(artifact, media_file):
+    if file_page and file_page not in _existing_claim_strings(
+        artifact, media_file
+    ):
         _append(
             artifact,
             _string_claim(media_file, file_page, stated_in, artifact_qid),
@@ -246,7 +254,10 @@ def _ensure_fragment(
     fragment.descriptions.set("en", f"page {page} of {title}")
     fragment = fragment.write(summary="ingest: register fragment")
 
-    _append(fragment, _item_claim(instance_of, fragment_class, stated_in, artifact_qid))
+    _append(
+        fragment,
+        _item_claim(instance_of, fragment_class, stated_in, artifact_qid),
+    )
     part_claim = _item_claim(part_of, artifact_qid, stated_in, artifact_qid)
     part_claim.qualifiers.add(String(prop_nr=page_number, value=str(page)))
     _append(fragment, part_claim)

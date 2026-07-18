@@ -112,7 +112,8 @@ class TestRealManifest:
         assert manifest.properties["religion"].datatype == "monolingualtext"
 
     def test_schema_source_has_no_superclass(self, manifest):
-        """The manifest item is a reference target, not part of the taxonomy."""
+        """The manifest item is a reference target, not part of the
+        taxonomy."""
         assert manifest.items[manifest.schema_source_item].subclass_of is None
 
     def test_wikidata_ids_wellformed(self, manifest):
@@ -182,7 +183,9 @@ class TestValidators:
 
 class TestMappingPage:
     def test_wikitext_contains_ids_and_links(self, manifest):
-        property_ids = {key: f"P{n}" for n, key in enumerate(manifest.properties, 1)}
+        property_ids = {
+            key: f"P{n}" for n, key in enumerate(manifest.properties, 1)
+        }
         item_ids = {key: f"Q{n}" for n, key in enumerate(manifest.items, 1)}
         text = build_mapping_wikitext(manifest, property_ids, item_ids)
         assert "do not edit by hand" in text

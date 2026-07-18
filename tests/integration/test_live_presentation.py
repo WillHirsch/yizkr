@@ -11,7 +11,12 @@ import zlib
 
 import pytest
 
-from tests.unit.test_presentation import IMAGE_REL, SLIDE_REL, rels_xml, slide_xml
+from tests.unit.test_presentation import (
+    IMAGE_REL,
+    SLIDE_REL,
+    rels_xml,
+    slide_xml,
+)
 from yizkr.pipeline.presentation import register_derived_media, unpack_pptx
 from yizkr.pipeline.registrar import register_artifact
 
@@ -43,7 +48,8 @@ def build_live_deck(path):
         "<p:presentation"
         ' xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
         ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        '<p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst></p:presentation>'
+        '<p:sldIdLst><p:sldId id="256" r:id="rId1"/>'
+        "</p:sldIdLst></p:presentation>"
     )
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("[Content_Types].xml", "<Types/>")
@@ -65,7 +71,9 @@ def build_live_deck(path):
 
 
 def test_deck_and_derived_media_provenance(client, tmp_path):
-    deck_path = build_live_deck(tmp_path / "integration-test-presentation.pptx")
+    deck_path = build_live_deck(
+        tmp_path / "integration-test-presentation.pptx"
+    )
     content = unpack_pptx(deck_path)
 
     deck = register_artifact(
@@ -103,7 +111,9 @@ def test_deck_and_derived_media_provenance(client, tmp_path):
     assert part["mainsnak"]["datavalue"]["value"]["id"] == deck.artifact_qid
     slide_qualifiers = [
         snak["datavalue"]["value"]
-        for snak in part.get("qualifiers", {}).get(properties["page_number"], [])
+        for snak in part.get("qualifiers", {}).get(
+            properties["page_number"], []
+        )
     ]
     assert slide_qualifiers == ["1"]
     for statements in claims.values():

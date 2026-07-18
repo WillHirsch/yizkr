@@ -44,7 +44,9 @@ def test_backup_and_public_export_privacy(config, tmp_path):
     # person — not their QID, not a claim about them, not a provenance
     # node quoting a source line that names them
     mentioned = {
-        token for line in public.splitlines() for token in QID_TOKEN.findall(line)
+        token
+        for line in public.splitlines()
+        for token in QID_TOKEN.findall(line)
     }
     assert not (mentioned & excluded)
     # excerpts (raw source quotations) never enter the public tier
@@ -59,4 +61,6 @@ def test_backup_and_public_export_privacy(config, tmp_path):
     )
     # people with recorded deaths are present
     assert exclusions["included_persons"]
-    assert any(f"entity/{qid}>" in public for qid in exclusions["included_persons"])
+    assert any(
+        f"entity/{qid}>" in public for qid in exclusions["included_persons"]
+    )

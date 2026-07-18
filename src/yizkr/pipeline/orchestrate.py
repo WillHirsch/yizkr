@@ -219,7 +219,9 @@ class Orchestrator:
             and path.suffix.lower() not in SUPPORTED_SUFFIXES
         ]
         for name in skipped:
-            self.log(f"skipping {name}: unsupported file type", file=sys.stderr)
+            self.log(
+                f"skipping {name}: unsupported file type", file=sys.stderr
+            )
         return [DocumentRun(path, self.state_dir) for path in files]
 
     # -- pipeline steps (override points for tests) ---------------------------
@@ -241,7 +243,9 @@ class Orchestrator:
             media_path=doc.source,
             artifact_type=artifact_type,
             title=doc.state.title,
-            description=f"ingested by `yizkr ingest run` from {doc.source.name}",
+            description=(
+                f"ingested by `yizkr ingest run` from {doc.source.name}"
+            ),
             pages=pages,
         )
         return result.artifact_qid
@@ -308,7 +312,9 @@ class Orchestrator:
         from yizkr.pipeline.transcribe import Transcription
 
         if doc.transcription.exists():
-            return Transcription.model_validate_json(doc.transcription.read_text())
+            return Transcription.model_validate_json(
+                doc.transcription.read_text()
+            )
         if doc.source.suffix.lower() in PRESENTATION_SUFFIXES:
             # deterministic: slide text is data in the file, not an
             # image to read; [Slide N] markers scope the claim locators
@@ -358,7 +364,9 @@ class Orchestrator:
                 }
             }
             if self.language == "auto":
-                self.log(f"  {doc.source.name}: language {resolution.describe()}")
+                self.log(
+                    f"  {doc.source.name}: language {resolution.describe()}"
+                )
         doc.transcription.write_text(transcription.model_dump_json(indent=2))
         return transcription
 
@@ -375,18 +383,22 @@ class Orchestrator:
         # document costs a few extra calls and is never incorrect
         # (ADR-0006 §7).
         extractor = ChunkedClaimExtractor(
-            make_client(self.llm, effort=self.extract_effort, model=self.extract_model),
+            make_client(
+                self.llm, effort=self.extract_effort, model=self.extract_model
+            ),
             state_dir=doc.batch.with_name(doc.batch.name + ".chunks"),
             resume=True,
             concurrency=self.chunk_concurrency,
             log=self.log,
         )
-        batch = extractor.extract(transcription, artifact_qid=doc.state.artifact_qid)
+        batch = extractor.extract(
+            transcription, artifact_qid=doc.state.artifact_qid
+        )
         failed = getattr(extractor, "failed_chunks", None)
         if failed:
             raise RuntimeError(
-                f"{len(failed)} chunks failed after retries ({', '.join(failed)}); "
-                f"re-run to resume them"
+                f"{len(failed)} chunks failed after retries "
+                f"({', '.join(failed)}); re-run to resume them"
             )
         return batch
 
@@ -433,7 +445,9 @@ class Orchestrator:
         if doc.equivalences_reviewed.exists():
             approved = read_approved_equivalences(doc.equivalences_reviewed)
             batch = apply_equivalences(
-                batch, approved, read_reviewed_aliases(doc.equivalences_reviewed)
+                batch,
+                approved,
+                read_reviewed_aliases(doc.equivalences_reviewed),
             )
             self.log(f"  applied {len(approved)} approved equivalences")
         _, item_labels = self.client.label_index()
@@ -452,11 +466,15 @@ class Orchestrator:
 
     def _surface_gaps(self, doc: DocumentRun) -> None:
         """Render the extractor's gap log to a per-document review CSV."""
-        source = doc.batch.with_name(doc.batch.name + ".chunks") / "gaps.ndjson"
+        source = (
+            doc.batch.with_name(doc.batch.name + ".chunks") / "gaps.ndjson"
+        )
         if not source.exists():
             return
         gaps = [
-            json.loads(line) for line in source.read_text().splitlines() if line.strip()
+            json.loads(line)
+            for line in source.read_text().splitlines()
+            if line.strip()
         ]
         if not gaps:
             return
@@ -464,7 +482,8 @@ class Orchestrator:
 
         with open(doc.gaps, "w", newline="") as handle:
             writer = _csv.DictWriter(
-                handle, fieldnames=["subject", "predicate", "object", "evidence"]
+                handle,
+                fieldnames=["subject", "predicate", "object", "evidence"],
             )
             writer.writeheader()
             writer.writerows(gaps)
@@ -477,14 +496,20 @@ class Orchestrator:
         from yizkr.pipeline.critique import run_critique
         from yizkr.pipeline.llm import make_client
 
-        findings = run_critique(make_client(self.llm, effort=self.review_effort), batch)
+        findings = run_critique(
+            make_client(self.llm, effort=self.review_effort), batch
+        )
         doc.critique.write_text(
             json.dumps([f.model_dump() for f in findings], indent=2)
         )
         if findings:
-            self.log(f"  critique: {len(findings)} concern(s) flagged for review")
+            self.log(
+                f"  critique: {len(findings)} concern(s) flagged for review"
+            )
             for finding in findings[:6]:
-                self.log(f"    - {finding.target}: {finding.issue}", file=sys.stderr)
+                self.log(
+                    f"    - {finding.target}: {finding.issue}", file=sys.stderr
+                )
         return findings
 
     def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
@@ -501,7 +526,9 @@ class Orchestrator:
             if entity_id:
                 note = f"critique: {finding.get('issue', '')}"
                 notes[entity_id] = (
-                    f"{notes[entity_id]}; {note}" if entity_id in notes else note
+                    f"{notes[entity_id]}; {note}"
+                    if entity_id in notes
+                    else note
                 )
         return notes
 
@@ -525,7 +552,9 @@ class Orchestrator:
 
     # -- the state machine ----------------------------------------------------
 
-    def advance(self, doc: DocumentRun, *, stop_after_extract: bool = False) -> str:
+    def advance(
+        self, doc: DocumentRun, *, stop_after_extract: bool = False
+    ) -> str:
         """Advance one document as far as the gates allow; returns status.
 
         ``stop_after_extract`` returns once the batch (entity manifest)
@@ -538,13 +567,16 @@ class Orchestrator:
             doc.state.error = f"{type(exc).__name__}: {exc}"
             doc.save()
             self.log(
-                f"  {doc.source.name}: FAILED — {doc.state.error}", file=sys.stderr
+                f"  {doc.source.name}: FAILED — {doc.state.error}",
+                file=sys.stderr,
             )
             return FAILED
         finally:
             doc.save()
 
-    def _advance(self, doc: DocumentRun, *, stop_after_extract: bool = False) -> str:
+    def _advance(
+        self, doc: DocumentRun, *, stop_after_extract: bool = False
+    ) -> str:
         doc.dir.mkdir(parents=True, exist_ok=True)
         doc.state.error = None
 
@@ -557,7 +589,9 @@ class Orchestrator:
         if doc.state.content_sha1 and doc.state.content_sha1 != content_sha1:
             shutil.rmtree(doc.dir, ignore_errors=True)
             doc.dir.mkdir(parents=True, exist_ok=True)
-            doc.state = DocumentState(file=str(doc.source), title=doc.source.stem)
+            doc.state = DocumentState(
+                file=str(doc.source), title=doc.source.stem
+            )
             self.log(f"  {doc.source.name}: content changed; re-ingesting")
         doc.state.content_sha1 = content_sha1
 
@@ -570,7 +604,9 @@ class Orchestrator:
         canonical = self._seen_hashes.get(content_sha1)
         if canonical is not None and canonical != doc.source.name:
             doc.state.status = DUPLICATE
-            doc.state.detail = (doc.state.detail or {}) | {"duplicate_of": canonical}
+            doc.state.detail = (doc.state.detail or {}) | {
+                "duplicate_of": canonical
+            }
             self.log(
                 f"  identical content to {canonical}; skipping (one artifact "
                 f"per distinct file, ADR-0010)"
@@ -592,7 +628,9 @@ class Orchestrator:
         ).get("derived_media"):
             with self._wiki_lock:  # register_derived_media also writes items
                 derived = self._step_derive_media(doc)
-            doc.state.detail = (doc.state.detail or {}) | {"derived_media": derived}
+            doc.state.detail = (doc.state.detail or {}) | {
+                "derived_media": derived
+            }
             doc.save()
             self.log(f"  derived media: {len(derived)} item(s)")
 
@@ -684,7 +722,8 @@ class Orchestrator:
             doc.state.detail = (doc.state.detail or {}) | {"write": summary}
             self.log(
                 f"  written: {summary['written']} new, "
-                f"{summary['referenced']} referenced, {summary['skipped']} skipped"
+                f"{summary['referenced']} referenced, "
+                f"{summary['skipped']} skipped"
             )
         doc.state.status = WRITTEN
         return doc.state.status
@@ -734,7 +773,9 @@ class Orchestrator:
             # this one is written, so stop at the first that isn't done. The
             # human clears its gate and re-runs to advance the sequence.
             if self.serial and status not in (WRITTEN, DUPLICATE):
-                self.log(f"  (serial) paused until {doc.source.name} is written")
+                self.log(
+                    f"  (serial) paused until {doc.source.name} is written"
+                )
                 break
 
         self.log("")
@@ -768,7 +809,9 @@ class Orchestrator:
         self._extract_all(docs)
         keyed = {doc.source.name: self._entity_keys(doc) for doc in docs}
         by_name = {doc.source.name: doc for doc in docs}
-        ordered = [by_name[name] for name in sequence_documents(list(keyed.items()))]
+        ordered = [
+            by_name[name] for name in sequence_documents(list(keyed.items()))
+        ]
         self.log(
             "\nserial order (most connective first): "
             + ", ".join(doc.source.name for doc in ordered)
@@ -822,7 +865,8 @@ def _fresh(output: Path, *inputs: Path) -> bool:
         return False
     output_mtime = output.stat().st_mtime
     return all(
-        not path.exists() or path.stat().st_mtime <= output_mtime for path in inputs
+        not path.exists() or path.stat().st_mtime <= output_mtime
+        for path in inputs
     )
 
 

@@ -31,7 +31,11 @@ def batch() -> ClaimBatch:
             "extraction_run": RUN,
             "claims": [
                 {
-                    "subject": {"kind": "local", "local_id": "e01", "label": "Hermann"},
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "e01",
+                        "label": "Hermann",
+                    },
                     "property": "employer",
                     "value": {
                         "type": "item",

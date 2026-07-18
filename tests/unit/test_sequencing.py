@@ -59,5 +59,10 @@ class TestSequenceDocuments:
 
     def test_order_only_never_drops(self):
         # a document that overlaps nothing is still placed, never lost
-        items = [("hub", {"x", "y"}), ("z1", {"x"}), ("z2", {"y"}), ("solo", set())]
+        items = [
+            ("hub", {"x", "y"}),
+            ("z1", {"x"}),
+            ("z2", {"y"}),
+            ("solo", set()),
+        ]
         assert set(sequence_documents(items)) == {"hub", "z1", "z2", "solo"}

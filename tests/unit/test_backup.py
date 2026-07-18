@@ -55,32 +55,36 @@ class TestPublicFilter:
         # the excluded person's own triples: entity, statement node, sitelink
         '<http://w.lan/entity/Q76> <http://x/p> "Donald" .',
         '<http://w.lan/entity/statement/Q76-aaaa-bbbb> <http://x/p> "1958" .',
-        "<http://w.lan/wiki/Item:Q76> <http://schema.org/about> <http://w.lan/entity/Q76> .",
+        "<http://w.lan/wiki/Item:Q76> <http://schema.org/about> <http://w.lan/entity/Q76> .",  # noqa: E501
         # someone else's claim ABOUT the excluded person
-        "<http://w.lan/entity/Q72> <http://w.lan/prop/direct/P7> <http://w.lan/entity/Q76> .",
+        "<http://w.lan/entity/Q72> <http://w.lan/prop/direct/P7> <http://w.lan/entity/Q76> .",  # noqa: E501
         # an includable person whose QID shares a prefix (Q7 vs Q76)
         '<http://w.lan/entity/Q7> <http://x/p> "Samuel" .',
         # unrelated triple
         '<http://w.lan/entity/Q100> <http://x/p> "place" .',
         # provenance: the excluded person's statement uses REF_DEAD
-        f"<http://w.lan/entity/statement/Q76-cccc> <http://www.w3.org/ns/prov#wasDerivedFrom> <http://w.lan/reference/{REF_DEAD}> .",
+        f"<http://w.lan/entity/statement/Q76-cccc> <http://www.w3.org/ns/prov#wasDerivedFrom> <http://w.lan/reference/{REF_DEAD}> .",  # noqa: E501
         # REF_DEAD's content quotes source text naming the living person
-        f'<http://w.lan/reference/{REF_DEAD}> <http://w.lan/prop/reference/P8> "5. Donald Hirsch b: 15 Oct 1958"@en .',
-        f"<http://w.lan/reference/{REF_DEAD}> <http://w.lan/prop/reference/value/P9> <http://w.lan/value/{VALUE_DEAD}> .",
+        f'<http://w.lan/reference/{REF_DEAD}> <http://w.lan/prop/reference/P8> "5. Donald Hirsch b: 15 Oct 1958"@en .',  # noqa: E501
+        f"<http://w.lan/reference/{REF_DEAD}> <http://w.lan/prop/reference/value/P9> <http://w.lan/value/{VALUE_DEAD}> .",  # noqa: E501
         f'<http://w.lan/value/{VALUE_DEAD}> <http://x/time> "1958" .',
         # provenance shared with an included person's statement
-        f"<http://w.lan/entity/statement/Q7-dddd> <http://www.w3.org/ns/prov#wasDerivedFrom> <http://w.lan/reference/{REF_SHARED}> .",
-        f'<http://w.lan/reference/{REF_SHARED}> <http://w.lan/prop/reference/P8> "1. Samuel b: 1853"@en .',
-        f"<http://w.lan/reference/{REF_SHARED}> <http://w.lan/prop/reference/value/P9> <http://w.lan/value/{VALUE_LIVE}> .",
+        f"<http://w.lan/entity/statement/Q7-dddd> <http://www.w3.org/ns/prov#wasDerivedFrom> <http://w.lan/reference/{REF_SHARED}> .",  # noqa: E501
+        f'<http://w.lan/reference/{REF_SHARED}> <http://w.lan/prop/reference/P8> "1. Samuel b: 1853"@en .',  # noqa: E501
+        f"<http://w.lan/reference/{REF_SHARED}> <http://w.lan/prop/reference/value/P9> <http://w.lan/value/{VALUE_LIVE}> .",  # noqa: E501
         f'<http://w.lan/value/{VALUE_LIVE}> <http://x/time> "1853" .',
     ]
 
-    def filter(self, tmp_path: Path, excluded: set[str], excerpt_pids=frozenset()):
+    def filter(
+        self, tmp_path: Path, excluded: set[str], excerpt_pids=frozenset()
+    ):
         full = tmp_path / "full.nt.gz"
         public = tmp_path / "public.nt.gz"
         with gzip.open(full, "wt") as handle:
             handle.write("\n".join(self.LINES) + "\n")
-        kept, dropped = filter_public_export(full, public, excluded, excerpt_pids)
+        kept, dropped = filter_public_export(
+            full, public, excluded, excerpt_pids
+        )
         with gzip.open(public, "rt") as handle:
             return kept, dropped, handle.read()
 
@@ -104,7 +108,9 @@ class TestPublicFilter:
 
     def test_excerpts_never_enter_the_public_export(self, tmp_path):
         _, _, content = self.filter(tmp_path, set(), excerpt_pids={"P8"})
-        assert "Samuel b: 1853" not in content  # excerpt gone even for the dead
+        assert (
+            "Samuel b: 1853" not in content
+        )  # excerpt gone even for the dead
         assert REF_SHARED in content  # the reference node itself survives
         assert VALUE_LIVE in content
 

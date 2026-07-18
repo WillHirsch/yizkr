@@ -107,7 +107,8 @@ class DocumentSegmentation(BaseModel):
 
 def number_lines(text: str) -> str:
     return "\n".join(
-        f"{number}: {line}" for number, line in enumerate(text.splitlines(), start=1)
+        f"{number}: {line}"
+        for number, line in enumerate(text.splitlines(), start=1)
     )
 
 
@@ -123,10 +124,13 @@ family tree, one narrative section, one table. Prefer natural units
 over fixed sizes.
 
 Output ONE JSON object, no prose, no code fences:
-{{"units": [{{"id": "u01", "label": "<short name>", "kind": "<person entry|narrative section|...>",
-"first_line": <int>, "last_line": <int>, "context": "<what a reader needs from OUTSIDE the unit,
+{{"units": [{{"id": "u01", "label": "<short name>",
+"kind": "<person entry|narrative section|...>",
+"first_line": <int>, "last_line": <int>,
+"context": "<what a reader needs from OUTSIDE the unit,
 e.g. the ancestor path in a tree: 'child of X and Y (generation 2)'>",
-"extract": <true, or false for regions asserting no facts about people, places or events
+"extract": <true, or false for regions asserting no facts about
+people, places or events
 (logistics, boilerplate, tables of contents)>}}, ...]}}
 
 Rules:
@@ -210,7 +214,8 @@ If the source asserts a RELATION that NO listed property expresses (e.g.
 "deported to", "imprisoned at", "employed by" when no such property is
 listed), do NOT force it into a wrong property and do NOT silently drop
 it: emit a GAP line instead —
-{{"gap": {{"subject": "<local_id or name>", "predicate": "<the relation, verbatim>",
+{{"gap": {{"subject": "<local_id or name>",
+"predicate": "<the relation, verbatim>",
 "object": "<local_id, name, or literal>", "evidence": "<short excerpt>"}}}}
 Gaps are reviewed to grow the vocabulary; they are never invented and
 never used when a real property fits.
@@ -384,7 +389,11 @@ def parse_chunk_gaps(response: str) -> list[dict]:
     gaps: list[dict] = []
     for obj in scan_json_objects(response):
         gap = obj.get("gap")
-        if isinstance(gap, dict) and gap.get("subject") and gap.get("predicate"):
+        if (
+            isinstance(gap, dict)
+            and gap.get("subject")
+            and gap.get("predicate")
+        ):
             gaps.append(
                 {
                     "subject": str(gap.get("subject", "")),
@@ -428,7 +437,11 @@ def _rewrite_local_refs(claim: dict, fix) -> dict:
     fixed = json.loads(json.dumps(claim))  # deep copy, JSON-native
 
     def visit(ref: Any) -> None:
-        if isinstance(ref, dict) and ref.get("kind") == "local" and "local_id" in ref:
+        if (
+            isinstance(ref, dict)
+            and ref.get("kind") == "local"
+            and "local_id" in ref
+        ):
             fix(ref)
 
     visit(fixed.get("subject"))
@@ -436,7 +449,9 @@ def _rewrite_local_refs(claim: dict, fix) -> dict:
     if isinstance(value, dict):
         visit(value.get("value"))
     for qualifier in fixed.get("qualifiers") or []:
-        if isinstance(qualifier, dict) and isinstance(qualifier.get("value"), dict):
+        if isinstance(qualifier, dict) and isinstance(
+            qualifier.get("value"), dict
+        ):
             visit(qualifier["value"].get("value"))
     source = fixed.get("source")
     if isinstance(source, dict):
@@ -465,7 +480,9 @@ def pack_entities(
         if not entity.extract:
             continue
         lines = [
-            number for number in entity.mention_lines if 1 <= number <= len(text_lines)
+            number
+            for number in entity.mention_lines
+            if 1 <= number <= len(text_lines)
         ]
         size = (
             sum(len(text_lines[number - 1]) for number in lines)
@@ -482,7 +499,9 @@ def pack_entities(
     return chunks
 
 
-def normalize_to_manifest(claim: dict, records: dict[str, EntityRecord]) -> dict:
+def normalize_to_manifest(
+    claim: dict, records: dict[str, EntityRecord]
+) -> dict:
     """Normalize local refs to the manifest: canonical label, kind.
 
     Labels identify entities, so they take the manifest's canonical
@@ -623,14 +642,17 @@ class ChunkedClaimExtractor:
             except Exception as exc:
                 last_error, handle = str(exc), None
                 continue
-            entities, problems = self._parse_entity_manifest(response, line_count)
+            entities, problems = self._parse_entity_manifest(
+                response, line_count
+            )
             if entities is not None and not problems:
                 return entities, handle
             last_error, handle = "; ".join(problems or ["unparseable"]), None
         self.used_fallback_manifest = True
         self._write(
             "manifest-fallback.txt",
-            f"entity manifest fell back to line-range segmentation: {last_error}\n",
+            f"entity manifest fell back to line-range segmentation: "
+            f"{last_error}\n",
         )
         return None, None
 
@@ -659,7 +681,9 @@ class ChunkedClaimExtractor:
                     problems.append(f"duplicate entity id {record.id!r}")
                 seen.add(record.id)
                 if record.kind not in item_keys:
-                    problems.append(f"entity {record.id}: unknown kind {record.kind!r}")
+                    problems.append(
+                        f"entity {record.id}: unknown kind {record.kind!r}"
+                    )
                 # mention lines are best-effort: clamp, don't reject
                 record.mention_lines = [
                     number
@@ -698,7 +722,9 @@ class ChunkedClaimExtractor:
             except Exception as exc:
                 last_error, handle = str(exc), None
                 continue
-            segmentation, problems = self._parse_segmentation(response, line_count)
+            segmentation, problems = self._parse_segmentation(
+                response, line_count
+            )
             if segmentation is not None and not problems:
                 return segmentation, handle
             last_error, handle = "; ".join(problems or ["unparseable"]), None
@@ -817,7 +843,11 @@ class ChunkedClaimExtractor:
 
         entities_block = "\n\n".join(
             f"- {entity.id}: {entity.label}"
-            + (f" (aliases: {', '.join(entity.aliases)})" if entity.aliases else "")
+            + (
+                f" (aliases: {', '.join(entity.aliases)})"
+                if entity.aliases
+                else ""
+            )
             + f"; kind: {entity.kind}"
             + (f"\n  {entity.summary}" if entity.summary else "")
             + mention_text(entity)
@@ -861,7 +891,9 @@ class ChunkedClaimExtractor:
 
     # -- orchestration ---------------------------------------------------
 
-    def extract(self, transcription: Transcription, artifact_qid: str) -> ClaimBatch:
+    def extract(
+        self, transcription: Transcription, artifact_qid: str
+    ) -> ClaimBatch:
         text_lines = transcription.text.splitlines()
         fingerprint = hashlib.sha256(transcription.text.encode()).hexdigest()
 
@@ -872,7 +904,10 @@ class ChunkedClaimExtractor:
         if self.resume:
             previous_raw = self._read("manifest.json")
             previous = json.loads(previous_raw) if previous_raw else None
-            if previous and previous.get("transcription_sha256") == fingerprint:
+            if (
+                previous
+                and previous.get("transcription_sha256") == fingerprint
+            ):
                 entity_raw = self._read("entity-manifest.json")
                 segmentation_raw = self._read("segmentation.json")
                 if entity_raw:
@@ -891,20 +926,30 @@ class ChunkedClaimExtractor:
                 handle = None
         if entities is None and segmentation is None:
             self._log("  scanning document for entities...")
-            entities, handle = self._entity_manifest(transcription, artifact_qid)
+            entities, handle = self._entity_manifest(
+                transcription, artifact_qid
+            )
             if entities is not None:
                 self._write(
                     "entity-manifest.json",
-                    json.dumps([record.model_dump() for record in entities], indent=2),
+                    json.dumps(
+                        [record.model_dump() for record in entities], indent=2
+                    ),
                 )
             else:
-                segmentation, handle = self._segment(transcription, artifact_qid)
-                self._write("segmentation.json", segmentation.model_dump_json(indent=2))
+                segmentation, handle = self._segment(
+                    transcription, artifact_qid
+                )
+                self._write(
+                    "segmentation.json", segmentation.model_dump_json(indent=2)
+                )
 
         inline_document = (
             handle is None and len(transcription.text) <= INLINE_DOCUMENT_LIMIT
         )
-        manifest["strategy"] = "entity" if entities is not None else "line-range"
+        manifest["strategy"] = (
+            "entity" if entities is not None else "line-range"
+        )
         manifest["context_mode"] = (
             "fork"
             if handle is not None
@@ -917,11 +962,18 @@ class ChunkedClaimExtractor:
 
         if entities is not None:
             records = {record.id: record for record in entities}
-            chunk_groups: list[list] = pack_entities(entities, text_lines, self.budget)
+            chunk_groups: list[list] = pack_entities(
+                entities, text_lines, self.budget
+            )
 
             def build_prompt(group: list, inline: bool) -> str:
                 return self._entity_chunk_prompt(
-                    group, entities, text_lines, transcription, artifact_qid, inline
+                    group,
+                    entities,
+                    text_lines,
+                    transcription,
+                    artifact_qid,
+                    inline,
                 )
 
             def member_ids(group: list) -> list[str]:
@@ -932,7 +984,9 @@ class ChunkedClaimExtractor:
 
             entities_payload = [record.model_dump() for record in entities]
         else:
-            chunk_groups = pack_units(segmentation.units, text_lines, self.budget)
+            chunk_groups = pack_units(
+                segmentation.units, text_lines, self.budget
+            )
 
             def build_prompt(group: list, inline: bool) -> str:
                 return self._chunk_prompt(
@@ -948,9 +1002,13 @@ class ChunkedClaimExtractor:
             entities_payload = []
 
         self.failed_chunks = []
-        chunk_ids = [f"c{index:03d}" for index in range(1, len(chunk_groups) + 1)]
+        chunk_ids = [
+            f"c{index:03d}" for index in range(1, len(chunk_groups) + 1)
+        ]
         for chunk_id, group in zip(chunk_ids, chunk_groups, strict=True):
-            manifest["chunks"].setdefault(chunk_id, {"members": member_ids(group)})
+            manifest["chunks"].setdefault(
+                chunk_id, {"members": member_ids(group)}
+            )
 
         total = len(chunk_ids)
         self._chunks_done = 0
@@ -969,7 +1027,9 @@ class ChunkedClaimExtractor:
                 prompt = build_prompt(group, False)
                 fallback_prompt = build_prompt(group, inline_document)
                 try:
-                    parsed = self._run_chunk(chunk_id, prompt, handle, fallback_prompt)
+                    parsed = self._run_chunk(
+                        chunk_id, prompt, handle, fallback_prompt
+                    )
                 except Exception as exc:
                     reason = f"{type(exc).__name__}: {exc}"
                     # a truncation leaves its unparseable response in
@@ -984,7 +1044,9 @@ class ChunkedClaimExtractor:
                             f"failed: {reason[:200]}"
                         )
                         self.failed_chunks.append(chunk_id)
-                        self._write("manifest.json", json.dumps(manifest, indent=2))
+                        self._write(
+                            "manifest.json", json.dumps(manifest, indent=2)
+                        )
                         # durable record: outlives the successful re-run
                         # that overwrites manifest.json and raw.txt
                         self._append(
@@ -1000,12 +1062,16 @@ class ChunkedClaimExtractor:
                         )
                     self._note_chunk_done(total, ok=False)
                     return None
-                self._write(f"{chunk_id}.ndjson", "\n".join(map(json.dumps, parsed)))
+                self._write(
+                    f"{chunk_id}.ndjson", "\n".join(map(json.dumps, parsed))
+                )
             with self._state_lock:
                 manifest["chunks"][chunk_id]["status"] = "ok"
                 manifest["chunks"][chunk_id]["claims"] = len(parsed)
                 self._write("manifest.json", json.dumps(manifest, indent=2))
-            self._note_chunk_done(total, ok=True, claims=len(parsed), resumed=resumed)
+            self._note_chunk_done(
+                total, ok=True, claims=len(parsed), resumed=resumed
+            )
             return parsed
 
         with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
@@ -1016,7 +1082,9 @@ class ChunkedClaimExtractor:
         gaps: list[dict] = []
         for chunk_id, parsed in zip(chunk_ids, outcomes, strict=True):
             if parsed is not None:
-                raw_claims.extend(transform(claim, chunk_id) for claim in parsed)
+                raw_claims.extend(
+                    transform(claim, chunk_id) for claim in parsed
+                )
                 # gaps come from the persisted raw response, so they cost
                 # no extra model call and survive resume (ADR-0013)
                 raw = self._read(f"{chunk_id}.raw.txt")
@@ -1057,14 +1125,20 @@ class ChunkedClaimExtractor:
             return None
         parsed = self._read(f"{chunk_id}.ndjson")
         if parsed is not None:
-            return [json.loads(line) for line in parsed.splitlines() if line.strip()]
+            return [
+                json.loads(line)
+                for line in parsed.splitlines()
+                if line.strip()
+            ]
         raw = self._read(f"{chunk_id}.raw.txt")
         if raw is not None:
             try:
                 claims = parse_chunk_response(raw, warn=self._log)
             except ChunkIncomplete:
                 return None
-            self._write(f"{chunk_id}.ndjson", "\n".join(map(json.dumps, claims)))
+            self._write(
+                f"{chunk_id}.ndjson", "\n".join(map(json.dumps, claims))
+            )
             return claims
         return None
 
@@ -1125,7 +1199,10 @@ class ChunkedClaimExtractor:
         )
 
     def _write_coverage(
-        self, segmentation: DocumentSegmentation, batch: ClaimBatch, line_count: int
+        self,
+        segmentation: DocumentSegmentation,
+        batch: ClaimBatch,
+        line_count: int,
     ) -> None:
         """Advisory completeness report for the curator (no auto-retry)."""
         subject_labels = {
@@ -1138,7 +1215,8 @@ class ChunkedClaimExtractor:
         silent_units = [
             unit.id
             for unit in segmentation.units
-            if unit.extract and not any(label in unit.label for label in subject_labels)
+            if unit.extract
+            and not any(label in unit.label for label in subject_labels)
         ]
         self._write(
             "coverage.json",

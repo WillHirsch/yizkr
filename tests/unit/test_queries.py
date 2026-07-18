@@ -70,15 +70,21 @@ class TestRendering:
 
     def test_render_substitutes_ids(self, vocabulary):
         properties, items = vocabulary
-        rendered = render("?x wdt:{P:instance_of} wd:{Q:human} .", properties, items)
-        assert rendered == (f"?x wdt:{properties['instance_of']} wd:{items['human']} .")
+        rendered = render(
+            "?x wdt:{P:instance_of} wd:{Q:human} .", properties, items
+        )
+        assert rendered == (
+            f"?x wdt:{properties['instance_of']} wd:{items['human']} ."
+        )
 
     def test_unknown_key_fails_loudly(self, vocabulary):
         properties, items = vocabulary
         with pytest.raises(KeyError, match="shoe_size"):
             render("wdt:{P:shoe_size}", properties, items)
 
-    def test_instance_render_declares_local_prefixes(self, templates, vocabulary):
+    def test_instance_render_declares_local_prefixes(
+        self, templates, vocabulary
+    ):
         """WDQS ships wikidata.org prefixes; queries must redeclare them
         for the local concept URI or silently match nothing."""
         properties, items = vocabulary
@@ -98,7 +104,9 @@ class TestWikitext:
         properties, items = vocabulary
         name = "unreferenced-statements"
         rendered = render(templates[name], properties, items)
-        text = page_wikitext(name, templates[name], rendered, "http://query.example")
+        text = page_wikitext(
+            name, templates[name], rendered, "http://query.example"
+        )
         assert "http://query.example/#" in text
         assert "embed.html#" in text
         assert '<syntaxhighlight lang="sparql">' in text

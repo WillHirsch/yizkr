@@ -28,7 +28,9 @@ def places() -> list[PlaceRecord]:
         PlaceRecord(
             qid="Q5", label="Espringfeld", aliases=["Springfield, Exampleland"]
         ),
-        PlaceRecord(qid="Q6", label="Capital City, Exampleland", parents=["Q1"]),
+        PlaceRecord(
+            qid="Q6", label="Capital City, Exampleland", parents=["Q1"]
+        ),
     ]
 
 
@@ -47,7 +49,9 @@ class TestCommaCandidates:
         questions = comma_parent_candidates(
             [
                 PlaceRecord(qid="Q7", label="Docks, Espringfeld"),
-                PlaceRecord(qid="Q5", label="Some Other Name", aliases=["Espringfeld"]),
+                PlaceRecord(
+                    qid="Q5", label="Some Other Name", aliases=["Espringfeld"]
+                ),
             ]
         )
         assert [(q.qid_a, q.qid_b) for q in questions] == [("Q7", "Q5")]
@@ -58,15 +62,22 @@ class TestCommaCandidates:
 
     def test_no_commas_no_candidates(self):
         assert (
-            comma_parent_candidates([PlaceRecord(qid="Q4", label="Shelbyville")]) == []
+            comma_parent_candidates(
+                [PlaceRecord(qid="Q4", label="Shelbyville")]
+            )
+            == []
         )
 
 
 class TestWorklist:
     def test_spine_first_ordering_and_dedupe(self):
         competing = [
-            Question(kind="competing", qid_a="Q3", qid_b="Q4", context="pob of X"),
-            Question(kind="competing", qid_a="Q2", qid_b="Q1", context="pod of Y"),
+            Question(
+                kind="competing", qid_a="Q3", qid_b="Q4", context="pob of X"
+            ),
+            Question(
+                kind="competing", qid_a="Q2", qid_b="Q1", context="pod of Y"
+            ),
         ]
         comma = comma_parent_candidates(places())
         worklist = build_worklist(places(), competing, comma)
@@ -74,7 +85,10 @@ class TestWorklist:
         assert len(keys) == len(set(keys))  # deduplicated across sources
         # the Q2/Q1 question (country-scale) precedes the Q3 ones
         position = {key: index for index, key in enumerate(keys)}
-        assert position[frozenset(("Q2", "Q1"))] < position[frozenset(("Q3", "Q4"))]
+        assert (
+            position[frozenset(("Q2", "Q1"))]
+            < position[frozenset(("Q3", "Q4"))]
+        )
 
 
 class ScriptedLlm:
@@ -102,7 +116,12 @@ class TestAdjudication:
                 }  # fmt: skip
             ),
             json.dumps(  # not an asked question: must be dropped
-                {"qid_a": "Q1", "qid_b": "Q4", "verdict": "same", "confidence": 1}
+                {
+                    "qid_a": "Q1",
+                    "qid_b": "Q4",
+                    "verdict": "same",
+                    "confidence": 1,
+                }
             ),
             json.dumps(  # unknown verdict: dropped
                 {"qid_a": "Q3", "qid_b": "Q2", "verdict": "overlaps"}
@@ -124,7 +143,9 @@ class TestAdjudication:
         )
         with pytest.raises(ValueError, match="sentinel"):
             adjudicate_places(
-                llm, [Question(kind="parent", qid_a="Q3", qid_b="Q2")], places()
+                llm,
+                [Question(kind="parent", qid_a="Q3", qid_b="Q2")],
+                places(),
             )
 
 
@@ -153,7 +174,10 @@ class TestPlanContainment:
     def test_live_cycle_guard(self):
         rows = [row("Q1", "Q3", "a_within_b")]  # country inside the mill
         edges, notes = plan_containment(
-            rows, creates_cycle=lambda child, parent: (child, parent) == ("Q1", "Q3")
+            rows,
+            creates_cycle=lambda child, parent: (
+                (child, parent) == ("Q1", "Q3")
+            ),
         )
         assert edges == []
         assert any("cycle" in note for note in notes)
@@ -180,7 +204,9 @@ class TestCsv:
         from yizkr.pipeline.places import PlaceProposal
 
         questions = [
-            Question(kind="competing", qid_a="Q3", qid_b="Q4", context="pob of X")
+            Question(
+                kind="competing", qid_a="Q3", qid_b="Q4", context="pob of X"
+            )
         ]
         proposals = [
             PlaceProposal(

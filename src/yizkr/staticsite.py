@@ -36,7 +36,11 @@ from collections import defaultdict
 from pathlib import Path
 
 from yizkr.core.config import Config
-from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS, is_possibly_living, year_of
+from yizkr.core.privacy import (
+    DEFAULT_CUTOFF_YEARS,
+    is_possibly_living,
+    year_of,
+)
 from yizkr.core.wiki import WikiClient
 from yizkr.queries.publish import load_templates, prefix_block, render
 
@@ -97,7 +101,8 @@ ORDER BY ?personLabel
 STATEMENTS_QUERY = """\
 SELECT ?person ?propLabel ?st ?value ?valueLabel ?precision
        (GROUP_CONCAT(DISTINCT ?sourceLabel; separator="|") AS ?sources)
-       (GROUP_CONCAT(DISTINCT ?qualifierText; separator="|") AS ?qualifierTexts)
+       (GROUP_CONCAT(DISTINCT ?qualifierText; separator="|")
+        AS ?qualifierTexts)
 WHERE {{
   ?person wdt:{instance_of} wd:{human} .
   ?person ?p ?st .
@@ -181,7 +186,8 @@ ORDER BY ?childLabel
 
 # what each artifact asserts — the artifact page's evidence table
 ASSERTIONS_QUERY = """\
-SELECT ?artifact ?subject ?subjectLabel ?propLabel ?value ?valueLabel ?precision
+SELECT ?artifact ?subject ?subjectLabel ?propLabel ?value ?valueLabel
+       ?precision
 WHERE {{
   ?st prov:wasDerivedFrom/pr:{stated_in} ?artifact .
   ?subject ?p ?st .
@@ -190,8 +196,14 @@ WHERE {{
         rdfs:label ?propLabel .
   FILTER(LANG(?propLabel) = "en")
   ?st ?ps ?value .
-  OPTIONAL {{ ?subject rdfs:label ?subjectLabel . FILTER(LANG(?subjectLabel) = "en") }}
-  OPTIONAL {{ ?value rdfs:label ?valueLabel . FILTER(LANG(?valueLabel) = "en") }}
+  OPTIONAL {{
+    ?subject rdfs:label ?subjectLabel .
+    FILTER(LANG(?subjectLabel) = "en")
+  }}
+  OPTIONAL {{
+    ?value rdfs:label ?valueLabel .
+    FILTER(LANG(?valueLabel) = "en")
+  }}
   OPTIONAL {{
     ?prop wikibase:statementValue ?psv .
     ?st ?psv ?valueNode .
@@ -202,36 +214,47 @@ ORDER BY ?artifact ?subjectLabel ?propLabel
 """
 
 CSS = """\
-:root { --ink: #222; --muted: #667; --accent: #7a4a20; --line: #ddd; --bg: #faf8f4; }
+:root { --ink: #222; --muted: #667; --accent: #7a4a20; --line: #ddd;
+        --bg: #faf8f4; }
 * { box-sizing: border-box; }
 body { font: 16px/1.55 Georgia, 'Times New Roman', serif; color: var(--ink);
-       background: var(--bg); margin: 0 auto; max-width: 60rem; padding: 1rem 1.2rem 4rem; }
+       background: var(--bg); margin: 0 auto; max-width: 60rem;
+       padding: 1rem 1.2rem 4rem; }
 a { color: var(--accent); }
-nav { font-family: system-ui, sans-serif; font-size: .85rem; border-bottom: 1px solid var(--line);
+nav { font-family: system-ui, sans-serif; font-size: .85rem;
+      border-bottom: 1px solid var(--line);
       padding-bottom: .6rem; margin-bottom: 1.2rem; }
 nav a { margin-right: 1rem; text-decoration: none; }
 h1 { font-weight: normal; margin: .2rem 0 .1rem; }
 .sub { color: var(--muted); margin: 0 0 1rem; }
-.badge { font-family: system-ui, sans-serif; font-size: .7rem; background: #a33; color: #fff;
+.badge { font-family: system-ui, sans-serif; font-size: .7rem;
+         background: #a33; color: #fff;
          border-radius: .6rem; padding: .1rem .55rem; vertical-align: middle; }
-dl.statements dt { font-family: system-ui, sans-serif; font-size: .8rem; text-transform: uppercase;
-                   letter-spacing: .05em; color: var(--muted); margin-top: 1rem; }
+dl.statements dt { font-family: system-ui, sans-serif; font-size: .8rem;
+                   text-transform: uppercase;
+                   letter-spacing: .05em; color: var(--muted);
+                   margin-top: 1rem; }
 dl.statements dd { margin: .25rem 0 .25rem 1rem; }
 .source { color: var(--muted); font-size: .85em; }
 .source::before { content: " — per "; }
 .qualifiers { color: var(--muted); font-size: .85em; font-style: italic; }
 ul.roster { columns: 2; list-style: none; padding: 0; }
 ul.roster li { margin: .15rem 0; break-inside: avoid; }
-.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+.gallery { display: grid;
+           grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+           gap: 1rem; }
 .gallery figure { margin: 0; }
-.gallery img { width: 100%; height: 200px; object-fit: contain; background: #fff;
+.gallery img { width: 100%; height: 200px; object-fit: contain;
+               background: #fff;
                border: 1px solid var(--line); }
 .gallery figcaption { font-size: .8rem; color: var(--muted); }
-.timeline .year { font-family: system-ui, sans-serif; font-weight: 600; margin-top: 1.2rem;
+.timeline .year { font-family: system-ui, sans-serif; font-weight: 600;
+                  margin-top: 1.2rem;
                   border-bottom: 1px solid var(--line); }
 .timeline .entry { margin: .3rem 0 .3rem 1rem; }
 table { border-collapse: collapse; width: 100%; font-size: .92rem; }
-th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--line);
+th, td { text-align: left; padding: .35rem .6rem;
+         border-bottom: 1px solid var(--line);
          vertical-align: top; }
 footer { margin-top: 3rem; color: var(--muted); font-size: .8rem;
          border-top: 1px solid var(--line); padding-top: .6rem; }
@@ -258,10 +281,11 @@ def page(title: str, body: str, root: str = "") -> str:
         f'<link rel="stylesheet" href="{root}style.css"></head><body>'
         + NAV.format(root=root)
         + body
-        + "<footer>Generated by <code>yizkr publish-site</code> from the live"
-        " graph — includes possibly-living people; for private use. Every value is"
-        " shown with the source that asserts it; disagreement is a healthy"
-        " state, not an error.</footer></body></html>"
+        + "<footer>Generated by <code>yizkr publish-site</code> from the "
+        "live graph — includes possibly-living people; for private "
+        "use. Every value is shown with the source that asserts it; "
+        "disagreement is a healthy state, not an error."
+        "</footer></body></html>"
     )
 
 
@@ -285,7 +309,9 @@ def format_time(value: str, precision: str) -> str:
 
 
 class SiteBuilder:
-    def __init__(self, config: Config, out_dir: Path, run=None, vocabulary=None):
+    def __init__(
+        self, config: Config, out_dir: Path, run=None, vocabulary=None
+    ):
         self.config = config
         self.out = out_dir
         self.run = run or sparql_runner(config)
@@ -313,7 +339,9 @@ class SiteBuilder:
 
     def _instance_query(self, template: str) -> str:
         vocabulary = {**self.items, **self.properties}
-        return prefix_block(self.config.concept_uri) + template.format(**vocabulary)
+        return prefix_block(self.config.concept_uri) + template.format(
+            **vocabulary
+        )
 
     def _library_query(self, name: str) -> str:
         return prefix_block(self.config.concept_uri) + render(
@@ -350,7 +378,8 @@ class SiteBuilder:
         for row in people:
             qid = qid_of(row, "person")
             self._write(
-                f"people/{qid}.html", self.person_page(row, by_person.get(qid, []))
+                f"people/{qid}.html",
+                self.person_page(row, by_person.get(qid, [])),
             )
         for row in artifacts:
             qid = qid_of(row, "artifact")
@@ -363,7 +392,9 @@ class SiteBuilder:
         self._write("timeline.json", self.timeline_feed(timeline))
         self._write("gallery.html", self.gallery_page(gallery))
         self._write("places.html", self.places_page(places, place_tree))
-        self._write("inconsistencies.html", self.inconsistencies_page(inconsistencies))
+        self._write(
+            "inconsistencies.html", self.inconsistencies_page(inconsistencies)
+        )
         return {
             "out": str(self.out),
             "people": len(people),
@@ -383,7 +414,8 @@ class SiteBuilder:
             qid, _, label = pair.partition("~")
             if qid.startswith("Q") and label:
                 links.append(
-                    f'<a href="{root}artifacts/{esc(qid)}.html">{esc(label)}</a>'
+                    f'<a href="{root}artifacts/{esc(qid)}.html">'
+                    f"{esc(label)}</a>"
                 )
             else:
                 links.append(esc(label or qid))
@@ -396,7 +428,8 @@ class SiteBuilder:
         body = [f"<h1>{esc(label)}"]
         if self._possibly_living(person):
             body.append(
-                ' <span class="badge">possibly living — never in public exports</span>'
+                ' <span class="badge">possibly living — never in '
+                "public exports</span>"
             )
         body.append("</h1>")
         description = cell(person, "personDescription")
@@ -427,7 +460,8 @@ class SiteBuilder:
                 body.append(f"<dd>{self.render_value(row)}</dd>")
         body.append("</dl>")
         body.append(
-            f'<p class="sub"><a href="{esc(self.config.wikibase_url)}/wiki/Item:{qid}">'
+            f'<p class="sub">'
+            f'<a href="{esc(self.config.wikibase_url)}/wiki/Item:{qid}">'
             f"curate {qid} in the wiki</a></p>"
         )
         return page(label, "".join(body), root="../")
@@ -446,7 +480,8 @@ class SiteBuilder:
         qualifiers = [q for q in cell(row, "qualifierTexts").split("|") if q]
         if qualifiers:
             rendered += (
-                f' <span class="qualifiers">({esc("; ".join(qualifiers))})</span>'
+                f' <span class="qualifiers">'
+                f"({esc('; '.join(qualifiers))})</span>"
             )
         sources = self.source_links(cell(row, "sources"))
         if sources:
@@ -478,13 +513,19 @@ class SiteBuilder:
                 f"({esc(file_name.removeprefix('File:'))})</a></p>"
             )
         if assertions:
-            body.append(f"<h2>What this artifact asserts ({len(assertions)})</h2>")
-            body.append("<table><tr><th>About</th><th>Property</th><th>Value</th></tr>")
+            body.append(
+                f"<h2>What this artifact asserts ({len(assertions)})</h2>"
+            )
+            body.append(
+                "<table><tr><th>About</th><th>Property</th><th>Value</th></tr>"
+            )
             for row in assertions:
                 subject_qid = qid_of(row, "subject")
                 subject = esc(cell(row, "subjectLabel") or subject_qid)
                 if subject_qid.startswith("Q"):
-                    subject = f'<a href="../people/{subject_qid}.html">{subject}</a>'
+                    subject = (
+                        f'<a href="../people/{subject_qid}.html">{subject}</a>'
+                    )
                 value = row.get("value", {})
                 raw = value.get("value", "")
                 if value.get("datatype", "").endswith("dateTime"):
@@ -500,13 +541,15 @@ class SiteBuilder:
                     )
                 body.append(
                     f"<tr><td>{subject}</td>"
-                    f"<td>{esc(cell(row, 'propLabel'))}</td><td>{shown}</td></tr>"
+                    f"<td>{esc(cell(row, 'propLabel'))}</td>"
+                    f"<td>{shown}</td></tr>"
                 )
             body.append("</table>")
         else:
             body.append("<p>No statements reference this artifact yet.</p>")
         body.append(
-            f'<p class="sub"><a href="{esc(self.config.wikibase_url)}/wiki/Item:{qid}">'
+            f'<p class="sub">'
+            f'<a href="{esc(self.config.wikibase_url)}/wiki/Item:{qid}">'
             f"curate {qid} in the wiki</a></p>"
         )
         return page(label, "".join(body), root="../")
@@ -514,7 +557,8 @@ class SiteBuilder:
     def index_page(self, people: list[dict], artifacts: list[dict]) -> str:
         body = ["<h1>Family archive</h1>"]
         body.append(
-            f'<p class="sub">{len(people)} people · {len(artifacts)} artifacts · '
+            f'<p class="sub">{len(people)} people · '
+            f"{len(artifacts)} artifacts · "
             "every statement traceable to the source that asserts it</p>"
         )
         body.append('<h2>People</h2><ul class="roster">')
@@ -526,9 +570,12 @@ class SiteBuilder:
                 if self._possibly_living(row)
                 else ""
             )
-            body.append(f'<li><a href="people/{qid}.html">{label}</a>{badge}</li>')
+            body.append(
+                f'<li><a href="people/{qid}.html">{label}</a>{badge}</li>'
+            )
         body.append(
-            "</ul><h2>Artifacts</h2><table><tr><th>Artifact</th><th>Kind</th></tr>"
+            "</ul><h2>Artifacts</h2>"
+            "<table><tr><th>Artifact</th><th>Kind</th></tr>"
         )
         for row in artifacts:
             qid = qid_of(row, "artifact")
@@ -559,7 +606,8 @@ class SiteBuilder:
             source_qid = qid_of(row, "source")
             source_label = cell(row, "sourceLabel")
             source = (
-                f'<span class="source"><a href="artifacts/{esc(source_qid)}.html">'
+                f'<span class="source">'
+                f'<a href="artifacts/{esc(source_qid)}.html">'
                 f"{esc(source_label)}</a></span>"
                 if source_label and source_qid.startswith("Q")
                 else ""
@@ -567,7 +615,8 @@ class SiteBuilder:
             body.append(
                 '<div class="entry">'
                 f"{esc(format_time(date, cell(row, 'precision')))} — "
-                f'<a href="people/{person}.html">{esc(cell(row, "personLabel"))}</a>, '
+                f'<a href="people/{person}.html">'
+                f"{esc(cell(row, 'personLabel'))}</a>, "
                 f"{esc(cell(row, 'what'))}" + source + "</div>"
             )
         body.append("</div>")
@@ -592,8 +641,12 @@ class SiteBuilder:
                 {
                     "start_date": start,
                     "text": {
-                        "headline": f"{cell(row, 'personLabel')}: {cell(row, 'what')}",
-                        "text": f"per {cell(row, 'sourceLabel') or 'unattributed'}",
+                        "headline": (
+                            f"{cell(row, 'personLabel')}: {cell(row, 'what')}"
+                        ),
+                        "text": (
+                            f"per {cell(row, 'sourceLabel') or 'unattributed'}"
+                        ),
                     },
                 }
             )
@@ -618,7 +671,9 @@ class SiteBuilder:
             label = cell(row, "photoLabel") or qid_of(row, "photo")
             container = cell(row, "containerLabel")
             caption = esc(label) + (
-                f'<br><span class="source">{esc(container)}</span>' if container else ""
+                f'<br><span class="source">{esc(container)}</span>'
+                if container
+                else ""
             )
             body.append(
                 f'<figure><a href="{esc(image)}"><img src="{esc(image)}" '
@@ -630,18 +685,22 @@ class SiteBuilder:
             body.append("<p>No photographs in the graph yet.</p>")
         return page("Gallery", "".join(body))
 
-    def places_page(self, rows: list[dict], tree_rows: list[dict] | None = None) -> str:
+    def places_page(
+        self, rows: list[dict], tree_rows: list[dict] | None = None
+    ) -> str:
         body = ["<h1>Places</h1>"]
         with_coordinates = [row for row in rows if cell(row, "coords")]
         if not with_coordinates:
             body.append(
-                '<p class="sub">no place carries a <em>coordinate location</em> '
+                '<p class="sub">no place carries a '
+                "<em>coordinate location</em> "
                 "statement yet — the map lights up once places are reconciled "
                 "to coordinates (GeoNames pass, see docs/MODELING.md)</p>"
             )
         body.append(self.place_tree_html(tree_rows or []))
         body.append(
-            "<table><tr><th>Place</th><th>Coordinates</th><th>Connected to</th></tr>"
+            "<table><tr><th>Place</th><th>Coordinates</th>"
+            "<th>Connected to</th></tr>"
         )
         seen = set()
         for row in rows:
@@ -687,11 +746,19 @@ class SiteBuilder:
             return f"<li>{label}{f'<ul>{below}</ul>' if below else ''}</li>"
 
         roots = sorted(
-            (qid for qid in labels if qid not in parented and children.get(qid)),
+            (
+                qid
+                for qid in labels
+                if qid not in parented and children.get(qid)
+            ),
             key=lambda q: labels.get(q, q),
         )
         unplaced = sorted(
-            (qid for qid in labels if qid not in parented and not children.get(qid)),
+            (
+                qid
+                for qid in labels
+                if qid not in parented and not children.get(qid)
+            ),
             key=lambda q: labels.get(q, q),
         )
         parts = ["<h2>Containment</h2><ul>"]
@@ -709,7 +776,8 @@ class SiteBuilder:
     def inconsistencies_page(self, rows: list[dict]) -> str:
         body = [
             "<h1>Inconsistencies</h1>",
-            '<p class="sub">properties where sources disagree — the archive\'s '
+            '<p class="sub">properties where sources disagree — '
+            "the archive's "
             "flagship view (ADR-0002): coexistence is the healthy resting "
             "state, and this page exists so a reader can weigh the evidence. "
             "Differences of resolution are suppressed once the graph records "
@@ -737,7 +805,8 @@ class SiteBuilder:
                 f"{self.source_links(cell(row, 'sourcesA'), root='')}</td>"
                 f"<td>{rendered(row, 'B')}</td>"
                 f'<td class="source" style="font-style:italic">'
-                f"{self.source_links(cell(row, 'sourcesB'), root='')}</td></tr>"
+                f"{self.source_links(cell(row, 'sourcesB'), root='')}"
+                "</td></tr>"
             )
         body.append("</table>")
         return page("Inconsistencies", "".join(body))

@@ -38,7 +38,11 @@ def make_batch(entities=True) -> ClaimBatch:
             "extraction_run": RUN,
             "claims": [
                 {
-                    "subject": {"kind": "local", "local_id": "e1", "label": "Anna"},
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "e1",
+                        "label": "Anna",
+                    },
                     "property": "date_of_birth",
                     "value": {"type": "time", "year": 1901},
                     "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
@@ -127,7 +131,9 @@ def make_run(tmp_path, name="letter.txt", **kwargs):
     folder = tmp_path / "docs"
     folder.mkdir(exist_ok=True)
     (folder / name).write_text("Anna was born in 1901.")
-    orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet, **kwargs)
+    orchestrator = ScriptedOrchestrator(
+        folder, tmp_path / "state", log=quiet, **kwargs
+    )
     return orchestrator
 
 
@@ -215,7 +221,9 @@ class TestResume:
         calls_after_first = list(orchestrator.calls)
         orchestrator.run()  # still waiting: nothing new should execute
         repeated = orchestrator.calls[len(calls_after_first) :]
-        assert not any(call.startswith(("register", "batch")) for call in repeated)
+        assert not any(
+            call.startswith(("register", "batch")) for call in repeated
+        )
 
     def test_written_document_is_a_noop(self, tmp_path):
         orchestrator = make_run(tmp_path)
@@ -295,16 +303,23 @@ class TestIsolationAndDiscovery:
         folder.mkdir()
         (folder / "notes.txt").write_text("text")
         (folder / "data.xlsx").write_text("not a document")
-        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
-        assert [d.source.name for d in orchestrator.documents()] == ["notes.txt"]
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
+        assert [d.source.name for d in orchestrator.documents()] == [
+            "notes.txt"
+        ]
 
     def test_gedcom_routes_through_deterministic_adapter(self, tmp_path):
         folder = tmp_path / "docs"
         folder.mkdir()
         (folder / "family.ged").write_text(
-            "0 @I1@ INDI\n1 NAME Anna /Beispiel/\n1 BIRT\n2 DATE 1901\n0 TRLR\n"
+            "0 @I1@ INDI\n1 NAME Anna /Beispiel/\n"
+            "1 BIRT\n2 DATE 1901\n0 TRLR\n"
         )
-        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
         orchestrator.run()
         (doc,) = orchestrator.documents()
         saved = ClaimBatch.model_validate_json(doc.batch.read_text())
@@ -330,7 +345,9 @@ class TestContentDedup:
         folder = self._folder(tmp_path)
         (folder / "a-original.txt").write_text("same bytes")
         (folder / "b-copy.txt").write_text("same bytes")  # identical content
-        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
         orchestrator.run()
         original, copy = orchestrator.documents()
         # the alphabetically-first file is canonical; only it is worked on
@@ -344,11 +361,15 @@ class TestContentDedup:
         folder = self._folder(tmp_path)
         (folder / "one.txt").write_text("first document")
         (folder / "two.txt").write_text("second document")
-        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
         orchestrator.run()
         assert "batch:one.txt" in orchestrator.calls
         assert "batch:two.txt" in orchestrator.calls
-        assert all(d.state.status != DUPLICATE for d in orchestrator.documents())
+        assert all(
+            d.state.status != DUPLICATE for d in orchestrator.documents()
+        )
 
     def test_dedup_decision_is_stable_across_reruns(self, tmp_path):
         folder = self._folder(tmp_path)
@@ -416,7 +437,9 @@ class TestContentDedup:
         folder = self._folder(tmp_path)
         source = folder / "record.txt"
         source.write_text("Anna was born in 1901.")
-        orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
         self._complete(orchestrator)
 
         source.write_text("Bernard was born in 1880.")  # same name, new bytes
@@ -475,11 +498,15 @@ class TestFreshness:
 
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
-        writes_before = len([c for c in orchestrator.calls if c.startswith("write")])
+        writes_before = len(
+            [c for c in orchestrator.calls if c.startswith("write")]
+        )
         future = doc.write_result.stat().st_mtime + 10
         os.utime(doc.review_reviewed, (future, future))
         assert orchestrator.run() == 0
-        writes_after = len([c for c in orchestrator.calls if c.startswith("write")])
+        writes_after = len(
+            [c for c in orchestrator.calls if c.startswith("write")]
+        )
         assert writes_after == writes_before + 1
 
 
@@ -575,7 +602,9 @@ class TestSerialMode:
         folder.mkdir()
         (folder / "a.txt").write_text("Anna was born in 1901.")
         (folder / "b.txt").write_text("Bella was born in 1902.")
-        return ScriptedOrchestrator(folder, tmp_path / "state", log=quiet, serial=True)
+        return ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet, serial=True
+        )
 
     def test_extracts_all_then_reconciles_only_the_first(self, tmp_path):
         orch = self._two_doc_folder(tmp_path)
@@ -592,10 +621,14 @@ class TestSerialMode:
     def test_next_reconciles_only_after_the_first_is_written(self, tmp_path):
         orch = self._two_doc_folder(tmp_path)
         orch.run()
-        approve_all_equivalences({d.source.name: d for d in orch.documents()}["a.txt"])
+        approve_all_equivalences(
+            {d.source.name: d for d in orch.documents()}["a.txt"]
+        )
         orch.run()  # a advances to its claim gate; b must NOT reconcile yet
         assert "reconcile:b.txt" not in orch.calls
-        approve_all_claims({d.source.name: d for d in orch.documents()}["a.txt"])
+        approve_all_claims(
+            {d.source.name: d for d in orch.documents()}["a.txt"]
+        )
         orch.run()  # a is written; only now does b reconcile
         docs = {d.source.name: d for d in orch.documents()}
         assert docs["a.txt"].state.status == WRITTEN
@@ -621,7 +654,11 @@ class TestSerialMode:
         (folder / "a.txt").write_text("Anna was born in 1901.")
         (folder / "b.txt").write_text("Bella was born in 1902.")
         orch = ScriptedOrchestrator(
-            folder, tmp_path / "state", log=quiet, serial=True, extract_concurrency=2
+            folder,
+            tmp_path / "state",
+            log=quiet,
+            serial=True,
+            extract_concurrency=2,
         )
         orch.run()
         assert "batch:a.txt" in orch.calls and "batch:b.txt" in orch.calls
@@ -637,7 +674,11 @@ class TestSerialMode:
         (folder / "a.txt").write_text("identical bytes")
         (folder / "b.txt").write_text("identical bytes")
         orch = ScriptedOrchestrator(
-            folder, tmp_path / "state", log=quiet, serial=True, extract_concurrency=2
+            folder,
+            tmp_path / "state",
+            log=quiet,
+            serial=True,
+            extract_concurrency=2,
         )
         orch.run()
         statuses = {d.source.name: d.state.status for d in orch.documents()}

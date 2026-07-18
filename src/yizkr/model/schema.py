@@ -74,12 +74,17 @@ class Manifest(BaseModel):
     def check_cross_references(self) -> Manifest:
         if self.schema_source_item not in self.items:
             raise ValueError(
-                f"schema_source_item {self.schema_source_item!r} is not an item key"
+                f"schema_source_item {self.schema_source_item!r} "
+                f"is not an item key"
             )
         for key, item in self.items.items():
-            if item.subclass_of is not None and item.subclass_of not in self.items:
+            if (
+                item.subclass_of is not None
+                and item.subclass_of not in self.items
+            ):
                 raise ValueError(
-                    f"items.{key}.subclass_of {item.subclass_of!r} is not an item key"
+                    f"items.{key}.subclass_of {item.subclass_of!r} "
+                    f"is not an item key"
                 )
         if self.items and "subclass_of" not in self.properties:
             for item in self.items.values():
@@ -88,7 +93,10 @@ class Manifest(BaseModel):
                         "manifest declares subclass_of relations but no "
                         "'subclass_of' property"
                     )
-        for kind, entries in (("properties", self.properties), ("items", self.items)):
+        for kind, entries in (
+            ("properties", self.properties),
+            ("items", self.items),
+        ):
             seen: dict[str, str] = {}
             for key, entry in entries.items():
                 if entry.label in seen:

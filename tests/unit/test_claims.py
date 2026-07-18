@@ -44,7 +44,11 @@ def spouse_claim(**overrides) -> dict:
         "property": "spouse",
         "value": {
             "type": "item",
-            "value": {"kind": "local", "local_id": "person-2", "label": "Person Two"},
+            "value": {
+                "kind": "local",
+                "local_id": "person-2",
+                "label": "Person Two",
+            },
         },
         "qualifiers": [
             {
@@ -53,7 +57,10 @@ def spouse_claim(**overrides) -> dict:
             },
             {
                 "property": "sourcing_circumstances",
-                "value": {"type": "item", "value": {"kind": "vocab", "key": "circa"}},
+                "value": {
+                    "type": "item",
+                    "value": {"kind": "vocab", "key": "circa"},
+                },
             },
         ],
         "source": source(),
@@ -64,7 +71,9 @@ def spouse_claim(**overrides) -> dict:
 
 
 def batch(*claims) -> ClaimBatch:
-    return ClaimBatch.model_validate({"extraction_run": RUN, "claims": list(claims)})
+    return ClaimBatch.model_validate(
+        {"extraction_run": RUN, "claims": list(claims)}
+    )
 
 
 class TestBatchBasics:
@@ -85,7 +94,10 @@ class TestBatchBasics:
         with pytest.raises(ValidationError, match="timezone-aware"):
             ClaimBatch.model_validate(
                 {
-                    "extraction_run": {**RUN, "started_at": "2026-07-12T09:00:00"},
+                    "extraction_run": {
+                        **RUN,
+                        "started_at": "2026-07-12T09:00:00",
+                    },
                     "claims": [],
                 }
             )
@@ -147,7 +159,10 @@ class TestTimeValues:
             TimeValue(year=1929, precision="day")
 
     def test_decade_and_century(self):
-        assert TimeValue(year=1920, precision="decade").to_wikibase()["precision"] == 8
+        assert (
+            TimeValue(year=1920, precision="decade").to_wikibase()["precision"]
+            == 8
+        )
         with pytest.raises(ValidationError):
             TimeValue(year=1920, month=5, precision="decade")
 
@@ -161,11 +176,17 @@ class TestTimeValues:
             "precision": 9,
             "calendarmodel": "http://www.wikidata.org/entity/Q1985727",
         }
-        julian = TimeValue(year=1752, month=9, day=2, calendar="julian").to_wikibase()
+        julian = TimeValue(
+            year=1752, month=9, day=2, calendar="julian"
+        ).to_wikibase()
         assert julian["time"] == "+1752-09-02T00:00:00Z"
         assert julian["precision"] == 11
         assert julian["calendarmodel"].endswith("Q1985786")
-        assert TimeValue(year=-44, month=3).to_wikibase()["time"].startswith("-0044-03")
+        assert (
+            TimeValue(year=-44, month=3)
+            .to_wikibase()["time"]
+            .startswith("-0044-03")
+        )
 
 
 class TestRegions:
@@ -190,7 +211,10 @@ class TestOtherValues:
             batch(
                 spouse_claim(
                     source=source(
-                        transcription_excerpt={"text": "x", "language": "English"}
+                        transcription_excerpt={
+                            "text": "x",
+                            "language": "English",
+                        }
                     )
                 )
             )
@@ -200,7 +224,11 @@ class TestOtherValues:
             batch(
                 spouse_claim(
                     property="coordinate_location",
-                    value={"type": "coordinate", "latitude": 91, "longitude": 0},
+                    value={
+                        "type": "coordinate",
+                        "latitude": 91,
+                        "longitude": 0,
+                    },
                 )
             )
 
@@ -258,7 +286,9 @@ class TestManifestValidation:
         assert validate_against_manifest(batch(appellation)) == []
 
     def test_unknown_property_reported(self):
-        problems = validate_against_manifest(batch(spouse_claim(property="shoe_size")))
+        problems = validate_against_manifest(
+            batch(spouse_claim(property="shoe_size"))
+        )
         assert problems == ["claims[0]: unknown property key 'shoe_size'"]
 
     def test_datatype_mismatch_reported(self):
@@ -276,13 +306,17 @@ class TestManifestValidation:
         claim = spouse_claim()
         claim["qualifiers"][0]["property"] = "no_such_qualifier"
         problems = validate_against_manifest(batch(claim))
-        assert any("qualifiers[0]" in p and "no_such_qualifier" in p for p in problems)
+        assert any(
+            "qualifiers[0]" in p and "no_such_qualifier" in p for p in problems
+        )
 
     def test_unknown_vocab_key_reported(self):
         claim = spouse_claim()
         claim["qualifiers"][1]["value"]["value"]["key"] = "roughly"
         problems = validate_against_manifest(batch(claim))
-        assert any("unknown vocabulary item key 'roughly'" in p for p in problems)
+        assert any(
+            "unknown vocabulary item key 'roughly'" in p for p in problems
+        )
 
     def test_unknown_instance_of_reported(self):
         claim = spouse_claim()
@@ -304,7 +338,10 @@ class TestManifestValidation:
         )
         sex = spouse_claim(
             property="sex_or_gender",
-            value={"type": "item", "value": {"kind": "vocab", "key": "female"}},
+            value={
+                "type": "item",
+                "value": {"kind": "vocab", "key": "female"},
+            },
             qualifiers=[],
         )
         assert validate_against_manifest(batch(claim, sex)) == []
@@ -345,7 +382,9 @@ class TestManifestValidation:
         vocabulary = ({"spouse": "wikibase-item"}, set())
         claim = spouse_claim(qualifiers=[])
         claim["subject"].pop("instance_of")
-        problems = validate_against_manifest(batch(claim), vocabulary=vocabulary)
+        problems = validate_against_manifest(
+            batch(claim), vocabulary=vocabulary
+        )
         assert problems == []
 
     def test_unsupported_datatype_reported_not_crash(self):

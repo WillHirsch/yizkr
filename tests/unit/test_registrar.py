@@ -56,9 +56,15 @@ class TestStringStatementIndex:
     def test_non_string_and_missing_property_ignored(self):
         client = FakeIndexClient(
             {
-                "Q5": {"claims": {"P42": [{"mainsnak": {"datavalue": {"value": 3}}}]}},
+                "Q5": {
+                    "claims": {
+                        "P42": [{"mainsnak": {"datavalue": {"value": 3}}}]
+                    }
+                },
                 "Q6": {
-                    "claims": {"P99": [{"mainsnak": {"datavalue": {"value": "x"}}}]}
+                    "claims": {
+                        "P99": [{"mainsnak": {"datavalue": {"value": "x"}}}]
+                    }
                 },
             }
         )

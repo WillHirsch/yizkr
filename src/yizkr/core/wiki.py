@@ -24,7 +24,9 @@ from yizkr.model.schema import DEFAULT_MANIFEST, read_manifest_data
 
 
 class WikiClient:
-    def __init__(self, config: Config, manifest_source=DEFAULT_MANIFEST) -> None:
+    def __init__(
+        self, config: Config, manifest_source=DEFAULT_MANIFEST
+    ) -> None:
         self.config = config
         self.manifest_source = manifest_source
         self._wbi = None
@@ -120,7 +122,9 @@ class WikiClient:
             )
             for entity_id, entity in data["entities"].items():
                 entities[entity_id] = {
-                    "label": entity.get("labels", {}).get("en", {}).get("value"),
+                    "label": entity.get("labels", {})
+                    .get("en", {})
+                    .get("value"),
                     "datatype": entity.get("datatype"),
                 }
         return entities
@@ -214,9 +218,9 @@ class WikiClient:
             )
             for entity_id, entity in data.get("entities", {}).items():
                 for claim in entity.get("claims", {}).get(property_pid, []):
-                    value = (claim.get("mainsnak", {}).get("datavalue") or {}).get(
-                        "value"
-                    )
+                    value = (
+                        claim.get("mainsnak", {}).get("datavalue") or {}
+                    ).get("value")
                     if isinstance(value, str):
                         candidates.setdefault(value, []).append(entity_id)
         return {
@@ -257,7 +261,11 @@ class WikiClient:
 
         def api(data: dict) -> None:
             wbi_helpers.mediawiki_api_call_helper(
-                data={**data, "token": self.login.get_edit_token(), "bot": "1"},
+                data={
+                    **data,
+                    "token": self.login.get_edit_token(),
+                    "bot": "1",
+                },
                 login=self.login,
             )
 
@@ -270,17 +278,23 @@ class WikiClient:
             # strip the source's label/description (an empty value in
             # wbsetlabel/wbsetdescription REMOVES the term) so the merge
             # has no term conflicts and genuinely empties the source
-            aliases = {str(alias) for alias in (target.aliases.get("en") or [])}
+            aliases = {
+                str(alias) for alias in (target.aliases.get("en") or [])
+            }
             if source_label not in aliases:
                 target.aliases.set("en", sorted(aliases | {source_label}))
-                target.write(summary=f"merge: preserve label of {from_qid} as alias")
+                target.write(
+                    summary=f"merge: preserve label of {from_qid} as alias"
+                )
             api(
                 {
                     "action": "wbsetlabel",
                     "id": from_qid,
                     "language": "en",
                     "value": "",
-                    "summary": f"merge: clear label before merging into {to_qid}",
+                    "summary": (
+                        f"merge: clear label before merging into {to_qid}"
+                    ),
                 }
             )
         if str(source.descriptions.get("en") or ""):
@@ -290,7 +304,10 @@ class WikiClient:
                     "id": from_qid,
                     "language": "en",
                     "value": "",
-                    "summary": f"merge: clear description before merging into {to_qid}",
+                    "summary": (
+                        f"merge: clear description before merging "
+                        f"into {to_qid}"
+                    ),
                 }
             )
         wbi_helpers.mediawiki_api_call_helper(

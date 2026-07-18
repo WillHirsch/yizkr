@@ -97,7 +97,10 @@ class LanguageResolution:
         if self.source == "fallback":
             if self.confidence is None:
                 return f"{self.code} (fallback: too short to detect)"
-            return f"{self.code} (fallback: best guess only {self.confidence:.0%})"
+            return (
+                f"{self.code} (fallback: best guess only "
+                f"{self.confidence:.0%})"
+            )
         return f"{self.code} (forced)"
 
 
@@ -118,4 +121,6 @@ def resolve_language(
     code, confidence = detect_language(text)
     if code is not None and confidence >= floor:
         return LanguageResolution(code, "detected", confidence)
-    return LanguageResolution(fallback, "fallback", confidence if code else None)
+    return LanguageResolution(
+        fallback, "fallback", confidence if code else None
+    )

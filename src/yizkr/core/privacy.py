@@ -71,5 +71,8 @@ def is_possibly_living(
     if birth_year is not None and birth_year <= cutoff_year:
         return False, f"born {birth_year}, beyond the {cutoff_year} cutoff"
     if birth_year is None:
-        return True, "no death evidence and no birth date: unknown means excluded"
+        return (
+            True,
+            "no death evidence and no birth date: unknown means excluded",
+        )
     return True, f"born {birth_year} with no death evidence"

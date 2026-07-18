@@ -120,7 +120,9 @@ class Gallery(StrictModel):
 # ---------------------------------------------------------------------------
 
 
-def to_region(bbox: PixelBox, image_width: int, image_height: int) -> RegionPercent:
+def to_region(
+    bbox: PixelBox, image_width: int, image_height: int
+) -> RegionPercent:
     """Pixel box -> percentage region, clamped inside the frame.
 
     Detectors may return boxes that poke past the frame edge; the region
@@ -185,7 +187,9 @@ def proposals_to_batch(
             unmatched.append(face.index)
             continue
         person, score = match
-        region = to_region(face.bbox, detection.image_width, detection.image_height)
+        region = to_region(
+            face.bbox, detection.image_width, detection.image_height
+        )
         if person.qid:
             person_ref = QidRef(qid=person.qid)
         else:
@@ -213,7 +217,9 @@ def proposals_to_batch(
             )
         )
     batch = ClaimBatch(
-        extraction_run=run_metadata(f"face-detection:{detection.model_identifier}"),
+        extraction_run=run_metadata(
+            f"face-detection:{detection.model_identifier}"
+        ),
         claims=claims,
     )
     return batch, unmatched
@@ -273,7 +279,9 @@ class InsightFaceDetector:
                         width=max(x2 - x1, 1),
                         height=max(y2 - y1, 1),
                     ),
-                    detection_score=round(min(max(float(face.det_score), 0), 1), 3),
+                    detection_score=round(
+                        min(max(float(face.det_score), 0), 1), 3
+                    ),
                     embedding=[float(v) for v in face.normed_embedding],
                 )
             )
@@ -311,7 +319,9 @@ def enroll_from_detections(
 ) -> GalleryPerson:
     for face in detections.faces:
         if face.index == face_index:
-            return gallery.enroll(label=label, embedding=face.embedding, qid=qid)
+            return gallery.enroll(
+                label=label, embedding=face.embedding, qid=qid
+            )
     raise ValueError(
         f"no face with index {face_index} in detections "
         f"(have {[f.index for f in detections.faces]})"

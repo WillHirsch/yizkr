@@ -53,16 +53,23 @@ _QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
 # ---------------------------------------------------------------------------
 
 
-def compose_base(deploy_dir: Path, compose_files: list[str] | None = None) -> list[str]:
+def compose_base(
+    deploy_dir: Path, compose_files: list[str] | None = None
+) -> list[str]:
     files = compose_files or ["docker-compose.yml"]
     command = ["docker", "compose", "--env-file", str(deploy_dir / ".env")]
     for name in files:
         path = Path(name)
-        command += ["-f", str(path if path.is_absolute() else deploy_dir / path)]
+        command += [
+            "-f",
+            str(path if path.is_absolute() else deploy_dir / path),
+        ]
     return command
 
 
-def _stream_to_gzip(command: list[str], out_path: Path, already_compressed=False):
+def _stream_to_gzip(
+    command: list[str], out_path: Path, already_compressed=False
+):
     """Run a container command, streaming stdout to (gzipped) out_path."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with subprocess.Popen(command, stdout=subprocess.PIPE) as process:
@@ -76,16 +83,23 @@ def _stream_to_gzip(command: list[str], out_path: Path, already_compressed=False
     if process.returncode != 0:
         out_path.unlink(missing_ok=True)
         raise RuntimeError(
-            f"backup command failed with exit {process.returncode}: {' '.join(command)}"
+            f"backup command failed with exit {process.returncode}: "
+            f"{' '.join(command)}"
         )
     if out_path.stat().st_size == 0:
         out_path.unlink(missing_ok=True)
-        raise RuntimeError(f"backup command produced no output: {' '.join(command)}")
+        raise RuntimeError(
+            f"backup command produced no output: {' '.join(command)}"
+        )
 
 
-def dump_database(deploy_dir: Path, out_path: Path, compose_files=None) -> None:
+def dump_database(
+    deploy_dir: Path, out_path: Path, compose_files=None
+) -> None:
     env = read_env_file(deploy_dir / ".env")
-    missing = [key for key in ("DB_USER", "DB_PASS", "DB_NAME") if not env.get(key)]
+    missing = [
+        key for key in ("DB_USER", "DB_PASS", "DB_NAME") if not env.get(key)
+    ]
     if missing:
         raise RuntimeError(f"{deploy_dir / '.env'} is missing {missing}")
     _stream_to_gzip(
@@ -209,8 +223,12 @@ def exclusion_report(
     for binding in bindings:
         qid = binding["person"]["value"].rsplit("/", 1)[-1]
         birth_year = year_of(binding.get("birth", {}).get("value", ""))
-        has_death = any(binding.get(name, {}).get("value") for name in _DEATH_BINDINGS)
-        possibly_living, reason = is_possibly_living(birth_year, has_death, cutoff_year)
+        has_death = any(
+            binding.get(name, {}).get("value") for name in _DEATH_BINDINGS
+        )
+        possibly_living, reason = is_possibly_living(
+            birth_year, has_death, cutoff_year
+        )
         report.reasons[qid] = reason
         (report.excluded if possibly_living else report.included).add(qid)
     return report
@@ -245,10 +263,14 @@ def filter_public_export(
     Returns (kept, dropped) line counts. Streams the gzipped dump three
     times, holding only node-hash sets in memory.
     """
-    excerpt_predicates = tuple(f"/prop/reference/{pid}>" for pid in excerpt_pids)
+    excerpt_predicates = tuple(
+        f"/prop/reference/{pid}>" for pid in excerpt_pids
+    )
 
     def suppressed(line: str) -> bool:
-        if excluded and any(token in excluded for token in _QID_TOKEN.findall(line)):
+        if excluded and any(
+            token in excluded for token in _QID_TOKEN.findall(line)
+        ):
             return True
         parts = line.split(" ", 2)
         predicate = parts[1] if len(parts) >= 3 else ""
@@ -278,11 +300,15 @@ def filter_public_export(
     kept = dropped = 0
     with (
         gzip.open(full_dump, "rt", encoding="utf-8") as source,
-        gzip.open(public_dump, "wt", encoding="utf-8", compresslevel=6) as sink,
+        gzip.open(
+            public_dump, "wt", encoding="utf-8", compresslevel=6
+        ) as sink,
     ):
         for line in source:
             subject = subject_hash(line)
-            if suppressed(line) or (subject is not None and subject not in needed):
+            if suppressed(line) or (
+                subject is not None and subject not in needed
+            ):
                 dropped += 1
                 continue
             sink.write(line)
@@ -362,7 +388,8 @@ def run_backup(
                 {
                     "cutoff_years": cutoff_years,
                     "excluded": {
-                        qid: report.reasons[qid] for qid in sorted(report.excluded)
+                        qid: report.reasons[qid]
+                        for qid in sorted(report.excluded)
                     },
                     "included_persons": sorted(report.included),
                 },

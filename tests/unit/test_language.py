@@ -31,7 +31,9 @@ EN = (
 class TestResolutionPolicy:
     def test_explicit_code_forces_and_skips_detection(self, monkeypatch):
         def boom(_text):  # detection must not be consulted for a forced code
-            raise AssertionError("detection should not run for an explicit code")
+            raise AssertionError(
+                "detection should not run for an explicit code"
+            )
 
         monkeypatch.setattr(lang, "detect_language", boom)
         result = resolve_language("egal welcher Text", "de")
@@ -66,9 +68,16 @@ class TestResolutionPolicy:
 class TestDescribe:
     def test_each_source_has_a_distinct_phrasing(self):
         assert "forced" in LanguageResolution("de", "override").describe()
-        assert "detected" in LanguageResolution("de", "detected", 0.97).describe()
-        assert "fallback" in LanguageResolution("en", "fallback", 0.3).describe()
-        assert "too short" in LanguageResolution("en", "fallback", None).describe()
+        assert (
+            "detected" in LanguageResolution("de", "detected", 0.97).describe()
+        )
+        assert (
+            "fallback" in LanguageResolution("en", "fallback", 0.3).describe()
+        )
+        assert (
+            "too short"
+            in LanguageResolution("en", "fallback", None).describe()
+        )
 
 
 class TestRealDetector:

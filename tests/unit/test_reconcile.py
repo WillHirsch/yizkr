@@ -72,7 +72,11 @@ def spouse_claim() -> dict:
         "property": "residence",
         "value": {
             "type": "item",
-            "value": {"kind": "local", "local_id": "e2", "label": "Springfield"},
+            "value": {
+                "kind": "local",
+                "local_id": "e2",
+                "label": "Springfield",
+            },
         },
         "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
     }
@@ -94,7 +98,10 @@ def name_claim(prop: str, text: str, subject: str = "e1") -> dict:
     return {
         "subject": {"kind": "local", "local_id": subject, "label": "Rosa"},
         "property": prop,
-        "value": {"type": "monolingual", "value": {"text": text, "language": "en"}},
+        "value": {
+            "type": "monolingual",
+            "value": {"text": text, "language": "en"},
+        },
         "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
     }
 
@@ -117,14 +124,18 @@ class TestTypedNameEvidence:
         assert "nickname: Rosie" in facts
 
     def test_entity_facts_renders_monolingual_names_plainly(self):
-        facts = entity_facts(batch(claims=[name_claim("birth_name", "Rosa G")]), "e1")
+        facts = entity_facts(
+            batch(claims=[name_claim("birth_name", "Rosa G")]), "e1"
+        )
         assert "birth_name: Rosa G" in facts
         assert "language=" not in facts  # not a pydantic repr
 
     def test_batch_name_claim_reaches_the_adjudication_prompt(self):
         llm = ScriptedLlm(json.dumps({"done": True, "proposals_emitted": 0}))
         source = batch(claims=[name_claim("birth_name", "Rosa Genserowski")])
-        adjudicate(llm, entities(), block_candidates(entities(), roster()), source)
+        adjudicate(
+            llm, entities(), block_candidates(entities(), roster()), source
+        )
         assert "Rosa Genserowski" in llm.prompts[0]
 
 
@@ -143,9 +154,13 @@ class TestBlocking:
         clipped forms are how family documents refer to people."""
         alex = [EntityRecord(id="e5", label="Alex", kind="human")]
         extended = roster() + [
-            RosterEntity(qid="Q124", label="Alexander Samuel Genserowsky", kind="human")
+            RosterEntity(
+                qid="Q124", label="Alexander Samuel Genserowsky", kind="human"
+            )
         ]
-        assert [c.qid for c in block_candidates(alex, extended)["e5"]] == ["Q124"]
+        assert [c.qid for c in block_candidates(alex, extended)["e5"]] == [
+            "Q124"
+        ]
 
     def test_graph_pair_blocking_is_also_prefix_aware(self):
         """Same rule for roster x roster pairs: 'Alex' vs 'Alexander …'
@@ -201,7 +216,9 @@ class TestAdjudication:
             ),
             *extra_lines,
         ]
-        lines.append(json.dumps({"done": True, "proposals_emitted": len(lines) - 1}))
+        lines.append(
+            json.dumps({"done": True, "proposals_emitted": len(lines) - 1})
+        )
         return "\n".join(lines)
 
     def test_valid_proposals_survive(self):
@@ -218,7 +235,12 @@ class TestAdjudication:
 
     def test_rulings_on_unblocked_pairs_are_dropped(self):
         invented = json.dumps(
-            {"entity_id": "e1", "qid": "Q99", "verdict": "same", "confidence": 1}
+            {
+                "entity_id": "e1",
+                "qid": "Q99",
+                "verdict": "same",
+                "confidence": 1,
+            }
         )
         llm = ScriptedLlm(self.response(extra_lines=[invented]))
         proposals = adjudicate(
@@ -231,7 +253,12 @@ class TestAdjudication:
             json.dumps({"entity_id": "e1", "qid": "Q40", "verdict": "same"})
         )
         with pytest.raises(ValueError, match="sentinel"):
-            adjudicate(llm, entities(), block_candidates(entities(), roster()), batch())
+            adjudicate(
+                llm,
+                entities(),
+                block_candidates(entities(), roster()),
+                batch(),
+            )
 
     def test_no_candidates_no_call(self):
         llm = ScriptedLlm("must not be called")
@@ -254,14 +281,20 @@ class TestAdjudication:
 
         first = "\n".join(
             [
-                json.dumps({"entity_id": "e1", "qid": "Q40", "verdict": "same"}),
-                json.dumps({"entity_id": "e1", "qid": "Q77", "verdict": "distinct"}),
+                json.dumps(
+                    {"entity_id": "e1", "qid": "Q40", "verdict": "same"}
+                ),
+                json.dumps(
+                    {"entity_id": "e1", "qid": "Q77", "verdict": "distinct"}
+                ),
                 json.dumps({"done": True, "proposals_emitted": 2}),
             ]
         )
         second = "\n".join(
             [
-                json.dumps({"entity_id": "e2", "qid": "Q90", "verdict": "same"}),
+                json.dumps(
+                    {"entity_id": "e2", "qid": "Q90", "verdict": "same"}
+                ),
                 json.dumps({"done": True, "proposals_emitted": 1}),
             ]
         )
@@ -293,7 +326,9 @@ class TestEquivalencesCsv:
                 confidence=0.95,
                 evidence="same spouse",
             ),
-            Proposal(entity_id="e1", qid="Q77", verdict="distinct", confidence=0.9),
+            Proposal(
+                entity_id="e1", qid="Q77", verdict="distinct", confidence=0.9
+            ),
         ]
 
     def test_round_trip_only_approved_rows_take_effect(self, tmp_path):
@@ -335,7 +370,9 @@ class TestEquivalencesCsv:
         approved = read_approved_equivalences(path)
         reviewed = read_reviewed_aliases(path)
         assert reviewed == {"e1": ["our great grandmother"]}
-        applied = apply_equivalences(batch(entity_list=noisy), approved, reviewed)
+        applied = apply_equivalences(
+            batch(entity_list=noisy), approved, reviewed
+        )
         (entity,) = applied.entities
         assert entity.qid == "Q40"
         assert entity.aliases == ["our great grandmother"]  # MOTHER pruned
@@ -378,12 +415,16 @@ class TestApplyEquivalences:
     def test_identical_claims_collapse_after_equivalence(self):
         # two document entities (duplicated records in the source) both
         # approved to one item leave byte-identical claims: collapse
-        twin = dict(spouse_claim(), subject={"kind": "local", "local_id": "e3"})
+        twin = dict(
+            spouse_claim(), subject={"kind": "local", "local_id": "e3"}
+        )
         entity_list = [
             *entities(),
             EntityRecord(id="e3", label="Rosa", kind="human"),
         ]
-        original = batch(claims=[spouse_claim(), twin], entity_list=entity_list)
+        original = batch(
+            claims=[spouse_claim(), twin], entity_list=entity_list
+        )
         applied = apply_equivalences(original, {"e1": "Q40", "e3": "Q40"})
         assert len(applied.claims) == 1
         assert applied.claims[0].subject == QidRef(qid="Q40")
@@ -403,7 +444,9 @@ class TestApplyEquivalences:
 def rf(**kw) -> RosterEntity:
     """A roster entity with defaults; kw overrides."""
     kw.setdefault("kind", "human")
-    return RosterEntity(qid=kw.pop("qid", "Q1"), label=kw.pop("label", "X"), **kw)
+    return RosterEntity(
+        qid=kw.pop("qid", "Q1"), label=kw.pop("label", "X"), **kw
+    )
 
 
 def _facts(entity: RosterEntity):
@@ -427,7 +470,13 @@ class TestImpossiblePair:
 
     @pytest.mark.parametrize(
         "field_name",
-        ["father_qids", "mother_qids", "spouse_qids", "child_qids", "sibling_qids"],
+        [
+            "father_qids",
+            "mother_qids",
+            "spouse_qids",
+            "child_qids",
+            "sibling_qids",
+        ],
     )
     def test_every_kinship_relation_feeds_the_filter(self, field_name):
         a = rf(qid="Q1", label="Sam", **{field_name: ["Q2"]})
@@ -445,13 +494,17 @@ class TestImpossiblePair:
         camp = rf(qid="Q66", label="Chelmno camp", kind="place")
         poland = rf(qid="Q10", label="Poland", kind="place")
         assert (
-            impossible_pair(_facts(camp), _facts(poland), containment=containment)
+            impossible_pair(
+                _facts(camp), _facts(poland), containment=containment
+            )
             == "place-containment"
         )
         # a place NOT in the closure with the other is a live candidate
         other = rf(qid="Q11", label="Poland (other)", kind="place")
         assert (
-            impossible_pair(_facts(camp), _facts(other), containment=containment)
+            impossible_pair(
+                _facts(camp), _facts(other), containment=containment
+            )
             is None
         )
 
@@ -462,23 +515,30 @@ class TestImpossiblePair:
         batch_poland = _batch_pair_facts(
             EntityRecord(id="e1", label="Poland", kind="place"), None
         )
-        camp = _facts(rf(qid="Q66", label="Chelmno camp, Poland", kind="place"))
-        assert impossible_pair(batch_poland, camp, containment=containment) == (
-            "place-containment"
+        camp = _facts(
+            rf(qid="Q66", label="Chelmno camp, Poland", kind="place")
         )
+        assert impossible_pair(
+            batch_poland, camp, containment=containment
+        ) == ("place-containment")
 
     def test_containment_only_applies_between_places(self):
         containment = PlaceContainment({"Q66": {"Q10"}}, {"Q10": "Poland"})
         a = rf(qid="Q66", label="X", kind="human")
         b = rf(qid="Q10", label="X", kind="human")
         # same closure, but humans — never a containment prune
-        assert impossible_pair(_facts(a), _facts(b), containment=containment) is None
+        assert (
+            impossible_pair(_facts(a), _facts(b), containment=containment)
+            is None
+        )
 
     def test_equal_labels_are_never_pruned_by_containment(self):
         # eponymous nesting: "New York" the city sits inside "New York" the
         # state. A batch "New York" vs a graph "New York" that happens to be
         # contained in a same-named place may be the SAME place — never prune.
-        containment = PlaceContainment({"Q60": {"Q1384"}}, {"Q1384": "New York"})
+        containment = PlaceContainment(
+            {"Q60": {"Q1384"}}, {"Q1384": "New York"}
+        )
         batch_ny = _batch_pair_facts(
             EntityRecord(id="e1", label="New York", kind="place"), None
         )
@@ -516,7 +576,10 @@ class TestBlockingWithImpossibility:
         # without the closure the tenuous "Poland" token still blocks it
         assert block_candidates(places, roster_places)["e1"][0].qid == "Q66"
         # with it, the impossible pair is pruned -> e1 has no candidates
-        assert block_candidates(places, roster_places, containment=containment) == {}
+        assert (
+            block_candidates(places, roster_places, containment=containment)
+            == {}
+        )
 
     def test_batch_kinship_qidref_prunes_candidate(self):
         # a batch entity whose father is ALREADY the graph candidate (a
@@ -527,7 +590,10 @@ class TestBlockingWithImpossibility:
                 {
                     "subject": {"kind": "local", "local_id": "e1"},
                     "property": "father",
-                    "value": {"type": "item", "value": {"kind": "qid", "qid": "Q84"}},
+                    "value": {
+                        "type": "item",
+                        "value": {"kind": "qid", "qid": "Q84"},
+                    },
                     "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
                 }
             ],
@@ -546,7 +612,9 @@ class TestBlockingWithImpossibility:
         from yizkr.pipeline.reconcile import propose_graph_pairs
 
         pair_roster = [
-            RosterEntity(qid="Q1", label="Sam Cohen", kind="human", father_qids=["Q2"]),
+            RosterEntity(
+                qid="Q1", label="Sam Cohen", kind="human", father_qids=["Q2"]
+            ),
             RosterEntity(qid="Q2", label="Sam Cohen", kind="human"),
         ]
 
@@ -554,7 +622,9 @@ class TestBlockingWithImpossibility:
             model_identifier = "fake"
 
             def complete(self, *a, **k):  # must never be called
-                raise AssertionError("adjudicator called on an impossible pair")
+                raise AssertionError(
+                    "adjudicator called on an impossible pair"
+                )
 
         assert propose_graph_pairs(_Boom(), pair_roster) == []
 
@@ -562,7 +632,10 @@ class TestBlockingWithImpossibility:
 class TestContainmentHandoff:
     def _proposal(self, **kw) -> Proposal:
         base = dict(
-            entity_id="Q66", qid="Q10", verdict="distinct", evidence="camp in Poland"
+            entity_id="Q66",
+            qid="Q10",
+            verdict="distinct",
+            evidence="camp in Poland",
         )
         base.update(kw)
         return Proposal(**base)
@@ -592,12 +665,16 @@ class TestContainmentHandoff:
         assert rows[0]["qid_a"] == "Q66" and rows[0]["qid_b"] == "Q10"
 
     def test_no_containment_field_no_row(self):
-        assert place_containment_proposals([self._proposal()], self._roster()) == []
+        assert (
+            place_containment_proposals([self._proposal()], self._roster())
+            == []
+        )
 
     def test_same_verdict_never_a_containment_row(self):
         assert (
             place_containment_proposals(
-                [self._proposal(verdict="same", contained_in="Q10")], self._roster()
+                [self._proposal(verdict="same", contained_in="Q10")],
+                self._roster(),
             )
             == []
         )
@@ -618,12 +695,17 @@ class TestContainmentHandoff:
             RosterEntity(qid="Q10", label="Anna B", kind="human"),
         ]
         assert (
-            place_containment_proposals([self._proposal(contained_in="Q10")], people)
+            place_containment_proposals(
+                [self._proposal(contained_in="Q10")], people
+            )
             == []
         )
 
     def test_unknown_qid_pair_never_produces_a_row(self):
         # both members must be known roster places
         assert (
-            place_containment_proposals([self._proposal(contained_in="Q10")], []) == []
+            place_containment_proposals(
+                [self._proposal(contained_in="Q10")], []
+            )
+            == []
         )

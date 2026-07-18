@@ -51,7 +51,10 @@ CLAIMS = [
             },
         },
         "qualifiers": [
-            {"property": "point_in_time", "value": {"type": "time", "year": 1933}}
+            {
+                "property": "point_in_time",
+                "value": {"type": "time", "year": 1933},
+            }
         ],
         "source": {
             "artifact": {"kind": "qid", "qid": "Q23"},
@@ -106,7 +109,9 @@ class TestTranscribe:
         llm = FakeLlm("The transcribed text")
         image = tmp_path / "scan.png"
         image.write_bytes(b"png")
-        result = LlmVisionTranscriber(llm).transcribe(image, artifact_qid="Q23")
+        result = LlmVisionTranscriber(llm).transcribe(
+            image, artifact_qid="Q23"
+        )
         assert result.text == "The transcribed text"
         assert result.engine == "llm-vision:fake-model"
         assert "exactly as written" in llm.prompts[0]
@@ -136,7 +141,9 @@ class TestExtract:
         with pytest.raises(ValueError, match="shoe_size"):
             LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
 
-    def test_llm_extractor_salvages_valid_claims_around_bad_ones(self, tmp_path):
+    def test_llm_extractor_salvages_valid_claims_around_bad_ones(
+        self, tmp_path
+    ):
         """One invalid claim must not discard the whole (expensive)
         extraction: the valid subset proceeds, rejects and reasons land
         in the rejects dump for diagnosis."""
@@ -232,7 +239,10 @@ class TestExtract:
             CLAIMS[1],
             source={
                 "artifact": {"kind": "qid", "qid": "Q23"},
-                "transcription_excerpt": {"text": "word " * 100, "language": "en"},
+                "transcription_excerpt": {
+                    "text": "word " * 100,
+                    "language": "en",
+                },
             },
         )
         llm = FakeLlm(json.dumps({"claims": [long_claim]}))
@@ -247,13 +257,17 @@ class TestExtract:
         raw = tmp_path / "deep" / "batch.json.raw.txt"
         llm = FakeLlm("total garbage, no JSON at all")
         with pytest.raises(ValueError):
-            LlmClaimExtractor(llm, raw_dump=raw).extract(self.transcription(), "Q23")
+            LlmClaimExtractor(llm, raw_dump=raw).extract(
+                self.transcription(), "Q23"
+            )
         assert raw.read_text() == "total garbage, no JSON at all"
 
     def test_file_extractor_wraps_bare_claims(self, tmp_path):
         claims_file = tmp_path / "claims.json"
         claims_file.write_text(json.dumps({"claims": CLAIMS}))
-        result = ClaimFileExtractor(claims_file).extract(self.transcription(), "Q23")
+        result = ClaimFileExtractor(claims_file).extract(
+            self.transcription(), "Q23"
+        )
         assert len(result.claims) == 2
         assert result.extraction_run.model_identifier == "manual"
 
@@ -343,7 +357,9 @@ class TestReviewRoundTrip:
 
     def test_claim_id_stable_across_serialization(self):
         first = batch().claims[0]
-        again = ClaimBatch.model_validate_json(batch().model_dump_json()).claims[0]
+        again = ClaimBatch.model_validate_json(
+            batch().model_dump_json()
+        ).claims[0]
         assert claim_id(first) == claim_id(again)
 
 
@@ -351,7 +367,9 @@ class TestAcceptAll:
     """`accept_all` fills every decision with an approve token, so the
     reviewed CSV round-trips through apply_review as a full approval."""
 
-    def test_fills_every_decision_and_apply_review_approves_all(self, tmp_path):
+    def test_fills_every_decision_and_apply_review_approves_all(
+        self, tmp_path
+    ):
         source = batch()
         review_csv = tmp_path / "review.csv"
         export_review_csv(source, review_csv)  # decisions start empty
@@ -363,7 +381,9 @@ class TestAcceptAll:
         with open(reviewed_csv, newline="") as f:
             reviewed_rows = list(csv.DictReader(f))
         assert reviewed_rows
-        assert all(r["decision"].strip().lower() in APPROVE for r in reviewed_rows)
+        assert all(
+            r["decision"].strip().lower() in APPROVE for r in reviewed_rows
+        )
 
         approved, warnings = apply_review(source, reviewed_csv)
         assert len(approved.claims) == len(source.claims)
@@ -409,7 +429,9 @@ class TestCritiqueNotes:
         export_review_csv(
             batch(),
             csv_path,
-            critique_notes={"person-1": "critique: role label 'MOTHER' is not a name"},
+            critique_notes={
+                "person-1": "critique: role label 'MOTHER' is not a name"
+            },
         )
         with open(csv_path, newline="") as f:
             reader = csv.DictReader(f)
@@ -449,8 +471,14 @@ class TestCorrections:
         TestReviewRoundTrip.edit_csv(csv_path, correct_birth)
         approved, warnings = apply_review(source, csv_path)
         assert warnings == []
-        (birth,) = [c for c in approved.claims if c.property == "date_of_birth"]
-        assert (birth.value.year, birth.value.month, birth.value.day) == (1910, 5, 12)
+        (birth,) = [
+            c for c in approved.claims if c.property == "date_of_birth"
+        ]
+        assert (birth.value.year, birth.value.month, birth.value.day) == (
+            1910,
+            5,
+            12,
+        )
         assert birth.value.precision == "day"
         assert birth.curated is True
         (spouse,) = [c for c in approved.claims if c.property == "spouse"]
@@ -562,7 +590,9 @@ class TestClaudeCodeClient:
         from yizkr.pipeline import llm
 
         monkeypatch.setattr(
-            llm.subprocess, "run", lambda *a, **k: FakeCompleted(stdout="2.1.207\n")
+            llm.subprocess,
+            "run",
+            lambda *a, **k: FakeCompleted(stdout="2.1.207\n"),
         )
         # no effort configured -> no flag (unchanged default behaviour)
         assert "--effort" not in llm.ClaudeCodeClient()._command()
@@ -570,7 +600,10 @@ class TestClaudeCodeClient:
         cmd = llm.ClaudeCodeClient(effort="low")._command()
         assert cmd[cmd.index("--effort") + 1] == "low"
         # make_client threads it for the claude-code engine
-        assert "--effort" in llm.make_client("claude-code", effort="medium")._command()
+        assert (
+            "--effort"
+            in llm.make_client("claude-code", effort="medium")._command()
+        )
 
     def test_make_client_threads_model_override(self, monkeypatch):
         # per-phase model override (ADR-0016): make_client(model=...) sets
@@ -580,16 +613,18 @@ class TestClaudeCodeClient:
         from yizkr.pipeline import llm
 
         monkeypatch.setattr(
-            llm.subprocess, "run", lambda *a, **k: FakeCompleted(stdout="2.1.207\n")
+            llm.subprocess,
+            "run",
+            lambda *a, **k: FakeCompleted(stdout="2.1.207\n"),
         )
         overridden = llm.make_client("claude-code", model="claude-sonnet-5")
         cmd = overridden._command()
         assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
         # None -> inherit the run's main model from the environment
         inherited = llm.make_client("claude-code", model=None)
-        assert inherited._command()[inherited._command().index("--model") + 1] == (
-            "claude-opus-4-8"
-        )
+        assert inherited._command()[
+            inherited._command().index("--model") + 1
+        ] == ("claude-opus-4-8")
 
     def test_version_probe_and_identifier(self, monkeypatch):
         client, calls = self.make_client(
@@ -611,7 +646,9 @@ class TestClaudeCodeClient:
         assert client.model_identifier == "claude-code/2.1.207:claude-sonnet-5"
         assert "--model" in client._command()
 
-    def test_complete_locks_down_tools_and_strips_api_key(self, monkeypatch, tmp_path):
+    def test_complete_locks_down_tools_and_strips_api_key(
+        self, monkeypatch, tmp_path
+    ):
         client, calls = self.make_client(
             monkeypatch,
             [
@@ -648,7 +685,9 @@ class TestClaudeCodeClient:
             {"type": "system", "subtype": "init"},
             {
                 "type": "assistant",
-                "message": {"content": [{"type": "text", "text": '{"claims": ['}]},
+                "message": {
+                    "content": [{"type": "text", "text": '{"claims": ['}]
+                },
             },
             {
                 "type": "assistant",

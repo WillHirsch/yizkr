@@ -14,7 +14,9 @@ pytestmark = pytest.mark.live
 def rendered(client, config):
     properties, items = client.vocabulary()
     return {
-        name: render_for_instance(template, properties, items, config.concept_uri)
+        name: render_for_instance(
+            template, properties, items, config.concept_uri
+        )
         for name, template in load_templates().items()
     }
 

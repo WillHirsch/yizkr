@@ -1,0 +1,23 @@
+# Enforce the repo's ruff standard (line-length 79) before every commit.
+#
+# These are `local` hooks so they reuse the project's own uv-managed ruff
+# (astral-sh/ruff, pinned in pyproject.toml's dev group + uv.lock). That
+# keeps the version identical to CI and the Makefile — one source of truth,
+# no second pin to drift.
+#
+# Enable once per clone:  make hooks   (or: uv run pre-commit install)
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (lint, incl. line length)
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format (line-length 79)
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true

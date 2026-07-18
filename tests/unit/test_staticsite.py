@@ -166,7 +166,9 @@ def build(tmp_path, vocabulary, responses):
                 return rows
         return []
 
-    builder = SiteBuilder(config(), tmp_path / "site", run=run, vocabulary=vocabulary)
+    builder = SiteBuilder(
+        config(), tmp_path / "site", run=run, vocabulary=vocabulary
+    )
     summary = builder.build()
     return tmp_path / "site", summary
 
@@ -177,7 +179,8 @@ RESPONSES = {
     'date of birth"@en': TIMELINE,  # person-timeline UNION arm marker
     "Special:FilePath": GALLERY,  # photo-gallery builds this URL
     "?kind wdt:": ARTIFACTS,  # artifacts query walks the subclass path
-    "?st prov:wasDerivedFrom/pr:": ASSERTIONS,  # assertions query (not ?stA/?stB)
+    # assertions query (not ?stA/?stB)
+    "?st prov:wasDerivedFrom/pr:": ASSERTIONS,
 }
 
 
@@ -216,7 +219,9 @@ class TestPersonPage:
         )
         assert "possibly living" not in (site / "people/Q7.html").read_text()
         index = (site / "index.html").read_text()
-        assert index.count('class="badge"') == 1  # only the possibly-living one
+        assert (
+            index.count('class="badge"') == 1
+        )  # only the possibly-living one
 
 
 class TestSections:
@@ -234,7 +239,9 @@ class TestSections:
         assert feed["events"][0]["start_date"]["year"] == "1873"
         assert "per family tree PDF" in feed["events"][0]["text"]["text"]
 
-    def test_artifact_page_has_download_and_assertions(self, tmp_path, vocabulary):
+    def test_artifact_page_has_download_and_assertions(
+        self, tmp_path, vocabulary
+    ):
         site, summary = build(tmp_path, vocabulary, RESPONSES)
         assert summary["artifacts"] == 1
         text = (site / "artifacts/Q23.html").read_text()
@@ -254,10 +261,15 @@ class TestSections:
         assert not (site / "disagreements.html").exists()
         assert "Inconsistencies" in (site / "index.html").read_text()
 
-    def test_gallery_renders_images_with_provenance(self, tmp_path, vocabulary):
+    def test_gallery_renders_images_with_provenance(
+        self, tmp_path, vocabulary
+    ):
         site, _ = build(tmp_path, vocabulary, RESPONSES)
         text = (site / "gallery.html").read_text()
-        assert '<img src="http://wikibase.example/wiki/Special:FilePath/x.png"' in text
+        assert (
+            '<img src="http://wikibase.example/wiki/Special:FilePath/x.png"'
+            in text
+        )
         assert "Deck" in text
 
     def test_empty_graph_still_builds(self, tmp_path, vocabulary):

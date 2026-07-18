@@ -26,5 +26,6 @@ def test_bootstrap_is_idempotent(client):
     assert second["updated"] == 0
     assert second["statements_added"] == 0
     assert (
-        second["unchanged"] == first["created"] + first["unchanged"] + first["updated"]
+        second["unchanged"]
+        == first["created"] + first["unchanged"] + first["updated"]
     )

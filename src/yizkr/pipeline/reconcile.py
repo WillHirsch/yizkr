@@ -120,11 +120,16 @@ SELECT ?item ?itemLabel ?kindLabel
        (GROUP_CONCAT(DISTINCT ?marriedName; separator="|") AS ?marriedNames)
        (GROUP_CONCAT(DISTINCT ?nick; separator="|") AS ?nicknames)
        (GROUP_CONCAT(DISTINCT ?officialName; separator="|") AS ?officialNames)
-       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?spouseItem), "entity/"); separator="|") AS ?spouseQids)
-       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?fatherItem), "entity/"); separator="|") AS ?fatherQids)
-       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?motherItem), "entity/"); separator="|") AS ?motherQids)
-       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?childItem), "entity/"); separator="|") AS ?childQids)
-       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?siblingItem), "entity/"); separator="|") AS ?siblingQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?spouseItem), "entity/");
+                      separator="|") AS ?spouseQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?fatherItem), "entity/");
+                      separator="|") AS ?fatherQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?motherItem), "entity/");
+                      separator="|") AS ?motherQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?childItem), "entity/");
+                      separator="|") AS ?childQids)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?siblingItem), "entity/");
+                      separator="|") AS ?siblingQids)
 WHERE {{
   ?item wdt:{instance_of} ?kind .
   OPTIONAL {{ ?item skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
@@ -142,15 +147,24 @@ WHERE {{
                           wdt:{instance_of} wd:{death_item} ;
                           wdt:{point_in_time} ?deathEventDate . }}
   # relation labels carry QIDs: bare labels are ambiguous (two Davids)
-  OPTIONAL {{ ?item wdt:{spouse} ?spouseItem . ?spouseItem rdfs:label ?spouseLabel .
+  OPTIONAL {{ ?item wdt:{spouse} ?spouseItem .
+              ?spouseItem rdfs:label ?spouseLabel .
               FILTER(LANG(?spouseLabel) = "en")
-              BIND(CONCAT(?spouseLabel, " (", STRAFTER(STR(?spouseItem), "entity/"), ")") AS ?spouseDesc) }}
-  OPTIONAL {{ ?item wdt:{father} ?fatherItem . ?fatherItem rdfs:label ?fatherLabel .
+              BIND(CONCAT(?spouseLabel, " (",
+                          STRAFTER(STR(?spouseItem), "entity/"), ")")
+                   AS ?spouseDesc) }}
+  OPTIONAL {{ ?item wdt:{father} ?fatherItem .
+              ?fatherItem rdfs:label ?fatherLabel .
               FILTER(LANG(?fatherLabel) = "en")
-              BIND(CONCAT(?fatherLabel, " (", STRAFTER(STR(?fatherItem), "entity/"), ")") AS ?fatherDesc) }}
-  OPTIONAL {{ ?item wdt:{mother} ?motherItem . ?motherItem rdfs:label ?motherLabel .
+              BIND(CONCAT(?fatherLabel, " (",
+                          STRAFTER(STR(?fatherItem), "entity/"), ")")
+                   AS ?fatherDesc) }}
+  OPTIONAL {{ ?item wdt:{mother} ?motherItem .
+              ?motherItem rdfs:label ?motherLabel .
               FILTER(LANG(?motherLabel) = "en")
-              BIND(CONCAT(?motherLabel, " (", STRAFTER(STR(?motherItem), "entity/"), ")") AS ?motherDesc) }}
+              BIND(CONCAT(?motherLabel, " (",
+                          STRAFTER(STR(?motherItem), "entity/"), ")")
+                   AS ?motherDesc) }}
   # child and sibling are fetched for their QIDs only (the impossibility
   # filter reads them; the adjudicator's prose uses father/mother/spouse).
   OPTIONAL {{ ?item wdt:{child} ?childItem . }}
@@ -209,8 +223,12 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                 aliases=split(binding, "aliases"),
                 kind=kind_label_to_key.get(kind_label, kind_label),
                 # direct statements win; event-derived dates fill gaps
-                birth=(field(binding, "birth") or field(binding, "eventBirth"))[:10],
-                death=(field(binding, "death") or field(binding, "eventDeath"))[:10],
+                birth=(
+                    field(binding, "birth") or field(binding, "eventBirth")
+                )[:10],
+                death=(
+                    field(binding, "death") or field(binding, "eventDeath")
+                )[:10],
                 spouses=split(binding, "spouses"),
                 fathers=split(binding, "fathers"),
                 mothers=split(binding, "mothers"),
@@ -243,7 +261,9 @@ def _tokens_overlap(first: set[str], second: set[str]) -> bool:
     people)."""
     if first & second:
         return True
-    return any(a.startswith(b) or b.startswith(a) for a in first for b in second)
+    return any(
+        a.startswith(b) or b.startswith(a) for a in first for b in second
+    )
 
 
 # -- impossibility filter (ADR-0017) -----------------------------------------
@@ -269,7 +289,10 @@ CONTAINMENT_QUERY = """\
 SELECT ?place ?ancestor ?ancestorLabel WHERE {{
   ?place wdt:{instance_of} wd:{place_item} .
   ?place (wdt:{part_of}|wdt:{location})+ ?ancestor .
-  OPTIONAL {{ ?ancestor rdfs:label ?ancestorLabel . FILTER(LANG(?ancestorLabel) = "en") }}
+  OPTIONAL {{
+    ?ancestor rdfs:label ?ancestorLabel .
+    FILTER(LANG(?ancestorLabel) = "en")
+  }}
 }}"""
 
 
@@ -283,7 +306,9 @@ class PlaceContainment:
     pair out.
     """
 
-    def __init__(self, ancestors: dict[str, set[str]], labels: dict[str, str]) -> None:
+    def __init__(
+        self, ancestors: dict[str, set[str]], labels: dict[str, str]
+    ) -> None:
         self._ancestors = ancestors
         self._labels = labels
 
@@ -303,7 +328,9 @@ class PlaceContainment:
         }
 
 
-def fetch_place_containment(client: WikiClient, config: Config) -> PlaceContainment:
+def fetch_place_containment(
+    client: WikiClient, config: Config
+) -> PlaceContainment:
     """One SPARQL query -> the transitive place-containment closure."""
     properties, items = client.vocabulary()
     query = prefix_block(config.concept_uri) + CONTAINMENT_QUERY.format(
@@ -357,7 +384,9 @@ def _roster_pair_facts(roster_entity: RosterEntity) -> _PairFacts:
     )
 
 
-def _batch_pair_facts(entity: EntityRecord, batch: ClaimBatch | None) -> _PairFacts:
+def _batch_pair_facts(
+    entity: EntityRecord, batch: ClaimBatch | None
+) -> _PairFacts:
     """Facts for a not-yet-written batch entity, from its own claims.
 
     A batch entity references others by local id; only relations to items
@@ -399,12 +428,17 @@ def impossible_pair(
     if b.qid and b.qid in a.kin_qids:
         return "kinship-edge"
     # R2: transitive place containment (a place is not its own container).
-    if containment is not None and a.kind == PLACE_KIND and b.kind == PLACE_KIND:
+    if (
+        containment is not None
+        and a.kind == PLACE_KIND
+        and b.kind == PLACE_KIND
+    ):
         if (
             a.qid
             and b.qid
             and (
-                containment.contains(a.qid, b.qid) or containment.contains(b.qid, a.qid)
+                containment.contains(a.qid, b.qid)
+                or containment.contains(b.qid, a.qid)
             )
         ):
             return "place-containment"
@@ -415,9 +449,17 @@ def impossible_pair(
         # inside "New York" the state), so an equal label may be the SAME
         # place, not its container — never prune that (recall-safe).
         if a.label != b.label:
-            if b.qid and a.label and a.label in containment.container_labels(b.qid):
+            if (
+                b.qid
+                and a.label
+                and a.label in containment.container_labels(b.qid)
+            ):
                 return "place-containment"
-            if a.qid and b.label and b.label in containment.container_labels(a.qid):
+            if (
+                a.qid
+                and b.label
+                and b.label in containment.container_labels(a.qid)
+            ):
                 return "place-containment"
     return None
 
@@ -446,7 +488,8 @@ def block_candidates(
             for roster_entity in roster
             if roster_entity.kind == entity.kind
             and _tokens_overlap(
-                tokens, _name_tokens(roster_entity.label, *roster_entity.aliases)
+                tokens,
+                _name_tokens(roster_entity.label, *roster_entity.aliases),
             )
             and not impossible_pair(
                 entity_pair_facts,
@@ -598,7 +641,11 @@ def adjudicate(
     for index, chunk in enumerate(chunks, start=1):
         entities_block = "\n".join(
             f"- {entity.id}: {entity.label}"
-            + (f" (aliases: {', '.join(entity.aliases)})" if entity.aliases else "")
+            + (
+                f" (aliases: {', '.join(entity.aliases)})"
+                if entity.aliases
+                else ""
+            )
             + f"; kind: {entity.kind}"
             + (f"; {entity.summary}" if entity.summary else "")
             + (
@@ -616,7 +663,8 @@ def adjudicate(
         )
         response = client.complete(
             ADJUDICATION_PROMPT.format(
-                entities_block=entities_block, candidates_block=candidates_block
+                entities_block=entities_block,
+                candidates_block=candidates_block,
             )
         )
         valid_pairs = {
@@ -662,7 +710,9 @@ def export_equivalences_csv(
     a bad entry from the cell and only the rest are appended.
     """
     entity_index = {entity.id: entity for entity in entities}
-    roster_labels = {roster_entity.qid: roster_entity.label for roster_entity in roster}
+    roster_labels = {
+        roster_entity.qid: roster_entity.label for roster_entity in roster
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=EQUIVALENCE_FIELDS)
@@ -757,7 +807,11 @@ def apply_equivalences(
             updates["value"] = ItemValue(value=resolve_ref(claim.value.value))
         updates["qualifiers"] = [
             qualifier.model_copy(
-                update={"value": ItemValue(value=resolve_ref(qualifier.value.value))}
+                update={
+                    "value": ItemValue(
+                        value=resolve_ref(qualifier.value.value)
+                    )
+                }
             )
             if isinstance(qualifier.value, ItemValue)
             else qualifier
@@ -805,7 +859,8 @@ compatible dates. Fuller and shorter forms of one name are common.
 Verdicts: "same", "uncertain", "distinct".
 
 For every pair below, output one NDJSON line:
-{{"entity_id": "<QID A>", "qid": "<QID B>", "verdict": "same|uncertain|distinct",
+{{"entity_id": "<QID A>", "qid": "<QID B>",
+"verdict": "same|uncertain|distinct",
 "confidence": <0-1>, "evidence": "<one sentence naming the deciding facts>"}}
 No wrapper object, no code fences, no prose.
 
@@ -863,7 +918,8 @@ def propose_graph_pairs(
     for start in range(0, len(pairs), batch_pairs):
         chunk = pairs[start : start + batch_pairs]
         pairs_block = "\n".join(
-            f"- {first.facts()}\n  vs {second.facts()}" for first, second in chunk
+            f"- {first.facts()}\n  vs {second.facts()}"
+            for first, second in chunk
         )
         response = client.complete(
             GRAPH_ADJUDICATION_PROMPT.format(pairs_block=pairs_block)
@@ -876,7 +932,9 @@ def propose_graph_pairs(
 def export_graph_pairs_csv(
     proposals: list[Proposal], roster: list[RosterEntity], path: Path
 ) -> int:
-    labels = {roster_entity.qid: roster_entity.label for roster_entity in roster}
+    labels = {
+        roster_entity.qid: roster_entity.label for roster_entity in roster
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as handle:
         writer = csv.DictWriter(
@@ -937,7 +995,9 @@ def place_containment_proposals(
             continue
         # both members must be known places (guard against a mis-emitted
         # contained_in on a person/organization pair)
-        if any(qid not in by_qid or by_qid[qid].kind != PLACE_KIND for qid in pair):
+        if any(
+            qid not in by_qid or by_qid[qid].kind != PLACE_KIND for qid in pair
+        ):
             continue
         (child,) = pair - {parent}
         rows.append(
@@ -946,7 +1006,9 @@ def place_containment_proposals(
                 "label_a": labels.get(child, ""),
                 "qid_b": parent,
                 "label_b": labels.get(parent, ""),
-                "question": f"reconcile flagged {child} as contained in {parent}",
+                "question": (
+                    f"reconcile flagged {child} as contained in {parent}"
+                ),
                 "verdict": "a_within_b",
                 "confidence": proposal.confidence,
                 "evidence": proposal.evidence,

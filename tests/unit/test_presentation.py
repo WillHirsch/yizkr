@@ -14,7 +14,9 @@ CT = "[Content_Types].xml"
 
 def slide_xml(*paragraphs: str) -> str:
     body = "".join(
-        "<a:p>" + "".join(f"<a:r><a:t>{run}</a:t></a:r>" for run in runs) + "</a:p>"
+        "<a:p>"
+        + "".join(f"<a:r><a:t>{run}</a:t></a:r>" for run in runs)
+        + "</a:p>"
         for runs in paragraphs
     )
     return (
@@ -36,18 +38,23 @@ def rels_xml(entries: list[tuple[str, str, str]]) -> str:
     )
 
 
-IMAGE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
-SLIDE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
-NOTES_REL = (
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide"
+IMAGE_REL = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
 )
+SLIDE_REL = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+)
+NOTES_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide"
 
 
 def build_deck(path, reorder=False):
     """Two slides; slide FILE 1 shows an image and has notes; the deck's
     sldIdLst can present the files in reversed order."""
-    order = [("rId2", "slides/slide2.xml"), ("rId1", "slides/slide1.xml")] if reorder \
-        else [("rId1", "slides/slide1.xml"), ("rId2", "slides/slide2.xml")]  # fmt: skip
+    order = (
+        [("rId2", "slides/slide2.xml"), ("rId1", "slides/slide1.xml")]
+        if reorder
+        else [("rId1", "slides/slide1.xml"), ("rId2", "slides/slide2.xml")]
+    )
     presentation = (
         "<p:presentation xmlns:p="
         '"http://schemas.openxmlformats.org/presentationml/2006/main"'
@@ -55,7 +62,8 @@ def build_deck(path, reorder=False):
         '"http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         "<p:sldIdLst>"
         + "".join(
-            f'<p:sldId id="25{i}" r:id="{rid}"/>' for i, (rid, _) in enumerate(order)
+            f'<p:sldId id="25{i}" r:id="{rid}"/>'
+            for i, (rid, _) in enumerate(order)
         )
         + "</p:sldIdLst></p:presentation>"
     )
@@ -68,7 +76,9 @@ def build_deck(path, reorder=False):
         )
         archive.writestr(
             "ppt/slides/slide1.xml",
-            slide_xml(["The Beispiel family", " in Springfield"], ["Married 1901"]),
+            slide_xml(
+                ["The Beispiel family", " in Springfield"], ["Married 1901"]
+            ),
         )
         archive.writestr(
             "ppt/slides/_rels/slide1.xml.rels",
@@ -79,7 +89,9 @@ def build_deck(path, reorder=False):
                 ]
             ),
         )
-        archive.writestr("ppt/slides/slide2.xml", slide_xml(["Anna's certificate"]))
+        archive.writestr(
+            "ppt/slides/slide2.xml", slide_xml(["Anna's certificate"])
+        )
         archive.writestr(
             "ppt/slides/_rels/slide2.xml.rels",
             rels_xml(
@@ -103,7 +115,8 @@ class TestUnpack:
         content = unpack_pptx(build_deck(tmp_path / "deck.pptx"))
         assert [slide.number for slide in content.slides] == [1, 2]
         assert (
-            content.slides[0].text == "The Beispiel family in Springfield\nMarried 1901"
+            content.slides[0].text
+            == "The Beispiel family in Springfield\nMarried 1901"
         )
         assert content.slides[0].notes == "Scanned from the family album"
         assert content.slides[1].text == "Anna's certificate"

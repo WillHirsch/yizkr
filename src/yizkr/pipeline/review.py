@@ -89,7 +89,9 @@ _CORRECTION_DATE = re.compile(r"^(\d{1,4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$")
 def claim_id(claim: Claim) -> str:
     """Stable content hash identifying a claim across export/import."""
     canonical = json.dumps(
-        claim.model_dump(mode="json", exclude_none=True, exclude_defaults=False),
+        claim.model_dump(
+            mode="json", exclude_none=True, exclude_defaults=False
+        ),
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode()).hexdigest()[:12]
@@ -216,14 +218,18 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
         )
     elif isinstance(value, QuantityValue):
         try:
-            amount = int(text) if re.fullmatch(r"[+-]?\d+", text) else float(text)
+            amount = (
+                int(text) if re.fullmatch(r"[+-]?\d+", text) else float(text)
+            )
         except ValueError:
             raise ValueError(
                 f"correction {text!r} is not a number (quantity values "
                 f"take a plain number)"
             ) from None
         corrected = value.model_copy(update={"amount": amount})
-    elif hasattr(value, "value") and isinstance(getattr(value, "value", None), str):
+    elif hasattr(value, "value") and isinstance(
+        getattr(value, "value", None), str
+    ):
         corrected = value.model_copy(update={"value": text})
     else:
         raise ValueError(
@@ -234,7 +240,9 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
     return claim.model_copy(update={"value": corrected, "curated": True})
 
 
-def apply_review(batch: ClaimBatch, csv_path: Path) -> tuple[ClaimBatch, list[str]]:
+def apply_review(
+    batch: ClaimBatch, csv_path: Path
+) -> tuple[ClaimBatch, list[str]]:
     """(approved batch, warnings). Only explicit approvals pass."""
     rows: dict[str, dict] = {}
     warnings: list[str] = []
@@ -290,7 +298,9 @@ def accept_all(source_csv: Path, out_csv: Path) -> int:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames or []
         if "decision" not in fieldnames:
-            raise ValueError(f"{source_csv} is not a review CSV (no 'decision' column)")
+            raise ValueError(
+                f"{source_csv} is not a review CSV (no 'decision' column)"
+            )
         rows = list(reader)
     for row in rows:
         row["decision"] = "approve"

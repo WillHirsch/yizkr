@@ -61,7 +61,9 @@ class WriteResult:
     # existing same-value statements that gained this batch's source
     # reference (an agreeing second source)
     referenced: int = 0
-    created_items: dict[str, str] = field(default_factory=dict)  # local_id -> QID
+    created_items: dict[str, str] = field(
+        default_factory=dict
+    )  # local_id -> QID
 
 
 def batch_fingerprint(batch: ClaimBatch) -> str:
@@ -82,7 +84,10 @@ class BatchWriter:
     # -- reference resolution ---------------------------------------------
 
     def _resolve_ref(
-        self, ref: EntityRef, result: WriteResult, source_artifact_qid: str | None
+        self,
+        ref: EntityRef,
+        result: WriteResult,
+        source_artifact_qid: str | None,
     ) -> str:
         if isinstance(ref, QidRef):
             return ref.qid
@@ -93,7 +98,10 @@ class BatchWriter:
         raise TypeError(f"unknown ref {ref!r}")
 
     def _materialize_local(
-        self, ref: LocalRef, result: WriteResult, source_artifact_qid: str | None
+        self,
+        ref: LocalRef,
+        result: WriteResult,
+        source_artifact_qid: str | None,
     ) -> str:
         if ref.local_id in result.created_items:
             return result.created_items[ref.local_id]
@@ -140,7 +148,9 @@ class BatchWriter:
             claim = self._item_claim(
                 self.properties["instance_of"], self.items[instance_of]
             )
-            claim.references = self._references(artifact_qid=source_artifact_qid)
+            claim.references = self._references(
+                artifact_qid=source_artifact_qid
+            )
             self._append(item, claim)
             item.write(summary="ingest: instance of")
         # open-schema escape hatch (ADR-0013): record what an unclassified
@@ -149,8 +159,12 @@ class BatchWriter:
         if type_hint and source_artifact_qid:
             from wikibaseintegrator.datatypes import String
 
-            hint = String(prop_nr=self.properties["type_hint"], value=type_hint)
-            hint.references = self._references(artifact_qid=source_artifact_qid)
+            hint = String(
+                prop_nr=self.properties["type_hint"], value=type_hint
+            )
+            hint.references = self._references(
+                artifact_qid=source_artifact_qid
+            )
             self._append(item, hint)
             item.write(summary="ingest: type hint (unclassified entity)")
         result.created_items[ref.local_id] = qid
@@ -192,7 +206,9 @@ class BatchWriter:
         """
         from wikibaseintegrator.wbi_enums import ActionIfExists
 
-        entity.claims.add(claim, action_if_exists=ActionIfExists.APPEND_OR_REPLACE)
+        entity.claims.add(
+            claim, action_if_exists=ActionIfExists.APPEND_OR_REPLACE
+        )
 
     @staticmethod
     def _item_claim(pid: str, qid: str):
@@ -201,7 +217,11 @@ class BatchWriter:
         return Item(prop_nr=pid, value=qid)
 
     def _to_wbi_claim(
-        self, prop_key: str, value, result: WriteResult, source_artifact_qid: str | None
+        self,
+        prop_key: str,
+        value,
+        result: WriteResult,
+        source_artifact_qid: str | None,
     ):
         from wikibaseintegrator.datatypes import (
             ExternalID,
@@ -217,7 +237,9 @@ class BatchWriter:
         if isinstance(value, ItemValue):
             return Item(
                 prop_nr=pid,
-                value=self._resolve_ref(value.value, result, source_artifact_qid),
+                value=self._resolve_ref(
+                    value.value, result, source_artifact_qid
+                ),
             )
         if isinstance(value, StringValue):
             return String(prop_nr=pid, value=value.value)
@@ -225,7 +247,9 @@ class BatchWriter:
             return ExternalID(prop_nr=pid, value=value.value)
         if isinstance(value, MonolingualValue):
             return MonolingualText(
-                prop_nr=pid, text=value.value.text, language=value.value.language
+                prop_nr=pid,
+                text=value.value.text,
+                language=value.value.language,
             )
         if isinstance(value, TimeValue):
             wikibase = value.to_wikibase()
@@ -247,14 +271,19 @@ class BatchWriter:
         raise TypeError(f"unhandled value {value!r}")
 
     def _references(
-        self, artifact_qid: str, run_qid: str | None = None, claim: Claim | None = None
+        self,
+        artifact_qid: str,
+        run_qid: str | None = None,
+        claim: Claim | None = None,
     ):
         from wikibaseintegrator.datatypes import Item, MonolingualText, String
         from wikibaseintegrator.models import Reference, References
 
         references = References()
         source_ref = Reference()
-        source_ref.add(Item(prop_nr=self.properties["stated_in"], value=artifact_qid))
+        source_ref.add(
+            Item(prop_nr=self.properties["stated_in"], value=artifact_qid)
+        )
         if claim is not None and claim.source.page_number:
             source_ref.add(
                 String(
@@ -316,7 +345,11 @@ class BatchWriter:
         item.descriptions.set(
             "en",
             f"pipeline {run.pipeline_version}"
-            + (f", commit {run.software_commit}" if run.software_commit else "")
+            + (
+                f", commit {run.software_commit}"
+                if run.software_commit
+                else ""
+            )
             + f", started {run.started_at.isoformat()}",
         )
         item = item.write(summary="ingest: extraction run")
@@ -344,7 +377,9 @@ class BatchWriter:
         if subject_qid.startswith("(new:"):
             return None
         if subject_qid not in self._entity_cache:
-            self._entity_cache[subject_qid] = self.client.wbi.item.get(subject_qid)
+            self._entity_cache[subject_qid] = self.client.wbi.item.get(
+                subject_qid
+            )
         entity = self._entity_cache[subject_qid]
         prop = wbi_claim.mainsnak.property_number
         new_value = wbi_claim.mainsnak.datavalue.get("value")
@@ -406,7 +441,7 @@ class BatchWriter:
                     return True
         return False
 
-    # -- main entry ------------------------------------------------------------
+    # -- main entry ----------------------------------------------------------
 
     def write_batch(self, batch: ClaimBatch) -> WriteResult:
         self._entity_records = {record.id: record for record in batch.entities}
@@ -416,13 +451,17 @@ class BatchWriter:
         if not self.dry_run:
             for record in batch.entities:
                 if record.qid:
-                    self._ensure_aliases(record.qid, [record.label, *record.aliases])
+                    self._ensure_aliases(
+                        record.qid, [record.label, *record.aliases]
+                    )
         result = WriteResult(run_qid=self.ensure_run_item(batch))
         for claim in batch.claims:
             artifact_qid = self._resolve_ref(
                 claim.source.artifact, result, source_artifact_qid=None
             )
-            subject_qid = self._resolve_ref(claim.subject, result, artifact_qid)
+            subject_qid = self._resolve_ref(
+                claim.subject, result, artifact_qid
+            )
             if self.dry_run:
                 # planning pass: resolve every ref so created_items is
                 # complete, then count — WBI datavalues cannot hold the
@@ -431,7 +470,9 @@ class BatchWriter:
                     self._resolve_ref(claim.value.value, result, artifact_qid)
                 for qualifier in claim.qualifiers:
                     if isinstance(qualifier.value, ItemValue):
-                        self._resolve_ref(qualifier.value.value, result, artifact_qid)
+                        self._resolve_ref(
+                            qualifier.value.value, result, artifact_qid
+                        )
                 result.written += 1
                 continue
             wbi_claim = self._to_wbi_claim(
@@ -459,8 +500,12 @@ class BatchWriter:
                 ).references:
                     existing.references.add(reference)
                 entity = self._entity_cache[subject_qid]
-                entity.write(summary="ingest: additional source for existing statement")
-                self._entity_cache[subject_qid] = self.client.wbi.item.get(subject_qid)
+                entity.write(
+                    summary="ingest: additional source for existing statement"
+                )
+                self._entity_cache[subject_qid] = self.client.wbi.item.get(
+                    subject_qid
+                )
                 result.referenced += 1
                 continue
             wbi_claim.references = self._references(
@@ -472,6 +517,8 @@ class BatchWriter:
                 ) or self.client.wbi.item.get(subject_qid)
                 self._append(entity, wbi_claim)
                 entity.write(summary="ingest: write reviewed claim")
-                self._entity_cache[subject_qid] = self.client.wbi.item.get(subject_qid)
+                self._entity_cache[subject_qid] = self.client.wbi.item.get(
+                    subject_qid
+                )
             result.written += 1
         return result

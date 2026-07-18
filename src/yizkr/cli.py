@@ -39,7 +39,9 @@ def cmd_bootstrap(args) -> int:
     from yizkr.model.bootstrap import bootstrap_instance
     from yizkr.model.schema import load_manifest
 
-    manifest = load_manifest(args.manifest) if args.manifest else load_manifest()
+    manifest = (
+        load_manifest(args.manifest) if args.manifest else load_manifest()
+    )
     config = Config.load(args.env_file)
     print(f"Wikibase: {config.wikibase_url}")
     bootstrap_instance(WikiClient(config), manifest, dry_run=args.dry_run)
@@ -70,7 +72,10 @@ def cmd_backup(args) -> int:
         detail = "".join(
             f", {key}={value}" for key, value in info.items() if key != "file"
         )
-        print(f"{name}: {args.out / manifest['timestamp'] / info['file']}{detail}")
+        print(
+            f"{name}: "
+            f"{args.out / manifest['timestamp'] / info['file']}{detail}"
+        )
     if manifest["pruned"]:
         print(f"pruned old backups: {', '.join(manifest['pruned'])}")
     return 0
@@ -83,7 +88,8 @@ def cmd_merge_items(args) -> int:
             sys.exit(f"{qid} does not exist")
     client.merge_items(args.from_qid, args.to_qid, summary=args.summary)
     print(
-        f"merged {args.from_qid} into {args.to_qid}; {args.from_qid} is now a redirect"
+        f"merged {args.from_qid} into {args.to_qid}; "
+        f"{args.from_qid} is now a redirect"
     )
     return 0
 
@@ -110,13 +116,19 @@ def cmd_reconcile_places(args) -> int:
     config = Config.load(args.env_file)
     client = WikiClient(config)
     if args.apply:
-        summary = apply_containment(client, config, args.apply, "curator-reviewed")
+        summary = apply_containment(
+            client, config, args.apply, "curator-reviewed"
+        )
         for note in summary["notes"]:
             print(f"note: {note}", file=sys.stderr)
         print(
             f"containment written: {summary['written']}, already present: "
             f"{summary['skipped']}"
-            + (f", run item {summary['run_qid']}" if summary["run_qid"] else "")
+            + (
+                f", run item {summary['run_qid']}"
+                if summary["run_qid"]
+                else ""
+            )
         )
         remaining = len(fetch_competing_pairs(client, config))
         print(
@@ -132,12 +144,14 @@ def cmd_reconcile_places(args) -> int:
     comma = comma_parent_candidates(places)
     worklist = build_worklist(places, competing, comma)
     print(
-        f"places: {len(places)}; unresolved competing pairs: {len(competing)}; "
-        f"comma-parent candidates: {len(comma)}; questions after transitive "
-        f"elimination + dedupe: {len(worklist)}"
+        f"places: {len(places)}; unresolved competing pairs: "
+        f"{len(competing)}; comma-parent candidates: {len(comma)}; "
+        f"questions after transitive elimination + dedupe: {len(worklist)}"
     )
     if not worklist:
-        print("nothing to adjudicate — the hierarchy already answers everything")
+        print(
+            "nothing to adjudicate — the hierarchy already answers everything"
+        )
         return 0
     proposals = adjudicate_places(make_client(args.llm), worklist, places)
     rows = export_places_csv(proposals, worklist, places, args.out)
@@ -152,13 +166,14 @@ def cmd_reconcile_places(args) -> int:
 def cmd_publish_site(args) -> int:
     from yizkr.staticsite import publish_site
 
-    summary = publish_site(Config.load(args.env_file), args.out, clean=args.clean)
+    summary = publish_site(
+        Config.load(args.env_file), args.out, clean=args.clean
+    )
     print(json.dumps(summary, indent=2))
     print(
-        "NOTE: built from the LIVE graph — includes possibly-living people; serve on "
-        "the LAN only (e.g. `python -m http.server -d {out}`).".format(
-            out=summary["out"]
-        )
+        "NOTE: built from the LIVE graph — includes possibly-living "
+        "people; serve on the LAN only "
+        "(e.g. `python -m http.server -d {out}`).".format(out=summary["out"])
     )
     return 0
 
@@ -230,7 +245,9 @@ def cmd_transcribe(args) -> int:
         from yizkr.pipeline.transcribe import HtrPlatformAdapter
 
         transcriber = HtrPlatformAdapter()
-    transcription = transcriber.transcribe(args.file, artifact_qid=args.artifact)
+    transcription = transcriber.transcribe(
+        args.file, artifact_qid=args.artifact
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(transcription.model_dump_json(indent=2))
     print(
@@ -243,7 +260,9 @@ def cmd_transcribe(args) -> int:
 def cmd_extract(args) -> int:
     from yizkr.pipeline.transcribe import Transcription
 
-    transcription = Transcription.model_validate_json(args.transcription.read_text())
+    transcription = Transcription.model_validate_json(
+        args.transcription.read_text()
+    )
     if args.engine == "file":
         if not args.claims_file:
             sys.exit("--engine file requires --claims-file")
@@ -259,7 +278,8 @@ def cmd_extract(args) -> int:
         from yizkr.pipeline.llm import make_client
 
         chunked = args.strategy == "chunked" or (
-            args.strategy == "auto" and len(transcription.text) > AUTO_CHUNK_THRESHOLD
+            args.strategy == "auto"
+            and len(transcription.text) > AUTO_CHUNK_THRESHOLD
         )
         if chunked:
             extractor = ChunkedClaimExtractor(
@@ -274,7 +294,9 @@ def cmd_extract(args) -> int:
             raw_dump = args.out.with_name(args.out.name + ".raw.txt")
             rejects_dump = args.out.with_name(args.out.name + ".rejected.json")
             extractor = LlmClaimExtractor(
-                make_client(args.llm), raw_dump=raw_dump, rejects_dump=rejects_dump
+                make_client(args.llm),
+                raw_dump=raw_dump,
+                rejects_dump=rejects_dump,
             )
     batch = extractor.extract(transcription, artifact_qid=args.artifact)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -371,7 +393,9 @@ def cmd_reconcile(args) -> int:
         f"roster: {len(roster)} graph entities; candidates for "
         f"{len(candidates)} of {len(batch.entities)} document entities"
     )
-    proposals = adjudicate(make_client(args.llm), batch.entities, candidates, batch)
+    proposals = adjudicate(
+        make_client(args.llm), batch.entities, candidates, batch
+    )
     rows = export_equivalences_csv(proposals, batch.entities, roster, args.out)
     print(
         f"wrote {args.out} ({rows} proposals). Fill the 'decision' column "
@@ -459,7 +483,9 @@ def cmd_accept_all(args) -> int:
     except (OSError, ValueError) as exc:
         sys.exit(str(exc))
     with open(out, newline="") as f:
-        warned = sum(1 for row in csv.DictReader(f) if row.get("warning", "").strip())
+        warned = sum(
+            1 for row in csv.DictReader(f) if row.get("warning", "").strip()
+        )
     note = (
         f"; {warned} carry an extraction warning — spot-check before writing"
         if warned
@@ -527,7 +553,11 @@ def cmd_detect_faces(args) -> int:
 
 
 def cmd_match_faces(args) -> int:
-    from yizkr.pipeline.faces import Gallery, load_detections, proposals_to_batch
+    from yizkr.pipeline.faces import (
+        Gallery,
+        load_detections,
+        proposals_to_batch,
+    )
 
     detection = load_detections(args.detections)
     batch, unmatched = proposals_to_batch(
@@ -579,7 +609,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("bootstrap", help="apply the model manifest to the instance")
+    p = sub.add_parser(
+        "bootstrap", help="apply the model manifest to the instance"
+    )
     p.add_argument("--manifest", type=Path, default=None)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_bootstrap)
@@ -655,7 +687,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="propose duplicate pairs among EXISTING items (ADR-0007); "
         "execution of approved pairs stays a curator action",
     )
-    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument(
+        "--llm", default="anthropic", choices=["anthropic", "claude-code"]
+    )
     p.add_argument("--out", type=Path, default=Path("graph-equivalences.csv"))
     p.set_defaults(func=cmd_reconcile_graph)
 
@@ -664,7 +698,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="propose place containment for unresolved competing values "
         "(ADR-0009); approved edges write referenced part_of statements",
     )
-    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument(
+        "--llm", default="anthropic", choices=["anthropic", "claude-code"]
+    )
     p.add_argument("--out", type=Path, default=Path("place-hierarchy.csv"))
     p.add_argument(
         "--apply",
@@ -681,14 +717,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--out", type=Path, default=Path("var/site"))
     p.add_argument(
-        "--clean", action="store_true", help="remove the output directory first"
+        "--clean",
+        action="store_true",
+        help="remove the output directory first",
     )
     p.set_defaults(func=cmd_publish_site)
 
     p = sub.add_parser("claims", help="claim-contract utilities")
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument(
-        "--json-schema", action="store_true", help="print the ClaimBatch JSON Schema"
+        "--json-schema",
+        action="store_true",
+        help="print the ClaimBatch JSON Schema",
     )
     group.add_argument(
         "--validate",
@@ -701,22 +741,32 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = sub.add_parser("ingest", help="pipeline steps")
     isub = ingest.add_subparsers(dest="step", required=True)
 
-    p = isub.add_parser("register", help="upload media + artifact/fragment items")
+    p = isub.add_parser(
+        "register", help="upload media + artifact/fragment items"
+    )
     p.add_argument("--file", type=Path, help="media file (omit for none)")
     p.add_argument(
-        "--type", required=True, help="manifest item key, e.g. photograph, certificate"
+        "--type",
+        required=True,
+        help="manifest item key, e.g. photograph, certificate",
     )
     p.add_argument("--title", required=True)
     p.add_argument("--description")
-    p.add_argument("--pages", type=int, default=0, help="create N page-fragment items")
+    p.add_argument(
+        "--pages", type=int, default=0, help="create N page-fragment items"
+    )
     p.set_defaults(func=cmd_register)
 
     p = isub.add_parser("transcribe", help="media -> transcription JSON")
     p.add_argument("--file", type=Path, required=True)
     p.add_argument("--artifact", help="artifact QID")
-    p.add_argument("--engine", choices=["llm", "textfile", "htr"], default="textfile")
     p.add_argument(
-        "--text-file", type=Path, help="existing transcription (textfile engine)"
+        "--engine", choices=["llm", "textfile", "htr"], default="textfile"
+    )
+    p.add_argument(
+        "--text-file",
+        type=Path,
+        help="existing transcription (textfile engine)",
     )
     p.add_argument(
         "--language",
@@ -747,7 +797,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--claims-file", type=Path, help="prepared claims JSON (file engine)"
     )
-    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument(
+        "--llm", default="anthropic", choices=["anthropic", "claude-code"]
+    )
     p.add_argument("--out", type=Path, default=Path("batch.json"))
     p.add_argument(
         "--strategy",
@@ -779,7 +831,9 @@ def build_parser() -> argparse.ArgumentParser:
         "gedcom",
         help="deterministic GEDCOM export -> claim batch (no LLM; item 13)",
     )
-    p.add_argument("--file", type=Path, required=True, help="GEDCOM file (.ged)")
+    p.add_argument(
+        "--file", type=Path, required=True, help="GEDCOM file (.ged)"
+    )
     p.add_argument("--artifact", required=True, help="registered artifact QID")
     p.add_argument("--out", type=Path, default=Path("batch.json"))
     p.set_defaults(func=cmd_gedcom)
@@ -789,7 +843,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="propose entity equivalences against the graph (ADR-0007)",
     )
     p.add_argument("--batch", type=Path, required=True)
-    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument(
+        "--llm", default="anthropic", choices=["anthropic", "claude-code"]
+    )
     p.add_argument("--out", type=Path, default=Path("equivalences.csv"))
     p.set_defaults(func=cmd_reconcile)
 
@@ -811,7 +867,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", type=Path, default=Path("review.csv"))
     p.set_defaults(func=cmd_export_review)
 
-    p = isub.add_parser("apply-review", help="filter batch by reviewed CSV decisions")
+    p = isub.add_parser(
+        "apply-review", help="filter batch by reviewed CSV decisions"
+    )
     p.add_argument("--batch", type=Path, required=True)
     p.add_argument("--csv", type=Path, required=True)
     p.add_argument("--out", type=Path, default=Path("approved.json"))
@@ -819,9 +877,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = isub.add_parser(
         "accept-all",
-        help="init review.reviewed.csv approving every row (curator bulk-accept)",
+        help=(
+            "init review.reviewed.csv approving every row "
+            "(curator bulk-accept)"
+        ),
     )
-    p.add_argument("--csv", type=Path, required=True, help="the review.csv to accept")
+    p.add_argument(
+        "--csv", type=Path, required=True, help="the review.csv to accept"
+    )
     p.add_argument(
         "--out",
         type=Path,
@@ -829,7 +892,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="output path (default: review.reviewed.csv beside --csv)",
     )
     p.add_argument(
-        "--force", action="store_true", help="overwrite an existing reviewed CSV"
+        "--force",
+        action="store_true",
+        help="overwrite an existing reviewed CSV",
     )
     p.set_defaults(func=cmd_accept_all)
 
@@ -849,7 +914,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="state/output directory (default var/runs/<folder name>)",
     )
-    p.add_argument("--llm", default="anthropic", choices=["anthropic", "claude-code"])
+    p.add_argument(
+        "--llm", default="anthropic", choices=["anthropic", "claude-code"]
+    )
     p.add_argument(
         "--type",
         default="artifact",
@@ -932,7 +999,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--file", type=Path, required=True, help="photo file")
     p.add_argument(
-        "--artifact", required=True, help="QID of the registered photograph item"
+        "--artifact",
+        required=True,
+        help="QID of the registered photograph item",
     )
     p.add_argument("--engine", choices=["insightface"], default="insightface")
     p.add_argument("--gallery", type=Path, default=Path("gallery.json"))
@@ -970,7 +1039,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--detections", type=Path, required=True)
     p.add_argument(
-        "--face", type=int, required=True, help="face index within the detections file"
+        "--face",
+        type=int,
+        required=True,
+        help="face index within the detections file",
     )
     p.add_argument("--label", required=True, help="person's English label")
     p.add_argument("--qid", help="person item QID, if it exists")

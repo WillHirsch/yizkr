@@ -78,7 +78,9 @@ class Record:
     children: list[Record] = field(default_factory=list)
 
     def first(self, tag: str) -> Record | None:
-        return next((child for child in self.children if child.tag == tag), None)
+        return next(
+            (child for child in self.children if child.tag == tag), None
+        )
 
     def all(self, tag: str) -> list[Record]:
         return [child for child in self.children if child.tag == tag]
@@ -145,14 +147,27 @@ def _parse_plain_date(text: str) -> dict | None:
     try:
         if len(parts) == 3:
             if parts[0] in MONTHS:
-                month, day, year = MONTHS[parts[0]], int(parts[1]), int(parts[2])
+                month, day, year = (
+                    MONTHS[parts[0]],
+                    int(parts[1]),
+                    int(parts[2]),
+                )
             else:
-                day, month, year = int(parts[0]), MONTHS[parts[1]], int(parts[2])
+                day, month, year = (
+                    int(parts[0]),
+                    MONTHS[parts[1]],
+                    int(parts[2]),
+                )
             return {"type": "time", "year": year, "month": month, "day": day,
                     "precision": "day"}  # fmt: skip
         if len(parts) == 2:
             month, year = MONTHS[parts[0]], int(parts[1])
-            return {"type": "time", "year": year, "month": month, "precision": "month"}
+            return {
+                "type": "time",
+                "year": year,
+                "month": month,
+                "precision": "month",
+            }
         if len(parts) == 1:
             return {"type": "time", "year": int(parts[0]), "precision": "year"}
     except (KeyError, ValueError):
@@ -171,7 +186,10 @@ def parse_gedcom_date(text: str) -> tuple[dict | None, list[dict]]:
     circa = [
         {
             "property": "sourcing_circumstances",
-            "value": {"type": "item", "value": {"kind": "vocab", "key": "circa"}},
+            "value": {
+                "type": "item",
+                "value": {"kind": "vocab", "key": "circa"},
+            },
         }
     ]
     if upper.startswith(("ABT ", "EST ", "CAL ")):
@@ -257,7 +275,9 @@ def _inline_nicknames(name: str) -> list[str]:
     return [
         token
         for token in found
-        if token and len(token.split()) <= 2 and not any(c.isdigit() for c in token)
+        if token
+        and len(token.split()) <= 2
+        and not any(c.isdigit() for c in token)
     ]
 
 
@@ -338,7 +358,9 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     def local(entity_id: str) -> dict:
         return {"kind": "local", "local_id": entity_id}
 
-    def claim(subject_id: str, prop: str, value: dict, record: Record, quals=()):
+    def claim(
+        subject_id: str, prop: str, value: dict, record: Record, quals=()
+    ):
         claims.append(
             {
                 "subject": local(subject_id),
@@ -366,7 +388,9 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                 quals.extend(date_quals)
         return quals
 
-    def event_claims(indi_xref: str, event: Record, date_prop: str, place_prop: str):
+    def event_claims(
+        indi_xref: str, event: Record, date_prop: str, place_prop: str
+    ):
         date_record = event.first("DATE")
         if date_record:
             value, quals = parse_gedcom_date(date_record.value)
@@ -387,7 +411,10 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
             )
 
     def monolingual(text: str) -> dict:
-        return {"type": "monolingual", "value": {"text": text, "language": "en"}}
+        return {
+            "type": "monolingual",
+            "value": {"text": text, "language": "en"},
+        }
 
     def name_claims(xref: str, record: Record) -> None:
         """Typed, referenced name claims (docs/MODELING.md "Names").
@@ -402,15 +429,21 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
         def add_nickname(text: str, name_record: Record) -> None:
             if text and text not in emitted_nicknames:
                 emitted_nicknames.add(text)
-                claim(person_id(xref), "nickname", monolingual(text), name_record)
+                claim(
+                    person_id(xref), "nickname", monolingual(text), name_record
+                )
 
         for name_record in record.all("NAME"):
             if not name_record.value:
                 continue
             cleaned = _clean_name(name_record.value)
-            prop = _NAME_TYPE_PROPERTY.get(name_record.text("TYPE").strip().lower())
+            prop = _NAME_TYPE_PROPERTY.get(
+                name_record.text("TYPE").strip().lower()
+            )
             if prop == "nickname":
-                add_nickname(cleaned, name_record)  # the whole aka IS the nickname
+                add_nickname(
+                    cleaned, name_record
+                )  # the whole aka IS the nickname
             elif prop:
                 claim(person_id(xref), prop, monolingual(cleaned), name_record)
             add_nickname(name_record.text("NICK").strip(), name_record)
@@ -428,7 +461,11 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
 
     # individuals -> entities + birth/death claims
     for xref, record in individuals.items():
-        names = [_clean_name(name.value) for name in record.all("NAME") if name.value]
+        names = [
+            _clean_name(name.value)
+            for name in record.all("NAME")
+            if name.value
+        ]
         if not names:
             warnings.append(f"{xref}: no NAME; skipped entirely")
             continue
@@ -506,7 +543,10 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                 quals.append(
                     {
                         "property": "location",
-                        "value": {"type": "item", "value": local(place_entity(place))},
+                        "value": {
+                            "type": "item",
+                            "value": local(place_entity(place)),
+                        },
                     }
                 )
             claim(
@@ -558,7 +598,10 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                     claim(
                         person_id(child.value),
                         prop,
-                        {"type": "item", "value": local(person_id(parent_xref))},
+                        {
+                            "type": "item",
+                            "value": local(person_id(parent_xref)),
+                        },
                         fam,
                     )
         if husband in individuals and wife in individuals:
@@ -570,11 +613,14 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                     value, date_quals = parse_gedcom_date(date_record.value)
                     if value is None:
                         warnings.append(
-                            f"line {date_record.line_number}: unparsed marriage "
-                            f"date {date_record.value!r} — start_time omitted"
+                            f"line {date_record.line_number}: unparsed "
+                            f"marriage date {date_record.value!r} "
+                            "— start_time omitted"
                         )
                     else:
-                        quals.append({"property": "start_time", "value": value})
+                        quals.append(
+                            {"property": "start_time", "value": value}
+                        )
                         quals.extend(date_quals)
                 place = marriage.text("PLAC")
                 if place:
@@ -611,7 +657,9 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
 
     batch = ClaimBatch.model_validate(
         {
-            "extraction_run": run_metadata(ADAPTER_IDENTIFIER).model_dump(mode="json"),
+            "extraction_run": run_metadata(ADAPTER_IDENTIFIER).model_dump(
+                mode="json"
+            ),
             "claims": claims,
             "entities": entities,
         }
@@ -620,6 +668,9 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     if problems:
         # deterministic code emitting invalid claims is a bug, not input noise
         raise ValueError(
-            "gedcom adapter produced invalid claims:\n  " + "\n  ".join(problems)
+            "gedcom adapter produced invalid claims:\n  "
+            + "\n  ".join(problems)
         )
-    return AdapterResult(batch=batch, warnings=warnings, unsupported_tags=unsupported)
+    return AdapterResult(
+        batch=batch, warnings=warnings, unsupported_tags=unsupported
+    )

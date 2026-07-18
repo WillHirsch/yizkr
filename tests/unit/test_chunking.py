@@ -1,4 +1,7 @@
-"""Offline tests for chunked extraction (ADR-0006/0007). No instance, no LLM."""
+"""Offline tests for chunked extraction (ADR-0006/0007).
+
+No instance, no LLM.
+"""
 
 import json
 
@@ -188,7 +191,9 @@ class TestSegmentationModel:
 
 class TestPacking:
     def units(self):
-        return DocumentSegmentation.model_validate_json(segmentation_json()).units
+        return DocumentSegmentation.model_validate_json(
+            segmentation_json()
+        ).units
 
     def entities(self):
         return [
@@ -206,9 +211,13 @@ class TestPacking:
         assert [[u.id for u in chunk] for chunk in chunks] == [["u2"], ["u3"]]
 
     def test_entities_pack_by_mention_evidence(self):
-        chunks = pack_entities(self.entities(), DOC.splitlines(), budget=LINE_LENGTH)
+        chunks = pack_entities(
+            self.entities(), DOC.splitlines(), budget=LINE_LENGTH
+        )
         assert [[e.id for e in chunk] for chunk in chunks] == [["e1"], ["e2"]]
-        chunks = pack_entities(self.entities(), DOC.splitlines(), budget=10_000)
+        chunks = pack_entities(
+            self.entities(), DOC.splitlines(), budget=10_000
+        )
         assert [[e.id for e in chunk] for chunk in chunks] == [["e1", "e2"]]
 
     def test_entities_without_mentions_use_flat_estimate(self):
@@ -244,7 +253,9 @@ class TestChunkResponseContract:
         assert warnings and "reported 5" in warnings[0]
 
     def test_valid_ndjson_parses(self):
-        claims = parse_chunk_response(ndjson([claim("e1", "Anna Example", 1900)]))
+        claims = parse_chunk_response(
+            ndjson([claim("e1", "Anna Example", 1900)])
+        )
         assert len(claims) == 1
 
     def test_gap_lines_and_extended_sentinel_do_not_break_claims(self):
@@ -264,7 +275,9 @@ class TestChunkResponseContract:
                         }
                     }
                 ),  # fmt: skip
-                json.dumps({"done": True, "claims_emitted": 1, "gaps_emitted": 1}),
+                json.dumps(
+                    {"done": True, "claims_emitted": 1, "gaps_emitted": 1}
+                ),
             ]
         )
         claims = parse_chunk_response(response)
@@ -288,7 +301,9 @@ class TestGapChannel:
                         }
                     }
                 ),  # fmt: skip
-                json.dumps({"done": True, "claims_emitted": 1, "gaps_emitted": 1}),
+                json.dumps(
+                    {"done": True, "claims_emitted": 1, "gaps_emitted": 1}
+                ),
             ]
         )
         (gap,) = parse_chunk_gaps(response)
@@ -298,9 +313,13 @@ class TestGapChannel:
     def test_malformed_gaps_dropped_never_raise(self):
         response = "\n".join(
             [
-                json.dumps({"gap": {"predicate": "no subject"}}),  # missing subject
+                json.dumps(
+                    {"gap": {"predicate": "no subject"}}
+                ),  # missing subject
                 json.dumps({"gap": "not an object"}),
-                json.dumps({"done": True, "claims_emitted": 0, "gaps_emitted": 0}),
+                json.dumps(
+                    {"done": True, "claims_emitted": 0, "gaps_emitted": 0}
+                ),
             ]
         )
         assert parse_chunk_gaps(response) == []
@@ -320,7 +339,11 @@ class TestLocalRefRewrites:
                     "property": "location",
                     "value": {
                         "type": "item",
-                        "value": {"kind": "local", "local_id": "e9", "label": "X"},
+                        "value": {
+                            "kind": "local",
+                            "local_id": "e9",
+                            "label": "X",
+                        },
                     },
                 }
             ],
@@ -331,7 +354,9 @@ class TestLocalRefRewrites:
         fixed = prefix_local_ids(self.raw_claim(), "c001")
         assert fixed["subject"]["local_id"] == "c001:e1"
         assert fixed["value"]["value"]["local_id"] == "c001:e2"
-        assert fixed["qualifiers"][0]["value"]["value"]["local_id"] == "c001:e9"
+        assert (
+            fixed["qualifiers"][0]["value"]["value"]["local_id"] == "c001:e9"
+        )
         assert fixed["source"]["artifact"] == {"kind": "qid", "qid": "Q23"}
 
     def test_normalize_sets_canonical_label_and_kind(self):
@@ -349,7 +374,9 @@ class TestLocalRefRewrites:
 
 class TestEntityFirstExtractor:
     def extractor(self, llm, tmp_path, **kwargs):
-        return ChunkedClaimExtractor(llm, state_dir=tmp_path / "state", **kwargs)
+        return ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", **kwargs
+        )
 
     def test_fork_flow_end_to_end(self, tmp_path):
         """The manifest opens a conversation; each chunk is a fork
@@ -398,13 +425,20 @@ class TestEntityFirstExtractor:
             ]
         )
         logs: list[str] = []
-        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, log=logs.append)
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, log=logs.append
+        )
         extractor.extract(transcription(), "Q23")
 
         assert any("scanning document for entities" in line for line in logs)
         assert any("extract: 2 entities, 2 chunk(s)" in line for line in logs)
-        chunk_lines = [line for line in logs if line.strip().startswith("chunk ")]
-        assert chunk_lines == ["  chunk 1/2 (1 claim)", "  chunk 2/2 (1 claim)"]
+        chunk_lines = [
+            line for line in logs if line.strip().startswith("chunk ")
+        ]
+        assert chunk_lines == [
+            "  chunk 1/2 (1 claim)",
+            "  chunk 2/2 (1 claim)",
+        ]
 
     def test_plain_client_gets_inline_document(self, tmp_path):
         llm = PlainLlm(
@@ -431,7 +465,10 @@ class TestEntityFirstExtractor:
             [
                 entity_manifest_json(),
                 ndjson(
-                    [claim("e1", "Anna Example", 1900), claim("e99", "Nobody", 1800)]
+                    [
+                        claim("e1", "Anna Example", 1900),
+                        claim("e99", "Nobody", 1800),
+                    ]
                 ),
                 ndjson([claim("e2", "Bern Example", 1902)]),
             ]
@@ -446,7 +483,9 @@ class TestEntityFirstExtractor:
     def test_truncation_retries_then_succeeds(self, tmp_path):
         # a missing sentinel is real truncation: retryable, unlike a
         # count mismatch (which keeps its claims — next test)
-        truncated = json.dumps(claim("e1", "Anna Example", 1900))  # no sentinel
+        truncated = json.dumps(
+            claim("e1", "Anna Example", 1900)
+        )  # no sentinel
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
@@ -455,7 +494,9 @@ class TestEntityFirstExtractor:
                 ndjson([claim("e2", "Bern Example", 1902)]),
             ]
         )
-        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=1
+        )
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
         assert extractor.failed_chunks == []
@@ -466,11 +507,15 @@ class TestEntityFirstExtractor:
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([claim("e1", "Anna Example", 1900)], emitted=99),  # miscount
+                ndjson(
+                    [claim("e1", "Anna Example", 1900)], emitted=99
+                ),  # miscount
                 ndjson([claim("e2", "Bern Example", 1902)]),
             ]
         )
-        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=1
+        )
         batch = extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == []
         assert {c.subject.label for c in batch.claims} == {
@@ -485,16 +530,22 @@ class TestEntityFirstExtractor:
             [
                 entity_manifest_json(),
                 RuntimeError("engine down"),  # c001 attempt 1 (fork)
-                RuntimeError("engine down"),  # c001 attempt 1 (inline fallback)
+                RuntimeError(
+                    "engine down"
+                ),  # c001 attempt 1 (inline fallback)
                 RuntimeError("engine down"),  # c001 attempt 2 (inline)
                 ndjson([claim("e2", "Bern Example", 1902)]),  # c002
             ]
         )
-        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=1
+        )
         batch = extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c001"]
         assert [c.subject.label for c in batch.claims] == ["Bern Example"]
-        manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
+        manifest = json.loads(
+            (tmp_path / "state" / "manifest.json").read_text()
+        )
         assert manifest["chunks"]["c001"]["status"].startswith("failed")
 
     def test_failed_chunk_sidecar_survives_recovery(self, tmp_path):
@@ -504,12 +555,16 @@ class TestEntityFirstExtractor:
             [
                 entity_manifest_json(),
                 RuntimeError("engine down"),  # c001 attempt 1 (fork)
-                RuntimeError("engine down"),  # c001 attempt 1 (inline fallback)
+                RuntimeError(
+                    "engine down"
+                ),  # c001 attempt 1 (inline fallback)
                 RuntimeError("engine down"),  # c001 attempt 2 (inline)
                 ndjson([claim("e2", "Bern Example", 1902)]),  # c002
             ]
         )
-        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=1
+        )
         extractor.extract(transcription(), "Q23")
         sidecar = tmp_path / "state" / "c001.fail.ndjson"
         record = json.loads(sidecar.read_text().splitlines()[0])
@@ -523,10 +578,14 @@ class TestEntityFirstExtractor:
             ndjson([claim("e1", "Anna Example", 1900)])
         )
         second = ScriptedLlm([])
-        extractor = self.extractor(second, tmp_path, budget=LINE_LENGTH, resume=True)
+        extractor = self.extractor(
+            second, tmp_path, budget=LINE_LENGTH, resume=True
+        )
         extractor.extract(transcription(), "Q23")
         assert second.calls == []
-        manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
+        manifest = json.loads(
+            (tmp_path / "state" / "manifest.json").read_text()
+        )
         assert manifest["chunks"]["c001"]["status"] == "ok"  # recovered
         assert record["error"] in sidecar.read_text()  # ...record survives
 
@@ -542,10 +601,14 @@ class TestEntityFirstExtractor:
                 ndjson([claim("e2", "Bern Example", 1902)]),  # c002
             ]
         )
-        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH, retries=1)
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=1
+        )
         extractor.extract(transcription(), "Q23")
         record = json.loads(
-            (tmp_path / "state" / "c001.fail.ndjson").read_text().splitlines()[0]
+            (tmp_path / "state" / "c001.fail.ndjson")
+            .read_text()
+            .splitlines()[0]
         )
         assert "truncated" in record["error"]
         assert record["raw"] == cut
@@ -563,7 +626,9 @@ class TestEntityFirstExtractor:
                 RuntimeError("timeout"),  # c002 retry
             ]
         )
-        extractor = self.extractor(first, tmp_path, budget=LINE_LENGTH, retries=1)
+        extractor = self.extractor(
+            first, tmp_path, budget=LINE_LENGTH, retries=1
+        )
         extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c002"]
 
@@ -573,7 +638,9 @@ class TestEntityFirstExtractor:
             ndjson([claim("e2", "Bern Example", 1902)])
         )
         second = ScriptedLlm([])  # NO responses: no model call allowed
-        extractor = self.extractor(second, tmp_path, budget=LINE_LENGTH, resume=True)
+        extractor = self.extractor(
+            second, tmp_path, budget=LINE_LENGTH, resume=True
+        )
         batch = extractor.extract(transcription(), "Q23")
         assert second.calls == []
         assert len(batch.claims) == 2
@@ -609,7 +676,10 @@ class TestEntityFirstExtractor:
             [
                 entity_manifest_json(),
                 ndjson(
-                    [claim("e1", "Anna Example", 1900), claim("e1", "Anna", 1900)]
+                    [
+                        claim("e1", "Anna Example", 1900),
+                        claim("e1", "Anna", 1900),
+                    ]
                 ),  # alias variant normalizes into an exact duplicate
                 ndjson([claim("e2", "Bern Example", 1902)]),
             ]
@@ -642,7 +712,9 @@ class KeyedLlm:
 
     model_identifier = "fake-model"
 
-    def __init__(self, manifest_response: str, by_entity: dict[str, str]) -> None:
+    def __init__(
+        self, manifest_response: str, by_entity: dict[str, str]
+    ) -> None:
         self.manifest_response = manifest_response
         self.by_entity = by_entity
         import threading
@@ -665,7 +737,9 @@ class KeyedLlm:
             for entity_id, response in self.by_entity.items():
                 if f"- {entity_id}:" in prompt:
                     return response
-            raise AssertionError(f"no scripted response for prompt: {prompt[:80]}")
+            raise AssertionError(
+                f"no scripted response for prompt: {prompt[:80]}"
+            )
         finally:
             with self._lock:
                 self._active -= 1
@@ -694,7 +768,9 @@ class TestParallelChunks:
         # claims arrive in chunk order regardless of completion order
         assert [c.subject.local_id for c in batch.claims] == ["e1", "e2"]
         assert llm.concurrent_peak == 2  # the calls genuinely overlapped
-        manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
+        manifest = json.loads(
+            (tmp_path / "state" / "manifest.json").read_text()
+        )
         assert all(c["status"] == "ok" for c in manifest["chunks"].values())
 
     def test_concurrent_failure_isolates_to_its_chunk(self, tmp_path):
@@ -722,7 +798,9 @@ class TestParallelChunks:
 
 class TestFallbackLadder:
     def extractor(self, llm, tmp_path, **kwargs):
-        return ChunkedClaimExtractor(llm, state_dir=tmp_path / "state", **kwargs)
+        return ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", **kwargs
+        )
 
     def test_bad_manifest_falls_back_to_line_segmentation(self, tmp_path):
         """Manifest unusable twice -> line-range segmentation runs, with
@@ -745,8 +823,13 @@ class TestFallbackLadder:
         assert extractor.used_fallback_manifest
         assert not extractor.used_fallback_segmentation
         assert batch.entities == []
-        assert {c.subject.local_id for c in batch.claims} == {"c001:p1", "c001:p2"}
-        manifest = json.loads((tmp_path / "state" / "manifest.json").read_text())
+        assert {c.subject.local_id for c in batch.claims} == {
+            "c001:p1",
+            "c001:p2",
+        }
+        manifest = json.loads(
+            (tmp_path / "state" / "manifest.json").read_text()
+        )
         assert manifest["strategy"] == "line-range"
         assert (tmp_path / "state" / "manifest-fallback.txt").exists()
 

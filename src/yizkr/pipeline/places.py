@@ -71,8 +71,8 @@ class Question:
 PLACES_QUERY = """\
 SELECT ?place ?placeLabel
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
-       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?parent), "/entity/"); separator="|")
-        AS ?parents)
+       (GROUP_CONCAT(DISTINCT STRAFTER(STR(?parent), "/entity/");
+                      separator="|") AS ?parents)
 WHERE {{
   ?place wdt:{instance_of} wd:{place} .
   ?place rdfs:label ?placeLabel . FILTER(LANG(?placeLabel) = "en")
@@ -101,7 +101,10 @@ WHERE {{
   FILTER(STR(?valueA) < STR(?valueB))
   FILTER NOT EXISTS {{ ?valueA (wdt:{location}|wdt:{part_of})+ ?valueB . }}
   FILTER NOT EXISTS {{ ?valueB (wdt:{location}|wdt:{part_of})+ ?valueA . }}
-  OPTIONAL {{ ?entity rdfs:label ?entityLabel . FILTER(LANG(?entityLabel) = "en") }}
+  OPTIONAL {{
+    ?entity rdfs:label ?entityLabel .
+    FILTER(LANG(?entityLabel) = "en")
+  }}
   OPTIONAL {{ ?property rdfs:label ?propertyLabel .
               FILTER(LANG(?propertyLabel) = "en") }}
 }}
@@ -133,17 +136,23 @@ def fetch_places(client: WikiClient, config: Config) -> list[PlaceRecord]:
                 qid=row["place"]["value"].rsplit("/", 1)[-1],
                 label=row["placeLabel"]["value"],
                 aliases=[
-                    a for a in row.get("aliases", {}).get("value", "").split("|") if a
+                    a
+                    for a in row.get("aliases", {}).get("value", "").split("|")
+                    if a
                 ],
                 parents=[
-                    p for p in row.get("parents", {}).get("value", "").split("|") if p
+                    p
+                    for p in row.get("parents", {}).get("value", "").split("|")
+                    if p
                 ],
             )
         )
     return records
 
 
-def fetch_competing_pairs(client: WikiClient, config: Config) -> list[Question]:
+def fetch_competing_pairs(
+    client: WikiClient, config: Config
+) -> list[Question]:
     properties, _ = client.vocabulary()
     query = prefix_block(config.concept_uri) + COMPETING_QUERY.format(
         place_of_birth=properties["place_of_birth"],
@@ -163,7 +172,8 @@ def fetch_competing_pairs(client: WikiClient, config: Config) -> list[Question]:
                 qid_a=value_a.rsplit("/", 1)[-1],
                 qid_b=value_b.rsplit("/", 1)[-1],
                 context=(
-                    f"both asserted as {row.get('propertyLabel', {}).get('value', '?')}"
+                    f"both asserted as "
+                    f"{row.get('propertyLabel', {}).get('value', '?')}"
                     f" of {row.get('entityLabel', {}).get('value', '?')}"
                 ),
             )
@@ -196,7 +206,8 @@ def comma_parent_candidates(places: list[PlaceRecord]) -> list[Question]:
                             qid_a=place.qid,
                             qid_b=parent,
                             context=(
-                                f"label comma-suffix {', '.join(parts[start:])!r} "
+                                f"label comma-suffix "
+                                f"{', '.join(parts[start:])!r} "
                                 f"names an existing place"
                             ),
                         )
@@ -218,7 +229,9 @@ def build_worklist(
             continue
         seen.add(key)
         worklist.append(question)
-    worklist.sort(key=lambda q: min(depth.get(q.qid_a, 9), depth.get(q.qid_b, 9)))
+    worklist.sort(
+        key=lambda q: min(depth.get(q.qid_a, 9), depth.get(q.qid_b, 9))
+    )
     return worklist
 
 
@@ -280,8 +293,12 @@ def adjudicate_places(
             f"  ({question.context})"
             for question in chunk
         )
-        response = client.complete(ADJUDICATION_PROMPT.format(questions_block=block))
-        valid = {frozenset((question.qid_a, question.qid_b)) for question in chunk}
+        response = client.complete(
+            ADJUDICATION_PROMPT.format(questions_block=block)
+        )
+        valid = {
+            frozenset((question.qid_a, question.qid_b)) for question in chunk
+        }
         parsed = _parse_place_proposals(response, valid)
         print(
             f"  batch {index}/{len(batches)}: {len(chunk)} questions -> "
@@ -292,7 +309,9 @@ def adjudicate_places(
     return proposals
 
 
-def _parse_place_proposals(response: str, valid: set[frozenset]) -> list[PlaceProposal]:
+def _parse_place_proposals(
+    response: str, valid: set[frozenset]
+) -> list[PlaceProposal]:
     proposals = []
     sentinel = None
     for obj in scan_json_objects(response):
@@ -316,7 +335,9 @@ def _parse_place_proposals(response: str, valid: set[frozenset]) -> list[PlacePr
             )
         )
     if sentinel is None:
-        raise ValueError("place adjudication response carried no terminal sentinel")
+        raise ValueError(
+            "place adjudication response carried no terminal sentinel"
+        )
     return proposals
 
 
@@ -386,14 +407,16 @@ def plan_containment(
         verdict = row.get("verdict", "")
         if verdict == "same":
             notes.append(
-                f"{row['qid_a']} = {row['qid_b']}: identity is curator-executed "
-                f"(yizkr merge-items, or a referenced 'said to be the same as') "
-                f"— not applied here"
+                f"{row['qid_a']} = {row['qid_b']}: identity is "
+                f"curator-executed (yizkr merge-items, or a referenced "
+                f"'said to be the same as') — not applied here"
             )
             continue
         if verdict not in ("a_within_b", "b_within_a"):
-            notes.append(f"{row['qid_a']} vs {row['qid_b']}: verdict {verdict!r} "
-                         "is not containment — nothing to apply")  # fmt: skip
+            notes.append(
+                f"{row['qid_a']} vs {row['qid_b']}: verdict {verdict!r} "
+                "is not containment — nothing to apply"
+            )
             continue
         child, parent = (
             (row["qid_a"], row["qid_b"])
@@ -416,7 +439,9 @@ def plan_containment(
     return edges, notes
 
 
-def ensure_places_run_item(client: WikiClient, fingerprint: str, model: str) -> str:
+def ensure_places_run_item(
+    client: WikiClient, fingerprint: str, model: str
+) -> str:
     from yizkr.pipeline.registrar import _append, _item_claim
 
     properties, items = client.vocabulary()
@@ -447,7 +472,11 @@ def apply_containment(
     client: WikiClient, config: Config, csv_path: Path, model: str
 ) -> dict:
     """Write approved containment edges as referenced part_of claims."""
-    from yizkr.pipeline.registrar import _append, _existing_claim_targets, _item_claim
+    from yizkr.pipeline.registrar import (
+        _append,
+        _existing_claim_targets,
+        _item_claim,
+    )
 
     properties, _ = client.vocabulary()
 

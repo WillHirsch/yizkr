@@ -288,7 +288,9 @@ class LlmClaimExtractor:
         self.raw_dump = raw_dump
         self.rejects_dump = rejects_dump
 
-    def extract(self, transcription: Transcription, artifact_qid: str) -> ClaimBatch:
+    def extract(
+        self, transcription: Transcription, artifact_qid: str
+    ) -> ClaimBatch:
         schema = json.dumps(ClaimBatch.model_json_schema(), indent=2)
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
@@ -319,7 +321,9 @@ class LlmClaimExtractor:
                 self.rejects_dump.unlink(missing_ok=True)  # no stale rejects
         if not batch.claims:
             detail = "\n  ".join(
-                problem for reject in rejects[:20] for problem in reject["problems"]
+                problem
+                for reject in rejects[:20]
+                for problem in reject["problems"]
             )
             raise ValueError(
                 f"every extracted claim failed validation "
@@ -335,23 +339,28 @@ class ClaimFileExtractor:
     object; in the latter case run metadata is generated here.
     """
 
-    def __init__(self, claims_file: Path, model_identifier: str = "manual") -> None:
+    def __init__(
+        self, claims_file: Path, model_identifier: str = "manual"
+    ) -> None:
         self.claims_file = claims_file
         self.model_identifier = model_identifier
 
-    def extract(self, transcription: Transcription, artifact_qid: str) -> ClaimBatch:
+    def extract(
+        self, transcription: Transcription, artifact_qid: str
+    ) -> ClaimBatch:
         payload = json.loads(self.claims_file.read_text())
         if "extraction_run" not in payload:
             payload = {
-                "extraction_run": run_metadata(self.model_identifier).model_dump(
-                    mode="json"
-                ),
+                "extraction_run": run_metadata(
+                    self.model_identifier
+                ).model_dump(mode="json"),
                 "claims": payload.get("claims", payload),
             }
         batch = ClaimBatch.model_validate(payload)
         problems = validate_against_manifest(batch)
         if problems:
             raise ValueError(
-                "claims file failed manifest validation:\n  " + "\n  ".join(problems)
+                "claims file failed manifest validation:\n  "
+                + "\n  ".join(problems)
             )
         return batch

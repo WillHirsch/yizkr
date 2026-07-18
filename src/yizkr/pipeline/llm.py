@@ -42,7 +42,8 @@ class LlmClient(Protocol):
     model_identifier: str
 
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
-        """Return the model's text response for a prompt (+ optional images)."""
+        """Return the model's text response for a prompt (+ optional
+        images)."""
         ...
 
 
@@ -71,7 +72,8 @@ class AnthropicClient:
             import anthropic
         except ImportError as exc:
             raise RuntimeError(
-                "the 'anthropic' package is not installed; pip install anthropic"
+                "the 'anthropic' package is not installed; "
+                "pip install anthropic"
             ) from exc
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise RuntimeError(
@@ -108,15 +110,23 @@ class AnthropicClient:
             max_tokens=4096,
             messages=messages,
         )
-        return "".join(block.text for block in response.content if block.type == "text")
+        return "".join(
+            block.text for block in response.content if block.type == "text"
+        )
 
     def open_conversation(self, prompt: str) -> tuple[str, Any]:
         """Stateless conversations: the handle IS the message prefix."""
-        first_turn = {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        first_turn = {
+            "role": "user",
+            "content": [{"type": "text", "text": prompt}],
+        }
         response = self._create([first_turn])
         handle = [
             first_turn,
-            {"role": "assistant", "content": [{"type": "text", "text": response}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": response}],
+            },
         ]
         return response, handle
 
@@ -129,7 +139,9 @@ class AnthropicClient:
         """
         messages = copy.deepcopy(handle)
         messages[-1]["content"][-1]["cache_control"] = {"type": "ephemeral"}
-        messages.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
+        messages.append(
+            {"role": "user", "content": [{"type": "text", "text": prompt}]}
+        )
         return self._create(messages)
 
 
@@ -161,7 +173,9 @@ class ClaudeCodeClient:
         effort: str | None = None,
     ) -> None:
         self.executable = executable
-        self.model = model if model is not None else os.environ.get("YIZKR_LLM_MODEL")
+        self.model = (
+            model if model is not None else os.environ.get("YIZKR_LLM_MODEL")
+        )
         self.timeout = timeout
         self.max_turns = max_turns
         # reasoning effort (low..max). Adaptive-reasoning models ignore
@@ -169,7 +183,9 @@ class ClaudeCodeClient:
         # steps (transcription, extraction) burning 100k+ thinking tokens
         # per call while judgment steps (adjudication, critique) keep high.
         self.effort = (
-            effort if effort is not None else os.environ.get("YIZKR_LLM_EFFORT")
+            effort
+            if effort is not None
+            else os.environ.get("YIZKR_LLM_EFFORT")
         )
         try:
             version = subprocess.run(
@@ -269,7 +285,8 @@ class ClaudeCodeClient:
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[-500:]
             raise RuntimeError(
-                f"claude CLI exited with {result.returncode}: {detail or 'no output'}"
+                f"claude CLI exited with {result.returncode}: "
+                f"{detail or 'no output'}"
                 " (not logged in? run `claude` interactively once)"
             )
         text = self._assemble_stream(result.stdout)

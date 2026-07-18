@@ -33,7 +33,9 @@ def load_templates() -> dict[str, str]:
     """name -> template text, from the packaged *.rq files."""
     return {
         resource.name[: -len(".rq")]: resource.read_text()
-        for resource in sorted(files("yizkr.queries").iterdir(), key=lambda r: r.name)
+        for resource in sorted(
+            files("yizkr.queries").iterdir(), key=lambda r: r.name
+        )
         if resource.name.endswith(".rq")
     }
 
@@ -46,7 +48,9 @@ def placeholder_keys(template: str) -> tuple[set[str], set[str]]:
     return properties, items
 
 
-def render(template: str, properties: dict[str, str], items: dict[str, str]) -> str:
+def render(
+    template: str, properties: dict[str, str], items: dict[str, str]
+) -> str:
     def substitute(match: re.Match) -> str:
         kind, key = match.groups()
         table = properties if kind == "P" else items
@@ -80,7 +84,10 @@ def prefix_block(concept_uri: str) -> str:
 
 
 def render_for_instance(
-    template: str, properties: dict[str, str], items: dict[str, str], concept_uri: str
+    template: str,
+    properties: dict[str, str],
+    items: dict[str, str],
+    concept_uri: str,
 ) -> str:
     return prefix_block(concept_uri) + render(template, properties, items)
 
@@ -101,7 +108,9 @@ def page_title(name: str) -> str:
     return f"{INDEX_PAGE}/{name}"
 
 
-def page_wikitext(name: str, template: str, rendered: str, frontend: str) -> str:
+def page_wikitext(
+    name: str, template: str, rendered: str, frontend: str
+) -> str:
     encoded = urllib.parse.quote(rendered, safe="")
     return "\n".join(
         [
@@ -132,7 +141,9 @@ def index_wikitext(templates: dict[str, str]) -> str:
         "",
     ]
     for name, template in templates.items():
-        lines.append(f"* [[{page_title(name)}|{name}]] — {description_of(template)}")
+        lines.append(
+            f"* [[{page_title(name)}|{name}]] — {description_of(template)}"
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -152,7 +163,9 @@ def publish_queries(
     published: list[str] = []
 
     for name, template in templates.items():
-        rendered = render_for_instance(template, properties, items, config.concept_uri)
+        rendered = render_for_instance(
+            template, properties, items, config.concept_uri
+        )
         if dry_run:
             log(f"--- {page_title(name)} (dry run) ---")
             log(rendered)

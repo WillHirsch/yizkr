@@ -44,7 +44,9 @@ class TestParser:
         assert roots[0].lines() == "0 @I1@ INDI\n1 NAME A /B/\n2 SOUR x"
 
     def test_cont_concatenation(self):
-        roots = parse_gedcom("0 @N1@ NOTE first\n1 CONC  part\n1 CONT second line\n")
+        roots = parse_gedcom(
+            "0 @N1@ NOTE first\n1 CONC  part\n1 CONT second line\n"
+        )
         assert roots[0].value == "first part\nsecond line"
 
     def test_bad_line_raises_with_number(self):
@@ -55,8 +57,12 @@ class TestParser:
 class TestDates:
     def test_exact_precisions(self):
         assert parse_gedcom_date("12 AUG 1885")[0] == {
-            "type": "time", "year": 1885, "month": 8, "day": 12, "precision": "day",
-        }  # fmt: skip
+            "type": "time",
+            "year": 1885,
+            "month": 8,
+            "day": 12,
+            "precision": "day",
+        }
         assert parse_gedcom_date("MAR 1950")[0]["precision"] == "month"
         assert parse_gedcom_date("1908")[0]["precision"] == "year"
 
@@ -74,7 +80,10 @@ class TestDates:
     def test_between_maps_to_range(self):
         value, quals = parse_gedcom_date("BET 1910 AND 1912")
         assert value["year"] == 1910
-        assert {q["property"] for q in quals} == {"earliest_date", "latest_date"}
+        assert {q["property"] for q in quals} == {
+            "earliest_date",
+            "latest_date",
+        }
 
     def test_garbage_is_never_guessed(self):
         assert parse_gedcom_date("SOMEDAY MAYBE") == (None, [])
@@ -83,20 +92,32 @@ class TestDates:
     def test_full_month_names(self):
         # hand-maintained trees spell months out; still unambiguous
         assert parse_gedcom_date("9 August 1861")[0] == {
-            "type": "time", "year": 1861, "month": 8, "day": 9, "precision": "day",
-        }  # fmt: skip
+            "type": "time",
+            "year": 1861,
+            "month": 8,
+            "day": 9,
+            "precision": "day",
+        }
         assert parse_gedcom_date("September 1899")[0]["month"] == 9
         assert parse_gedcom_date("13 Sept 1923")[0]["month"] == 9
 
     def test_month_first_order_with_named_month(self):
         assert parse_gedcom_date("January 1 1860")[0] == {
-            "type": "time", "year": 1860, "month": 1, "day": 1, "precision": "day",
-        }  # fmt: skip
+            "type": "time",
+            "year": 1860,
+            "month": 1,
+            "day": 1,
+            "precision": "day",
+        }
 
     def test_german_month_names(self):
         assert parse_gedcom_date("27 März 1910")[0] == {
-            "type": "time", "year": 1910, "month": 3, "day": 27, "precision": "day",
-        }  # fmt: skip
+            "type": "time",
+            "year": 1910,
+            "month": 3,
+            "day": 27,
+            "precision": "day",
+        }
         assert parse_gedcom_date("1 Dezember 1900")[0]["month"] == 12
 
     def test_lowercase_keywords(self):
@@ -112,7 +133,9 @@ class TestAdapter:
         second = fixture_result()
         assert first.batch.claims == second.batch.claims
         assert first.batch.entities == second.batch.entities
-        assert first.batch.extraction_run.model_identifier == ADAPTER_IDENTIFIER
+        assert (
+            first.batch.extraction_run.model_identifier == ADAPTER_IDENTIFIER
+        )
 
     def test_entities_carry_names_and_aliases(self):
         batch = fixture_result().batch
@@ -122,7 +145,9 @@ class TestAdapter:
         assert anna.kind == "human"
         # places become entities too, deduplicated by name
         springfield = [
-            e for e in batch.entities if e.label == "Springfield, Example County"
+            e
+            for e in batch.entities
+            if e.label == "Springfield, Example County"
         ]
         assert len(springfield) == 1
 
@@ -191,7 +216,9 @@ class TestVocabulary:
     def test_burial_place_with_point_in_time(self):
         batch = fixture_result().batch
         (burial,) = claims_for(batch, "i1", "burial_place")
-        place = next(e for e in batch.entities if e.id == burial.value.value.local_id)
+        place = next(
+            e for e in batch.entities if e.id == burial.value.value.local_id
+        )
         assert place.label == "Lakeside Cemetery, Example County"
         assert place.kind == "place"
         (qualifier,) = burial.qualifiers
@@ -202,7 +229,9 @@ class TestVocabulary:
         batch = fixture_result().batch
         (occupation,) = claims_for(batch, "i2", "occupation")
         entity = next(
-            e for e in batch.entities if e.id == occupation.value.value.local_id
+            e
+            for e in batch.entities
+            if e.id == occupation.value.value.local_id
         )
         assert entity.label == "Cigar maker"
         assert entity.kind == "occupation_class"
@@ -211,7 +240,9 @@ class TestVocabulary:
         batch = fixture_result().batch
         (cause,) = claims_for(batch, "i2", "cause_of_death")
         assert cause.value.value.text == "Heart failure"
-        assert "2 CAUS Heart failure" in cause.source.transcription_excerpt.text
+        assert (
+            "2 CAUS Heart failure" in cause.source.transcription_excerpt.text
+        )
 
     def test_number_of_children_is_a_quantity(self):
         batch = fixture_result().batch
@@ -251,7 +282,9 @@ class TestVocabulary:
         quals = {q.property: q for q in occupation.qualifiers}
         assert quals["point_in_time"].value.year == 1901
         place = next(
-            e for e in batch.entities if e.id == quals["location"].value.value.local_id
+            e
+            for e in batch.entities
+            if e.id == quals["location"].value.value.local_id
         )
         assert place.label == "Springfield"
 
@@ -260,7 +293,9 @@ class TestVocabulary:
             "0 @I1@ INDI\n1 NAME A /B/\n1 NCHI several\n0 TRLR\n",
             artifact_qid="Q23",
         )
-        assert any("NCHI" in w and "not a number" in w for w in result.warnings)
+        assert any(
+            "NCHI" in w and "not a number" in w for w in result.warnings
+        )
         assert not claims_for(result.batch, "i1", "number_of_children")
 
 
@@ -296,7 +331,12 @@ class TestTypedNames:
 
     def test_name_claims_carry_a_reference(self):
         batch = fixture_result().batch
-        for prop in ("birth_name", "married_name", "nickname", "official_name"):
+        for prop in (
+            "birth_name",
+            "married_name",
+            "nickname",
+            "official_name",
+        ):
             for claim in [c for c in batch.claims if c.property == prop]:
                 assert claim.source.artifact.qid == "Q23"
                 assert claim.value.type == "monolingual"
@@ -304,7 +344,12 @@ class TestTypedNames:
     def test_plain_name_emits_no_name_claim(self):
         # a person with an untyped, unquoted name stays label/alias only
         batch = fixture_result().batch
-        for prop in ("birth_name", "married_name", "nickname", "official_name"):
+        for prop in (
+            "birth_name",
+            "married_name",
+            "nickname",
+            "official_name",
+        ):
             assert not claims_for(batch, "i4", prop)  # Dov Muster
 
     def test_label_and_aliases_unchanged_by_typing(self):
@@ -354,13 +399,17 @@ class TestResidence:
         assert len(dated) == 1
         (qualifier,) = dated[0].qualifiers
         assert qualifier.value.year == 1939
-        place = next(e for e in batch.entities if e.id == dated[0].value.value.local_id)
+        place = next(
+            e for e in batch.entities if e.id == dated[0].value.value.local_id
+        )
         assert place.label == "Surrey, England"
         assert place.kind == "place"
 
     def test_undated_residence_has_no_qualifiers(self):
         batch = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23").batch
-        undated = [c for c in claims_for(batch, "i1", "residence") if not c.qualifiers]
+        undated = [
+            c for c in claims_for(batch, "i1", "residence") if not c.qualifiers
+        ]
         # the unparsed-date residence also ends up bare (date omitted)
         assert len(undated) == 2
 

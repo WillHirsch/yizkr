@@ -53,13 +53,17 @@ class EmbeddedMedium:
 class PresentationContent:
     slides: list[Slide]
     media: list[EmbeddedMedium]
-    skipped_media: dict[str, int] = field(default_factory=dict)  # suffix -> count
+    skipped_media: dict[str, int] = field(
+        default_factory=dict
+    )  # suffix -> count
 
 
 def _relationships(archive: zipfile.ZipFile, part: str) -> dict[str, str]:
     """rId -> resolved target path, for one part's .rels file."""
     rels_path = str(
-        PurePosixPath(part).parent / "_rels" / (PurePosixPath(part).name + ".rels")
+        PurePosixPath(part).parent
+        / "_rels"
+        / (PurePosixPath(part).name + ".rels")
     )
     if rels_path not in archive.namelist():
         return {}
@@ -99,7 +103,9 @@ def unpack_pptx(path: Path) -> PresentationContent:
     with zipfile.ZipFile(path) as archive:
         names = set(archive.namelist())
         if "ppt/presentation.xml" not in names:
-            raise ValueError(f"{path.name} is not a PPTX (no ppt/presentation.xml)")
+            raise ValueError(
+                f"{path.name} is not a PPTX (no ppt/presentation.xml)"
+            )
 
         # authoritative slide order: sldIdLst r:ids -> relationship targets
         presentation_rels = _relationships(archive, "ppt/presentation.xml")
@@ -129,7 +135,11 @@ def unpack_pptx(path: Path) -> PresentationContent:
                     if position not in media_slides[target]:
                         media_slides[target].append(position)
             slides.append(
-                Slide(number=position, text=_text_runs(archive, part), notes=notes)
+                Slide(
+                    number=position,
+                    text=_text_runs(archive, part),
+                    notes=notes,
+                )
             )
 
         media: list[EmbeddedMedium] = []
@@ -139,7 +149,9 @@ def unpack_pptx(path: Path) -> PresentationContent:
                 continue
             name = PurePosixPath(target).name
             medium = EmbeddedMedium(
-                name=name, data=archive.read(target), slides=media_slides[target]
+                name=name,
+                data=archive.read(target),
+                slides=media_slides[target],
             )
             if medium.is_image:
                 media.append(medium)
@@ -147,7 +159,9 @@ def unpack_pptx(path: Path) -> PresentationContent:
                 suffix = PurePosixPath(name).suffix.lower() or "(none)"
                 skipped[suffix] = skipped.get(suffix, 0) + 1
 
-    return PresentationContent(slides=slides, media=media, skipped_media=skipped)
+    return PresentationContent(
+        slides=slides, media=media, skipped_media=skipped
+    )
 
 
 def slide_transcript(content: PresentationContent) -> str:
@@ -200,7 +214,9 @@ def register_derived_media(
     from wikibaseintegrator.datatypes import String
 
     derived: dict[str, str] = {}
-    prefix = re.sub(r"[^A-Za-z0-9 _.-]+", "", deck_title).strip() or "presentation"
+    prefix = (
+        re.sub(r"[^A-Za-z0-9 _.-]+", "", deck_title).strip() or "presentation"
+    )
     workdir.mkdir(parents=True, exist_ok=True)
     for medium in content.media:
         label = f"{deck_title} — {medium.name}"
@@ -221,7 +237,9 @@ def register_derived_media(
         kind = items["photograph"] if medium.is_image else items["artifact"]
         if kind not in _existing_claim_targets(item, instance_of):
             _append(item, _item_claim(instance_of, kind, stated_in, deck_qid))
-        _append(item, _string_claim(media_file, file_page, stated_in, deck_qid))
+        _append(
+            item, _string_claim(media_file, file_page, stated_in, deck_qid)
+        )
         for slide in medium.slides:
             claim = _item_claim(part_of, deck_qid, stated_in, deck_qid)
             claim.qualifiers.add(String(prop_nr=page_number, value=str(slide)))

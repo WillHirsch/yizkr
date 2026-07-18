@@ -114,7 +114,11 @@ def test_register_is_idempotent(client, artifact):
 def _sha1_values(client, qid):
     properties, _ = client.vocabulary()
     data = client.api_get(
-        {"action": "wbgetclaims", "entity": qid, "property": properties["media_sha1"]}
+        {
+            "action": "wbgetclaims",
+            "entity": qid,
+            "property": properties["media_sha1"],
+        }
     )
     return [
         claim["mainsnak"]["datavalue"]["value"]
@@ -241,13 +245,17 @@ def test_write_is_idempotent_and_dual_referenced(client, artifact):
             reference_properties = {
                 pid for ref in claim["references"] for pid in ref["snaks"]
             }
-            assert properties["stated_in"] in reference_properties  # source ref
+            assert (
+                properties["stated_in"] in reference_properties
+            )  # source ref
             assert properties["inferred_from_extraction_run"] in (
                 reference_properties
             )  # process ref
 
 
-def stated_in_values(client, person_qid: str, year_time: str) -> tuple[int, set[str]]:
+def stated_in_values(
+    client, person_qid: str, year_time: str
+) -> tuple[int, set[str]]:
     """(statement count for the year, set of stated-in artifact QIDs)."""
     properties, _ = client.vocabulary()
     data = client.api_get(
@@ -290,12 +298,16 @@ def test_agreeing_second_source_appends_reference(client, artifact):
     assert (result.referenced, result.skipped) in ((1, 0), (0, 1))
     person_qid = result.created_items["person-1"]
 
-    count, sources = stated_in_values(client, person_qid, "+1901-00-00T00:00:00Z")
+    count, sources = stated_in_values(
+        client, person_qid, "+1901-00-00T00:00:00Z"
+    )
     assert count == 1  # still one statement, not a duplicate
     assert {artifact.artifact_qid, second.artifact_qid} <= sources
 
     # re-running the same batch is a no-op (reference already present)
-    rerun = BatchWriter(client).write_batch(birth_batch(second.artifact_qid, 1901))
+    rerun = BatchWriter(client).write_batch(
+        birth_batch(second.artifact_qid, 1901)
+    )
     assert rerun.written == 0
     assert rerun.referenced == 0
     assert rerun.skipped == 1
@@ -328,9 +340,13 @@ def test_curated_claim_carries_no_run_reference(client, artifact):
         for claim in claims
         if claim["mainsnak"]["datavalue"]["value"]["time"].startswith("+1990")
     ]
-    reference_properties = {pid for ref in claim["references"] for pid in ref["snaks"]}
+    reference_properties = {
+        pid for ref in claim["references"] for pid in ref["snaks"]
+    }
     assert properties["stated_in"] in reference_properties
-    assert properties["inferred_from_extraction_run"] not in reference_properties
+    assert (
+        properties["inferred_from_extraction_run"] not in reference_properties
+    )
 
 
 def test_detected_language_tags_excerpt_reference(client, artifact):
@@ -365,7 +381,10 @@ def test_detected_language_tags_excerpt_reference(client, artifact):
                     "property": "date_of_birth",
                     "value": {"type": "time", "year": 1929},
                     "source": {
-                        "artifact": {"kind": "qid", "qid": artifact.artifact_qid},
+                        "artifact": {
+                            "kind": "qid",
+                            "qid": artifact.artifact_qid,
+                        },
                         "page_number": "1",
                         "transcription_excerpt": {
                             "text": german[:60],
@@ -488,7 +507,9 @@ def test_item10_vocabulary_writes_and_is_idempotent(client, artifact):
     person_qid = first.created_items["person-1"]
     occupation_qid = first.created_items["occ-1"]
 
-    rerun = BatchWriter(client).write_batch(vocabulary_batch(artifact.artifact_qid))
+    rerun = BatchWriter(client).write_batch(
+        vocabulary_batch(artifact.artifact_qid)
+    )
     assert rerun.written == 0
     assert rerun.skipped == 4
 
@@ -512,7 +533,9 @@ def test_item10_vocabulary_writes_and_is_idempotent(client, artifact):
     assert quantity["amount"] == "+2"
     (cause,) = claim_values(person_qid, "cause_of_death")
     assert cause == {"text": "integration test cause", "language": "en"}
-    burial_targets = {value["id"] for value in claim_values(person_qid, "burial_place")}
+    burial_targets = {
+        value["id"] for value in claim_values(person_qid, "burial_place")
+    }
     assert first.created_items["pl-1"] in burial_targets
     occupation_classes = {
         value["id"] for value in claim_values(occupation_qid, "instance_of")
@@ -531,14 +554,20 @@ def names_batch(artifact_qid: str) -> ClaimBatch:
     source = {
         "artifact": {"kind": "qid", "qid": artifact_qid},
         "page_number": "1",
-        "transcription_excerpt": {"text": "née, later, known as", "language": "en"},
+        "transcription_excerpt": {
+            "text": "née, later, known as",
+            "language": "en",
+        },
     }
 
     def name(prop, text):
         return {
             "subject": subject,
             "property": prop,
-            "value": {"type": "monolingual", "value": {"text": text, "language": "en"}},
+            "value": {
+                "type": "monolingual",
+                "value": {"text": text, "language": "en"},
+            },
             "source": source,
         }
 
@@ -585,8 +614,14 @@ def test_typed_names_write_and_round_trip(client, artifact):
         }
         return claim["mainsnak"]["datavalue"]["value"]
 
-    assert one("birth_name") == {"text": "Integration Testerson", "language": "en"}
-    assert one("married_name") == {"text": "Integration Person", "language": "en"}
+    assert one("birth_name") == {
+        "text": "Integration Testerson",
+        "language": "en",
+    }
+    assert one("married_name") == {
+        "text": "Integration Person",
+        "language": "en",
+    }
     assert one("nickname") == {"text": "Iggy", "language": "en"}
 
 
@@ -596,7 +631,10 @@ def harness_batch(artifact_qid: str) -> ClaimBatch:
     source = {
         "artifact": {"kind": "qid", "qid": artifact_qid},
         "page_number": "1",
-        "transcription_excerpt": {"text": "worked at the mill", "language": "en"},
+        "transcription_excerpt": {
+            "text": "worked at the mill",
+            "language": "en",
+        },
     }
     return ClaimBatch.model_validate(
         {
@@ -728,7 +766,10 @@ def kinship_batch(artifact_qid: str) -> ClaimBatch:
                     "qualifiers": [
                         {
                             "property": "kinship_type",
-                            "value": {"type": "string", "value": "maternal aunt"},
+                            "value": {
+                                "type": "string",
+                                "value": "maternal aunt",
+                            },
                         }
                     ],
                     "source": source,
@@ -773,8 +814,13 @@ def test_adr0014_vocabulary_writes(client, artifact):
     properties, items = client.vocabulary()
 
     # sex_or_gender points at the `male` vocab item
-    sex = client.api_get({"action": "wbgetclaims", "entity": person_qid,
-                          "property": properties["sex_or_gender"]})  # fmt: skip
+    sex = client.api_get(
+        {
+            "action": "wbgetclaims",
+            "entity": person_qid,
+            "property": properties["sex_or_gender"],
+        }
+    )
     assert items["male"] in {
         c["mainsnak"]["datavalue"]["value"]["id"]
         for cs in sex["claims"].values()

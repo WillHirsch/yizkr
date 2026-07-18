@@ -7,10 +7,13 @@ COMPOSE_LOCAL = docker compose -f docker-compose.yml -f docker-compose.localhost
 export UID := $(shell id -u)
 export GID := $(shell id -g)
 
-.PHONY: install test test-live lint fmt up down up-local cli bootstrap smoke publish-queries
+.PHONY: install hooks test test-live lint fmt up down up-local cli bootstrap smoke publish-queries
 
 install:            ## create/update the uv-managed venv (with dev tools)
 	$(UV) sync --dev
+
+hooks:              ## install the git pre-commit hooks (ruff format + lint)
+	$(UV) run pre-commit install
 
 test:               ## offline unit tests
 	$(UV) run pytest
@@ -19,12 +22,12 @@ test-live:          ## integration tests against the running stack (make up firs
 	$(UV) run pytest -m live tests/integration -v
 
 lint:
-	$(UV) run ruff check src tests
-	$(UV) run ruff format --check src tests
+	$(UV) run ruff check .
+	$(UV) run ruff format --check .
 
 fmt:
-	$(UV) run ruff format src tests
-	$(UV) run ruff check --fix src tests
+	$(UV) run ruff format .
+	$(UV) run ruff check --fix .
 
 up:                 ## start the Wikibase Suite stack
 	cd deploy && docker compose up -d --wait

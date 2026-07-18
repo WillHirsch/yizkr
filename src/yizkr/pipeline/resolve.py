@@ -29,7 +29,11 @@ def _resolve_claim(claim: Claim, label_to_qid: dict[str, str]) -> Claim:
         )
     updates["qualifiers"] = [
         q.model_copy(
-            update={"value": ItemValue(value=_resolve_ref(q.value.value, label_to_qid))}
+            update={
+                "value": ItemValue(
+                    value=_resolve_ref(q.value.value, label_to_qid)
+                )
+            }
         )
         if isinstance(q.value, ItemValue)
         else q
@@ -41,8 +45,12 @@ def _resolve_claim(claim: Claim, label_to_qid: dict[str, str]) -> Claim:
     return claim.model_copy(update=updates)
 
 
-def resolve_batch(batch: ClaimBatch, label_to_qid: dict[str, str]) -> ClaimBatch:
+def resolve_batch(
+    batch: ClaimBatch, label_to_qid: dict[str, str]
+) -> ClaimBatch:
     """Return a copy of the batch with exact-label local refs resolved."""
     return batch.model_copy(
-        update={"claims": [_resolve_claim(c, label_to_qid) for c in batch.claims]}
+        update={
+            "claims": [_resolve_claim(c, label_to_qid) for c in batch.claims]
+        }
     )

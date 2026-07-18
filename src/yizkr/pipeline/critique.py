@@ -58,7 +58,8 @@ Claims (subject | property | value):
 
 Output NDJSON, one finding per line, no prose, no code fences:
 {{"target": "<entity id, or 'e01 alias: MOTHER', or 'claim: e01 occupation'>",
-"issue": "<one line>", "suggestion": "<one line: likely-correct kind/name/property, or 'drop'>"}}
+"issue": "<one line>",
+"suggestion": "<one line: likely-correct kind/name/property, or 'drop'>"}}
 Emit a line ONLY for a genuine concern; emit NONE if the extraction
 looks sound. After the last finding, end with exactly one final line:
 {{"done": true, "findings_emitted": K}}
@@ -70,7 +71,9 @@ def _entities_block(batch: ClaimBatch) -> str:
     for entity in batch.entities:
         aliases = ", ".join(entity.aliases) if entity.aliases else "-"
         hint = f" (hint: {entity.type_hint})" if entity.type_hint else ""
-        lines.append(f"{entity.id} | {entity.kind}{hint} | {entity.label} | {aliases}")
+        lines.append(
+            f"{entity.id} | {entity.kind}{hint} | {entity.label} | {aliases}"
+        )
     return "\n".join(lines)
 
 

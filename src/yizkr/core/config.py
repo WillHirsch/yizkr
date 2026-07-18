@@ -67,7 +67,9 @@ class Config:
     env_file: Path | None
 
     @classmethod
-    def load(cls, env_file: Path | None = None, require_admin: bool = True) -> Config:
+    def load(
+        cls, env_file: Path | None = None, require_admin: bool = True
+    ) -> Config:
         env_file = resolve_env_file(env_file)
         file_values = read_env_file(env_file) if env_file else {}
 
@@ -78,12 +80,16 @@ class Config:
         wikibase_host = get("WIKIBASE_PUBLIC_HOST")
         wdqs_host = get("WDQS_PUBLIC_HOST")
         port = get("HTTP_PORT", "80")
-        port_suffix = "" if port in ("80", "") or scheme == "https" else f":{port}"
+        port_suffix = (
+            "" if port in ("80", "") or scheme == "https" else f":{port}"
+        )
 
         wikibase_url = get("WIKIBASE_URL") or (
             f"{scheme}://{wikibase_host}{port_suffix}" if wikibase_host else ""
         )
-        wdqs_url = f"{scheme}://{wdqs_host}{port_suffix}" if wdqs_host else None
+        wdqs_url = (
+            f"{scheme}://{wdqs_host}{port_suffix}" if wdqs_host else None
+        )
         sparql_url = get("WDQS_SPARQL_URL") or (
             f"{wdqs_url}/sparql" if wdqs_url else None
         )
@@ -107,7 +113,9 @@ class Config:
         # The concept URI is an identifier prefix baked into the triples:
         # scheme://host, never a port (matches WIKIBASE_CONCEPT_URI in the
         # compose file).
-        concept_uri = f"{scheme}://{wikibase_host}" if wikibase_host else wikibase_url
+        concept_uri = (
+            f"{scheme}://{wikibase_host}" if wikibase_host else wikibase_url
+        )
         return cls(
             wikibase_url=wikibase_url,
             concept_uri=concept_uri,
