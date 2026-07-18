@@ -1,9 +1,9 @@
 """Human review step: ClaimBatch <-> CSV for OpenRefine (R4).
 
 `export_review_csv` renders one row per claim with human-readable
-values, source locators, a machine-written `warning` column, and empty
-curator columns. Reviewers work in OpenRefine or any spreadsheet and
-fill:
+values, source locators, a machine-written `critique_notes` column, and
+empty curator columns. Reviewers work in OpenRefine or any spreadsheet
+and fill:
 
 * `decision` — approve / reject (nothing passes without it);
 * `correction` — a replacement value for an approved claim the machine
@@ -12,16 +12,20 @@ fill:
   number for quantity values. The
   corrected claim is curator-attributed: it keeps the artifact
   reference but no extraction-run reference (ADR-0003 — process
-  provenance is for machine writes);
-* `living` — `yes` / `no` sets the `living person` privacy flag for the
-  row's subject (ROADMAP item 10): a curated claim referenced to the
-  artifact whose review prompted it. The flag drives the public-export
-  exclusion (docs/MODELING.md).
+  provenance is for machine writes).
 
-The `warning` column flags subjects with no death data in the batch (or
-the graph, when the caller supplies known deaths) and activity within
-the living-person cutoff — the reviewer decides whether to set
-`living`.
+The `critique_notes` column carries the extraction critic's concerns
+(ADR-0013) for the row's subject — flagged mistypes, misapplied
+properties, role-aliases — so the curator sees them at this gate.
+
+There is no `living` column. Whether a person is possibly living is
+never a review decision: it is a runtime determination from the absence
+of death evidence, made when a privacy-sensitive action runs (public
+export, an internet-facing publish) — see ADR-0020 and
+`yizkr.core.privacy`. To record a person as deceased with no
+particulars, a source asserting death (a burial place, a cause of
+death, or an undated death event) is enough; nothing is asked of the
+reviewer.
 
 `apply_review` filters the ORIGINAL batch by the returned CSV: rows are
 matched by `claim_id`, a content hash of the claim, so reordering,
@@ -43,7 +47,6 @@ import csv
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 
 from yizkr.claims import (
@@ -74,16 +77,11 @@ CSV_COLUMNS = [
     "region",
     "excerpt",
     "confidence",
-    "warning",
+    "critique_notes",
     "decision",
     "correction",
-    "living",
     "notes",
 ]
-
-# mirror of the public-export policy (docs/MODELING.md): activity within
-# this window and no death data means "possibly living"
-LIVING_CUTOFF_YEARS = 100
 
 _CORRECTION_DATE = re.compile(r"^(\d{1,4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$")
 
@@ -134,100 +132,20 @@ def _describe_value(value) -> str:
     return str(value.value)
 
 
-# -- living-person warning (ROADMAP item 10) ------------------------------
-
-
-def _subject_key(claim: Claim) -> str:
-    return _describe_ref(claim.subject)
-
-
-def _claim_years(claim: Claim) -> list[int]:
-    years = [claim.value.year] if isinstance(claim.value, TimeValue) else []
-    years += [
-        qualifier.value.year
-        for qualifier in claim.qualifiers
-        if isinstance(qualifier.value, TimeValue)
-    ]
-    return years
-
-
-def living_warnings(
-    batch: ClaimBatch,
-    known_deaths: set[str] | None = None,
-    cutoff_year: int | None = None,
-) -> dict[str, str]:
-    """subject key -> warning, for human subjects with no death data and
-    activity within the cutoff window.
-
-    `known_deaths` lets the caller add graph knowledge (QIDs with a
-    recorded death) so already-documented deaths don't warn spuriously.
-    Offline callers may omit it; the warning is advisory either way.
-    """
-    if cutoff_year is None:
-        cutoff_year = datetime.now(UTC).year - LIVING_CUTOFF_YEARS
-    human_ids = {record.id for record in batch.entities if record.kind == "human"}
-
-    def is_human_subject(claim: Claim) -> bool:
-        subject = claim.subject
-        if isinstance(subject, LocalRef):
-            if subject.local_id in human_ids:
-                return True
-            return subject.instance_of == "human"
-        # QID subjects: the batch cannot tell; treat person-shaped
-        # properties as evidence enough for an advisory warning
-        return claim.property in (
-            "date_of_birth",
-            "place_of_birth",
-            "date_of_death",
-            "place_of_death",
-            "age_at_death",
-            "father",
-            "mother",
-            "spouse",
-            "residence",
-        )
-
-    subjects: dict[str, dict] = {}
-    for claim in batch.claims:
-        if not is_human_subject(claim):
-            continue
-        entry = subjects.setdefault(
-            _subject_key(claim), {"death": False, "latest": None}
-        )
-        if claim.property in ("date_of_death", "place_of_death", "age_at_death"):
-            entry["death"] = True
-        for year in _claim_years(claim):
-            if entry["latest"] is None or year > entry["latest"]:
-                entry["latest"] = year
-
-    warnings: dict[str, str] = {}
-    for key, entry in subjects.items():
-        if entry["death"]:
-            continue
-        if known_deaths and key in known_deaths:
-            continue
-        if entry["latest"] is not None and entry["latest"] >= cutoff_year:
-            warnings[key] = (
-                f"no death data and activity in {entry['latest']} — possibly "
-                f"living; consider living=yes (excludes from public exports)"
-            )
-    return warnings
-
-
 def export_review_csv(
     batch: ClaimBatch,
     path: Path,
-    known_deaths: set[str] | None = None,
-    cutoff_year: int | None = None,
     critique_notes: dict[str, str] | None = None,
 ) -> int:
     """Write the review CSV; returns the number of rows.
 
     `critique_notes` (ADR-0013): entity local_id -> concern from the
-    extraction critic, merged into the `warning` column so the curator
-    sees flagged mistypes/role-aliases at this gate.
+    extraction critic, rendered in the `critique_notes` column so the
+    curator sees flagged mistypes / misapplied properties / role-aliases
+    at this gate. There is no possibly-living warning and no `living`
+    column: privacy is a runtime determination, never a review decision
+    (ADR-0020).
     """
-    warnings = living_warnings(batch, known_deaths, cutoff_year)
     critique_notes = critique_notes or {}
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
@@ -254,19 +172,11 @@ def export_review_csv(
                     "confidence": claim.confidence
                     if claim.confidence is not None
                     else "",
-                    "warning": "; ".join(
-                        note
-                        for note in (
-                            warnings.get(_subject_key(claim), ""),
-                            critique_notes.get(
-                                getattr(claim.subject, "local_id", None) or "", ""
-                            ),
-                        )
-                        if note
+                    "critique_notes": critique_notes.get(
+                        getattr(claim.subject, "local_id", None) or "", ""
                     ),
                     "decision": "",
                     "correction": "",
-                    "living": "",
                     "notes": "",
                 }
             )
@@ -324,23 +234,6 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
     return claim.model_copy(update={"value": corrected, "curated": True})
 
 
-LIVING_VALUES = {"yes", "no"}
-
-
-def _living_claim(template: Claim, flag: str) -> Claim:
-    """A curated `living person` claim for the template claim's subject,
-    referenced to the artifact whose review prompted it."""
-    return Claim(
-        subject=template.subject,
-        property="living_person",
-        value=ItemValue(value=VocabRef(key=flag)),
-        source=template.source.model_copy(
-            update={"page_number": None, "region": None, "transcription_excerpt": None}
-        ),
-        curated=True,
-    )
-
-
 def apply_review(batch: ClaimBatch, csv_path: Path) -> tuple[ClaimBatch, list[str]]:
     """(approved batch, warnings). Only explicit approvals pass."""
     rows: dict[str, dict] = {}
@@ -350,7 +243,6 @@ def apply_review(batch: ClaimBatch, csv_path: Path) -> tuple[ClaimBatch, list[st
             rows[row["claim_id"]] = row
 
     approved: list[Claim] = []
-    living_flags: dict[str, tuple[str, Claim]] = {}
     for claim in batch.claims:
         cid = claim_id(claim)
         row = rows.pop(cid, None)
@@ -358,24 +250,6 @@ def apply_review(batch: ClaimBatch, csv_path: Path) -> tuple[ClaimBatch, list[st
             warnings.append(f"claim {cid} has no row in the CSV: excluded")
             continue
         decision = row.get("decision", "").strip().lower()
-        living = row.get("living", "").strip().lower()
-        if living:
-            if living not in LIVING_VALUES:
-                warnings.append(
-                    f"claim {cid}: living={living!r} not understood "
-                    f"(yes/no): flag not set"
-                )
-            else:
-                key = _subject_key(claim)
-                previous = living_flags.get(key)
-                if previous and previous[0] != living:
-                    warnings.append(
-                        f"subject {key}: conflicting living flags "
-                        f"({previous[0]} vs {living}): flag not set"
-                    )
-                    living_flags[key] = ("", claim)
-                elif not previous:
-                    living_flags[key] = (living, claim)
         if decision in APPROVE:
             correction = row.get("correction", "").strip()
             if correction:
@@ -397,9 +271,6 @@ def apply_review(batch: ClaimBatch, csv_path: Path) -> tuple[ClaimBatch, list[st
             f"CSV row {stale} matches no claim in the batch (content edited "
             f"or wrong batch): ignored"
         )
-    for flag, template in living_flags.values():
-        if flag:
-            approved.append(_living_claim(template, flag))
     return batch.model_copy(update={"claims": approved}), warnings
 
 
@@ -419,9 +290,7 @@ def accept_all(source_csv: Path, out_csv: Path) -> int:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames or []
         if "decision" not in fieldnames:
-            raise ValueError(
-                f"{source_csv} is not a review CSV (no 'decision' column)"
-            )
+            raise ValueError(f"{source_csv} is not a review CSV (no 'decision' column)")
         rows = list(reader)
     for row in rows:
         row["decision"] = "approve"

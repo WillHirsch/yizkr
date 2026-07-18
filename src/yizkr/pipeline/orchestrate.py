@@ -10,8 +10,8 @@ every document as far as it can and then STOPS at the human gates:
   (copy `equivalences.csv`, fill the `decision` column, save under the
   reviewed name — identity is never auto-confirmed, ADR-0007);
 * after the review export, until `<doc>/review.reviewed.csv` exists
-  (same convention for claim decisions, corrections, and the living
-  flag — R3: human confirmation is part of the data flow).
+  (same convention for claim decisions and corrections — R3: human
+  confirmation is part of the data flow).
 
 A reviewed file's PRESENCE (and freshness) is the gate: the
 orchestrator never interprets a half-filled CSV as consent, and a
@@ -440,18 +440,11 @@ class Orchestrator:
         return resolve_batch(batch, item_labels)
 
     def _step_export_review(self, doc: DocumentRun, batch: ClaimBatch) -> int:
-        from yizkr.pipeline.reconcile import fetch_roster
         from yizkr.pipeline.review import export_review_csv
 
-        known_deaths = {
-            entity.qid
-            for entity in fetch_roster(self.client, self.config)
-            if entity.death
-        }
         return export_review_csv(
             batch,
             doc.review,
-            known_deaths=known_deaths,
             critique_notes=self._critique_notes(doc),
         )
 

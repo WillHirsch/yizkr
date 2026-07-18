@@ -5,34 +5,43 @@ from pathlib import Path
 
 from yizkr.backup import (
     filter_public_export,
-    is_possibly_living,
     prune_old_backups,
 )
+from yizkr.core.privacy import is_possibly_living, year_of
 
 CUTOFF = 1926  # as if today were 2026 with the default 100-year window
 
 
-class TestLivingCall:
+class TestPossiblyLiving:
+    """Runtime determination (ADR-0020): no stored flag, no override —
+    only death evidence or a birth beyond the cutoff includes a person."""
+
     def test_unknown_means_excluded(self):
-        possibly, reason = is_possibly_living(None, False, None, CUTOFF)
+        possibly, reason = is_possibly_living(None, False, CUTOFF)
         assert possibly
         assert "unknown means excluded" in reason
 
     def test_death_evidence_includes(self):
-        assert is_possibly_living(None, True, None, CUTOFF)[0] is False
-        assert is_possibly_living(1980, True, None, CUTOFF)[0] is False
+        # a single boolean; the query decides what counts as evidence
+        # (date/place/cause of death, burial place, or a death event)
+        assert is_possibly_living(None, True, CUTOFF)[0] is False
+        assert is_possibly_living(1980, True, CUTOFF)[0] is False
 
     def test_birth_beyond_cutoff_includes(self):
-        assert is_possibly_living(1900, False, None, CUTOFF)[0] is False
+        assert is_possibly_living(1900, False, CUTOFF)[0] is False
 
     def test_recent_birth_without_death_excludes(self):
-        assert is_possibly_living(1958, False, None, CUTOFF)[0] is True
+        assert is_possibly_living(1958, False, CUTOFF)[0] is True
 
-    def test_explicit_flag_wins_both_directions(self):
-        # flagged living: excluded even with death evidence recorded
-        assert is_possibly_living(1900, True, "yes", CUTOFF)[0] is True
-        # curator cleared the flag: included even without evidence
-        assert is_possibly_living(1980, False, "no", CUTOFF)[0] is False
+
+class TestYearOf:
+    def test_plain_and_signed_years(self):
+        assert year_of("1900-01-01T00:00:00Z") == 1900
+        assert year_of("+1885-08-12T00:00:00Z") == 1885
+
+    def test_missing_or_malformed_is_none(self):
+        assert year_of("") is None
+        assert year_of("not-a-date") is None
 
 
 REF_DEAD = "a" * 40  # reference used only by the excluded person

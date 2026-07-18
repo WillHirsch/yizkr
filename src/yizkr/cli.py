@@ -20,6 +20,7 @@ from pathlib import Path
 
 from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
+from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS
 from yizkr.core.wiki import WikiClient
 
 
@@ -154,7 +155,7 @@ def cmd_publish_site(args) -> int:
     summary = publish_site(Config.load(args.env_file), args.out, clean=args.clean)
     print(json.dumps(summary, indent=2))
     print(
-        "NOTE: built from the LIVE graph — includes living people; serve on "
+        "NOTE: built from the LIVE graph — includes possibly-living people; serve on "
         "the LAN only (e.g. `python -m http.server -d {out}`).".format(
             out=summary["out"]
         )
@@ -424,29 +425,11 @@ def cmd_export_review(args) -> int:
     from yizkr.pipeline.review import export_review_csv
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    # graph knowledge for the living-person warning (best-effort: the
-    # export still works offline, the warning is just batch-local then)
-    known_deaths: set[str] | None = None
-    try:
-        from yizkr.pipeline.reconcile import fetch_roster
-
-        config = Config.load(args.env_file)
-        known_deaths = {
-            entity.qid
-            for entity in fetch_roster(WikiClient(config), config)
-            if entity.death
-        }
-    except Exception as exc:
-        print(
-            f"note: no graph connection ({exc}); living-person warnings "
-            f"use batch data only",
-            file=sys.stderr,
-        )
-    rows = export_review_csv(_load_batch(args.batch), args.out, known_deaths)
+    rows = export_review_csv(_load_batch(args.batch), args.out)
     print(
-        f"wrote {args.out} ({rows} rows). Fill 'decision' (approve/reject), "
-        f"optionally 'correction' (unambiguous replacement value) and "
-        f"'living' (yes/no privacy flag), then run apply-review."
+        f"wrote {args.out} ({rows} rows). Fill 'decision' (approve/reject) "
+        f"and optionally 'correction' (unambiguous replacement value), then "
+        f"run apply-review."
     )
     return 0
 
@@ -632,7 +615,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "backup",
-        help="database + media + RDF dump, and a living-persons-excluded "
+        help="database + media + RDF dump, and a possibly-living-excluded "
         "public export (W1 task 7)",
     )
     p.add_argument("--out", type=Path, default=Path("var/backups"))
@@ -648,15 +631,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--no-public-export",
         action="store_true",
-        help="skip the living-persons-excluded export",
+        help="skip the possibly-living-excluded export",
     )
     p.add_argument(
         "--cutoff-years",
         type=int,
-        default=100,
+        default=DEFAULT_CUTOFF_YEARS,
         metavar="N",
-        help="without death evidence or a curator flag, only people born "
-        "more than N years ago enter the public export (default 100)",
+        help="without any death evidence, only people born more than N "
+        f"years ago enter the public export (default {DEFAULT_CUTOFF_YEARS})",
     )
     p.add_argument(
         "--keep",
@@ -694,7 +677,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "publish-site",
         help="render the live graph to a static site (frontend ladder rung 2; "
-        "LAN/private — includes living people)",
+        "LAN/private — includes possibly-living people)",
     )
     p.add_argument("--out", type=Path, default=Path("var/site"))
     p.add_argument(

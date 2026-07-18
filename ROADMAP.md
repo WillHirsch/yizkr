@@ -36,7 +36,7 @@ updated, and no path writes an unreferenced statement.
    unreferenced-statement QC report.
    *Done — see `queries/` (plus an artifact-assertions inventory).*
 7. **Backup/export** – scheduled RDF dump + media backup job, with a
-   living-persons-excluded public export variant (empty for now).
+   possibly-living-excluded public export variant (empty for now).
    *Done — see `backup.py`; `yizkr backup` (database + media + RDF +
    conservative public export), cron runbook in deploy/README.md.*
 
@@ -61,18 +61,21 @@ updated, and no path writes an unreferenced statement.
    duplicates already in the graph.
    *Done — see `pipeline/reconcile.py`; `ingest reconcile`,
    `resolve --equivalences`, `reconcile-graph`.*
-10. **Living-person policy at ingestion** – partially done: the entity
-    manifest's `extract: false` flag (ADR-0007) keeps logistics-context
-    people out of extraction. Still open: review CSV warns when a
-    subject has no death data and recent activity, and the
-    `living person` flag gets set as part of curation. Vocabulary
-    session for the observed gaps: artifact types (genealogical
-    report, address book), occupation, sibling, cause of death
-    (quantity datatype support for ages/counts).
-    *Review-flow half done (rode along with item 15): the review CSV's
-    `warning` column flags subjects with no death data (batch- and
-    graph-aware) and activity within the 100-year cutoff, and its
-    `living` column sets the `living person` flag as a curated claim.*
+10. **Living-person policy at ingestion** – done: the entity manifest's
+    `extract: false` flag (ADR-0007) keeps logistics-context people out
+    of extraction, and "possibly living" is a **runtime determination**
+    from the absence of death evidence — no stored flag, no reviewer
+    decision (ADR-0020). Vocabulary session for the observed gaps:
+    artifact types (genealogical report, address book), occupation,
+    sibling, cause of death (quantity datatype support for ages/counts).
+    *Reworked (ADR-0020): the earlier `living` review-CSV column was
+    removed and the `warning` column renamed `critique_notes` (its now
+    single role). The possibly-living call lives in
+    `yizkr.core.privacy`, shared by the public export and the
+    static-site badge, keyed on death evidence — a date, place, or cause
+    of death, a burial place, or a death event — so a person can be
+    marked deceased with no date or place, and privacy needs no
+    curation.*
     *Vocabulary session done: `place of burial` (P119), `occupation`
     (P106; item-valued, labels verbatim, occupations reconcile like
     places), `sibling` (P3373; asserted only, never derived from
@@ -161,8 +164,10 @@ updated, and no path writes an unreferenced statement.
     it now always extracts entity-first; (b) upstream redos left stale
     downstream outputs and could mis-open review gates — dependencies
     are now make-style, and a reviewed file older than its CSV no
-    longer counts as consent. First live use of the `living` column
-    (three flags set). Photo and German legs still open: the candidate
+    longer counts as consent. (That run's first live use of the `living`
+    column is now moot: the column was removed and possibly-living made a
+    runtime determination — ADR-0020.) Photo and German legs still open:
+    the candidate
     photographs and German documents on Drive are unreachable from
     this session (files exceed the connector's transfer cap or sit in
     shared folders it cannot index); the faces extra is verified
@@ -299,10 +304,11 @@ and feeds rung 2's gallery instead).
 
 Rung 2 — *done*: `yizkr publish-site` renders the LIVE SPARQL endpoint
 (decided; an internet-facing build must instead come from the
-living-persons-excluded public export — later variant) to a
+possibly-living-excluded public export — later variant) to a
 self-contained static site under var/site: person pages showing every
 attributed value side by side with its source label and stated
-precision (never padded), living badges, the timeline (page +
+precision (never padded), runtime possibly-living badges (ADR-0020), the
+timeline (page +
 TimelineJS-format feed), the photo gallery (ADR-0008 derived media
 with provenance), the disagreement report, and a places index that
 becomes a map once places carry coordinates (GeoNames pass still

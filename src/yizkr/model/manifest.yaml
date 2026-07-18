@@ -236,11 +236,6 @@ properties:
     datatype: wikibase-item
     wikidata: P551
 
-  living_person:
-    label: living person
-    description: privacy flag; whether the person is (possibly) living, which excludes them from public exports (docs/MODELING.md)
-    datatype: wikibase-item
-
   sibling:
     label: sibling
     description: >-
@@ -655,14 +650,6 @@ items:
     label: circa
     description: sourcing circumstances value; the source gives the value as approximate
     wikidata: Q5727902
-
-  "yes":
-    label: "yes"
-    description: affirmative value for flag properties such as living person
-
-  "no":
-    label: "no"
-    description: negative value for flag properties such as living person
 
   male:
     label: male

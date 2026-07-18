@@ -161,11 +161,13 @@ directory under `var/backups/` containing:
 - `media.tar.gz` — uploaded artifact files.
 - `full.nt.gz` — complete RDF dump. Portable export; also what a full
   WDQS reload imports (WDQS state itself is derived and not backed up).
-- `public.nt.gz` + `public-exclusions.json` — the living-persons-
-  excluded export (R7). Conservative by construction: a person is
-  included only on positive evidence they are not living (a death
-  record, birth beyond the 100-year cutoff, or an explicit curator
-  `living person = no`); *unknown means excluded*. Every triple that
+- `public.nt.gz` + `public-exclusions.json` — the possibly-living-
+  excluded export (R7, ADR-0020). "Possibly living" is a runtime
+  determination from the absence of death evidence, not a stored flag.
+  Conservative by construction: a person is included only on positive
+  evidence they are not living (any death evidence — a date, place, or
+  cause of death, a burial place, or a death event — or birth beyond the
+  100-year cutoff); *unknown means excluded*. Every triple that
   mentions an excluded person is dropped — including other people's
   claims about them and orphaned provenance nodes — and transcription
   excerpts (raw source quotations) never enter the public tier at all.

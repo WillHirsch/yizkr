@@ -152,9 +152,10 @@ one needs:
 
 Both properties are multi-valued and source-attributed: many people may
 call one person many things, each appellation its own referenced statement
-at normal rank, none canonical (ADR-0002). Appellations of living people
-are personal data and ride the existing living-person exclusion (ADR
-MODELING.md) — no special handling, but noted.
+at normal rank, none canonical (ADR-0002). Appellations of possibly-living
+people are personal data and ride the existing possibly-living exclusion
+(ADR-0020, MODELING.md) — dropped with every other mention of an excluded
+person; no special handling, but noted.
 
 ## Rulings
 

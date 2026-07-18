@@ -302,7 +302,7 @@ def test_agreeing_second_source_appends_reference(client, artifact):
 
 
 def test_curated_claim_carries_no_run_reference(client, artifact):
-    """A curator-attributed claim (correction / living flag) is a human
+    """A curator-attributed claim (a value correction) is a human
     write: artifact reference only, no extraction-run reference
     (ADR-0003 — process provenance is for machine writes)."""
     batch = birth_batch(artifact.artifact_qid, 1990)

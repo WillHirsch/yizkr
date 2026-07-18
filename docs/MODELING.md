@@ -59,8 +59,8 @@ Every statement carries at least one reference with:
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item
 
-Curator-attributed statements (a value correction or a curation flag
-from the review CSV) carry the `stated in → artifact` reference only:
+Curator-attributed statements (a value correction from the review CSV)
+carry the `stated in → artifact` reference only:
 process provenance is for machine writes, and a human decision's
 process is the MediaWiki edit history. The pipeline marks these with
 the claim contract's `curated` flag.
@@ -369,20 +369,34 @@ same shape as the reconciled deportation events already in the graph.
   by nature: two spouses asserted by one source are remarriages, not a
   contradiction (their start/end qualifiers tell them apart).
 
-## Living persons and privacy
+## Living persons and privacy (see ADR-0020)
 
-- Property: "living person" flag (or inferred from absence of death
-  data + birth recency); flagged entities are excluded from every
-  public export, dump, or publish tier by default.
-- The flag is set during claim review: the review CSV warns when a
-  subject has no death data (in the batch or the graph) and activity
-  within the 100-year cutoff, and its `living` column (yes/no) writes
-  the flag as a curated claim referenced to the artifact whose review
-  prompted it.
-- The public export (`yizkr backup`) applies this conservatively:
-  a person enters it only on positive evidence they are not living —
-  a death record, birth beyond a 100-year cutoff, or an explicit
-  curator `living person = no`. Unknown means excluded. Exclusion
-  removes every mention (other people's claims about them, orphaned
-  provenance nodes), and transcription excerpts — raw source
-  quotations, which can name anyone — never enter the public tier.
+- **No stored "living" flag.** Whether a person is *possibly living* is
+  never recorded and never a review decision; it is a **runtime
+  determination** made whenever a privacy-sensitive action runs (the
+  public export, an internet-facing publish), computed from the
+  **absence of death evidence** in the graph. The determination lives in
+  `yizkr.core.privacy` and both the export and the private static-site
+  badge call it, so they always agree.
+- **Death evidence** is any source-asserted signal that presupposes
+  death: a `date of death`, `place of death`, or `cause of death`; a
+  `place of burial` (burial presupposes death); or participation in a
+  `death` event. None of these requires *both* a date and a place, so a
+  person can be recorded as **deceased without a time or place of
+  death** — a burial place, a cause of death, or an undated death event
+  each suffices. Death is an event like any other (ADR-0014), so "died,
+  nothing else known" is a death event with the person as participant.
+- **No curation duty.** There is no `living` column in the review CSV
+  and nothing the reviewer must decide. Privacy falls out of what
+  sources already assert; a curator who knows a person is dead records
+  that as an ordinary death assertion, not a flag.
+- The public export (`yizkr backup`) is **conservative**: a person
+  enters it only on positive evidence they are not living — any death
+  evidence above, or birth beyond a 100-year cutoff (default,
+  `--cutoff-years`). **Unknown means excluded.** Exclusion removes every
+  mention (other people's claims about them, orphaned provenance nodes),
+  and transcription excerpts — raw source quotations, which can name
+  anyone — never enter the public tier.
+- The private static site (`yizkr publish-site`) includes everyone but
+  badges each subject the export would drop ("possibly living — never in
+  public exports"), using the same runtime call.

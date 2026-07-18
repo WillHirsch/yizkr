@@ -52,17 +52,22 @@ def time_literal(value: str) -> dict:
     }
 
 
+# ?deceased / ?birth are the runtime possibly-living signals (ADR-0020):
+# Q7 has death evidence (?deceased true) → not living; Q8 has neither
+# death evidence nor a birth → possibly living, so it earns the badge.
 PEOPLE = [
     {
         "person": uri("Q7"),
         "personLabel": literal('Rosa "Ro" & Co <Genserowski>'),
         "personDescription": literal("matriarch"),
+        "deceased": literal("true"),
+        "birth": time_literal("+1873-05-10T00:00:00Z"),
         "aliases": literal("Rosa|our great grandmother"),
     },
     {
         "person": uri("Q8"),
         "personLabel": literal("Living Person"),
-        "living": literal("yes"),
+        "deceased": literal("false"),
         "aliases": literal(""),
     },
 ]
@@ -201,13 +206,17 @@ class TestPersonPage:
         assert "&lt;Genserowski&gt;" in text
         assert "<Genserowski>" not in text
 
-    def test_living_badge(self, tmp_path, vocabulary):
+    def test_possibly_living_badge(self, tmp_path, vocabulary):
+        # runtime determination (ADR-0020): Q8 has no death evidence, so
+        # the private site marks it; Q7 (deceased) is not marked.
         site, _ = build(tmp_path, vocabulary, RESPONSES)
         assert (
-            "living — never in public exports" in (site / "people/Q8.html").read_text()
+            "possibly living — never in public exports"
+            in (site / "people/Q8.html").read_text()
         )
+        assert "possibly living" not in (site / "people/Q7.html").read_text()
         index = (site / "index.html").read_text()
-        assert index.count('class="badge"') == 1  # only the living person
+        assert index.count('class="badge"') == 1  # only the possibly-living one
 
 
 class TestSections:

@@ -9,17 +9,18 @@ everything needed to rebuild the instance, plus a public export:
 * ``full.nt.gz`` — complete RDF dump (portable export; also the input
   for the public variant). WDQS state is derived and never backed up:
   it reloads from this dump.
-* ``public.nt.gz`` — the living-persons-excluded export (R7,
+* ``public.nt.gz`` — the possibly-living-excluded export (R7,
   docs/MODELING.md "Living persons and privacy"). Nothing about a
   possibly-living person leaves the instance: every triple that
   mentions an excluded person — as subject, statement node, or object
   of someone else's claim — is dropped.
 
-Exclusion is CONSERVATIVE by design. A human is excluded unless the
-graph gives positive evidence they are not living: an explicit
-`living person = no`, a death date, a death event, or birth more than
-``cutoff_years`` (default 100) ago. An explicit `living person = yes`
-always excludes. Unknown means excluded.
+Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
+no stored "living" flag (ADR-0020). A human is excluded unless the graph
+gives positive evidence they are not living: any death evidence (a date,
+place, or cause of death, a place of burial, or a death event), or birth
+more than ``cutoff_years`` (default 100) ago. Unknown means excluded.
+The determination itself lives in ``yizkr.core.privacy``.
 
 Scheduling is the host's job (this is a home-server deployment): see
 deploy/README.md for the cron line. Retention: ``--keep N`` prunes the
@@ -40,6 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from yizkr.core.config import Config, read_env_file
+from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS
 from yizkr.queries.publish import prefix_block
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -140,25 +142,32 @@ def dump_rdf(deploy_dir: Path, out_path: Path, compose_files=None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# living-person exclusion (public export)
+# possibly-living exclusion (public export) — runtime, no stored flag
 # ---------------------------------------------------------------------------
 
 
+# One row per human with a boolean per death signal. A death event needs
+# only the person as participant — no date — so an undated death marks a
+# person deceased just like a burial place or a cause of death does.
 PERSON_FACTS_QUERY = """\
-SELECT ?person (SAMPLE(?birthDate) AS ?birth) (SAMPLE(?deathDate) AS ?death)
-       (SAMPLE(?eventDeathDate) AS ?eventDeath)
-       (SAMPLE(?deathEventItem) AS ?deathEvent) (SAMPLE(?livingFlag) AS ?living)
+SELECT ?person (SAMPLE(?birthDate) AS ?birth)
+       (SAMPLE(?deathDate) AS ?death) (SAMPLE(?deathPlace) AS ?deathPlace)
+       (SAMPLE(?deathCause) AS ?deathCause) (SAMPLE(?burial) AS ?burial)
+       (SAMPLE(?deathEventItem) AS ?deathEvent)
 WHERE {{
   ?person wdt:{instance_of} wd:{human} .
   OPTIONAL {{ ?person wdt:{date_of_birth} ?birthDate . }}
   OPTIONAL {{ ?person wdt:{date_of_death} ?deathDate . }}
+  OPTIONAL {{ ?person wdt:{place_of_death} ?deathPlace . }}
+  OPTIONAL {{ ?person wdt:{cause_of_death} ?deathCause . }}
+  OPTIONAL {{ ?person wdt:{burial_place} ?burial . }}
   OPTIONAL {{ ?deathEventItem wdt:{participant} ?person ;
-                              wdt:{instance_of} wd:{death} .
-              OPTIONAL {{ ?deathEventItem wdt:{point_in_time} ?eventDeathDate . }} }}
-  OPTIONAL {{ ?person wdt:{living_person} ?livingFlag . }}
+                              wdt:{instance_of} wd:{death} . }}
 }}
 GROUP BY ?person
 """
+
+_DEATH_BINDINGS = ("death", "deathPlace", "deathCause", "burial", "deathEvent")
 
 
 @dataclass
@@ -168,33 +177,11 @@ class ExclusionReport:
     reasons: dict[str, str] = field(default_factory=dict)
 
 
-def is_possibly_living(
-    birth_year: int | None,
-    has_death_evidence: bool,
-    living_flag: str | None,  # "yes" | "no" | None
-    cutoff_year: int,
-) -> tuple[bool, str]:
-    """Conservative call: unknown means possibly living (excluded).
-
-    Returns (possibly_living, reason). An explicit flag wins in both
-    directions; otherwise only positive evidence of death or a birth
-    beyond the cutoff includes a person.
-    """
-    if living_flag == "yes":
-        return True, "living person flag set"
-    if living_flag == "no":
-        return False, "living person flag cleared by curator"
-    if has_death_evidence:
-        return False, "death recorded"
-    if birth_year is not None and birth_year <= cutoff_year:
-        return False, f"born {birth_year}, beyond the {cutoff_year} cutoff"
-    if birth_year is None:
-        return True, "no death evidence and no birth date: unknown means excluded"
-    return True, f"born {birth_year} with no death evidence"
-
-
-def exclusion_report(config: Config, cutoff_years: int = 100) -> ExclusionReport:
+def exclusion_report(
+    config: Config, cutoff_years: int = DEFAULT_CUTOFF_YEARS
+) -> ExclusionReport:
     """Which humans the public export must not mention, and why."""
+    from yizkr.core.privacy import is_possibly_living, year_of
     from yizkr.core.wiki import WikiClient
 
     properties, items = WikiClient(config).vocabulary()
@@ -202,9 +189,10 @@ def exclusion_report(config: Config, cutoff_years: int = 100) -> ExclusionReport
         instance_of=properties["instance_of"],
         date_of_birth=properties["date_of_birth"],
         date_of_death=properties["date_of_death"],
+        place_of_death=properties["place_of_death"],
+        cause_of_death=properties["cause_of_death"],
+        burial_place=properties["burial_place"],
         participant=properties["participant"],
-        point_in_time=properties["point_in_time"],
-        living_person=properties["living_person"],
         human=items["human"],
         death=items["death"],
     )
@@ -216,24 +204,13 @@ def exclusion_report(config: Config, cutoff_years: int = 100) -> ExclusionReport
     with urllib.request.urlopen(url, timeout=120) as response:
         bindings = json.load(response)["results"]["bindings"]
 
-    yes_qid, no_qid = items.get("yes"), items.get("no")
     cutoff_year = datetime.datetime.now(datetime.UTC).year - cutoff_years
     report = ExclusionReport()
     for binding in bindings:
         qid = binding["person"]["value"].rsplit("/", 1)[-1]
-        birth = binding.get("birth", {}).get("value", "")
-        birth_year = int(birth[:4]) if birth[:4].isdigit() else None
-        has_death = bool(
-            binding.get("death", {}).get("value")
-            or binding.get("deathEvent", {}).get("value")
-        )
-        flag_value = binding.get("living", {}).get("value", "").rsplit("/", 1)[-1]
-        living_flag = (
-            "yes" if flag_value == yes_qid else "no" if flag_value == no_qid else None
-        )
-        possibly_living, reason = is_possibly_living(
-            birth_year, has_death, living_flag, cutoff_year
-        )
+        birth_year = year_of(binding.get("birth", {}).get("value", ""))
+        has_death = any(binding.get(name, {}).get("value") for name in _DEATH_BINDINGS)
+        possibly_living, reason = is_possibly_living(birth_year, has_death, cutoff_year)
         report.reasons[qid] = reason
         (report.excluded if possibly_living else report.included).add(qid)
     return report
@@ -338,7 +315,7 @@ def run_backup(
     compose_files: list[str] | None = None,
     skip_media: bool = False,
     public_export: bool = True,
-    cutoff_years: int = 100,
+    cutoff_years: int = DEFAULT_CUTOFF_YEARS,
     keep: int = 0,
 ) -> dict:
     """Full backup run; returns the manifest that is also written to disk."""
@@ -368,7 +345,7 @@ def run_backup(
         if not config.sparql_url:
             raise RuntimeError(
                 "public export needs the query service (WDQS_PUBLIC_HOST) to "
-                "compute living-person exclusions"
+                "compute possibly-living exclusions"
             )
         from yizkr.core.wiki import WikiClient
 

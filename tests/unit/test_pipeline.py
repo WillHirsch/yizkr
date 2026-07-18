@@ -397,65 +397,38 @@ class TestAcceptAll:
             accept_all(bad, tmp_path / "out.csv")
 
 
-class TestLivingWarning:
-    """ROADMAP item 10: the review CSV warns about possibly-living subjects."""
+class TestCritiqueNotes:
+    """ADR-0013 / ADR-0020: the review CSV carries the critic's concerns
+    in a single-role `critique_notes` column. There is no possibly-living
+    warning and no `living` column — privacy is a runtime determination,
+    never a review decision."""
 
-    def test_no_death_and_recent_activity_warns(self, tmp_path):
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(batch(), csv_path, cutoff_year=1920)
-        with open(csv_path, newline="") as f:
-            rows = list(__import__("csv").DictReader(f))
-        # spouse claim carries point_in_time 1933 >= cutoff; no death data
-        assert all("possibly living" in row["warning"] for row in rows)
-
-    def test_death_data_suppresses_warning(self, tmp_path):
-        source = batch()
-        death = source.claims[1].model_copy(
-            update={
-                "property": "date_of_death",
-                "value": source.claims[1].value.model_copy(update={"year": 1980}),
-            }
-        )
-        source = source.model_copy(update={"claims": [*source.claims, death]})
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path, cutoff_year=1920)
-        with open(csv_path, newline="") as f:
-            rows = list(__import__("csv").DictReader(f))
-        assert all(row["warning"] == "" for row in rows)
-
-    def test_critique_notes_merge_into_warning_column(self, tmp_path):
-        # ADR-0013: the critic's concerns for an entity ride the review
-        # CSV warning column, alongside any living-person warning
+    def test_critique_notes_render_in_their_column(self, tmp_path):
         csv_path = tmp_path / "review.csv"
         # notes arrive already formatted (the orchestrator adds "critique:")
         export_review_csv(
             batch(),
             csv_path,
-            cutoff_year=2100,  # suppress living warnings to isolate the note
             critique_notes={"person-1": "critique: role label 'MOTHER' is not a name"},
         )
         with open(csv_path, newline="") as f:
-            rows = list(__import__("csv").DictReader(f))
+            reader = csv.DictReader(f)
+            fields = reader.fieldnames or []
+            rows = list(reader)
+        assert "critique_notes" in fields
+        assert "warning" not in fields  # renamed
+        assert "living" not in fields  # retired
         person1_rows = [r for r in rows if "person-1" in r["subject"]]
         assert person1_rows
-        assert all("critique:" in r["warning"] for r in person1_rows)
+        assert all("critique:" in r["critique_notes"] for r in person1_rows)
 
-    def test_graph_death_knowledge_suppresses_warning(self, tmp_path):
-        source = batch()
-        qid_subject = source.claims[0].model_copy(update={"subject": QidRef(qid="Q99")})
-        source = source.model_copy(update={"claims": [qid_subject]})
+    def test_no_critique_leaves_column_blank(self, tmp_path):
         csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path, known_deaths={"Q99"}, cutoff_year=1920)
+        export_review_csv(batch(), csv_path)
         with open(csv_path, newline="") as f:
-            rows = list(__import__("csv").DictReader(f))
-        assert rows[0]["warning"] == ""
-
-    def test_old_activity_does_not_warn(self, tmp_path):
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(batch(), csv_path, cutoff_year=1990)
-        with open(csv_path, newline="") as f:
-            rows = list(__import__("csv").DictReader(f))
-        assert all(row["warning"] == "" for row in rows)
+            rows = list(csv.DictReader(f))
+        assert rows
+        assert all(row["critique_notes"] == "" for row in rows)
 
 
 class TestCorrections:
@@ -531,67 +504,6 @@ class TestCorrections:
         assert corrected.curated is True
         with pytest.raises(ValueError, match="not a number"):
             _parse_correction(count, "several")
-
-
-class TestLivingFlag:
-    """ROADMAP item 10: `living` column sets the privacy flag as curation."""
-
-    def test_living_yes_emits_curated_flag_claim(self, tmp_path):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def flag_living(rows):
-            for row in rows:
-                row["decision"] = "approve"
-            rows[0]["living"] = "yes"
-            return rows
-
-        TestReviewRoundTrip.edit_csv(csv_path, flag_living)
-        approved, warnings = apply_review(source, csv_path)
-        assert warnings == []
-        (flag,) = [c for c in approved.claims if c.property == "living_person"]
-        assert flag.curated is True
-        assert flag.value.value.key == "yes"
-        assert flag.subject == source.claims[0].subject
-        # referenced to the artifact whose review prompted it, no locator
-        assert flag.source.artifact.qid == "Q23"
-        assert flag.source.transcription_excerpt is None
-
-    def test_flag_rides_even_on_rejected_rows(self, tmp_path):
-        """Rejecting a misread claim must not lose the living flag."""
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def reject_but_flag(rows):
-            for row in rows:
-                row["decision"] = "reject"
-            rows[0]["living"] = "no"
-            return rows
-
-        TestReviewRoundTrip.edit_csv(csv_path, reject_but_flag)
-        approved, warnings = apply_review(source, csv_path)
-        (flag,) = approved.claims
-        assert flag.property == "living_person"
-        assert flag.value.value.key == "no"
-
-    def test_conflicting_flags_warn_and_do_nothing(self, tmp_path):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def conflict(rows):
-            for row in rows:
-                row["decision"] = "approve"
-            rows[0]["living"] = "yes"
-            rows[1]["living"] = "no"
-            return rows
-
-        TestReviewRoundTrip.edit_csv(csv_path, conflict)
-        approved, warnings = apply_review(source, csv_path)
-        assert not any(c.property == "living_person" for c in approved.claims)
-        assert any("conflicting living flags" in w for w in warnings)
 
 
 class TestPrivacyDefaults:
