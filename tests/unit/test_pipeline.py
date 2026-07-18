@@ -1,5 +1,6 @@
 """Offline tests for pipeline steps (pytest; no instance, no LLM)."""
 
+import csv
 import json
 
 import pytest
@@ -11,7 +12,13 @@ from yizkr.pipeline.extract import (
     _parse_response,
 )
 from yizkr.pipeline.resolve import resolve_batch
-from yizkr.pipeline.review import apply_review, claim_id, export_review_csv
+from yizkr.pipeline.review import (
+    APPROVE,
+    accept_all,
+    apply_review,
+    claim_id,
+    export_review_csv,
+)
 from yizkr.pipeline.transcribe import (
     HtrPlatformAdapter,
     LlmVisionTranscriber,
@@ -338,6 +345,56 @@ class TestReviewRoundTrip:
         first = batch().claims[0]
         again = ClaimBatch.model_validate_json(batch().model_dump_json()).claims[0]
         assert claim_id(first) == claim_id(again)
+
+
+class TestAcceptAll:
+    """`accept_all` fills every decision with an approve token, so the
+    reviewed CSV round-trips through apply_review as a full approval."""
+
+    def test_fills_every_decision_and_apply_review_approves_all(self, tmp_path):
+        source = batch()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(source, review_csv)  # decisions start empty
+
+        reviewed_csv = tmp_path / "review.reviewed.csv"
+        rows = accept_all(review_csv, reviewed_csv)
+        assert rows == len(source.claims)
+
+        with open(reviewed_csv, newline="") as f:
+            reviewed_rows = list(csv.DictReader(f))
+        assert reviewed_rows
+        assert all(r["decision"].strip().lower() in APPROVE for r in reviewed_rows)
+
+        approved, warnings = apply_review(source, reviewed_csv)
+        assert len(approved.claims) == len(source.claims)
+        assert warnings == []
+
+    def test_preserves_claim_ids_and_other_columns(self, tmp_path):
+        # only `decision` changes — claim_id (the content hash apply_review
+        # matches on) and every other column stay byte-identical
+        source = batch()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(source, review_csv)
+        with open(review_csv, newline="") as f:
+            before = {r["claim_id"]: dict(r) for r in csv.DictReader(f)}
+
+        reviewed_csv = tmp_path / "review.reviewed.csv"
+        accept_all(review_csv, reviewed_csv)
+        with open(reviewed_csv, newline="") as f:
+            after = {r["claim_id"]: dict(r) for r in csv.DictReader(f)}
+
+        assert before.keys() == after.keys()
+        for cid, row in after.items():
+            assert row["decision"] == "approve"
+            for col, value in before[cid].items():
+                if col != "decision":
+                    assert row[col] == value
+
+    def test_rejects_a_non_review_csv(self, tmp_path):
+        bad = tmp_path / "not-a-review.csv"
+        bad.write_text("a,b\n1,2\n")
+        with pytest.raises(ValueError, match="not a review CSV"):
+            accept_all(bad, tmp_path / "out.csv")
 
 
 class TestLivingWarning:

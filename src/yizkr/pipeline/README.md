@@ -108,6 +108,14 @@ re-running one step in isolation — but for a normal ingest you only ever run
   mis-apply decisions, and edited claim content is detected loudly.
   **Only explicit `approve` decisions pass** — no decision means no
   write; human confirmation is part of the data flow (R3).
+- **accept-all** — writes `review.reviewed.csv` from a `review.csv`
+  with every row's decision pre-set to `approve`, so a curator can flip
+  the few rejects and add corrections instead of typing `approve` on
+  every row. It is a deliberate human bulk-accept — each row still
+  carries an explicit `approve`, and the machine never runs it on its
+  own — not auto-confirmation. Refuses to overwrite an existing reviewed
+  file without `--force`, and reports how many rows carry an extraction
+  `warning` so a blind accept isn't silent.
 - **write** — mints the extraction-run item, creates items for
   unresolved subjects (reusing exact-label matches), writes each claim
   at normal rank with two references: `stated in → artifact/fragment`

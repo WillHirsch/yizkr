@@ -463,6 +463,29 @@ def cmd_apply_review(args) -> int:
     return 0
 
 
+def cmd_accept_all(args) -> int:
+    import csv
+
+    from yizkr.pipeline.review import accept_all
+
+    out = args.out or args.csv.with_name("review.reviewed.csv")
+    if out.exists() and not args.force:
+        sys.exit(f"{out} already exists; pass --force to overwrite it")
+    try:
+        rows = accept_all(args.csv, out)
+    except (OSError, ValueError) as exc:
+        sys.exit(str(exc))
+    with open(out, newline="") as f:
+        warned = sum(1 for row in csv.DictReader(f) if row.get("warning", "").strip())
+    note = (
+        f"; {warned} carry an extraction warning — spot-check before writing"
+        if warned
+        else ""
+    )
+    print(f"wrote {out} ({rows} claims set to approve{note})")
+    return 0
+
+
 def cmd_write(args) -> int:
     from yizkr.pipeline.writer import BatchWriter
 
@@ -810,6 +833,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--csv", type=Path, required=True)
     p.add_argument("--out", type=Path, default=Path("approved.json"))
     p.set_defaults(func=cmd_apply_review)
+
+    p = isub.add_parser(
+        "accept-all",
+        help="init review.reviewed.csv approving every row (curator bulk-accept)",
+    )
+    p.add_argument("--csv", type=Path, required=True, help="the review.csv to accept")
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="output path (default: review.reviewed.csv beside --csv)",
+    )
+    p.add_argument(
+        "--force", action="store_true", help="overwrite an existing reviewed CSV"
+    )
+    p.set_defaults(func=cmd_accept_all)
 
     p = isub.add_parser("write", help="write approved claims as statements")
     p.add_argument("--batch", type=Path, required=True)

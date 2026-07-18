@@ -31,7 +31,10 @@ instead of silently writing altered data. Corrections change the claim
 only AFTER matching, through the `correction` column.
 
 No auto-confirmation: a claim with no decision is NOT approved —
-human confirmation is part of the data flow (R3, ADR-0005).
+human confirmation is part of the data flow (R3, ADR-0005). A curator
+who has spot-checked a batch may bulk-approve it with `accept_all` (the
+`accept-all` CLI step): that is the human choosing to accept every row,
+still an explicit `approve` on each, not the machine confirming itself.
 """
 
 from __future__ import annotations
@@ -398,3 +401,33 @@ def apply_review(batch: ClaimBatch, csv_path: Path) -> tuple[ClaimBatch, list[st
         if flag:
             approved.append(_living_claim(template, flag))
     return batch.model_copy(update={"claims": approved}), warnings
+
+
+def accept_all(source_csv: Path, out_csv: Path) -> int:
+    """Copy a review CSV to `out_csv` with every row's decision set to
+    `approve`; returns the row count. Only the `decision` column is
+    touched — `claim_id` and every content column are preserved verbatim,
+    so `apply_review` still matches each row by content hash.
+
+    This is a curator's deliberate bulk-accept of a whole sheet — the
+    human end of the "explicit approve" rule (R3), not auto-confirmation.
+    The machine never runs it; the reviewed file it writes is what the
+    claim gate consumes. It trades per-row scrutiny for speed, for a
+    trusted or already spot-checked batch — not the default.
+    """
+    with open(source_csv, newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames or []
+        if "decision" not in fieldnames:
+            raise ValueError(
+                f"{source_csv} is not a review CSV (no 'decision' column)"
+            )
+        rows = list(reader)
+    for row in rows:
+        row["decision"] = "approve"
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)
