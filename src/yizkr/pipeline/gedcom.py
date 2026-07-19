@@ -818,6 +818,12 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                     quals,
                 )
 
+    # ADR-0021 §4: the same alias hygiene the LLM path runs — GEDCOM's
+    # structured NAME/TYPE tags already do the typing; this only drops
+    # derivable short-forms and keeps compound surnames whole.
+    from yizkr.pipeline.names import normalize_entity_dict
+
+    entities = [normalize_entity_dict(entity) for entity in entities]
     batch = ClaimBatch.model_validate(
         {
             "extraction_run": run_metadata(ADAPTER_IDENTIFIER).model_dump(

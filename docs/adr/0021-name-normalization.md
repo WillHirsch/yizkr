@@ -1,11 +1,15 @@
 # ADR-0021: Name normalization — LLM-primary, no new property, composition without kind
 
-Status: **proposed** — design settled through three adversarial design passes;
-implementation (extraction-prompt standards, the thin `names.py` validator,
-frontend factoring) pending. **Amends ADR-0011** (re-affirms and re-grounds the
-given/family component deferral) and applies ADR-0018's derive-don't-store
-discipline to name surface forms. Validation is the live review flow, not a
-synthetic eval (§Decision 7).
+Status: **accepted** — design settled through three adversarial design passes;
+implemented: the extraction-prompt standards (chunking.py's entity-manifest and
+chunk prompts) and the thin deterministic `pipeline/names.py` validator, wired
+into both the LLM manifest path and the GEDCOM adapter. Still pending: the
+**frontend factoring** layer (§5 — composing display forms and deriving
+short-forms from the atoms), and the §6 confidence surfacing, which was
+generalised and implemented by ADR-0022. **Amends ADR-0011** (re-affirms and
+re-grounds the given/family component deferral) and applies ADR-0018's
+derive-don't-store discipline to name surface forms. Validation is the live
+review flow, not a synthetic eval (§Decision 7).
 
 ## Context
 
