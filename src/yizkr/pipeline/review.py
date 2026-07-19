@@ -36,9 +36,12 @@ only AFTER matching, through the `correction` column.
 
 No auto-confirmation: a claim with no decision is NOT approved —
 human confirmation is part of the data flow (R3, ADR-0005). A curator
-who has spot-checked a batch may bulk-approve it with `accept_all` (the
-`accept-all` CLI step): that is the human choosing to accept every row,
-still an explicit `approve` on each, not the machine confirming itself.
+who has spot-checked a batch may bulk-accept it with `accept_all` (the
+`accept-all` CLI step): the human choosing to accept the machine's
+proposals wholesale, still an explicit decision written per row, not the
+machine confirming itself. For a claims sheet that is `approve` on every
+row; for an equivalences sheet it *ratifies each verdict* (same ->
+approve, distinct -> reject), never a blanket merge.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ import csv
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from yizkr.claims import (
@@ -282,17 +286,44 @@ def apply_review(
     return batch.model_copy(update={"claims": approved}), warnings
 
 
-def accept_all(source_csv: Path, out_csv: Path) -> int:
-    """Copy a review CSV to `out_csv` with every row's decision set to
-    `approve`; returns the row count. Only the `decision` column is
-    touched — `claim_id` and every content column are preserved verbatim,
-    so `apply_review` still matches each row by content hash.
+@dataclass
+class AcceptAllResult:
+    """What `accept_all` did. `mode` is the CSV kind it detected; for the
+    claims gate everything is `approved`, for the equivalences gate the
+    counts break the machine's verdicts down (see `ratify_equivalence_
+    verdicts`)."""
 
-    This is a curator's deliberate bulk-accept of a whole sheet — the
-    human end of the "explicit approve" rule (R3), not auto-confirmation.
-    The machine never runs it; the reviewed file it writes is what the
-    claim gate consumes. It trades per-row scrutiny for speed, for a
-    trusted or already spot-checked batch — not the default.
+    mode: str  # "claims" | "equivalences"
+    total: int
+    approved: int
+    rejected: int = 0
+    uncertain: int = 0
+    conflicted: int = 0
+
+
+def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
+    """Copy a review CSV to `out_csv` with the `decision` column filled in,
+    ratifying the machine wholesale. Only `decision` is touched — every
+    content column (and the `claim_id` / `entity_id` the appliers match on)
+    is preserved verbatim.
+
+    Two gates, detected by the CSV's columns:
+
+    * **claims** (`review.csv`, has `claim_id`): every row -> `approve`.
+      Each extracted claim is a proposal to add, so accepting the sheet is
+      approving them all.
+    * **equivalences** (`equivalences.csv`, has `entity_id` + `verdict`):
+      each row's `decision` is set from its machine `verdict` — accept the
+      verdict, NOT a blanket "same" (`ratify_equivalence_verdicts`). A
+      blanket approve would merge even the pairs the machine judged
+      distinct; ratifying rejects those and mints the entity fresh.
+
+    A curator's deliberate bulk-accept of a whole sheet — the human end of
+    the "explicit approve" rule (R3), not auto-confirmation. The machine
+    never runs it; the reviewed file it writes is what the gate consumes.
+    It trades per-row scrutiny for speed on a trusted or spot-checked
+    batch — not the default. Raises ValueError on a CSV that is neither
+    gate (e.g. the reconcile-places sheet).
     """
     with open(source_csv, newline="") as f:
         reader = csv.DictReader(f)
@@ -302,11 +333,30 @@ def accept_all(source_csv: Path, out_csv: Path) -> int:
                 f"{source_csv} is not a review CSV (no 'decision' column)"
             )
         rows = list(reader)
-    for row in rows:
-        row["decision"] = "approve"
+
+    if "verdict" in fieldnames and "entity_id" in fieldnames:
+        from yizkr.pipeline.reconcile import ratify_equivalence_verdicts
+
+        counts = ratify_equivalence_verdicts(rows)
+        result = AcceptAllResult(
+            mode="equivalences", total=len(rows), **counts
+        )
+    elif "verdict" in fieldnames:
+        raise ValueError(
+            f"{source_csv} has a 'verdict' column but no 'entity_id' — "
+            f"accept-all handles the claims and equivalences review CSVs "
+            f"only, not this sheet (a reconcile-places CSV?)"
+        )
+    else:
+        for row in rows:
+            row["decision"] = "approve"
+        result = AcceptAllResult(
+            mode="claims", total=len(rows), approved=len(rows)
+        )
+
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     with open(out_csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
-    return len(rows)
+    return result

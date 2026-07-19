@@ -110,14 +110,24 @@ re-running one step in isolation — but for a normal ingest you only ever run
   mis-apply decisions, and edited claim content is detected loudly.
   **Only explicit `approve` decisions pass** — no decision means no
   write; human confirmation is part of the data flow (R3).
-- **accept-all** — writes `review.reviewed.csv` from a `review.csv`
-  with every row's decision pre-set to `approve`, so a curator can flip
-  the few rejects and add corrections instead of typing `approve` on
-  every row. It is a deliberate human bulk-accept — each row still
-  carries an explicit `approve`, and the machine never runs it on its
-  own — not auto-confirmation. Refuses to overwrite an existing reviewed
-  file without `--force`, and reports how many rows carry an extraction
-  `warning` so a blind accept isn't silent.
+- **accept-all** — writes a `*.reviewed.csv` from a gate CSV with the
+  `decision` column pre-filled, so a curator can flip the few outliers
+  instead of typing a decision on every row. It writes `<input-stem>`
+  `.reviewed.csv` beside the input (so `equivalences.csv` →
+  `equivalences.reviewed.csv`, `review.csv` → `review.reviewed.csv`) and
+  detects the gate by the CSV's columns:
+  - **claims** (`review.csv`): every row → `approve`.
+  - **equivalences** (`equivalences.csv`): each row is set from its
+    machine `verdict` — *ratify the verdict*, not a blanket approve:
+    `same → approve`, `distinct → reject`, `uncertain → blank` (left for
+    the human). An entity the machine calls `same` against two items is a
+    contradiction it can't ratify, so those rows are left blank and
+    reported. Distinct-judged pairs are therefore never silently merged.
+
+  It is a deliberate human bulk-accept — each decision is written
+  explicitly, per row, and the machine never runs it on its own — not
+  auto-confirmation. Refuses to overwrite an existing reviewed file
+  without `--force`.
 - **write** — mints the extraction-run item, creates items for
   unresolved subjects (reusing exact-label matches), writes each claim
   at normal rank with two references: `stated in → artifact/fragment`

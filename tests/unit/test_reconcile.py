@@ -18,6 +18,7 @@ from yizkr.pipeline.reconcile import (
     export_equivalences_csv,
     impossible_pair,
     place_containment_proposals,
+    ratify_equivalence_verdicts,
     read_approved_equivalences,
 )
 
@@ -709,3 +710,66 @@ class TestContainmentHandoff:
             )
             == []
         )
+
+
+class TestRatifyEquivalenceVerdicts:
+    """`accept-all` on an equivalences CSV ratifies the machine per row
+    (same->approve, distinct->reject, uncertain->blank) — never a blanket
+    merge — and leaves a self-contradicting entity blank."""
+
+    def test_maps_each_verdict_to_its_decision(self):
+        rows = [
+            {
+                "entity_id": "e1",
+                "qid": "Q10",
+                "verdict": "same",
+                "decision": "",
+            },
+            {
+                "entity_id": "e2",
+                "qid": "Q20",
+                "verdict": "distinct",
+                "decision": "",
+            },
+            {
+                "entity_id": "e3",
+                "qid": "Q30",
+                "verdict": "uncertain",
+                "decision": "",
+            },
+        ]
+        counts = ratify_equivalence_verdicts(rows)
+        assert [r["decision"] for r in rows] == ["approve", "reject", ""]
+        assert counts == {
+            "approved": 1,
+            "rejected": 1,
+            "uncertain": 1,
+            "conflicted": 0,
+        }
+
+    def test_same_against_two_items_is_left_blank(self):
+        # a contradiction read_approved_equivalences would reject: don't merge
+        rows = [
+            {
+                "entity_id": "e4",
+                "qid": "Q40",
+                "verdict": "same",
+                "decision": "",
+            },
+            {
+                "entity_id": "e4",
+                "qid": "Q41",
+                "verdict": "same",
+                "decision": "",
+            },
+            {
+                "entity_id": "e5",
+                "qid": "Q50",
+                "verdict": "same",
+                "decision": "",
+            },
+        ]
+        counts = ratify_equivalence_verdicts(rows)
+        assert [r["decision"] for r in rows] == ["", "", "approve"]
+        assert counts["conflicted"] == 2
+        assert counts["approved"] == 1
