@@ -172,6 +172,10 @@ Rules — these mirror the archive's non-negotiable conventions:
   only when the source marks a name's TYPE: birth_name (a name/maiden
   name given at birth), married_name (taken on marriage), nickname (an
   informal/pet name or "aka"), official_name (a formal or legal change).
+  The marker may be CONTEXTUAL (a née/geb. maiden cue, a stated legal or
+  immigration change), not only an explicit tag. Never infer a name's kind
+  (given vs family) or type from word order or position — type only what a
+  source marks (ADR-0021).
 - Kinship: use ONLY the primitives father, mother, spouse, sibling,
   child. Do NOT invent properties for compound relations (aunt, cousin,
   grandmother, brother-in-law) — those are derived from the primitives.
@@ -312,6 +316,24 @@ NAMES the document uses for the entity. They are NOT:
   extraction, not as aliases (a literal kinship term becomes `relative` +
   `kinship_type`; a courtesy/pet name becomes `referred_to_as`). Never
   record any of these as an alias (ADR-0018).
+
+Name composition and the canonical label (ADR-0021):
+- Do NOT enumerate full-name PERMUTATIONS as aliases. A "/" between family
+  names ("Frida Hollfeld/Falk/Gellerowski") is ONE person with alternative
+  family names held at different times: give the label ONE clean form (given
+  + one surname), list the OTHER surname forms as aliases, and do NOT emit the
+  composed cross-products ("Frida Falk", "Frida Gellerowski"). Never guess
+  which surname is maiden vs married — that is a name TYPE, recorded only when
+  the source marks it, at extraction.
+- Do NOT list a bare given name ("Sigmund") or an initialism ("S. Gellerowski")
+  as an alias — a reader derives those from a fuller form. A genuinely
+  distinct informal form ("Siggi") IS an alias.
+- Keep the canonical label CLEAN: parenthetical name metadata is NOT part of
+  it. "Rieke Sadelman-Rauholz (b. Gellerowski)" has label "Rieke
+  Sadelman-Rauholz"; "Lazar Gellerowski (later Leon Gell)" has label "Lazar
+  Gellerowski" with "Leon Gell" as an alias. Keep hyphenated and
+  space-separated compound/particle surnames ("de la Cruz", "van der Berg")
+  WHOLE — never split them. Never infer given vs family from word order.
 
 Output ONE JSON object, no prose, no code fences:
 {{"entities": [{{"id": "e01", "label": "<canonical, fullest form>",
@@ -1002,7 +1024,15 @@ class ChunkedClaimExtractor:
             def transform(claim: dict, chunk_id: str) -> dict:
                 return normalize_to_manifest(claim, records)
 
-            entities_payload = [record.model_dump() for record in entities]
+            # ADR-0021 §4: hygiene the alias bag (drop derivable short-forms,
+            # keep compounds whole) — the deterministic safety net over the
+            # LLM manifest; typing/composition stay the LLM's job.
+            from yizkr.pipeline.names import normalize_entity_dict
+
+            entities_payload = [
+                normalize_entity_dict(record.model_dump())
+                for record in entities
+            ]
         else:
             chunk_groups = pack_units(
                 segmentation.units, text_lines, self.budget

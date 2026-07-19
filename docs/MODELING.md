@@ -286,6 +286,22 @@ Names are modelled in **two layers**:
   name matching another's birth name (a marriage name change) is strong
   identity evidence.
 
+**Name normalization (ADR-0021).** Three axes are kept distinct:
+*composition* (which token is the fixed part vs. an alternating one — the
+`/` in "Frida Hollfeld/Falk/Gellerowski" prescribes it, so those
+surnames are alternative family names for one person), *kind* (given vs.
+family — undecidable without name-order convention, so **never asserted**
+and never a stored property), and *type* (birth/married/nickname/official —
+recorded only where a source marks it, the marker possibly contextual). The
+LLM is the primary normalizer: its prompt carries these standards (compose
+no permutations, keep a clean label, strip embedded annotations, type only
+what is marked). A thin deterministic validator (`pipeline/names.py`) is the
+shared safety net over both the LLM and GEDCOM paths: it drops
+re-derivable short-forms (a bare given name, an initialism, a surname the
+label already carries) and keeps compound/particle surnames whole (never
+shattering `de la Cruz` / `van der Berg`), asserting no kind. Composition
+and short-form display are the frontend's to *derive*, never stored.
+
 **Relational and perspectival appellations are NOT names** (ADR-0018).
 "our great grandmother", "meine Oma", "Tante Rosa", "my husband" describe
 a relationship or viewpoint, so they never enter the alias bag. A literal
