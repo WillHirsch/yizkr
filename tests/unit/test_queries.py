@@ -21,6 +21,7 @@ EXPECTED_QUERIES = {
     "photo-gallery",
     "unreferenced-statements",
     "artifact-assertions",
+    "under-witnessed-statements",
 }
 
 
@@ -58,6 +59,14 @@ class TestLibrary:
     def test_disagreement_report_uses_provenance(self, templates):
         assert "prov:wasDerivedFrom" in templates["disagreement-report"]
         assert "{P:stated_in}" in templates["disagreement-report"]
+
+    def test_under_witnessed_query_keys_on_provenance(self, templates):
+        # ADR-0022: reappraisal is a structural query — machine-written
+        # (run reference) and under-witnessed (one source, no curator sibling)
+        q = templates["under-witnessed-statements"]
+        assert "{P:inferred_from_extraction_run}" in q
+        assert "{P:stated_in}" in q
+        assert "FILTER NOT EXISTS" in q
 
 
 class TestRendering:

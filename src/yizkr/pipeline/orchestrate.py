@@ -514,9 +514,13 @@ class Orchestrator:
 
     def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
         """entity local_id -> concatenated critic concerns, for the review
-        CSV warning column."""
+        CSV `critique_notes` column. Each concern is tagged with the
+        statement-part it doubts (ADR-0022): [subject] / [predicate] /
+        [value], derived from the finding's target."""
         if not doc.critique.exists():
             return {}
+        from yizkr.pipeline.critique import axis_of
+
         notes: dict[str, str] = {}
         for finding in json.loads(doc.critique.read_text()):
             target = finding.get("target", "")
@@ -524,7 +528,9 @@ class Orchestrator:
             tokens = target.replace("claim:", "").split()
             entity_id = tokens[0] if tokens else ""
             if entity_id:
-                note = f"critique: {finding.get('issue', '')}"
+                axis = axis_of(target)
+                prefix = f"critique [{axis}]: " if axis else "critique: "
+                note = prefix + finding.get("issue", "")
                 notes[entity_id] = (
                     f"{notes[entity_id]}; {note}"
                     if entity_id in notes
@@ -533,14 +539,16 @@ class Orchestrator:
         return notes
 
     def _step_write(self, doc: DocumentRun, batch: ClaimBatch) -> dict:
-        from yizkr.pipeline.review import apply_review
+        from yizkr.pipeline.review import apply_review, is_bulk_accepted
         from yizkr.pipeline.writer import BatchWriter
 
         approved, warnings = apply_review(batch, doc.review_reviewed)
         for warning in warnings:
             self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
         doc.approved.write_text(approved.model_dump_json(indent=2))
-        result = BatchWriter(self.client).write_batch(approved)
+        result = BatchWriter(self.client).write_batch(
+            approved, bulk_accepted=is_bulk_accepted(doc.review_reviewed)
+        )
         return {
             "run_qid": result.run_qid,
             "written": result.written,

@@ -3,7 +3,7 @@
 import json
 
 from yizkr.claims import ClaimBatch
-from yizkr.pipeline.critique import run_critique
+from yizkr.pipeline.critique import Finding, axis_of, run_critique
 
 RUN = {
     "model_identifier": "fake-model",
@@ -118,3 +118,23 @@ class TestCritique:
             )
         )
         assert run_critique(llm, batch()) == []
+
+
+class TestAxis:
+    """ADR-0022: a Finding's statement-part axis is derived from its target
+    grammar — the general form of ADR-0021 §6's per-name axes."""
+
+    def test_axis_of_each_target_form(self):
+        assert axis_of("e01") == "subject"
+        assert axis_of("e01 alias: MOTHER") == "value"
+        assert axis_of("claim: e01 occupation") == "predicate"
+
+    def test_axis_of_unrecognised_is_none(self):
+        assert axis_of("") is None
+        assert axis_of("some free text target") is None
+
+    def test_finding_exposes_axis(self):
+        f = Finding(target="claim: e01 occupation", issue="misapplied")
+        assert f.axis == "predicate"
+        # the computed axis serialises for the durable critique.json
+        assert f.model_dump()["axis"] == "predicate"

@@ -492,7 +492,10 @@ def cmd_accept_all(args) -> int:
             )
         print(f"wrote {out} (ratified {result.total} verdicts: {summary})")
     else:
-        print(f"wrote {out} ({result.approved} claims set to approve)")
+        print(
+            f"wrote {out} ({result.approved} claims set to bulk-accept; "
+            f"the write path marks these low-scrutiny for reappraisal)"
+        )
     return 0
 
 

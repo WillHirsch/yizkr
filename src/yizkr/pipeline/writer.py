@@ -443,7 +443,17 @@ class BatchWriter:
 
     # -- main entry ----------------------------------------------------------
 
-    def write_batch(self, batch: ClaimBatch) -> WriteResult:
+    def write_batch(
+        self, batch: ClaimBatch, bulk_accepted: bool = False
+    ) -> WriteResult:
+        # a bulk-accepted batch (whole-sheet accept-all, ADR-0022) gets a
+        # distinct edit summary so MediaWiki history is the low-scrutiny
+        # reappraisal queue — no graph flag, no staleness.
+        claim_summary = (
+            "ingest: write bulk-accepted claim"
+            if bulk_accepted
+            else "ingest: write reviewed claim"
+        )
         self._entity_records = {record.id: record for record in batch.entities}
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
@@ -516,7 +526,7 @@ class BatchWriter:
                     subject_qid
                 ) or self.client.wbi.item.get(subject_qid)
                 self._append(entity, wbi_claim)
-                entity.write(summary="ingest: write reviewed claim")
+                entity.write(summary=claim_summary)
                 self._entity_cache[subject_qid] = self.client.wbi.item.get(
                     subject_qid
                 )

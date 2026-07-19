@@ -12,11 +12,29 @@ applied to extraction, and it is what catches the "MOTHER as a name" and
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
 from yizkr.claims import ClaimBatch, ItemValue
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import LlmClient
+
+
+def axis_of(target: str) -> str | None:
+    """Which universal statement-part a Finding concerns (ADR-0022),
+    derived from the `target` grammar: ``claim: e01 prop`` -> predicate,
+    ``e01 alias: X`` -> value, bare ``e01`` -> subject. Unrecognised ->
+    None. This is the general form of ADR-0021 §6's per-name axes, now
+    addressable across every property; existence-axis concerns have no
+    target form and stay None.
+    """
+    text = target.strip()
+    if text.startswith("claim:"):
+        return "predicate"
+    if "alias:" in text:
+        return "value"
+    if text and " " not in text:
+        return "subject"
+    return None
 
 
 class Finding(BaseModel):
@@ -25,6 +43,12 @@ class Finding(BaseModel):
     target: str  # "e01", "e01 alias: MOTHER", or "claim: e01 occupation"
     issue: str
     suggestion: str = ""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def axis(self) -> str | None:
+        """subject | predicate | value (ADR-0022), derived from `target`."""
+        return axis_of(self.target)
 
 
 CRITIQUE_PROMPT = """\
