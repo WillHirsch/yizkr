@@ -18,6 +18,7 @@ from yizkr.pipeline.review import (
     apply_review,
     claim_id,
     export_review_csv,
+    is_bulk_accepted,
 )
 from yizkr.pipeline.transcribe import (
     HtrPlatformAdapter,
@@ -486,7 +487,7 @@ class TestAcceptAll:
 
         assert before.keys() == after.keys()
         for cid, row in after.items():
-            assert row["decision"] == "approve"
+            assert row["decision"] == "bulk-accept"  # ADR-0022 disposition
             for col, value in before[cid].items():
                 if col != "decision":
                     assert row[col] == value
@@ -496,6 +497,41 @@ class TestAcceptAll:
         bad.write_text("a,b\n1,2\n")
         with pytest.raises(ValueError, match="not a review CSV"):
             accept_all(bad, tmp_path / "out.csv")
+
+    def test_bulk_accept_disposition_round_trips(self, tmp_path):
+        # ADR-0022: a pristine accept-all sheet is detectable for the write
+        # path (which marks its edits low-scrutiny), and still approves.
+        source = batch()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(source, review_csv)
+        reviewed = tmp_path / "review.reviewed.csv"
+        accept_all(review_csv, reviewed)
+
+        assert is_bulk_accepted(reviewed)
+        approved, warnings = apply_review(source, reviewed)
+        assert len(approved.claims) == len(source.claims)
+        assert warnings == []
+
+    def test_human_touch_demotes_bulk_accept(self, tmp_path):
+        source = batch()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(source, review_csv)
+        reviewed = tmp_path / "review.reviewed.csv"
+        accept_all(review_csv, reviewed)
+
+        def flip_one(rows):
+            rows[0]["decision"] = "approve"  # a per-row human decision
+            return rows
+
+        TestReviewRoundTrip.edit_csv(reviewed, flip_one)
+        assert not is_bulk_accepted(reviewed)  # no longer a pristine sheet
+
+    def test_is_bulk_accepted_false_for_missing_or_plain(self, tmp_path):
+        assert not is_bulk_accepted(tmp_path / "nope.csv")
+        source = batch()
+        plain = tmp_path / "review.csv"
+        export_review_csv(source, plain)  # decisions empty
+        assert not is_bulk_accepted(plain)
 
 
 class TestCritiqueNotes:

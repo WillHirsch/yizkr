@@ -400,6 +400,14 @@ not a signal to grow the schema on.
   accumulate values over a life — spouse, residence — are multi-valued
   by nature: two spouses asserted by one source are remarriages, not a
   contradiction (their start/end qualifiers tell them apart).
+- **Machine uncertainty is process, not graph data (ADR-0022).** The
+  graph records the *source's* vagueness (circa, ranges, precision) but
+  never the *machine's* confidence. Contentiousness surfaces ephemerally
+  at review (the critic's per-concern axis: `[subject]`/`[predicate]`/
+  `[value]`); reappraisal of low-scrutiny machine writes is a structural
+  query (`under-witnessed-statements.rq`, the complement of the
+  disagreement report), and the bulk-accept disposition lives in the
+  reviewed CSV + MediaWiki edit history — never a stored flag.
 
 ## Living persons and privacy (see ADR-0020)
 

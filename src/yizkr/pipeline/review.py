@@ -67,7 +67,10 @@ from yizkr.claims import (
     VocabRef,
 )
 
-APPROVE = {"approve", "approved", "accept", "yes", "y"}
+# `bulk-accept` is an approval that also records HOW it was accepted (a
+# whole-sheet accept-all, ADR-0022), so the write path can mark those edits
+# for later reappraisal; it approves like any other token.
+APPROVE = {"approve", "approved", "accept", "yes", "y", "bulk-accept"}
 REJECT = {"reject", "rejected", "no", "n"}
 
 CSV_COLUMNS = [
@@ -309,8 +312,10 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
 
     Two gates, detected by the CSV's columns:
 
-    * **claims** (`review.csv`, has `claim_id`): every row -> `approve`.
-      Each extracted claim is a proposal to add, so accepting the sheet is
+    * **claims** (`review.csv`, has `claim_id`): every row -> `bulk-accept`
+      (an approval token that also records the whole-sheet disposition, so
+      the write path can flag these for reappraisal — ADR-0022). Each
+      extracted claim is a proposal to add, so accepting the sheet is
       approving them all.
     * **equivalences** (`equivalences.csv`, has `entity_id` + `verdict`):
       each row's `decision` is set from its machine `verdict` — accept the
@@ -349,7 +354,7 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
         )
     else:
         for row in rows:
-            row["decision"] = "approve"
+            row["decision"] = "bulk-accept"
         result = AcceptAllResult(
             mode="claims", total=len(rows), approved=len(rows)
         )
@@ -360,3 +365,25 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
         writer.writeheader()
         writer.writerows(rows)
     return result
+
+
+def is_bulk_accepted(csv_path: Path) -> bool:
+    """True iff a reviewed claims CSV is a pristine `accept-all` sheet — every
+    decision is `bulk-accept` and no row carries a per-row human token. The
+    write path uses this to mark the resulting edits as low-scrutiny for
+    reappraisal (ADR-0022); a human who changed any decision demotes the whole
+    sheet to an ordinary review. Missing/empty or non-claims CSVs -> False.
+    """
+    try:
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            if "decision" not in (reader.fieldnames or []):
+                return False
+            decisions = {
+                row.get("decision", "").strip().lower()
+                for row in reader
+                if row.get("decision", "").strip()
+            }
+    except OSError:
+        return False
+    return decisions == {"bulk-accept"}

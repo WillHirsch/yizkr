@@ -81,8 +81,11 @@ place), an alias that looks like a role/field label rather than a name
 (MOTHER, INFORMANT, BRIDE), a claim whose property looks misapplied. It
 **flags, never rewrites** — findings land in `critique.json`, are
 counted in the run log, and are merged into the claim review CSV's
-`warning` column so the curator sees them at the existing gate. This is
-the reconciliation adjudicator's pattern applied to extraction, and it
+`critique_notes` column (renamed from `warning`, ADR-0020) so the curator
+sees them at the existing gate. Each `Finding` also carries a derived
+`axis` — `subject`/`predicate`/`value` from its target grammar — the
+general statement-part decomposition ADR-0022 surfaces per concern. This
+is the reconciliation adjudicator's pattern applied to extraction, and it
 is what would have caught both MOTHER and the mill without a human
 eyeballing raw output.
 
