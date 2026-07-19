@@ -377,9 +377,23 @@ class TestReviewRoundTrip:
         assert claim_id(first) == claim_id(again)
 
 
+def _write_equivalences_csv(path, rows):
+    """Write a minimal equivalences.csv (entity_id/qid/verdict/decision)."""
+    from yizkr.pipeline.reconcile import EQUIVALENCE_FIELDS
+
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=EQUIVALENCE_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {field: row.get(field, "") for field in EQUIVALENCE_FIELDS}
+            )
+
+
 class TestAcceptAll:
-    """`accept_all` fills every decision with an approve token, so the
-    reviewed CSV round-trips through apply_review as a full approval."""
+    """`accept_all` fills the decision column, ratifying the machine: a
+    claims sheet round-trips through apply_review as a full approval; an
+    equivalences sheet ratifies each verdict rather than merging all."""
 
     def test_fills_every_decision_and_apply_review_approves_all(
         self, tmp_path
@@ -389,8 +403,10 @@ class TestAcceptAll:
         export_review_csv(source, review_csv)  # decisions start empty
 
         reviewed_csv = tmp_path / "review.reviewed.csv"
-        rows = accept_all(review_csv, reviewed_csv)
-        assert rows == len(source.claims)
+        result = accept_all(review_csv, reviewed_csv)
+        assert result.mode == "claims"
+        assert result.total == len(source.claims)
+        assert result.approved == len(source.claims)
 
         with open(reviewed_csv, newline="") as f:
             reviewed_rows = list(csv.DictReader(f))
@@ -402,6 +418,57 @@ class TestAcceptAll:
         approved, warnings = apply_review(source, reviewed_csv)
         assert len(approved.claims) == len(source.claims)
         assert warnings == []
+
+    def test_equivalences_ratifies_verdicts_not_blanket_approve(
+        self, tmp_path
+    ):
+        # ratify the machine per row: same->approve, distinct->reject,
+        # uncertain->blank; a `same` against two items is a contradiction
+        # left blank (it must not merge). Verifies the reviewed file is
+        # applicable: only the lone `same` survives read_approved_equivalences.
+        from yizkr.pipeline.reconcile import read_approved_equivalences
+
+        src = tmp_path / "equivalences.csv"
+        _write_equivalences_csv(
+            src,
+            [
+                {"entity_id": "e1", "qid": "Q10", "verdict": "same"},
+                {"entity_id": "e2", "qid": "Q20", "verdict": "distinct"},
+                {"entity_id": "e3", "qid": "Q30", "verdict": "uncertain"},
+                # e4 judged "same" against two items -> contradiction
+                {"entity_id": "e4", "qid": "Q40", "verdict": "same"},
+                {"entity_id": "e4", "qid": "Q41", "verdict": "same"},
+            ],
+        )
+        out = tmp_path / "equivalences.reviewed.csv"
+        result = accept_all(src, out)
+        assert result.mode == "equivalences"
+        assert (result.approved, result.rejected, result.uncertain) == (
+            1,
+            1,
+            1,
+        )
+        assert result.conflicted == 2
+
+        with open(out, newline="") as f:
+            by_pair = {
+                (r["entity_id"], r["qid"]): r["decision"]
+                for r in csv.DictReader(f)
+            }
+        assert by_pair[("e1", "Q10")] == "approve"
+        assert by_pair[("e2", "Q20")] == "reject"
+        assert by_pair[("e3", "Q30")] == ""
+        assert by_pair[("e4", "Q40")] == "" and by_pair[("e4", "Q41")] == ""
+
+        # applicable and conflict-free: only e1 is an approved merge
+        assert read_approved_equivalences(out) == {"e1": "Q10"}
+
+    def test_refuses_a_non_equivalences_verdict_csv(self, tmp_path):
+        # a reconcile-places sheet has verdict+decision but no entity_id
+        places = tmp_path / "places.csv"
+        places.write_text("qid_a,qid_b,verdict,decision\nQ1,Q2,same,\n")
+        with pytest.raises(ValueError, match="no 'entity_id'"):
+            accept_all(places, tmp_path / "out.csv")
 
     def test_preserves_claim_ids_and_other_columns(self, tmp_path):
         # only `decision` changes — claim_id (the content hash apply_review

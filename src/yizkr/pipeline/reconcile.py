@@ -757,6 +757,50 @@ def read_approved_equivalences(path: Path) -> dict[str, str]:
     return approved
 
 
+def ratify_equivalence_verdicts(rows: list[dict]) -> dict[str, int]:
+    """Fill each equivalence row's `decision` in place from the machine
+    `verdict`, ratifying the adjudicator wholesale — the `accept-all`
+    bulk path. This is NOT a blanket approve: it accepts what the machine
+    decided, per row, so distinct-judged pairs are NOT merged.
+
+        same      -> approve   (accept the proposed match)
+        distinct  -> reject    (accept the non-match; the entity mints fresh)
+        uncertain -> ""        (the machine punted — nothing to ratify;
+                                left blank for the human, no merge)
+
+    An entity the adjudicator marks `same` against MORE THAN ONE item is a
+    contradiction it cannot ratify — `read_approved_equivalences` rejects a
+    double approval — so those rows are left blank and counted separately,
+    for the human to resolve. The output is therefore always applicable.
+
+    Returns a breakdown: {approved, rejected, uncertain, conflicted}.
+    """
+    same_targets: dict[str, set[str]] = {}
+    for row in rows:
+        if row.get("verdict", "").strip().lower() == "same":
+            same_targets.setdefault(row["entity_id"], set()).add(row["qid"])
+    conflicted_entities = {
+        entity_id for entity_id, qids in same_targets.items() if len(qids) > 1
+    }
+
+    counts = {"approved": 0, "rejected": 0, "uncertain": 0, "conflicted": 0}
+    for row in rows:
+        verdict = row.get("verdict", "").strip().lower()
+        if verdict == "same" and row["entity_id"] in conflicted_entities:
+            row["decision"] = ""
+            counts["conflicted"] += 1
+        elif verdict == "same":
+            row["decision"] = "approve"
+            counts["approved"] += 1
+        elif verdict == "distinct":
+            row["decision"] = "reject"
+            counts["rejected"] += 1
+        else:  # uncertain (or, defensively, any unrecognised verdict)
+            row["decision"] = ""
+            counts["uncertain"] += 1
+    return counts
+
+
 def read_reviewed_aliases(path: Path) -> dict[str, list[str]]:
     """entity_id -> the alias list as the reviewer left it, for approved
     rows of a CSV that carries the `aliases` column.

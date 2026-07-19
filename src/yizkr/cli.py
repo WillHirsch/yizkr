@@ -468,27 +468,31 @@ def cmd_apply_review(args) -> int:
 
 
 def cmd_accept_all(args) -> int:
-    import csv
-
     from yizkr.pipeline.review import accept_all
 
-    out = args.out or args.csv.with_name("review.reviewed.csv")
+    # default output name follows the input: review.csv -> review.reviewed.csv,
+    # equivalences.csv -> equivalences.reviewed.csv (the gate each satisfies).
+    out = args.out or args.csv.with_name(args.csv.stem + ".reviewed.csv")
     if out.exists() and not args.force:
         sys.exit(f"{out} already exists; pass --force to overwrite it")
     try:
-        rows = accept_all(args.csv, out)
+        result = accept_all(args.csv, out)
     except (OSError, ValueError) as exc:
         sys.exit(str(exc))
-    with open(out, newline="") as f:
-        warned = sum(
-            1 for row in csv.DictReader(f) if row.get("warning", "").strip()
+    if result.mode == "equivalences":
+        summary = (
+            f"{result.approved} match(es) approved, "
+            f"{result.rejected} distinct rejected, "
+            f"{result.uncertain} uncertain left blank"
         )
-    note = (
-        f"; {warned} carry an extraction warning — spot-check before writing"
-        if warned
-        else ""
-    )
-    print(f"wrote {out} ({rows} claims set to approve{note})")
+        if result.conflicted:
+            summary += (
+                f", {result.conflicted} conflicting (same vs >1 item) left "
+                f"blank — resolve these by hand"
+            )
+        print(f"wrote {out} (ratified {result.total} verdicts: {summary})")
+    else:
+        print(f"wrote {out} ({result.approved} claims set to approve)")
     return 0
 
 
@@ -875,18 +879,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = isub.add_parser(
         "accept-all",
         help=(
-            "init review.reviewed.csv approving every row "
-            "(curator bulk-accept)"
+            "bulk-accept a review CSV: approve every claim (review.csv), or "
+            "ratify each machine verdict (equivalences.csv) — curator "
+            "bulk-accept"
         ),
     )
     p.add_argument(
-        "--csv", type=Path, required=True, help="the review.csv to accept"
+        "--csv",
+        type=Path,
+        required=True,
+        help="the review.csv or equivalences.csv to accept",
     )
     p.add_argument(
         "--out",
         type=Path,
         default=None,
-        help="output path (default: review.reviewed.csv beside --csv)",
+        help="output path (default: <input-stem>.reviewed.csv beside --csv)",
     )
     p.add_argument(
         "--force",
