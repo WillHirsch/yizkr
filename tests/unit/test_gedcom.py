@@ -8,6 +8,7 @@ from yizkr.claims import validate_against_manifest
 from yizkr.pipeline.gedcom import (
     ADAPTER_IDENTIFIER,
     adapt_gedcom,
+    format_unsupported_tags,
     parse_gedcom,
     parse_gedcom_date,
 )
@@ -208,6 +209,10 @@ class TestAdapter:
         result = fixture_result()
         assert result.unsupported_tags.get("EDUC") == 1
         assert "OCCU" not in result.unsupported_tags
+        # the envelope (HEAD/TRLR and its GEDC/CHAR/SOUR children) is
+        # structure, not dropped genealogy — never reported
+        for envelope in ("HEAD", "TRLR", "GEDC", "CHAR", "SOUR"):
+            assert envelope not in result.unsupported_tags
 
 
 class TestVocabulary:
@@ -424,3 +429,77 @@ class TestResidence:
         result = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23")
         assert any("RESI without PLAC" in w for w in result.warnings)
         assert len(claims_for(result.batch, "i1", "residence")) == 3
+
+
+# Exercises what the old direct-children-of-INDI/FAM scan could not see:
+# a level-0 sidecar record (SOUR/OBJE/REPO), citations nested UNDER a
+# mapped event, and the envelope. Modelled on the real Ancestry export
+# that surfaced issue #8 (SOUR on nearly every fact, OBJE media records).
+CENSUS_GEDCOM = """\
+0 HEAD
+1 SOUR SomeSoftware
+1 CHAR UTF-8
+0 @S1@ SOUR
+1 TITL General Register Office
+1 REPO @R1@
+0 @R1@ REPO
+1 NAME GRO
+0 @O1@ OBJE
+1 FILE https://example.test/photo.jpg
+2 FORM jpg
+0 @I1@ INDI
+1 NAME John /Smith/
+2 GIVN John
+2 SURN Smith
+2 SOUR @S1@
+3 PAGE Vol 3 p 1
+3 _APID 1,2::3
+1 OBJE @O1@
+1 BIRT
+2 DATE 1900
+2 SOUR @S1@
+3 PAGE Vol 3 p 1
+1 EDUC Somewhere
+0 TRLR
+"""
+
+
+class TestUnsupportedCensus:
+    """The census names every dropped tag, at every depth (ADR-0021)."""
+
+    def test_census_covers_all_records_and_nesting(self):
+        tags = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").unsupported_tags
+        # SOUR as a level-0 record, under NAME, and under BIRT — all three;
+        # the old scan saw only direct INDI children and would report 0 here
+        assert tags["SOUR"] == 3
+        # OBJE both as a level-0 media record and as an INDI-level pointer
+        assert tags["OBJE"] == 2
+        assert tags["REPO"] == 1
+        assert tags["EDUC"] == 1
+
+    def test_dropped_subtrees_are_not_itemised(self):
+        # a citation is reported once; its PAGE/_APID/TITL internals are not
+        # separately counted — the top-most unmapped tag stands for the branch
+        tags = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").unsupported_tags
+        assert "PAGE" not in tags and "_APID" not in tags
+        assert "TITL" not in tags and "FILE" not in tags
+
+    def test_name_parts_and_envelope_are_not_dropped(self):
+        tags = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").unsupported_tags
+        # GIVN/SURN restate the NAME value the adapter reads — not dropped
+        assert "GIVN" not in tags and "SURN" not in tags
+        # HEAD/TRLR envelope (and the header's own CHAR) never counted
+        assert "HEAD" not in tags and "TRLR" not in tags
+        assert "CHAR" not in tags
+
+
+class TestUnsupportedFormat:
+    def test_count_is_kept_apart_from_tag(self):
+        # issue #8: "OBJEx4" read as a corrupt tag; the count must be legible
+        assert (
+            format_unsupported_tags({"OBJE": 4, "SOUR": 71})
+            == "OBJE ×4, SOUR ×71"
+        )
+
+    def test_empty_census_is_empty_string(self):
+        assert format_unsupported_tags({}) == ""

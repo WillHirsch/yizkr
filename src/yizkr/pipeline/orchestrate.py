@@ -285,7 +285,10 @@ class Orchestrator:
         return self._step_extract(doc, transcription)
 
     def _step_gedcom(self, doc: DocumentRun) -> ClaimBatch:
-        from yizkr.pipeline.gedcom import adapt_gedcom
+        from yizkr.pipeline.gedcom import (
+            adapt_gedcom,
+            format_unsupported_tags,
+        )
 
         result = adapt_gedcom(
             doc.source.read_text(), artifact_qid=doc.state.artifact_qid
@@ -293,12 +296,9 @@ class Orchestrator:
         for warning in result.warnings:
             self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
         if result.unsupported_tags:
-            counted = ", ".join(
-                f"{tag}x{count}"
-                for tag, count in sorted(result.unsupported_tags.items())
-            )
             self.log(
-                f"  {doc.source.name}: unsupported GEDCOM tags: {counted}",
+                f"  {doc.source.name}: unsupported GEDCOM tags: "
+                + format_unsupported_tags(result.unsupported_tags),
                 file=sys.stderr,
             )
         doc.state.detail = (doc.state.detail or {}) | {

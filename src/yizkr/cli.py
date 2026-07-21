@@ -347,7 +347,7 @@ def cmd_resolve(args) -> int:
 
 
 def cmd_gedcom(args) -> int:
-    from yizkr.pipeline.gedcom import adapt_gedcom
+    from yizkr.pipeline.gedcom import adapt_gedcom, format_unsupported_tags
 
     result = adapt_gedcom(args.file.read_text(), artifact_qid=args.artifact)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -362,10 +362,7 @@ def cmd_gedcom(args) -> int:
     if result.unsupported_tags:
         print(
             "unsupported GEDCOM tags (counted, not extracted): "
-            + ", ".join(
-                f"{tag}x{count}"
-                for tag, count in sorted(result.unsupported_tags.items())
-            ),
+            + format_unsupported_tags(result.unsupported_tags),
             file=sys.stderr,
         )
     return 0
