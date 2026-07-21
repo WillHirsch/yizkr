@@ -36,7 +36,12 @@ siblinghood (docs/MODELING.md — never derive). Dates accept the
 GEDCOM-standard English abbreviations plus what hand-maintained trees
 actually contain: full English and German month names, and month-first
 order when the month is named. Unsupported tags are counted and
-reported, not silently dropped.
+reported, not silently dropped — the census walks every record and every
+nesting level and names the top-most tag it does not map in each branch
+(so a citation nested under a mapped event still surfaces), which is how
+source citations (SOUR), multimedia (OBJE) and whole sidecar records show
+at their true prevalence. Mapping those into the graph is a source-first
+modeling decision, not a parser gap: see ADR-0021.
 """
 
 from __future__ import annotations
@@ -288,6 +293,19 @@ class AdapterResult:
     unsupported_tags: dict[str, int]
 
 
+def format_unsupported_tags(unsupported: dict[str, int]) -> str:
+    """One-line census for logs: ``OBJE ×4, SOUR ×71``.
+
+    The count is kept visibly apart from the tag (a ``×`` behind a space)
+    so it never reads as part of the tag name: ``OBJEx4`` looked like a
+    corrupt tag rather than four OBJE records (issue #8). Single formatter,
+    shared by the CLI and the orchestrator, so the two cannot drift.
+    """
+    return ", ".join(
+        f"{tag} ×{count}" for tag, count in sorted(unsupported.items())
+    )
+
+
 def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     """The whole file -> one ClaimBatch with entity manifest."""
     roots = parse_gedcom(text)
@@ -301,14 +319,40 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
         "RESI", "FAMC", "FAMS",
     }  # fmt: skip
     HANDLED_FAM = {"HUSB", "WIFE", "CHIL", "MARR", "DIV"}
-    for record in individuals.values():
+    # Unsupported-tag census (ADR-0021). Name the top-most tag the adapter
+    # does not map in EVERY branch of EVERY record — not merely the direct
+    # children of INDI/FAM. A tag the adapter reads is descended into, so a
+    # citation nested under a mapped event still surfaces; a tag it does not
+    # read is counted once and its subtree left untouched, so an already-
+    # dropped branch is not itemised down to its PAGE/_APID leaves. This
+    # keeps the promise above true for source citations (SOUR), multimedia
+    # (OBJE), repositories (REPO) and whole sidecar records, at their true
+    # prevalence rather than the fraction that sat one level under a person.
+    consumed = (
+        {"INDI", "FAM"}                      # record types the adapter walks
+        | HANDLED_INDI | HANDLED_FAM         # event / attribute containers
+        | {"DATE", "PLAC", "CAUS"}           # values read inside those
+        | {"TYPE", "NICK", "GIVN", "SURN",   # name parts read, or restated
+           "NPFX", "NSFX", "SPFX"}           #   by the NAME value we do read
+    )  # fmt: skip
+    # The GEDCOM envelope is structure, not dropped genealogy.
+    envelope = {"HEAD", "TRLR"}
+
+    def census(record: Record) -> None:
         for child in record.children:
-            if child.tag not in HANDLED_INDI:
+            if child.tag in consumed:
+                census(child)  # descend: a citation may sit deeper down
+            elif child.tag not in envelope:
                 unsupported[child.tag] = unsupported.get(child.tag, 0) + 1
-    for record in families.values():
-        for child in record.children:
-            if child.tag not in HANDLED_FAM:
-                unsupported[child.tag] = unsupported.get(child.tag, 0) + 1
+                # the top-most unmapped tag stands for its whole branch
+
+    for root in roots:
+        if root.tag in envelope:
+            continue
+        if root.tag in consumed:
+            census(root)
+        elif root.tag:
+            unsupported[root.tag] = unsupported.get(root.tag, 0) + 1
 
     entities: list[dict] = []
     claims: list[dict] = []
