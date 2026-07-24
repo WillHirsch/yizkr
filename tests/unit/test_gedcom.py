@@ -431,10 +431,9 @@ class TestResidence:
         assert len(claims_for(result.batch, "i1", "residence")) == 3
 
 
-# Exercises what the old direct-children-of-INDI/FAM scan could not see:
-# a level-0 sidecar record (SOUR/OBJE/REPO), citations nested UNDER a
-# mapped event, and the envelope. Modelled on the real Ancestry export
-# that surfaced issue #8 (SOUR on nearly every fact, OBJE media records).
+# A level-0 SOUR (cited upstream source) + REPO sidecar, an OBJE media
+# object, and a person whose NAME and BIRT both carry a SOUR citation with
+# a PAGE. Modelled on the real Ancestry export that surfaced issue #8.
 CENSUS_GEDCOM = """\
 0 HEAD
 1 SOUR SomeSoftware
@@ -447,6 +446,8 @@ CENSUS_GEDCOM = """\
 0 @O1@ OBJE
 1 FILE https://example.test/photo.jpg
 2 FORM jpg
+2 TITL Family portrait
+1 DATE 1978
 0 @I1@ INDI
 1 NAME John /Smith/
 2 GIVN John
@@ -465,21 +466,21 @@ CENSUS_GEDCOM = """\
 
 
 class TestUnsupportedCensus:
-    """The census names every dropped tag, at every depth (ADR-0021)."""
+    """The census reports the genuine unmapped tail, at every depth."""
 
-    def test_census_covers_all_records_and_nesting(self):
+    def test_census_reports_the_unmapped_tail_only(self):
         tags = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").unsupported_tags
-        # SOUR as a level-0 record, under NAME, and under BIRT — all three;
-        # the old scan saw only direct INDI children and would report 0 here
-        assert tags["SOUR"] == 3
-        # OBJE both as a level-0 media record and as an INDI-level pointer
-        assert tags["OBJE"] == 2
+        # REPO and EDUC are genuinely unmapped, at level 0 and nested — both
+        # reported (the old direct-children scan would have missed REPO)
         assert tags["REPO"] == 1
         assert tags["EDUC"] == 1
+        # SOUR and OBJE are now incorporated (ADR-0021), so the census no
+        # longer flags them — as records, pointers, or nested citations
+        assert "SOUR" not in tags and "OBJE" not in tags
 
-    def test_dropped_subtrees_are_not_itemised(self):
-        # a citation is reported once; its PAGE/_APID/TITL internals are not
-        # separately counted — the top-most unmapped tag stands for the branch
+    def test_handled_and_dropped_subtrees_are_not_itemised(self):
+        # a handled/dropped tag stands for its whole branch: the citation's
+        # PAGE/_APID and the media object's FILE/TITL are never itemised
         tags = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").unsupported_tags
         assert "PAGE" not in tags and "_APID" not in tags
         assert "TITL" not in tags and "FILE" not in tags
@@ -491,6 +492,78 @@ class TestUnsupportedCensus:
         # HEAD/TRLR envelope (and the header's own CHAR) never counted
         assert "HEAD" not in tags and "TRLR" not in tags
         assert "CHAR" not in tags
+
+
+class TestSourceCitations:
+    """SOUR citations fold into the claim's reference (ADR-0021 step A)."""
+
+    def test_page_becomes_the_reference_page_number(self):
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        (birth,) = claims_for(batch, "i1", "date_of_birth")
+        assert birth.source.page_number == "Vol 3 p 1"
+
+    def test_cited_source_title_surfaces_in_excerpt(self):
+        # the verbatim lines carry only "@S1@"; the resolved upstream source
+        # name is appended so the reviewer can read the citation
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        (birth,) = claims_for(batch, "i1", "date_of_birth")
+        excerpt = birth.source.transcription_excerpt.text
+        assert "cited: General Register Office" in excerpt
+
+    def test_claim_without_a_citation_has_no_page_number(self):
+        batch = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n0 TRLR\n",
+            artifact_qid="Q23",
+        ).batch
+        (birth,) = claims_for(batch, "i1", "date_of_birth")
+        assert birth.source.page_number is None
+
+
+class TestMediaObjects:
+    """OBJE becomes a lightweight un-held media item (ADR-0021)."""
+
+    def test_person_images_an_unheld_media_item(self):
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        (image,) = claims_for(batch, "i1", "image")
+        media = next(
+            e for e in batch.entities if e.id == image.value.value.local_id
+        )
+        assert media.kind == "artifact"  # not photograph: bytes not held
+        assert media.label == "Family portrait"
+        assert "never fetched" in media.summary
+
+    def test_media_association_carries_the_objects_date(self):
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        (image,) = claims_for(batch, "i1", "image")
+        (qualifier,) = image.qualifiers
+        assert qualifier.property == "point_in_time"
+        assert qualifier.value.year == 1978
+
+    def test_batch_stays_manifest_valid(self):
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        assert validate_against_manifest(batch) == []
+
+    def test_shared_object_is_one_media_item(self):
+        gedcom = (
+            "0 @O1@ OBJE\n1 FILE p.jpg\n2 TITL Shared photo\n"
+            "0 @I1@ INDI\n1 NAME A /B/\n1 OBJE @O1@\n"
+            "0 @I2@ INDI\n1 NAME C /D/\n1 OBJE @O1@\n0 TRLR\n"
+        )
+        batch = adapt_gedcom(gedcom, artifact_qid="Q23").batch
+        media = [e for e in batch.entities if e.kind == "artifact"]
+        assert len(media) == 1  # deduped by xref across both people
+        assert len(claims_for(batch, "i1", "image")) == 1
+        assert len(claims_for(batch, "i2", "image")) == 1
+
+    def test_dangling_pointer_warns_and_skips(self):
+        result = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME A /B/\n1 OBJE @O9@\n0 TRLR\n",
+            artifact_qid="Q23",
+        )
+        assert any(
+            "OBJE points to unknown object" in w for w in result.warnings
+        )
+        assert not claims_for(result.batch, "i1", "image")
 
 
 class TestUnsupportedFormat:

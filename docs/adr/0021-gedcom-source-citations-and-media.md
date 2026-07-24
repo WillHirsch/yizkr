@@ -1,22 +1,24 @@
 # ADR-0021: GEDCOM source citations (SOUR) and multimedia (OBJE)
 
-Status: **proposed** — the honest unsupported-tag census that surfaced the
-question is implemented (`pipeline/gedcom.py`, issue #8); how to *map*
-SOUR and OBJE into the graph is the open decision this ADR records for
-ratification. Nothing here is built yet.
+Status: **accepted** — implemented in the GEDCOM adapter
+(`pipeline/gedcom.py`): SOUR citations fold into each claim's reference
+(step A) and OBJE objects become un-held media items linked with the new
+`image` property. Follows the honest census of the preceding change (issue
+#8). Step B (promoting a cited SOUR to its own artifact item) remains
+deferred to a future ADR.
 
 ## Context
 
 The GEDCOM adapter (ROADMAP item 13) maps the genealogical content a
 family-tree export carries — names, dates, places, parentage, marriages,
 occupations, and so on — deterministically into referenced claims. Two
-common tag families it does **not** map are `SOUR` (source citations) and
-`OBJE` (multimedia objects). Until now they were "counted" only where they
-sat one level under an `INDI`/`FAM` record, which under-reported them
-badly; the census now names the top-most unmapped tag in every branch, so
-their true prevalence is visible. In the real Ancestry export that
-prompted this (`Hirsch Family Tree.ged`): **134 `SOUR`** and **8 `OBJE`**,
-against 72 individuals.
+common tag families it did **not** map are `SOUR` (source citations) and
+`OBJE` (multimedia objects). They were once "counted" only where they sat
+one level under an `INDI`/`FAM` record, which under-reported them badly;
+the preceding change's census named the top-most unmapped tag in every
+branch, making their true prevalence visible. In the real Ancestry export
+that prompted this (`Hirsch Family Tree.ged`): **134 `SOUR`** and **8
+`OBJE`**, against 72 individuals.
 
 That prevalence forces a principled question rather than a parser one,
 because of what these tags *are*:
@@ -48,72 +50,75 @@ verbatim lines as excerpt. So the question is not "do these claims have a
 reference" (they do) but "should the export's *own* upstream citation and
 media pointers be preserved, and in what shape".
 
-## Decision (proposed)
+## Decision
 
-### 1. `SOUR` → preserved as reference detail, in two graded steps
+### 1. `SOUR` → folded into the claim's reference (step A, implemented)
 
-**Step A (near-term, no new entities).** When a mapped claim's GEDCOM
-record carries a `SOUR` citation, fold that citation into the claim's
-existing reference: keep the citation's human text (`TITL`, `PAGE`, and the
-verbatim `SOUR`/`PAGE` lines) in the transcription excerpt already attached
-to the claim, and — where the model has a locator qualifier (ADR-0003) —
-record `PAGE` there. This captures *what upstream source the tree cited*
-for the reviewer, needs no new items, and cannot auto-confirm anything.
-It is the conservative, source-first-faithful first move and is a
-contained change to the adapter's `source()` helper.
+When a mapped claim's GEDCOM record carries a `SOUR` citation, the
+adapter's `source()` helper folds it into the claim's existing reference:
+the `PAGE` becomes the reference's `page_number` locator (ADR-0003), and
+the cited level-0 `SOUR` record's title is resolved from its opaque
+`@S..@` pointer and appended to the transcription excerpt (`… | cited:
+England & Wales, Civil Registration Marriage Index`), so the reviewer
+reads the source's name, not a pointer. The verbatim `SOUR`/`PAGE` lines
+remain in the excerpt. No new entities are minted, so nothing is
+auto-confirmed. The upstream source is **resolved, never fetched**.
 
-**Step B (later, its own follow-up).** Promote each level-0 `SOUR` record
-to an artifact / artifact-fragment item (a *cited source*, e.g. the GRO
-index), referenced `stated in →` from every claim that cites it, and keyed
-for de-duplication like places are — the same `_APID`/GRO reference
-recurs across many people. This is real modeling work: citation identity,
-dedup, and a review step (never auto-merge). It is **not** in scope for
-issue #8 and should get its own ADR + review flow when prioritised.
+**Step B (deferred).** Promoting each level-0 `SOUR` record to its own
+artifact / artifact-fragment item (a *cited source*, e.g. the GRO index),
+referenced `stated in →` from every claim that cites it and de-duplicated
+like places, is real modeling work — citation identity, dedup, a review
+step (never auto-merge). It gets its own ADR + review flow when
+prioritised; it is not built here.
 
-Recommendation: adopt **Step A** now as the resolution of the source-first
-tension; schedule **Step B** rather than deferring it indefinitely.
+### 2. `OBJE` → a lightweight un-held media item, never a fetch
 
-### 2. `OBJE` → an un-fetched media reference, never a fetch
+Each `OBJE` becomes an entity of kind **`artifact`** (not `photograph`: we
+hold none of the bytes and cannot vouch it is a photo — many objects are
+document scans — and an un-held stub stays out of the gallery/faces flows,
+which key on held media). Its label is the object's `TITL` (else file
+name); it carries **no `media file` and no `media SHA-1`** — the absence
+of a content hash *is* the un-held marker. The person links to it with the
+new **`image`** property (P18 semantics: media of the subject),
+`point_in_time`-qualified when the object is dated. Objects are deduped by
+xref so several people share one item. `image` is used, not `depicts`,
+because `depicts` is the faces-confirmation predicate (ADR-0005) that must
+never be auto-written (CLAUDE.md), and an attached obituary is not a facial
+depiction.
 
-Record that a subject *has* an associated medium as a structured,
-referenced statement (or a lightweight media-reference item): the `FILE`
-name/URL, `FORM`, `TITL`, and any `DATE`/`PLAC` the record carries — with
-**zero bytes held and zero third-party fetch**. Referencing is not
-fetching, so this does not touch rule 7; acquiring the bytes stays a
-separate, explicitly-instructed step, and only then does the medium join
-the normal SHA-1-keyed artifact path (ADR-0010). This preserves the
-person↔media linkage the future faces/gallery flows (ADR-0005) will want,
-without ever pulling personal media off Ancestry or newspapers.com on the
-archive's own initiative. Detail (dedicated `media reference` property vs.
-an un-held `photograph` item with a `media file` URL and no `media SHA-1`)
-is left to implementation; the ruling is *reference, never fetch*.
+Referencing is not fetching: this records the `FILE` URL/name and the
+metadata the export already holds with **zero bytes held and zero
+third-party fetch**. Acquiring the bytes stays a separate,
+explicitly-instructed step, and only then does the medium join the normal
+SHA-1-keyed artifact path (ADR-0010). This preserves the person↔media
+linkage the future faces/gallery flows (ADR-0005) will want, without ever
+pulling personal media off Ancestry or newspapers.com on the archive's own
+initiative.
 
-### 3. Until ratified/implemented, the census keeps the drop honest
+## Rulings
 
-The unsupported-tag census (this change) now reports `SOUR`/`OBJE` at their
-true counts across all records and depths, so the gap stays visible in
-every ingest run instead of hiding behind a one-level scan.
-
-## Open questions (decision needed)
-
-1. Adopt **Step A** for `SOUR` now, or leave `SOUR` counted-only until
-   Step B is scheduled?
-2. `OBJE` as a **statement** on the subject vs. a lightweight **un-held
-   media item**? (Both honour *reference-never-fetch*.)
-3. Confirm the hard line: the pipeline **never** fetches `OBJE` bytes from a
-   third party without an explicit, separate instruction.
+1. **`SOUR` step A adopted.** Citations fold into the citing claim's
+   reference (`page_number` + resolved title in the excerpt); no new
+   entities. Step B (cited-source-as-item) is deferred to its own ADR.
+2. **`OBJE` is a lightweight un-held media item** (`artifact` kind, no
+   `media file`/`media SHA-1`), linked with `image`, not `depicts`.
+3. **Hard line confirmed.** The pipeline **never** fetches `OBJE` bytes
+   from a third party without an explicit, separate instruction.
+4. Once handled, `SOUR`/`OBJE` leave the unsupported-tag census — it now
+   reports only the genuine unmapped tail (`REPO`, `SUBM`, `_`-tags).
 
 ## Consequences
 
 - Source-first fidelity improves: the upstream citations a tree carries are
-  preserved for the reviewer (Step A) and, later, become first-class cited
-  sources (Step B).
+  preserved on the very claims they support, name and locator both.
 - Privacy is preserved by construction: `OBJE` is referenced, never
   fetched; no personal media leaves or enters via a background download.
 - No auto-confirmation: neither citations nor media become asserted
-  *entities* without the ordinary human review (ADR-0007/0010).
+  *depiction/identity* facts without the ordinary human review
+  (ADR-0005/0007).
+- A new `image` property joins the manifest (P18 semantics, item-valued);
+  bootstrap mints it idempotently on the next run.
 - The heavier citation-as-entity modeling (Step B) is named and deferred to
   its own ADR, not smuggled into the adapter.
-- Docs move with code: the adapter docstring already points here; if
-  Step A / `OBJE` referencing lands, MODELING.md and ROADMAP item 13's
-  note update in that same change.
+- Docs move with code: the adapter docstring, MODELING.md ("Names"/media),
+  and ROADMAP item 13's note are updated in this change.

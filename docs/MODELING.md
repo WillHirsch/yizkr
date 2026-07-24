@@ -232,6 +232,17 @@ and reference the artifact itself or the producing run.
   proposals live outside the graph (review queue), never in it.
 - W1 implementation: `python -m ingest detect-faces / enroll-face /
   match-faces` (see `ingest/faces.py`), feeding the shared review flow.
+- **Associated media vs. depiction (see ADR-0021).** `image` (P18
+  semantics) links a person to a medium a source *associates* with them (a
+  portrait, an obituary scan) — distinct from `depicts`, which is a
+  confirmed facial depiction with an image region and is never
+  auto-written. The GEDCOM adapter emits `image` for OBJE multimedia
+  objects as **un-held media items** (kind `artifact`, with no `media file`
+  and no `media SHA-1` — the missing content hash *is* the un-held marker):
+  the bytes are referenced from the export, never fetched from a third
+  party (privacy rule 7). Acquiring the bytes is a separate,
+  explicitly-instructed step, after which the medium joins the SHA-1-keyed
+  artifact path (ADR-0010).
 
 ## Names (see ADR-0011)
 
