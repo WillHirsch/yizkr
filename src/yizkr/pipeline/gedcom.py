@@ -30,18 +30,22 @@ cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
 the record is), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
 when the record is), parent-child relations, marriages (date, place)
-and divorces (end time). Sibling relations are deliberately NOT
+and divorces (end time). Source citations (SOUR) are folded into each
+claim's reference (ADR-0021): the PAGE locator becomes the reference's
+page number and the cited source's own title is surfaced in the excerpt
+— the upstream source is resolved, never fetched. Multimedia objects
+(OBJE) become lightweight un-held media items (an `artifact`) linked to
+the person with `image`; the bytes are referenced, never downloaded from
+a third party (privacy rule 7). Sibling relations are deliberately NOT
 derived from shared parents: the export asserts parentage, not
 siblinghood (docs/MODELING.md — never derive). Dates accept the
 GEDCOM-standard English abbreviations plus what hand-maintained trees
 actually contain: full English and German month names, and month-first
-order when the month is named. Unsupported tags are counted and
-reported, not silently dropped — the census walks every record and every
-nesting level and names the top-most tag it does not map in each branch
-(so a citation nested under a mapped event still surfaces), which is how
-source citations (SOUR), multimedia (OBJE) and whole sidecar records show
-at their true prevalence. Mapping those into the graph is a source-first
-modeling decision, not a parser gap: see ADR-0021.
+order when the month is named. Tags the adapter still does not map (e.g.
+REPO, SUBM, tool-specific `_` tags) are counted and reported, not
+silently dropped: the census walks every record and nesting level and
+names the top-most unmapped tag in each branch, leaving an already-
+handled or already-dropped subtree unitemised (ADR-0021).
 """
 
 from __future__ import annotations
@@ -246,6 +250,37 @@ def _clean_name(name: str) -> str:
     return re.sub(r"\s+", " ", name.replace("/", " ")).strip()
 
 
+def _source_title(record: Record) -> str:
+    """A level-0 SOUR record's human title (TITL), else its inline value.
+
+    Resolves the opaque ``@S..@`` pointer a citation carries to the name
+    of the upstream source the tree relied on ("England & Wales, Civil
+    Registration Marriage Index"). Whitespace-collapsed; never fetched.
+    """
+    title = record.text("TITL").strip() or record.value.strip()
+    return " ".join(title.split())
+
+
+def _media_label(obje: Record) -> str:
+    """A GEDCOM multimedia object's display label.
+
+    Prefers the object's title (TITL, which real exports nest under
+    FILE), then its file name/URL, then a generic fallback — labels must
+    be non-empty (EntityRecord.label).
+    """
+    file_record = obje.first("FILE")
+    for candidate in (
+        file_record.text("TITL") if file_record else "",
+        obje.text("TITL"),
+        file_record.value if file_record else "",
+        obje.value,
+    ):
+        cleaned = " ".join(candidate.split()) if candidate else ""
+        if cleaned:
+            return cleaned
+    return "media object"
+
+
 # GEDCOM NAME TYPE (5.5.1 §, plus common tool values) -> typed-name
 # property. Only types the source states are recorded; an absent or
 # unrecognised TYPE leaves the name as a plain label/alias, never guessed.
@@ -311,6 +346,10 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     roots = parse_gedcom(text)
     individuals = {r.xref: r for r in roots if r.tag == "INDI" and r.xref}
     families = {r.xref: r for r in roots if r.tag == "FAM" and r.xref}
+    # level-0 records a person/event may point at by xref: SOUR = the
+    # upstream source a citation cites; OBJE = a multimedia object (ADR-0021)
+    sources = {r.xref: r for r in roots if r.tag == "SOUR" and r.xref}
+    media_records = {r.xref: r for r in roots if r.tag == "OBJE" and r.xref}
     warnings: list[str] = []
     unsupported: dict[str, int] = {}
 
@@ -321,13 +360,15 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     HANDLED_FAM = {"HUSB", "WIFE", "CHIL", "MARR", "DIV"}
     # Unsupported-tag census (ADR-0021). Name the top-most tag the adapter
     # does not map in EVERY branch of EVERY record — not merely the direct
-    # children of INDI/FAM. A tag the adapter reads is descended into, so a
-    # citation nested under a mapped event still surfaces; a tag it does not
-    # read is counted once and its subtree left untouched, so an already-
-    # dropped branch is not itemised down to its PAGE/_APID leaves. This
-    # keeps the promise above true for source citations (SOUR), multimedia
-    # (OBJE), repositories (REPO) and whole sidecar records, at their true
-    # prevalence rather than the fraction that sat one level under a person.
+    # children of INDI/FAM. `consumed` container tags are descended into, so
+    # an unmapped tag nested under a mapped event still surfaces. `handled`
+    # tags the adapter incorporates wholesale — SOUR (folded into claim
+    # references) and OBJE (minted as un-held media items) — are skipped
+    # subtree and all: neither counted nor descended. The envelope is
+    # structure, not data. Everything else is counted once and its subtree
+    # left untouched, so an already-dropped branch is not itemised down to
+    # its PAGE/_APID leaves. What remains reported is the genuine tail
+    # (REPO, SUBM, tool-specific `_` tags).
     consumed = (
         {"INDI", "FAM"}                      # record types the adapter walks
         | HANDLED_INDI | HANDLED_FAM         # event / attribute containers
@@ -335,19 +376,21 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
         | {"TYPE", "NICK", "GIVN", "SURN",   # name parts read, or restated
            "NPFX", "NSFX", "SPFX"}           #   by the NAME value we do read
     )  # fmt: skip
-    # The GEDCOM envelope is structure, not dropped genealogy.
-    envelope = {"HEAD", "TRLR"}
+    handled = {"SOUR", "OBJE"}  # incorporated wholesale (ADR-0021)
+    envelope = {"HEAD", "TRLR"}  # GEDCOM structure, not genealogy
 
     def census(record: Record) -> None:
         for child in record.children:
+            if child.tag in handled or child.tag in envelope:
+                continue
             if child.tag in consumed:
-                census(child)  # descend: a citation may sit deeper down
-            elif child.tag not in envelope:
+                census(child)  # descend: an unmapped tag may sit deeper
+            elif child.tag:
                 unsupported[child.tag] = unsupported.get(child.tag, 0) + 1
                 # the top-most unmapped tag stands for its whole branch
 
     for root in roots:
-        if root.tag in envelope:
+        if root.tag in handled or root.tag in envelope:
             continue
         if root.tag in consumed:
             census(root)
@@ -358,17 +401,46 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
     claims: list[dict] = []
     place_ids: dict[str, str] = {}
     occupation_ids: dict[str, str] = {}
+    media_ids: dict[str, str] = {}
+
+    def cited_sources(record: Record) -> tuple[list[str], list[str]]:
+        """(PAGE locators, resolved upstream-source titles) from a
+        record's own SOUR citations — ADR-0021 step A.
+
+        A GEDCOM SOUR child names the upstream source the tree relied on;
+        we fold it into the claim's existing reference rather than drop
+        it. The upstream @S..@ is resolved to its title, never fetched.
+        """
+        pages: list[str] = []
+        titles: list[str] = []
+        for citation in record.all("SOUR"):
+            page = citation.text("PAGE").strip()
+            if page:
+                pages.append(page)
+            target = sources.get(citation.value.strip())
+            if target and (title := _source_title(target)):
+                titles.append(title)
+        return pages, titles
 
     def source(record: Record) -> dict:
         # monolingual text values forbid newlines; keep each GEDCOM line
         # verbatim and join visibly
         excerpt = record.lines().replace("\n", " | ")
+        pages, titles = cited_sources(record)
+        if titles:
+            # the verbatim lines carry only the @S..@ pointer; name the
+            # cited source(s) so the reviewer can read the citation
+            excerpt += " | cited: " + "; ".join(dict.fromkeys(titles))
         if len(excerpt) > 400:
             excerpt = excerpt[:397].rsplit(" | ", 1)[0] + " | …"
-        return {
+        reference: dict = {
             "artifact": {"kind": "qid", "qid": artifact_qid},
             "transcription_excerpt": {"text": excerpt, "language": "en"},
         }
+        if pages:
+            # the citation's PAGE is the reference's locator (ADR-0003)
+            reference["page_number"] = " ; ".join(dict.fromkeys(pages))
+        return reference
 
     def person_id(xref: str) -> str:
         return xref.strip("@").lower()
@@ -398,6 +470,31 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                 }
             )
         return occupation_ids[name]
+
+    def media_entity(obje: Record) -> str:
+        """A lightweight un-held media item for a GEDCOM OBJE (ADR-0021).
+
+        Kind `artifact`, not `photograph`: we hold none of the bytes and
+        cannot vouch it is a photo (many OBJE are document scans), and an
+        un-held stub with no `media file`/`media SHA-1` stays out of the
+        gallery/faces flows, which key on held media. Deduped by xref so
+        several people can point at the one object.
+        """
+        key = obje.xref or f"@inline{obje.line_number}@"
+        if key not in media_ids:
+            media_ids[key] = f"md{len(media_ids) + 1}"
+            entities.append(
+                {
+                    "id": media_ids[key],
+                    "label": _media_label(obje),
+                    "kind": "artifact",
+                    "summary": (
+                        "media referenced from the GEDCOM export; bytes not "
+                        "held and never fetched from a third party (ADR-0021)"
+                    ),
+                }
+            )
+        return media_ids[key]
 
     def local(entity_id: str) -> dict:
         return {"kind": "local", "local_id": entity_id}
@@ -630,6 +727,28 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
                 {"type": "item", "value": local(place_entity(place))},
                 residence,
                 dated_qualifiers(residence, "residence"),
+            )
+        # OBJE -> an un-held media item the person `image`s (ADR-0021).
+        # A pointer resolves to its level-0 OBJE record; some tools embed
+        # the object inline. Reference the media, never fetch its bytes.
+        for obje_ptr in record.all("OBJE"):
+            target = obje_ptr.value.strip()
+            if target.startswith("@"):
+                obje = media_records.get(target)
+                if obje is None:
+                    warnings.append(
+                        f"line {obje_ptr.line_number}: OBJE points to unknown "
+                        f"object {target!r} — no media claim emitted"
+                    )
+                    continue
+            else:
+                obje = obje_ptr  # media embedded inline under the person
+            claim(
+                person_id(xref),
+                "image",
+                {"type": "item", "value": local(media_entity(obje))},
+                obje,
+                dated_qualifiers(obje, "media"),
             )
 
     # families -> parentage and spouse claims

@@ -388,6 +388,16 @@ properties:
     datatype: wikibase-item
     wikidata: P180
 
+  image:
+    label: image
+    description: >-
+      media (photo, scan, clipping) a source associates with the subject;
+      value is a media item, possibly un-held — referenced from an export,
+      bytes never fetched (ADR-0021). Looser than depicts, which is a
+      confirmed depiction with an image region
+    datatype: wikibase-item
+    wikidata: P18
+
   # --- places ---
 
   coordinate_location:

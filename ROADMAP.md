@@ -119,9 +119,11 @@ updated, and no path writes an unreferenced statement.
     GEDCOM uncertainty (ABT/BEF/AFT/BET) maps to structural qualifiers;
     unparseable dates warn, never guess; unsupported tags counted
     honestly — the census names the top-most unmapped tag in every branch
-    of every record type, not just direct children of INDI/FAM (issue #8),
-    so source citations (SOUR) and multimedia (OBJE) show at true
-    prevalence; mapping those into the graph is deferred to ADR-0021.
+    of every record type, not just direct children of INDI/FAM (issue #8).
+    Source citations (SOUR) fold into each claim's reference (PAGE →
+    page-number locator; the cited source's title surfaced in the excerpt)
+    and multimedia (OBJE) become un-held media items linked with `image` —
+    referenced, never fetched (ADR-0021).
     Fixture is fictional (the repo carries no personal data) — export
     the real Ancestry GEDCOM and run it through when ready.*
 14. **Parallel chunk execution** – chunks are independent by design;
