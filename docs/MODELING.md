@@ -357,6 +357,11 @@ destination, `point_in_time`/`start_time`/`end_time`). "Deported to Riga
 in 1942" is a deportation event, never a `deported to` property — the
 same shape as the reconciled deportation events already in the graph.
 
+These relations are therefore **not** open-schema gaps (ADR-0013): a
+`deported to` or `imprisoned at` line in `gaps.csv` reports something
+the vocabulary already holds, so it is an extraction mistake to fix,
+not a signal to grow the schema on.
+
 ## Identity and reconciliation (ADR-0007)
 
 - Every ingested document contributes its name variants as item

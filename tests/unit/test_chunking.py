@@ -295,9 +295,9 @@ class TestGapChannel:
                     {
                         "gap": {
                             "subject": "e1",
-                            "predicate": "imprisoned at",
-                            "object": "Sachsenhausen",
-                            "evidence": "held there",
+                            "predicate": "godparent of",
+                            "object": "e2",
+                            "evidence": "stood godparent to",
                         }
                     }
                 ),  # fmt: skip
@@ -307,8 +307,37 @@ class TestGapChannel:
             ]
         )
         (gap,) = parse_chunk_gaps(response)
-        assert gap["predicate"] == "imprisoned at"
-        assert gap["object"] == "Sachsenhausen"
+        assert gap["predicate"] == "godparent of"
+        assert gap["object"] == "e2"
+
+    def test_prompt_routes_persecution_to_events_not_gaps(self, tmp_path):
+        """The gap examples named `employed by` — a property added in the
+        same commit as the gap channel — and `deported to`/`imprisoned
+        at`, which ADR-0014 models as events. The prompt was telling the
+        model to gap exactly what the vocabulary already holds."""
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna", 1900)]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
+        )
+        ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
+        ).extract(transcription(), "Q23")
+        chunk_prompt = llm.calls[1][1]
+
+        assert "Persecution and displacement are EVENTS" in chunk_prompt
+        assert "`deportation`" in chunk_prompt
+        assert "`imprisonment`" in chunk_prompt
+        assert "`release`" in chunk_prompt
+        assert "`participant` (the person)" in chunk_prompt
+        # no longer offered as things to gap
+        assert "employed by" not in chunk_prompt
+        assert "deported to" not in chunk_prompt
+        # the gap channel itself survives (ADR-0013 mechanism B)
+        assert '{"gap":' in chunk_prompt
+        assert "godparent of" in chunk_prompt
 
     def test_malformed_gaps_dropped_never_raise(self):
         response = "\n".join(

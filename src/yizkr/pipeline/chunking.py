@@ -203,6 +203,17 @@ Rules — these mirror the archive's non-negotiable conventions:
   never asserted here. If you do record a dependent's residence from a
   relative's address (e.g. a newborn at the parents' address), lower its
   confidence to mark the inference.
+- Persecution and displacement are EVENTS, not relations and not
+  locations on a person (ADR-0014). "Deported to X in 1942" is a
+  `deportation`; "held at", "interned at", "taken to" an
+  `imprisonment`; "released from", "freed from" a `release`. Put the
+  claims on the EVENT: `participant` (the person), `location` (the
+  camp, ghetto, or prison), `point_in_time` (the date) — or
+  `start_time`/`end_time` for a period of detention. Never record the
+  camp or prison as the person's own `location` or `residence`, and
+  never emit a gap line for a relation the event model already
+  carries. If no such event is available to you, a gap line is the
+  honest fallback — but check first: it should be rare.
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
 
 {assignment_block}
@@ -213,15 +224,16 @@ definition of this JSON Schema:
 
 {schema}
 
-If the source asserts a RELATION that NO listed property expresses (e.g.
-"deported to", "imprisoned at", "employed by" when no such property is
-listed), do NOT force it into a wrong property and do NOT silently drop
-it: emit a GAP line instead —
+If the source asserts a RELATION that no listed property expresses AND
+no event kind captures (e.g. "godparent of", "buried alongside"), do
+NOT force it into an adjacent-but-wrong property and do NOT silently
+drop it: emit a GAP line instead —
 {{"gap": {{"subject": "<local_id or name>",
 "predicate": "<the relation, verbatim>",
 "object": "<local_id, name, or literal>", "evidence": "<short excerpt>"}}}}
-Gaps are reviewed to grow the vocabulary; they are never invented and
-never used when a real property fits.
+Gaps are reviewed to grow the vocabulary; they are never invented, and
+never used for something the vocabulary already holds. Check the
+property list and the persecution-event rule before emitting one.
 
 After the last line, end with exactly one final line:
 {{"done": true, "claims_emitted": N, "gaps_emitted": M}}
