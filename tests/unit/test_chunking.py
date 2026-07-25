@@ -413,6 +413,49 @@ class TestEntityFirstExtractor:
         assert coverage["entities_without_claims"] == []
         assert (state / "entity-manifest.json").exists()
 
+    def test_prompts_carry_manifest_descriptions(self, tmp_path):
+        """The manifest already authors what each kind and property
+        means — which way a relation points, what kind of entity a value
+        must be. Rendering bare keys made the model guess both."""
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna", 1900)]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
+        )
+        self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
+            transcription(), "Q23"
+        )
+
+        manifest_prompt = llm.calls[0][1]
+        assert (
+            "organization: an organization acting as an agent"
+            in manifest_prompt
+        )
+        assert (
+            "deportation: event of a person being forcibly deported"
+            in manifest_prompt
+        )
+        # artifact types and vocabulary values are real items but not
+        # kinds the extractor may type a document entity as
+        assert "photograph" not in manifest_prompt
+        assert "circa" not in manifest_prompt
+
+        chunk_prompt = llm.calls[1][1]
+        assert (
+            "employer: wikibase-item — organization the person works or "
+            "worked for" in chunk_prompt
+        )
+        assert (
+            "location: wikibase-item — place where the event or subject "
+            "is located" in chunk_prompt
+        )
+        assert (
+            "depicts: wikibase-item — person or thing depicted in the "
+            "artifact" in chunk_prompt
+        )
+
     def test_progress_logging_reports_each_chunk(self, tmp_path):
         """Chunked extraction emits per-chunk progress; otherwise a large
         document is silent for minutes (the `log` callback is a no-op when
@@ -832,6 +875,27 @@ class TestFallbackLadder:
         )
         assert manifest["strategy"] == "line-range"
         assert (tmp_path / "state" / "manifest-fallback.txt").exists()
+
+    def test_fallback_tier_offers_the_same_kinds_as_the_manifest(
+        self, tmp_path
+    ):
+        """The line-range tier used to carry its own hand-written kind
+        list, which had drifted behind the manifest by eight kinds."""
+        llm = ScriptedLlm(
+            [
+                "no manifest here",
+                "still no manifest",
+                segmentation_json(),
+                ndjson([claim("p1", "Anna Example", 1900)]),
+            ]
+        )
+        self.extractor(llm, tmp_path, budget=10_000).extract(
+            transcription(), "Q23"
+        )
+
+        chunk_prompt = llm.calls[-1][1]
+        for kind in ("deportation", "family", "vessel", "unclassified_entity"):
+            assert kind in chunk_prompt, kind
 
     def test_full_fallback_to_offset_windows(self, tmp_path):
         """Manifest AND segmentation unusable -> offset windows, no

@@ -24,6 +24,7 @@ import json
 import re
 import subprocess
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ from yizkr.claims import (
     load_vocabulary,
     validate_against_manifest,
 )
+from yizkr.model.schema import load_manifest
 from yizkr.pipeline.llm import LlmClient
 from yizkr.pipeline.transcribe import Transcription
 
@@ -51,11 +53,12 @@ Rules — these mirror the archive's non-negotiable conventions:
   plus page number and a short verbatim transcription excerpt supporting it.
 - Refer to people, places, and events the document mentions with "local"
   references (stable local_id per entity within this batch, label as
-  written, instance_of from: human, place, event, birth, death, marriage,
-  migration, military_service).
-- Use ONLY these property keys (property key: datatype), for claims and
-  qualifiers alike — a claim naming any other key is discarded. If the
-  document asserts something no listed property expresses, skip it:
+  written, instance_of from: {kinds}).
+- Use ONLY these property keys (property key: datatype — what it means),
+  for claims and qualifiers alike — a claim naming any other key is
+  discarded. The description is authoritative: it says what the VALUE
+  must be, and so which way a relation points. If the document asserts
+  something no listed property expresses, skip it:
 {property_keys}
 - Vocabulary item keys available for "vocab" references:
 {item_keys}
@@ -267,14 +270,61 @@ def salvage_valid_claims(
     )
 
 
+def _one_line(text: str) -> str:
+    """Collapse a folded YAML description to a single prompt line."""
+    return " ".join(text.split())
+
+
+# The renderers below run per chunk and parse + validate the whole
+# manifest, which ships as package data and cannot change mid-run.
+# Cached so a hundred-chunk document pays for it once.
+
+
+@lru_cache(maxsize=1)
 def vocabulary_prompt_lines() -> tuple[str, str]:
-    """Render the manifest vocabulary for the extraction prompt."""
-    properties, items = load_vocabulary()
+    """Render the manifest vocabulary for the extraction prompt.
+
+    Each property carries its manifest description, because that
+    description is where the semantics a model needs to place a claim
+    correctly already live: which way a relation points (`employer` is
+    the organization, not the employee) and what kind of entity a value
+    must be (`location` takes a place). Rendering keys and datatypes
+    alone left the model to guess both. The words are already authored
+    — this only stops discarding them.
+    """
+    manifest = load_manifest()
     property_lines = "\n".join(
-        f"  {key}: {datatype}" for key, datatype in sorted(properties.items())
+        f"  {key}: {spec.datatype} — {_one_line(spec.description)}"
+        for key, spec in sorted(manifest.properties.items())
     )
-    item_lines = "  " + ", ".join(sorted(items))
+    item_lines = "  " + ", ".join(sorted(manifest.items))
     return property_lines, item_lines
+
+
+@lru_cache(maxsize=1)
+def entity_kind_prompt_lines() -> tuple[str, str]:
+    """Render the entity kinds for the manifest pass (ADR-0007).
+
+    Returns (bare comma-joined keys, described block). The kinds are the
+    manifest items flagged `entity_kind`, so the offerable set is
+    declared in one place rather than restated in the prompt.
+    """
+    kinds = sorted(
+        (
+            (key, spec)
+            for key, spec in load_manifest().items.items()
+            if spec.entity_kind
+        ),
+        key=lambda entry: entry[0],
+    )
+    if not kinds:
+        raise ValueError("manifest declares no entity_kind items")
+    return (
+        ", ".join(key for key, _ in kinds),
+        "\n".join(
+            f"  {key}: {_one_line(spec.description)}" for key, spec in kinds
+        ),
+    )
 
 
 class LlmClaimExtractor:
@@ -297,6 +347,7 @@ class LlmClaimExtractor:
             schema=schema,
             property_keys=property_keys,
             item_keys=item_keys,
+            kinds=entity_kind_prompt_lines()[0],
             artifact_qid=artifact_qid,
             language=transcription.language,
             text=transcription.text,

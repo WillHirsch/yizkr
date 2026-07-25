@@ -59,6 +59,12 @@ class ManifestItem(BaseModel):
     aliases: list[str] = []
     wikidata: str | None = Field(default=None, pattern=r"^Q\d+$")
     subclass_of: str | None = None
+    # Offerable to the extractor as an entity kind (the ADR-0007
+    # manifest pass). False for artifact types, controlled-vocabulary
+    # values, and infrastructure classes: real classes the extractor
+    # never types a *document-mentioned* entity as. The manifest is the
+    # one place this set is declared — the prompt renders it from here.
+    entity_kind: bool = False
 
 
 class Manifest(BaseModel):

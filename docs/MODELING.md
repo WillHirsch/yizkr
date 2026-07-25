@@ -42,6 +42,22 @@
 - extraction run (one pipeline execution: model name+version, date,
   prompt/pipeline version, software commit)
 
+**Manifest descriptions are extraction-prompt surface**, not only
+documentation. Every property and item in `model/manifest.yaml` carries
+a description, and the extractor is shown it verbatim beside the key: a
+property's description is what tells the model which way a relation
+points (`employer` takes the organization, not the employee) and what
+kind of entity the value must be (`location` takes a place). Write them
+for that reader as well as for a human.
+
+Items flagged **`entity_kind: true`** are the kinds the extractor may
+type a document-mentioned entity as (the ADR-0007 manifest pass), and
+the prompt renders that set from the manifest rather than restating it.
+Artifact types, controlled-vocabulary values (`circa`, `male`), and
+infrastructure classes (`artifact_fragment`, `extraction_run`) are real
+classes but not entity kinds. A new item is not offered to the
+extractor until it says so.
+
 ## Reference pattern (see ADR-0003)
 
 Every statement carries at least one reference with:

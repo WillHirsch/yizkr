@@ -53,7 +53,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -63,7 +62,7 @@ from pydantic import (
     model_validator,
 )
 
-from yizkr.model.schema import DEFAULT_MANIFEST, read_manifest_data
+from yizkr.model.schema import DEFAULT_MANIFEST, load_manifest
 
 SCHEMA_VERSION = 1
 
@@ -428,13 +427,17 @@ class ClaimBatch(StrictModel):
 def load_vocabulary(
     manifest_path=DEFAULT_MANIFEST,
 ) -> tuple[dict[str, str], set[str]]:
-    """(property key -> datatype, item keys) from the model manifest."""
-    raw = yaml.safe_load(read_manifest_data(manifest_path))
-    properties = {
-        key: spec["datatype"] for key, spec in raw["properties"].items()
-    }
-    items = set(raw["items"])
-    return properties, items
+    """(property key -> datatype, item keys) from the model manifest.
+
+    The narrow view: what validation needs. Callers that render the
+    vocabulary into a prompt want the manifest's descriptions too and
+    load it whole via `load_manifest`.
+    """
+    manifest = load_manifest(manifest_path)
+    return (
+        {key: spec.datatype for key, spec in manifest.properties.items()},
+        set(manifest.items),
+    )
 
 
 def validate_against_manifest(
