@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from yizkr.claims import ClaimBatch, EntityRecord, load_vocabulary
 from yizkr.pipeline.extract import (
+    entity_kind_prompt_lines,
     run_metadata,
     salvage_valid_claims,
     scan_json_objects,
@@ -158,9 +159,11 @@ Rules — these mirror the archive's non-negotiable conventions:
   format — downgrade to the precision actually supported.
 - Every claim MUST include the source reference: artifact QID {artifact_qid},
   plus page number and a short verbatim transcription excerpt supporting it.
-- Use ONLY these property keys (property key: datatype), for claims and
-  qualifiers alike — a claim naming any other key is discarded. If the
-  document asserts something no listed property expresses, skip it:
+- Use ONLY these property keys (property key: datatype — what it means),
+  for claims and qualifiers alike — a claim naming any other key is
+  discarded. The description is authoritative: it says what the VALUE
+  must be, and so which way a relation points. If the document asserts
+  something no listed property expresses, skip it:
 {property_keys}
 - Vocabulary item keys available for "vocab" references:
 {item_keys}
@@ -230,8 +233,7 @@ LINE_ASSIGNMENT_BLOCK = """\
 Refer to people, places, organizations, events, and occupations with
 "local" references (stable local_id per entity within this response,
 label as written — prefer the fullest name the document gives for a
-person anywhere, instance_of from: human, place, organization, event,
-birth, death, marriage, migration, military_service, occupation_class).
+person anywhere, instance_of from: {kinds}).
 An organization (company, committee, agency) is an agent, never a place.
 An occupation value keeps the source's exact wording as its label.
 
@@ -333,6 +335,10 @@ Rules:
   is the exception: extract=true for the relationship.)
 - summary is evidence for later identity matching: pack it with the
   document's key facts (born/died/married when-where, parents, spouse).
+
+Entity kinds — pick the one whose meaning actually fits, not the
+nearest-sounding one:
+{kind_descriptions}
 
 Transcription of artifact {artifact_qid} (language: {language}):
 
@@ -622,11 +628,10 @@ class ChunkedClaimExtractor:
         forking would plant known-bad output in every chunk's context.
         """
         line_count = len(transcription.text.splitlines())
+        kinds, kind_descriptions = entity_kind_prompt_lines()
         prompt = ENTITY_MANIFEST_PROMPT.format(
-            kinds="human, place, organization, family, vessel, "
-            "legal_instrument, military_unit, event, birth, death, "
-            "marriage, migration, military_service, deportation, "
-            "imprisonment, release, occupation_class, unclassified_entity",
+            kinds=kinds,
+            kind_descriptions=kind_descriptions,
             artifact_qid=artifact_qid,
             language=transcription.language,
             numbered_text=number_lines(transcription.text),
@@ -815,7 +820,10 @@ class ChunkedClaimExtractor:
             for unit in chunk_units
         )
         return self._render_chunk_prompt(
-            LINE_ASSIGNMENT_BLOCK.format(units_block=units_block),
+            LINE_ASSIGNMENT_BLOCK.format(
+                kinds=entity_kind_prompt_lines()[0],
+                units_block=units_block,
+            ),
             transcription,
             artifact_qid,
             inline_document,

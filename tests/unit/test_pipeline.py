@@ -168,6 +168,20 @@ class TestExtract:
         assert "place_of_birth: wikibase-item" in llm.prompts[0]
         assert "circa" in llm.prompts[0]
 
+    def test_llm_extractor_prompt_carries_property_descriptions(self):
+        """Direction and value type live in the manifest description;
+        a key and datatype alone leave the model to guess them."""
+        llm = FakeLlm(json.dumps({"claims": CLAIMS}))
+        LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        assert (
+            "employer: wikibase-item — organization the person works or "
+            "worked for" in llm.prompts[0]
+        )
+        assert (
+            "child: wikibase-item — the subject has the object as a child"
+            in llm.prompts[0]
+        )
+
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")
         with pytest.raises(ValueError, match="no claim JSON"):

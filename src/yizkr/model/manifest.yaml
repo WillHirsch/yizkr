@@ -472,6 +472,12 @@ properties:
       for a real class
     datatype: string
 
+# `entity_kind: true` marks an item the extractor may type a
+# document-mentioned entity as (ADR-0007 manifest pass). The extraction
+# prompt renders that set — and each kind's description — from here, so
+# this file stays the single place the offerable kinds are declared.
+# Artifact types, controlled-vocabulary values, and infrastructure
+# classes are real classes but are not entity kinds.
 items:
   # --- core classes (docs/MODELING.md) ---
 
@@ -481,10 +487,12 @@ items:
     aliases:
       - person
     wikidata: Q5
+    entity_kind: true
 
   place:
     label: place
     description: geographic place, including historical places that no longer exist
+    entity_kind: true
 
   organization:
     label: organization
@@ -496,6 +504,7 @@ items:
       - company
       - institution
     wikidata: Q43229
+    entity_kind: true
 
   family:
     label: family
@@ -504,6 +513,7 @@ items:
       family") — a collective of related people (ADR-0014); members
       attach via kinship or `member of`
     wikidata: Q8436
+    entity_kind: true
 
   vessel:
     label: vessel
@@ -511,6 +521,7 @@ items:
     aliases:
       - ship
     wikidata: Q11446
+    entity_kind: true
 
   legal_instrument:
     label: legal instrument
@@ -521,11 +532,13 @@ items:
       - law
       - statute
     wikidata: Q1298668
+    entity_kind: true
 
   military_unit:
     label: military unit
     description: an organized military formation, e.g. a regiment or brigade (ADR-0014)
     wikidata: Q176799
+    entity_kind: true
 
   time_period_class:
     label: time period
@@ -534,6 +547,7 @@ items:
   event:
     label: event
     description: something that happened at a time, usually at a place, usually involving people
+    entity_kind: true
 
   artifact:
     label: artifact
@@ -553,6 +567,7 @@ items:
     label: occupation
     description: occupation or profession named by sources; the value class for the occupation property, with labels kept in the source's wording
     wikidata: Q12737077
+    entity_kind: true
 
   unclassified_entity:
     label: unclassified entity
@@ -561,6 +576,7 @@ items:
       asserts exists but that no modelled kind can express yet, kept
       queryable (with a type hint) to drive vocabulary growth without
       mistyping it as a person or place
+    entity_kind: true
 
   # --- event types (subclasses of event) ---
 
@@ -568,27 +584,32 @@ items:
     label: birth
     description: event of a person being born
     subclass_of: event
+    entity_kind: true
 
   death:
     label: death
     description: event of a person dying
     subclass_of: event
+    entity_kind: true
 
   marriage:
     label: marriage
     description: event of persons marrying
     subclass_of: event
     wikidata: Q8445
+    entity_kind: true
 
   migration:
     label: migration
     description: event of a person or family relocating
     subclass_of: event
+    entity_kind: true
 
   military_service:
     label: military service
     description: event or period of a person serving in a military force
     subclass_of: event
+    entity_kind: true
 
   deportation:
     label: deportation
@@ -597,16 +618,19 @@ items:
       destination (location) + date, e.g. deportation to a ghetto or camp
     subclass_of: event
     wikidata: Q2249676
+    entity_kind: true
 
   imprisonment:
     label: imprisonment
     description: event or period of a person being imprisoned or detained (ADR-0014); participant + location + dates
     subclass_of: event
+    entity_kind: true
 
   release:
     label: release
     description: event of a person being released from detention or imprisonment (ADR-0014)
     subclass_of: event
+    entity_kind: true
 
   # --- artifact types (subclasses of artifact) ---
 

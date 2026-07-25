@@ -111,6 +111,54 @@ class TestRealManifest:
             assert manifest.properties[key].datatype == "wikibase-item", key
         assert manifest.properties["religion"].datatype == "monolingualtext"
 
+    def test_entity_kinds_are_declared_here(self, manifest):
+        """The kinds the extractor may type an entity as (ADR-0007) are
+        the manifest's own flag, not a list restated in the prompt."""
+        kinds = {k for k, spec in manifest.items.items() if spec.entity_kind}
+        assert kinds == {
+            "human",
+            "place",
+            "organization",
+            "family",
+            "vessel",
+            "legal_instrument",
+            "military_unit",
+            "event",
+            "birth",
+            "death",
+            "marriage",
+            "migration",
+            "military_service",
+            "deportation",
+            "imprisonment",
+            "release",
+            "occupation_class",
+            "unclassified_entity",
+        }
+
+    def test_non_entity_items_are_not_offered_as_kinds(self, manifest):
+        """Artifact types, vocabulary values, and infrastructure classes
+        are real items the extractor must never type an entity as."""
+        for key in (
+            "photograph",
+            "certificate",
+            "circa",
+            "male",
+            "artifact",
+            "artifact_fragment",
+            "extraction_run",
+            "model_manifest",
+            "time_period_class",
+        ):
+            assert not manifest.items[key].entity_kind, key
+
+    def test_every_entity_kind_has_a_description(self, manifest):
+        """Descriptions are prompt surface now: an entity kind without
+        one would reach the extractor as a bare key."""
+        for key, spec in manifest.items.items():
+            if spec.entity_kind:
+                assert spec.description.strip(), key
+
     def test_schema_source_has_no_superclass(self, manifest):
         """The manifest item is a reference target, not part of the
         taxonomy."""
@@ -171,6 +219,12 @@ class TestValidators:
         raw["properties"]["stated_in"]["datatpye"] = "string"  # typo
         with pytest.raises(ValidationError):
             Manifest.model_validate(raw)
+
+    def test_entity_kind_defaults_off(self):
+        """A new item is not an extraction kind until it says so: the
+        prompt offers the flagged set, so the safe default is out."""
+        manifest = Manifest.model_validate(minimal_raw())
+        assert not any(spec.entity_kind for spec in manifest.items.values())
 
     def test_overlong_description_rejected(self):
         # Wikibase caps descriptions at 250 chars; catch it at load time
