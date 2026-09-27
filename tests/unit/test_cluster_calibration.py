@@ -193,16 +193,24 @@ def test_place_key_variants():
                     "kind": "place",
                 },
                 {"id": "e2", "label": "Klurnau", "kind": "place"},
+                {
+                    "id": "e3",
+                    "label": "8 Hawthorn Road, Stupfield",
+                    "kind": "place",
+                },
             ],
         )
     )
-    camp, town = found
+    camp, town, address = found
     assert cc.place_keys(camp, "first-component") == {"lager klurnau"}
     assert cc.place_keys(camp) == {"lager", "klurnau"}
     assert not cc.place_keys(camp, "first-component") & cc.place_keys(
         town, "first-component"
     )
     assert cc.place_keys(camp) & cc.place_keys(town)
+    # A token of exactly four characters ("road") is a key.
+    assert cc.place_keys(address, "first-component") == {"8 hawthorn road"}
+    assert cc.place_keys(address) == {"hawthorn", "road"}
 
 
 # -- blocking -----------------------------------------------------------------
