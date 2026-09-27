@@ -99,6 +99,7 @@ STAGES: dict[str, Stage] = {
                 2,
                 (
                     "yizkr.pipeline.transcribe:LlmVisionTranscriber",
+                    "yizkr.pipeline.transcribe:_CheckedTranscriber",
                     f"{_ORCHESTRATE}._transcribe_vision",
                 ),
             ),
@@ -106,6 +107,7 @@ STAGES: dict[str, Stage] = {
                 2,
                 (
                     "yizkr.pipeline.transcribe:TextFileTranscriber",
+                    "yizkr.pipeline.transcribe:_CheckedTranscriber",
                     f"{_ORCHESTRATE}._transcribe_text_file",
                 ),
             ),

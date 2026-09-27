@@ -74,10 +74,13 @@ tool-failure message or a refusal instead of the page's text, fails its
 document the same way: the reason is recorded as the `error` in the
 document's `state.json` and in the transcription stage's failure log, no
 transcription is stored, and the next run transcribes the document
-again. The check runs when a transcription is computed. A transcription
-the stage store reuses passed the check as it stood when that
-transcription was made, and is not checked again; `--recompute
-transcription` transcribes and checks the run's documents again.
+again. The check runs when the vision or text-file method computes a
+transcription. Slide text from a deck and a curator's correction are
+computed, stored and reused without it. A vision or text-file
+transcription the stage store reuses passed the check as it stood when
+it was made, and is not checked again. `--recompute transcription`
+transcribes the run's documents again, which checks the vision and
+text-file ones.
 
 Every stage before the gates reads and writes through the stage store
 (`var/stages`, `--store`): each output is keyed by its input content and
@@ -172,11 +175,14 @@ re-running one step in isolation — but for a normal ingest you only ever run
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (Transkribus-style platform adapter, stub for now).
-- **transcription check** — runs on every engine's output before
-  anything uses it, in `ingest run` and `ingest transcribe` alike
-  (`yizkr.pipeline.transcription_check`, a step with its own version,
-  apart from the transcription's, so changing the check never forces
-  transcriptions to be redone). It fails the document when the output
+- **transcription check** — runs on the output of the `llm` and
+  `textfile` engines (in `ingest run`, the vision and text-file methods)
+  before anything uses it, in `ingest run` and `ingest transcribe`
+  alike; slide text and a curator's correction are not checked. It is
+  `yizkr.pipeline.transcription_check`, a step with its own version,
+  apart from the transcription's: changing the check never forces
+  transcriptions to be redone, and re-checks none the stage store holds
+  (docs/STAGE_STORE.md). It fails the document when the output
   matches a tool-failure or refusal signature (the PDF renderer missing,
   a CLI or API error, "I can't transcribe this document"), or when a
   document of two or more pages yields fewer than 3 letters or digits per

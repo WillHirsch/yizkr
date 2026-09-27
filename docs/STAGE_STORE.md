@@ -101,11 +101,14 @@ Corpus stages (the identity map, #105; flags, #112) use the `corpus`
 scope, which the store supports already. The vision and text-file
 transcribers run the transcription check (#175) inside `transcribe()`,
 so a transcription that fails it raises, is logged as the stage's
-failure and is never stored; their method versions count the check. It
-is not a stage of its own yet: its own version (`CHECK_VERSION`) is in no
-key, so a change to the check recomputes nothing, and a reused
-transcription is not checked again. Registering it, and checking reused
-transcriptions, is follow-up work.
+failure and is never stored. The code that runs it
+(`transcribe:_CheckedTranscriber`) is a registered source of both
+methods, so an edit to it asks for a version bump. Slide text and a
+curator's correction are not checked. The check is not a stage of its
+own yet: its own version (`CHECK_VERSION`) is in no key, so a change to
+the check recomputes nothing, and a reused transcription is not checked
+again. Registering it, and checking reused transcriptions, is follow-up
+work (#218).
 
 ## Layout
 
