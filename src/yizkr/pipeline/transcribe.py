@@ -7,8 +7,8 @@ Engines implement `Transcriber`. Provided:
 * `TextFileTranscriber` — reads an existing transcription from a text
   file (manual transcriptions, or output of any external tool). Keeps
   the pipeline fully runnable with no LLM configured.
-* `HtrPlatformAdapter` — stub for HTR platforms (e.g. Transkribus),
-  reserved for a later task; raises with a pointer.
+* `HtrPlatformAdapter` — stub for HTR platforms (e.g. Transkribus);
+  not implemented, it raises with a pointer.
 
 Output is a `Transcription` JSON document consumed by the extraction
 step. The transcription itself is NOT written to the graph — only the

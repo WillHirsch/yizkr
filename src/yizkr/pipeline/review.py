@@ -7,12 +7,11 @@ and fill:
 
 * `decision` — approve / reject (nothing passes without it);
 * `correction` — a replacement value for an approved claim the machine
-  misread (ROADMAP item 11): dates as `YYYY`, `YYYY-MM` or `YYYY-MM-DD`
-  (never an ambiguous format), plain text for string values, a plain
-  number for quantity values. The
-  corrected claim is curator-attributed: it keeps the artifact
-  reference but no extraction-run reference (ADR-0003 — process
-  provenance is for machine writes).
+  misread: dates as `YYYY`, `YYYY-MM` or `YYYY-MM-DD` (never an
+  ambiguous format), plain text for string values, a plain number for
+  quantity values. The corrected claim is curator-attributed: it keeps
+  the artifact reference but no extraction-run reference (ADR-0003 —
+  process provenance is for machine writes).
 
 The `critique_notes` column carries the extraction critic's concerns
 (ADR-0013) for the row's subject — flagged mistypes, misapplied
@@ -192,7 +191,7 @@ def export_review_csv(
     return len(batch.claims)
 
 
-# -- corrections (ROADMAP item 11) ----------------------------------------
+# -- corrections ----------------------------------------------------------
 
 
 def _parse_correction(claim: Claim, text: str) -> Claim:

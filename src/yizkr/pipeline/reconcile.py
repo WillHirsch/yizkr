@@ -574,8 +574,8 @@ class Proposal(BaseModel):
 
 # Pairs per adjudication call. Bounds each response — the same
 # output-size constraint chunked extraction enforces (ADR-0006), one
-# level up: an unbatched call over a large roster is the multi-turn
-# fragility all over again.
+# level up: an unbatched call over a large roster would overflow one
+# response and hit the same multi-turn fragility.
 ADJUDICATION_BATCH_PAIRS = 40
 
 
@@ -807,8 +807,8 @@ def read_reviewed_aliases(path: Path) -> dict[str, list[str]]:
 
     The reviewer prunes bad machine aliases (a form's MOTHER label is a
     role, not a name) by deleting them from the cell; the writer then
-    appends only what survived review. CSVs from before the column
-    existed yield nothing — the batch's aliases apply unchanged.
+    appends only what survived review. A CSV without the column yields
+    nothing — the batch's aliases apply unchanged.
     """
     reviewed: dict[str, list[str]] = {}
     with open(path, newline="") as handle:

@@ -190,11 +190,11 @@ def register_artifact(
 
     # -- locate the artifact item: content hash is the identity key -------
     # Identical bytes are one artifact however they are named. With media
-    # present the hash decides; the label is consulted only to adopt a
-    # pre-ADR-0010 artifact that has no hash yet (same title, backfilled
-    # below). A same-title item that already carries a DIFFERENT hash is
-    # genuinely different content and must not be collapsed onto. With no
-    # media to hash, the label is the key (unchanged behaviour).
+    # present the hash decides; the label is consulted only to adopt an
+    # artifact item that carries no hash (same title; the hash is
+    # backfilled below). A same-title item that already carries a
+    # DIFFERENT hash is genuinely different content and must not be
+    # collapsed onto. With no media to hash, the label is the key.
     reused_by_hash = False
     existing_qid = None
     if content_sha1 is not None:
@@ -207,7 +207,7 @@ def register_artifact(
             if labelled is not None and not _existing_claim_strings(
                 client.wbi.item.get(labelled), media_sha1
             ):
-                existing_qid = labelled  # legacy artifact: adopt and backfill
+                existing_qid = labelled  # unhashed item: adopt and backfill
     else:
         existing_qid = client.find_item_by_label(title)
 
@@ -257,8 +257,8 @@ def register_artifact(
             _string_claim(media_file, file_page, stated_in, artifact_qid),
         )
         changed = True
-    # backfill the content hash (also covers artifacts registered before
-    # ADR-0010, and matched here by label)
+    # backfill the content hash (also covers an unhashed item matched
+    # above by label)
     if content_sha1 and content_sha1 not in _existing_claim_strings(
         artifact, media_sha1
     ):

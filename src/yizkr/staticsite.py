@@ -447,9 +447,9 @@ class SiteBuilder:
         grouped: dict[str, list[dict]] = defaultdict(list)
         for row in statements:
             prop = cell(row, "propLabel")
-            # "instance of" is the subtitle. "living person" is retired
-            # (ADR-0020) and never written now; skip any legacy flag
-            # statements so they don't render as data.
+            # "instance of" is the subtitle. No "living person" flag is
+            # written (ADR-0020); skip any such statement in the graph so
+            # it doesn't render as data.
             if prop in ("instance of", "living person"):
                 continue
             grouped[prop].append(row)

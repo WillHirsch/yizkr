@@ -453,7 +453,7 @@ def pack_units(
     """Greedy-pack extractable units, in document order, under budget.
 
     A single unit over budget becomes its own chunk (the multi-turn
-    reassembly nets remain as backstop for that case).
+    reassembly nets are the backstop for that case).
     """
     chunks: list[list[SegmentationUnit]] = []
     current: list[SegmentationUnit] = []
@@ -1134,10 +1134,10 @@ class ChunkedClaimExtractor:
         for chunk_id, parsed in zip(chunk_ids, outcomes, strict=True):
             if parsed is not None:
                 for claim in parsed:
-                    # one malformed claim must never sink the whole
-                    # document's merge — degrade it to a reject, the way
-                    # salvage_valid_claims does downstream (a double-nested
-                    # local_id once aborted a 283-claim run entirely)
+                    # one malformed claim (a double-nested local_id, say)
+                    # must never sink the whole document's merge — degrade
+                    # it to a reject, the way salvage_valid_claims does
+                    # downstream
                     try:
                         raw_claims.append(transform(claim, chunk_id))
                     except Exception as exc:  # keep the other claims
@@ -1213,9 +1213,10 @@ class ChunkedClaimExtractor:
     ) -> None:
         """Advisory completeness report, entity flavour (ADR-0007).
 
-        Replaces the line-audit: flags manifest entities with zero
-        claims, and lines that carry name-shaped tokens matching no
-        manifest label/alias (a possibly-missed entity)."""
+        Used in place of the line-range path's unit audit
+        (`_write_coverage`): flags manifest entities with zero claims,
+        and lines that carry name-shaped tokens matching no manifest
+        label/alias (a possibly-missed entity)."""
         subject_ids = {
             claim.subject.local_id
             for claim in batch.claims
