@@ -4,7 +4,9 @@ genuine pages pass.
 
 Every failure and refusal output below is invented engine text, and every
 genuine text is either a source passage of the fictional universe
-(docs/EXAMPLES.md) or a generic line with no names in it.
+(docs/EXAMPLES.md) or a generic line with no names in it. The one
+exception is SURNAME_LINES: the universe has no one whose surname is also
+a tool's name, so those lines invent a witness in its town.
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ FAILURES = [
         "install poppler-utils, or convert each page to a PNG image and "
         "share those instead.",
     ),
+    ("pdf-renderer", "To go on, install poppler and try again."),
     (
         "traceback",
         "Traceback (most recent call last):\n"
@@ -105,6 +108,7 @@ FAILURES = [
     ),
     ("refusal-short", "I'm sorry, but I can't help with that."),
     ("refusal-short", "Sorry, I can't do that."),
+    ("refusal-short", "I'm unable to complete this task."),
 ]
 
 # said of page 2 after page 1's text: the page that failed is missing
@@ -119,6 +123,21 @@ LETTER = (
     "school and reads everything she can find, even the newspaper. "
     "Write soon and tell me how the new house is coming along."
 )
+
+
+# a letter declining a task in its own words
+TASK_LETTER = (
+    "Dear brother, I could not complete this task before the winter came, "
+    "as father was ill and the roads were closed for weeks."
+)
+
+# an invented witness whose surname is also the PDF renderer's package
+SURNAME_LINES = [
+    "Witness: Anna Poppler, of Springfield, aged 40.",
+    "WITNESS: ANNA POPPLER, OF SPRINGFIELD, AGED 40.",
+    "Received from Poppler, Springfield, the sum of 40 marks.",
+    "The congregation installed Poppler as its cantor.",
+]
 
 
 def universe_texts() -> list[str]:
@@ -165,6 +184,32 @@ class TestSignatures:
 
     def test_letter_with_refusal_words_passes(self):
         assert check_transcription(LETTER, pages=1).passed
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "pdftoppm is not installed.",
+            "Please install poppler-utils.",
+            "The Poppler utils are missing.",
+            "Try: brew install poppler",
+            "It renders pages with a tool from poppler.",
+        ],
+    )
+    def test_renderer_package_phrases_fail(self, text):
+        check = check_transcription(text, pages=1)
+        assert check.signature == "pdf-renderer"
+
+    @pytest.mark.parametrize("line", SURNAME_LINES)
+    def test_surname_that_names_a_tool_passes(self, line):
+        # a record may name a person Poppler; only the package's own
+        # phrases ("poppler-utils", "install poppler") are a tool's words
+        assert check_transcription(line, pages=1).passed
+        assert check_transcription(f"{a_page()}\n{line}", pages=2).passed
+
+    def test_letter_declining_a_task_passes(self):
+        # declining a task is ordinary prose, alone or inside a letter
+        assert check_transcription(TASK_LETTER, pages=1).passed
+        assert check_transcription(f"{LETTER} {TASK_LETTER}", pages=1).passed
 
     def test_bare_decline_fails_only_as_a_short_whole_output(self):
         decline = "I am sorry, but I cannot help with that."

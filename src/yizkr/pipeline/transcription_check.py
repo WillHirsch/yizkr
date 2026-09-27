@@ -17,8 +17,9 @@ whether the output may go downstream. It fails the output on either of:
   output: a multi-page reading that failed on one page is missing that
   page. Two signatures could also match an ordinary sentence, so they
   apply only to an output that is little else: a bare decline ("I can't
-  help with that") opening a short output, and a lone sentence
-  announcing that the engine is about to read the file.
+  help with that", "I'm unable to complete this task") opening a short
+  output, and a lone sentence announcing that the engine is about to
+  read the file.
 * **Implausible length**: a document of two or more pages must hold at
   least `MIN_TEXT_CHARS_PER_PAGE` letters or digits per page, counted
   outside editorial brackets. The floor sits far below any written page
@@ -123,10 +124,17 @@ _MEDIA = r"(?:PDFs?|images?|image files?|attachments?|scans?)"
 
 SIGNATURES: tuple[Signature, ...] = (
     # -- tool and engine failures: tokens no source document writes ------
+    # Poppler is also a surname, so the bare word counts as the package
+    # only in lowercase after "install" or "from" ("brew install
+    # poppler"); "a letter from Poppler", or the name in a register
+    # written in capitals, is a source's words.
     _signature(
         "pdf-renderer",
         TOOL_FAILURE,
-        r"\bpdftoppm\b|\bpoppler(?:-utils)?\b|\bPDF render(?:er|ing)\b",
+        r"\bpdftoppm\b"
+        r"|\bpoppler[-_ ]utils\b"
+        r"|(?-i:\b(?:install(?:ed|ing)?|from)\s+poppler\b)"
+        r"|\bPDF render(?:er|ing)\b",
         outside_marks=False,
     ),
     _signature(
@@ -196,12 +204,16 @@ SIGNATURES: tuple[Signature, ...] = (
         r"(?:transcribe|provide (?:a|the|any) transcription"
         r"|(?:help|assist)(?: you)? with transcrib\w*)\b",
     ),
+    # declining the request itself; declining a "task", or to "complete"
+    # or "process" something, is also a letter's ordinary prose ("I could
+    # not complete this task before the winter"), so those words count
+    # only as a bare decline (refusal-short)
     _signature(
         "refusal-request",
         REFUSAL,
         rf"\b{_DECLINE}\s+"
-        r"(?:(?:help|assist)(?: you)? with|comply with|fulfil|fulfill"
-        r"|complete|process)\s+(?:this|that|your)\s+(?:request|task)\b",
+        r"(?:(?:help|assist)(?: you)? with|comply with|fulfil|fulfill)"
+        r"\s+(?:this|that|your)\s+request\b",
     ),
     _signature(
         "ai-disclaimer",
@@ -216,7 +228,8 @@ SIGNATURES: tuple[Signature, ...] = (
         rf"\A\W*(?:(?:I{_A}m|I am)\s+(?:sorry|afraid)|I apologi[sz]e|Sorry"
         r"|Unfortunately)?[,.!]?\s*(?:but\s+)?"
         rf"I(?:{_A}m|\s+am)?\s+{_DECLINE}\s+"
-        r"(?:(?:help|assist)(?: you)? with|do|comply with|provide)"
+        r"(?:(?:help|assist)(?: you)? with|do|comply with|provide"
+        r"|complete|process)"
         r"\s+(?:that|this)\b",
         short_output_only=True,
     ),
