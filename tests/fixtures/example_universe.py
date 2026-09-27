@@ -1173,13 +1173,6 @@ ASSERTIONS = tuple(
             Date(1938, 8, 19),
             "[postmark] Flörburg 19.8.38",
         ),
-        (
-            "sebastian-loebig",
-            "referred_to_as",
-            "Dein Vater",
-            {"perspective": "klara-loebig"},
-            "Dein Vater",
-        ),
         ("klara-loebig", "father", "sebastian-loebig", "Dein Vater"),
         ("klara-loebig", "nickname", "Pünktchen", "Liebes Pünktchen!"),
         (
@@ -1859,13 +1852,6 @@ ASSERTIONS = tuple(
             "gustav-loebig",
             "Dad — Gus, everyone called him",
         ),
-        (
-            "gustav-loebig",
-            "referred_to_as",
-            "Dad",
-            {"perspective": "nicholas-lobig"},
-            "Dad — Gus",
-        ),
         ("gustav-loebig", "nickname", "Gus", "Gus, everyone called him"),
         (
             "emigration-1939",
@@ -1880,13 +1866,6 @@ ASSERTIONS = tuple(
             "left Germany in the August, just before the war",
         ),
         ("klara-loebig", "nickname", "Pünktchen", "Aunt Pünktchen"),
-        (
-            "klara-loebig",
-            "referred_to_as",
-            "Aunt Pünktchen",
-            {"perspective": "nicholas-lobig"},
-            "Aunt Pünktchen",
-        ),
         (
             "klara-loebig",
             "relative",

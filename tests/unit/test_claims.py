@@ -352,20 +352,20 @@ class TestManifestValidation:
 
     def test_referred_to_as_appellation_with_perspective_is_valid(self):
         # ADR-0018: a perspectival appellation is a monolingual statement on
-        # the referent, qualified by the ego (a person/family item). On the
-        # universe's postcard Sebastian signs himself "Dein Vater": how he
-        # is referred to from his daughter Klara's perspective.
+        # the referent, qualified by the ego (a person/family item). In the
+        # universe's interview Nicholas calls a neighbour who is no relation
+        # "Nana Maisie": a courtesy title, from his perspective.
         appellation = {
             "subject": {
                 "kind": "local",
                 "local_id": "person-1",
-                "label": "Sebastian Löbig",
+                "label": "Maisie Cutmore",
                 "instance_of": "human",
             },
             "property": "referred_to_as",
             "value": {
                 "type": "monolingual",
-                "value": {"text": "Dein Vater", "language": "de"},
+                "value": {"text": "Nana Maisie", "language": "en"},
             },
             "qualifiers": [
                 {

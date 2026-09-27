@@ -24,6 +24,16 @@ SOURCES = {source.key: source for source in u.SOURCES}
 
 PERSECUTION_KINDS = ("event", "imprisonment", "release", "deportation")
 
+# Kinship words in the universe's two languages, to spot a kinship term
+# inside an appellation (ADR-0018).
+KINSHIP_WORDS = {
+    "aunt", "brother", "cousin", "dad", "daughter", "father", "grandfather",
+    "grandma", "grandmother", "grandpa", "husband", "mother", "mum", "nana",
+    "nephew", "niece", "sister", "son", "uncle", "wife",
+    "bruder", "mutter", "neffe", "nichte", "oma", "onkel", "opa",
+    "schwester", "sohn", "tante", "tochter", "vater", "vetter",
+}  # fmt: skip
+
 
 def values(subject: str, prop: str) -> list:
     return [assertion.value for assertion in u.about(subject, prop)]
@@ -223,6 +233,29 @@ class TestNames:
         ]
         assert aunt.source == called.source
         assert dict(aunt.qualifiers) == {"kinship_type": "aunt"}
+
+    def test_a_kinship_term_is_never_an_appellation(self):
+        # ADR-0018 Ruling 2: a literal kinship term is recorded as the
+        # kinship (`relative` + `kinship_type`, or an ADR-0014 primitive
+        # such as `father`), and `referred_to_as` is kept for appellations
+        # that are not kinship.  A kinship word in one makes it a courtesy
+        # title: the referent is no relation of the ego.
+        edges = {"father", "mother", "child", "sibling", "spouse", "relative"}
+        related = {
+            frozenset((a.subject, a.value))
+            for a in u.ASSERTIONS
+            if a.property in edges
+        }
+        appellations = [
+            a for a in u.ASSERTIONS if a.property == "referred_to_as"
+        ]
+        courtesy = []
+        for a in appellations:
+            if set(re.findall(r"\w+", a.value.lower())) & KINSHIP_WORDS:
+                ego = dict(a.qualifiers).get("perspective")
+                assert frozenset((a.subject, ego)) not in related, a
+                courtesy.append(a.value)
+        assert courtesy == ["Nana Maisie"]
 
 
 class TestFamily:
