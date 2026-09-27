@@ -190,7 +190,7 @@ PEOPLE = (
             ("Gustav Beispiel", "birth", "de"),
             ("G. Beispiel", "as_written", "de"),
         ),
-        note="founded the family mill in 1878; homonym of gustav_1925",
+        note="founded the family firm in 1887; homonym of gustav_1925",
     ),
     Person(
         "ottilie", "Ottilie Beispiel", "female", 0,
@@ -206,7 +206,7 @@ PEOPLE = (
             ("Bern Example", "anglicised", "en"),
         ),
         gedcom_xref="@I2@",
-        note="cigar maker, not a miller; emigrated 1939",
+        note="cigar maker, not in the family firm; emigrated 1939",
     ),
     Person(
         "alma", "Alma Beispiel", "female", 1,
@@ -225,7 +225,8 @@ PEOPLE = (
             ("Hugo Beispiel", "birth", "de"),
             ("Hugo Beispiel sen.", "as_written", "de"),
         ),
-        note="mill director; deported 1942; father of hugo_jun",
+        note="the family firm's Prokurist; deported 1942; father of "
+        "hugo_jun",
     ),
     Person(
         "leonore", "Leonore Beispiel", "female", 1,
@@ -243,7 +244,8 @@ PEOPLE = (
             ("Hugo Beispiel jun.", "as_written", "de"),
             ("Hugo Example", "anglicised", "en"),
         ),
-        note="ran the mill; emigrated 1938 with wife and children",
+        note="worked in the family firm; emigrated 1938 with wife and "
+        "children",
     ),
     Person(
         "gretl", "Margarete Beispiel", "female", 2,
@@ -273,7 +275,8 @@ PEOPLE = (
             ("Dov Muster (later Don Masters)", "as_written", "en"),
         ),
         gedcom_xref="@I4@",
-        note="imprisoned and released 1938; emigrated 1939",
+        note="imprisoned November 1938, released January 1939; emigrated "
+        "1939",
     ),
     Person(
         "roland", "Roland Thorne", "male", 2,
@@ -357,13 +360,13 @@ PLACES = (
         note="the family's home town; a 1938 clerk wrote 'Espringfeld'",
     ),
     Place(
-        "muehlgasse_12", "Mühlgasse 12", "address", ("springfield",),
-        _names(("Mühlgasse 12, Springfield", "as_written", "de")),
+        "rosengasse_12", "Rosengasse 12", "address", ("springfield",),
+        _names(("Rosengasse 12, Springfield", "as_written", "de")),
         note="Bern and Alma's home (street -> town -> region -> country)",
     ),
     Place(
-        "old_mill", "Old Mill", "locality", ("springfield",),
-        _names(("Alte Mühle", "exonym", "de")),
+        "lower_town", "Lower Town", "locality", ("springfield",),
+        _names(("Unterstadt", "exonym", "de")),
         note="site of the family firm",
     ),
     Place(
@@ -438,18 +441,19 @@ PLACES = (
 
 ENTITIES = (
     Entity(
-        "gustavmuehlen_ag", "Gustavmühlen AG", "organization",
-        ("Gustavmühle", "Gustavmühlen=Aktiengesellschaft"),
-        note="the family firm: a flour mill at the Old Mill, founded 1878 "
-        "by gustav_1851 as the Gustavmühle; 29 mill workers in 1937. The "
-        "'=' form is how its name OCRs from a scan. Named after a person, "
-        "it is still an agent, never a place or a human",
+        "beispiel_soehne", "Beispiel & Söhne", "organization",
+        ("Seifenfabrik Beispiel & Söhne", "Seifen=Fabrik Beispiel & Söhne"),
+        note="the family firm: a soap works in the Lower Town, founded "
+        "1887 by gustav_1851. The '=' form is how a Fraktur double hyphen "
+        "OCRs from a scan. Named after people, it is still an agent, never "
+        "a place or a human",
     ),
     Entity("example_academy", "Example Academy", "organization"),
     Entity(
-        "stadtkasse_springfield", "Stadtkasse Springfield", "organization",
-        note="municipal treasury; issuing authority of the 1937 letter "
-        "(boilerplate, not a genealogical subject)",
+        "fire_office", "Example County Fire Office", "organization",
+        ("Feuerkasse Kreis Beispiel",),
+        note="the county's fire insurer; issuing authority of the 1908 "
+        "policy (boilerplate, not a genealogical subject)",
     ),
     Entity(
         "tracing_service", "Exampleland Tracing Service", "organization",
@@ -468,13 +472,16 @@ ENTITIES = (
         "zigarrenmacher", "Zigarrenmacher", "occupation_class",
         note="the address book's wording for the same trade",
     ),
-    Entity("mill_director", "Direktor", "occupation_class"),
+    Entity(
+        "prokurist", "Prokurist", "occupation_class",
+        note="authorised signatory: a role, recorded beside the employer",
+    ),
     Entity(
         "deportation_1942", "Deportation of Hugo and Leonore Beispiel",
         "deportation",
     ),
     Entity("imprisonment_1938", "Imprisonment of Dov Muster", "imprisonment"),
-    Entity("release_1938", "Release of Dov Muster", "release"),
+    Entity("release_1939", "Release of Dov Muster", "release"),
     Entity("release_1945", "Release of Leonore Beispiel", "release"),
     Entity(
         "emigration_1938", "Emigration of the Hugo Beispiel jun. family",
@@ -493,10 +500,10 @@ SOURCES = (
         "of its GEDCOM export",
     ),
     Source(
-        "gravestone_1930", "Gravestone of Gustav and Ottilie Beispiel",
-        "de", 1930, "photograph",
-        text="Gustav Beispiel 1851 - 19. Juni 1921. "
-        "Ottilie Beispiel geb. Faber 185_ - 1930.",
+        "gravestone_1927", "Gravestone of Gustav and Ottilie Beispiel",
+        "de", 1927, "photograph",
+        text="Gustav Beispiel 1851 - 27. Januar 1909. "
+        "Ottilie Beispiel geb. Faber 185_ - 1927.",
         note="Lakeside Cemetery; the stone is weathered",
     ),
     Source(
@@ -504,6 +511,15 @@ SOURCES = (
         "Springfield civil register: marriage of Hugo Beispiel and "
         "Leonore Grau",
         "de", 1900, "certificate",
+    ),
+    Source(
+        "insurance_1908", "Fire insurance policy of Beispiel & Söhne",
+        "de", 1908, "certificate",
+        text="Feuerkasse Kreis Beispiel. Versicherungsschein Nr. 4471. "
+        "Versichert: Siedehaus und Lager der Seifen=Fabrik Beispiel & Söhne, "
+        "Unterstadt, Springfield. Springfield, den 14. April 1908. "
+        "ppa. Hugo Beispiel, Prokurist.",
+        note="the '=' is a Fraktur double hyphen as OCR reads it",
     ),
     Source(
         "birth_certificate_1929",
@@ -514,35 +530,22 @@ SOURCES = (
         "Beispiel und der Margarete Beispiel geb. Sommer.",
     ),
     Source(
-        "photo_1929", "Photograph: the Beispiel family at the Old Mill",
+        "photo_1929",
+        "Photograph: Hugo and Margarete Beispiel with two children",
         None, 1929, "photograph",
-        note="caption on the back: 'Die Beispiels, Alte Mühle 1929'",
+        note="caption on the back: 'Hugo, Gretl, Gustl und Irmi, Sommer 1929'",
     ),
     Source(
         "address_book_1932", "Springfield address book", "de", 1932,
         "address_book",
-        text="Beispiel, Bern, Zigarrenmacher, Mühlgasse 12",
-    ),
-    Source(
-        "tax_letter_1937",
-        "Letter from the Stadtkasse Springfield to Gustavmühlen AG",
-        "de", 1937, "letter",
-        text="Springfield, den 6. Dezember 1937. An die Direktion der "
-        "Gustavmühlen AG, zu Händen von Direktor Hugo Beispiel. Wir "
-        "bestätigen den Eingang Ihres Schreibens. Die Gewerbesteuer für "
-        "1936 ist nunmehr beglichen; die Angelegenheit ist damit erledigt.",
+        text="Beispiel, Bern, Zigarrenmacher, Rosengasse 12",
     ),
     Source(
         "passenger_list_1938", "Passenger list of the SS Havenstar", "en",
         1938,
-        text="BEISPIEL, Hugo, miller, last residence Espringfeld; "
+        text="BEISPIEL, Hugo, soap maker, last residence Espringfeld; "
         "destination 4 Station Road, Sampleton, Westshire, Havenland. "
         "With wife Margarete and children Gustav, Irmgard, Ignaz.",
-    ),
-    Source(
-        "release_certificate_1938",
-        "Release certificate of Dov Muster, Capital City police prison",
-        "de", 1938, "certificate",
     ),
     Source(
         "deportation_list_1942", "Deportation list, Springfield", "de",
@@ -559,15 +562,23 @@ SOURCES = (
         "de", 1950, "letter",
     ),
     Source(
+        "gazette_1978", "Sampleton Gazette: interview with Don Masters",
+        "en", 1978, "newspaper_clipping",
+        text="Don Masters, born Dov Muster in Capital City, was arrested "
+        "in November 1938 and held in the city's police prison until "
+        "January 1939.",
+        note="a recollection forty years on: month precision only",
+    ),
+    Source(
         "memoir_1995", "Memoir of Ian Example (born Ignaz Beispiel)", "en",
         1995,
         text="I was born in Springfield in 1929, the youngest of three "
-        "children. My father ran a small flour mill, and my earliest "
-        "memories are of flour dust on his coat. My mother called me "
-        "Mäuschen. We left for Havenland in 1939. Oma Lore came back from "
-        "Musterfeld in 1945; Opa Hugo did not. Großtante Alma never left "
-        "Exampleland. Dov Muster (later Don Masters) lodged with Friedl, "
-        "who was no relation.",
+        "children. My father worked in the family soap works, and my "
+        "earliest memories are of the smell of soap on his coat. My mother "
+        "called me Mäuschen. We left for Havenland in 1939. Oma Lore came "
+        "back from Musterfeld in 1945; Opa Hugo did not. Großtante Alma "
+        "never left Exampleland. Dov Muster (later Don Masters) lodged with "
+        "Friedl, who was no relation.",
     ),
     Source(
         "death_notice_2015", "Death notice of Ian Example, Sampleton Gazette",
@@ -665,14 +676,14 @@ ASSERTIONS = tuple(
         ),
     )
     + _said(
-        "gravestone_1930",
+        "gravestone_1927",
         ("gustav_1851", "date_of_birth", Date(1851)),
-        ("gustav_1851", "date_of_death", Date(1921, 6, 19)),
+        ("gustav_1851", "date_of_death", Date(1909, 1, 27)),
         ("gustav_1851", "burial_place", "lakeside_cemetery"),
         ("ottilie", "birth_name", "Ottilie Faber"),
         ("ottilie", "spouse", "gustav_1851"),
         ("ottilie", "date_of_birth", Date(1850, decade=True), "185_"),
-        ("ottilie", "date_of_death", Date(1930)),
+        ("ottilie", "date_of_death", Date(1927)),
         ("ottilie", "burial_place", "lakeside_cemetery"),
     )
     + _said(
@@ -686,6 +697,15 @@ ASSERTIONS = tuple(
             "leonore", "date_of_birth", Date(1880, 11, 3),
             "geboren am 3. November 1880",
         ),
+    )
+    + _said(
+        "insurance_1908",
+        (
+            "hugo_sen", "employer", "beispiel_soehne",
+            "ppa. Hugo Beispiel, Prokurist",
+        ),
+        ("hugo_sen", "occupation", "prokurist"),
+        ("beispiel_soehne", "location", "lower_town"),
     )
     + _said(
         "birth_certificate_1929",
@@ -708,17 +728,8 @@ ASSERTIONS = tuple(
     )
     + _said(
         "address_book_1932",
-        ("bern", "residence", "muehlgasse_12", {"point_in_time": Date(1932)}),
+        ("bern", "residence", "rosengasse_12", {"point_in_time": Date(1932)}),
         ("bern", "occupation", "zigarrenmacher"),
-    )
-    + _said(
-        "tax_letter_1937",
-        (
-            "hugo_sen", "employer", "gustavmuehlen_ag",
-            "Direktor Hugo Beispiel",
-        ),
-        ("hugo_sen", "occupation", "mill_director"),
-        ("gustavmuehlen_ag", "location", "old_mill"),
     )
     + _said(
         "passenger_list_1938",
@@ -733,16 +744,6 @@ ASSERTIONS = tuple(
             "hugo_jun", "residence", "station_road_4",
             {"point_in_time": Date(1938, 8)},
         ),
-    )
-    + _said(
-        "release_certificate_1938",
-        ("imprisonment_1938", "participant", "dov"),
-        ("imprisonment_1938", "location", "capital_city_police_prison"),
-        ("imprisonment_1938", "start_time", Date(1938, 11)),
-        ("imprisonment_1938", "end_time", Date(1938, 12, 20)),
-        ("release_1938", "participant", "dov"),
-        ("release_1938", "location", "capital_city_police_prison"),
-        ("release_1938", "point_in_time", Date(1938, 12, 20)),
     )
     + _said(
         "deportation_list_1942",
@@ -770,12 +771,22 @@ ASSERTIONS = tuple(
         ("release_1945", "point_in_time", Date(1945, 5)),
     )
     + _said(
+        "gazette_1978",
+        ("imprisonment_1938", "participant", "dov"),
+        ("imprisonment_1938", "location", "capital_city_police_prison"),
+        ("imprisonment_1938", "start_time", Date(1938, 11)),
+        ("imprisonment_1938", "end_time", Date(1939, 1)),
+        ("release_1939", "participant", "dov"),
+        ("release_1939", "location", "capital_city_police_prison"),
+        ("release_1939", "point_in_time", Date(1939, 1)),
+    )
+    + _said(
         "memoir_1995",
         ("ignaz", "date_of_birth", Date(1929)),
         ("ignaz", "place_of_birth", "springfield"),
         (
-            "hugo_jun", "employer", "gustavmuehlen_ag",
-            "My father ran a small flour mill",
+            "hugo_jun", "employer", "beispiel_soehne",
+            "My father worked in the family soap works",
         ),
         (
             "emigration_1938", "point_in_time", Date(1939),

@@ -178,7 +178,7 @@ class TestFamily:
         )
 
     def test_family_firm_employs_family_members(self):
-        firm = ENTITIES["gustavmuehlen_ag"]
+        firm = ENTITIES["beispiel_soehne"]
         assert firm.kind == "organization"
         staff = {
             a.subject
@@ -186,12 +186,12 @@ class TestFamily:
             if a.property == "employer" and a.value == firm.key
         }
         assert staff >= {"hugo_sen", "hugo_jun"}
-        assert values(firm.key, "location") == ["old_mill"]
+        assert values(firm.key, "location") == ["lower_town"]
 
 
 class TestPlaces:
     def test_street_town_region_country_chain(self):
-        (path,) = u.containment_paths("muehlgasse_12")
+        (path,) = u.containment_paths("rosengasse_12")
         assert [PLACES[key].kind for key in path] == [
             "address", "town", "region", "country",
         ]  # fmt: skip
