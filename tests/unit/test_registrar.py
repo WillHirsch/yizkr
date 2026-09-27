@@ -184,15 +184,15 @@ class TestEnsureReferenced:
 
 # -- register_artifact: media file never drifts from media SHA-1 (#186) ------
 
-# Fictional media (docs/EXAMPLES.md): two different scans of Hugo jun. and
-# Gretl's 1924 wedding photograph.
-WEDDING = b"\x89PNG synthetic scan of the 1924 wedding photograph"
-RESCAN = b"\x89PNG synthetic re-scan of the 1924 wedding photograph"
-TITLE = "Wedding of Hugo Beispiel jun. and Margarete Sommer, 1924"
+# Fictional media (docs/EXAMPLES.md): two different scans of the Löbig
+# family's studio portrait of the 1890s.
+PORTRAIT = b"\x89PNG synthetic scan of the 1890s studio portrait"
+RESCAN = b"\x89PNG synthetic re-scan of the 1890s studio portrait"
+TITLE = "Studio portrait of the Löbig family"
 P = FakeWiki.PROPERTIES
 
 
-def scan(tmp_path, data: bytes, name="wedding-1924.png", folder="scans"):
+def scan(tmp_path, data: bytes, name="portrait-1890s.png", folder="scans"):
     path = tmp_path / folder / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -219,14 +219,14 @@ def sha1(data: bytes) -> str:
 class TestRegisterArtifact:
     def test_first_registration_uploads_and_hashes(self, tmp_path):
         wiki = FakeWiki()
-        result = register(wiki, scan(tmp_path, WEDDING))
+        result = register(wiki, scan(tmp_path, PORTRAIT))
         assert result.created
-        assert result.file_page == "File:Wedding-1924.png"
+        assert result.file_page == "File:Portrait-1890s.png"
         assert strings(wiki, result.artifact_qid, "media_file") == [
-            "File:Wedding-1924.png"
+            "File:Portrait-1890s.png"
         ]
         assert strings(wiki, result.artifact_qid, "media_sha1") == [
-            sha1(WEDDING)
+            sha1(PORTRAIT)
         ]
         assert wiki.drift() == []
 
@@ -234,7 +234,7 @@ class TestRegisterArtifact:
         self, tmp_path
     ):
         wiki = FakeWiki()
-        first = register(wiki, scan(tmp_path, WEDDING))
+        first = register(wiki, scan(tmp_path, PORTRAIT))
         before = copy.deepcopy(wiki.entities[first.artifact_qid])
 
         changed = register(wiki, scan(tmp_path, RESCAN, folder="rescans"))
@@ -244,25 +244,25 @@ class TestRegisterArtifact:
         entity = wiki.entities[changed.artifact_qid]
         assert entity["labels"]["en"]["value"] == f"{TITLE} [{tag}]"
         # the stored file is not overwritten: the new bytes get their own
-        assert changed.file_page == f"File:Wedding-1924 {tag}.png"
+        assert changed.file_page == f"File:Portrait-1890s {tag}.png"
         assert wiki.files == {
-            "File:Wedding-1924.png": sha1(WEDDING),
-            f"File:Wedding-1924 {tag}.png": sha1(RESCAN),
+            "File:Portrait-1890s.png": sha1(PORTRAIT),
+            f"File:Portrait-1890s {tag}.png": sha1(RESCAN),
         }
         assert wiki.entities[first.artifact_qid] == before
         assert wiki.drift() == []
 
     def test_same_bytes_under_a_new_name_upload_nothing(self, tmp_path):
         wiki = FakeWiki()
-        first = register(wiki, scan(tmp_path, WEDDING))
+        first = register(wiki, scan(tmp_path, PORTRAIT))
         requests = len(wiki.media.requests)
 
         copied = register(
-            wiki, scan(tmp_path, WEDDING, name="hugo and gretl.png"), "Copy"
+            wiki, scan(tmp_path, PORTRAIT, name="muckel and cilli.png"), "Copy"
         )
 
         assert copied.artifact_qid == first.artifact_qid
-        assert copied.file_page == "File:Wedding-1924.png"
+        assert copied.file_page == "File:Portrait-1890s.png"
         assert len(wiki.media.requests) == requests  # held already
         assert len(wiki.files) == 1
         aliases = wiki.entities[first.artifact_qid]["aliases"]["en"]
@@ -270,12 +270,12 @@ class TestRegisterArtifact:
 
     def test_rerun_uploads_and_writes_nothing(self, tmp_path):
         wiki = FakeWiki()
-        register(wiki, scan(tmp_path, WEDDING))
+        register(wiki, scan(tmp_path, PORTRAIT))
         register(wiki, scan(tmp_path, RESCAN, folder="rescans"))
         snapshot, writes = copy.deepcopy(wiki.entities), wiki.writes
         requests = len(wiki.media.requests)
 
-        register(wiki, scan(tmp_path, WEDDING))
+        register(wiki, scan(tmp_path, PORTRAIT))
         changed = register(wiki, scan(tmp_path, RESCAN, folder="rescans"))
 
         assert wiki.entities == snapshot
@@ -287,14 +287,14 @@ class TestRegisterArtifact:
 
     def test_a_title_naming_another_item_is_not_an_alias(self, tmp_path):
         wiki = FakeWiki()
-        first = register(wiki, scan(tmp_path, WEDDING))
+        first = register(wiki, scan(tmp_path, PORTRAIT))
         other = register(
             wiki, scan(tmp_path, RESCAN, name="rescan.png"), "Rescan"
         )
 
-        # the wedding bytes again, under the title of the other artifact
+        # the portrait bytes again, under the title of the other artifact
         again = register(
-            wiki, scan(tmp_path, WEDDING, name="x.png", folder="x"), "Rescan"
+            wiki, scan(tmp_path, PORTRAIT, name="x.png", folder="x"), "Rescan"
         )
 
         assert again.artifact_qid == first.artifact_qid != other.artifact_qid
@@ -303,14 +303,14 @@ class TestRegisterArtifact:
 
     def test_pre_hash_item_holding_the_bytes_is_adopted(self, tmp_path):
         wiki = FakeWiki()
-        first = register(wiki, scan(tmp_path, WEDDING))
+        first = register(wiki, scan(tmp_path, PORTRAIT))
         del wiki.entities[first.artifact_qid]["claims"][P["media_sha1"]]
 
-        again = register(wiki, scan(tmp_path, WEDDING))
+        again = register(wiki, scan(tmp_path, PORTRAIT))
 
         assert again.artifact_qid == first.artifact_qid
         assert strings(wiki, first.artifact_qid, "media_sha1") == [
-            sha1(WEDDING)
+            sha1(PORTRAIT)
         ]
         assert len(wiki.files) == 1
 
@@ -319,7 +319,7 @@ class TestRegisterArtifact:
         # bytes is different content: backfilling this hash onto it would
         # make its media file show other bytes than its media SHA-1
         wiki = FakeWiki()
-        first = register(wiki, scan(tmp_path, WEDDING))
+        first = register(wiki, scan(tmp_path, PORTRAIT))
         del wiki.entities[first.artifact_qid]["claims"][P["media_sha1"]]
         before = copy.deepcopy(wiki.entities[first.artifact_qid])
 
@@ -337,18 +337,18 @@ class TestRegisterArtifact:
         # ignored warnings) no longer holds the item's bytes: the item
         # gains a file that does, and its earlier statement stays
         wiki = FakeWiki()
-        first = register(wiki, scan(tmp_path, WEDDING))
+        first = register(wiki, scan(tmp_path, PORTRAIT))
         qid = first.artifact_qid
-        wiki.media.versions["Wedding-1924.png"].append(sha1(RESCAN))
+        wiki.media.versions["Portrait-1890s.png"].append(sha1(RESCAN))
 
-        again = register(wiki, scan(tmp_path, WEDDING))
+        again = register(wiki, scan(tmp_path, PORTRAIT))
 
-        tag = sha1(WEDDING)[:8]
+        tag = sha1(PORTRAIT)[:8]
         assert again.artifact_qid == qid
-        assert again.file_page == f"File:Wedding-1924 {tag}.png"
+        assert again.file_page == f"File:Portrait-1890s {tag}.png"
         assert strings(wiki, qid, "media_file") == [
-            "File:Wedding-1924.png",
-            f"File:Wedding-1924 {tag}.png",
+            "File:Portrait-1890s.png",
+            f"File:Portrait-1890s {tag}.png",
         ]
-        assert wiki.files[f"File:Wedding-1924 {tag}.png"] == sha1(WEDDING)
-        assert wiki.drift() == [(qid, "File:Wedding-1924.png")]
+        assert wiki.files[f"File:Portrait-1890s {tag}.png"] == sha1(PORTRAIT)
+        assert wiki.drift() == [(qid, "File:Portrait-1890s.png")]
