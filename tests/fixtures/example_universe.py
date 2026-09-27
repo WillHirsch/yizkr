@@ -1888,9 +1888,9 @@ ASSERTIONS = tuple(
             "Aunt Pünktchen",
         ),
         (
-            "nicholas-lobig",
-            "relative",
             "klara-loebig",
+            "relative",
+            "nicholas-lobig",
             {"kinship_type": "aunt"},
             "Aunt Pünktchen",
         ),
@@ -1907,9 +1907,9 @@ ASSERTIONS = tuple(
             "Aunt Pünktchen had gone ahead in '38 or '39",
         ),
         (
-            "gustav-loebig",
-            "relative",
             "leopold-loebig",
+            "relative",
+            "gustav-loebig",
             {"kinship_type": "cousin"},
             "Dad's cousin Leopold",
         ),

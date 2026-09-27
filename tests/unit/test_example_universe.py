@@ -214,11 +214,12 @@ class TestNames:
             for a in u.ASSERTIONS
             if a.property in kin and "maisie-cutmore" in (a.subject, a.value)
         ]
-        # the same source's literal kinship term is a relation
+        # the same source's literal kinship term is a relation, with the
+        # aunt as subject and the ego who calls her so as object
         (aunt,) = [
             a
-            for a in u.about("nicholas-lobig", "relative")
-            if a.value == "klara-loebig"
+            for a in u.about("klara-loebig", "relative")
+            if a.value == "nicholas-lobig"
         ]
         assert aunt.source == called.source
         assert dict(aunt.qualifiers) == {"kinship_type": "aunt"}
@@ -238,6 +239,39 @@ class TestFamily:
                 child = PEOPLE[assertion.subject]
                 parent = PEOPLE[assertion.value]
                 assert child.generation == parent.generation + 1, assertion
+
+    def test_kinship_terms_run_from_the_referent_to_the_ego(self):
+        # ADR-0018: `relative` + `kinship_type` has the referent as subject
+        # and the ego as object, so the term is what the subject is to the
+        # object.  The universe's parent edges bear out each one.
+        parents: dict[str, set[str]] = {}
+        for a in u.ASSERTIONS:
+            if a.property in {"father", "mother"}:
+                parents.setdefault(a.subject, set()).add(a.value)
+
+        def children(of: set[str]) -> set[str]:
+            return {key for key, theirs in parents.items() if theirs & of}
+
+        def aunts_and_uncles(ego: str) -> set[str]:
+            mine = parents.get(ego, set())
+            grandparents = set().union(*(parents.get(p, set()) for p in mine))
+            return children(grandparents) - mine
+
+        derived = {
+            "aunt": lambda ego: {
+                key
+                for key in aunts_and_uncles(ego)
+                if PEOPLE[key].sex == "female"
+            },
+            "cousin": lambda ego: children(aunts_and_uncles(ego)),
+        }
+        kinship = [a for a in u.ASSERTIONS if a.property == "relative"]
+        assert kinship
+        for assertion in kinship:
+            term = dict(assertion.qualifiers)["kinship_type"]
+            assert assertion.subject in derived[term](assertion.value), (
+                assertion
+            )
 
     def test_spouses_in_three_generations(self):
         couples = {
