@@ -1,37 +1,58 @@
 name: Ingestion pass
-description: One write pass of an ingestion cohort into a graph. Local sessions only.
+description: A whole-corpus scratch run, or the keeper run. Local sessions only.
 labels: ["kind:ingestion-pass", "exec:local-agent"]
 body:
   - type: markdown
     attributes:
       value: >-
         An ingestion pass runs only in a local session
-        (docs/AGENT_PROTOCOL.md §6). Everything written here is
-        pseudonymous and aggregate: sources by QID or by SHA-1 prefix plus
-        a generic descriptor, people by QID, counts rather than rows. No
-        real names, dates or quotations.
-  - type: input
-    id: cohort
-    attributes:
-      label: Cohort
-      description: The ingestion cohort, e.g. "cohort 0".
-    validations:
-      required: true
-  - type: input
-    id: pass
-    attributes:
-      label: Write pass
-      description: Which of the cohort's ordered write passes, e.g. "the spine pass".
-    validations:
-      required: true
+        (docs/AGENT_PROTOCOL.md §6). In the development stage every pass is
+        an unattended whole-corpus scratch run (ADR-0025); the keeper run
+        (#151) is the one pass with cluster review and ratification.
+        Everything written here is pseudonymous and aggregate: sources by
+        QID or by SHA-1 prefix plus a generic descriptor, people by QID,
+        counts rather than rows. No real names, dates or quotations.
+        report.html, report.json and detailed diffs stay under var/; post
+        only the aggregate report.md and diff summary.
   - type: dropdown
-    id: target
+    id: kind
     attributes:
-      label: Target graph
+      label: Pass kind
       options:
-        - dev stack
-        - pre-reset instance
-        - production
+        - scratch run (development stage, unattended)
+        - scratch-diff run (verifies needs:scratch-diff PRs)
+        - keeper run (cluster review and ratification)
+    validations:
+      required: true
+  - type: input
+    id: run-id
+    attributes:
+      label: Run id
+      description: The run's id, as `yizkr scratch run` prints it.
+    validations:
+      required: true
+  - type: input
+    id: baseline
+    attributes:
+      label: Baseline run
+      description: >-
+        The run whose stage outputs this run reuses and diffs against,
+        normally the latest completed run on main; "none" for the first
+        run.
+  - type: input
+    id: prs
+    attributes:
+      label: PRs verified
+      description: >-
+        For a scratch-diff run, the PRs it verifies, e.g. "#4, #42".
+        Several waiting PRs may share one run.
+  - type: dropdown
+    id: stages-run
+    attributes:
+      label: Stages run
+      options:
+        - stages before write only (`--until` the last one; no wiki reads or writes)
+        - through write (reset, register, write, place reconciliation, site)
     validations:
       required: true
   - type: input
@@ -39,17 +60,22 @@ body:
     attributes:
       label: Commit
       description: >-
-        The tagged, eval-passing commit, from `git describe --dirty`.
-        Production refuses a dirty tree or an unknown commit.
+        From `git describe --dirty`. The keeper run needs a tagged, clean
+        commit.
     validations:
       required: true
+  - type: input
+    id: cohort
+    attributes:
+      label: Cohort
+      description: The ingestion cohort, e.g. "cohort 0" (the whole corpus until the keeper run).
   - type: textarea
     id: sources
     attributes:
       label: Sources
       description: >-
-        How many, and each by QID or by SHA-1 prefix plus a generic
-        descriptor ("3f2a9c1, a typed letter").
+        How many, and any named ones by QID or by SHA-1 prefix plus a
+        generic descriptor ("3f2a9c1, a typed letter").
   - type: checkboxes
     id: exclusion
     attributes:
@@ -60,16 +86,59 @@ body:
             passed the shared exclusion check.
           required: true
   - type: textarea
+    id: stages
+    attributes:
+      label: Stages
+      description: >-
+        Per stage, from the aggregate report.md: computed, reused (key
+        match or adopted), failed and needs attention, with the key
+        component that forced each recompute; calls and wall time.
+  - type: textarea
+    id: anomalies
+    attributes:
+      label: Anomalies, pauses and aborts
+      description: >-
+        Alerts by check, new and carried; each slice paused or aborted,
+        and why, in aggregate terms.
+  - type: textarea
+    id: diff
+    attributes:
+      label: Diff summary
+      description: The aggregate summary of `yizkr scratch diff` against the baseline.
+  - type: textarea
+    id: problems
+    attributes:
+      label: Problems filed
+      description: >-
+        Issues filed for what this run showed, each with the stage:* label
+        of the stage it changes. Fixes go into the pipeline and are
+        regenerated, never repaired in the graph.
+  - type: input
+    id: runs
+    attributes:
+      label: Run items
+      description: QIDs of the run items this pass writes, if it writes.
+  - type: markdown
+    attributes:
+      value: >-
+        The fields below are for the keeper run. A scratch run counts flags
+        but ratifies nothing.
+  - type: input
+    id: pass
+    attributes:
+      label: Ratification pass
+      description: >-
+        If the owner splits ratification into passes, which one, in the
+        order persisted in the run manifest, e.g. "the spine pass".
+  - type: textarea
     id: privacy-diff
     attributes:
       label: Privacy dry-run diff
       description: >-
-        Aggregate counts from the privacy dry run taken before this pass
-        writes: people who would become publishable, people who would
+        Aggregate counts from the privacy dry run taken before the keeper
+        run writes: people who would become publishable, people who would
         become withheld, and unchanged. People by QID only if needed; no
         names or dates.
-    validations:
-      required: true
   - type: textarea
     id: flags
     attributes:
@@ -77,11 +146,6 @@ body:
       description: >-
         Counts of blocking and advisory flags by kind, and how the owner
         disposed of each blocking flag (by QID or cluster id).
-  - type: input
-    id: runs
-    attributes:
-      label: Run items
-      description: QIDs of the extraction-run items this pass writes.
   - type: input
     id: episode-qid
     attributes:

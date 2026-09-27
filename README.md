@@ -17,7 +17,9 @@ Start here:
 - `docs/AGENT_PROTOCOL.md` – how work moves from an issue to main, and
   how real data stays out of the repository and GitHub
 - `docs/REQUIREMENTS.md` – the six requirements (acceptance criteria)
-- `docs/adr/` – architecture decisions and their rationale
+- `docs/adr/` – architecture decisions and their rationale; ADR-0025
+  says how the pipeline is developed: whole-corpus scratch runs, stage
+  reuse, and run reports and diffs in place of a synthetic eval
 - `docs/MODELING.md` – Wikibase modeling conventions
 - `docs/EXAMPLES.md` – the one fictional example universe every example
   comes from
@@ -46,9 +48,16 @@ make test-live           # integration tests against the running stack
 
 [uv]: https://docs.astral.sh/uv/
 
-Pipeline outputs (claim batches, review CSVs, face galleries) are
-runtime state, not code — keep them under `var/` (gitignored) or
-outside the repo.
+Pipeline outputs (the stage store, scratch-run directories, run reports
+and diffs, claim batches, review CSVs, face galleries) are runtime state,
+not code — keep them under `var/` (gitignored) or outside the repo. They
+hold corpus content, so they stay on the machine; only a run's aggregate
+report and diff summary may be posted (`docs/AGENT_PROTOCOL.md` §6).
+
+Changes to a stage before write (a prompt, the manifest, a model, or a
+stage's code) are checked by a whole-corpus scratch run and its diff
+against the latest run on main (`needs:scratch-diff`, ADR-0025), not by a
+gold set or eval gate.
 
 **Privacy:** deployments built from this repository handle data about
 living people: nothing in a deployment is published or sent to
