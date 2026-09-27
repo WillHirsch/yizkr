@@ -250,33 +250,58 @@ def pinned_cli_version() -> str | None:
     return _PIN.version
 
 
-# Environment variables a call must not inherit: every Anthropic and
-# Claude Code variable. A Claude Code session exports its own session id,
-# effort, entrypoint and messaging socket to the commands it runs, which
-# would leak into calls made from inside it, and a stray API key would
+# The only environment variables a call inherits: those that find and run
+# the CLI, locate its login and session store, place its temporary files,
+# and carry the machine's proxy and certificate setup. None of them
+# changes how the CLI handles a call; everything else stays behind.
+# The CLI reads dozens of variables that do change a call, and a new
+# version can add more. Among them, MAX_THINKING_TOKENS changes the
+# model's output; the DISABLE_PROMPT_CACHING, ENABLE_PROMPT_CACHING_1H and
+# FORCE_PROMPT_CACHING_5M families change caching, and so the cost that
+# forked extraction relies on (ADR-0006); ENABLE_TOOL_SEARCH changes how
+# tools are put in the model's context; and DISABLE_COMPACT and
+# DISABLE_AUTO_COMPACT change what a long call does when its context
+# fills. A Claude Code session also exports its own session id, effort
+# and messaging socket to the commands it runs, and a stray API key would
 # silently switch this engine to per-token billing, which is exactly what
-# choosing it opts out of. The CLI also reads a few variables outside
-# those prefixes that change a call: MAX_THINKING_TOKENS and
-# DISABLE_INTERLEAVED_THINKING change the model's output, and
-# DISABLE_PROMPT_CACHING and its per-model variants
-# (DISABLE_PROMPT_CACHING_OPUS and the like) change caching, and so the
-# cost that forked extraction relies on (ADR-0006). Two are kept: the
-# directory that holds the CLI's login, and a subscription token used in
-# place of that login.
-_CLEARED_PREFIXES = ("ANTHROPIC_", "CLAUDE", "DISABLE_PROMPT_CACHING")
-_CLEARED_VARIABLES = frozenset(
-    {"MAX_THINKING_TOKENS", "DISABLE_INTERLEAVED_THINKING"}
+# choosing it opts out of. SHELL and the locale stay behind too: the CLI
+# names the shell in the model's context and formats some numbers there
+# with its runtime's default locale, and it runs without either.
+_PASSED_VARIABLES = frozenset(
+    {
+        # finds the CLI and the programs it runs
+        "PATH",
+        # the login and session store: under the home directory, or in
+        # the directory named instead, or a subscription token
+        "HOME",
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        # temporary files
+        "TMPDIR",
+        # proxies and certificate authorities on the way to the API
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_USE_SYSTEM_CA",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+    }
 )
-_KEPT_VARIABLES = frozenset({"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"})
 # Set for every call. The version is pinned for the pass, so the CLI must
-# not update itself. Auto-memory would carry content from one call into
-# the next. Error reports and telemetry go to third parties and can
-# describe the calls, such as the paths of the files read (CLAUDE.md
-# rule 7).
+# not update itself. Server-side feature flags could change a call between
+# passes on the same version; without them the CLI uses its built-in
+# defaults. Auto-memory would carry content from one call into the next.
+# Error reports and telemetry go to third parties and can describe the
+# calls, such as the paths of the files read (CLAUDE.md rule 7).
 _PINNED_ENVIRONMENT = {
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
     "DISABLE_AUTOUPDATER": "1",
     "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_GROWTHBOOK": "1",
     "DISABLE_TELEMETRY": "1",
 }
 
@@ -419,9 +444,9 @@ class ClaudeCodeClient:
     (``CliVersionMismatch``) and the call's output is discarded.
 
     **Isolated.** Calls load none of the owner's Claude Code settings
-    files, MCP servers or skills, inherit none of the Anthropic or Claude
-    Code environment variables (the thinking and prompt-caching ones
-    included), and run in a dedicated directory, so
+    files, MCP servers or skills, inherit only the environment variables
+    on an allowlist (``_PASSED_VARIABLES``: what runs the CLI, finds its
+    login and reaches the API), and run in a dedicated directory, so
     neither the owner's configuration nor a Claude Code session that
     launched the pass shapes a call. ``effective_config`` lists
     everything besides the prompt that does, and ``config_hash``
@@ -547,13 +572,12 @@ class ClaudeCodeClient:
 
     @staticmethod
     def _child_env() -> dict[str, str]:
+        """The allowlisted variables of this process's environment, with
+        the pinned settings on top."""
         env = {
             key: value
             for key, value in os.environ.items()
-            if key in _KEPT_VARIABLES
-            or not (
-                key in _CLEARED_VARIABLES or key.startswith(_CLEARED_PREFIXES)
-            )
+            if key in _PASSED_VARIABLES
         }
         env.update(_PINNED_ENVIRONMENT)
         return env
@@ -563,7 +587,9 @@ class ClaudeCodeClient:
         """Everything besides the prompt that shapes this client's calls:
         the pinned CLI version, its arguments (the executable's path and
         the per-call session arguments aside), the directory it runs in,
-        and the environment rules. Values of kept variables are never
+        and its environment: the settings pinned for every call and the
+        names of the variables passed through. The values passed through
+        (paths on this machine, the login, the proxy) are never
         included."""
         return {
             "engine": "claude-code",
@@ -572,9 +598,7 @@ class ClaudeCodeClient:
             "working_directory": str(self.workdir),
             "environment": {
                 "set": dict(sorted(_PINNED_ENVIRONMENT.items())),
-                "cleared_prefixes": list(_CLEARED_PREFIXES),
-                "cleared": sorted(_CLEARED_VARIABLES),
-                "kept": sorted(_KEPT_VARIABLES),
+                "passed": sorted(_PASSED_VARIABLES),
             },
         }
 
@@ -598,9 +622,9 @@ class ClaudeCodeClient:
                 "First use the Read tool to examine these image files:\n"
                 f"{listing}\n\n{prompt}"
             )
-        # Explicit fresh session id: a nested CLI otherwise adopts the
-        # session id from its parent's environment, so concurrent
-        # pipeline calls would collide on one session.
+        # An explicit fresh session id names the call's transcript, so it
+        # is released even when the call fails before its stream reports
+        # the id.
         return self._run(["--session-id", str(uuid.uuid4())], full_prompt)
 
     def open_conversation(self, prompt: str) -> tuple[str, Any]:

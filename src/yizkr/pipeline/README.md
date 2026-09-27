@@ -302,18 +302,32 @@ Two Anthropic-backed providers, differing in how usage is billed:
   `--setting-sources ""` (no user, project or local settings, so no
   hooks, permission rules, plugins or CLAUDE.md), `--strict-mcp-config`
   (no MCP servers, claude.ai connectors included),
-  `--disable-slash-commands` (no skills), and a child environment
-  without any `ANTHROPIC_*` or `CLAUDE*` variable except
-  `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` (so a stray API key
-  cannot switch billing, and a Claude Code session that launches the
-  pass leaks nothing into it), and without the variables the CLI reads
-  outside those prefixes that change a call: `MAX_THINKING_TOKENS` and
-  `DISABLE_INTERLEAVED_THINKING` (the model's output) and
-  `DISABLE_PROMPT_CACHING*` (caching, and so the cost forked extraction
-  relies on), with auto-memory, error reporting and telemetry off.
-  Calls run in `<tmp>/yizkr-claude-code`. The client's
-  `effective_config` lists all of this and `config_hash` fingerprints it
-  for the run record.
+  `--disable-slash-commands` (no skills), and a child environment built
+  from an **allowlist**. A call inherits only `PATH`; `HOME`,
+  `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` (the login and
+  session store); `TMPDIR`; and the proxy and certificate variables
+  (`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in upper or lower case;
+  `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA`, `SSL_CERT_FILE` and
+  `SSL_CERT_DIR`). Nothing else gets through: not a stray API key, which
+  would switch billing; not what a Claude Code session that launches
+  the pass exports to it; and not the dozens of variables the CLI reads
+  that change a call, such as the thinking switches
+  (`MAX_THINKING_TOKENS`), the prompt-caching and cache-TTL switches
+  (`DISABLE_PROMPT_CACHING*`, `ENABLE_PROMPT_CACHING_1H`,
+  `FORCE_PROMPT_CACHING_5M`, which change the cost forked extraction
+  relies on), tool search (`ENABLE_TOOL_SEARCH`) and compaction
+  (`DISABLE_COMPACT`, `DISABLE_AUTO_COMPACT`), nor any a later CLI
+  version adds. `SHELL` and the locale stay behind too: the CLI names
+  the shell in the model's context and formats some numbers there with
+  its runtime's default locale. On top, the engine sets
+  `DISABLE_AUTOUPDATER`, `DISABLE_GROWTHBOOK` (no server-side feature
+  flags, so the CLI's built-in defaults apply),
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, `DISABLE_ERROR_REPORTING` and
+  `DISABLE_TELEMETRY`. Calls run in `<tmp>/yizkr-claude-code`. The
+  client's `effective_config` lists the flags, the settings and the
+  names of the variables passed (never their values, which differ
+  between machines), and `config_hash` fingerprints it for the run
+  record.
 
   **Transcripts.** The CLI stores each session under
   `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`); sessions
