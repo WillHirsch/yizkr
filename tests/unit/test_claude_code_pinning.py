@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 import subprocess
 import tempfile
 import uuid
@@ -135,50 +136,85 @@ class TestIsolation:
         assert cwd == tmp_path / "tmp" / ClaudeCodeClient.WORKDIR_NAME
         assert cwd.is_dir() and not any(cwd.iterdir())
 
-    def test_environment_is_cleared_and_pinned(self, cli, monkeypatch):
-        # what a Claude Code session exports to the commands it runs
+    def test_other_variables_stay_behind(self, cli, monkeypatch):
         inherited = {
+            # what a Claude Code session exports to the commands it runs
             "CLAUDECODE": "1",
             "CLAUDE_CODE_SESSION_ID": str(uuid.uuid4()),
             "CLAUDE_CODE_ENTRYPOINT": "cli",
             "CLAUDE_EFFORT": "xhigh",
+            # a key would switch billing; the model is chosen per client
             "ANTHROPIC_API_KEY": "sk-should-not-leak",
             "ANTHROPIC_MODEL": "some-other-model",
-            "DISABLE_AUTOUPDATER": "0",
-            # read by the CLI outside the Anthropic and Claude prefixes
+            # switches CLI 2.1.237 reads outside those prefixes: thinking,
+            # prompt caching, tool search, the LSP tool, compaction and
+            # feature flags (#206 reviews)
             "MAX_THINKING_TOKENS": "32000",
             "DISABLE_INTERLEAVED_THINKING": "1",
-            "DISABLE_PROMPT_CACHING": "1",
-            "DISABLE_PROMPT_CACHING_HAIKU": "1",
-            "DISABLE_PROMPT_CACHING_SONNET": "1",
             "DISABLE_PROMPT_CACHING_OPUS": "1",
-            "DISABLE_PROMPT_CACHING_FABLE": "1",
-            "DISABLE_PROMPT_CACHING_MYTHOS": "1",
+            "ENABLE_PROMPT_CACHING_1H": "1",
+            "FORCE_PROMPT_CACHING_5M": "1",
+            "ENABLE_TOOL_SEARCH": "false",
+            "ENABLE_LSP_TOOL": "1",
+            "DISABLE_AUTO_COMPACT": "1",
+            "DISABLE_COMPACT": "1",
+            "DISABLE_GROWTHBOOK": "",
+            # the shell is named in the model's context, and the locale
+            # formats numbers there
+            "SHELL": "/usr/bin/zsh",
+            "LANG": "de_DE.UTF-8",
+            # a switch no CLI version reads yet
+            "ENABLE_INVENTED_FEATURE": "1",
         }
         for name, value in inherited.items():
             monkeypatch.setenv(name, value)
-        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "subscription-token")
         ClaudeCodeClient().complete("transcribe")
         env = cli.calls[0][1]["env"]
         for name in inherited:
-            if name != "DISABLE_AUTOUPDATER":
-                assert name not in env
-        assert env["DISABLE_AUTOUPDATER"] == "1"
-        assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
-        assert env["DISABLE_ERROR_REPORTING"] == "1"
-        assert env["DISABLE_TELEMETRY"] == "1"
-        # the login's location and a subscription token are kept
-        assert env["CLAUDE_CONFIG_DIR"].endswith("claude-config")
-        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "subscription-token"
-        assert "PATH" in env
+            # absent, or the value pinned for every call
+            assert env.get(name) == llm._PINNED_ENVIRONMENT.get(name)
+        assert set(env) <= llm._PASSED_VARIABLES | set(llm._PINNED_ENVIRONMENT)
         # the version probe runs under the same environment
-        assert cli.probes[0]["env"]["DISABLE_AUTOUPDATER"] == "1"
-        assert "CLAUDECODE" not in cli.probes[0]["env"]
+        assert cli.probes[0]["env"] == env
+
+    def test_allowlisted_variables_reach_the_cli(
+        self, cli, monkeypatch, tmp_path
+    ):
+        passed = {
+            "HOME": str(tmp_path / "home"),
+            "TMPDIR": str(tmp_path / "tmp"),
+            "CLAUDE_CODE_OAUTH_TOKEN": "subscription-token",
+            "HTTPS_PROXY": "http://proxy.example:3128",
+            "no_proxy": "localhost",
+            "NODE_EXTRA_CA_CERTS": str(tmp_path / "proxy-ca.pem"),
+        }
+        for name, value in passed.items():
+            monkeypatch.setenv(name, value)
+        ClaudeCodeClient().complete("transcribe")
+        env = cli.calls[0][1]["env"]
+        for name, value in passed.items():
+            assert env[name] == value
+        # the search path, and the login's location set by the fixture
+        assert env["PATH"] == os.environ["PATH"]
+        assert env["CLAUDE_CONFIG_DIR"].endswith("claude-config")
+
+    def test_pinned_settings_are_set(self, cli, monkeypatch):
+        # an inherited value never replaces a pinned one
+        monkeypatch.setenv("DISABLE_AUTOUPDATER", "0")
+        monkeypatch.setenv("DISABLE_GROWTHBOOK", "")
+        ClaudeCodeClient().complete("transcribe")
+        for env in (cli.probes[0]["env"], cli.calls[0][1]["env"]):
+            assert env["DISABLE_AUTOUPDATER"] == "1"
+            assert env["DISABLE_GROWTHBOOK"] == "1"
+            assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+            assert env["DISABLE_ERROR_REPORTING"] == "1"
+            assert env["DISABLE_TELEMETRY"] == "1"
 
 
 class TestEffectiveConfig:
     def test_lists_what_shapes_a_call(self, cli, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "subscription-token")
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
         client = ClaudeCodeClient(model="claude-sonnet-5", effort="low")
         config = client.effective_config
         assert config["engine"] == "claude-code"
@@ -190,14 +226,49 @@ class TestEffectiveConfig:
         assert "--session-id" not in arguments
         assert config["working_directory"] == str(client.workdir)
         environment = config["environment"]
-        assert environment["set"]["DISABLE_AUTOUPDATER"] == "1"
-        assert "DISABLE_PROMPT_CACHING" in environment["cleared_prefixes"]
-        assert environment["cleared"] == [
-            "DISABLE_INTERLEAVED_THINKING",
-            "MAX_THINKING_TOKENS",
+        assert environment["set"] == {
+            "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "DISABLE_AUTOUPDATER": "1",
+            "DISABLE_ERROR_REPORTING": "1",
+            "DISABLE_GROWTHBOOK": "1",
+            "DISABLE_TELEMETRY": "1",
+        }
+        assert environment["passed"] == [
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CONFIG_DIR",
+            "HOME",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NODE_EXTRA_CA_CERTS",
+            "NODE_USE_SYSTEM_CA",
+            "NO_PROXY",
+            "PATH",
+            "SSL_CERT_DIR",
+            "SSL_CERT_FILE",
+            "TMPDIR",
+            "http_proxy",
+            "https_proxy",
+            "no_proxy",
         ]
-        # names of kept variables only, never their values
-        assert "subscription-token" not in json.dumps(config)
+        # names of passed variables only, never their values
+        dumped = json.dumps(config)
+        assert "subscription-token" not in dumped
+        assert "proxy.example" not in dumped
+
+    def test_hash_covers_the_rule_not_this_machine(
+        self, cli, monkeypatch, tmp_path
+    ):
+        before = ClaudeCodeClient().config_hash
+        # passed values differ between machines; other variables are
+        # dropped
+        monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+        monkeypatch.setenv("ENABLE_INVENTED_FEATURE", "1")
+        assert ClaudeCodeClient().config_hash == before
+        monkeypatch.setattr(
+            llm, "_PASSED_VARIABLES", llm._PASSED_VARIABLES | {"SHELL"}
+        )
+        assert ClaudeCodeClient().config_hash != before
 
     def test_hash_is_stable_and_follows_the_config(self, cli):
         low = ClaudeCodeClient(effort="low")
