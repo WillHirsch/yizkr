@@ -88,9 +88,13 @@ rehearsal work that produces no code diff.
    the requirement, and gives the evidence. Move the issue's Status to
    *In review*.
 6. **Review.** The PR gets an adversarial review, and required fixes are
-   pushed to the same branch. The verdict names the commit it reviewed; any
-   commit pushed after that is re-checked by the reviewer before the PR is
-   marked ready.
+   pushed to the same branch. Alongside correctness, scope and real data
+   (§7), the review checks that comments and docstrings in `src/yizkr/`
+   describe how the code works now and carry no development history such
+   as issue or PR numbers; ADR references are fine (CLAUDE.md, Engineering
+   conventions). The verdict names the commit it reviewed; any commit
+   pushed after that is re-checked by the reviewer before the PR is marked
+   ready.
 7. **Mark it ready.** The orchestrating session runs `gh pr ready` once
    the verdict is in and the fixes are checked. Until then the PR stays a
    draft. This is the standard for all agentic work: a draft means "not

@@ -32,5 +32,8 @@ Commands run and their results, aggregates only:
   the fictional universe.
 - [ ] Issues are cited by #number and decisions by ADR number; no
   plan-internal codes.
+- [ ] Comments and docstrings in `src/yizkr/` describe how the code
+  works now, with no development history (no issue or PR numbers,
+  "previously" notes or bug-hunt accounts); ADR references are fine.
 - [ ] Docs move with code (ADRs, MODELING.md, CLAUDE.md, READMEs).
 - [ ] Owner actions, if any, are listed in one place above.
