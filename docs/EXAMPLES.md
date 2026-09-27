@@ -94,11 +94,13 @@ tree's GEDCOM export, and each person's `gedcom_xref` points into it.
 ## Extending
 
 Add to the module rather than inventing a one-off name inline, and keep
-`tests/unit/test_example_universe.py` green. Before committing, check
-every new name, place, organisation and exact date against the
-out-of-repo denylist (#35), both its enforced and its review lists.
-Prefer names built on the universe's own roots (Beispiel, Muster,
-Example, Sample-) to real small towns or real surnames.
+`tests/unit/test_example_universe.py` green. Prefer names built on the
+universe's own roots (Beispiel, Muster, Example, Sample-) to real small
+towns or real surnames. A session that has handled real data also
+confirms, as part of its self-review (docs/AGENT_PROTOCOL.md §7), that no
+new name, place, organisation, date or source document matches or mirrors
+a real one, including a document that resembles a real one by kind and
+date.
 
 ## Status
 
@@ -107,4 +109,5 @@ Example, Sample-) to real small towns or real surnames.
   carry earlier names, and Alma's an earlier birth date. Other tests,
   prompts and ADRs still use earlier examples too. Replacing them is #31,
   #32 and #33.
-- CLAUDE.md and docs/AGENT_PROTOCOL.md state the rule once #20 lands.
+- CLAUDE.md and docs/AGENT_PROTOCOL.md state the rule (ADR-0024). The
+  token denylist once used to check additions is retired (ADR-0024 §5).

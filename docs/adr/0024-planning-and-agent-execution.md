@@ -1,0 +1,268 @@
+# ADR-0024: Planning and supervised agent execution — GitHub issues replace ROADMAP; data boundary; owner merges
+
+Status: **accepted** — these are decisions the owner made on 2026-09-27,
+recorded in #20 together with its dispatch and claim rules. This ADR does
+not pass through a `proposed` stage: the owner's merge of the PR that adds
+it is its acceptance. The operational rules are in
+[`docs/AGENT_PROTOCOL.md`](../AGENT_PROTOCOL.md), and CLAUDE.md carries the
+short form. Small changes amend this ADR in place with a dated "Amended by
+#n" line; reversing a ruling takes a new ADR (#19).
+
+## Context
+
+Work resumed on 2026-09-27 after a pause. Most changes are now made by
+agent sessions working in parallel: local sessions on the owner's machine
+now, cloud sessions later. Four things had to change together.
+
+- **The plan lived outside GitHub.** ROADMAP.md numbered its items, and the
+  resumption plan used internal keys and codes that mean nothing to someone
+  reading an issue or a commit. Neither could carry status, ownership or
+  blocked-by links.
+- **Nothing gated main.** Local work had piled up on a local main that
+  diverged from origin and had to be reconciled in one large PR (#48). With
+  agents working in parallel, the owner needs every change as a separate,
+  reviewable unit. Twice on 2026-09-27 a PR was merged while its review was
+  still open (#177, then #182): a PR that looks ready invites merging.
+- **Real family data had leaked into examples.** README said the repository
+  carries no personal data, but a 2026-09-27 audit (#39) found real names,
+  places, addresses, a family firm and exact dates used as examples in about
+  33 tracked files (ADRs, prompts, code comments and tests), and in early
+  issue texts. The records are about real, partly living people (CLAUDE.md
+  rule 7), and examples travel: into prompts sent to models, into issues
+  read by agents, and into a repository that may one day be shared.
+- **Sessions differ in what they may see.** A cloud agent runs outside this
+  machine, so under rule 7 it may not see the corpus, run state, archives or
+  the graph. A local session may see them, so it must make sure none of it
+  leaves the machine in a commit or a GitHub text.
+
+## Decision
+
+### 1. The plan lives in GitHub-native entities
+
+- Work is tracked as issues, cited by `#number`. Epics are parent issues
+  with native sub-issues. Order comes from native blocked-by links; time
+  from native milestones (descriptive names with due dates) and the
+  Project's Iteration field; state from the Project's Status, Size and
+  Owner touchpoint fields and from labels.
+- Decisions are cited by ADR number and requirements by R-number
+  (docs/REQUIREMENTS.md). The keys, codes and iteration numbers of the
+  planning file were scaffolding for loading the plan into GitHub once.
+  They are never written into GitHub or the repository.
+- ROADMAP.md is retired: #73 turns it into a stub with an item-to-issue
+  table and moves its deferred items to the deferred-on-trigger register
+  (#171).
+- Requirements R1 to R6 stay the north star, and the proposed privacy
+  requirement is tracked as R7-privacy. Every epic names the requirements
+  it serves, and its issues inherit the matching `req:*` labels. The
+  resumption changes how the requirements are reached, never what they are.
+- An issue body is the source of truth for its task, so it is kept true.
+  When scope or a fact changes, the body is corrected and a dated comment
+  says what changed and why.
+
+### 2. The owner merges every PR; agent PRs stay drafts until reviewed
+
+- Every change, a local session's included, goes issue → branch cut from
+  freshly fetched origin/main → pull request, and the owner merges every
+  PR. Nobody pushes to main directly. A local pre-push hook, installed by
+  `make hooks`, refuses such a push. Branch protection is not available for
+  this private repository on its current GitHub plan, so the hook is a
+  tripwire for mistakes rather than an access control.
+- An agent opens its PR as a GitHub **draft**. The orchestrating session
+  marks it ready for review (`gh pr ready`) only after the adversarial
+  review has passed and every fix it required is pushed and re-checked. The
+  owner merges only PRs marked ready. This is the standard for all agentic
+  work: draft means "not ready to merge", so a PR that is not a draft has
+  passed its review.
+- One issue, one PR, one reviewable diff. Code issues are size S or M, and
+  anything larger is split. Size L is kept for local ingestion, annotation
+  and rehearsal work that produces no code diff.
+- The owner chooses the merge method (rebase-merge is fine). Nothing may
+  depend on branch commit IDs surviving a merge, so docs and ADR statuses
+  cite issue and PR numbers, never branch SHAs.
+- A PR that changes a write path carries `needs:live-test`: a local session
+  posts `make test-live` results before merge. Until #75 merges, live tests
+  target the current pre-reset instance, which is backed up (#16) and
+  disposable; after that, the dev stack. A PR that changes prompts, schemas
+  or models carries `needs:eval`: a local session posts aggregate metrics
+  against the docs/EVAL.md gate, and such PRs merge only after the gate's
+  thresholds are set (#83).
+
+### 3. Dispatch: a standing go-ahead, limited by non-interference
+
+- Any issue whose native blockers are all closed is dispatched without a
+  per-batch go-ahead, however wide the total active surface becomes,
+  provided it does not interfere with work in flight. There is no ceiling
+  on open draft PRs. This replaces the earlier plan of at most five open
+  agent PRs: a ceiling throttles independent work without preventing
+  conflicts.
+- Interference is defined by two rules. At most one in-flight issue that
+  edits the repository per `area:*` label; tasks that edit nothing in the
+  repository don't count. And one agent at a time uses each shared
+  resource: the live Wikibase stack, and the claude-code subscription for
+  LLM-heavy work (eval runs, extraction).
+- Parked issues and `exec:owner` issues are never dispatched.
+  `exec:cloud-agent-ok` issues go to cloud agents only after the
+  cloud-dispatch gate (§4) closes.
+- The owner's attention is the scarce resource, so it is batched: whatever
+  needs the owner is grouped into touchpoints (the Project's Owner
+  touchpoint field), each with a time estimate. The budget is about four
+  touchpoints per iteration, plus two fixed PR-review slots a week.
+
+### 4. The data boundary is structural
+
+- **Local-only data.** The corpus (`import/`, or the directory that
+  `YIZKR_CORPUS_DIR` names once #29 moves it out of the tree), `var/`,
+  `bundle/`, `~/yizkr-private/` and its archives, the gold set, backups,
+  the exclusion list, the private audit inventory, and any live or dev
+  graph. Only local sessions read them, nothing from them is copied into
+  the repository, GitHub or a cloud agent's session, and an issue whose
+  work touches any of them is `exec:local-agent`. (Sending corpus content
+  to a model during ingestion is governed by CLAUDE.md rule 7, not here.)
+- **Cloud agents are code-only.** They see the repository and its
+  fictional fixtures, nothing else, and their issues are
+  `exec:cloud-agent-ok`.
+- **The cloud-dispatch gate (#34)** is one explicit switch. The owner closes
+  it once this ADR and the protocol are merged, every inventoried real
+  example is replaced (#31, #32, #33) and a final semantic sweep of the tree
+  finds none, issues and PRs are scrubbed, and the plan is loaded. Every
+  `exec:cloud-agent-ok` issue reaches #34 through blocked-by links, directly
+  or transitively, so no cloud agent is dispatched before it closes.
+- **Never-ingest fails closed.** A document on the exclusion list is never
+  ingested. Every ingestion entry point uses one shared exclusion check,
+  and production and extract-all modes refuse to run when no exclusion list
+  is configured (#29). The owner keeps the list, outside the repository.
+
+### 5. Real data never leaves the private area
+
+- **Examples come only from the fictional universe**
+  (`tests/fixtures/example_universe.py`, `docs/EXAMPLES.md`, #40): in code,
+  comments, prompts, tests, docs, commit messages, issues and PRs. Never
+  real family data, not even partially anonymised. This replaces README's
+  claim that the repository carries no personal data. Nothing kept that
+  claim true; this rule is one every author can follow.
+- **Nobody quotes, paraphrases or identifies corpus content outside the
+  private area.** Identifying includes mirroring: an invented document that
+  matches a real one by kind and date, or a family or firm built on a real
+  one's pattern.
+- **GitHub text is pseudonymous.** People are cited by QID only. Artifacts
+  are cited by QID; by slug only when the slug holds no personal name; and
+  otherwise by SHA-1 prefix plus a generic descriptor. No real names or
+  dates of family members appear. Metrics are reported as aggregates only.
+- **Outgoing-text self-review.** A local session that has handled real data
+  re-reads every commit range it pushes and every issue, PR and comment text
+  it posts, and confirms that none of it quotes, paraphrases or identifies
+  anything from the corpus, before it leaves the machine. The PR template
+  carries this as a checkbox.
+- **Pushed history is not rewritten.** Earlier commits on main still
+  contain real data. The repository is private, and the owner accepts this
+  residual; a rewrite is revisited only if the repository or site is ever
+  made public (#171).
+
+**The token denylist was tried and retired.** On 2026-09-27 a categorised
+denylist of real names, places, organisations and dates was built (#35),
+with a pre-commit hook to block staged diffs (#30) and a CI check over
+salted token hashes (#36, closed PR #181). It was retired the same day, for
+four reasons:
+
+1. **It is incomplete by construction.** It knows only the sources already
+   ingested, so it lags every new batch of sources.
+2. **Tokens are not the whole leak.** #177 passed the denylist check with
+   no hits, yet its review found a partially anonymised firm and invented
+   documents that mirrored real ones by kind and date.
+3. **Matching is brittle.** A line-based check misses a name wrapped across
+   two lines, or a date written with other separators; catching those took
+   word n-grams across lines.
+4. **It concentrates risk and cost.** The list is itself a compact
+   inventory of real identifiers. The CI check needed a secret salt and a
+   `pull_request_target` workflow kept away from PR code.
+
+A single fictional universe removes the reason to write real data at all,
+which no list can do, and self-review covers what a list cannot see. The
+retired work is kept in closed PR #181 and in the private archive.
+
+### 6. Decision records
+
+- ADR numbers are claimed in the pinned registry (#19) before a branch is
+  cut.
+- Drafts merge with status `proposed` and are accepted in batched owner
+  sessions (#72, #74). The issue that drafts an ADR closes when the draft
+  merges. Decision clauses that are still open live in the session issues,
+  not in the drafts, so no draft blocks another.
+- Small changes amend an ADR in place with a dated "Amended by #n" line.
+  Reversing a ruling always takes a new ADR.
+
+### 7. Planning principles
+
+These principles of the resumption plan are decided here:
+
+- **Stabilise before redesign.** Nothing new starts until the "Stabilise and
+  safeguard" milestone delivers: one reconciled main, merged by the owner
+  through a PR with green CI; a recovered stack whose volumes were archived
+  before any container started; archived reference datasets; a scrubbed,
+  pseudonymous GitHub; and a tree whose examples come only from the
+  fictional universe.
+- **Scaffolding is idempotent, throttled and reviewable.** Scripts that
+  load labels, milestones, Project fields or issues can be re-run, pause at
+  least 1 s between mutations, write a resumable checkpoint after each
+  step, and self-review every title and body before sending it.
+- **Backup policy by stage (owner decision, 2026-09-27).** Each move to a
+  later stage is an explicit owner decision.
+  - *Development stage* (now, until the owner declares a keep-worthy
+    state): no routine backups. Graph and run state is regenerated rather
+    than restored, and one-off archives are taken only where a decision
+    asks for one.
+  - *Kept-state stage* (declared in a decision issue, #159, once an
+    ingestion pass shows no further schema or process fixes): backups at
+    milestone closes.
+  - *Production-curation stage* (once a production instance is used for
+    bulk human curation): nightly backups plus an off-machine copy (#172).
+
+  Owner-made artefacts that cannot be regenerated, such as the verified
+  gold set, get a one-off archive copy when completed. The stage also sets
+  how errors are fixed. In the development stage a schema or process fix
+  is applied by regenerating (reset and re-ingest), carrying the owner's
+  decisions forward by semantic fingerprint. From the kept-state stage,
+  CLAUDE.md rule 3 applies in full, and any reset needs a full archive and a
+  new, explicit owner decision.
+
+These principles are decided elsewhere and are listed here only so they
+can be found:
+
+| Principle | Decided in |
+|---|---|
+| Identity is decided per ingestion cohort, before anything is written | ADR-0027 (#74) |
+| Humans ratify runs, not rows, with blocking and advisory flags | ADR-0026 (#72) |
+| Privacy fails closed and trusts confirmed facts only | ADR-0028 (#72) |
+| Reproducibility means re-derivability under the claude-code engine | ADR-0029 (#72) |
+| Development and evaluation are separated from production ingestion | ADR-0025 (#72) |
+| Rehearse on real data before production, and never review twice | #122, #148 |
+
+## Consequences
+
+- Every change is a reviewable unit tied to an issue, and the owner's time
+  goes to review and decisions rather than to tracking state.
+- The owner merges every PR, so review capacity sets the pace. Drafts keep
+  unreviewed work visible without inviting a merge.
+- The pre-push hook only works in clones where `make hooks` ran, and
+  `--no-verify` skips it. Hooks live in the common git directory, so one run
+  in the owner's checkout covers every agent worktree.
+- Keeping real data out rests on convention and self-review, so a lapse is
+  caught only by review. The fictional universe makes lapses rarer, because
+  no author needs real data for an example.
+- Some work stays local for good: ingestion, annotation, rehearsals, live
+  tests and evals. Cloud agents wait for the gate (#34).
+
+## Alternatives considered
+
+- **Keep ROADMAP.md as the plan.** Rejected: no status, ownership or
+  blocked-by links, and its item numbers leak into code and docs.
+- **A ceiling of five open agent PRs.** Replaced by the non-interference
+  rules (§3).
+- **A token denylist with a pre-commit hook and a CI check.** Built and
+  retired (§5).
+- **Server-side branch protection for main.** Not available on the
+  repository's current plan; the local hook stands in.
+- **pre-commit's pre-push stage for the hook.** pre-commit shows its hooks
+  only the first ref being pushed that has new commits, and none for a
+  deletion, so `git push origin feature main` would slip past. A plain
+  hook reads every ref.

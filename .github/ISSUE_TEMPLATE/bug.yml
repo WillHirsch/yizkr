@@ -1,0 +1,73 @@
+name: Bug
+description: Something the code or the stack does wrong.
+labels: ["kind:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Pseudonymous text only** (docs/AGENT_PROTOCOL.md §7). Examples
+        come only from the fictional universe (docs/EXAMPLES.md). Cite
+        people by QID; artifacts by QID, by a slug without a personal name,
+        or by SHA-1 prefix plus a generic descriptor. No real names or
+        dates of family members, and metrics as aggregates only. Cite
+        issues by #number and decisions by ADR number.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >-
+        Describe it with fictional fixtures or by QID. Never paste real
+        records, or logs and review sheets that contain them.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Commands and fictional inputs, e.g. a fixture from tests/fixtures.
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git describe --dirty`.
+  - type: dropdown
+    id: exec
+    attributes:
+      label: Exec label
+      description: Who can fix it (docs/AGENT_PROTOCOL.md §2 and §6).
+      options:
+        - "exec:cloud-agent-ok (code only)"
+        - "exec:local-agent (needs the corpus, var/, private data or a live or dev graph)"
+        - "exec:owner (owner action or decision)"
+    validations:
+      required: true
+  - type: dropdown
+    id: requirement
+    attributes:
+      label: Requirements affected
+      description: See docs/REQUIREMENTS.md.
+      multiple: true
+      options:
+        - R1
+        - R2
+        - R3
+        - R4
+        - R5
+        - R6
+        - R7-privacy
+        - "none (infrastructure or governance)"
+  - type: checkboxes
+    id: no-real-data
+    attributes:
+      label: No real data
+      options:
+        - label: >-
+            I re-read this text. It quotes, paraphrases or identifies
+            nothing from the corpus.
+          required: true

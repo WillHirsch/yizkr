@@ -14,6 +14,8 @@ done; second ingestion trial (photos/HTR/German) next.
 
 Start here:
 - `CLAUDE.md` – standing instructions for AI-assisted development
+- `docs/AGENT_PROTOCOL.md` – how work moves from an issue to main, and
+  how real data stays out of the repository and GitHub
 - `docs/REQUIREMENTS.md` – the six requirements (acceptance criteria)
 - `docs/adr/` – architecture decisions and their rationale
 - `docs/MODELING.md` – Wikibase modeling conventions
@@ -47,8 +49,12 @@ Pipeline outputs (claim batches, review CSVs, face galleries) are
 runtime state, not code — keep them under `var/` (gitignored) or
 outside the repo.
 
-**Privacy:** this repository contains only infrastructure, tooling,
-and documentation — no family records or personal data. Deployments
-built from it, however, handle data about living people: nothing in a
-deployment is published or sent to third-party services without
-explicit instruction.
+**Privacy:** deployments built from this repository handle data about
+living people: nothing in a deployment is published or sent to
+third-party services without explicit instruction. The repository itself
+keeps real family data out by convention: every example comes from the
+fictional universe in `docs/EXAMPLES.md`, and sessions that handle real
+data self-review everything they push or post (ADR-0024,
+`docs/AGENT_PROTOCOL.md`). Its commit history predates that rule and
+still holds some real data, so the repository stays private unless that
+history is rewritten (#171).

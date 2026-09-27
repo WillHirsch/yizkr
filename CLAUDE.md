@@ -68,6 +68,33 @@ values and N source-attributed values, and everything still works.*
   keep them in `var/` (gitignored) or outside the repo.
 - Docs move with code: update ADRs/MODELING.md in the same PR as any
   behavior change; new architectural decisions get a new ADR.
+- Examples: every example in code, comments, prompts, tests, docs,
+  commits, issues and PRs comes only from the fictional universe
+  (`docs/EXAMPLES.md`, `tests/fixtures/example_universe.py`). Never
+  real family data, not even partially anonymised.
+
+## Agent execution & data boundary
+
+Every change goes issue → branch → draft PR → review → ready → owner
+merge; see `docs/AGENT_PROTOCOL.md` and ADR-0024.
+
+- **Local-only data** is read only by local sessions and never copied
+  into the repository, GitHub or a cloud agent's session: the corpus
+  (`import/`, or `YIZKR_CORPUS_DIR` once moved out of the tree), `var/`,
+  `bundle/`, `~/yizkr-private/` and its archives, the gold set, backups,
+  the exclusion list, the private audit inventory, and any live or dev
+  graph. Work that touches them is `exec:local-agent`; cloud agents are
+  code-only.
+- **Real data stays in the private area.** Never quote, paraphrase or
+  identify corpus content anywhere else. GitHub text cites people by
+  QID only and gives metrics as aggregates only.
+- **Self-review before anything leaves the machine.** A session that
+  has handled real data re-reads every commit range it pushes and every
+  issue, PR and comment text it posts, and confirms none of it quotes,
+  paraphrases or identifies anything from the corpus.
+- **Never push to main.** `make hooks` installs a pre-push hook that
+  refuses it. Agent PRs open as drafts and are marked ready only after
+  review passes and its fixes land; the owner merges.
 
 ## What NOT to do
 

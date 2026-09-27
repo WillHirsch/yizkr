@@ -1,0 +1,102 @@
+name: Ingestion pass
+description: One write pass of an ingestion cohort into a graph. Local sessions only.
+labels: ["kind:ingestion-pass", "exec:local-agent"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        An ingestion pass runs only in a local session
+        (docs/AGENT_PROTOCOL.md §6). Everything written here is
+        pseudonymous and aggregate: sources by QID or by SHA-1 prefix plus
+        a generic descriptor, people by QID, counts rather than rows. No
+        real names, dates or quotations.
+  - type: input
+    id: cohort
+    attributes:
+      label: Cohort
+      description: The ingestion cohort, e.g. "cohort 0".
+    validations:
+      required: true
+  - type: input
+    id: pass
+    attributes:
+      label: Write pass
+      description: Which of the cohort's ordered write passes, e.g. "the spine pass".
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target graph
+      options:
+        - dev stack
+        - pre-reset instance
+        - production
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: >-
+        The tagged, eval-passing commit, from `git describe --dirty`.
+        Production refuses a dirty tree or an unknown commit.
+    validations:
+      required: true
+  - type: textarea
+    id: sources
+    attributes:
+      label: Sources
+      description: >-
+        How many, and each by QID or by SHA-1 prefix plus a generic
+        descriptor ("3f2a9c1, a typed letter").
+  - type: checkboxes
+    id: exclusion
+    attributes:
+      label: Exclusion check
+      options:
+        - label: >-
+            An exclusion list is configured, and every source in this pass
+            passed the shared exclusion check.
+          required: true
+  - type: textarea
+    id: privacy-diff
+    attributes:
+      label: Privacy dry-run diff
+      description: >-
+        Aggregate counts from the privacy dry run taken before this pass
+        writes: people who would become publishable, people who would
+        become withheld, and unchanged. People by QID only if needed; no
+        names or dates.
+    validations:
+      required: true
+  - type: textarea
+    id: flags
+    attributes:
+      label: Flags
+      description: >-
+        Counts of blocking and advisory flags by kind, and how the owner
+        disposed of each blocking flag (by QID or cluster id).
+  - type: input
+    id: runs
+    attributes:
+      label: Run items
+      description: QIDs of the extraction-run items this pass writes.
+  - type: input
+    id: episode-qid
+    attributes:
+      label: Ratification episode QID
+      description: The episode item that ratifies this pass's run; filled in at ratification.
+  - type: input
+    id: policy
+    attributes:
+      label: Ratification policy version
+  - type: checkboxes
+    id: no-real-data
+    attributes:
+      label: No real data
+      options:
+        - label: >-
+            I re-read this text. It quotes, paraphrases or identifies
+            nothing from the corpus.
+          required: true
