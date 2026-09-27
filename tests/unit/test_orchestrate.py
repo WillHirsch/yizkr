@@ -478,6 +478,25 @@ class TestFreshness:
         assert doc.state.status == AWAITING_EQUIVALENCES
         assert not doc.resolved.exists()
         assert not doc.write_result.exists()
+        # ...and the human decisions were moved aside, not deleted
+        assert not doc.equivalences_reviewed.exists()
+        assert not doc.review_reviewed.exists()
+        assert (doc.dir / "equivalences.reviewed.superseded-1.csv").exists()
+        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
+
+    def test_repeated_redo_keeps_every_superseded_review(self, tmp_path):
+        orchestrator = self.completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        doc.batch.unlink()
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        doc.batch.unlink()  # a second upstream correction
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        assert (doc.dir / "equivalences.reviewed.superseded-1.csv").exists()
+        assert (doc.dir / "equivalences.reviewed.superseded-2.csv").exists()
+        assert doc.state.status == AWAITING_EQUIVALENCES
 
     def test_stale_reviewed_file_is_not_consent(self, tmp_path):
         import os

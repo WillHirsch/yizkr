@@ -50,7 +50,10 @@ save the reviewed CSV, then continues on the next `ingest run`.
 
 **What keeps it safe.** A gate opens only when its `*.reviewed.csv` exists
 *and* is newer than the CSV it reviews — edit the source CSV and the gate
-re-arms. No reviewed file, nothing writes; identity is never auto-confirmed
+re-arms. A re-extracted batch moves both reviewed files aside as
+`*.reviewed.superseded-<n>.csv` (kept, never deleted), so decisions about
+the old rows cannot open gates for the new ones. No reviewed file, nothing
+writes; identity is never auto-confirmed
 and no claim reaches the graph without an explicit `approve` (R3, ADR-0007).
 
 **Reading a run.** Each document prints a status — `awaiting equivalences
