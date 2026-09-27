@@ -931,9 +931,14 @@ def propose_graph_pairs(
     containment: PlaceContainment | None = None,
 ) -> list[Proposal]:
     """Blocked roster x roster pairs -> adjudicated duplicate proposals,
-    in bounded batches per call. Pairs the graph proves impossible
-    (kinship edge, existing containment, disjoint lifespan) are pruned
-    before adjudication (ADR-0017).
+    in bounded batches per call. Two items of the same kind pair when a
+    name token is shared (prefix-aware); ``impossible_pair`` then prunes a
+    pair before adjudication when a structural graph fact rules identity
+    out: a kinship edge (father, mother, spouse, child or sibling) between
+    the two, or, for two places, one transitively inside the other.
+    Without ``containment`` only the kinship rule applies. Dates never
+    prune a pair: contradictory dates go to adjudication and review
+    (ADR-0017).
 
     Executing an approved pair is a curator action (item merge, or a
     referenced `said to be the same as` statement) — deliberately not
