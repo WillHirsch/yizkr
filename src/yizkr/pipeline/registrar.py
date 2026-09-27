@@ -22,8 +22,10 @@ bytes under a different filename reuse the one item (the alternate
 filename is kept as an alias) instead of minting a duplicate that
 shares a blob. Falls back to the exact English label when there is no
 media to hash (re-registration). Statements that already exist are
-skipped; re-uploading identical media is a no-op (MediaWiki dedups the
-blob by SHA-1).
+skipped. The bytes are uploaded only when none of the item's wiki files
+holds them, and an upload never overwrites a wiki file or stores bytes
+the wiki already holds (`WikiClient.upload_file`), so every `media file`
+holds the bytes its item's `media SHA-1` names.
 """
 
 from __future__ import annotations
@@ -154,6 +156,95 @@ def _string_claim(pid: str, value: str, stated_in_pid: str, source_qid: str):
     return String(prop_nr=pid, value=value, references=references)
 
 
+def _files_holding(
+    client: WikiClient, file_pages: set[str], content_sha1: str
+) -> list[str]:
+    """The wiki files among `file_pages` whose current bytes have this
+    SHA-1, by MediaWiki's own hash of each file (imageinfo)."""
+    if not file_pages:
+        return []
+    data = client.api_get(
+        {
+            "action": "query",
+            "titles": "|".join(sorted(file_pages)),
+            "prop": "imageinfo",
+            "iiprop": "sha1",
+        }
+    )
+    query = data.get("query", {})
+    # map API-normalised titles back to the statement values asked for
+    asked = {
+        entry["to"]: entry["from"] for entry in query.get("normalized", [])
+    }
+    return sorted(
+        asked.get(page["title"], page["title"])
+        for page in query.get("pages", {}).values()
+        if (page.get("imageinfo") or [{}])[0].get("sha1") == content_sha1
+    )
+
+
+def _locate_by_content(
+    client: WikiClient,
+    hashed_qid: str | None,
+    label: str,
+    content_sha1: str,
+    *,
+    media_file: str,
+    media_sha1: str,
+):
+    """Find the artifact item that a medium's bytes are (ADR-0010).
+
+    `hashed_qid` is the item whose `media SHA-1` is `content_sha1`, if
+    any: the bytes are that item. Otherwise an item labelled `label`
+    that carries no hash is these bytes only if one of its wiki files
+    holds them, or it has no file yet (a registration interrupted before
+    its statements); it is adopted and its hash is backfilled by the
+    caller. Any other item with that label is different content.
+
+    Returns ``(item, held, label_taken)``: the item or None, its wiki
+    files that hold these bytes, and whether `label` names a different
+    artifact, so that a new item needs a content-tagged label. The
+    caller uploads the bytes only when `held` is empty; `upload_file`
+    never overwrites a file, so every `media file` it records holds the
+    bytes its `media SHA-1` names.
+    """
+    if hashed_qid is not None:
+        item = client.wbi.item.get(hashed_qid)
+        files = _existing_claim_strings(item, media_file)
+        return item, _files_holding(client, files, content_sha1), False
+    labelled = client.find_item_by_label(label)
+    if labelled is None:
+        return None, [], False
+    candidate = client.wbi.item.get(labelled)
+    files = _existing_claim_strings(candidate, media_file)
+    held = _files_holding(client, files, content_sha1)
+    if not _existing_claim_strings(candidate, media_sha1) and (
+        held or not files
+    ):
+        return candidate, held, False
+    return None, [], True
+
+
+def _takes_alias(
+    client: WikiClient, item, name: str, content_sha1: str
+) -> bool:
+    """Should `name`, another name for an item's bytes, become its alias?
+
+    Name variants live in aliases (MODELING.md), but not a name that
+    belongs to other content: another item's label, or the plain form of
+    this item's content-tagged label (tagged because that name was
+    taken). Aliasing it would cross-link two artifacts.
+    """
+    current = str(item.labels.get("en") or "")
+    aliases = {str(alias) for alias in item.aliases.get("en") or []}
+    return (
+        name != current
+        and name not in aliases
+        and current != f"{name} [{content_sha1[:8]}]"
+        and client.find_item_by_label(name) in (None, item.id)
+    )
+
+
 def register_artifact(
     client: WikiClient,
     media_path: Path | None,
@@ -180,47 +271,46 @@ def register_artifact(
     media_sha1 = properties["media_sha1"]
     page_number = properties["page_number"]
 
+    # -- locate the artifact item: content hash is the identity key -------
+    # Identical bytes are one artifact however they are named: with media
+    # present the hash decides (see _locate_by_content), and the label is
+    # consulted only to adopt an unhashed item whose file holds these
+    # bytes. With no media to hash, the label is the key.
     file_page: str | None = None
     content_sha1: str | None = None
+    artifact = None
+    label_taken = reused_by_hash = False
     if media_path is not None:
-        # hash before upload: the content identity is the file's bytes,
-        # independent of the name MediaWiki files it under (ADR-0010)
+        # the content identity is the file's bytes, independent of the
+        # name MediaWiki files them under (ADR-0010)
         content_sha1 = hashlib.sha1(media_path.read_bytes()).hexdigest()
-        file_page = client.upload_file(media_path)
-
-    # -- locate the artifact item: content hash is the identity key -------
-    # Identical bytes are one artifact however they are named. With media
-    # present the hash decides; the label is consulted only to adopt an
-    # artifact item that carries no hash (same title; the hash is
-    # backfilled below). A same-title item that already carries a
-    # DIFFERENT hash is genuinely different content and must not be
-    # collapsed onto. With no media to hash, the label is the key.
-    reused_by_hash = False
-    existing_qid = None
-    if content_sha1 is not None:
-        existing_qid = client.string_statement_index(media_sha1).get(
+        hashed_qid = client.string_statement_index(media_sha1).get(
             content_sha1
         )
-        reused_by_hash = existing_qid is not None
-        if existing_qid is None:
-            labelled = client.find_item_by_label(title)
-            if labelled is not None and not _existing_claim_strings(
-                client.wbi.item.get(labelled), media_sha1
-            ):
-                existing_qid = labelled  # unhashed item: adopt and backfill
+        artifact, held, label_taken = _locate_by_content(
+            client,
+            hashed_qid,
+            title,
+            content_sha1,
+            media_file=media_file,
+            media_sha1=media_sha1,
+        )
+        reused_by_hash = hashed_qid is not None
+        # upload before any item is minted, and only when none of the
+        # item's files holds the bytes already
+        file_page = held[0] if held else client.upload_file(media_path)
     else:
         existing_qid = client.find_item_by_label(title)
+        if existing_qid:
+            artifact = client.wbi.item.get(existing_qid)
 
-    if existing_qid:
-        artifact = client.wbi.item.get(existing_qid)
+    if artifact is not None:
         created = False
     else:
         # new content. Labels are unique per kind (the wiki's idempotency
         # convention), so if this title already names DIFFERENT content,
         # disambiguate with a short content tag rather than collide.
-        label = title
-        if content_sha1 is not None and client.find_item_by_label(title):
-            label = f"{title} [{content_sha1[:8]}]"
+        label = f"{title} [{content_sha1[:8]}]" if label_taken else title
         artifact = client.wbi.item.new()
         artifact.labels.set("en", label)
         if description:
@@ -230,13 +320,10 @@ def register_artifact(
     artifact_qid = artifact.id
 
     # same bytes under a new filename: keep the new name as an alias
-    # (name variants live in aliases — docs/MODELING.md)
-    if reused_by_hash:
-        current_label = str(artifact.labels.get("en") or "")
+    if reused_by_hash and _takes_alias(client, artifact, title, content_sha1):
         aliases = {str(alias) for alias in (artifact.aliases.get("en") or [])}
-        if title != current_label and title not in aliases:
-            artifact.aliases.set("en", sorted(aliases | {title}))
-            artifact.write(summary="ingest: alternate filename as alias")
+        artifact.aliases.set("en", sorted(aliases | {title}))
+        artifact.write(summary="ingest: alternate filename as alias")
 
     changed = False
     if items[artifact_type] not in _existing_claim_targets(

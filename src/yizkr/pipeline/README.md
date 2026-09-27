@@ -105,7 +105,8 @@ standalone `yizkr ingest <step>` command (see `--help`) for debugging or
 re-running one step in isolation — but for a normal ingest you only ever run
 `ingest run` and fill the two gates above.
 
-- **register** — uploads media (idempotent by content), ensures the
+- **register** — uploads media (idempotent by content; a wiki file is
+  never overwritten or stored twice, ADR-0010), ensures the
   artifact item (`instance of`, `media file`) and optional page
   fragments (`part of` + page qualifier). Statement provenance:
   `stated in → the artifact itself` (see docs/MODELING.md, "Artifacts

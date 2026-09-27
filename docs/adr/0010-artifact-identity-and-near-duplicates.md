@@ -1,7 +1,9 @@
 # ADR-0010: Artifact identity and near-duplicate handling
 
 Status: accepted (content-hash key implemented; near-duplicate linking
-deferred, see "Later")
+deferred, see "Later").
+Amended by #186 (2026-09-27): uploads honour MediaWiki's warnings, with a
+file-naming rule for changed sources (§1, "Media files").
 
 ## Context
 
@@ -80,6 +82,50 @@ Amended by #50 (2026-09-27): media derived from a compound artifact
 referenced `stated in →` the deck that embeds them, and are resolved by
 it the same way, so one image embedded in several decks is one item,
 `part of` each (see ADR-0008's amendment).
+
+**Media files** (amended by #186, 2026-09-27). The blob deduplication
+the context above takes for granted was not in effect: the upload sent
+`ignorewarnings=0`, and MediaWiki reads a boolean parameter as true
+whenever it is present, so every warning was ignored. Identical bytes
+under a new name were stored as a second file, and a stored name with
+different bytes silently gained a new version, so an earlier item's
+`media file` could show other bytes than its `media SHA-1`. The rule
+now, one for the registrar and for derived media:
+
+- **A wiki file is never overwritten, and bytes are stored once.**
+  `WikiClient.upload_file` sends no `ignorewarnings` and answers each
+  warning. Bytes stored already (`nochange` under the requested name,
+  `duplicate` under another) reuse that file, and nothing is uploaded;
+  with several such files, the first by name is used.
+- **File names for changed sources.** When the requested name holds
+  different bytes (`exists`), the new bytes go under a content-tagged
+  name, `"<stem> <sha1[:8]><extension>"` (a regenerated
+  `wedding-1924.png` becomes `Wedding-1924 3f2a9c1b.png`), and the stored
+  file keeps its bytes and history. MediaWiki forbids brackets in file
+  names, hence a space rather than the `[…]` of content-tagged labels.
+  If the tagged name also holds other bytes, the upload is refused.
+- **Warnings about the name alone** (a camera-style prefix, a
+  thumbnail-like or corrected name, a near-identical name with another
+  extension, a deleted file's name) are overridden deliberately: with no
+  `exists` and no `duplicate`, no file is overwritten and nothing is
+  stored twice. Every other warning stops the upload for a person to
+  decide, notably `duplicate-archive`: those bytes were deleted from the
+  wiki, and re-uploading them would undo a curator's deletion.
+- **Registration uploads only what no file of the item holds.** The
+  registrar, like derived-media registration, locates the item first
+  and uploads only when none of the item's `media file`s currently holds
+  its bytes (MediaWiki's own SHA-1 of each file). An item with no hash
+  is adopted by its label only when its file holds the same bytes, or
+  it has no file yet; otherwise the title names different content and
+  the new item gets a content-tagged label. A file that no longer holds
+  its item's bytes (overwritten before this rule) is not trusted: the
+  item gains a `media file` that does hold them, and the earlier
+  statement stays (CLAUDE.md rule 3).
+- **Aliases follow the derived-media rule.** An alternate title for the
+  same bytes becomes an alias only when it names no other item and is
+  not the plain form of the item's own content-tagged label, so a
+  changed source's item never takes the title of the artifact it was
+  tagged against, and a re-run writes nothing.
 
 The orchestrator adds **content dedup** ahead of the expensive steps. It
 hashes each file at the top of `advance`, and a file whose bytes were
