@@ -4,7 +4,7 @@ A fake ``claude`` executable stands in for the CLI. It answers
 ``--version``, stores each session's transcript under a temporary
 $CLAUDE_CONFIG_DIR the way the real CLI does, refuses to fork a session
 whose transcript is gone, and prints a stream-json event stream whose
-init event reports the CLI version.
+init event reports the CLI version and the tools offered to the model.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import gc
 import json
 import os
+import pwd
 import subprocess
 import tempfile
 import uuid
@@ -25,6 +26,7 @@ from yizkr.pipeline import llm
 from yizkr.pipeline.llm import (
     ClaudeCodeClient,
     CliConfigEnvironment,
+    CliToolsMismatch,
     CliVersionMismatch,
     PassPaused,
     claude_global_config_path,
@@ -53,6 +55,9 @@ class FakeCli:
         self.projects = projects
         self.installed = PINNED  # what `claude --version` prints
         self.reports: str | None = None  # init event version, if not that
+        # the tools the init event reports offering the model (None: no
+        # tools key, as in older streams)
+        self.tools: list[str] | None = ["Read"]
         self.returncode = 0
         self.timeout = False
         self.probes: list[dict] = []  # kwargs of each --version probe
@@ -80,13 +85,16 @@ class FakeCli:
         (project / session / "tool-results").mkdir(parents=True)
         (project / f"{session}.jsonl").write_text('{"type": "user"}\n')
         version = self.reports or self.installed
+        init = {
+            "type": "system",
+            "subtype": "init",
+            "session_id": session,
+            "claude_code_version": version,
+        }
+        if self.tools is not None:
+            init["tools"] = self.tools
         events = [
-            {
-                "type": "system",
-                "subtype": "init",
-                "session_id": session,
-                "claude_code_version": version,
-            },
+            init,
             {
                 "type": "assistant",
                 "session_id": session,
@@ -131,7 +139,9 @@ class TestIsolation:
         assert "--disable-slash-commands" in command
         # forks resume stored sessions, so persistence stays on
         assert "--no-session-persistence" not in command
+        # Read is the one tool approved and the one tool offered
         assert command[command.index("--allowedTools") + 1] == "Read"
+        assert command[command.index("--tools") + 1] == "Read"
 
     def test_compaction_is_pinned_on(self, cli):
         """Command-line settings outrank the global config, which the CLI
@@ -217,13 +227,28 @@ class TestIsolation:
         # an inherited value never replaces a pinned one
         monkeypatch.setenv("DISABLE_AUTOUPDATER", "0")
         monkeypatch.setenv("DISABLE_GROWTHBOOK", "")
+        monkeypatch.setenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "4321")
         ClaudeCodeClient().complete("transcribe")
         for env in (cli.probes[0]["env"], cli.calls[0][1]["env"]):
             assert env["DISABLE_AUTOUPDATER"] == "1"
             assert env["DISABLE_GROWTHBOOK"] == "1"
             assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+            assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "64000"
             assert env["DISABLE_ERROR_REPORTING"] == "1"
             assert env["DISABLE_TELEMETRY"] == "1"
+
+    def test_empty_variables_are_left_out(self, cli, monkeypatch, tmp_path):
+        """An empty value is unset for the CLI and for the helpers here
+        alike (#206 review): the CLI would read an empty CLAUDE_CONFIG_DIR
+        as a relative directory."""
+        monkeypatch.setattr(
+            pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(tmp_path))
+        )
+        for name in ("HOME", "CLAUDE_CONFIG_DIR", "HTTPS_PROXY"):
+            monkeypatch.setenv(name, "")
+        ClaudeCodeClient().complete("transcribe")
+        env = cli.calls[0][1]["env"]
+        assert not {"HOME", "CLAUDE_CONFIG_DIR", "HTTPS_PROXY"} & set(env)
 
 
 def write_config(path: Path, config: dict) -> Path:
@@ -322,10 +347,30 @@ class TestGlobalConfig:
         path.parent.mkdir(parents=True, exist_ok=True)
         # cut short, as a file caught mid-write would be
         path.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-secret-in-conf')
-        with pytest.raises(CliConfigEnvironment, match="cannot be read"):
+        with pytest.raises(CliConfigEnvironment, match="cannot be read") as e:
             ClaudeCodeClient()
+        assert "sk-secret-in-conf" not in str(e.value)
         assert len(sleeps) == 1  # read once more before refusing
         assert cli.probes == []
+
+    def test_empty_home_means_the_password_database_home(
+        self, cli, monkeypatch, tmp_path
+    ):
+        """With HOME empty the CLI uses the password database's home, and
+        so does the check; Path.home() would give the root directory
+        (#206 review)."""
+        home = tmp_path / "pw-home"
+        monkeypatch.setattr(
+            pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(home))
+        )
+        monkeypatch.setenv("HOME", "")
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+        path = write_config(
+            home / ".claude.json", {"env": {"DISABLE_COMPACT": "1"}}
+        )
+        assert claude_global_config_path() == path
+        with pytest.raises(CliConfigEnvironment, match="DISABLE_COMPACT"):
+            ClaudeCodeClient()
 
 
 class TestEffectiveConfig:
@@ -345,6 +390,7 @@ class TestEffectiveConfig:
         environment = config["environment"]
         assert environment["set"] == {
             "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
             "DISABLE_AUTOUPDATER": "1",
             "DISABLE_ERROR_REPORTING": "1",
             "DISABLE_GROWTHBOOK": "1",
@@ -579,6 +625,33 @@ class TestTranscripts:
         assert cli.transcripts() == set()
 
 
+class TestToolCheck:
+    """--tools Read leaves the model that tool alone; account data from
+    the server can add others (#206 review), so every call's reported
+    tool list is checked."""
+
+    def test_read_alone_passes(self, cli):
+        assert ClaudeCodeClient().complete("transcribe") == "answer"
+
+    def test_another_tool_pauses_the_pass(self, cli):
+        client = ClaudeCodeClient()
+        cli.tools = ["Read", "TaskCreate", "Workflow"]
+        with pytest.raises(CliToolsMismatch, match="TaskCreate, Workflow"):
+            client.complete("transcribe")
+        assert issubclass(CliToolsMismatch, PassPaused)
+        # the call's output is discarded and its transcript released
+        assert cli.transcripts() == set()
+        # latched: the next call never reaches the CLI
+        cli.tools = ["Read"]
+        with pytest.raises(CliToolsMismatch):
+            client.complete("again")
+        assert len(cli.calls) == 1
+
+    def test_stream_without_a_tool_list_is_let_through(self, cli):
+        cli.tools = None
+        assert ClaudeCodeClient().complete("transcribe") == "answer"
+
+
 class TestReleaseTranscripts:
     def test_only_uuids_select_files(self, cli):
         project = cli.projects / PROJECT
@@ -587,6 +660,26 @@ class TestReleaseTranscripts:
         keep.write_text("{}\n")
         assert release_transcripts(["*", "../notes", "notes"], None) == []
         assert keep.exists()
+
+    def test_empty_home_means_the_password_database_home(
+        self, monkeypatch, tmp_path
+    ):
+        """With HOME empty the CLI files sessions under the password
+        database's home, and release looks there (#206 review)."""
+        home = tmp_path / "pw-home"
+        monkeypatch.setattr(
+            pwd, "getpwuid", lambda uid: SimpleNamespace(pw_dir=str(home))
+        )
+        monkeypatch.setenv("HOME", "")
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+        projects = home / ".claude" / "projects"
+        assert llm.claude_projects_dir() == projects
+        session = str(uuid.uuid4())
+        (projects / PROJECT).mkdir(parents=True)
+        transcript = projects / PROJECT / f"{session}.jsonl"
+        transcript.write_text("{}\n")
+        assert release_transcripts([session], None) == [transcript]
+        assert not transcript.exists()
 
     def test_destination_setting(self, monkeypatch, tmp_path):
         monkeypatch.delenv(llm.TRANSCRIPTS_ENV, raising=False)

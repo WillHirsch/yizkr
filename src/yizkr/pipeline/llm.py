@@ -179,6 +179,11 @@ class CliConfigEnvironment(PassPaused):
     CLI would add to every call."""
 
 
+class CliToolsMismatch(PassPaused):
+    """A call's CLI offered the model a tool besides the one the engine
+    allows."""
+
+
 def _version_mismatch(
     found: str, pinned: str, where: str
 ) -> CliVersionMismatch:
@@ -194,13 +199,15 @@ def _version_mismatch(
 
 
 class _CliPin:
-    """The claude CLI version one pass runs on.
+    """The claude CLI version one pass runs on, and the pause that stops
+    the pass.
 
     A pass is one process. Its first ClaudeCodeClient pins the version it
     finds installed (or the version its caller requires). Every later
     client is checked against the pin when it starts, and every call
-    against the version its stream reports. A mismatch latches: after the
-    first one, no client starts and no call is made in this process.
+    against the version and the tools its stream reports. A mismatch
+    latches: after the first one, no client starts and no call is made in
+    this process.
     """
 
     def __init__(self) -> None:
@@ -246,6 +253,25 @@ class _CliPin:
                 _version_mismatch(str(reported), pinned, "reported by a call")
             )
 
+    def check_tools(self, reported: Any, allowed: str) -> None:
+        """Assert that the tools a call's stream reports offering the model
+        are ``allowed`` alone. A stream that reports none is let through,
+        as for the version."""
+        if not isinstance(reported, list):
+            return
+        others = sorted({str(tool) for tool in reported} - {allowed})
+        if others:
+            raise self._latch(
+                CliToolsMismatch(
+                    f"the claude CLI offered the model {', '.join(others)} "
+                    f"besides {allowed}, although --tools {allowed} names "
+                    "that tool alone: a CLI change or account data from the "
+                    "server has added tools. The call's output is "
+                    "discarded, and the pass is paused and makes no "
+                    "further calls; its completed outputs are kept."
+                )
+            )
+
 
 _PIN = _CliPin()
 
@@ -274,7 +300,8 @@ def pinned_cli_version() -> str | None:
 # with its runtime's default locale, and it runs without either. The
 # config directory these variables locate still shapes a call: its login
 # decides the account and how it is billed, and its global config can add
-# variables of its own, which check_global_config refuses.
+# variables of its own, which check_global_config refuses, and holds the
+# account data the server sends (see _PINNED_ENVIRONMENT).
 _PASSED_VARIABLES = frozenset(
     {
         # finds the CLI and the programs it runs
@@ -301,13 +328,21 @@ _PASSED_VARIABLES = frozenset(
     }
 )
 # Set for every call. The version is pinned for the pass, so the CLI must
-# not update itself. Server-side feature flags could change a call between
-# passes on the same version; without them the CLI uses its built-in
-# defaults. Auto-memory would carry content from one call into the next.
-# Error reports and telemetry go to third parties and can describe the
-# calls, such as the paths of the files read (CLAUDE.md rule 7).
+# not update itself. DISABLE_GROWTHBOOK turns off server-side feature
+# flags, but the CLI does not run on built-in defaults alone: it also
+# fetches account data from the server at every start and caches it in its
+# global config, where the owner's own sessions refresh it too. That data
+# can change the system-prompt text, the output-token budget, the default
+# model and the auto-compact windows, and no variable keeps it out.
+# CLAUDE_CODE_MAX_OUTPUT_TOKENS takes the budget's default out of its
+# reach: every call asks for 64000 tokens, the Claude 5 default, capped at
+# the model's own ceiling, which account data can still lower.
+# Auto-memory would carry content from one call into the next. Error
+# reports and telemetry go to third parties and can describe the calls,
+# such as the paths of the files read (CLAUDE.md rule 7).
 _PINNED_ENVIRONMENT = {
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
     "DISABLE_AUTOUPDATER": "1",
     "DISABLE_ERROR_REPORTING": "1",
     "DISABLE_GROWTHBOOK": "1",
@@ -325,26 +360,38 @@ _PINNED_SETTINGS = {"autoCompactEnabled": True}
 TRANSCRIPTS_ENV = "YIZKR_CLAUDE_TRANSCRIPTS"
 
 
+def _home() -> Path:
+    """The home directory the CLI uses: $HOME, or the password database's
+    entry when HOME is unset or empty, as in the CLI's runtime. (For an
+    empty HOME, Path.home() would give the root directory.)"""
+    home = os.environ.get("HOME")
+    if home:
+        return Path(home)
+    import pwd
+
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
 def claude_projects_dir() -> Path:
     """Where the CLI stores its sessions: ``projects/`` under
-    $CLAUDE_CONFIG_DIR, or under ~/.claude when that is unset."""
+    $CLAUDE_CONFIG_DIR, or under ~/.claude when that is unset or empty."""
     configured = os.environ.get("CLAUDE_CONFIG_DIR")
     if configured:
         return Path(configured).expanduser() / "projects"
-    return Path.home() / ".claude" / "projects"
+    return _home() / ".claude" / "projects"
 
 
 def claude_global_config_path() -> Path:
     """The CLI's global config file: ``.config.json`` in its config
-    directory ($CLAUDE_CONFIG_DIR, or ~/.claude when that is unset) if that
-    file exists, else ``.claude.json`` in $CLAUDE_CONFIG_DIR, or in the
-    home directory when that is unset."""
+    directory ($CLAUDE_CONFIG_DIR, or ~/.claude when that is unset or
+    empty) if that file exists, else ``.claude.json`` in $CLAUDE_CONFIG_DIR,
+    or in the home directory."""
     configured = os.environ.get("CLAUDE_CONFIG_DIR")
     base = Path(configured).expanduser() if configured else None
-    preferred = (base or Path.home() / ".claude") / ".config.json"
+    preferred = (base or _home() / ".claude") / ".config.json"
     if preferred.exists():
         return preferred
-    return (base or Path.home()) / ".claude.json"
+    return (base or _home()) / ".claude.json"
 
 
 def check_global_config() -> None:
@@ -514,13 +561,16 @@ class ClaudeCodeClient:
     billing, use the ``anthropic`` engine instead.
 
     Vision works by pointing the CLI's Read tool at the image files, and
-    tool access is locked down to Read only.
+    tool access is locked down to Read only: it is the one tool the model
+    is offered and the one tool approved.
 
     **Pinned.** A pass runs on one CLI version (``_CliPin``). The CLI
     never updates itself during a call; the installed version is checked
     when a client starts, and the version each call's stream reports is
     checked when it returns. A mismatch pauses the pass
-    (``CliVersionMismatch``) and the call's output is discarded.
+    (``CliVersionMismatch``) and the call's output is discarded, as it is
+    when a call's stream reports offering the model any tool but Read
+    (``CliToolsMismatch``).
 
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit only the environment variables
@@ -528,10 +578,14 @@ class ClaudeCodeClient:
     config directory and reaches the API), pin compaction on, and run in a
     dedicated directory. A client neither starts nor calls while the CLI's
     global config sets environment variables of its own
-    (``check_global_config``). So neither the owner's configuration nor a
-    Claude Code session that launched the pass shapes a call. Two things
-    the engine does not control still do: the login, which decides the
-    account, and machine-managed settings, which are machine policy.
+    (``check_global_config``). So no local configuration of the owner's,
+    and nothing a Claude Code session that launched the pass exports,
+    shapes a call without showing in ``config_hash``. Three things the
+    engine does not control still shape calls: the login, which decides
+    the account; machine-managed settings, which are machine policy; and
+    the account data the server sends, which the CLI caches in its global
+    config and which can change the system-prompt text, the output-token
+    ceiling, the default model and the auto-compact windows.
     ``effective_config`` lists what the engine sets for a call besides the
     prompt, and ``config_hash`` fingerprints it for the run record.
 
@@ -545,7 +599,9 @@ class ClaudeCodeClient:
     """
 
     # Only file reading is permitted — the engine must never execute
-    # commands or write files on behalf of model output.
+    # commands or write files on behalf of model output. It is the only
+    # tool the model is offered (--tools) and the only one approved
+    # (--allowedTools).
     ALLOWED_TOOLS = "Read"
     # The directory calls run in, under the system temporary directory:
     # it holds nothing, and the CLI files these sessions under a project
@@ -629,6 +685,10 @@ class ClaudeCodeClient:
             "--verbose",  # required by the CLI for stream-json in -p mode
             "--allowedTools",
             self.ALLOWED_TOOLS,
+            # every other tool out of the model's context, the ones server
+            # account data can add among them
+            "--tools",
+            self.ALLOWED_TOOLS,
             "--max-turns",
             str(self.max_turns),
             # isolation from the owner's configuration: no settings files
@@ -662,11 +722,14 @@ class ClaudeCodeClient:
     @staticmethod
     def _child_env() -> dict[str, str]:
         """The allowlisted variables of this process's environment, with
-        the pinned settings on top."""
+        the pinned settings on top. An empty one is left out, so the CLI
+        treats it as unset, as the helpers here do: the CLI would read an
+        empty CLAUDE_CONFIG_DIR as a directory relative to its working
+        directory."""
         env = {
             key: value
             for key, value in os.environ.items()
-            if key in _PASSED_VARIABLES
+            if key in _PASSED_VARIABLES and value
         }
         env.update(_PINNED_ENVIRONMENT)
         return env
@@ -791,6 +854,9 @@ class ClaudeCodeClient:
                 ):
                     self._pin.check(
                         event.get("claude_code_version"), self.cli_version
+                    )
+                    self._pin.check_tools(
+                        event.get("tools"), self.ALLOWED_TOOLS
                     )
             text = self._assemble_stream(stdout)
             if not text.strip():

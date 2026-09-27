@@ -282,10 +282,14 @@ Two Anthropic-backed providers, differing in how usage is billed:
   (`claude -p`), using the CLI's own login, so a Claude Pro/Max
   **subscription** covers usage instead of per-token billing. Install
   the CLI and log in once; being logged in is the opt-in. The engine
-  restricts the CLI to the Read tool only (images are read from disk
-  for vision; nothing can be executed or written). Note subscriptions
-  have rolling usage windows rather than API rate limits — fine for
-  evening-sized ingestion runs, less suited to bulk backlogs.
+  restricts the CLI to the Read tool only: `--tools Read` makes it the
+  one tool the model is offered and `--allowedTools Read` the one tool
+  approved, so images and PDFs are read from disk for vision and nothing
+  can be executed or written. A call whose stream reports offering the
+  model any other tool pauses the pass (`CliToolsMismatch`) and its
+  output is discarded. Note subscriptions have rolling usage windows
+  rather than API rate limits — fine for evening-sized ingestion runs,
+  less suited to bulk backlogs.
 
   A pass runs on one **pinned** CLI version (#133). The first client
   pins the installed version; every later client is checked when it
@@ -321,11 +325,12 @@ Two Anthropic-backed providers, differing in how usage is billed:
   (`DISABLE_COMPACT`, `DISABLE_AUTO_COMPACT`), nor any a later CLI
   version adds. `SHELL` and the locale stay behind too: the CLI names
   the shell in the model's context and formats some numbers there with
-  its runtime's default locale. On top, the engine sets
-  `DISABLE_AUTOUPDATER`, `DISABLE_GROWTHBOOK` (no server-side feature
-  flags, so the CLI's built-in defaults apply),
-  `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, `DISABLE_ERROR_REPORTING` and
-  `DISABLE_TELEMETRY`. Calls run in `<tmp>/yizkr-claude-code`.
+  its runtime's default locale. Empty variables are left out, as unset.
+  On top, the engine sets `DISABLE_AUTOUPDATER`, `DISABLE_GROWTHBOOK`
+  (no server-side feature flags), `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000`
+  (see below), `CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
+  `DISABLE_ERROR_REPORTING` and `DISABLE_TELEMETRY`. Calls run in
+  `<tmp>/yizkr-claude-code`.
 
   The config directory still reaches a call. Its **global config**
   (`.config.json` in the config directory if that exists, else
@@ -341,7 +346,16 @@ Two Anthropic-backed providers, differing in how usage is billed:
   few settings; the one that changes a call, `autoCompactEnabled`, is
   pinned on by the `--settings` argument, which outranks that fallback.
   The **login** in the config directory decides the account and how it
-  is billed.
+  is billed. The global config also caches the **account data** the
+  server sends at every start, which your own sessions refresh too. It
+  can change the system-prompt text, the output-token budget, the
+  default model and the auto-compact windows, and no local setting keeps
+  it out. The engine pins what it can: `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+  takes the budget's default out of its reach (64000, the Claude 5
+  default), although the model's own ceiling, which the data can lower,
+  still caps it; `--tools Read` keeps out the tools it can add; and an
+  explicit `--model` wins over its default model. The rest is outside
+  the pipeline's control.
 
   Machine-managed settings under `/etc/claude-code` always apply to the
   CLI: they are machine policy, outside the pipeline's control.
@@ -350,8 +364,8 @@ Two Anthropic-backed providers, differing in how usage is billed:
   the flags (the pinned settings among them), the working directory, the
   variables it sets and the names of the variables passed, never their
   values. `config_hash` fingerprints it for the run record. It follows
-  the working directory, and so `TMPDIR`, but not the login, managed
-  settings or the machine.
+  the working directory, and so `TMPDIR`, but not the login, the
+  server's account data, managed settings or the machine.
 
   **Transcripts.** The CLI stores each session under
   `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`); sessions
