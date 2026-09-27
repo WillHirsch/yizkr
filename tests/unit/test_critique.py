@@ -25,7 +25,7 @@ class ScriptedLlm:
 
 
 def batch() -> ClaimBatch:
-    # a mill mistyped as place, and a person with a MOTHER role-alias
+    # a hatters' firm mistyped as place, and a person with a MOTHER role-alias
     return ClaimBatch.model_validate(
         {
             "extraction_run": RUN,
@@ -34,7 +34,7 @@ def batch() -> ClaimBatch:
                     "subject": {
                         "kind": "local",
                         "local_id": "e01",
-                        "label": "Hermann",
+                        "label": "Sebastian",
                     },
                     "property": "employer",
                     "value": {
@@ -47,11 +47,15 @@ def batch() -> ClaimBatch:
             "entities": [
                 {
                     "id": "e01",
-                    "label": "Hermann Rothholz",
+                    "label": "Sebastian Löbig",
                     "kind": "human",
                     "aliases": ["MOTHER"],
                 },  # fmt: skip
-                {"id": "e04", "label": "Hermannmühlen AG", "kind": "place"},
+                {
+                    "id": "e04",
+                    "label": "Hutmacherei zum Blauen Hut",
+                    "kind": "place",
+                },
             ],
         }
     )
@@ -85,7 +89,7 @@ class TestCritique:
         findings = run_critique(llm, batch())
         assert [f.target for f in findings] == ["e04", "e01 alias: MOTHER"]
         # the critic sees the kinds and aliases it must judge
-        assert "Hermannmühlen AG" in llm.prompts[0]
+        assert "Hutmacherei zum Blauen Hut" in llm.prompts[0]
         assert "MOTHER" in llm.prompts[0]
 
     def test_sound_extraction_yields_no_findings(self):

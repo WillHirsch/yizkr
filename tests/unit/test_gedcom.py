@@ -459,7 +459,7 @@ class TestResidence:
 
 # A level-0 SOUR (cited upstream source) + REPO sidecar, an OBJE media
 # object, and a person whose NAME and BIRT both carry a SOUR citation with
-# a PAGE. Modelled on the real Ancestry export that surfaced issue #8.
+# a PAGE.
 CENSUS_GEDCOM = """\
 0 HEAD
 1 SOUR SomeSoftware
@@ -596,10 +596,10 @@ class TestMediaObjects:
 
 class TestUnsupportedFormat:
     def test_count_is_kept_apart_from_tag(self):
-        # issue #8: "OBJEx4" read as a corrupt tag; the count must be legible
+        # "OBJEx5" would read as a corrupt tag; the count must be legible
         assert (
-            format_unsupported_tags({"OBJE": 4, "SOUR": 71})
-            == "OBJE ×4, SOUR ×71"
+            format_unsupported_tags({"OBJE": 5, "SOUR": 12})
+            == "OBJE ×5, SOUR ×12"
         )
 
     def test_empty_census_is_empty_string(self):
