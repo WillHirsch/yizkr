@@ -302,18 +302,20 @@ Two Anthropic-backed providers, differing in how usage is billed:
   `--setting-sources ""` (no user, project or local settings, so no
   hooks, permission rules, plugins or CLAUDE.md), `--strict-mcp-config`
   (no MCP servers, claude.ai connectors included),
-  `--disable-slash-commands` (no skills), and a child environment built
-  from an **allowlist**. A call inherits only `PATH`; `HOME`,
-  `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` (the login and
-  session store); `TMPDIR`; and the proxy and certificate variables
+  `--disable-slash-commands` (no skills), `--settings
+  '{"autoCompactEnabled":true}'` (see below), and a child environment
+  built from an **allowlist**. A call inherits only `PATH`; `HOME`,
+  `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` (the config
+  directory, which holds the login, the global config and the session
+  store); `TMPDIR`; and the proxy and certificate variables
   (`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in upper or lower case;
   `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA`, `SSL_CERT_FILE` and
-  `SSL_CERT_DIR`). Nothing else gets through: not a stray API key, which
-  would switch billing; not what a Claude Code session that launches
-  the pass exports to it; and not the dozens of variables the CLI reads
-  that change a call, such as the thinking switches
-  (`MAX_THINKING_TOKENS`), the prompt-caching and cache-TTL switches
-  (`DISABLE_PROMPT_CACHING*`, `ENABLE_PROMPT_CACHING_1H`,
+  `SSL_CERT_DIR`). Nothing else passes from the pipeline's environment:
+  not a stray API key, which would switch billing; not what a Claude
+  Code session that launches the pass exports to it; and not the dozens
+  of variables the CLI reads that change a call, such as the thinking
+  switches (`MAX_THINKING_TOKENS`), the prompt-caching and cache-TTL
+  switches (`DISABLE_PROMPT_CACHING*`, `ENABLE_PROMPT_CACHING_1H`,
   `FORCE_PROMPT_CACHING_5M`, which change the cost forked extraction
   relies on), tool search (`ENABLE_TOOL_SEARCH`) and compaction
   (`DISABLE_COMPACT`, `DISABLE_AUTO_COMPACT`), nor any a later CLI
@@ -323,11 +325,33 @@ Two Anthropic-backed providers, differing in how usage is billed:
   `DISABLE_AUTOUPDATER`, `DISABLE_GROWTHBOOK` (no server-side feature
   flags, so the CLI's built-in defaults apply),
   `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, `DISABLE_ERROR_REPORTING` and
-  `DISABLE_TELEMETRY`. Calls run in `<tmp>/yizkr-claude-code`. The
-  client's `effective_config` lists the flags, the settings and the
-  names of the variables passed (never their values, which differ
-  between machines), and `config_hash` fingerprints it for the run
-  record.
+  `DISABLE_TELEMETRY`. Calls run in `<tmp>/yizkr-claude-code`.
+
+  The config directory still reaches a call. Its **global config**
+  (`.config.json` in the config directory if that exists, else
+  `.claude.json` in `$CLAUDE_CONFIG_DIR`, or in your home directory when
+  that is unset) has an `env` map that the CLI copies into its own
+  environment at every start, past both `--setting-sources` and the
+  allowlist. So a client refuses to start, and the pass pauses before
+  any further call, while that map is not empty (`CliConfigEnvironment`);
+  the error names the file and the variables, never their values. Keep
+  such variables in your shell, or in the `env` block of your user
+  settings (`settings.json` in the config directory), which pipeline
+  calls do not load. The CLI also falls back to the global config for a
+  few settings; the one that changes a call, `autoCompactEnabled`, is
+  pinned on by the `--settings` argument, which outranks that fallback.
+  The **login** in the config directory decides the account and how it
+  is billed.
+
+  Machine-managed settings under `/etc/claude-code` always apply to the
+  CLI: they are machine policy, outside the pipeline's control.
+
+  The client's `effective_config` lists what the engine sets for a call:
+  the flags (the pinned settings among them), the working directory, the
+  variables it sets and the names of the variables passed, never their
+  values. `config_hash` fingerprints it for the run record. It follows
+  the working directory, and so `TMPDIR`, but not the login, managed
+  settings or the machine.
 
   **Transcripts.** The CLI stores each session under
   `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`); sessions

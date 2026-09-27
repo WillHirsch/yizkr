@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,8 +24,10 @@ from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import llm
 from yizkr.pipeline.llm import (
     ClaudeCodeClient,
+    CliConfigEnvironment,
     CliVersionMismatch,
     PassPaused,
+    claude_global_config_path,
     make_client,
     pinned_cli_version,
     release_transcripts,
@@ -130,6 +133,18 @@ class TestIsolation:
         assert "--no-session-persistence" not in command
         assert command[command.index("--allowedTools") + 1] == "Read"
 
+    def test_compaction_is_pinned_on(self, cli):
+        """Command-line settings outrank the global config, which the CLI
+        otherwise consults for autoCompactEnabled (#206 review)."""
+        client = ClaudeCodeClient()
+        client.complete("transcribe")
+        command = cli.calls[0][0]
+        settings = command[command.index("--settings") + 1]
+        assert settings == '{"autoCompactEnabled":true}'
+        # an argument, so the hashed config carries it
+        arguments = client.effective_config["arguments"]
+        assert arguments[arguments.index("--settings") + 1] == settings
+
     def test_calls_run_in_a_dedicated_directory(self, cli, tmp_path):
         ClaudeCodeClient().complete("transcribe")
         cwd = Path(cli.calls[0][1]["cwd"])
@@ -211,6 +226,108 @@ class TestIsolation:
             assert env["DISABLE_TELEMETRY"] == "1"
 
 
+def write_config(path: Path, config: dict) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config))
+    return path
+
+
+class TestGlobalConfig:
+    """The CLI copies the env map of its global config into its own
+    environment at every start, past the allowlist (#206 review), so a
+    client refuses to start or call while that map is not empty."""
+
+    @pytest.mark.parametrize(
+        ("config_dir_set", "name"),
+        [
+            (True, ".config.json"),
+            (True, ".claude.json"),
+            (False, ".claude/.config.json"),
+            (False, ".claude.json"),
+        ],
+    )
+    def test_env_map_is_refused_wherever_the_cli_reads_it(
+        self, cli, monkeypatch, tmp_path, config_dir_set, name
+    ):
+        if config_dir_set:
+            base = Path(os.environ["CLAUDE_CONFIG_DIR"])
+        else:
+            monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+            base = tmp_path / "home"
+            monkeypatch.setenv("HOME", str(base))
+        path = write_config(
+            base / name, {"env": {"DISABLE_PROMPT_CACHING": "1"}}
+        )
+        assert claude_global_config_path() == path
+        with pytest.raises(CliConfigEnvironment) as refused:
+            make_client("claude-code")
+        assert "DISABLE_PROMPT_CACHING" in str(refused.value)
+        assert str(path) in str(refused.value)
+        # refused before anything ran
+        assert cli.probes == [] and cli.calls == []
+
+    def test_config_json_is_read_first(self, cli):
+        base = Path(os.environ["CLAUDE_CONFIG_DIR"])
+        write_config(base / ".claude.json", {"env": {"DISABLE_COMPACT": "1"}})
+        write_config(base / ".config.json", {"numStartups": 3})
+        ClaudeCodeClient().complete("transcribe")
+        assert len(cli.calls) == 1
+
+    def test_empty_env_map_is_accepted(self, cli):
+        # the CLI's own default config holds an empty map; compaction is
+        # pinned by --settings rather than refused
+        base = Path(os.environ["CLAUDE_CONFIG_DIR"])
+        write_config(
+            base / ".claude.json", {"env": {}, "autoCompactEnabled": False}
+        )
+        ClaudeCodeClient().complete("transcribe")
+        assert len(cli.calls) == 1
+
+    def test_refusal_names_variables_never_values(self, cli):
+        path = write_config(
+            Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".claude.json",
+            {
+                "env": {
+                    "ANTHROPIC_BASE_URL": "http://stub.example:8080",
+                    "ANTHROPIC_API_KEY": "sk-secret-in-config",
+                }
+            },
+        )
+        with pytest.raises(CliConfigEnvironment) as refused:
+            ClaudeCodeClient()
+        message = str(refused.value)
+        assert f"{path} sets" in message
+        assert "ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL" in message
+        assert "sk-secret-in-config" not in message
+        assert "stub.example" not in message
+        # where such variables can go instead
+        assert "shell" in message and "user settings" in message
+
+    def test_env_map_added_mid_pass_stops_the_next_call(self, cli):
+        client = ClaudeCodeClient()
+        client.complete("first")
+        write_config(
+            Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".claude.json",
+            {"env": {"ENABLE_TOOL_SEARCH": "false"}},
+        )
+        with pytest.raises(CliConfigEnvironment):
+            client.complete("second")
+        assert issubclass(CliConfigEnvironment, PassPaused)
+        assert len(cli.calls) == 1  # the second call never reached the CLI
+
+    def test_unreadable_config_is_refused(self, cli, monkeypatch):
+        sleeps: list[float] = []
+        monkeypatch.setattr(llm, "time", SimpleNamespace(sleep=sleeps.append))
+        path = Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".claude.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # cut short, as a file caught mid-write would be
+        path.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-secret-in-conf')
+        with pytest.raises(CliConfigEnvironment, match="cannot be read"):
+            ClaudeCodeClient()
+        assert len(sleeps) == 1  # read once more before refusing
+        assert cli.probes == []
+
+
 class TestEffectiveConfig:
     def test_lists_what_shapes_a_call(self, cli, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "subscription-token")
@@ -269,6 +386,14 @@ class TestEffectiveConfig:
             llm, "_PASSED_VARIABLES", llm._PASSED_VARIABLES | {"SHELL"}
         )
         assert ClaudeCodeClient().config_hash != before
+
+    def test_hash_follows_the_pinned_values(self, cli, monkeypatch):
+        before = ClaudeCodeClient().config_hash
+        monkeypatch.setitem(llm._PINNED_ENVIRONMENT, "DISABLE_GROWTHBOOK", "0")
+        environment_changed = ClaudeCodeClient().config_hash
+        assert environment_changed != before
+        monkeypatch.setitem(llm._PINNED_SETTINGS, "autoCompactEnabled", False)
+        assert ClaudeCodeClient().config_hash != environment_changed
 
     def test_hash_is_stable_and_follows_the_config(self, cli):
         low = ClaudeCodeClient(effort="low")
