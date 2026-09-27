@@ -138,7 +138,7 @@ class TestNames:
             key
             for key in PEOPLE
             if typed <= {a.property for a in u.about(key)}
-        } >= {"caecilie-loebig", "emma-loebig", "rebekka-loebig"}
+        } >= {"caecilie-loebig", "hildegard-loebig", "ida-loebig"}
 
     def test_german_and_english_forms_and_diminutives(self):
         crossed = [
@@ -147,7 +147,7 @@ class TestNames:
             if any(n.form == "birth" and n.lang == "de" for n in person.names)
             and any(n.form == "anglicised" for n in person.names)
         ]
-        assert crossed == ["gustav-loebig", "anna-loebig"]
+        assert crossed == ["gustav-loebig", "klara-loebig"]
         diminutives = {
             n.lang
             for person in u.PEOPLE
@@ -184,17 +184,17 @@ class TestNames:
         (label,) = [label for label, n in by_label.items() if n > 1]
         namesakes = [p for p in u.PEOPLE if p.label == label]
         assert {p.key for p in namesakes} == {
-            "frieda-loebig",
-            "frieda-loebig-angerring",
+            "ursula-loebig",
+            "ursula-loebig-angerring",
         }
         # one is family (parents, a generation), the other is not
-        assert values("frieda-loebig", "father") == ["sebastian-loebig"]
-        assert PEOPLE["frieda-loebig-angerring"].generation is None
-        assert not values("frieda-loebig-angerring", "father")
-        # the directory lists the widow when the other Frieda is a baby
-        (listed,) = u.about("frieda-loebig-angerring", "residence")
+        assert values("ursula-loebig", "father") == ["sebastian-loebig"]
+        assert PEOPLE["ursula-loebig-angerring"].generation is None
+        assert not values("ursula-loebig-angerring", "father")
+        # the directory lists the widow when the other Ursula is a baby
+        (listed,) = u.about("ursula-loebig-angerring", "residence")
         listed_in = dict(listed.qualifiers)["point_in_time"]
-        (born,) = values("frieda-loebig", "date_of_birth")
+        (born,) = values("ursula-loebig", "date_of_birth")
         assert listed_in.year - born.year == 1
 
     def test_a_person_without_name_or_sex(self):
@@ -353,9 +353,9 @@ class TestEventsAndDates:
         ("when", "text", "gedcom", "qualifiers"),
         [
             (
-                u.Date(1840, qualifier="circa"),
-                "c. 1840",
-                "ABT 1840",
+                u.Date(1833, qualifier="circa"),
+                "c. 1833",
+                "ABT 1833",
                 {"sourcing_circumstances"},
             ),
             (
@@ -371,9 +371,9 @@ class TestEventsAndDates:
                 {"earliest_date"},
             ),
             (
-                u.Date(1937, qualifier="between", until=u.Date(1938)),
-                "between 1937 and 1938",
-                "BET 1937 AND 1938",
+                u.Date(1938, qualifier="between", until=u.Date(1939)),
+                "between 1938 and 1939",
+                "BET 1938 AND 1939",
                 {"earliest_date", "latest_date"},
             ),
             (
@@ -382,7 +382,7 @@ class TestEventsAndDates:
                 "BET 1890 AND 1899",
                 {"earliest_date", "latest_date"},
             ),
-            (u.Date(1911, 10, 1), "1 October 1911", "1 OCT 1911", set()),
+            (u.Date(1909, 3, 16), "16 March 1909", "16 MAR 1909", set()),
         ],
     )
     def test_date_renderings_keep_the_uncertainty(

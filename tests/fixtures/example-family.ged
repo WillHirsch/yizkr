@@ -12,11 +12,11 @@
 2 DATE 1836
 2 PLAC Bad Flörburg, Hesse, Germany
 1 DEAT
-2 DATE 1 OCT 1911
+2 DATE 16 MAR 1909
 2 PLAC Flörburg, Hesse, Germany
 2 CAUS Dropsy
 1 BURI
-2 DATE 3 OCT 1911
+2 DATE 20 MAR 1909
 2 PLAC Friedhof Flörburg, Hesse, Germany
 1 OCCU Master hatter
 1 NCHI 3
@@ -30,7 +30,7 @@
 2 TYPE married
 1 SEX F
 1 BIRT
-2 DATE ABT 1840
+2 DATE ABT 1833
 2 PLAC Kredfeld, Hesse, Germany
 1 DEAT
 2 DATE 1902
@@ -42,26 +42,26 @@
 2 NICK Wastl
 1 SEX M
 1 BIRT
-2 DATE 15 FEB 1868
+2 DATE 15 FEB 1862
 2 PLAC Flörburg, Hesse, Germany
 1 DEAT
-2 DATE 1953
+2 DATE 1945
 1 OCCU Hatter
 1 RESI
-2 DATE 7 SEP 1907
+2 DATE 8 JAN 1919
 2 PLAC Brunnenring 35, Flörburg, Hesse, Germany
 1 OBJE @O1@
 1 FAMC @F1@
 1 FAMS @F2@
 0 @I4@ INDI
-1 NAME Emma /Laudler/
+1 NAME Hildegard /Laudler/
 2 TYPE birth
-2 NICK Emmi
-1 NAME Emma /Löbig/
+2 NICK Hilde
+1 NAME Hildegard /Löbig/
 2 TYPE married
 1 SEX F
 1 BIRT
-2 DATE 23 APR 1884
+2 DATE 19 MAR 1876
 2 PLAC Fläckfeld, Kreis Mockburg, Hesse, Germany
 1 DEAT
 2 DATE 1968
@@ -79,9 +79,9 @@
 1 NAME Felix /Löbig/
 1 SEX M
 1 BIRT
-2 DATE 1873
+2 DATE 1867
 1 DEAT
-2 DATE 1942
+2 DATE 1931
 1 OCCU Hatter
 1 RESI
 2 DATE 1930
@@ -90,11 +90,11 @@
 1 FAMC @F1@
 1 FAMS @F3@
 0 @I7@ INDI
-1 NAME Rebekka (Peppi) /Sörne/
-1 _MARNM Rebekka /Löbig/
+1 NAME Ida (Peppi) /Sörne/
+1 _MARNM Ida /Löbig/
 1 SEX F
 1 BIRT
-2 DATE 1 JUN 1893
+2 DATE 17 APR 1881
 2 PLAC Moshausen, Germany
 1 DEAT
 2 DATE 1946
@@ -107,7 +107,7 @@
 2 TYPE immigrant
 1 SEX M
 1 BIRT
-2 DATE 6 SEP 1907
+2 DATE 7 JAN 1919
 2 PLAC Flörburg, Hesse, Germany
 1 DEAT
 2 DATE 1996
@@ -120,22 +120,22 @@
 1 FAMC @F2@
 1 FAMS @F4@
 0 @I9@ INDI
-1 NAME Anna /Löbig/
+1 NAME Klara /Löbig/
 2 TYPE birth
 2 NICK Pünktchen
-1 NAME Anne /Lobig/
+1 NAME Clara /Lobig/
 2 TYPE immigrant
 1 SEX F
 1 BIRT
-2 DATE 1910
+2 DATE 1917
 1 DEAT
 2 DATE 2001
 1 RESI
-2 DATE 2 JUN 1938
+2 DATE 19 AUG 1938
 2 PLAC 31 Juniper Street, Stupfield, Victoria, Australia
 1 FAMC @F2@
 0 @I10@ INDI
-1 NAME Frieda /Löbig/
+1 NAME Ursula /Löbig/
 1 SEX F
 1 BIRT
 2 DATE 1911
@@ -165,9 +165,9 @@
 1 NAME N.N. /Löbig/
 1 SEX U
 1 BIRT
-2 DATE 1925
+2 DATE 1922
 1 DEAT
-2 DATE 1925
+2 DATE 1922
 1 FAMC @F3@
 0 @I14@ INDI
 1 NAME Iris /Faxridge/
@@ -184,11 +184,11 @@
 1 NAME Nicholas /Lobig/
 1 SEX M
 1 BIRT
-2 DATE 1947
+2 DATE 1950
 2 PLAC Stupfield, Victoria, Australia
 1 FAMC @F4@
 0 @I16@ INDI
-1 NAME Frieda /Löbig/
+1 NAME Ursula /Löbig/
 1 SEX F
 1 RESI
 2 DATE 1912
@@ -199,16 +199,16 @@
 1 HUSB @I1@
 1 WIFE @I2@
 1 CHIL @I3@
-1 CHIL @I5@
 1 CHIL @I6@
+1 CHIL @I5@
 1 MARR
 2 DATE 1859
 0 @F2@ FAM
 1 HUSB @I3@
 1 WIFE @I4@
-1 CHIL @I8@
-1 CHIL @I9@
 1 CHIL @I10@
+1 CHIL @I9@
+1 CHIL @I8@
 1 MARR
 2 DATE 15 DEC 1905
 2 PLAC Flörburg, Hesse, Germany
@@ -223,7 +223,7 @@
 1 WIFE @I14@
 1 CHIL @I15@
 1 MARR
-2 DATE 1945
+2 DATE 1942
 0 @O1@ OBJE
 1 FILE studio-portrait-1890s.jpg
 2 FORM jpg

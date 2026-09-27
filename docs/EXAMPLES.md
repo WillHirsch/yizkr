@@ -24,8 +24,8 @@ with fixed seeds from broad tables (period given names, ordinary
 trades, large regions, syllables for surnames and towns), then read over
 for plausibility. The module's docstring lists every hand change. A
 separate checker, who can see the real corpus, compares the result
-against it before it merges; the fifth and sixth rounds of draws
-re-drew what the first and second checks sent back. Real geography
+against it before it merges; the fifth, sixth and seventh rounds of
+draws re-drew what the first three checks sent back. Real geography
 appears only at the broadest level: Germany, Hesse, Australia and
 Victoria. Every town, street, firm, institution, ship and document
 is invented.
@@ -51,25 +51,25 @@ The Löbigs are hatters. Two grandchildren emigrated to Australia and
 became the Lobigs.
 
 ```
-1  Eugen "Muckel" (1836-1911) = 1859 Cäcilie Tarle "Cilli" (c. 1840-1902)
+1  Eugen "Muckel" (1836-1909) = 1859 Cäcilie Tarle "Cilli" (c. 1833-1902)
    |  founded the Hutmacherei zum Blauen Hut, hatters, in 1863;
    |  Sebastian owns it after Eugen's death
-2  Sebastian "Wastl" (1868-1953) = 1905 Emma Laudler "Emmi" (1884-1968)
+2  Sebastian "Wastl" (1862-1945) = 1905 Hildegard Laudler "Hilde" (1876-1968)
+   Felix (1867-1931) = Ida Sörne "Peppi" (1881-1946)
    Rahel (1871-after 1945)
-   Felix (1873-1942) = Rebekka Sörne "Peppi" (1893-1946)
    |
-3  of Sebastian and Emma:
-     Gustav "Gustl" (1907-1996), later Gustave "Gus" Lobig,
-       = 1945 Iris Faxridge (1914-1963)
-     Anna "Pünktchen" (1910-2001), later Anne Lobig
-     Frieda (1911-1941)
-   of Felix and Rebekka:
-     Leopold (1914-1960), Rudolf "Rudi" (1916-1941), an unnamed infant (1925)
+3  of Sebastian and Hildegard:
+     Ursula (1911-1941)
+     Klara "Pünktchen" (1917-2001), later Clara Lobig
+     Gustav "Gustl" (1919-1996), later Gustave "Gus" Lobig,
+       = 1942 Iris Faxridge (1914-1963)
+   of Felix and Ida:
+     Leopold (1914-1960), Rudolf "Rudi" (1916-1941), an unnamed infant (1922)
    |
-4  Nicholas Lobig (b. 1947), son of Gustav and Iris
+4  Nicholas Lobig (b. 1950), son of Gustav and Iris
 ```
 
-Not kin: a widow listed in the 1912 directory as *Löbig, Frieda,
+Not kin: a widow listed in the 1912 directory as *Löbig, Ursula,
 Wwe.*, who shares a name with Sebastian's daughter.
 
 ## Sources
@@ -80,42 +80,42 @@ every assertion quotes the passage that makes it (`Assertion.excerpt`).
 | Key | What | Language |
 |---|---|---|
 | `studio-photo-1890s` | studio portrait, names pencilled on the back | none |
-| `marriage-cert-1905` | civil marriage certificate, Sebastian and Emma | German |
+| `marriage-cert-1905` | civil marriage certificate, Sebastian and Hildegard | German |
+| `burial-register-1909` | the cemetery's burial register: Eugen's death, cause and burial | German |
 | `directory-1912` | Flörburg address book: the firm (with its founding year) and the widow | German |
-| `burial-register-1911` | the cemetery's burial register: Eugen's death, cause and burial | German |
 | `school-report-1930` | Rudolf's school report | German |
 | `birth-extract-1938` | Gustav's birth register extract, issued for emigration | German |
-| `postcard-1938` | Sebastian to Anna in Australia, dated only by its postmark | German |
-| `registration-card-1945` | Rebekka's post-war card, with her son Leopold's arrest | English |
+| `postcard-1938` | Sebastian to Klara in Australia, dated only by its postmark | German |
+| `registration-card-1945` | Ida's post-war card, with her son Leopold's arrest | English |
 | `naturalisation-1952` | Gustav's naturalisation as Gustave Lobig | English |
-| `compensation-file-1953` | Leopold's claim for his late mother Rebekka: her deportation | German |
+| `compensation-file-1953` | Leopold's claim for his late mother Ida: her deportation | German |
 | `gravestone-photo-1956` | photograph of Eugen and Cäcilie's gravestone | German |
-| `family-tree-1984` | the tree Anna drew in Australia | English |
+| `family-tree-1984` | the tree Klara drew in Australia | English |
 | `interview-2002` | oral history with Nicholas (possibly living), who says where Gustav is buried | English |
 
 ## Pattern index
 
 | Pattern | In the universe |
 |---|---|
-| Birth, married and nick names (ADR-0011) | Rebekka: born *Rebekka Sörne*, married *Rebekka Löbig*, nickname *Peppi*; likewise Cäcilie (*Cilli*) and Emma (*Emmi*) |
-| German and English forms | Löbig/Lobig, Gustav/Gustave, Flörburg/Floerburg, Gerichtsgefängnis Peiltal/Peiltal court prison, Hutmacherei zum Blauen Hut/the Blue Hat, Hutmacher/hatter |
-| Diminutives | German *Wastl, Cilli, Emmi, Gustl, Rudi*; English *Gus*; pet names *Muckel, Peppi, Pünktchen* |
-| Names as sources write them (ADR-0022) | *Cäcilie Löbig geb. Tarle*; *Emma Löbig geborene Laudler*; *LÖBIG, Rebekka, née SÖRNE*; *Gustave LOBIG (formerly Gustav LÖBIG)*; *Löbig, Frieda, Wwe.*; *Sebastian 'Wastl'*; the placeholder *N.N. Löbig* |
-| Homonyms (ADR-0017) | two Frieda Löbigs: Sebastian's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow |
-| Spouses and parents, 3+ generations | four generations, Eugen to Nicholas; marriages in 1859, 1905, an undated one and 1945 |
-| Kinship terms (ADR-0018) | *Dein Vater* (the postcard, from Anna's view); *Dad*, *Aunt Pünktchen*, *Dad's cousin Leopold* (the interview, from Nicholas's view) |
-| Family firm (ADR-0012) | Hutmacherei zum Blauen Hut, hat makers, founded 1863 (*gegr. 1863*), at Brunnenring 35, owned by Sebastian in 1912, the year after his father's death (*Inh. Sebastian Löbig*), gone *before 1926* |
+| Birth, married and nick names (ADR-0011) | Ida: born *Ida Sörne*, married *Ida Löbig*, nickname *Peppi*; likewise Cäcilie (*Cilli*) and Hildegard (*Hilde*) |
+| German and English forms | Löbig/Lobig, Gustav/Gustave, Klara/Clara, Flörburg/Floerburg, Gerichtsgefängnis Peiltal/Peiltal court prison, Hutmacherei zum Blauen Hut/the Blue Hat, Hutmacher/hatter |
+| Diminutives | German *Wastl, Cilli, Hilde, Gustl, Rudi*; English *Gus*; pet names *Muckel, Peppi, Pünktchen* |
+| Names as sources write them (ADR-0022) | *Cäcilie Löbig geb. Tarle*; *Hildegard Löbig geborene Laudler*; *LÖBIG, Ida, née SÖRNE*; *Gustave LOBIG (formerly Gustav LÖBIG)*; *Löbig, Ursula, Wwe.*; *Sebastian 'Wastl'*; the placeholder *N.N. Löbig* |
+| Homonyms (ADR-0017) | two Ursula Löbigs: Sebastian's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow |
+| Spouses and parents, 3+ generations | four generations, Eugen to Nicholas; marriages in 1859, 1905, an undated one and 1942 |
+| Kinship terms (ADR-0018) | *Dein Vater* (the postcard, from Klara's view); *Dad*, *Aunt Pünktchen*, *Dad's cousin Leopold* (the interview, from Nicholas's view) |
+| Family firm (ADR-0012) | Hutmacherei zum Blauen Hut, hat makers, founded 1863 (*gegr. 1863*), at Brunnenring 35, owned by Sebastian in 1912, after his father's death in 1909 (*Inh. Sebastian Löbig*), gone *before 1926* |
 | Other agents and kinds | Standesamt Flörburg, Städtische Realschule Flörburg, Wiedergutmachungsamt Peiltal, Photograph Brüsrich (organisations); RMS Flund (vessel); occupations *Hatter* and *Master hatter* |
 | Street address and containment (ADR-0009) | Brunnenring 35 → Brunnenring → Flörburg → Kreis Peiltal → Hesse → Germany; 8 Hawthorn Road → Hawthorn Road → Stupfield → Victoria → Australia |
 | A place named two ways over time | Flörburg, *Bad Flörburg* from 1954; the 1984 tree uses the new name for an 1836 birth, the naturalisation spells it *Floerburg* |
 | A place under two parents | Fläckfeld: Kreis Mockburg (1905) or Kreis Peiltal (1984) |
 | A place with no known location | Klurnau |
-| Persecution events (ADR-0014) | Leopold's arrest (3 Sep 1939), imprisonment in the Peiltal court prison and release (1 Oct 1939); Rebekka's deportation to Lager Klurnau (21 Aug 1942) and liberation at Klurnau (28 Jan 1945). Emigrations are `migration` events too |
-| Contradictory dates (ADR-0002) | Gustav born 6 Sep 1907 (civil register) and 9 June 1907 (naturalisation): day and month transposed. Also Fläckfeld's district |
-| Refinement, not contradiction | Eugen died 1911 (gravestone) and 1 Oct 1911 (burial register); Anna left in '37 or '38 (interview) and on 12 Mar 1938 (postcard); Leopold held "in Peiltal" and in its court prison; Rebekka deported to Klurnau (card) and to Lager Klurnau (compensation file) |
-| Uncertain dates | circa: Cäcilie *c. 1840* (`ABT 1840`); before: the firm gone *before 1926* (`BEF 1926`); after: Rahel died *after 1945* (`AFT 1945`); between: Anna left *between 1937 and 1938* (`BET 1937 AND 1938`); decade: the studio portrait, *1890s* (`BET 1890 AND 1899`) |
-| A person without name or sex | the infant of 1925, *N.N. Löbig* (`SEX U`) |
-| Privacy (ADR-0020) | Nicholas Lobig (b. 1947, no death asserted) is possibly living; he is dated to the year only |
+| Persecution events (ADR-0014) | Leopold's arrest (3 Sep 1939), imprisonment in the Peiltal court prison and release (1 Oct 1939); Ida's deportation to Lager Klurnau (21 Aug 1942) and liberation at Klurnau (28 Jan 1945). Emigrations are `migration` events too |
+| Contradictory dates (ADR-0002) | Gustav born 7 Jan 1919 (civil register) and 1 July 1919 (naturalisation): day and month transposed. Also Fläckfeld's district |
+| Refinement, not contradiction | Eugen died 1909 (gravestone) and 16 Mar 1909 (burial register); Klara left in '38 or '39 (interview) and on 22 June 1938 (postcard); Leopold held "in Peiltal" and in its court prison; Ida deported to Klurnau (card) and to Lager Klurnau (compensation file) |
+| Uncertain dates | circa: Cäcilie *c. 1833* (`ABT 1833`); before: the firm gone *before 1926* (`BEF 1926`); after: Rahel died *after 1945* (`AFT 1945`); between: Klara left *between 1938 and 1939* (`BET 1938 AND 1939`); decade: the studio portrait, *1890s* (`BET 1890 AND 1899`) |
+| A person without name or sex | the infant of 1922, *N.N. Löbig* (`SEX U`) |
+| Privacy (ADR-0020) | Nicholas Lobig (b. 1950, no death asserted) is possibly living; he is dated to the year only |
 | GEDCOM rendering (ADR-0021) | `tests/fixtures/example-family.ged`: typed names, `NICK`, an inline `(Peppi)`, `_MARNM`, `TYPE immigrant`, a dated burial and an undated one, cause of death, child count, residences at street addresses, an `EDUC` and a `NOTE` the adapter reports as unsupported, and the studio portrait as a shared `OBJE` |
 
 ## Using it
@@ -125,8 +125,8 @@ from tests.fixtures import example_universe as u
 
 u.about("gustav-loebig", "date_of_birth")    # three sources, two days
 u.containment_paths("brunnenring-35")        # address -> ... -> country
-str(u.Date(1937, qualifier="between", until=u.Date(1938)))
-# 'between 1937 and 1938'
+str(u.Date(1938, qualifier="between", until=u.Date(1939)))
+# 'between 1938 and 1939'
 ```
 
 People, places, entities (organisations, occupations, a vessel,
@@ -145,12 +145,14 @@ Add to the module rather than inventing a one-off name inline, and keep
 `tests/unit/test_example_universe.py` green. Draw new specifics the way
 the rest were drawn: append a round to `universe_draws.py` (never edit
 an earlier one, so earlier draws stay put; a round may take its own
-seed, as the fifth and sixth do), run it, and note any hand change in
-the module docstring. Draw names only from what the tables hold
-beyond those already used, nor a variant of one (`_variant`): the
-used names are `USED_GIVEN`, `USED_BY_FIFTH` and `USED_BY_SIXTH`,
-and the short and pet names `USED_SHORT_5`, `USED_SHORT_6` and
-`USED_PET_NAMES_5`.
+seed, as the fifth, sixth and seventh do), run it, and note any hand
+change in the module docstring. Draw names only from what the tables
+hold beyond those already used, never a variant of one (`_variant`) nor
+one sharing four letters in a row with one (`_shares`): the used names
+are `USED_GIVEN`, `USED_BY_FIFTH`, `USED_BY_SIXTH` and
+`USED_BY_SEVENTH`, the short and pet names `USED_SHORT_5`,
+`USED_SHORT_6`, `USED_SHORT_7` and `USED_PET_NAMES_5`, and a place that
+is also a given name is in `PLACE_GIVEN`.
 Before committing, check every new name, place, organisation and exact
 date against the out-of-repo denylist (#35), both its enforced and its
 review lists.

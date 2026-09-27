@@ -10,25 +10,25 @@ artifact classes).
 
 The family, in four generations:
 
-* Eugen Löbig (1836-1911), master hatter, founds the Hutmacherei zum
+* Eugen Löbig (1836-1909), master hatter, founds the Hutmacherei zum
   Blauen Hut in 1863 at Brunnenring 35 in Flörburg (Hesse, Germany);
   he marries Cäcilie Tarle ("Cilli") of Kredfeld.
-* Their children Sebastian ("Wastl"), Rahel and Felix; Sebastian, who
-  owns the firm after his father's death, marries Emma Laudler
-  ("Emmi"), and Felix marries Rebekka Sörne ("Peppi").
-* Felix and Rebekka's son Leopold is arrested in 1939, held in the
-  court prison at Peiltal and released; Rebekka is deported to Lager
-  Klurnau in 1942 and liberated at Klurnau in 1945.
-* Sebastian's children Anna ("Pünktchen") and Gustav ("Gustl")
+* Their children Sebastian ("Wastl"), Felix and Rahel; Sebastian, who
+  owns the firm after his father's death, marries Hildegard Laudler
+  ("Hilde"), and Felix marries Ida Sörne ("Peppi").
+* Felix and Ida's son Leopold is arrested in 1939, held in the court
+  prison at Peiltal and released; Ida, widowed in 1931, is deported to
+  Lager Klurnau in 1942 and liberated at Klurnau in 1945.
+* Sebastian's children Klara ("Pünktchen") and Gustav ("Gustl")
   emigrate to Stupfield (Victoria, Australia) in 1938 and 1939 and take
   the surname Lobig; Gustav marries Iris Faxridge, and their son
-  Nicholas, born 1947, is possibly living.
-* An unrelated widow in Flörburg shares the name Frieda Löbig with
+  Nicholas, born 1950, is possibly living.
+* An unrelated widow in Flörburg shares the name Ursula Löbig with
   Sebastian's daughter: the homonym.
 
 Flörburg became Bad Flörburg in 1954, so it is named two ways over
-time.  Gustav's birth date is deliberately contradictory (6 September
-per the civil register, 9 June per his naturalisation: day and month
+time.  Gustav's birth date is deliberately contradictory (7 January
+per the civil register, 1 July per his naturalisation: day and month
 transposed), and the sources carry every uncertain date form: circa,
 before, after, between and decade.
 
@@ -42,8 +42,9 @@ records.  Every specific was drawn by ``tests/fixtures/universe_draws.py``
 from broad tables of period given names, ordinary trades, large regions
 and syllables, then read over for plausibility: four rounds from
 ``random.Random(58213)``, each appended after the last so earlier draws
-never changed, a fifth from its own ``random.Random(136490)`` and a
-sixth from ``random.Random(238286)``.
+never changed, then a fifth, sixth and seventh from their own
+``random.Random(136490)``, ``random.Random(238286)`` and
+``random.Random(559179)``.
 
 The fifth round followed the first clean-room review.  It re-drew the
 surname, a town, a street and the firm's name; most given names; the
@@ -52,16 +53,22 @@ photograph; the birth years of Gustav's wife and son; who was arrested;
 and the kinds of three documents.
 
 The sixth round followed the second review.  From a wider table of
-names it re-drew the given names of the first generation, of the whole
-second (Sebastian's and Felix's wives included), of Anna and of Iris.
-It re-drew the second generation's birth years, Rebekka's birth date
-and Eugen's death date, which now falls between the 1905 marriage
+names it re-drew the given names of the first two generations, of the
+emigrant daughter and of Iris; the second generation's birth years; a
+wife's birth date; Eugen's death date; the days of the 1905 marriage
+and of two births; and the form of the studio's name.
+
+The seventh round followed the third review.  It re-drew the given
+names of both second-generation wives, of the emigrant daughter and of
+the two Ursulas; the birth years of Cäcilie, of Sebastian, Felix and
+their wives, of Gustav, Klara and the infant; Sebastian's and Felix's
+death years; Eugen's death date, which falls between the 1905 marriage
 certificate (it names him living) and the 1912 directory (his son owns
-the firm).  It also re-drew the days of the 1905 marriage and of
-Sebastian's and Emma's births, and the form of the studio's name.  Each
-round's docstring says what it kept.  Sebastian and Felix (born 1868
-and 1873) are still some fifteen to twenty years older than their wives
-(born 1884 and 1893); the read-over kept that as drawn.
+the firm); Klara's departure and the postmark after it; and the years
+of Gustav's marriage and of his son's birth.  Each round's docstring
+says what it kept.  Sebastian and Felix (born 1862 and 1867) are each
+fourteen years older than their wives (born 1876 and 1881) and have
+children into their fifties; the read-over kept that as drawn.
 
 Hand changes made on the read-overs:
 
@@ -69,19 +76,31 @@ Hand changes made on the read-overs:
   war) was dropped; the first ship name was skipped as a real surname;
 * "Löbig" was anglicised to "Lobig" by dropping the umlaut (the draw
   only said to anglicise);
-* the first round's marriage age for Gustav (1938, before he emigrated)
-  and his wife's age gap were superseded by third-round draws;
-* Rebekka's drawn death year was superseded by the "died within a
-  year of liberation" draw; Nicholas's birth is dated to the year only
-  because he is possibly living;
-* document wording, the civil register's filing date (the day after
-  the birth) and the postcard's date (a spare day draw) were written
-  around the drawn facts; the prison and camp take drawn town names;
-  the burial register's age at death follows from the drawn years, and
-  the firm's English name translates its drawn house sign;
+* the first round's marriage age for Gustav and his wife's age gap were
+  superseded by later draws;
+* Ida's drawn death year was superseded by the "died within a year of
+  liberation" draw; Nicholas's birth is dated to the year only because
+  he is possibly living;
+* document wording and the civil register's filing date (the day after
+  the birth) were written around the drawn facts; the prison and camp
+  take drawn town names; the burial register's age at death follows
+  from the drawn years, and the firm's English name translates its
+  drawn house sign;
 * the sixth round's name check gained its compound rule before its
   draws were used: a first run gave the first-generation wife a
   compound name that holds a diminutive an earlier round had used;
+* the seventh round's checks gained their read-over rules before its
+  draws were used.  A first run named the emigrant daughter Auguste,
+  which shares "gust" with her brother Gustav's name; put Gustav in
+  the emigrant daughter's old year; put the infant fifteen years before
+  his brothers; and had Felix die in a year two of the family died.  A
+  second run gave Gustav's mother Irene beside his wife Iris.  So a new
+  name shares no four letters in a row with a used one and no first two
+  letters with one in the cast, neither emigrant grandchild comes near
+  either emigrant's old year, siblings are one to six years apart, and
+  neither brother dies in a year another of the family dies;
+* the interview's vague years became '38 or '39, the only other pair
+  of consecutive years that holds the 1938 departure;
 * the GEDCOM export no longer renders Cäcilie's undated burial (the
   gravestone photograph still asserts it); a clause added to the
   interview gives Gustav's burial place instead, so the export's
@@ -142,7 +161,7 @@ class Date:
 
     @property
     def gedcom(self) -> str:
-        """The GEDCOM 5.5.1 date phrase, e.g. ``ABT 1840``."""
+        """The GEDCOM 5.5.1 date phrase, e.g. ``ABT 1833``."""
         if self.decade:
             return f"BET {self.year} AND {self.year + 9}"
         plain = self._plain(gedcom=True)
@@ -302,15 +321,15 @@ PEOPLE = (
         note="Owned the firm by 1912, after his father's death; never left.",
     ),
     Person(
-        "emma-loebig",
-        "Emma Löbig",
+        "hildegard-loebig",
+        "Hildegard Löbig",
         "female",
         2,
         _names(
-            ("Emma Laudler", "birth", "de"),
-            ("Emma Löbig", "married", "de"),
-            ("Emmi", "diminutive", "de"),
-            ("Emma Löbig geborene Laudler", "as_written", "de"),
+            ("Hildegard Laudler", "birth", "de"),
+            ("Hildegard Löbig", "married", "de"),
+            ("Hilde", "diminutive", "de"),
+            ("Hildegard Löbig geborene Laudler", "as_written", "de"),
         ),
         gedcom_xref="@I4@",
     ),
@@ -330,18 +349,18 @@ PEOPLE = (
         2,
         _names(("Felix Löbig", "birth", "de")),
         gedcom_xref="@I6@",
-        note="Stayed in Flörburg; died in 1942.",
+        note="Stayed in Flörburg; died in 1931.",
     ),
     Person(
-        "rebekka-loebig",
-        "Rebekka Löbig",
+        "ida-loebig",
+        "Ida Löbig",
         "female",
         2,
         _names(
-            ("Rebekka Sörne", "birth", "de"),
-            ("Rebekka Löbig", "married", "de"),
+            ("Ida Sörne", "birth", "de"),
+            ("Ida Löbig", "married", "de"),
             ("Peppi", "nickname", "de"),
-            ("LÖBIG, Rebekka, née SÖRNE", "as_written", "en"),
+            ("LÖBIG, Ida, née SÖRNE", "as_written", "en"),
         ),
         gedcom_xref="@I7@",
         note="Deported to Lager Klurnau in 1942; liberated in 1945.",
@@ -365,26 +384,26 @@ PEOPLE = (
         ),
     ),
     Person(
-        "anna-loebig",
-        "Anna Löbig",
+        "klara-loebig",
+        "Klara Löbig",
         "female",
         3,
         _names(
-            ("Anna Löbig", "birth", "de"),
+            ("Klara Löbig", "birth", "de"),
             ("Pünktchen", "nickname", "de"),
-            ("Anne Lobig", "anglicised", "en"),
+            ("Clara Lobig", "anglicised", "en"),
         ),
         gedcom_xref="@I9@",
         note="Emigrated first, in 1938; drew the family tree in 1984.",
     ),
     Person(
-        "frieda-loebig",
-        "Frieda Löbig",
+        "ursula-loebig",
+        "Ursula Löbig",
         "female",
         3,
-        _names(("Frieda Löbig", "birth", "de")),
+        _names(("Ursula Löbig", "birth", "de")),
         gedcom_xref="@I10@",
-        note="Homonym of the unrelated widow frieda-loebig-angerring.",
+        note="Homonym of the unrelated widow ursula-loebig-angerring.",
     ),
     Person(
         "leopold-loebig",
@@ -413,7 +432,7 @@ PEOPLE = (
         3,
         _names(("N.N. Löbig", "placeholder", None)),
         gedcom_xref="@I13@",
-        note="The tree shows a child who died in 1925: no name, no sex.",
+        note="The tree shows a child who died in 1922: no name, no sex.",
     ),
     Person(
         "iris-lobig",
@@ -434,20 +453,20 @@ PEOPLE = (
         _names(("Nicholas Lobig", "birth", "en")),
         gedcom_xref="@I15@",
         note=(
-            "Born 1947 and no source asserts a death: possibly living, "
+            "Born 1950 and no source asserts a death: possibly living, "
             "so private by default and dated to the year only."
         ),
     ),
     Person(
-        "frieda-loebig-angerring",
-        "Frieda Löbig",
+        "ursula-loebig-angerring",
+        "Ursula Löbig",
         "female",
         None,
-        _names(("Löbig, Frieda, Wwe.", "as_written", "de")),
+        _names(("Löbig, Ursula, Wwe.", "as_written", "de")),
         gedcom_xref="@I16@",
         note=(
             "A widow (Wwe.) listed in the 1912 directory; no relation "
-            "to the family is known.  Homonym of frieda-loebig."
+            "to the family is known.  Homonym of ursula-loebig."
         ),
     ),
 )
@@ -604,17 +623,17 @@ ENTITIES = (
     ),
     Entity(
         "deportation-1942",
-        "Deportation of Rebekka Löbig",
+        "Deportation of Ida Löbig",
         "deportation",
         note="Persecution event: from Flörburg to Lager Klurnau.",
     ),
     Entity(
         "liberation-1945",
-        "Liberation of Rebekka Löbig",
+        "Liberation of Ida Löbig",
         "release",
         note="Persecution event: liberation at Klurnau.",
     ),
-    Entity("emigration-1938", "Emigration of Anna Löbig", "migration"),
+    Entity("emigration-1938", "Emigration of Klara Löbig", "migration"),
     Entity("emigration-1939", "Emigration of Gustav Löbig", "migration"),
     Entity("floerburg-registry", "Standesamt Flörburg", "organization"),
     Entity(
@@ -657,17 +676,17 @@ SOURCES = (
     ),
     Source(
         "marriage-cert-1905",
-        "Marriage certificate of Sebastian Löbig and Emma Laudler",
+        "Marriage certificate of Sebastian Löbig and Hildegard Laudler",
         "de",
         1905,
         "certificate",
         text=(
             "Standesamt Flörburg. Flörburg, am 15. Dezember 1905. Vor dem "
             "Standesbeamten erschienen zum Zwecke der Eheschließung: der "
-            "Hutmacher Sebastian Löbig, geboren am 15. Februar 1868 zu "
+            "Hutmacher Sebastian Löbig, geboren am 15. Februar 1862 zu "
             "Flörburg, Sohn des Hutmachermeisters Eugen Löbig und "
             "dessen verstorbener Ehefrau Cäcilie geborene Tarle; und "
-            "die Emma Laudler, geboren am 23. April 1884 zu Fläckfeld, "
+            "die Hildegard Laudler, geboren am 19. März 1876 zu Fläckfeld, "
             "Kreis Mockburg."
         ),
     ),
@@ -680,23 +699,23 @@ SOURCES = (
         text=(
             "Hutmacherei zum Blauen Hut, gegr. 1863, Inh. Sebastian Löbig, "
             "Brunnenring 35.\n"
-            "Löbig, Frieda, Wwe., Angerring 57."
+            "Löbig, Ursula, Wwe., Angerring 57."
         ),
         note="Two Löbig entries on one page: the homonym.",
     ),
     Source(
-        "burial-register-1911",
+        "burial-register-1909",
         "Burial register of Friedhof Flörburg: Eugen Löbig",
         "de",
-        1911,
+        1909,
         "artifact",
         text=(
-            "Friedhof Flörburg, Beerdigungsbuch 1911.\n"
+            "Friedhof Flörburg, Beerdigungsbuch 1909.\n"
             "Name: Löbig, Eugen, Hutmachermeister. Wohnung: Brunnenring "
-            "35. Witwer der Cäcilie Löbig geb. Tarle. Alter: 75 Jahre.\n"
-            "Gestorben: 1. Oktober 1911 in Flörburg. Todesursache: "
+            "35. Witwer der Cäcilie Löbig geb. Tarle. Alter: 73 Jahre.\n"
+            "Gestorben: 16. März 1909 in Flörburg. Todesursache: "
             "Wassersucht.\n"
-            "Beerdigt: 3. Oktober 1911."
+            "Beerdigt: 20. März 1909."
         ),
         note="One entry in the cemetery's register of burials.",
     ),
@@ -720,11 +739,11 @@ SOURCES = (
         1938,
         "certificate",
         text=(
-            "Standesamt Flörburg. Flörburg, am 7. September 1907. Der "
+            "Standesamt Flörburg. Flörburg, am 8. Januar 1919. Der "
             "Hutmacher Sebastian Löbig, wohnhaft in Flörburg, Brunnenring "
-            "35, zeigte an, daß von seiner Ehefrau Emma Löbig "
-            "geborene Laudler zu Flörburg in seiner Wohnung am sechsten "
-            "September des Jahres tausend neunhundert und sieben ein "
+            "35, zeigte an, daß von seiner Ehefrau Hildegard Löbig "
+            "geborene Laudler zu Flörburg in seiner Wohnung am siebenten "
+            "Januar des Jahres tausend neunhundert und neunzehn ein "
             "Knabe geboren worden sei, welcher den Vornamen Gustav "
             "erhalten habe."
         ),
@@ -732,15 +751,15 @@ SOURCES = (
     ),
     Source(
         "postcard-1938",
-        "Postcard from Sebastian Löbig to his daughter Anna",
+        "Postcard from Sebastian Löbig to his daughter Klara",
         "de",
         1938,
         "letter",
         text=(
-            "[postmark] Flörburg 2.6.38\n"
-            "Fräulein Anna Löbig, 31 Juniper Street, Stupfield, "
+            "[postmark] Flörburg 19.8.38\n"
+            "Fräulein Klara Löbig, 31 Juniper Street, Stupfield, "
             "Victoria, Australien\n"
-            "Liebes Pünktchen! Seit Du am 12. März abgereist bist, ist "
+            "Liebes Pünktchen! Seit Du am 22. Juni abgereist bist, ist "
             "es still im Haus. Gustl wartet noch auf sein Visum. Dein "
             "Vater"
         ),
@@ -748,15 +767,15 @@ SOURCES = (
     ),
     Source(
         "registration-card-1945",
-        "Post-war registration card for Rebekka Löbig",
+        "Post-war registration card for Ida Löbig",
         "en",
         1945,
         "artifact",
         text=(
-            "LÖBIG, Rebekka, née SÖRNE. Born 1.6.1893 at Moshausen. "
+            "LÖBIG, Ida, née SÖRNE. Born 17.4.1881 at Moshausen. "
             "Last address: Flörburg, Wasserallee 59. Deported 21.8.1942 "
             "to Klurnau. Liberated at Klurnau 28.1.1945. Husband: "
-            "Felix LÖBIG, died 1942. Son: Leopold LÖBIG, arrested "
+            "Felix LÖBIG, died 1931. Son: Leopold LÖBIG, arrested "
             "3.9.1939, held in Peiltal court prison until 1.10.1939."
         ),
     ),
@@ -769,21 +788,21 @@ SOURCES = (
         text=(
             "Certificate of naturalisation. Gustave LOBIG (formerly "
             "Gustav LÖBIG), hatter, of 8 Hawthorn Road, Stupfield, "
-            "Victoria. Born 9th June 1907 at Floerburg, Germany. "
+            "Victoria. Born 1st July 1919 at Floerburg, Germany. "
             "Arrived in Australia 1939 per RMS Flund. Granted 1952."
         ),
         note="Its birth date transposes the register's day and month.",
     ),
     Source(
         "compensation-file-1953",
-        "Compensation file for Rebekka Löbig",
+        "Compensation file for Ida Löbig",
         "de",
         1953,
         "artifact",
         text=(
             "Wiedergutmachungsamt Peiltal, 1953. Antrag des Leopold "
-            "Löbig, Flörburg, für seine verstorbene Mutter Rebekka "
-            "Löbig geb. Sörne, geb. 1.6.1893, zuletzt wohnhaft in "
+            "Löbig, Flörburg, für seine verstorbene Mutter Ida "
+            "Löbig geb. Sörne, geb. 17.4.1881, zuletzt wohnhaft in "
             "Flörburg, Wasserallee 59. Am 21. August 1942 von Flörburg "
             "in das Lager Klurnau verschleppt, dort befreit, 1946 "
             "verstorben."
@@ -797,31 +816,31 @@ SOURCES = (
         1956,
         "photograph",
         text=(
-            "EUGEN LÖBIG\n1836 – 1911\nCÄCILIE LÖBIG\nGEB. TARLE\n1840 – 1902"
+            "EUGEN LÖBIG\n1836 – 1909\nCÄCILIE LÖBIG\nGEB. TARLE\n1833 – 1902"
         ),
         note="The grave is in the Flörburg cemetery.",
     ),
     Source(
         "family-tree-1984",
-        "Family tree drawn by Anne Lobig",
+        "Family tree drawn by Clara Lobig",
         "en",
         1984,
         "genealogical_report",
         text=(
-            "Eugen Löbig, b. Bad Flörburg 1836, d. 1911 = (1859) "
-            "Cäcilie 'Cilli' Tarle of Kredfeld, c. 1840–1902.\n"
-            "Their children: Sebastian 'Wastl' 1868–1953 = Emma 'Emmi' "
-            "Laudler of Fläckfeld (Kr. Peiltal) 1884–1968; "
-            "Rahel 1871 – after 1945; "
-            "Felix 1873–1942 = Rebekka 'Peppi' Sörne 1893–1946.\n"
-            "Children of Wastl and Emmi: Gustav 'Gustl' 1907 = (1945) "
-            "Iris Faxridge 1914–1963; Anna 'Pünktchen' 1910; "
-            "Frieda 1911–1941.\n"
+            "Eugen Löbig, b. Bad Flörburg 1836, d. 1909 = (1859) "
+            "Cäcilie 'Cilli' Tarle of Kredfeld, c. 1833–1902.\n"
+            "Their children: Sebastian 'Wastl' 1862–1945 = Hildegard "
+            "'Hilde' Laudler of Fläckfeld (Kr. Peiltal) 1876–1968; "
+            "Felix 1867–1931 = Ida 'Peppi' Sörne 1881–1946; "
+            "Rahel 1871 – after 1945.\n"
+            "Children of Wastl and Hilde: Ursula 1911–1941; "
+            "Klara 'Pünktchen' 1917; Gustav 'Gustl' 1919 = (1942) "
+            "Iris Faxridge 1914–1963.\n"
             "Children of Felix and Peppi: Leopold 1914–1960; "
-            "Rudolf 'Rudi' 1916–1941; infant 1925.\n"
-            "Children of Gustl and Iris: Nicholas 1947."
+            "Rudolf 'Rudi' 1916–1941; infant 1922.\n"
+            "Children of Gustl and Iris: Nicholas 1950."
         ),
-        note="Hand-drawn in Australia by the emigrant Anna.",
+        note="Hand-drawn in Australia by the emigrant Klara.",
     ),
     Source(
         "interview-2002",
@@ -830,9 +849,9 @@ SOURCES = (
         2002,
         None,
         text=(
-            "I was born in '47, in Stupfield. Dad — Gus, everyone "
+            "I was born in '50, in Stupfield. Dad — Gus, everyone "
             "called him — left Germany in the August, just before the "
-            "war. Aunt Pünktchen had gone ahead in '37 or '38. Dad's "
+            "war. Aunt Pünktchen had gone ahead in '38 or '39. Dad's "
             "cousin Leopold was taken the first week of the war and "
             "held about a month in Peiltal. The hat shop, the Blue Hat, "
             "was gone before 1926. Dad died in '96 and he's buried here "
@@ -894,21 +913,21 @@ ASSERTIONS = tuple(
         (
             "sebastian-loebig",
             "spouse",
-            "emma-loebig",
+            "hildegard-loebig",
             {"start_time": Date(1905, 12, 15), "location": "floerburg"},
             "Flörburg, am 15. Dezember 1905",
         ),
         (
             "sebastian-loebig",
             "date_of_birth",
-            Date(1868, 2, 15),
-            "geboren am 15. Februar 1868 zu Flörburg",
+            Date(1862, 2, 15),
+            "geboren am 15. Februar 1862 zu Flörburg",
         ),
         (
             "sebastian-loebig",
             "place_of_birth",
             "floerburg",
-            "geboren am 15. Februar 1868 zu Flörburg",
+            "geboren am 15. Februar 1862 zu Flörburg",
         ),
         (
             "sebastian-loebig",
@@ -941,22 +960,22 @@ ASSERTIONS = tuple(
             "Cäcilie geborene Tarle",
         ),
         (
-            "emma-loebig",
+            "hildegard-loebig",
             "birth_name",
-            "Emma Laudler",
-            "die Emma Laudler",
+            "Hildegard Laudler",
+            "die Hildegard Laudler",
         ),
         (
-            "emma-loebig",
+            "hildegard-loebig",
             "date_of_birth",
-            Date(1884, 4, 23),
-            "geboren am 23. April 1884 zu Fläckfeld",
+            Date(1876, 3, 19),
+            "geboren am 19. März 1876 zu Fläckfeld",
         ),
         (
-            "emma-loebig",
+            "hildegard-loebig",
             "place_of_birth",
             "flaeckfeld",
-            "geboren am 23. April 1884 zu Fläckfeld",
+            "geboren am 19. März 1876 zu Fläckfeld",
         ),
         (
             "flaeckfeld",
@@ -983,26 +1002,26 @@ ASSERTIONS = tuple(
         ),
         ("zum-blauen-hut", "start_time", Date(1863), "gegr. 1863"),
         (
-            "frieda-loebig-angerring",
+            "ursula-loebig-angerring",
             "residence",
             "angerring-57",
             {"point_in_time": Date(1912)},
-            "Löbig, Frieda, Wwe., Angerring 57",
+            "Löbig, Ursula, Wwe., Angerring 57",
         ),
     )
     + _said(
-        "burial-register-1911",
+        "burial-register-1909",
         (
             "eugen-loebig",
             "date_of_death",
-            Date(1911, 10, 1),
-            "Gestorben: 1. Oktober 1911",
+            Date(1909, 3, 16),
+            "Gestorben: 16. März 1909",
         ),
         (
             "eugen-loebig",
             "place_of_death",
             "floerburg",
-            "Gestorben: 1. Oktober 1911 in Flörburg",
+            "Gestorben: 16. März 1909 in Flörburg",
         ),
         (
             "eugen-loebig",
@@ -1010,13 +1029,13 @@ ASSERTIONS = tuple(
             "Wassersucht",
             "Todesursache: Wassersucht",
         ),
-        ("eugen-loebig", "age_at_death", "75 Jahre", "Alter: 75 Jahre"),
+        ("eugen-loebig", "age_at_death", "73 Jahre", "Alter: 73 Jahre"),
         (
             "eugen-loebig",
             "burial_place",
             "floerburg-cemetery",
-            {"point_in_time": Date(1911, 10, 3)},
-            "Beerdigt: 3. Oktober 1911",
+            {"point_in_time": Date(1909, 3, 20)},
+            "Beerdigt: 20. März 1909",
         ),
         (
             "eugen-loebig",
@@ -1028,7 +1047,7 @@ ASSERTIONS = tuple(
             "eugen-loebig",
             "residence",
             "brunnenring-35",
-            {"point_in_time": Date(1911, 10, 1)},
+            {"point_in_time": Date(1909, 3, 16)},
             "Wohnung: Brunnenring 35",
         ),
         (
@@ -1096,8 +1115,8 @@ ASSERTIONS = tuple(
         (
             "gustav-loebig",
             "date_of_birth",
-            Date(1907, 9, 6),
-            "am sechsten September des Jahres tausend neunhundert und sieben",
+            Date(1919, 1, 7),
+            "am siebenten Januar des Jahres tausend neunhundert und neunzehn",
         ),
         (
             "gustav-loebig",
@@ -1109,20 +1128,20 @@ ASSERTIONS = tuple(
         (
             "gustav-loebig",
             "mother",
-            "emma-loebig",
-            "Emma Löbig geborene Laudler",
+            "hildegard-loebig",
+            "Hildegard Löbig geborene Laudler",
         ),
         (
-            "emma-loebig",
+            "hildegard-loebig",
             "birth_name",
-            "Emma Laudler",
-            "Emma Löbig geborene Laudler",
+            "Hildegard Laudler",
+            "Hildegard Löbig geborene Laudler",
         ),
         (
-            "emma-loebig",
+            "hildegard-loebig",
             "married_name",
-            "Emma Löbig",
-            "Emma Löbig geborene Laudler",
+            "Hildegard Löbig",
+            "Hildegard Löbig geborene Laudler",
         ),
         (
             "sebastian-loebig",
@@ -1134,7 +1153,7 @@ ASSERTIONS = tuple(
             "sebastian-loebig",
             "residence",
             "brunnenring-35",
-            {"point_in_time": Date(1907, 9, 7)},
+            {"point_in_time": Date(1919, 1, 8)},
             "wohnhaft in Flörburg, Brunnenring 35",
         ),
     )
@@ -1143,35 +1162,35 @@ ASSERTIONS = tuple(
         (
             "postcard-1938",
             "point_in_time",
-            Date(1938, 6, 2),
-            "[postmark] Flörburg 2.6.38",
+            Date(1938, 8, 19),
+            "[postmark] Flörburg 19.8.38",
         ),
         (
             "sebastian-loebig",
             "referred_to_as",
             "Dein Vater",
-            {"perspective": "anna-loebig"},
+            {"perspective": "klara-loebig"},
             "Dein Vater",
         ),
-        ("anna-loebig", "father", "sebastian-loebig", "Dein Vater"),
-        ("anna-loebig", "nickname", "Pünktchen", "Liebes Pünktchen!"),
+        ("klara-loebig", "father", "sebastian-loebig", "Dein Vater"),
+        ("klara-loebig", "nickname", "Pünktchen", "Liebes Pünktchen!"),
         (
             "emigration-1938",
             "participant",
-            "anna-loebig",
-            "Seit Du am 12. März abgereist bist",
+            "klara-loebig",
+            "Seit Du am 22. Juni abgereist bist",
         ),
         (
             "emigration-1938",
             "point_in_time",
-            Date(1938, 3, 12),
-            "Seit Du am 12. März abgereist bist",
+            Date(1938, 6, 22),
+            "Seit Du am 22. Juni abgereist bist",
         ),
         (
-            "anna-loebig",
+            "klara-loebig",
             "residence",
             "juniper-street-31",
-            {"point_in_time": Date(1938, 6, 2)},
+            {"point_in_time": Date(1938, 8, 19)},
             "31 Juniper Street, Stupfield",
         ),
         (
@@ -1183,27 +1202,27 @@ ASSERTIONS = tuple(
     )
     + _said(
         "registration-card-1945",
-        ("rebekka-loebig", "birth_name", "Rebekka Sörne", "née SÖRNE"),
+        ("ida-loebig", "birth_name", "Ida Sörne", "née SÖRNE"),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "married_name",
-            "Rebekka Löbig",
-            "LÖBIG, Rebekka, née SÖRNE",
+            "Ida Löbig",
+            "LÖBIG, Ida, née SÖRNE",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "date_of_birth",
-            Date(1893, 6, 1),
-            "Born 1.6.1893 at Moshausen",
+            Date(1881, 4, 17),
+            "Born 17.4.1881 at Moshausen",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "place_of_birth",
             "moshausen",
-            "Born 1.6.1893 at Moshausen",
+            "Born 17.4.1881 at Moshausen",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "residence",
             "wasserallee-59",
             "Last address: Flörburg, Wasserallee 59",
@@ -1211,7 +1230,7 @@ ASSERTIONS = tuple(
         (
             "deportation-1942",
             "participant",
-            "rebekka-loebig",
+            "ida-loebig",
             "Deported 21.8.1942 to Klurnau",
         ),
         (
@@ -1229,7 +1248,7 @@ ASSERTIONS = tuple(
         (
             "liberation-1945",
             "participant",
-            "rebekka-loebig",
+            "ida-loebig",
             "Liberated at Klurnau 28.1.1945",
         ),
         (
@@ -1245,7 +1264,7 @@ ASSERTIONS = tuple(
             "Liberated at Klurnau 28.1.1945",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "spouse",
             "felix-loebig",
             "Husband: Felix LÖBIG",
@@ -1253,7 +1272,7 @@ ASSERTIONS = tuple(
         (
             "leopold-loebig",
             "mother",
-            "rebekka-loebig",
+            "ida-loebig",
             "Son: Leopold LÖBIG",
         ),
         (
@@ -1313,8 +1332,8 @@ ASSERTIONS = tuple(
         (
             "felix-loebig",
             "date_of_death",
-            Date(1942),
-            "Felix LÖBIG, died 1942",
+            Date(1931),
+            "Felix LÖBIG, died 1931",
         ),
     )
     + _said(
@@ -1334,8 +1353,8 @@ ASSERTIONS = tuple(
         (
             "gustav-loebig",
             "date_of_birth",
-            Date(1907, 6, 9),
-            "Born 9th June 1907",
+            Date(1919, 7, 1),
+            "Born 1st July 1919",
         ),
         (
             "gustav-loebig",
@@ -1378,29 +1397,29 @@ ASSERTIONS = tuple(
         (
             "leopold-loebig",
             "mother",
-            "rebekka-loebig",
+            "ida-loebig",
             "für seine verstorbene Mutter",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "birth_name",
-            "Rebekka Sörne",
-            "Rebekka Löbig geb. Sörne",
+            "Ida Sörne",
+            "Ida Löbig geb. Sörne",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "married_name",
-            "Rebekka Löbig",
-            "Rebekka Löbig geb. Sörne",
+            "Ida Löbig",
+            "Ida Löbig geb. Sörne",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "date_of_birth",
-            Date(1893, 6, 1),
-            "geb. 1.6.1893",
+            Date(1881, 4, 17),
+            "geb. 17.4.1881",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "residence",
             "wasserallee-59",
             "zuletzt wohnhaft in Flörburg, Wasserallee 59",
@@ -1408,7 +1427,7 @@ ASSERTIONS = tuple(
         (
             "deportation-1942",
             "participant",
-            "rebekka-loebig",
+            "ida-loebig",
             "Am 21. August 1942 von Flörburg in das Lager Klurnau verschleppt",
         ),
         (
@@ -1424,7 +1443,7 @@ ASSERTIONS = tuple(
             "in das Lager Klurnau verschleppt",
         ),
         (
-            "rebekka-loebig",
+            "ida-loebig",
             "date_of_death",
             Date(1946),
             "1946 verstorben",
@@ -1432,10 +1451,10 @@ ASSERTIONS = tuple(
     )
     + _said(
         "gravestone-photo-1956",
-        ("eugen-loebig", "date_of_birth", Date(1836), "1836 – 1911"),
-        ("eugen-loebig", "date_of_death", Date(1911), "1836 – 1911"),
-        ("caecilie-loebig", "date_of_birth", Date(1840), "1840 – 1902"),
-        ("caecilie-loebig", "date_of_death", Date(1902), "1840 – 1902"),
+        ("eugen-loebig", "date_of_birth", Date(1836), "1836 – 1909"),
+        ("eugen-loebig", "date_of_death", Date(1909), "1836 – 1909"),
+        ("caecilie-loebig", "date_of_birth", Date(1833), "1833 – 1902"),
+        ("caecilie-loebig", "date_of_death", Date(1902), "1833 – 1902"),
         (
             "caecilie-loebig",
             "birth_name",
@@ -1471,7 +1490,7 @@ ASSERTIONS = tuple(
             {"referred_to_as": "Bad Flörburg"},
             "b. Bad Flörburg 1836",
         ),
-        ("eugen-loebig", "date_of_death", Date(1911), "d. 1911"),
+        ("eugen-loebig", "date_of_death", Date(1909), "d. 1909"),
         (
             "eugen-loebig",
             "spouse",
@@ -1500,14 +1519,14 @@ ASSERTIONS = tuple(
         (
             "caecilie-loebig",
             "date_of_birth",
-            Date(1840, qualifier="circa"),
-            "c. 1840–1902",
+            Date(1833, qualifier="circa"),
+            "c. 1833–1902",
         ),
         (
             "caecilie-loebig",
             "date_of_death",
             Date(1902),
-            "c. 1840–1902",
+            "c. 1833–1902",
         ),
         ("sebastian-loebig", "father", "eugen-loebig", "Their children"),
         (
@@ -1520,29 +1539,34 @@ ASSERTIONS = tuple(
             "sebastian-loebig",
             "nickname",
             "Wastl",
-            "Sebastian 'Wastl' 1868–1953",
+            "Sebastian 'Wastl' 1862–1945",
         ),
         (
             "sebastian-loebig",
             "date_of_birth",
-            Date(1868),
-            "Sebastian 'Wastl' 1868–1953",
+            Date(1862),
+            "Sebastian 'Wastl' 1862–1945",
         ),
         (
             "sebastian-loebig",
             "date_of_death",
-            Date(1953),
-            "Sebastian 'Wastl' 1868–1953",
+            Date(1945),
+            "Sebastian 'Wastl' 1862–1945",
         ),
         (
             "sebastian-loebig",
             "spouse",
-            "emma-loebig",
-            "1868–1953 = Emma 'Emmi' Laudler",
+            "hildegard-loebig",
+            "1862–1945 = Hildegard 'Hilde' Laudler",
         ),
-        ("emma-loebig", "nickname", "Emmi", "Emma 'Emmi' Laudler"),
         (
-            "emma-loebig",
+            "hildegard-loebig",
+            "nickname",
+            "Hilde",
+            "Hildegard 'Hilde' Laudler",
+        ),
+        (
+            "hildegard-loebig",
             "place_of_birth",
             "flaeckfeld",
             "Laudler of Fläckfeld",
@@ -1554,16 +1578,49 @@ ASSERTIONS = tuple(
             "Fläckfeld (Kr. Peiltal)",
         ),
         (
-            "emma-loebig",
+            "hildegard-loebig",
             "date_of_birth",
-            Date(1884),
-            "(Kr. Peiltal) 1884–1968",
+            Date(1876),
+            "(Kr. Peiltal) 1876–1968",
         ),
         (
-            "emma-loebig",
+            "hildegard-loebig",
             "date_of_death",
             Date(1968),
-            "(Kr. Peiltal) 1884–1968",
+            "(Kr. Peiltal) 1876–1968",
+        ),
+        ("felix-loebig", "father", "eugen-loebig", "Their children"),
+        (
+            "felix-loebig",
+            "mother",
+            "caecilie-loebig",
+            "Their children",
+        ),
+        ("felix-loebig", "date_of_birth", Date(1867), "Felix 1867–1931"),
+        ("felix-loebig", "date_of_death", Date(1931), "Felix 1867–1931"),
+        (
+            "felix-loebig",
+            "spouse",
+            "ida-loebig",
+            "1867–1931 = Ida 'Peppi' Sörne",
+        ),
+        (
+            "ida-loebig",
+            "nickname",
+            "Peppi",
+            "Ida 'Peppi' Sörne",
+        ),
+        (
+            "ida-loebig",
+            "date_of_birth",
+            Date(1881),
+            "Ida 'Peppi' Sörne 1881–1946",
+        ),
+        (
+            "ida-loebig",
+            "date_of_death",
+            Date(1946),
+            "Ida 'Peppi' Sörne 1881–1946",
         ),
         ("rahel-loebig", "father", "eugen-loebig", "Their children"),
         (
@@ -1584,49 +1641,29 @@ ASSERTIONS = tuple(
             Date(1945, qualifier="after"),
             "Rahel 1871 – after 1945",
         ),
-        ("felix-loebig", "father", "eugen-loebig", "Their children"),
+        ("ursula-loebig", "father", "sebastian-loebig", "Wastl and Hilde"),
+        ("ursula-loebig", "mother", "hildegard-loebig", "Wastl and Hilde"),
+        ("ursula-loebig", "date_of_birth", Date(1911), "Ursula 1911–1941"),
+        ("ursula-loebig", "date_of_death", Date(1941), "Ursula 1911–1941"),
+        ("klara-loebig", "father", "sebastian-loebig", "Wastl and Hilde"),
+        ("klara-loebig", "mother", "hildegard-loebig", "Wastl and Hilde"),
+        ("klara-loebig", "nickname", "Pünktchen", "Klara 'Pünktchen' 1917"),
         (
-            "felix-loebig",
-            "mother",
-            "caecilie-loebig",
-            "Their children",
-        ),
-        ("felix-loebig", "date_of_birth", Date(1873), "Felix 1873–1942"),
-        ("felix-loebig", "date_of_death", Date(1942), "Felix 1873–1942"),
-        (
-            "felix-loebig",
-            "spouse",
-            "rebekka-loebig",
-            "1873–1942 = Rebekka 'Peppi' Sörne",
-        ),
-        (
-            "rebekka-loebig",
-            "nickname",
-            "Peppi",
-            "Rebekka 'Peppi' Sörne",
-        ),
-        (
-            "rebekka-loebig",
+            "klara-loebig",
             "date_of_birth",
-            Date(1893),
-            "Rebekka 'Peppi' Sörne 1893–1946",
+            Date(1917),
+            "Klara 'Pünktchen' 1917",
         ),
-        (
-            "rebekka-loebig",
-            "date_of_death",
-            Date(1946),
-            "Rebekka 'Peppi' Sörne 1893–1946",
-        ),
-        ("gustav-loebig", "father", "sebastian-loebig", "Wastl and Emmi"),
-        ("gustav-loebig", "mother", "emma-loebig", "Wastl and Emmi"),
-        ("gustav-loebig", "nickname", "Gustl", "Gustav 'Gustl' 1907"),
-        ("gustav-loebig", "date_of_birth", Date(1907), "Gustav 'Gustl' 1907"),
+        ("gustav-loebig", "father", "sebastian-loebig", "Wastl and Hilde"),
+        ("gustav-loebig", "mother", "hildegard-loebig", "Wastl and Hilde"),
+        ("gustav-loebig", "nickname", "Gustl", "Gustav 'Gustl' 1919"),
+        ("gustav-loebig", "date_of_birth", Date(1919), "Gustav 'Gustl' 1919"),
         (
             "gustav-loebig",
             "spouse",
             "iris-lobig",
-            {"start_time": Date(1945)},
-            "= (1945) Iris Faxridge",
+            {"start_time": Date(1942)},
+            "= (1942) Iris Faxridge",
         ),
         (
             "iris-lobig",
@@ -1646,21 +1683,8 @@ ASSERTIONS = tuple(
             Date(1963),
             "Iris Faxridge 1914–1963",
         ),
-        ("anna-loebig", "father", "sebastian-loebig", "Wastl and Emmi"),
-        ("anna-loebig", "mother", "emma-loebig", "Wastl and Emmi"),
-        ("anna-loebig", "nickname", "Pünktchen", "Anna 'Pünktchen' 1910"),
-        (
-            "anna-loebig",
-            "date_of_birth",
-            Date(1910),
-            "Anna 'Pünktchen' 1910",
-        ),
-        ("frieda-loebig", "father", "sebastian-loebig", "Wastl and Emmi"),
-        ("frieda-loebig", "mother", "emma-loebig", "Wastl and Emmi"),
-        ("frieda-loebig", "date_of_birth", Date(1911), "Frieda 1911–1941"),
-        ("frieda-loebig", "date_of_death", Date(1941), "Frieda 1911–1941"),
         ("leopold-loebig", "father", "felix-loebig", "Felix and Peppi"),
-        ("leopold-loebig", "mother", "rebekka-loebig", "Felix and Peppi"),
+        ("leopold-loebig", "mother", "ida-loebig", "Felix and Peppi"),
         ("leopold-loebig", "date_of_birth", Date(1914), "Leopold 1914–1960"),
         ("leopold-loebig", "date_of_death", Date(1960), "Leopold 1914–1960"),
         (
@@ -1672,7 +1696,7 @@ ASSERTIONS = tuple(
         (
             "rudolf-loebig",
             "mother",
-            "rebekka-loebig",
+            "ida-loebig",
             "Felix and Peppi",
         ),
         ("rudolf-loebig", "nickname", "Rudi", "Rudolf 'Rudi' 1916–1941"),
@@ -1697,11 +1721,11 @@ ASSERTIONS = tuple(
         (
             "infant-loebig",
             "mother",
-            "rebekka-loebig",
+            "ida-loebig",
             "Felix and Peppi",
         ),
-        ("infant-loebig", "date_of_birth", Date(1925), "infant 1925"),
-        ("infant-loebig", "date_of_death", Date(1925), "infant 1925"),
+        ("infant-loebig", "date_of_birth", Date(1922), "infant 1922"),
+        ("infant-loebig", "date_of_death", Date(1922), "infant 1922"),
         (
             "nicholas-lobig",
             "father",
@@ -1714,21 +1738,21 @@ ASSERTIONS = tuple(
             "iris-lobig",
             "Children of Gustl and Iris",
         ),
-        ("nicholas-lobig", "date_of_birth", Date(1947), "Nicholas 1947"),
+        ("nicholas-lobig", "date_of_birth", Date(1950), "Nicholas 1950"),
     )
     + _said(
         "interview-2002",
         (
             "nicholas-lobig",
             "date_of_birth",
-            Date(1947),
-            "I was born in '47, in Stupfield",
+            Date(1950),
+            "I was born in '50, in Stupfield",
         ),
         (
             "nicholas-lobig",
             "place_of_birth",
             "stupfield",
-            "I was born in '47, in Stupfield",
+            "I was born in '50, in Stupfield",
         ),
         (
             "nicholas-lobig",
@@ -1756,9 +1780,9 @@ ASSERTIONS = tuple(
             Date(1939, 8),
             "left Germany in the August, just before the war",
         ),
-        ("anna-loebig", "nickname", "Pünktchen", "Aunt Pünktchen"),
+        ("klara-loebig", "nickname", "Pünktchen", "Aunt Pünktchen"),
         (
-            "anna-loebig",
+            "klara-loebig",
             "referred_to_as",
             "Aunt Pünktchen",
             {"perspective": "nicholas-lobig"},
@@ -1767,21 +1791,21 @@ ASSERTIONS = tuple(
         (
             "nicholas-lobig",
             "relative",
-            "anna-loebig",
+            "klara-loebig",
             {"kinship_type": "aunt"},
             "Aunt Pünktchen",
         ),
         (
             "emigration-1938",
             "participant",
-            "anna-loebig",
-            "Aunt Pünktchen had gone ahead in '37 or '38",
+            "klara-loebig",
+            "Aunt Pünktchen had gone ahead in '38 or '39",
         ),
         (
             "emigration-1938",
             "point_in_time",
-            Date(1937, qualifier="between", until=Date(1938)),
-            "Aunt Pünktchen had gone ahead in '37 or '38",
+            Date(1938, qualifier="between", until=Date(1939)),
+            "Aunt Pünktchen had gone ahead in '38 or '39",
         ),
         (
             "gustav-loebig",
@@ -1828,7 +1852,7 @@ ASSERTIONS = tuple(
             "he's buried here in Stupfield",
         ),
         (
-            "anna-loebig",
+            "klara-loebig",
             "date_of_death",
             Date(2001),
             "Aunt Pünktchen died last year",
@@ -1839,7 +1863,7 @@ ASSERTIONS = tuple(
 # (subject, property) pairs where two sources disagree and nothing in
 # the data says which is right: the resting state, not an error.
 CONTRADICTIONS = (
-    # 6 September 1907 (civil register) vs 9 June 1907 (naturalisation).
+    # 7 January 1919 (civil register) vs 1 July 1919 (naturalisation).
     ("gustav-loebig", "date_of_birth"),
     # Kreis Mockburg (1905 certificate) vs Kreis Peiltal (1984 tree).
     ("flaeckfeld", "part_of"),
@@ -1848,11 +1872,11 @@ CONTRADICTIONS = (
 # (subject, property) pairs where one source is vaguer than another but
 # they agree: the precise value falls inside the vague one.
 REFINEMENTS = (
-    # 1911 (gravestone, tree) narrowed to 1 October 1911 (register).
+    # 1909 (gravestone, tree) narrowed to 16 March 1909 (register).
     ("eugen-loebig", "date_of_death"),
-    # c. 1840 (tree) and 1840 (gravestone).
+    # c. 1833 (tree) and 1833 (gravestone).
     ("caecilie-loebig", "date_of_birth"),
-    # between 1937 and 1938 (interview) narrowed to 12 March 1938.
+    # between 1938 and 1939 (interview) narrowed to 22 June 1938.
     ("emigration-1938", "point_in_time"),
     # c. September 1939 (interview) narrowed to 3 September 1939.
     ("arrest-1939", "point_in_time"),
