@@ -1,0 +1,93 @@
+name: Feature
+description: A new capability or change, sized for one reviewable PR.
+labels: ["kind:feature"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Pseudonymous text only** (docs/AGENT_PROTOCOL.md §7). Examples
+        come only from the fictional universe (docs/EXAMPLES.md). Cite
+        people by QID; artifacts by QID, by a slug without a personal name,
+        or by SHA-1 prefix plus a generic descriptor. No real names or
+        dates of family members, and metrics as aggregates only. Cite
+        issues by #number and decisions by ADR number. One issue, one PR,
+        one reviewable diff.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What becomes possible afterwards, and for whom.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: Checkable criteria. The PR that closes this issue ticks them off.
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: dropdown
+    id: requirement
+    attributes:
+      label: Requirements served
+      description: See docs/REQUIREMENTS.md. The issue inherits its epic's req labels.
+      multiple: true
+      options:
+        - R1
+        - R2
+        - R3
+        - R4
+        - R5
+        - R6
+        - R7-privacy
+        - "none (infrastructure or governance)"
+    validations:
+      required: true
+  - type: dropdown
+    id: exec
+    attributes:
+      label: Exec label
+      description: Who can do it (docs/AGENT_PROTOCOL.md §2 and §6).
+      options:
+        - "exec:cloud-agent-ok (code only)"
+        - "exec:local-agent (needs the corpus, var/, private data or a live or dev graph)"
+        - "exec:owner (owner action or decision)"
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      description: Code issues are S or M; split anything larger. L is only for local work with no code diff.
+      options:
+        - S
+        - M
+        - L
+  - type: input
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      description: Issue numbers, e.g. #34. Add them as native blocked-by links after filing.
+  - type: input
+    id: decisions
+    attributes:
+      label: Governing decisions
+      description: ADR numbers, e.g. ADR-0024.
+  - type: checkboxes
+    id: verification
+    attributes:
+      label: Verification a local session must add
+      options:
+        - label: Changes a write path (needs:live-test)
+        - label: Changes prompts, schemas or models (needs:eval)
+  - type: checkboxes
+    id: no-real-data
+    attributes:
+      label: No real data
+      options:
+        - label: >-
+            I re-read this text. It quotes, paraphrases or identifies
+            nothing from the corpus.
+          required: true

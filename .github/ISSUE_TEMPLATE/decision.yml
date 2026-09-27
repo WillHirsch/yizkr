@@ -1,0 +1,61 @@
+name: Decision
+description: A question for the owner to decide.
+labels: ["kind:decision", "exec:owner"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Pseudonymous text only** (docs/AGENT_PROTOCOL.md §7). Examples
+        come only from the fictional universe (docs/EXAMPLES.md). Cite
+        people by QID and give metrics as aggregates only. A decision that
+        sets architecture is recorded as an ADR: claim its number in the
+        registry (#19) first.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: The decision to make, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What prompts it, and the evidence (aggregates only).
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      description: Each option with its consequences.
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+  - type: input
+    id: adrs
+    attributes:
+      label: ADRs affected
+      description: E.g. "amends ADR-0020" or "new ADR (number claimed in #19)".
+  - type: input
+    id: waiting
+    attributes:
+      label: What waits on this
+      description: Issue numbers blocked by this decision.
+  - type: input
+    id: owner-time
+    attributes:
+      label: Owner time needed
+      description: An estimate for the owner's touchpoint, e.g. "about 20 min".
+    validations:
+      required: true
+  - type: checkboxes
+    id: no-real-data
+    attributes:
+      label: No real data
+      options:
+        - label: >-
+            I re-read this text. It quotes, paraphrases or identifies
+            nothing from the corpus.
+          required: true
