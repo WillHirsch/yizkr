@@ -44,14 +44,16 @@ verdict* (same -> approve, distinct -> reject), never a blanket merge.
 
 A `depicts` claim never takes that path, whether face detection or a
 source's text proposed it: only a per-row human decision confirms one
-(ADR-0005). `accept_all` refuses a claims sheet with any `depicts` row,
-or without the exactly named `claim_id` and `property` columns that show
-them. It takes any sheet with a column like `claim_id` for a claims
-sheet, so none passes for an equivalences sheet to have its rows
-ratified to `approve`. `apply_review` refuses a `bulk-accept` on any
-claim whose property in the batch is `depicts`, whatever the sheet's
-cells say, and any sheet carrying an equivalences sheet's columns. A
-per-row `approve` passes as it does for any claim.
+(ADR-0005). `accept_all` takes any sheet with a column like `claim_id`,
+by normalised name, for a claims sheet. It refuses a claims sheet with
+any `depicts` row, or without the exactly named `claim_id` and
+`property` columns that show them. `apply_review` refuses a
+`bulk-accept` on any claim whose property in the batch is `depicts`,
+whatever the sheet's cells say. It also refuses any sheet carrying an
+equivalences sheet's columns. A claims sheet disguised well enough to
+reach `accept_all`'s equivalences branch comes out with those columns,
+so the `approve`s that branch writes are never applied. A per-row
+`approve` passes as it does for any claim.
 
 Sheets are read as UTF-8, with or without the byte-order mark some
 spreadsheets write; `accept_all` refuses a column name that still holds
@@ -418,8 +420,14 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
       the pairs the machine judged distinct; ratifying rejects those and
       mints the entity fresh.
 
-    So a claims sheet never passes for an equivalences sheet, whose
-    ratified verdicts are written as `approve`.
+    Ratified verdicts are written as `approve`, which a claims sheet's rows
+    must never get from here (ADR-0005). The kind check reads the
+    normalised names above, and a column name that still holds an
+    invisible format character is refused outright (below). A claims
+    sheet disguised past both, say by a no-break space, a look-alike or a
+    full-width letter inside `claim_id`, does take the equivalences
+    branch. Its output then carries the `entity_id` and `verdict` columns
+    that `apply_review` refuses, so none of its `approve`s is applied.
 
     A curator's deliberate bulk-accept of a whole sheet — the human end of
     the "explicit approve" rule (R3), not auto-confirmation. The machine

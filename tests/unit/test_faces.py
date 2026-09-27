@@ -316,8 +316,8 @@ class TestAcceptAllRefusesDepicts:
     """ADR-0005: only a per-row human decision confirms a depicts claim,
     whether face detection or a source's text proposed it, so `accept_all`
     refuses a claims sheet with a depicts row, or without the exactly named
-    columns that show them, never lets one pass for an equivalences sheet,
-    and writes nothing when it refuses (#24)."""
+    columns that show them, takes a sheet with any column like `claim_id`
+    for a claims sheet, and writes nothing when it refuses (#24)."""
 
     def test_depicts_only_sheet_is_refused(self, tmp_path):
         faces = portrait_faces()
