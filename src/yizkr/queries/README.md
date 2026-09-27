@@ -37,8 +37,12 @@ uv run yizkr publish-queries             # or: make publish-queries
   differences of resolution, and are not listed: a date's span is the
   period its precision names or the range its source states with
   earliest and latest dates, which the report shows beside the value.
-  Spellings of a name that differ only in case or language are one
-  value. See MODELING.md "Contradictions" for the full rules.
+  Two dates stored alike are compared through those stated ranges. When
+  either residence or spouse statement carries earliest or latest dates,
+  their start and end times are compared as stated, with no difference
+  of resolution suppressed. Spellings of a name that differ only in case
+  or language are one value. See MODELING.md "Contradictions" for the
+  full rules.
 - **person-timeline** — every dated assertion about each person
   (statements, dated qualifiers such as a marriage's point in time, and
   events participated in), plural-by-default with sources (R6).

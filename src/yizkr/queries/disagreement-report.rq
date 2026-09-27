@@ -38,10 +38,13 @@
 # range its source states with earliest and latest dates, open-ended when
 # only one is given: 1909 and 16 March 1909 agree, as do "between 1938 and
 # 1939" and 3 March 1939, while "the 1930s, between 1930 and 1935" and 1937
-# disagree. Earliest and latest dates on a residence or spouse statement may
-# date either end of it, so its start and end times are not narrowed when it
-# carries them. Recording the place hierarchy is what makes this report
-# sharpen over time.
+# disagree. Two dates stored alike are compared through the ranges their
+# statements state: "before 1920" and "after 1920", both stored as 1920,
+# disagree, as do 1930 and "the 1930s, between 1934 and 1936". Earliest and
+# latest dates on a residence or spouse statement may date either end of
+# it, so when either statement carries them, their start and end times are
+# compared as stated, with no difference of resolution suppressed.
+# Recording the place hierarchy is what makes this report sharpen over time.
 SELECT ?entity ?entityLabel ?propertyLabel
        ?sharedValue ?sharedValueLabel ?qualifierLabel
        (MIN(COALESCE(?canonicalA, ?rawValueA)) AS ?valueA) ?valueALabel ?precisionA
@@ -86,7 +89,9 @@ WHERE {
               ?stepB (<http://www.w3.org/2002/07/owl#sameAs>|^<http://www.w3.org/2002/07/owl#sameAs>|wdt:{P:location}|wdt:{P:part_of})* ?rawValueA .
             }
           } UNION {
-            # the other single-valued properties: two statements' own values
+            # the other single-valued properties: two statements' own
+            # values, and two dates stored alike, which the ranges their
+            # statements state may still set apart
             VALUES ?property {
               wd:{P:date_of_birth} wd:{P:date_of_death}
               wd:{P:father} wd:{P:mother}
@@ -100,7 +105,8 @@ WHERE {
             ?entity ?p ?stA , ?stB .
             ?stA ?ps ?rawValueA .
             ?stB ?ps ?rawValueB .
-            FILTER(!sameTerm(?rawValueA, ?rawValueB))
+            FILTER(!sameTerm(?rawValueA, ?rawValueB)
+                   || (!sameTerm(?stA, ?stB) && DATATYPE(?rawValueA) = <http://www.w3.org/2001/XMLSchema#dateTime>))
           } UNION {
             # dated multi-valued statements: one place or spouse (the same
             # item, through merge redirects), dated two ways
@@ -128,12 +134,14 @@ WHERE {
           }
           # an item value written before a merge still points at the
           # redirect: compare the item it resolves to. Each pair is kept
-          # once, in the order of its values; a name compares as text,
-          # letter case and language tag aside.
+          # once, in the order of its values (two dates stored alike are
+          # ordered below, by their spans and stated bounds); a name
+          # compares as text, letter case and language tag aside.
           OPTIONAL { ?rawValueA <http://www.w3.org/2002/07/owl#sameAs> ?canonicalA . }
           OPTIONAL { ?rawValueB <http://www.w3.org/2002/07/owl#sameAs> ?canonicalB . }
           FILTER(IF(isLiteral(?rawValueA) && LANG(?rawValueA) != "", LCASE(STR(?rawValueA)), STR(COALESCE(?canonicalA, ?rawValueA)))
-                 < IF(isLiteral(?rawValueB) && LANG(?rawValueB) != "", LCASE(STR(?rawValueB)), STR(COALESCE(?canonicalB, ?rawValueB))))
+                 < IF(isLiteral(?rawValueB) && LANG(?rawValueB) != "", LCASE(STR(?rawValueB)), STR(COALESCE(?canonicalB, ?rawValueB)))
+                 || sameTerm(?rawValueA, ?rawValueB))
         }
       }
       # each date's stated precision and span, once per statement: the span
@@ -167,6 +175,8 @@ WHERE {
                    FLOOR((YEAR(?rawValueA) * 10000 + MONTH(?rawValueA) * 100 + DAY(?rawValueA)) / ?unitA) * ?unitA + ?unitA - 1)) AS ?toA)
         # a precision coarser than a century names no span
         BIND(?precisionA >= 7 && COALESCE(?earliestPrecisionA, 11) >= 7 && COALESCE(?latestPrecisionA, 11) >= 7 AS ?spannedA)
+        # which of the bounds the statement states, and at what precision
+        BIND(COALESCE(?earliestPrecisionA, -1e0) * 1e2 + COALESCE(?latestPrecisionA, -1e0) AS ?boundsA)
       }
       OPTIONAL {
         ?stB ?valuePredicate ?timeNodeB .
@@ -192,11 +202,20 @@ WHERE {
                 IF(BOUND(?earliestB), 1e10,
                    FLOOR((YEAR(?rawValueB) * 10000 + MONTH(?rawValueB) * 100 + DAY(?rawValueB)) / ?unitB) * ?unitB + ?unitB - 1)) AS ?toB)
         BIND(?precisionB >= 7 && COALESCE(?earliestPrecisionB, 11) >= 7 && COALESCE(?latestPrecisionB, 11) >= 7 AS ?spannedB)
+        BIND(COALESCE(?earliestPrecisionB, -1e0) * 1e2 + COALESCE(?latestPrecisionB, -1e0) AS ?boundsB)
       }
+      # two dates stored alike differ only through the ranges their
+      # statements state: such a pair is kept once, in the order of its
+      # spans and then of the bounds it states, and left out when both
+      # statements give the same span and the same bounds
+      FILTER(!sameTerm(?rawValueA, ?rawValueB)
+             || ?fromA < ?fromB
+             || (?fromA = ?fromB && (?toA < ?toB || (?toA = ?toB && ?boundsA < ?boundsB))))
       # a date whose span lies inside the other's differs only in
-      # resolution; a residence or spouse statement's earliest and latest
-      # dates may date either end, so its start and end times are not
-      # narrowed when either statement carries them
+      # resolution. Earliest and latest dates on a residence or spouse
+      # statement may date either end of it, so when either statement
+      # carries them, their start and end times are compared as stated,
+      # with no difference of resolution suppressed
       FILTER(!BOUND(?fromA) || !BOUND(?fromB)
              || !(?spannedA && ?spannedB
                   && (!BOUND(?qualifier) || !(BOUND(?earliestA) || BOUND(?latestA) || BOUND(?earliestB) || BOUND(?latestB)))

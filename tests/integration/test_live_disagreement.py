@@ -19,6 +19,9 @@ running stack, then pins the report's rows for the fixture subjects:
   1930s, between 1930 and 1935" and 1937 disagree, as do a year narrowed
   to March-June and 2 November of it (rule 5), and the report carries the
   range beside the value;
+* two dates stored alike are compared through their stated ranges (#136):
+  1930 and "the 1930s, between 1934 and 1936" disagree, as do "before
+  1920" and "after 1920", though each pair shares one stored value;
 * an event's own date is compared, and so are the start times of one
   residence place and of one spouse, dated two ways; two residence
   observations at different points in time are not;
@@ -62,6 +65,9 @@ def local(local_id: str, label: str, kind: str) -> dict:
 PERSON = local("disagreement-person", "Disagreement Fixture Person", "human")
 SPOUSE = local("disagreement-spouse", "Disagreement Fixture Spouse", "human")
 RANGES = local("disagreement-ranges", "Disagreement Fixture Ranges", "human")
+SAME_YEAR = local(
+    "disagreement-same-year", "Disagreement Fixture Same Year", "human"
+)
 EMIGRATION = local(
     "disagreement-emigration", "Disagreement Fixture Emigration", "migration"
 )
@@ -78,12 +84,20 @@ ROLES = {
     "disagreement-person": "person",
     "disagreement-spouse": "spouse",
     "disagreement-ranges": "ranges",
+    "disagreement-same-year": "same year",
     "disagreement-emigration": "emigration",
     "disagreement-second-emigration": "second emigration",
     "disagreement-town": "town",
     "disagreement-other-town": "other town",
 }
-SUBJECTS = ("person", "spouse", "ranges", "emigration", "second emigration")
+SUBJECTS = (
+    "person",
+    "spouse",
+    "ranges",
+    "same year",
+    "emigration",
+    "second emigration",
+)
 
 
 def date(
@@ -310,6 +324,32 @@ def fixture_graph(client, config):
                     between(date(1935, 3), date(1935, 6)),
                 ),
                 claim(RANGES, "date_of_death", date(1935, 11, 2), b),
+                # stored alike, set apart by a stated range: 1930 per two
+                # sources and "the 1930s, between 1934 and 1936" per a third
+                claim(SAME_YEAR, "date_of_birth", date(1930), a),
+                claim(SAME_YEAR, "date_of_birth", date(1930), c),
+                claim(
+                    SAME_YEAR,
+                    "date_of_birth",
+                    date(1930, precision="decade"),
+                    b,
+                    between(date(1934), date(1936)),
+                ),
+                # and "before 1920" beside "after 1920"
+                claim(
+                    SAME_YEAR,
+                    "date_of_death",
+                    date(1920),
+                    a,
+                    (("latest_date", date(1920)),),
+                ),
+                claim(
+                    SAME_YEAR,
+                    "date_of_death",
+                    date(1920),
+                    b,
+                    (("earliest_date", date(1920)),),
+                ),
                 # an event's own date: 22 June per one source and 22 July
                 # per another, while "between 1938 and 1939" refines both
                 claim(EMIGRATION, "point_in_time", date(1938, 6, 22), b),
@@ -432,6 +472,15 @@ def stated_range(row: dict, side: str) -> tuple:
     )
 
 
+def described(row: dict, side: str) -> str:
+    """A value as shown, with the earliest and latest dates the report
+    carries beside it: two dates stored alike differ only there."""
+    earliest, latest = stated_range(row, side)
+    if earliest is None and latest is None:
+        return shown(row, side)
+    return f"{shown(row, side)} [{earliest or ''}..{latest or ''}]"
+
+
 def row_key(row: dict, qids: dict[str, str]) -> tuple:
     role_of = {qid: role for role, qid in qids.items()}
     shared = row.get("sharedValue", {}).get("value", "").rsplit("/", 1)[-1]
@@ -440,7 +489,7 @@ def row_key(row: dict, qids: dict[str, str]) -> tuple:
         row["propertyLabel"]["value"],
         role_of.get(shared, shared),
         row.get("qualifierLabel", {}).get("value", ""),
-        frozenset({shown(row, "A"), shown(row, "B")}),
+        frozenset({described(row, "A"), described(row, "B")}),
     )
 
 
@@ -475,8 +524,34 @@ EXPECTED = {
         "start time",
         frozenset({"1946", "1947-02-08"}),
     ),
-    ("ranges", "date of birth", "", "", frozenset({"1930s", "1937"})),
-    ("ranges", "date of death", "", "", frozenset({"1935", "1935-11-02"})),
+    (
+        "ranges",
+        "date of birth",
+        "",
+        "",
+        frozenset({"1930s [1930..1935]", "1937"}),
+    ),
+    (
+        "ranges",
+        "date of death",
+        "",
+        "",
+        frozenset({"1935 [1935-03..1935-06]", "1935-11-02"}),
+    ),
+    (
+        "same year",
+        "date of birth",
+        "",
+        "",
+        frozenset({"1930", "1930s [1934..1936]"}),
+    ),
+    (
+        "same year",
+        "date of death",
+        "",
+        "",
+        frozenset({"1920 [..1920]", "1920 [1920..]"}),
+    ),
     (
         "emigration",
         "point in time",
@@ -510,17 +585,21 @@ def test_each_value_names_the_artifacts_that_state_it(
         "fixture spouse maiden name": {source["B"]},
         "1947-02-08": {source["A"]},
         "1946": {source["B"]},
-        "1930s": {source["A"]},
+        "1930s [1930..1935]": {source["A"]},
         "1937": {source["B"]},
-        "1935": {source["A"]},
+        "1935 [1935-03..1935-06]": {source["A"]},
         "1935-11-02": {source["B"]},
+        "1930": {source["A"], source["C"]},
+        "1930s [1934..1936]": {source["B"]},
+        "1920 [..1920]": {source["A"]},
+        "1920 [1920..]": {source["B"]},
         "1938-06-22": {source["B"]},
         "1938-07-22": {source["A"]},
     }
     for row in report_rows(client, config, qids):
         for side in "AB":
-            assert sources(row, side) == stated_by[shown(row, side)], row_key(
-                row, qids
+            assert sources(row, side) == stated_by[described(row, side)], (
+                row_key(row, qids)
             )
 
 
@@ -553,6 +632,38 @@ def test_a_stated_range_travels_with_its_value(client, config, fixture_graph):
         "1937": (None, None),
         "1935": ("1935-03", "1935-06"),
         "1935-11-02": (None, None),
+    }
+
+
+def test_dates_stored_alike_differ_by_their_stated_ranges(
+    client, config, fixture_graph
+):
+    """Rule 5: 1930 and "the 1930s, between 1934 and 1936" share a stored
+    value, and so do "before 1920" and "after 1920", but their spans do not
+    overlap or nest. Each pair is listed once, and the two sources that
+    state 1930 alike are listed together."""
+    qids, source = fixture_graph
+    rows = [
+        row
+        for row in report_rows(client, config, qids)
+        if row_key(row, qids)[0] == "same year"
+    ]
+    listed = {
+        row["propertyLabel"]["value"]: {
+            described(row, side): sources(row, side) for side in "AB"
+        }
+        for row in rows
+    }
+    assert len(rows) == len(listed)
+    assert listed == {
+        "date of birth": {
+            "1930": {source["A"], source["C"]},
+            "1930s [1934..1936]": {source["B"]},
+        },
+        "date of death": {
+            "1920 [..1920]": {source["A"]},
+            "1920 [1920..]": {source["B"]},
+        },
     }
 
 
@@ -620,7 +731,7 @@ def test_what_the_report_leaves_out(client, config, fixture_graph):
     assert not [
         row for row in rows if row_key(row, qids)[0] == "second emigration"
     ]
-    shown_values = {value for row in rows for value in row_key(row, qids)[4]}
+    shown_values = {shown(row, side) for row in rows for side in "AB"}
     assert not shown_values & {"1919", "1938", "19th century", "1850"}
     # residence observations and a one-sided end time are not compared
     assert len(statements(client, person, "residence")) == 4

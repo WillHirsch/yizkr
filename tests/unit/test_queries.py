@@ -246,8 +246,12 @@ class TestDisagreementReport:
                 f"AS ?value{side})"
             ) in q
         # each pair of values once, in key order: never both orientations
+        # (two dates stored alike are ordered by their spans and bounds)
         flat = " ".join(q.split())
-        assert f"FILTER({keys['A']} < {keys['B']})" in flat
+        assert (
+            f"FILTER({keys['A']} < {keys['B']} "
+            "|| sameTerm(?rawValueA, ?rawValueB))"
+        ) in flat
 
     def test_a_date_spans_its_precision_or_its_stated_range(self, q):
         # rule 5: a range a source states with earliest and latest dates
@@ -273,8 +277,44 @@ class TestDisagreementReport:
             "(?fromB <= ?fromA && ?toA <= ?toB)"
         ) in q
 
-    def test_a_residence_or_spouse_range_is_never_narrowed(self, q):
-        # its earliest and latest dates may date either end of it
+    def test_dates_stored_alike_are_compared_through_their_ranges(self, q):
+        # rule 5: "before 1920" and "after 1920" are both stored as 1920,
+        # and 1930 and "the 1930s, between 1934 and 1936" as 1930, yet
+        # their spans neither overlap nor nest (#136)
+        same = "sameTerm(?rawValueA, ?rawValueB)"
+        dated = "DATATYPE(?rawValueA) = <http://www.w3.org/2001/XMLSchema#dateTime>"
+        # two statements of a single-valued date stored alike are paired
+        single = " ".join(
+            group_at(q, "# the other single-valued properties").split()
+        )
+        assert (
+            f"FILTER(!{same} || (!sameTerm(?stA, ?stB) && {dated}))" in single
+        )
+        # places, and a residence's or spouse's start and end times, still
+        # pair different values only
+        for marker in ("# places:", "VALUES (?property ?qualifier)"):
+            arm = " ".join(group_at(q, marker).split())
+            assert f"FILTER(!{same})" in arm, marker
+            assert "sameTerm(?stA" not in arm, marker
+        # such a pair is kept once, in the order of its spans and then of
+        # the bounds its statements state (which of them, at what
+        # precision), and left out when both give the same span and bounds:
+        # below a century no span is named, so the bounds still count there
+        for side in "AB":
+            assert (
+                f"BIND(COALESCE(?earliestPrecision{side}, -1e0) * 1e2 "
+                f"+ COALESCE(?latestPrecision{side}, -1e0) AS ?bounds{side})"
+            ) in q
+        flat = " ".join(q.split())
+        assert (
+            f"FILTER(!{same} || ?fromA < ?fromB || (?fromA = ?fromB && "
+            "(?toA < ?toB || (?toA = ?toB && ?boundsA < ?boundsB))))"
+        ) in flat
+
+    def test_a_residence_or_spouse_time_beside_a_range_is_as_stated(self, q):
+        # its earliest and latest dates may date either end of it, so when
+        # either statement carries them, no difference of resolution
+        # between their start or end times is suppressed
         assert (
             "!BOUND(?qualifier) || !(BOUND(?earliestA) || BOUND(?latestA) "
             "|| BOUND(?earliestB) || BOUND(?latestB))"

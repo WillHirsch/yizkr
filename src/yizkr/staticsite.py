@@ -785,7 +785,10 @@ class SiteBuilder:
             "not listed: a date whose span lies inside another's (the period "
             "its precision names, or the range its source states with "
             "earliest and latest dates), or a place the graph records as "
-            "contained in the other.</p>",
+            "contained in the other. When either of two residence or spouse "
+            "statements carries earliest or latest dates, their start and "
+            "end times are compared as stated, so a difference of "
+            "resolution between them is listed.</p>",
             "<table><tr><th>Who/what</th><th>Property</th>"
             "<th>Value A</th><th>per</th><th>Value B</th><th>per</th></tr>",
         ]

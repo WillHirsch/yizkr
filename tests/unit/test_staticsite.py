@@ -158,8 +158,9 @@ GALLERY = [
 # disagreement-report rows: the universe's contradiction (Gustav's birth
 # day and month transposed between the civil register extract and the
 # naturalisation), then placeholder rows for a dated residence, a birth
-# name, and an event date one source gives as a range ("between 1938 and
-# 1939", the universe's form for an emigration) that another contradicts
+# name, an event date one source gives as a range ("between 1938 and
+# 1939", the universe's form for an emigration) that another contradicts,
+# and a date two sources store alike, set apart by their stated ranges
 INCONSISTENCIES = [
     {
         "entity": uri("Q12"),
@@ -222,6 +223,21 @@ INCONSISTENCIES = [
         "sourcesA": literal("Q62~Disagreement fixture source A"),
         "valueB": time_literal("+1940-06-22T00:00:00Z"),
         "precisionB": literal("11"),
+        "sourcesB": literal("Q63~Disagreement fixture source B"),
+    },
+    {
+        "entity": uri("Q66"),
+        "entityLabel": literal("Disagreement Fixture Same Year"),
+        "propertyLabel": literal("date of death"),
+        "valueA": time_literal("+1920-01-01T00:00:00Z"),
+        "precisionA": literal("9"),
+        "latestA": time_literal("+1920-01-01T00:00:00Z"),
+        "latestPrecisionA": literal("9"),
+        "sourcesA": literal("Q62~Disagreement fixture source A"),
+        "valueB": time_literal("+1920-01-01T00:00:00Z"),
+        "precisionB": literal("9"),
+        "earliestB": time_literal("+1920-01-01T00:00:00Z"),
+        "earliestPrecisionB": literal("9"),
         "sourcesB": literal("Q63~Disagreement fixture source B"),
     },
 ]
@@ -397,6 +413,20 @@ class TestInconsistencies:
         # a residence or spouse row compares a start or end time, which
         # the statement's range need not bound: it is not shown there
         assert "earliest date: 1937" not in text
+
+    def test_dates_stored_alike_show_the_ranges_that_set_them_apart(
+        self, tmp_path, vocabulary
+    ):
+        # "before 1920" and "after 1920" are both stored as 1920: without
+        # their ranges the row would show the same value twice
+        text = self.page(tmp_path, vocabulary)
+        assert (
+            '<td>1920 <span class="qualifiers">(latest date: 1920)</span></td>'
+        ) in text
+        assert (
+            '<td>1920 <span class="qualifiers">(earliest date: 1920)</span>'
+            "</td>"
+        ) in text
 
     def test_single_valued_rows_show_the_property_alone(
         self, tmp_path, vocabulary

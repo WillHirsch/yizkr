@@ -466,9 +466,16 @@ not a signal to grow the schema on.
   given: 1909 and 16 March 1909 agree, as do "between 1938 and 1939"
   and 3 March 1939, while "the 1930s, between 1930 and 1935" and 1937
   disagree (rule 5: a stated range is never widened back to its
-  precision). The earliest and latest dates of a residence or spouse
-  statement may date either end of it, so its start and end times are
-  not narrowed when it carries them.
+  precision). Two dates stored alike are compared through the ranges
+  their statements state: "before 1920" and "after 1920", both stored as
+  1920, disagree, as do 1930 and "the 1930s, between 1934 and 1936";
+  with the same stated ranges, or none, they differ at most in
+  resolution. The earliest and latest dates of a residence or spouse
+  statement may date either end of it, so when either statement carries
+  them, their start and end times are compared as stated, with no
+  difference of resolution suppressed: a start in 1938, on a statement
+  whose earliest and latest dates are 1938 and 1945, and a start on 3
+  March 1938 are listed side by side.
 - **Machine uncertainty is process, not graph data (ADR-0023).** The
   graph records the *source's* vagueness (circa, ranges, precision) but
   never the *machine's* confidence. Contentiousness surfaces ephemerally
