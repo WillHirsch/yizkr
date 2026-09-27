@@ -698,8 +698,14 @@ PROPERTIES = {
     "relative_position_within_image": "P10",
     "type_hint": "P11",
     "referred_to_as": "P12",
+    "start_time": "P13",
 }
-ITEMS = {"human": "Q1", "extraction_run": "Q2", "unclassified_entity": "Q3"}
+ITEMS = {
+    "human": "Q1",
+    "extraction_run": "Q2",
+    "unclassified_entity": "Q3",
+    "organization": "Q4",
+}
 
 
 class FakeItems:
@@ -885,11 +891,11 @@ INTERVIEW_SHA1 = hashlib.sha1(
 FIRM_LABEL = "Hutmacherei zum Blauen Hut"
 
 
-def _firm_batch(curated: bool = False) -> ClaimBatch:
+def _firm_batch(curated: bool = False, label: str = FIRM_LABEL) -> ClaimBatch:
     firm = {
         "kind": "local",
         "local_id": "firm",
-        "label": FIRM_LABEL,
+        "label": label,
         "instance_of": "unclassified_entity",
     }
     return ClaimBatch.model_validate(
@@ -919,7 +925,7 @@ def _firm_batch(curated: bool = False) -> ClaimBatch:
             "entities": [
                 {
                     "id": "firm",
-                    "label": FIRM_LABEL,
+                    "label": label,
                     "kind": "unclassified_entity",
                     "type_hint": "hat shop",
                 }
@@ -976,6 +982,408 @@ class TestWriterTypeStatements:
             assert _cited(statement, "inferred_from_extraction_run") == [
                 result.run_qid
             ]
+
+
+# -- writer: a later source adds to an existing item's kind (#233) ---------
+
+# The 1912 directory's entry for the firm: "Hutmacherei zum Blauen Hut,
+# gegr. 1863". A later batch than the interview's, so the firm's item
+# exists when it is written.
+DIRECTORY_SHA1 = hashlib.sha1(
+    "fictional scan: the 1912 Flörburg address book".encode()
+).hexdigest()
+DIRECTORY_RUN = dict(RUN, started_at="2026-07-13T09:00:00Z")
+FIRM_ENTRY = "Hutmacherei zum Blauen Hut, gegr. 1863"
+
+
+def _directory_batch(
+    kind: str = "organization",
+    type_hint: str | None = None,
+    extra_claims: tuple = (),
+) -> ClaimBatch:
+    """The directory's batch: the firm's founding year, with the kind
+    (and type hint) the directory's extraction gives the firm."""
+    firm = {
+        "kind": "local",
+        "local_id": "firm",
+        "label": FIRM_LABEL,
+        "instance_of": kind,
+    }
+    entity = {"id": "firm", "label": FIRM_LABEL, "kind": kind}
+    if type_hint:
+        entity["type_hint"] = type_hint
+    source = {
+        "artifact": {"kind": "artifact", "sha1": DIRECTORY_SHA1},
+        "transcription_excerpt": {"text": "gegr. 1863", "language": "de"},
+    }
+    founded = {
+        "subject": firm,
+        "property": "start_time",
+        "value": {"type": "time", "year": 1863},
+        "source": source,
+    }
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": DIRECTORY_RUN,
+            "claims": [
+                founded,
+                *(dict(claim, subject=firm) for claim in extra_claims),
+            ],
+            "entities": [entity],
+        }
+    )
+
+
+def _two_sources() -> FakeWiki:
+    return FakeWiki({INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"})
+
+
+def _statements(wiki: FakeWiki, qid: str, key: str) -> list:
+    return wiki.wbi.item.get(qid).claims.get(PROPERTIES[key])
+
+
+def _by_value(statements) -> dict:
+    """Type statements by what they say: an item QID or a hint's text."""
+    by_value = {}
+    for statement in statements:
+        value = statement.mainsnak.datavalue["value"]
+        by_value[value["id"] if isinstance(value, dict) else value] = statement
+    return by_value
+
+
+def _sources(statement) -> list[tuple[list[str], list[str]]]:
+    """Each reference block's (stated-in items, extraction-run items)."""
+    return [
+        (
+            [
+                snak.datavalue["value"]["id"]
+                for snak in block.snaks.get(PROPERTIES["stated_in"])
+            ],
+            [
+                snak.datavalue["value"]["id"]
+                for snak in block.snaks.get(
+                    PROPERTIES["inferred_from_extraction_run"]
+                )
+            ],
+        )
+        for block in statement.references.references
+    ]
+
+
+def _snapshot(wiki: FakeWiki, qid: str) -> str:
+    """The item's statements, with their references and ranks."""
+    return json.dumps(
+        wiki.wbi.item.get(qid).claims.get_json(), sort_keys=True, default=str
+    )
+
+
+class TestWriterLaterSourceTypes:
+    """A later batch whose manifest names an existing item records its
+    kind and type hint: a matching statement gains the batch's source
+    and run, a different value becomes a statement of its own, and a
+    curated statement is never altered (rules 1-3, ADR-0002)."""
+
+    def test_same_kind_from_a_second_source_gains_its_references(self):
+        wiki = _two_sources()
+        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        firm = interview.created_items["firm"]
+        # a dry run plans; it writes nothing
+        writes = wiki.wbi.item.writes
+        BatchWriter(wiki, dry_run=True).write_batch(
+            _directory_batch("unclassified_entity")
+        )
+        assert wiki.wbi.item.writes == writes
+
+        directory = BatchWriter(wiki).write_batch(
+            _directory_batch("unclassified_entity")
+        )
+        assert directory.created_items["firm"] == firm
+        (kind,) = _statements(wiki, firm, "instance_of")
+        assert _sources(kind) == [
+            (["Q25"], []),
+            ([], [interview.run_qid]),
+            (["Q26"], []),
+            ([], [directory.run_qid]),
+        ]
+        assert kind.rank.value == "normal"
+        assert directory.type_statements_referenced == 1
+        assert directory.type_statements_written == 0
+
+    def test_different_kind_is_a_statement_of_its_own(self):
+        wiki = _two_sources()
+        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        firm = interview.created_items["firm"]
+        directory = BatchWriter(wiki).write_batch(_directory_batch())
+        kinds = _by_value(_statements(wiki, firm, "instance_of"))
+        assert set(kinds) == {
+            ITEMS["unclassified_entity"],
+            ITEMS["organization"],
+        }
+        # the minted kind is as it was; the directory's cites the
+        # directory and its run, and both stand at normal rank
+        assert _sources(kinds[ITEMS["unclassified_entity"]]) == [
+            (["Q25"], []),
+            ([], [interview.run_qid]),
+        ]
+        assert _sources(kinds[ITEMS["organization"]]) == [
+            (["Q26"], []),
+            ([], [directory.run_qid]),
+        ]
+        assert {k.rank.value for k in kinds.values()} == {"normal"}
+        (hint,) = _statements(wiki, firm, "type_hint")
+        assert _cited(hint, "stated_in") == ["Q25"]
+        assert directory.type_statements_written == 1
+        assert directory.type_statements_referenced == 0
+
+    @pytest.mark.parametrize(
+        ("hint", "same"),
+        [
+            # the interview's hint, in another case and spacing
+            (" Hat  Shop", True),
+            # the directory's own word for the firm
+            ("Hutmacherei", False),
+        ],
+    )
+    def test_type_hint_same_or_different(self, hint, same):
+        wiki = _two_sources()
+        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        firm = interview.created_items["firm"]
+        directory = BatchWriter(wiki).write_batch(
+            _directory_batch("unclassified_entity", type_hint=hint)
+        )
+        hints = _by_value(_statements(wiki, firm, "type_hint"))
+        interview_sources = [(["Q25"], []), ([], [interview.run_qid])]
+        directory_sources = [(["Q26"], []), ([], [directory.run_qid])]
+        if same:
+            # one statement, in the words of the source that gave it
+            # first, now cited by both
+            assert list(hints) == ["hat shop"]
+            assert _sources(hints["hat shop"]) == (
+                interview_sources + directory_sources
+            )
+        else:
+            assert set(hints) == {"hat shop", "Hutmacherei"}
+            assert _sources(hints["hat shop"]) == interview_sources
+            assert _sources(hints["Hutmacherei"]) == directory_sources
+        # the kind is the same either way
+        assert directory.type_statements_referenced == (2 if same else 1)
+        assert directory.type_statements_written == (0 if same else 1)
+
+    def test_type_hints_compare_as_free_text(self):
+        from yizkr.pipeline.writer import normalized_type_hint
+
+        assert normalized_type_hint(" Hat  SHOP\n") == "hat shop"
+        # a compatibility form (a ligature) reads as its letters
+        assert normalized_type_hint("ﬀ") == normalized_type_hint("ff")
+        assert normalized_type_hint("Hutmacherei") != "hat shop"
+
+    def test_rewriting_a_later_batch_adds_nothing(self):
+        wiki = _two_sources()
+        firm = (
+            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
+        )
+        batch = _directory_batch(type_hint="Hutmacherei")
+        BatchWriter(wiki).write_batch(batch)
+        assert set(_by_value(_statements(wiki, firm, "instance_of"))) == {
+            ITEMS["unclassified_entity"],
+            ITEMS["organization"],
+        }
+        before = _snapshot(wiki, firm)
+        for again in (
+            BatchWriter(wiki).write_batch(batch),
+            BatchWriter(wiki).write_batch(_firm_batch()),
+        ):
+            assert again.created_items["firm"] == firm
+            assert (again.written, again.referenced, again.skipped) == (
+                0,
+                0,
+                1,
+            )
+            assert again.type_statements_written == 0
+            assert again.type_statements_referenced == 0
+        assert _snapshot(wiki, firm) == before
+
+    @pytest.mark.parametrize("curation", ["human write", "deprecated"])
+    def test_curated_statement_is_left_untouched(self, curation):
+        from wikibaseintegrator.datatypes import Item
+        from wikibaseintegrator.models import Reference, References
+        from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseRank
+
+        wiki = _two_sources()
+        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        firm_qid = interview.created_items["firm"]
+        firm = wiki.wbi.item.get(firm_qid)
+        if curation == "human write":
+            # a curator records, from the interview, that the firm is an
+            # organization: a statement with no extraction-run reference
+            kind = "organization"
+            curated = Item(
+                prop_nr=PROPERTIES["instance_of"], value=ITEMS[kind]
+            )
+            source = Reference()
+            source.add(Item(prop_nr=PROPERTIES["stated_in"], value="Q25"))
+            curated.references = References().add(source)
+            firm.claims.add(
+                curated, action_if_exists=ActionIfExists.FORCE_APPEND
+            )
+        else:
+            # a curator deprecates the interview's kind
+            kind = "unclassified_entity"
+            (curated,) = firm.claims.get(PROPERTIES["instance_of"])
+            curated.rank = WikibaseRank.DEPRECATED
+        firm.write()
+        curated_before = json.dumps(curated.get_json(), sort_keys=True)
+
+        directory = BatchWriter(wiki).write_batch(_directory_batch(kind))
+        same_value = [
+            statement
+            for statement in _statements(wiki, firm_qid, "instance_of")
+            if statement.mainsnak.datavalue["value"]["id"] == ITEMS[kind]
+        ]
+        assert len(same_value) == 2
+        assert curated in same_value
+        assert json.dumps(curated.get_json(), sort_keys=True) == (
+            curated_before
+        )
+        (new,) = [s for s in same_value if s is not curated]
+        assert new.rank == WikibaseRank.NORMAL
+        assert _sources(new) == [(["Q26"], []), ([], [directory.run_qid])]
+        assert directory.type_statements_written == 1
+        assert directory.type_statements_referenced == 0
+
+    def test_resolved_reference_is_matched_by_label(self):
+        # the resolve step replaced the firm's local refs with its QID
+        # (an exact label match), leaving its manifest record unmarked
+        wiki = _two_sources()
+        firm = (
+            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
+        )
+        resolved = resolve_batch(_directory_batch(), {FIRM_LABEL: firm})
+        assert isinstance(resolved.claims[0].subject, QidRef)
+        assert resolved.entities[0].qid is None
+        directory = BatchWriter(wiki).write_batch(resolved)
+        kinds = _by_value(_statements(wiki, firm, "instance_of"))
+        assert _sources(kinds[ITEMS["organization"]]) == [
+            (["Q26"], []),
+            ([], [directory.run_qid]),
+        ]
+
+    def test_approved_equivalence_records_its_kind(self):
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        # the directory's batch mints the firm; the interview's name for
+        # it, "the Blue Hat", matches no label, and a reviewer approves
+        # the equivalence
+        wiki = _two_sources()
+        directory = BatchWriter(wiki).write_batch(_directory_batch())
+        firm = directory.created_items["firm"]
+        approved = apply_equivalences(
+            _firm_batch(label="the Blue Hat"), {"firm": firm}
+        )
+        assert isinstance(approved.claims[0].subject, QidRef)
+        interview = BatchWriter(wiki).write_batch(approved)
+        interview_sources = [(["Q25"], []), ([], [interview.run_qid])]
+        kinds = _by_value(_statements(wiki, firm, "instance_of"))
+        assert set(kinds) == {
+            ITEMS["organization"],
+            ITEMS["unclassified_entity"],
+        }
+        assert _sources(kinds[ITEMS["unclassified_entity"]]) == (
+            interview_sources
+        )
+        (hint,) = _statements(wiki, firm, "type_hint")
+        assert hint.mainsnak.datavalue["value"] == "hat shop"
+        assert _sources(hint) == interview_sources
+
+    def test_gedcom_export_witnesses_an_existing_persons_kind(self):
+        from yizkr.pipeline.gedcom import adapt_gedcom
+
+        # Sebastian Löbig as the 1905 marriage certificate gives him, then
+        # as the family's GEDCOM export does: its adapter's local refs
+        # carry no label, so the writer finds him by his manifest label
+        certificate = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    {
+                        "subject": {
+                            "kind": "local",
+                            "local_id": "e01",
+                            "label": "Sebastian Löbig",
+                            "instance_of": "human",
+                        },
+                        "property": "date_of_birth",
+                        "value": {
+                            "type": "time",
+                            "year": 1862,
+                            "month": 2,
+                            "day": 15,
+                        },
+                        "source": {"artifact": ARTIFACT},
+                    }
+                ],
+                "entities": [
+                    {"id": "e01", "label": "Sebastian Löbig", "kind": "human"}
+                ],
+            }
+        )
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        first = BatchWriter(wiki).write_batch(certificate)
+        person = first.created_items["e01"]
+        export = adapt_gedcom(
+            "0 HEAD\n1 CHAR UTF-8\n0 @I3@ INDI\n1 NAME Sebastian /Löbig/\n"
+            "1 BIRT\n2 DATE 15 FEB 1862\n0 TRLR\n",
+            artifact_qid="Q27",
+        ).batch
+        gedcom = BatchWriter(wiki).write_batch(export)
+        assert gedcom.created_items["i3"] == person
+        assert gedcom.referenced == 1  # the agreeing birth date
+        (kind,) = _statements(wiki, person, "instance_of")
+        assert _sources(kind) == [
+            (["Q23"], []),
+            ([], [first.run_qid]),
+            (["Q27"], []),
+            ([], [gedcom.run_qid]),
+        ]
+
+    def test_explicit_kind_claim_keeps_its_excerpt(self):
+        # the directory's batch also claims the kind outright, citing its
+        # entry: the claim is written first, with its excerpt, and the
+        # manifest's same kind adds nothing beside it
+        wiki = _two_sources()
+        firm = (
+            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
+        )
+        claim = {
+            "property": "instance_of",
+            "value": {
+                "type": "item",
+                "value": {"kind": "vocab", "key": "organization"},
+            },
+            "source": {
+                "artifact": {"kind": "artifact", "sha1": DIRECTORY_SHA1},
+                "transcription_excerpt": {
+                    "text": FIRM_ENTRY,
+                    "language": "de",
+                },
+            },
+        }
+        directory = BatchWriter(wiki).write_batch(
+            _directory_batch(extra_claims=(claim,))
+        )
+        assert directory.written == 2
+        kinds = _by_value(_statements(wiki, firm, "instance_of"))
+        organization = kinds[ITEMS["organization"]]
+        assert _sources(organization) == [
+            (["Q26"], []),
+            ([], [directory.run_qid]),
+        ]
+        (excerpt,) = organization.references.references[0].snaks.get(
+            PROPERTIES["transcription_excerpt"]
+        )
+        assert excerpt.datavalue["value"]["text"] == FIRM_ENTRY
+        assert directory.type_statements_written == 0
+        assert directory.type_statements_referenced == 0
 
 
 class TestPrivacyDefaults:
