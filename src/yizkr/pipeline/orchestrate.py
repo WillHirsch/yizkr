@@ -30,12 +30,17 @@ and invalidates exactly what depends on the text.
 The document directory keeps plain-file views for reading and review:
 `transcription.json`, `batch.json`, `critique.json` and the files the
 later steps derive from them. Dependencies are make-style by content
-hash, never by modification time (`derivations.json`): a changed batch
-invalidates every file derived from it and moves the reviewed files
-aside as `*.reviewed.superseded-<n>.csv`; a re-exported CSV whose
-content changed moves its reviewed file aside too; and a reviewed file
-is consent only for the CSV it was first seen with, so editing the
-reviewed CSV re-writes and editing the CSV it reviews re-arms the gate.
+hash (`derivations.json`): a changed batch invalidates every file
+derived from it and moves the reviewed files aside as
+`*.reviewed.superseded-<n>.csv`; a re-exported CSV whose content changed
+moves its reviewed file aside too; and a reviewed file is consent only
+for the CSV it was first seen with, so editing the reviewed CSV
+re-writes and editing the CSV it reviews re-arms the gate. A directory
+that has state but no `derivations.json` is recorded once from its
+files' modification times, the only dependency information it holds: a
+file older than an input is derived again, and a reviewed file older
+than its CSV is moved aside (Derivations.adopt). Modification times are
+read nowhere else.
 A reviewed file's PRESENCE is the gate: the orchestrator never
 interprets a half-filled CSV as consent. Documents whose reconcile
 produced no proposals skip the first gate (there is nothing to review).
@@ -54,7 +59,7 @@ import re
 import shutil
 import sys
 import threading
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +76,7 @@ from yizkr.core.corpus import (
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.rundir import RUN_END, RUN_INTERRUPTED, RunDir
 from yizkr.pipeline.stages import (
+    UNPINNED_MODEL,
     DeferredClient,
     DispatchStopped,
     Recompute,
@@ -88,7 +94,7 @@ from yizkr.pipeline.stages import (
     sha256_file,
     stage_key,
 )
-from yizkr.pipeline.stageversions import BATCH_VOLATILE
+from yizkr.pipeline.stageversions import BATCH_VOLATILE, STAGES
 
 GEDCOM_SUFFIXES = {".ged"}
 TEXT_SUFFIXES = {".txt", ".md"}
@@ -121,6 +127,8 @@ DOCUMENT_STAGES = {
     "text": _EXTRACTED,
     "media": _EXTRACTED,
 }
+# the engine roles whose stage keys hold the role's model
+MODEL_ROLES = ("transcribe", "extract", "critique")
 
 
 def document_kind(source: Path) -> str:
@@ -183,16 +191,25 @@ class Derivations:
     made from still hash the same; a reviewed CSV consents while neither
     it nor the CSV it reviews has changed since it was first seen; and the
     batch view's canonical content hash says whether a regenerated batch
-    is really new. Modification times are never consulted.
+    is really new. Modification times are read in one place only: `adopt`,
+    once, for a directory that has state but no record.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        made_from: Mapping[Path, Sequence[Path]],
+        reviews: Mapping[Path, Path],
+    ) -> None:
         self.path = path
-        # a document directory with state but no record: each derived
-        # file already there is taken as current the first time it is
-        # seen, and recorded. A changed batch deletes every derived file,
-        # so none can outlive the batch it came from.
-        self.legacy = (
+        # each derived file -> the files it is made from
+        self.made_from = {out: tuple(ins) for out, ins in made_from.items()}
+        # each reviewed CSV -> the CSV it decides on
+        self.reviews = dict(reviews)
+        # a document directory with state but no record: its files carry
+        # no content hashes, so `adopt` records them once
+        self.unrecorded = (
             not path.exists() and (path.parent / "state.json").exists()
         )
 
@@ -210,20 +227,70 @@ class Derivations:
             self.path, json.dumps(data, indent=2, sort_keys=True)
         )
 
-    def current(self, output: Path, *inputs: Path) -> bool:
+    def _inputs(self, output: Path) -> dict[str, str | None]:
+        return {
+            path.name: sha256_file(path) for path in self.made_from[output]
+        }
+
+    def _binding(self, reviewed: Path) -> dict[str, str | None]:
+        source = self.reviews[reviewed]
+        return {
+            "reviewed": sha256_file(reviewed),
+            "reviews": source.name,
+            "source": sha256_file(source),
+        }
+
+    def adopt(self) -> list[Path]:
+        """Record a directory that has state but no record, once; returns
+        the reviewed CSVs it moved aside.
+
+        Only the files' modification times say what such a directory's
+        files were made from, so each file is judged by them once, on the
+        directory as it stands, and by content hash from then on:
+
+        * a derived file is recorded as current when no input it is made
+          from is newer than it; any other stays unrecorded and is derived
+          again;
+        * a reviewed CSV is bound to the CSV it decides on when that CSV
+          exists and is not newer than it. Otherwise its decisions are
+          about rows that have since been replaced, so it is moved aside
+          and consents to nothing.
+
+        Every file is judged before any is moved, and the record is saved
+        last: an adoption that stops part way leaves no record, so the
+        next run adopts again rather than binding a review it had judged
+        stale.
+        """
+        if not self.unrecorded:
+            return []
+        data = self._load()
+        for output, inputs in self.made_from.items():
+            if _no_input_newer(output, *inputs):
+                data["derived"][output.name] = self._inputs(output)
+        stale = []
+        for reviewed, source in self.reviews.items():
+            if not reviewed.exists():
+                continue
+            if source.exists() and _no_input_newer(reviewed, source):
+                data["reviews"][reviewed.name] = self._binding(reviewed)
+            else:
+                stale.append(reviewed)
+        for reviewed in stale:
+            _supersede(reviewed)
+        self._save(data)
+        self.unrecorded = False
+        return stale
+
+    def current(self, output: Path) -> bool:
+        """Was `output` made from its inputs as they are now?"""
         if not output.exists():
             return False
         recorded = self._load()["derived"].get(output.name)
-        if recorded is None and self.legacy:
-            self.record(output, *inputs)
-            return True
-        return recorded == {path.name: sha256_file(path) for path in inputs}
+        return recorded == self._inputs(output)
 
-    def record(self, output: Path, *inputs: Path) -> None:
+    def record(self, output: Path) -> None:
         data = self._load()
-        data["derived"][output.name] = {
-            path.name: sha256_file(path) for path in inputs
-        }
+        data["derived"][output.name] = self._inputs(output)
         self._save(data)
 
     def forget(self, *outputs: Path) -> None:
@@ -233,8 +300,8 @@ class Derivations:
             data["reviews"].pop(output.name, None)
         self._save(data)
 
-    def consents(self, reviewed: Path, source: Path) -> bool:
-        """Is `reviewed` a decision about the current `source`?
+    def consents(self, reviewed: Path) -> bool:
+        """Is `reviewed` a decision about the CSV it reviews, as it is now?
 
         A reviewed file seen for the first time, or saved again since, is
         bound to the CSV as it is now. While it stays unchanged it consents
@@ -242,17 +309,12 @@ class Derivations:
         if not reviewed.exists():
             return False
         data = self._load()
-        reviewed_hash, source_hash = sha256_file(reviewed), sha256_file(source)
         binding = data["reviews"].get(reviewed.name)
-        if binding is None or binding.get("reviewed") != reviewed_hash:
-            data["reviews"][reviewed.name] = {
-                "reviewed": reviewed_hash,
-                "reviews": source.name,
-                "source": source_hash,
-            }
+        if binding is None or binding.get("reviewed") != sha256_file(reviewed):
+            data["reviews"][reviewed.name] = self._binding(reviewed)
             self._save(data)
             return True
-        return binding.get("source") == source_hash
+        return binding.get("source") == sha256_file(self.reviews[reviewed])
 
     def bound_source(self, reviewed: Path) -> str | None:
         """The hash of the CSV `reviewed` was bound to, if it was seen."""
@@ -295,7 +357,19 @@ class DocumentRun:
         # open-schema harness (ADR-0013)
         self.gaps = self.dir / "gaps.csv"
         self.critique = self.dir / "critique.json"
-        self.derivations = Derivations(self.dir / "derivations.json")
+        self.derivations = Derivations(
+            self.dir / "derivations.json",
+            made_from={
+                self.equivalences: (self.batch,),
+                self.resolved: (self.batch, self.equivalences_reviewed),
+                self.review: (self.resolved, self.critique),
+                self.write_result: (self.review_reviewed, self.resolved),
+            },
+            reviews={
+                self.equivalences_reviewed: self.equivalences,
+                self.review_reviewed: self.review,
+            },
+        )
         # gaps the last extraction found, for the gap review CSV
         self.gaps_found: list[dict] = []
         self._sha1: str | None = None
@@ -451,6 +525,36 @@ class Orchestrator:
             model=model,
             effort=effort if self.llm == "claude-code" else None,
         )
+
+    def unpinned_roles(self) -> list[str]:
+        """The roles whose stage keys name no model: neither the role's
+        setting nor $YIZKR_LLM_MODEL sets one, so the engine runs its own
+        default, and a change to that default leaves their keys as they
+        were."""
+        return [
+            role
+            for role in MODEL_ROLES
+            if self._model_spec(role)["model"] == UNPINNED_MODEL
+        ]
+
+    def _warn_unpinned(self, docs: list[DocumentRun]) -> None:
+        """Say which roles run an unpinned model, when any document's
+        stages call the engine."""
+        calls_engine = any(
+            STAGES[stage].llm
+            for doc in docs
+            for stage in DOCUMENT_STAGES[doc.kind]
+        )
+        unpinned = self.unpinned_roles()
+        if calls_engine and unpinned:
+            self.log(
+                f"warning: no model is pinned for {', '.join(unpinned)}, so "
+                f"their stage keys hold {UNPINNED_MODEL!r}: if the "
+                f"{self.llm} engine's own default model changes, outputs "
+                f"the previous default made are still reused. Set "
+                f"$YIZKR_LLM_MODEL to key them on a model id.",
+                file=sys.stderr,
+            )
 
     def _stages(self, doc: DocumentRun) -> StageScope:
         return StageScope(
@@ -1080,6 +1184,15 @@ class Orchestrator:
             doc.save()
             self.log(f"  derived media: {len(derived)} item(s)")
 
+        # a directory with state but no derivation record is recorded once,
+        # as it stands, before anything below rewrites a file in it
+        for reviewed in doc.derivations.adopt():
+            self.log(
+                f"  {reviewed.name} does not review the current "
+                f"{doc.derivations.reviews[reviewed].name}: moved aside "
+                f"(review the current rows)"
+            )
+
         # every stage before the gates goes through the store: unchanged
         # outputs are reused, so this costs nothing when nothing changed
         batch = self._step_batch(doc)
@@ -1119,24 +1232,20 @@ class Orchestrator:
             return doc.state.status
 
         derivations = doc.derivations
-        if batch.entities and not derivations.current(
-            doc.equivalences, doc.batch
-        ):
+        if batch.entities and not derivations.current(doc.equivalences):
             proposals = self._export(
                 doc,
                 doc.equivalences,
                 doc.equivalences_reviewed,
                 lambda: self._step_reconcile(doc, batch),
             )
-            derivations.record(doc.equivalences, doc.batch)
+            derivations.record(doc.equivalences)
             self.log(f"  reconcile: {proposals} proposals")
 
         needs_equivalence_review = (
             doc.equivalences.exists()
             and _csv_has_rows(doc.equivalences)
-            and not derivations.consents(
-                doc.equivalences_reviewed, doc.equivalences
-            )
+            and not derivations.consents(doc.equivalences_reviewed)
         )
         if needs_equivalence_review:
             doc.state.status = AWAITING_EQUIVALENCES
@@ -1152,30 +1261,26 @@ class Orchestrator:
             )
             return doc.state.status
 
-        if not derivations.current(
-            doc.resolved, doc.batch, doc.equivalences_reviewed
-        ):
+        if not derivations.current(doc.resolved):
             resolved = self._step_resolve(doc, batch)
             atomic_write_text(doc.resolved, resolved.model_dump_json(indent=2))
-            derivations.record(
-                doc.resolved, doc.batch, doc.equivalences_reviewed
-            )
+            derivations.record(doc.resolved)
             doc.state.status = RESOLVED
             doc.save()
         else:
             resolved = ClaimBatch.model_validate_json(doc.resolved.read_text())
 
-        if not derivations.current(doc.review, doc.resolved, doc.critique):
+        if not derivations.current(doc.review):
             rows = self._export(
                 doc,
                 doc.review,
                 doc.review_reviewed,
                 lambda: self._step_export_review(doc, resolved),
             )
-            derivations.record(doc.review, doc.resolved, doc.critique)
+            derivations.record(doc.review)
             self.log(f"  review CSV: {rows} rows")
 
-        if not derivations.consents(doc.review_reviewed, doc.review):
+        if not derivations.consents(doc.review_reviewed):
             doc.state.status = AWAITING_CLAIMS
             self.log(
                 f"  waiting: review {doc.review} and save decisions as "
@@ -1189,14 +1294,10 @@ class Orchestrator:
             )
             return doc.state.status
 
-        if not derivations.current(
-            doc.write_result, doc.review_reviewed, doc.resolved
-        ):
+        if not derivations.current(doc.write_result):
             summary = self._step_write(doc, resolved)
             atomic_write_text(doc.write_result, json.dumps(summary, indent=2))
-            derivations.record(
-                doc.write_result, doc.review_reviewed, doc.resolved
-            )
+            derivations.record(doc.write_result)
             doc.state.detail = (doc.state.detail or {}) | {"write": summary}
             self.log(
                 f"  written: {summary['written']} new, "
@@ -1267,6 +1368,7 @@ class Orchestrator:
         if not docs:
             self.log(f"no supported documents in {self.folder}")
             return 0
+        self._warn_unpinned(docs)
         # seed with content already fully ingested in prior runs, so a
         # renamed copy skips the pipeline (cross-run dedup, ADR-0010)
         self._seen_hashes = self._prior_written_hashes()
@@ -1377,6 +1479,20 @@ class Orchestrator:
             if entity.extract:
                 keys |= _name_tokens(entity.label, *entity.aliases)
         return keys
+
+
+def _no_input_newer(output: Path, *inputs: Path) -> bool:
+    """Is `output` present, with no existing input modified after it?
+
+    The only dependency information a directory without derivation
+    records holds, read by `Derivations.adopt` alone. A tie counts as not
+    newer."""
+    if not output.exists():
+        return False
+    made = output.stat().st_mtime_ns
+    return all(
+        not path.exists() or path.stat().st_mtime_ns <= made for path in inputs
+    )
 
 
 def _supersede(reviewed: Path) -> None:

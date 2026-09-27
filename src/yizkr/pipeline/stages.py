@@ -10,7 +10,9 @@ record stored under a key, the SHA-256 of the key's components:
 * the stage name and its declared version, and for a routed stage the
   chosen method and that method's version (yizkr.pipeline.stageversions);
 * the hashes of the prompt templates and of the model manifest it uses;
-* the model: engine, model id, effort, and any parameters.
+* the model: engine, model id, effort, and any parameters. When
+  configuration names no model, the key holds UNPINNED_MODEL in place of
+  the engine's own default, which it cannot see (model_spec).
 
 Nothing is keyed on QIDs, file modification times or timestamps. An
 artifact QID that a stage's prompt or output carries is a binding, not an
@@ -69,6 +71,10 @@ RECOMPUTED = "recomputed"
 # stands in for the artifact QID when an output is hashed, so a content
 # hash never depends on which QID the artifact happens to have
 ARTIFACT_PLACEHOLDER = "{artifact}"
+
+# the model a key names when configuration names none: the engine then
+# runs a default model of its own choosing, which the key cannot see
+UNPINNED_MODEL = "engine default"
 
 # the components a key can hold, in report order
 KEY_COMPONENTS = (
@@ -209,8 +215,12 @@ def model_spec(
 
     `model` falls back to $YIZKR_LLM_MODEL, as the engines do. The engine
     is never started to ask: a run that reuses every output needs none.
+    With neither, the model is keyed as UNPINNED_MODEL. The engine then
+    runs its own default model, which the key does not name, so a change
+    to that default leaves the key unchanged, and outputs the previous
+    default made are reused (`ingest run` warns when this applies).
     """
-    resolved = model or os.environ.get("YIZKR_LLM_MODEL") or "engine default"
+    resolved = model or os.environ.get("YIZKR_LLM_MODEL") or UNPINNED_MODEL
     spec: dict[str, Any] = {"engine": engine, "model": resolved}
     if effort is not None:
         spec["effort"] = effort

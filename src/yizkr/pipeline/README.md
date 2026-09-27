@@ -63,8 +63,9 @@ review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done), or
 `failed` (errored; just re-run to retry). The exit code summarises the
 batch: `0` all written, `2` something awaits you, `1` something failed.
 Re-running is always safe: finished work is skipped, and a corrected
-upstream file re-does only what depends on it (make-style, by content hash,
-never by modification time).
+upstream file re-does only what depends on it (make-style, by content hash;
+modification times are read only once, to adopt a document directory that
+has no `derivations.json`, as docs/STAGE_STORE.md describes).
 
 Every stage before the gates reads and writes through the stage store
 (`var/stages`, `--store`): each output is keyed by its input content and

@@ -28,7 +28,7 @@ A stage key is the SHA-256 of the canonical JSON of its components:
 | `method`, `method_version` | For a routed stage, the method this document was routed to and that method's version |
 | `prompts` | SHA-256 of each prompt template the stage renders (and of the claim schema a chunk prompt embeds) |
 | `manifest` | SHA-256 of the model manifest (`yizkr/model/manifest.yaml`) behind the prompts' vocabulary and the validation |
-| `model` | Engine, model id and effort, from configuration (`$YIZKR_LLM_MODEL` when no model is set per phase) |
+| `model` | Engine, model id and effort, from configuration (`$YIZKR_LLM_MODEL` when no model is set per phase). With neither, the model is keyed as `engine default` (see *Unpinned models* below) |
 | `params` | Anything else that changes the output: the language settings, a chunk's assigned entities |
 | `depends` | Versions of registered helper stages a stage relies on without an input from them |
 
@@ -47,6 +47,23 @@ artifact therefore reuses every output.
 Context mode (whether a chunk call forked the manifest conversation or
 carried the document inline) is how the document reaches the model, not
 what is asked, so it is recorded on the record but not keyed.
+
+### Unpinned models
+
+The `model` component comes from configuration alone, so a run that
+reuses every output never starts the engine. When neither the phase's
+own setting (`--extract-model` for extraction, which `ingest run` sets
+by default) nor `$YIZKR_LLM_MODEL` names a model, the engine runs a
+default of its own choosing: the anthropic engine's built-in default,
+or whatever model the claude-code CLI picks. The key cannot see that
+default, so it holds the literal `engine default`. **A change to an
+engine's default model is not tracked**: the keys stay the same, and
+outputs that the previous default made are reused. Until #133 pins the
+model and the CLI, a key holds the full model id only when one is
+configured. `yizkr ingest run` warns, naming each unpinned role
+(transcribe, extract, critique), whenever a document's stages call the
+engine. Set `$YIZKR_LLM_MODEL` for any run whose outputs are to be
+reused.
 
 ### Routes
 
@@ -252,6 +269,35 @@ them. Their dependencies are recorded by content hash in
   an identical re-export keeps it;
 - a reviewed CSV consents for the CSV it was first seen with: saving it
   again re-writes, and editing the CSV it reviews re-arms the gate.
+
+| Derived file | Made from |
+|---|---|
+| `equivalences.csv` | `batch.json` |
+| `batch.resolved.json` | `batch.json`, `equivalences.reviewed.csv` |
+| `review.csv` | `batch.resolved.json`, `critique.json` |
+| `write.json` | `review.reviewed.csv`, `batch.resolved.json` |
+
+`equivalences.reviewed.csv` reviews `equivalences.csv`, and
+`review.reviewed.csv` reviews `review.csv`.
+
+**Directories from before these records.** A document directory with a
+`state.json` but no `derivations.json` was made under the old
+modification-time rule and holds no content hashes. `ingest run` adopts
+it once, before anything in it is rewritten, by applying that rule one
+last time to the directory as it was left:
+
+- a derived file is recorded as current only when no input it was made
+  from is newer than it (a tie counts as not newer). Any other derived
+  file is derived again, and from then on content hashes decide what
+  follows it;
+- a reviewed CSV is bound only when the CSV it reviews exists and is not
+  newer than it. Otherwise (the CSV is missing, or was re-exported after
+  the review was saved) the review decided on rows that have since been
+  replaced: it is moved aside as `*.reviewed.superseded-<n>.csv` and
+  consents to nothing. Its gate waits for a review of the current rows,
+  and nothing is written from the old one.
+
+After adoption, modification times are never read again.
 
 To correct a transcription, save the corrected text as
 `<doc>/transcription.corrected.txt`. The document is routed to the

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
 
 import pytest
@@ -28,7 +29,11 @@ from yizkr.pipeline.orchestrate import (
     Orchestrator,
     slugify,
 )
-from yizkr.pipeline.reconcile import EQUIVALENCE_FIELDS
+from yizkr.pipeline.reconcile import (
+    EQUIVALENCE_FIELDS,
+    apply_equivalences,
+    read_approved_equivalences,
+)
 from yizkr.pipeline.review import CSV_COLUMNS, export_review_csv
 from yizkr.pipeline.rundir import run_state
 
@@ -193,21 +198,33 @@ def make_run(tmp_path, name="letter.txt", **kwargs):
     folder = tmp_path / "docs"
     folder.mkdir(exist_ok=True)
     (folder / name).write_text("Anna was born in 1901.")
-    orchestrator = ScriptedOrchestrator(
-        folder, tmp_path / "state", log=quiet, **kwargs
-    )
+    kwargs.setdefault("log", quiet)
+    orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", **kwargs)
     return orchestrator
 
 
-def approve_all_equivalences(doc: DocumentRun) -> None:
+def collect(lines: list[str]):
+    """A log that keeps each message."""
+
+    def log(*args, **kwargs):
+        lines.append(" ".join(str(arg) for arg in args))
+
+    return log
+
+
+def decide_all_equivalences(doc: DocumentRun, decision: str) -> None:
     with open(doc.equivalences, newline="") as f:
         rows = list(csv.DictReader(f))
     for row in rows:
-        row["decision"] = "approve"
+        row["decision"] = decision
     with open(doc.equivalences_reviewed, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=EQUIVALENCE_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def approve_all_equivalences(doc: DocumentRun) -> None:
+    decide_all_equivalences(doc, "approve")
 
 
 def approve_all_claims(doc: DocumentRun) -> None:
@@ -219,6 +236,19 @@ def approve_all_claims(doc: DocumentRun) -> None:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def saved_last(path) -> None:
+    """Give `path` a modification time after every other file beside it,
+    as a file saved after them has. Files written moments apart can share
+    a timestamp on a coarse filesystem clock, so the tests set it."""
+    newest = max(
+        other.stat().st_mtime_ns
+        for other in path.parent.iterdir()
+        if other.is_file() and other != path
+    )
+    stamp = newest + 1_000_000_000
+    os.utime(path, ns=(stamp, stamp))
 
 
 class TestGates:
@@ -623,8 +653,9 @@ class TestFreshness:
         self, tmp_path
     ):
         """A document directory written before derivations were recorded
-        by content hash keeps its derived files and reviews: they are
-        adopted as current once, not re-derived."""
+        by content hash keeps its derived files and reviews: each is no
+        older than what it was made from, so it is adopted as current
+        once, not re-derived."""
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         (doc.dir / "derivations.json").unlink()
@@ -635,6 +666,133 @@ class TestFreshness:
         assert doc.state.status == WRITTEN
         assert doc.review_reviewed.exists()
         assert not (doc.dir / "review.reviewed.superseded-1.csv").exists()
+
+    def stale_review(self, tmp_path):
+        """A directory from before the records, held at the claim gate,
+        whose claim review is older than its CSV: the CSV was re-exported
+        with other rows after the review was saved."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        export_review_csv(make_batch(), doc.review)
+        saved_last(doc.review)
+        (doc.dir / "derivations.json").unlink()
+        return orchestrator
+
+    def test_adoption_moves_aside_a_review_older_than_its_csv(self, tmp_path):
+        """A claim review older than its CSV decided on rows that have
+        since been replaced. Adoption does not bind it: it is moved aside,
+        the gate waits, and nothing is written until the current rows are
+        reviewed."""
+        orchestrator = self.stale_review(tmp_path)
+        before = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert orchestrator.calls[before:] == []
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_CLAIMS
+        assert not doc.write_result.exists()
+        assert not doc.review_reviewed.exists()
+        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
+        # a review of the CSV as it is now opens the gate
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        assert [c.split(":")[0] for c in orchestrator.calls[before:]] == [
+            "write"
+        ]
+
+    def test_an_interrupted_adoption_adopts_again(self, tmp_path, monkeypatch):
+        """An adoption that stops before its record is saved leaves none,
+        so the next run adopts again, and a review it judged stale never
+        comes to consent."""
+        import yizkr.pipeline.orchestrate as orchestrate
+
+        orchestrator = self.stale_review(tmp_path)
+
+        def refuse(reviewed):
+            raise OSError("the disk refused")
+
+        monkeypatch.setattr(orchestrate, "_supersede", refuse)
+        assert orchestrator.run() == 1
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == FAILED
+        assert not (doc.dir / "derivations.json").exists()
+        monkeypatch.undo()
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_CLAIMS
+        assert not any(c.startswith("write") for c in orchestrator.calls)
+        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
+
+    def test_adoption_re_resolves_after_a_newer_equivalence_review(
+        self, tmp_path
+    ):
+        """In a directory from before the records, an equivalence review
+        saved again after the resolved batch was made is newer than it, so
+        the resolved batch is not adopted: it is resolved again with the
+        curator's new decisions, and the claim review of the old
+        resolution is moved aside instead of written."""
+
+        class Resolves(ScriptedOrchestrator):
+            """Resolves with the reviewed equivalence decisions, as the
+            real step does before its graph lookups."""
+
+            def _step_resolve(self, doc, batch):
+                self.calls.append(f"resolve:{doc.source.name}")
+                return apply_equivalences(
+                    batch,
+                    read_approved_equivalences(doc.equivalences_reviewed),
+                )
+
+        first = make_run(tmp_path)
+        orchestrator = Resolves(first.folder, first.state_dir, log=quiet)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        (doc,) = orchestrator.documents()
+        resolved = ClaimBatch.model_validate_json(doc.resolved.read_text())
+        assert resolved.claims[0].subject.kind == "qid"
+        # the curator saves the equivalence review again, rejecting the match
+        decide_all_equivalences(doc, "reject")
+        saved_last(doc.equivalences_reviewed)
+        (doc.dir / "derivations.json").unlink()
+        before = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert [c.split(":")[0] for c in orchestrator.calls[before:]] == [
+            "resolve",
+            "export",
+        ]
+        (doc,) = orchestrator.documents()
+        resolved = ClaimBatch.model_validate_json(doc.resolved.read_text())
+        assert resolved.claims[0].subject.kind == "local"
+        assert doc.state.status == AWAITING_CLAIMS
+        assert not doc.review_reviewed.exists()
+        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
+
+    def test_after_adoption_modification_times_are_not_read(self, tmp_path):
+        """Adoption happens once. After it, a CSV that is only touched,
+        not changed, re-arms nothing: content hashes decide."""
+        orchestrator = self.completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        (doc.dir / "derivations.json").unlink()
+        assert orchestrator.run() == 0
+        (doc,) = orchestrator.documents()
+        saved_last(doc.review)
+        saved_last(doc.equivalences)
+        before = list(orchestrator.calls)
+        assert orchestrator.run() == 0
+        assert orchestrator.calls == before
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+        assert doc.review_reviewed.exists()
+        assert doc.equivalences_reviewed.exists()
 
     def test_edited_csv_rearms_its_gate(self, tmp_path):
         """A reviewed file is consent for the CSV it was first seen with:
@@ -841,6 +999,52 @@ class TestStageStore:
         assert not any(c.endswith("b.txt") for c in orchestrator.calls)
         events = [e["event"] for e in orchestrator.rundir.events()]
         assert events[0] == "run-start" and events[-1] == "run-end"
+
+
+class TestUnpinnedModel:
+    """A key names only the model that configuration names. With none,
+    the engine's own default model is outside the keys, and a run that
+    calls the engine says so (#87, #133)."""
+
+    @staticmethod
+    def warnings(lines):
+        return [line for line in lines if "no model is pinned" in line]
+
+    def test_roles_without_a_model_are_unpinned(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
+        orchestrator = make_run(tmp_path, extract_model="model-for-extraction")
+        assert orchestrator.unpinned_roles() == ["transcribe", "critique"]
+        monkeypatch.setenv("YIZKR_LLM_MODEL", "model-from-env")
+        assert orchestrator.unpinned_roles() == []
+
+    def test_a_run_warns_about_unpinned_roles(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
+        lines: list[str] = []
+        make_run(tmp_path, log=collect(lines)).run()
+        (warning,) = self.warnings(lines)
+        assert "transcribe, extract, critique" in warning
+        assert "'engine default'" in warning
+
+    def test_pinned_models_need_no_warning(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("YIZKR_LLM_MODEL", "model-from-env")
+        lines: list[str] = []
+        make_run(tmp_path, log=collect(lines)).run()
+        assert self.warnings(lines) == []
+
+    def test_a_run_without_engine_stages_needs_no_model(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "family.ged").write_text(
+            "0 @I1@ INDI\n1 NAME Klara /Löbig/\n1 BIRT\n2 DATE 1917\n0 TRLR\n"
+        )
+        lines: list[str] = []
+        ScriptedOrchestrator(
+            folder, tmp_path / "state", log=collect(lines)
+        ).run()
+        assert self.warnings(lines) == []
 
 
 class TestTranscribeLanguage:
