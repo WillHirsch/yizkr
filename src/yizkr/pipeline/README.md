@@ -152,8 +152,9 @@ re-running one step in isolation — but for a normal ingest you only ever run
   image has no floor, since a photograph may carry no text at all. A
   note that a printed email or letter could also hold ("I couldn't open
   the PDF", "I can't transcribe this", "unable to comply with your
-  request") counts only in the engine's own voice: opening the output or
-  a page section, or naming the page it skipped, and not about the
+  request") counts only in the engine's own voice: opening the output, a
+  page section (after a "Page 2" or "[Page 2]" heading) or a line
+  labelled "Note:", or naming the page it skipped, and not about the
   correspondents' own attachment, writing or request ("the attachment you
   sent", "the old handwriting on the back of the photograph", "your
   request for copies of the register"). The reason is recorded and the

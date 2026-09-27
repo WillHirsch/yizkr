@@ -154,6 +154,8 @@ CORRESPONDENCE = [
     "No scans were included in the envelope.",
     "Unfortunately the image files could not be opened on my computer.",
     "Dear Nora, I couldn't open the PDF, so could you post a copy?",
+    # opening the message, freed only by naming who sent the attachment
+    "I couldn't open the attachment you sent, could you send the scans again?",
 ]
 
 # replies that decline their reader's request in an engine refusal's words
@@ -175,10 +177,21 @@ TRANSCRIBING_LETTERS = [
 # engine notes on the pages they skipped, each after a page of text
 PAGE_FAILURES = [
     PAGE_FAILURE,
+    # opening a page section, after its heading
     "--- Page 2 ---\nThe image could not be loaded.",
     "Page 2: I could not open the image.",
+    "[Page 2]\nI could not open the image.",
+    # opening a labelled line
+    "Note: I was unable to open the second image, so it is not transcribed.",
+    "(Note: I was unable to open the second image, so it is not transcribed.)",
+    "*Note: I was unable to open the second image, so it is not transcribed.*",
+    # naming the pages skipped
     "The PDF could not be rendered beyond page 1.",
     "I could not read the rest of the PDF.",
+    "(The remaining pages could not be read.)",
+    "Page 2 could not be read.",
+    "I couldn't read the remaining pages.",
+    "I could not read pages 3 and 4.",
 ]
 
 
@@ -258,6 +271,53 @@ class TestSignatures:
                 "I cannot transcribe this image fully, but here is what I "
                 "can read:",
             ),
+            # declining part of the task's document
+            (
+                "refusal-transcribe",
+                "I'm unable to transcribe the rest of this document.",
+            ),
+            (
+                "refusal-transcribe",
+                "I'm unable to transcribe most of this page.",
+            ),
+            (
+                "refusal-transcribe",
+                "I'm unable to transcribe the handwritten portion of this "
+                "document.",
+            ),
+            # nothing named: the sentence ends
+            ("refusal-transcribe", "I'm not able to provide a transcription."),
+            # a sentence announcing the task, naming the medium or the tool
+            (
+                "media-unreadable",
+                "Let me take a look at the image.I'm unable to open the "
+                "image file; it may be corrupted.",
+            ),
+            (
+                "media-unreadable",
+                "I'll use the Read tool to examine the image.I couldn't open "
+                "the image.",
+            ),
+            (
+                "media-missing",
+                "I'll analyze the image.I don't see any image at that path.",
+            ),
+            # the announcement joined straight onto the first page heading
+            (
+                "media-unreadable",
+                "I'll read the PDF file.**Page 1**\n\nI was unable to open "
+                "this image.",
+            ),
+            (
+                "refusal-transcribe",
+                "Page 2 (back)\nI can't transcribe this page.",
+            ),
+            # words between the determiner and the medium
+            ("media-unreadable", "The scanned image could not be read."),
+            ("media-unreadable", "The second image could not be loaded."),
+            ("media-unreadable", "The PDF file appears to be corrupted."),
+            # the prompt's own wording is the task's, not a correspondent's
+            ("media-unreadable", "I couldn't open the image of the document."),
         ],
     )
     def test_engine_note_opening_the_output_fails(self, name, text):
@@ -265,11 +325,36 @@ class TestSignatures:
         assert not check.passed
         assert check.signature == name
 
-    def test_refusal_on_a_skipped_page_fails_after_text(self):
-        text = f"{a_page()}\n\nI can't transcribe page 2 because it is faint."
-        check = check_transcription(text, pages=2)
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "I can't transcribe page 2 because it is faint.",
+            "Page 2 (back)\nI can't transcribe this page.",
+            "Page 2 - back\nI can't transcribe this page.",
+        ],
+    )
+    def test_refusal_on_a_skipped_page_fails_after_text(self, note):
+        check = check_transcription(f"{a_page()}\n\n{note}", pages=2)
         assert not check.passed
         assert check.signature == "refusal-transcribe"
+
+    def test_every_note_is_judged_not_only_the_first(self):
+        # a correspondent's own note first does not hide the engine's note
+        # on a later page
+        text = (
+            "Sorry, I wasn't able to open the PDF of the census page.\n\n"
+            "Page 2: I could not open the image."
+        )
+        check = check_transcription(text, pages=2)
+        assert not check.passed
+        assert check.signature == "media-unreadable"
+
+    def test_page_that_could_not_be_read_fails_even_in_a_letter(self):
+        # a page named as unread fails anywhere: a silent partial
+        # transcription is worse than a visible failure, so a letter that
+        # says so fails too
+        line = "The last page could not be read, the ink had run."
+        assert not check_transcription(f"{a_page()}\n{line}", pages=2).passed
 
     @pytest.mark.parametrize("line", TRANSCRIBING_LETTERS)
     def test_letter_declining_its_own_writing_passes(self, line):
