@@ -3,8 +3,9 @@
 Status: **accepted** — design settled through an adversarial design panel (three
 approaches, each critiqued, synthesised); implemented: a `Finding.axis` field,
 a review-CSV column, an `accept-all` disposition + writer edit summary, and the
-`under-witnessed-statements.rq` query (live validation of the query pending,
-#23). Renumbered from local ADR-0022 when reconciling with origin (#18). **Amends ADR-0022** (its §6 per-name uncertainty
+`under-witnessed-statements.rq` query, live-validated on a fictional fixture
+(#23; see §5 for the two row-shape fixes that validation made). Renumbered
+from local ADR-0022 when reconciling with origin (#18). **Amends ADR-0022** (its §6 per-name uncertainty
 treatment is *generalised*, not overturned) and **ADR-0013** (the extraction
 critic's `Finding` gains an `axis`). Sibling to **ADR-0020** ("don't store a
 derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance),
@@ -150,6 +151,14 @@ properties. Its header must state — ADR-0002 style — that this is a **queue,
 defect report**, and it must be labelled **"under-witnessed / low-scrutiny," not
 "contentious":** it measures under-witnessing (which can invert true
 contentiousness) and it cannot see the predicate axis.
+
+Amended by #23 (2026-09-27), from its live validation: the queue returns **one
+row per statement** (it projects the statement node, the reviewer's handle for
+re-appraisal), so two same-value statements that differ only by a qualifier —
+distinct assertions under ADR-0002 — are no longer collapsed into one row; and a
+time value carries its **stated precision**, so a year-precision date is not
+displayed as 1 January of that year (rule 5). The selection criteria above are
+unchanged.
 
 ### 6. Capture the bulk-accept subset off-graph
 

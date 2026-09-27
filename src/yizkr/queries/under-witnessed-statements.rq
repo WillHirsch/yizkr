@@ -9,23 +9,27 @@
 # Coexistence is a healthy resting state (ADR-0002): a well-witnessed or
 # curator-touched value is deliberately absent. Bulk-accepted writes are the
 # sharpest subset; that disposition lives in the reviewed CSV and MediaWiki
-# history (ADR-0023), not the graph. Scope it by adding a VALUES filter, e.g.
+# history (ADR-0023), not the graph. One row per statement: two same-value
+# statements that differ by a qualifier are two assertions (ADR-0002). A time
+# value carries its stated precision (display must never pad or narrow).
+# Scope it by adding a VALUES filter, e.g.
 # `VALUES ?prop { wd:{P:birth_name} wd:{P:married_name} }` for the name case.
-SELECT DISTINCT ?subject ?subjectLabel ?propertyLabel ?value ?valueLabel ?source
+SELECT DISTINCT ?statement ?subject ?subjectLabel ?propertyLabel
+       ?value ?valueLabel ?precision ?source
 WHERE {
   ?prop wikibase:claim ?p ;
         wikibase:statementProperty ?ps ;
         rdfs:label ?propertyLabel .
   FILTER(LANG(?propertyLabel) = "en")
-  ?subject ?p ?st .
-  ?st ?ps ?value .
+  ?subject ?p ?statement .
+  ?statement ?ps ?value .
   # machine-written: this statement is derived from an extraction run
-  ?st prov:wasDerivedFrom/pr:{P:inferred_from_extraction_run} ?run .
+  ?statement prov:wasDerivedFrom/pr:{P:inferred_from_extraction_run} ?run .
   # under-corroborated: exactly one distinct stated-in source (no agreeing
   # second source has been added, cf. writer's additional-source path)
-  ?st prov:wasDerivedFrom/pr:{P:stated_in} ?source .
+  ?statement prov:wasDerivedFrom/pr:{P:stated_in} ?source .
   FILTER NOT EXISTS {
-    ?st prov:wasDerivedFrom/pr:{P:stated_in} ?source2 .
+    ?statement prov:wasDerivedFrom/pr:{P:stated_in} ?source2 .
     FILTER(?source2 != ?source)
   }
   # no curator sibling: a human write carries NO extraction-run reference
@@ -33,12 +37,18 @@ WHERE {
   # count as a witness — its absence is what makes this one under-witnessed
   FILTER NOT EXISTS {
     ?subject ?p ?curatorSt .
-    FILTER(?curatorSt != ?st)
+    FILTER(?curatorSt != ?statement)
     FILTER NOT EXISTS {
       ?curatorSt prov:wasDerivedFrom/pr:{P:inferred_from_extraction_run} ?anyRun .
     }
   }
+  # stated precision for time values (a bare year is not 1 January)
+  OPTIONAL {
+    ?prop wikibase:statementValue ?psv .
+    ?statement ?psv ?valueNode .
+    ?valueNode wikibase:timePrecision ?precision .
+  }
   OPTIONAL { ?subject rdfs:label ?subjectLabel . FILTER(LANG(?subjectLabel) = "en") }
   OPTIONAL { ?value rdfs:label ?valueLabel . FILTER(LANG(?valueLabel) = "en") }
 }
-ORDER BY ?subjectLabel ?propertyLabel
+ORDER BY ?subjectLabel ?propertyLabel ?statement
