@@ -132,11 +132,15 @@ TASK_LETTER = (
     "as father was ill and the roads were closed for weeks."
 )
 
+# a short genuine text: the studio's stamp on the universe's studio
+# portrait
+STAMP = "Photograph Brüsrich · Peiltal"
+
 # an invented witness whose surname is also the PDF renderer's package
 SURNAME_LINES = [
-    "Witness: Anna Poppler, of Springfield, aged 40.",
-    "WITNESS: ANNA POPPLER, OF SPRINGFIELD, AGED 40.",
-    "Received from Poppler, Springfield, the sum of 40 marks.",
+    "Witness: A. Poppler, of Flörburg, aged 40.",
+    "WITNESS: A. POPPLER, OF FLÖRBURG, AGED 40.",
+    "Received from Poppler, Flörburg, the sum of 40 marks.",
     "The congregation installed Poppler as its cantor.",
 ]
 
@@ -146,14 +150,15 @@ SURNAME_LINES = [
 CORRESPONDENCE = [
     "Dear cousin, thank you for your email. I couldn't open the attachment "
     "you sent, could you send the scans again? I would like to add the "
-    "passenger list to the tree before the reunion. Love, Nora",
-    "Hi Nora, I don't see any attachment on your last message. Best, Iggy",
+    "postcard to the tree before the reunion. Love, Nicholas",
+    "Hi Nicholas, I don't see any attachment on your last message. Best, "
+    "Clara",
     "Sorry, I wasn't able to open the PDF of the census page. Can you "
-    "resend? I want to check the ages against the passenger list before I "
-    "write to the tracing service. Love, Nora",
+    "resend? I want to check the ages against the birth extract before I "
+    "write to the Standesamt Flörburg. Love, Nicholas",
     "No scans were included in the envelope.",
     "Unfortunately the image files could not be opened on my computer.",
-    "Dear Nora, I couldn't open the PDF, so could you post a copy?",
+    "Dear Nicholas, I couldn't open the PDF, so could you post a copy?",
     # opening the message, freed only by naming who sent the attachment
     "I couldn't open the attachment you sent, could you send the scans again?",
 ]
@@ -170,8 +175,8 @@ REPLIES = [
 TRANSCRIBING_LETTERS = [
     "I can't transcribe the old handwriting on the back of the photograph; "
     "could you?",
-    "Dear Nora, I cannot transcribe the old script, so I have sent the card "
-    "on to Friedl.",
+    "Dear Clara, I cannot transcribe the old script, so I am sending you a "
+    "copy of the postcard.",
 ]
 
 # engine notes on the pages they skipped, each after a page of text
@@ -453,8 +458,8 @@ class TestPlausibility:
         assert minimum_text_chars(10) == 10 * MIN_TEXT_CHARS_PER_PAGE
 
     def test_editorial_marks_do_not_count(self):
-        assert text_char_count("Som[?]mer [illegible] 1929") == len(
-            "Sommer1929"
+        assert text_char_count("Brunnen[?]ring [illegible] 35") == len(
+            "Brunnenring35"
         )
 
     def test_near_empty_multi_page_output_fails(self):
@@ -478,7 +483,7 @@ class TestPlausibility:
         # photograph's front and its captioned back)
         assert check_transcription(a_caption(), pages=1).passed
         assert check_transcription(a_caption(), pages=2).passed
-        assert check_transcription("Sommer 1929", pages=2).passed
+        assert check_transcription(STAMP, pages=2).passed
 
     def test_at_the_floor_passes_and_below_fails(self):
         floor = minimum_text_chars(4)
@@ -493,7 +498,7 @@ class TestPlausibility:
 
 class TestVerdict:
     def test_step_has_its_own_name_and_version(self):
-        check = check_transcription("Sommer 1929")
+        check = check_transcription(STAMP)
         assert check.stage == CHECK_STAGE == "transcription-check"
         assert check.version == CHECK_VERSION
 
@@ -511,7 +516,7 @@ class TestVerdict:
         assert f"v{CHECK_VERSION}" in str(caught.value)
 
     def test_require_returns_a_passing_verdict(self):
-        assert require_valid_transcription("Sommer 1929").passed
+        assert require_valid_transcription(STAMP).passed
 
     def test_recorded_phrase_is_capped(self):
         text = "Let me read the image file" + " very carefully" * 20 + "."
@@ -566,7 +571,7 @@ class TestMediaPageCount:
         assert media_page_count(tmp_path / "scan.TIFF") == 1
 
     def test_other_files_are_unknown(self, tmp_path):
-        assert media_page_count(tmp_path / "memoir.txt") is None
+        assert media_page_count(tmp_path / "interview.txt") is None
 
     def test_pdf_count_comes_from_pdfinfo(self, tmp_path, monkeypatch):
         fake = FakeRun(stdout="Title:  x\nPages:          3\nEncrypted: no\n")
@@ -652,9 +657,9 @@ class TestPreflight:
 
     def test_images_need_no_renderer(self, tmp_path, monkeypatch):
         monkeypatch.setattr(transcribe.shutil, "which", no_tools)
-        llm = FakeLlm("Sommer 1929")
+        llm = FakeLlm(STAMP)
         result = LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
-        assert result.text == "Sommer 1929"
+        assert result.text == STAMP
 
 
 class TestTranscribers:
