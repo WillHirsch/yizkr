@@ -743,7 +743,8 @@ def test_organization_employer_and_type_hint_write(client, artifact):
 
 def kinship_batch(artifact_qid: str) -> ClaimBatch:
     """ADR-0014: sex_or_gender (vocab), the `relative` + kinship_type
-    fallback, member_of an organization, and a deportation event."""
+    fallback, and a deportation event. The named relative is the
+    `relative` statement's subject and the ego its object (ADR-0018)."""
     source = {
         "artifact": {"kind": "qid", "qid": artifact_qid},
         "page_number": "1",
@@ -771,9 +772,9 @@ def kinship_batch(artifact_qid: str) -> ClaimBatch:
                     "source": source,
                 },  # fmt: skip
                 {
-                    "subject": person,
+                    "subject": aunt,
                     "property": "relative",
-                    "value": {"type": "item", "value": aunt},
+                    "value": {"type": "item", "value": person},
                     "qualifiers": [
                         {
                             "property": "kinship_type",
@@ -838,10 +839,13 @@ def test_adr0014_vocabulary_writes(client, artifact):
         for c in cs
     }
 
-    # `relative` carries the verbatim kinship_type qualifier
-    rel = client.api_get({"action": "wbgetclaims", "entity": person_qid,
+    # `relative` runs from the aunt to the ego and carries the verbatim
+    # kinship_type qualifier
+    aunt_qid = result.created_items["aunt-1"]
+    rel = client.api_get({"action": "wbgetclaims", "entity": aunt_qid,
                           "property": properties["relative"]})  # fmt: skip
     (claim,) = [c for cs in rel["claims"].values() for c in cs]
+    assert claim["mainsnak"]["datavalue"]["value"]["id"] == person_qid
     quals = claim.get("qualifiers", {}).get(properties["kinship_type"], [])
     assert any(q["datavalue"]["value"] == "maternal aunt" for q in quals)
 
