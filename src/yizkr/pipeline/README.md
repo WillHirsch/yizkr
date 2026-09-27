@@ -49,22 +49,35 @@ save the reviewed CSV, then continues on the next `ingest run`.
   determination, never curation (ADR-0020).
 
 **What keeps it safe.** A gate opens only when its `*.reviewed.csv` exists
-*and* is newer than the CSV it reviews — edit the source CSV and the gate
-re-arms. A re-extracted batch moves both reviewed files aside as
-`*.reviewed.superseded-<n>.csv` (kept, never deleted), so decisions about
-the old rows cannot open gates for the new ones. No reviewed file, nothing
-writes; identity is never auto-confirmed
-and no claim reaches the graph without an explicit `approve` (R3, ADR-0007).
+*and* reviews the CSV as it is now: a reviewed file is bound, by content
+hash, to the CSV it was first seen with, so editing the source CSV re-arms
+the gate. A batch whose content changed moves both reviewed files aside as
+`*.reviewed.superseded-<n>.csv` (kept, never deleted), and so does a
+re-exported CSV whose rows changed, so decisions about the old rows cannot
+open gates for the new ones. No reviewed file, nothing writes; identity is
+never auto-confirmed and no claim reaches the graph without an explicit
+`approve` (R3, ADR-0007).
 
 **Reading a run.** Each document prints a status — `awaiting equivalences
 review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done), or
 `failed` (errored; just re-run to retry). The exit code summarises the
 batch: `0` all written, `2` something awaits you, `1` something failed.
 Re-running is always safe: finished work is skipped, and a corrected
-upstream file re-does only what depends on it (make-style freshness).
+upstream file re-does only what depends on it (make-style, by content hash,
+never by modification time).
 
-State for each document lives in `var/runs/<folder>/<doc>/` — every stage's
-output is a plain file you can open, correct, or delete to force a redo.
+Every stage before the gates reads and writes through the stage store
+(`var/stages`, `--store`): each output is keyed by its input content and
+everything that shapes it, so a re-run reuses what is unchanged and
+recomputes only what a change reaches; `--recompute <stage>` forces one.
+State for each document lives in `var/runs/<folder>/<doc>/`: plain-file
+views of the stage outputs (`transcription.json`, `batch.json`,
+`critique.json`) and the files the later steps derive from them. To correct
+a transcription, save the corrected text as `transcription.corrected.txt`
+there. `var/runs/<folder>/` is also the run directory, with an event for
+every stage reuse, store and failure. See
+[docs/STAGE_STORE.md](../../../docs/STAGE_STORE.md) for keys, reuse, the
+stage-version registry (`yizkr stages check`) and the run directory.
 GEDCOM (`.ged`) files take a deterministic adapter in place of
 transcribe/extract; the gates, resolve, and write are identical.
 

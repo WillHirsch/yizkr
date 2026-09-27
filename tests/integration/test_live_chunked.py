@@ -52,7 +52,6 @@ def test_chunked_extraction_end_to_end(tmp_path):
     assert any("Anna" in entity.label for entity in batch.entities)
     # every claim carries its source (pydantic enforces; belt and braces)
     assert all(claim.source.artifact for claim in batch.claims)
-    # state dir materialized for inspection/resume
-    assert (tmp_path / "chunks" / "entity-manifest.json").exists()
-    assert (tmp_path / "chunks" / "manifest.json").exists()
-    assert (tmp_path / "chunks" / "coverage.json").exists()
+    # every phase stored in the stage store for inspection and reuse (#87)
+    assert extractor.batch_record is not None
+    assert extractor.batch_record.extra("coverage.json")

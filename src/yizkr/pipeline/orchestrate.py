@@ -18,35 +18,47 @@ A run refuses to start without a never-ingest list
 the list is skipped at discovery, before any step reads it
 (yizkr.core.corpus).
 
-A reviewed file's PRESENCE (and freshness) is the gate: the
-orchestrator never interprets a half-filled CSV as consent, and a
-reviewed file older than the CSV it reviews is a decision about
-superseded rows, not consent for the current ones. Documents whose
-reconcile produced no proposals skip the first gate (there is nothing
-to review).
+The stages before the gates (transcription, entity manifest, chunks,
+batch, critique, and the GEDCOM adapter) read and write through the
+stage store (yizkr.pipeline.stages): each output is keyed by its input
+content and everything that shapes it, so a re-run reuses what is
+unchanged and recomputes only what a change reaches. The transcription
+is routed per document (vision, text file, slide text); a curator's
+`<doc>/transcription.corrected.txt` routes it to the correction instead,
+and invalidates exactly what depends on the text.
 
-State lives beside the outputs in the state directory (runtime state —
-keep it under var/ or outside the repo; the repo carries no personal
-data). Every step's output is a plain file, so any step can be
-inspected, corrected upstream, or re-run by deleting its output;
-dependencies are make-style (a corrected transcription re-extracts, a
-re-extracted batch invalidates every derived file and moves the reviewed
-files aside as `*.reviewed.superseded-<n>.csv`, a re-reviewed CSV
-re-writes). Re-running a completed document is a no-op (the writer is
-idempotent).
+The document directory keeps plain-file views for reading and review:
+`transcription.json`, `batch.json`, `critique.json` and the files the
+later steps derive from them. Dependencies are make-style by content
+hash, never by modification time (`derivations.json`): a changed batch
+invalidates every file derived from it and moves the reviewed files
+aside as `*.reviewed.superseded-<n>.csv`; a re-exported CSV whose
+content changed moves its reviewed file aside too; and a reviewed file
+is consent only for the CSV it was first seen with, so editing the
+reviewed CSV re-writes and editing the CSV it reviews re-arms the gate.
+A reviewed file's PRESENCE is the gate: the orchestrator never
+interprets a half-filled CSV as consent. Documents whose reconcile
+produced no proposals skip the first gate (there is nothing to review).
+
+The state directory is also the run directory (yizkr.pipeline.rundir):
+`run.json`, `events.jsonl` with an event for every stage reuse, store
+and failure, and `control.jsonl`, whose pause and abort requests stop
+dispatch. It is runtime state — keep it under var/ or outside the repo.
+Re-running a completed document is a no-op (the writer is idempotent).
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shutil
 import sys
 import threading
+from collections.abc import Callable, Collection
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
@@ -57,6 +69,26 @@ from yizkr.core.corpus import (
     is_excluded,
 )
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline.rundir import RUN_END, RUN_INTERRUPTED, RunDir
+from yizkr.pipeline.stages import (
+    DeferredClient,
+    DispatchStopped,
+    Recompute,
+    RecordingClient,
+    StageFailed,
+    StageResult,
+    StageScope,
+    StageStore,
+    atomic_write_text,
+    content_hash,
+    doc_scope,
+    manifest_hash,
+    model_spec,
+    sha1_file,
+    sha256_file,
+    stage_key,
+)
+from yizkr.pipeline.stageversions import BATCH_VOLATILE
 
 GEDCOM_SUFFIXES = {".ged"}
 TEXT_SUFFIXES = {".txt", ".md"}
@@ -78,6 +110,47 @@ FAILED = "failed"
 # same run: identical content is one artifact, so it is not transcribed,
 # extracted, or written again (ADR-0010)
 DUPLICATE = "duplicate"
+# the run's control file held the document's next stage
+PAUSED = "paused"
+
+# the stages the store holds for each kind of document, in order
+_EXTRACTED = ("transcription", "entity_manifest", "chunk", "batch", "critique")
+DOCUMENT_STAGES = {
+    "gedcom": ("gedcom",),
+    "presentation": _EXTRACTED,
+    "text": _EXTRACTED,
+    "media": _EXTRACTED,
+}
+
+
+def document_kind(source: Path) -> str:
+    """The kind of source a document is: a run's slices are kinds."""
+    suffix = source.suffix.lower()
+    if suffix in GEDCOM_SUFFIXES:
+        return "gedcom"
+    if suffix in PRESENTATION_SUFFIXES:
+        return "presentation"
+    if suffix in TEXT_SUFFIXES:
+        return "text"
+    return "media"
+
+
+def route_transcription(source: Path, correction: Path | None = None) -> str:
+    """The transcription method for a document, chosen deterministically.
+
+    A curator's correction wins; otherwise the source decides: slide text
+    is data in a deck, a text file is its own transcription, and anything
+    else is read by the vision engine. The method, and only its version,
+    is part of the transcription's key, so a new or changed method
+    recomputes only the documents routed to it."""
+    if correction is not None and correction.is_file():
+        return "correction"
+    suffix = source.suffix.lower()
+    if suffix in PRESENTATION_SUFFIXES:
+        return "slide-text"
+    if suffix in TEXT_SUFFIXES:
+        return "text-file"
+    return "vision"
 
 
 @dataclass
@@ -102,6 +175,99 @@ class DocumentState:
         path.write_text(json.dumps(self.__dict__, indent=2))
 
 
+class Derivations:
+    """What each derived file of a document was made from, by content hash.
+
+    The make-style dependency record behind safe re-runs, kept in
+    `derivations.json`: a derived file is current while the inputs it was
+    made from still hash the same; a reviewed CSV consents while neither
+    it nor the CSV it reviews has changed since it was first seen; and the
+    batch view's canonical content hash says whether a regenerated batch
+    is really new. Modification times are never consulted.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        # a document directory with state but no record: each derived
+        # file already there is taken as current the first time it is
+        # seen, and recorded. A changed batch deletes every derived file,
+        # so none can outlive the batch it came from.
+        self.legacy = (
+            not path.exists() and (path.parent / "state.json").exists()
+        )
+
+    def _load(self) -> dict:
+        try:
+            data = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            data = {}
+        for section in ("derived", "reviews", "content"):
+            data.setdefault(section, {})
+        return data
+
+    def _save(self, data: dict) -> None:
+        atomic_write_text(
+            self.path, json.dumps(data, indent=2, sort_keys=True)
+        )
+
+    def current(self, output: Path, *inputs: Path) -> bool:
+        if not output.exists():
+            return False
+        recorded = self._load()["derived"].get(output.name)
+        if recorded is None and self.legacy:
+            self.record(output, *inputs)
+            return True
+        return recorded == {path.name: sha256_file(path) for path in inputs}
+
+    def record(self, output: Path, *inputs: Path) -> None:
+        data = self._load()
+        data["derived"][output.name] = {
+            path.name: sha256_file(path) for path in inputs
+        }
+        self._save(data)
+
+    def forget(self, *outputs: Path) -> None:
+        data = self._load()
+        for output in outputs:
+            data["derived"].pop(output.name, None)
+            data["reviews"].pop(output.name, None)
+        self._save(data)
+
+    def consents(self, reviewed: Path, source: Path) -> bool:
+        """Is `reviewed` a decision about the current `source`?
+
+        A reviewed file seen for the first time, or saved again since, is
+        bound to the CSV as it is now. While it stays unchanged it consents
+        only as long as that CSV does too."""
+        if not reviewed.exists():
+            return False
+        data = self._load()
+        reviewed_hash, source_hash = sha256_file(reviewed), sha256_file(source)
+        binding = data["reviews"].get(reviewed.name)
+        if binding is None or binding.get("reviewed") != reviewed_hash:
+            data["reviews"][reviewed.name] = {
+                "reviewed": reviewed_hash,
+                "reviews": source.name,
+                "source": source_hash,
+            }
+            self._save(data)
+            return True
+        return binding.get("source") == source_hash
+
+    def bound_source(self, reviewed: Path) -> str | None:
+        """The hash of the CSV `reviewed` was bound to, if it was seen."""
+        binding = self._load()["reviews"].get(reviewed.name)
+        return binding.get("source") if binding else None
+
+    def content(self, name: str) -> str | None:
+        return self._load()["content"].get(name)
+
+    def set_content(self, name: str, digest: str) -> None:
+        data = self._load()
+        data["content"][name] = digest
+        self._save(data)
+
+
 def slugify(name: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.")
     return slug or "document"
@@ -115,6 +281,9 @@ class DocumentRun:
         self.dir = state_dir / slugify(source.stem)
         self.state_path = self.dir / "state.json"
         self.transcription = self.dir / "transcription.json"
+        # a curator's corrected transcription (plain text); when present
+        # it is the document's transcription
+        self.correction = self.dir / "transcription.corrected.txt"
         self.batch = self.dir / "batch.json"
         self.equivalences = self.dir / "equivalences.csv"
         self.equivalences_reviewed = self.dir / "equivalences.reviewed.csv"
@@ -126,20 +295,46 @@ class DocumentRun:
         # open-schema harness (ADR-0013)
         self.gaps = self.dir / "gaps.csv"
         self.critique = self.dir / "critique.json"
+        self.derivations = Derivations(self.dir / "derivations.json")
+        # gaps the last extraction found, for the gap review CSV
+        self.gaps_found: list[dict] = []
+        self._sha1: str | None = None
         if self.state_path.exists():
             self.state = DocumentState.load(self.state_path)
         else:
             self.state = DocumentState(file=str(source), title=source.stem)
 
+    @property
+    def sha1(self) -> str:
+        """The media SHA-1 of the source as it is now."""
+        if self._sha1 is None:
+            self._sha1 = sha1_file(self.source)
+        return self._sha1
+
+    @property
+    def kind(self) -> str:
+        return document_kind(self.source)
+
     def save(self) -> None:
         self.state.save(self.state_path)
+
+
+def _write_view(path: Path, text: str) -> None:
+    """Refresh a plain-file view, leaving an identical one untouched."""
+    try:
+        if path.read_text() == text:
+            return
+    except OSError:
+        pass
+    atomic_write_text(path, text)
 
 
 class Orchestrator:
     """Advances every document in a folder as far as review allows.
 
     Heavy operations live in small `_step_*` methods so the state
-    machine is testable offline with scripted substitutes.
+    machine is testable offline with scripted substitutes; engines come
+    from `_llm`, which tests replace with a scripted model.
     """
 
     def __init__(
@@ -159,6 +354,8 @@ class Orchestrator:
         extract_concurrency: int = 1,
         env_file: Path | None = None,
         exclusions: ExclusionList | None = None,
+        store_dir: Path | None = None,
+        recompute: Collection[str] = (),
         log=print,
     ) -> None:
         self.folder = folder
@@ -166,6 +363,14 @@ class Orchestrator:
         # an empty ExclusionList is an explicit configuration, None is none.
         self.exclusions = exclusions
         self.state_dir = state_dir
+        # stage outputs are shared across runs; a state directory without
+        # a named store keeps its own. The name cannot be a document slug.
+        self.store = StageStore(
+            store_dir if store_dir is not None else state_dir / ".stages"
+        )
+        self.rundir = RunDir(state_dir)
+        # stages to recompute once in this run even when a key matches
+        self.recompute = Recompute(recompute)
         self.llm = llm
         self.artifact_type = artifact_type
         self.language = language
@@ -216,6 +421,45 @@ class Orchestrator:
         if self._client is None:
             self._client = WikiClient(self.config)
         return self._client
+
+    # -- engines and stage scopes ------------------------------------------
+
+    def _engine_settings(self, role: str) -> tuple[str, str | None]:
+        """(effort, model override) for a role: transcribe, extract,
+        critique."""
+        if role == "critique":
+            return self.review_effort, None
+        if role == "extract":
+            return self.extract_effort, self.extract_model
+        return self.extract_effort, None
+
+    def _llm(self, role: str, doc: DocumentRun):
+        """The engine for one role on one document, started on first use."""
+        from yizkr.pipeline.llm import make_client
+
+        effort, model = self._engine_settings(role)
+        return DeferredClient(
+            lambda: make_client(self.llm, effort=effort, model=model)
+        )
+
+    def _model_spec(self, role: str) -> dict:
+        """The model component of a role's stage keys. Only the
+        claude-code engine takes an effort, so only it keys on one."""
+        effort, model = self._engine_settings(role)
+        return model_spec(
+            self.llm,
+            model=model,
+            effort=effort if self.llm == "claude-code" else None,
+        )
+
+    def _stages(self, doc: DocumentRun) -> StageScope:
+        return StageScope(
+            self.store,
+            doc_scope(doc.sha1),
+            events=self.rundir,
+            recompute=self.recompute,
+            kind=doc.kind,
+        )
 
     # -- document discovery --------------------------------------------------
 
@@ -304,94 +548,191 @@ class Orchestrator:
         return self._step_extract(doc, transcription)
 
     def _step_gedcom(self, doc: DocumentRun) -> ClaimBatch:
-        from yizkr.pipeline.gedcom import (
-            adapt_gedcom,
-            format_unsupported_tags,
+        # the adapter validates against the model manifest
+        key = stage_key(
+            "gedcom", inputs={"media": doc.sha1}, manifest=manifest_hash()
         )
+        outcome = self._stages(doc).run(
+            "gedcom",
+            key,
+            lambda: self._compute_gedcom(doc),
+            artifact_qid=doc.state.artifact_qid,
+        )
+        meta = outcome.record.meta
+        warnings = meta.get("warnings") or []
+        unsupported = meta.get("unsupported") or {}
+        if not outcome.reused:
+            from yizkr.pipeline.gedcom import format_unsupported_tags
+
+            for warning in warnings:
+                self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
+            if unsupported:
+                self.log(
+                    f"  {doc.source.name}: unsupported GEDCOM tags: "
+                    + format_unsupported_tags(unsupported),
+                    file=sys.stderr,
+                )
+        doc.state.detail = (doc.state.detail or {}) | {
+            "gedcom_warnings": warnings,
+            "gedcom_unsupported": unsupported,
+        }
+        return ClaimBatch.model_validate(
+            outcome.record.bound_output(doc.state.artifact_qid)
+        )
+
+    def _compute_gedcom(self, doc: DocumentRun) -> StageResult:
+        from yizkr.pipeline.gedcom import adapt_gedcom
 
         result = adapt_gedcom(
             doc.source.read_text(), artifact_qid=doc.state.artifact_qid
         )
-        for warning in result.warnings:
-            self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
-        if result.unsupported_tags:
-            self.log(
-                f"  {doc.source.name}: unsupported GEDCOM tags: "
-                + format_unsupported_tags(result.unsupported_tags),
-                file=sys.stderr,
-            )
-        doc.state.detail = (doc.state.detail or {}) | {
-            "gedcom_warnings": result.warnings,
-            "gedcom_unsupported": result.unsupported_tags,
-        }
-        return result.batch
+        return StageResult(
+            result.batch.model_dump(mode="json"),
+            meta={
+                "warnings": result.warnings,
+                "unsupported": result.unsupported_tags,
+            },
+        )
 
     def _step_transcribe(self, doc: DocumentRun):
-        from yizkr.pipeline.language import resolve_language
-        from yizkr.pipeline.transcribe import Transcription
+        from yizkr.pipeline.language import LanguageResolution
+        from yizkr.pipeline.transcribe import (
+            TRANSCRIPTION_PROMPT,
+            Transcription,
+        )
 
-        if doc.transcription.exists():
-            return Transcription.model_validate_json(
-                doc.transcription.read_text()
-            )
-        if doc.source.suffix.lower() in PRESENTATION_SUFFIXES:
-            # deterministic: slide text is data in the file, not an
-            # image to read; [Slide N] markers scope the claim locators
-            from yizkr.pipeline.presentation import slide_transcript
-
-            text = slide_transcript(self._presentation(doc))
-            resolution = resolve_language(
-                text, self.language, fallback=self.fallback_language
-            )
-            transcription = Transcription(
-                artifact_qid=doc.state.artifact_qid,
-                text=text,
-                language=resolution.code,
-                engine="pptx-adapter",
-            )
-        else:
-            if doc.source.suffix.lower() in TEXT_SUFFIXES:
-                from yizkr.pipeline.transcribe import TextFileTranscriber
-
-                transcriber = TextFileTranscriber(
-                    doc.source,
-                    language=self.language,
-                    fallback_language=self.fallback_language,
-                )
-            else:
-                from yizkr.pipeline.llm import make_client
-                from yizkr.pipeline.transcribe import LlmVisionTranscriber
-
-                transcriber = LlmVisionTranscriber(
-                    make_client(self.llm, effort=self.extract_effort),
-                    language=self.language,
-                    fallback_language=self.fallback_language,
-                )
-            transcription = transcriber.transcribe(
-                doc.source, artifact_qid=doc.state.artifact_qid
-            )
-            resolution = transcriber.last_resolution
+        method = route_transcription(doc.source, doc.correction)
+        inputs = {"media": doc.sha1}
+        if method == "correction":
+            inputs["correction"] = sha256_file(doc.correction)
+        vision = method == "vision"
+        key = stage_key(
+            "transcription",
+            method=method,
+            inputs=inputs,
+            prompts={"vision": TRANSCRIPTION_PROMPT} if vision else None,
+            model=self._model_spec("transcribe") if vision else None,
+            params={
+                "language": self.language,
+                "fallback_language": self.fallback_language,
+            },
+        )
+        outcome = self._stages(doc).run(
+            "transcription",
+            key,
+            lambda: self._compute_transcription(doc, method),
+        )
+        output = outcome.record.output()
+        transcription = Transcription.model_validate(
+            output["transcription"] | {"artifact_qid": doc.state.artifact_qid}
+        )
         # detection is a per-document choice with real graph effect (the
         # excerpt language tag): record it, and surface it when it was
         # inferred rather than forced, so a wrong guess is reviewable.
-        if resolution is not None:
-            doc.state.detail = (doc.state.detail or {}) | {
+        language = output["language"]
+        doc.state.detail = (doc.state.detail or {}) | {"language": language}
+        if self.language == "auto" and not outcome.reused:
+            self.log(
+                f"  {doc.source.name}: language "
+                f"{LanguageResolution(**language).describe()}"
+            )
+        _write_view(doc.transcription, transcription.model_dump_json(indent=2))
+        return transcription
+
+    def _compute_transcription(
+        self, doc: DocumentRun, method: str
+    ) -> StageResult:
+        """The transcription stage: the routed method's text, its language
+        and the raw engine responses. The stored transcription carries no
+        artifact QID; it is bound when read."""
+        transcribe = {
+            "vision": self._transcribe_vision,
+            "text-file": self._transcribe_text_file,
+            "slide-text": self._transcribe_slides,
+            "correction": self._transcribe_correction,
+        }[method]
+        transcription, resolution, raw, meta = transcribe(doc)
+        return StageResult(
+            {
+                "transcription": transcription.model_dump(
+                    mode="json", exclude={"artifact_qid"}
+                ),
                 "language": {
                     "code": resolution.code,
                     "source": resolution.source,
                     "confidence": resolution.confidence,
-                }
-            }
-            if self.language == "auto":
-                self.log(
-                    f"  {doc.source.name}: language {resolution.describe()}"
-                )
-        doc.transcription.write_text(transcription.model_dump_json(indent=2))
-        return transcription
+                },
+            },
+            raw=raw,
+            meta=meta,
+        )
+
+    def _transcribe_vision(self, doc: DocumentRun):
+        from yizkr.pipeline.transcribe import LlmVisionTranscriber
+
+        client = RecordingClient(self._llm("transcribe", doc))
+        transcriber = LlmVisionTranscriber(
+            client,
+            language=self.language,
+            fallback_language=self.fallback_language,
+        )
+        try:
+            transcription = transcriber.transcribe(doc.source)
+        except Exception as exc:
+            # the failure log keeps what the engine said, for diagnosis
+            raise StageFailed(
+                f"{type(exc).__name__}: {exc}",
+                raw=client.responses[-1] if client.responses else None,
+            ) from exc
+        return (
+            transcription,
+            transcriber.last_resolution,
+            client.responses,
+            {"model_identifier": client.model_identifier},
+        )
+
+    def _transcribe_text_file(self, doc: DocumentRun):
+        from yizkr.pipeline.transcribe import TextFileTranscriber
+
+        transcriber = TextFileTranscriber(
+            doc.source,
+            language=self.language,
+            fallback_language=self.fallback_language,
+        )
+        transcription = transcriber.transcribe(doc.source)
+        return transcription, transcriber.last_resolution, [], {}
+
+    def _transcribe_slides(self, doc: DocumentRun):
+        # deterministic: slide text is data in the file, not an image to
+        # read; [Slide N] markers scope the claim locators
+        from yizkr.pipeline.language import resolve_language
+        from yizkr.pipeline.presentation import slide_transcript
+        from yizkr.pipeline.transcribe import Transcription
+
+        text = slide_transcript(self._presentation(doc))
+        resolution = resolve_language(
+            text, self.language, fallback=self.fallback_language
+        )
+        transcription = Transcription(
+            text=text, language=resolution.code, engine="pptx-adapter"
+        )
+        return transcription, resolution, [], {}
+
+    def _transcribe_correction(self, doc: DocumentRun):
+        from yizkr.pipeline.language import resolve_language
+        from yizkr.pipeline.transcribe import Transcription
+
+        text = doc.correction.read_text()
+        resolution = resolve_language(
+            text, self.language, fallback=self.fallback_language
+        )
+        transcription = Transcription(
+            text=text, language=resolution.code, engine="correction"
+        )
+        return transcription, resolution, [], {}
 
     def _step_extract(self, doc: DocumentRun, transcription) -> ClaimBatch:
         from yizkr.pipeline.chunking import ChunkedClaimExtractor
-        from yizkr.pipeline.llm import make_client
 
         # always entity-first (ADR-0007), even for documents that fit a
         # single call: reconciliation NEEDS the entity manifest, and a
@@ -401,17 +742,16 @@ class Orchestrator:
         # small document costs a few extra calls and is never incorrect
         # (ADR-0006 §7).
         extractor = ChunkedClaimExtractor(
-            make_client(
-                self.llm, effort=self.extract_effort, model=self.extract_model
-            ),
-            state_dir=doc.batch.with_name(doc.batch.name + ".chunks"),
-            resume=True,
+            self._llm("extract", doc),
+            stages=self._stages(doc),
+            model=self._model_spec("extract"),
             concurrency=self.chunk_concurrency,
             log=self.log,
         )
         batch = extractor.extract(
             transcription, artifact_qid=doc.state.artifact_qid
         )
+        doc.gaps_found = extractor.gaps
         failed = getattr(extractor, "failed_chunks", None)
         if failed:
             raise RuntimeError(
@@ -483,17 +823,8 @@ class Orchestrator:
     # -- open-schema harness (ADR-0013) --------------------------------------
 
     def _surface_gaps(self, doc: DocumentRun) -> None:
-        """Render the extractor's gap log to a per-document review CSV."""
-        source = (
-            doc.batch.with_name(doc.batch.name + ".chunks") / "gaps.ndjson"
-        )
-        if not source.exists():
-            return
-        gaps = [
-            json.loads(line)
-            for line in source.read_text().splitlines()
-            if line.strip()
-        ]
+        """Render the extraction's gap log to a per-document review CSV."""
+        gaps = doc.gaps_found
         if not gaps:
             return
         import csv as _csv
@@ -511,16 +842,32 @@ class Orchestrator:
         )
 
     def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
-        from yizkr.pipeline.critique import run_critique
-        from yizkr.pipeline.llm import make_client
+        from yizkr.pipeline.critique import CRITIQUE_PROMPT, Finding
 
-        findings = run_critique(
-            make_client(self.llm, effort=self.review_effort), batch
+        key = stage_key(
+            "critique",
+            inputs={
+                "batch": content_hash(
+                    batch.model_dump(mode="json"),
+                    volatile=BATCH_VOLATILE,
+                    artifact_qid=doc.state.artifact_qid,
+                )
+            },
+            prompts={"critique": CRITIQUE_PROMPT},
+            model=self._model_spec("critique"),
         )
-        doc.critique.write_text(
-            json.dumps([f.model_dump() for f in findings], indent=2)
+        outcome = self._stages(doc).run(
+            "critique", key, lambda: self._compute_critique(doc, batch)
         )
-        if findings:
+        found = outcome.record.output()
+        _write_view(doc.critique, json.dumps(found, indent=2))
+        findings = [
+            Finding.model_validate(
+                {key: value for key, value in item.items() if key != "axis"}
+            )
+            for item in found
+        ]
+        if findings and not outcome.reused:
             self.log(
                 f"  critique: {len(findings)} concern(s) flagged for review"
             )
@@ -529,6 +876,21 @@ class Orchestrator:
                     f"    - {finding.target}: {finding.issue}", file=sys.stderr
                 )
         return findings
+
+    def _compute_critique(
+        self, doc: DocumentRun, batch: ClaimBatch
+    ) -> StageResult:
+        from yizkr.pipeline.critique import run_critique
+
+        client = RecordingClient(self._llm("critique", doc))
+        findings = run_critique(client, batch)
+        return StageResult(
+            [finding.model_dump(mode="json") for finding in findings],
+            raw=client.responses,
+            meta={"model_identifier": client.model_identifier}
+            if client.responses
+            else {},
+        )
 
     def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
         """entity local_id -> concatenated critic concerns, for the review
@@ -576,6 +938,59 @@ class Orchestrator:
             "approved_claims": len(approved.claims),
         }
 
+    # -- views and derivations ----------------------------------------------
+
+    def _update_batch_view(self, doc: DocumentRun, batch: ClaimBatch) -> bool:
+        """Write `batch.json` for the current batch; True when its content
+        differs from the batch the document's derived files were made from.
+
+        Content is compared by canonical hash (run timestamps left out),
+        so an identical recompute, or a deleted view rebuilt from the
+        store, invalidates nothing."""
+        digest = content_hash(
+            batch.model_dump(mode="json"), volatile=BATCH_VOLATILE
+        )
+        recorded = doc.derivations.content(doc.batch.name)
+        if recorded is None and doc.batch.exists():
+            try:
+                existing = ClaimBatch.model_validate_json(
+                    doc.batch.read_text()
+                )
+                recorded = content_hash(
+                    existing.model_dump(mode="json"), volatile=BATCH_VOLATILE
+                )
+            except ValueError:
+                recorded = None
+        if recorded == digest:
+            if not doc.batch.exists():
+                atomic_write_text(doc.batch, batch.model_dump_json(indent=2))
+            doc.derivations.set_content(doc.batch.name, digest)
+            return False
+        atomic_write_text(doc.batch, batch.model_dump_json(indent=2))
+        doc.derivations.set_content(doc.batch.name, digest)
+        return True
+
+    def _export(
+        self,
+        doc: DocumentRun,
+        target: Path,
+        reviewed: Path,
+        produce: Callable[[], Any],
+    ) -> Any:
+        """(Re)write a CSV a human reviews. When its content differs from
+        the CSV the reviewed file decided on, move the reviewed file aside;
+        an identical re-export keeps it."""
+        before = doc.derivations.bound_source(reviewed) or sha256_file(target)
+        result = produce()
+        if sha256_file(target) != before and reviewed.exists():
+            _supersede(reviewed)
+            doc.derivations.forget(reviewed)
+            self.log(
+                f"  {target.name} changed: {reviewed.name} moved aside "
+                f"(review the new rows)"
+            )
+        return result
+
     # -- the state machine ----------------------------------------------------
 
     def advance(
@@ -588,6 +1003,11 @@ class Orchestrator:
         document's manifest before it can order them."""
         try:
             return self._advance(doc, stop_after_extract=stop_after_extract)
+        except DispatchStopped as exc:
+            # held by the control file: nothing failed, nothing is lost
+            doc.state.status = PAUSED
+            self.log(f"  {doc.source.name}: {exc}")
+            return PAUSED
         except Exception as exc:  # per-document isolation: others continue
             doc.state.status = FAILED
             doc.state.error = f"{type(exc).__name__}: {exc}"
@@ -606,7 +1026,7 @@ class Orchestrator:
         doc.dir.mkdir(parents=True, exist_ok=True)
         doc.state.error = None
 
-        content_sha1 = hashlib.sha1(doc.source.read_bytes()).hexdigest()
+        content_sha1 = doc.sha1
 
         # source bytes changed since this document was last processed: the
         # old artifact, claims, and reviews describe DIFFERENT content
@@ -660,40 +1080,37 @@ class Orchestrator:
             doc.save()
             self.log(f"  derived media: {len(derived)} item(s)")
 
-        if not doc.batch.exists():
-            batch = self._step_batch(doc)
-            # an upstream redo invalidates everything derived from the
-            # old batch — stale machine outputs must never gate or write
-            for stale in (doc.equivalences, doc.resolved, doc.review,
-                          doc.approved, doc.write_result,
-                          doc.gaps, doc.critique):  # fmt: skip
-                stale.unlink(missing_ok=True)
+        # every stage before the gates goes through the store: unchanged
+        # outputs are reused, so this costs nothing when nothing changed
+        batch = self._step_batch(doc)
+        if self._update_batch_view(doc, batch):
+            # a new batch invalidates everything derived from the old one
+            # — stale machine outputs must never gate or write
+            stale = (doc.equivalences, doc.resolved, doc.review,
+                     doc.approved, doc.write_result,
+                     doc.gaps, doc.critique)  # fmt: skip
+            for path in stale:
+                path.unlink(missing_ok=True)
+            doc.derivations.forget(*stale)
             # the reviewed files decide rows of the OLD batch: move them
-            # aside rather than leave them to an mtime race against the
-            # regenerated CSVs (on a coarse filesystem clock a stale review
-            # can tie with its replacement CSV and pass as consent)
+            # aside, never deleting a human's decisions
             for reviewed in (doc.equivalences_reviewed, doc.review_reviewed):
                 _supersede(reviewed)
-            doc.batch.write_text(batch.model_dump_json(indent=2))
+                doc.derivations.forget(reviewed)
             doc.state.status = BATCHED
             doc.save()
             self.log(f"  batch: {len(batch.claims)} claims")
             # open-schema harness (ADR-0013): surface unmappable relations
-            # and run the extraction critic once per batch generation
             self._surface_gaps(doc)
-            if doc.source.suffix.lower() not in GEDCOM_SUFFIXES:
-                self._step_critique(doc, batch)
-        else:
-            batch = ClaimBatch.model_validate_json(doc.batch.read_text())
-            # a valid cached batch means extraction succeeded, so a
-            # FAILED status is stale — left by a later step (e.g. a
-            # write-time outage) on a prior run. Clear it to BATCHED so a
-            # re-run reports the true state and flows on into reconcile,
-            # instead of echoing the old failure forever (the downstream
-            # gates re-derive the real status from here).
-            if doc.state.status == FAILED:
-                doc.state.status = BATCHED
-                doc.save()
+        elif doc.state.status in (FAILED, PAUSED, REGISTERED):
+            # the batch stands, so an earlier failure or hold is over; the
+            # gates below re-derive the real status
+            doc.state.status = BATCHED
+            doc.save()
+        # the extraction critic reviews each batch once (ADR-0013); the
+        # store reuses its findings while the batch is unchanged
+        if doc.source.suffix.lower() not in GEDCOM_SUFFIXES:
+            self._step_critique(doc, batch)
 
         # serial mode extracts every document first (so the sequencer has all
         # the manifests), then processes them in order — stop here on the
@@ -701,14 +1118,25 @@ class Orchestrator:
         if stop_after_extract:
             return doc.state.status
 
-        if batch.entities and not _fresh(doc.equivalences, doc.batch):
-            proposals = self._step_reconcile(doc, batch)
+        derivations = doc.derivations
+        if batch.entities and not derivations.current(
+            doc.equivalences, doc.batch
+        ):
+            proposals = self._export(
+                doc,
+                doc.equivalences,
+                doc.equivalences_reviewed,
+                lambda: self._step_reconcile(doc, batch),
+            )
+            derivations.record(doc.equivalences, doc.batch)
             self.log(f"  reconcile: {proposals} proposals")
 
         needs_equivalence_review = (
             doc.equivalences.exists()
             and _csv_has_rows(doc.equivalences)
-            and not _fresh(doc.equivalences_reviewed, doc.equivalences)
+            and not derivations.consents(
+                doc.equivalences_reviewed, doc.equivalences
+            )
         )
         if needs_equivalence_review:
             doc.state.status = AWAITING_EQUIVALENCES
@@ -716,41 +1144,59 @@ class Orchestrator:
                 f"  waiting: review {doc.equivalences} and save decisions as "
                 f"{doc.equivalences_reviewed.name}"
                 + (
-                    " (existing reviewed file predates the current CSV)"
+                    " (the CSV changed after the existing reviewed file "
+                    "was saved)"
                     if doc.equivalences_reviewed.exists()
                     else ""
                 )
             )
             return doc.state.status
 
-        if not _fresh(doc.resolved, doc.batch, doc.equivalences_reviewed):
+        if not derivations.current(
+            doc.resolved, doc.batch, doc.equivalences_reviewed
+        ):
             resolved = self._step_resolve(doc, batch)
-            doc.resolved.write_text(resolved.model_dump_json(indent=2))
+            atomic_write_text(doc.resolved, resolved.model_dump_json(indent=2))
+            derivations.record(
+                doc.resolved, doc.batch, doc.equivalences_reviewed
+            )
             doc.state.status = RESOLVED
             doc.save()
         else:
             resolved = ClaimBatch.model_validate_json(doc.resolved.read_text())
 
-        if not _fresh(doc.review, doc.resolved):
-            rows = self._step_export_review(doc, resolved)
+        if not derivations.current(doc.review, doc.resolved, doc.critique):
+            rows = self._export(
+                doc,
+                doc.review,
+                doc.review_reviewed,
+                lambda: self._step_export_review(doc, resolved),
+            )
+            derivations.record(doc.review, doc.resolved, doc.critique)
             self.log(f"  review CSV: {rows} rows")
 
-        if not _fresh(doc.review_reviewed, doc.review):
+        if not derivations.consents(doc.review_reviewed, doc.review):
             doc.state.status = AWAITING_CLAIMS
             self.log(
                 f"  waiting: review {doc.review} and save decisions as "
                 f"{doc.review_reviewed.name}"
                 + (
-                    " (existing reviewed file predates the current CSV)"
+                    " (the CSV changed after the existing reviewed file "
+                    "was saved)"
                     if doc.review_reviewed.exists()
                     else ""
                 )
             )
             return doc.state.status
 
-        if not _fresh(doc.write_result, doc.review_reviewed, doc.resolved):
+        if not derivations.current(
+            doc.write_result, doc.review_reviewed, doc.resolved
+        ):
             summary = self._step_write(doc, resolved)
-            doc.write_result.write_text(json.dumps(summary, indent=2))
+            atomic_write_text(doc.write_result, json.dumps(summary, indent=2))
+            derivations.record(
+                doc.write_result, doc.review_reviewed, doc.resolved
+            )
             doc.state.detail = (doc.state.detail or {}) | {"write": summary}
             self.log(
                 f"  written: {summary['written']} new, "
@@ -787,6 +1233,31 @@ class Orchestrator:
                 seen.setdefault(state.content_sha1, Path(state.file).name)
         return seen
 
+    def _start_run(self, docs: list[DocumentRun]) -> None:
+        """Record the run's plan and configuration in the run manifest."""
+        self.rundir.start(
+            mode="ingest run",
+            store=str(self.store.root),
+            config={
+                "engine": self.llm,
+                "language": self.language,
+                "fallback_language": self.fallback_language,
+                "extract_effort": self.extract_effort,
+                "review_effort": self.review_effort,
+                "extract_model": self.extract_model,
+                "recompute": sorted(self.recompute.stages),
+            },
+            documents=[
+                {
+                    "sha1": doc.sha1,
+                    "file": doc.source.name,
+                    "kind": doc.kind,
+                    "stages": list(DOCUMENT_STAGES[doc.kind]),
+                }
+                for doc in docs
+            ],
+        )
+
     def run(self) -> int:
         # fail closed: extract-all work never starts without a
         # never-ingest list, so a missing list cannot pass as an empty one
@@ -799,27 +1270,47 @@ class Orchestrator:
         # seed with content already fully ingested in prior runs, so a
         # renamed copy skips the pipeline (cross-run dedup, ADR-0010)
         self._seen_hashes = self._prior_written_hashes()
+        self._start_run(docs)
 
-        if self.serial:
-            docs = self._serial_sequence(docs)
-        for doc in docs:
-            self.log(f"{doc.source.name} [{doc.state.status}]")
-            status = self.advance(doc)
-            # serial (ADR-0019): the next artifact must not reconcile until
-            # this one is written, so stop at the first that isn't done. The
-            # human clears its gate and re-runs to advance the sequence.
-            if self.serial and status not in (WRITTEN, DUPLICATE):
-                self.log(
-                    f"  (serial) paused until {doc.source.name} is written"
-                )
-                break
+        try:
+            if self.serial:
+                docs = self._serial_sequence(docs)
+            for doc in docs:
+                control = self.rundir.control()
+                if control.stopped():
+                    self.log(f"run stopped ({control.stopped()})")
+                    break
+                held = control.stopped(kind=doc.kind)
+                if held:
+                    self.log(f"{doc.source.name}: not dispatched ({held})")
+                    continue
+                self.log(f"{doc.source.name} [{doc.state.status}]")
+                status = self.advance(doc)
+                # serial (ADR-0019): the next artifact must not reconcile
+                # until this one is written, so stop at the first that isn't
+                # done. The human clears its gate and re-runs to advance.
+                if self.serial and status not in (WRITTEN, DUPLICATE):
+                    self.log(
+                        f"  (serial) paused until {doc.source.name} is written"
+                    )
+                    break
+        except KeyboardInterrupt:
+            self.rundir.emit(RUN_INTERRUPTED)
+            raise
 
+        statuses: dict[str, int] = {}
         self.log("")
         for doc in docs:
             self.log(f"{doc.state.status:32} {doc.source.name}")
+            statuses[doc.state.status] = statuses.get(doc.state.status, 0) + 1
+        self.rundir.emit(RUN_END, statuses=statuses)
         if any(doc.state.status == FAILED for doc in docs):
             return 1
-        if any(doc.state.status.startswith("awaiting") for doc in docs):
+        if any(
+            doc.state.status.startswith("awaiting")
+            or doc.state.status == PAUSED
+            for doc in docs
+        ):
             return 2
         return 0
 
@@ -837,7 +1328,7 @@ class Orchestrator:
         # never two identical files both registering.
         for doc in docs:
             try:
-                sha1 = hashlib.sha1(doc.source.read_bytes()).hexdigest()
+                sha1 = doc.sha1
             except OSError:
                 continue
             self._seen_hashes.setdefault(sha1, doc.source.name)
@@ -886,24 +1377,6 @@ class Orchestrator:
             if entity.extract:
                 keys |= _name_tokens(entity.label, *entity.aliases)
         return keys
-
-
-def _fresh(output: Path, *inputs: Path) -> bool:
-    """Is `output` present and at least as new as every existing input?
-
-    The make-style dependency rule behind safe re-runs: a redone
-    upstream step (a corrected transcription, a re-reviewed CSV) makes
-    everything downstream stale, including the human gates — a reviewed
-    file older than the CSV it reviews is a decision about superseded
-    rows, not consent for the current ones.
-    """
-    if not output.exists():
-        return False
-    output_mtime = output.stat().st_mtime_ns
-    return all(
-        not path.exists() or path.stat().st_mtime_ns <= output_mtime
-        for path in inputs
-    )
 
 
 def _supersede(reviewed: Path) -> None:

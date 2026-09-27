@@ -4,7 +4,8 @@ Status: accepted (implemented in `pipeline/chunking.py`; validated by
 re-extracting the first trial's family tree chunked and diffing against
 the reviewed single-shot batch — 99% of facts identical, the remainder
 explained: richer symmetric spouse claims, and an ambiguous date
-correctly downgraded to year precision instead of silently guessed)
+correctly downgraded to year precision instead of silently guessed).
+Amended by #87 (2026-09-27): chunk state lives in the stage store (§5).
 
 ## Context
 
@@ -181,6 +182,20 @@ Deterministic, no model involvement:
   boundary.
 
 ### 5. State, failure, and resume
+
+Amended by #87 (2026-09-27): the entity manifest (or segmentation), every
+chunk and the merged batch are now stages in the stage store
+(docs/STAGE_STORE.md), each stored under a key built from the
+transcription's content, the prompt templates, the manifest and the model,
+with every raw response beside its parsed output. The sidecar files below
+are gone: per-chunk status is the store's records and the run's events,
+failures go to the stage's append-only `failures.jsonl` (reason, attempts,
+and the raw response of a truncation), and coverage, rejects and gaps are
+extras of the batch record. `--resume` reuses records whose key matches; a
+failed chunk's logged response is re-parsed before the model is called
+again, and a parser version bump re-parses stored raw responses. A
+recorded fallback is stored only when the engine answered: an outage
+fails the stage, to be retried. The layout this section first described:
 
 All intermediate state lives beside the output (runtime state, so under
 `var/` or wherever `--out` points):

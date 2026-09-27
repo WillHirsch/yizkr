@@ -184,6 +184,11 @@ recorded fallback (`manifest-fallback.txt`). `--resume` semantics are
 unchanged. Reconciliation artifacts (`roster.json`, `candidates.json`,
 `equivalences.csv`) live beside the batch, runtime-state as always.
 
+Amended by #87 (2026-09-27): the entity manifest, or its recorded
+line-range fallback, is the `entity_manifest` stage in the stage store
+(ADR-0006 §5, docs/STAGE_STORE.md); a fallback is an attention reason on
+its record rather than a `manifest-fallback.txt` file.
+
 ### Testing
 
 Offline, scripted fakes: manifest validation + fallback to line-range;
