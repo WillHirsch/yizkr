@@ -185,33 +185,6 @@ def slide_transcript(content: PresentationContent) -> str:
     return "\n".join(blocks)
 
 
-def _files_holding(
-    client, file_pages: set[str], content_sha1: str
-) -> list[str]:
-    """The wiki files among `file_pages` whose current bytes have this
-    SHA-1, by MediaWiki's own hash of each file (imageinfo)."""
-    if not file_pages:
-        return []
-    data = client.api_get(
-        {
-            "action": "query",
-            "titles": "|".join(sorted(file_pages)),
-            "prop": "imageinfo",
-            "iiprop": "sha1",
-        }
-    )
-    query = data.get("query", {})
-    # map API-normalised titles back to the statement values asked for
-    asked = {
-        entry["to"]: entry["from"] for entry in query.get("normalized", [])
-    }
-    return sorted(
-        asked.get(page["title"], page["title"])
-        for page in query.get("pages", {}).values()
-        if (page.get("imageinfo") or [{}])[0].get("sha1") == content_sha1
-    )
-
-
 def register_derived_media(
     client,
     deck_qid: str,
@@ -228,7 +201,10 @@ def register_derived_media(
     without a hash is matched by its deck-prefixed label, and adopted
     and backfilled when its wiki file holds the same bytes; a
     same-label item with DIFFERENT bytes is different content, so the new
-    item gets a content-tagged label and file name.
+    item gets a content-tagged label. The upload never overwrites a wiki
+    file (`WikiClient.upload_file`): bytes whose file name already holds
+    other bytes go under a content-tagged file name, so every `media
+    file` holds the bytes its item's `media SHA-1` names.
 
     Each deck's assertions are then ensured additively (ADR-0008): one
     `part of -> deck` per slide the medium is on, slide-qualified, plus
@@ -242,9 +218,10 @@ def register_derived_media(
 
     from yizkr.pipeline.registrar import (
         _ensure_referenced,
-        _existing_claim_strings,
         _item_claim,
+        _locate_by_content,
         _string_claim,
+        _takes_alias,
     )
 
     derived: dict[str, str] = {}
@@ -267,41 +244,24 @@ def register_derived_media(
     for medium in content.media:
         content_sha1 = hashlib.sha1(medium.data).hexdigest()
         label = f"{deck_title} — {medium.name}"
-        filename = f"{prefix} {medium.name}"
-        item = None
-        held: list[str] = []  # the item's wiki files holding these bytes
-        qid = by_hash.get(content_sha1)
-        if qid is not None:
-            item = client.wbi.item.get(qid)
-            held = _files_holding(
-                client, _existing_claim_strings(item, media_file), content_sha1
-            )
-        else:
-            labelled = client.find_item_by_label(label)
-            if labelled is not None:
-                # a same-label item without a hash is this medium only if
-                # its wiki file holds these bytes (or it has no file yet —
-                # a write interrupted before its statements); a hashed one
-                # holds different bytes, or the hash lookup would have
-                # found it
-                candidate = client.wbi.item.get(labelled)
-                files = _existing_claim_strings(candidate, media_file)
-                held = _files_holding(client, files, content_sha1)
-                hashed = _existing_claim_strings(candidate, media_sha1)
-                if not hashed and (held or not files):
-                    item = candidate  # adopt; the hash is backfilled below
-                else:
-                    # same deck title and media name, different bytes (a
-                    # deck re-exported with a changed image): a distinct
-                    # artifact, so its label and file name must differ
-                    held = []
-                    label = f"{label} [{content_sha1[:8]}]"
-                    filename = f"{prefix} {content_sha1[:8]} {medium.name}"
+        item, held, label_taken = _locate_by_content(
+            client,
+            by_hash.get(content_sha1),
+            label,
+            content_sha1,
+            media_file=media_file,
+            media_sha1=media_sha1,
+        )
+        if label_taken:
+            # same deck title and media name, different bytes (a deck
+            # re-exported with a changed image): a distinct artifact, so
+            # its label must differ
+            label = f"{label} [{content_sha1[:8]}]"
 
         # the bytes are uploaded only if no file of the item holds them
         # already, so a medium reused by another deck adds no second blob
         if not held:
-            local = workdir / filename
+            local = workdir / f"{prefix} {medium.name}"
             local.write_bytes(medium.data)
             held = [client.upload_file(local)]
 
@@ -315,23 +275,12 @@ def register_derived_media(
             )
             changed = True
         else:
-            changed = False
             # another deck's name for the same bytes becomes an alias, as
-            # the registrar keeps an alternate filename (MODELING.md) —
-            # unless the name is another item's: the item was content-
-            # tagged because its plain label was taken, or the label now
-            # names a different artifact. Aliasing it would cross-link two
-            # artifacts (and make a re-run write).
-            current = str(item.labels.get("en") or "")
-            aliases = {str(alias) for alias in item.aliases.get("en") or []}
-            if (
-                label != current
-                and label not in aliases
-                and current != f"{label} [{content_sha1[:8]}]"
-                and client.find_item_by_label(label) in (None, item.id)
-            ):
+            # the registrar keeps an alternate filename, unless the name
+            # belongs to other content
+            changed = _takes_alias(client, item, label, content_sha1)
+            if changed:
                 item.aliases.set("en", label)
-                changed = True
 
         kind = items["photograph"] if medium.is_image else items["artifact"]
         statements = [
