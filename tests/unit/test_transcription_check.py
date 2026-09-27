@@ -161,6 +161,9 @@ CORRESPONDENCE = [
     "Dear Nicholas, I couldn't open the PDF, so could you post a copy?",
     # opening the message, freed only by naming who sent the attachment
     "I couldn't open the attachment you sent, could you send the scans again?",
+    # asking to be told is no announcement of the engine's
+    "Let me know if you need the scans. I couldn't open the PDF, so could "
+    "you post a copy?",
 ]
 
 # replies that decline their reader's request in an engine refusal's words
@@ -190,6 +193,11 @@ PAGE_FAILURES = [
     "Note: I was unable to open the second image, so it is not transcribed.",
     "(Note: I was unable to open the second image, so it is not transcribed.)",
     "*Note: I was unable to open the second image, so it is not transcribed.*",
+    "Error: I was unable to open the second image.",
+    "Warning: I was unable to open the second image.",
+    "**Note**: I was unable to open the second image.",
+    "*Note*: I was unable to open the second image.",
+    "NB: I was unable to open the second image.",
     # naming the pages skipped
     "The PDF could not be rendered beyond page 1.",
     "I could not read the rest of the PDF.",
@@ -197,6 +205,9 @@ PAGE_FAILURES = [
     "Page 2 could not be read.",
     "I couldn't read the remaining pages.",
     "I could not read pages 3 and 4.",
+    "Pages 2 and 3 could not be read.",
+    "The last two pages could not be read.",
+    "I couldn't read the second and third pages.",
 ]
 
 
@@ -323,6 +334,42 @@ class TestSignatures:
             ("media-unreadable", "The PDF file appears to be corrupted."),
             # the prompt's own wording is the task's, not a correspondent's
             ("media-unreadable", "I couldn't open the image of the document."),
+            # an announcement alone: the engine stopped before transcribing
+            ("narration-only", "Let me take a look at the image."),
+            ("narration-only", "I'll use the Read tool to examine the image."),
+            ("narration-only", "I'll analyze the image."),
+            # an interjection or a heading before the note
+            (
+                "media-unreadable",
+                "Okay, let me read the image.I couldn't open the image.",
+            ),
+            (
+                "media-unreadable",
+                "First, let me read the image.I couldn't open the image.",
+            ),
+            (
+                "media-unreadable",
+                "Let me take a look.I couldn't open the image.",
+            ),
+            (
+                "media-unreadable",
+                "## Transcription\n\nI was unable to read the PDF.",
+            ),
+            # a file, "it" after the announcement, the engine's "you provided"
+            ("media-unreadable", "I couldn't read the file."),
+            ("media-unreadable", "I'll read the image.I couldn't open it."),
+            ("media-unreadable", "The image you provided could not be read."),
+            # a page mark inside a line is no page heading, and does not hide
+            # the label or apology before it
+            ("media-unreadable", "Note: [Page 2] I couldn't open the image."),
+            (
+                "media-unreadable",
+                "Transcription: [Page 1] I couldn't open the image.",
+            ),
+            (
+                "refusal-transcribe",
+                "I'm sorry, but [Page 1] I cannot transcribe this document.",
+            ),
         ],
     )
     def test_engine_note_opening_the_output_fails(self, name, text):

@@ -23,8 +23,8 @@ whether the output may go downstream. It fails the output on either of:
   image was provided", "I'm unable to assist with this request", "I
   can't transcribe this document"), counts where it opens the output, a
   page section (after a heading such as "Page 2" or "[Page 2]") or a
-  line labelled "Note:", "Error:" or "Warning:", or where it names the
-  pages it skipped ("I was unable to read page 2 of the PDF", "The
+  line labelled "Note:", "NB:", "Error:" or "Warning:", or where it names
+  the pages it skipped ("I was unable to read page 2 of the PDF", "The
   remaining pages could not be read"); and only while it names the
   task's medium, document or request plainly. Correspondence names its
   own by what it holds ("the PDF of the census page", "your request for
@@ -34,8 +34,8 @@ whether the output may go downstream. It fails the output on either of:
   back of the photograph"); such a note is the source's own sentence, as
   is one in the middle of a text that names no page. A bare decline ("I
   can't help with that", "I'm unable to complete this task") counts only
-  opening a short output, and a sentence announcing that the engine is
-  about to read the file only as the whole output.
+  opening a short output, and the engine's announcement of what it will
+  do ("Let me take a look at the image.") only as the whole output.
 * **Implausible length**: a document of two or more pages must hold at
   least `MIN_TEXT_CHARS_PER_PAGE` letters or digits per page, counted
   outside editorial brackets. The floor sits far below any written page
@@ -145,7 +145,9 @@ _DECLINE = rf"(?:{_NEGATED_MODAL}|{_UNABLE})"
 _I = rf"(?:I(?:{_A}m|{_A}ve been|\s+am|\s+was|\s+have been)?\s+)"
 # the longer names first, so that a match takes the whole name ("the image
 # file" rather than "the image")
-_MEDIA = r"(?:PDF files?|image files?|PDFs?|images?|attachments?|scans?)"
+_MEDIA = (
+    r"(?:PDF files?|image files?|PDFs?|images?|files?|attachments?|scans?)"
+)
 # the words between a verb and its medium: within one sentence, and short
 # of any other medium, so that the first medium named is the object
 _GAP = rf"(?:(?!\b{_MEDIA}\b)[^.\n]){{0,40}}?"
@@ -157,14 +159,18 @@ _THE = (
     rf"(?:(?!{_MEDIA}\b)\w+\s+){{0,2}}?)?"
     r"(?:(?:attached|uploaded|provided|shared)\s+)?"
 )
+_ORDINAL = (
+    r"(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth"
+    r"|tenth|last|final|remaining|other|later|following|subsequent)"
+)
 # the pages a note says were skipped, named by number or place: "page 2",
-# "pages 3-4", "the second page", "the remaining pages", "the rest of the
+# "pages 3-4", "pages 2 and 3", "the second page", "the second and third
+# pages", "the last two pages", "the remaining pages", "the rest of the
 # PDF"
 _PAGE = (
-    r"\b(?:pages?\s+\d+"
-    r"|(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth"
-    r"|tenth|last|final|remaining|other|later|following|subsequent)"
-    r"\s+pages?"
+    r"\b(?:pages?\s+\d+(?:\s*(?:[-\u2013,&]|and|to)\s*\d+)*"
+    rf"|{_ORDINAL}(?:\s*(?:,|and|&)\s*{_ORDINAL})*"
+    r"(?:\s+(?:two|three|four|five|few|\d+))?\s+pages?"
     r"|rest\s+of\s+the\s+(?:PDF|document|file|pages))\b"
 )
 # what an engine declines to transcribe: the task's document named plainly
@@ -193,13 +199,31 @@ _NARRATION = (
     r"(?:(?:image|PDF)\s+)?(?:images?|PDFs?|files?|documents?|scans?)\b"
     r"[^.!?\n]*[.!?:]?"
 )
-# any first-person sentence announcing what the engine is about to do that
-# names the file, the medium or the Read tool ("Let me take a look at the
-# image.", "I'll use the Read tool to examine the image.")
+# a sentence announcing what the engine will do: it opens with "I'll", "I
+# will", "Let me" (but not "Let me know"), "I'm going to" or "I am going
+# to", after at most an interjection ("Okay,", "First,"); it names an
+# image, PDF, file, document, scan, page or the Read tool within its
+# first 120 characters, or says it will take a look; and it ends with a
+# full stop, a question or exclamation mark, or a colon ("Let me take a
+# look at the image.", "I'll use the Read tool to examine the image.",
+# "Let me take a look.")
 _ANNOUNCE = (
-    rf"(?:I{_A}ll|I will|Let me|I{_A}m going to|I am going to)\b"
-    r"[^.!?\n]{0,120}?\b(?:images?|PDFs?|files?|documents?|scans?|pages?"
-    r"|Read tool)\b[^.!?\n]{0,60}[.!?:]"
+    r"(?:(?:okay|ok|alright|all right|sure|right|now|first|great)"
+    r"[,.!]?\s+)?"
+    rf"(?:I{_A}ll|I will|Let me(?!\s+know\b)|I{_A}m going to|I am going to)"
+    r"\b(?:[^.!?\n]{0,120}?\b(?:images?|PDFs?|files?|documents?|scans?"
+    r"|pages?|Read tool)\b[^.!?\n]{0,60}"
+    r"|\s+(?:take|have)\s+a\s+(?:quick\s+|closer\s+)?look"
+    r"(?:\s+at\s+(?:it|this|that))?)"
+    r"[.!?:]"
+)
+# the engine's announcement, in either form
+_ANNOUNCING = rf"(?:{_ANNOUNCE}|{_NARRATION})"
+# the engine's own relative clause after a medium ("the image you
+# provided"); a correspondent's "you sent" is theirs (_THEIRS)
+_YOU_GAVE = (
+    rf"(?:\s+(?:that\s+|which\s+)?you(?:{_A}ve|\s+have)?\s+"
+    r"(?:provided|shared|uploaded))"
 )
 
 # -- the engine's own voice ---------------------------------------------
@@ -210,12 +234,19 @@ _ANNOUNCE = (
 # skipped, and names the task's medium, document and request plainly;
 # correspondence names its own.
 
-# what may precede an engine's note where it opens: a sentence announcing
-# the read (the claude-code engine joins its turns without a separator),
-# a label ("Error:"), an apology, a hedge
+# a label: "Note:", "**Note**:", "NB:", "N.B.", "Error:", "Warning:",
+# "Transcription:", or one of these words alone on its line as a heading
+# ("## Transcription")
+_LABEL = (
+    r"(?:(?:note|nb|error|warning|transcription)[^\w\n]{0,3}"
+    r"(?::|[^\S\n]*(?=\n))|n\.b\.:?)"
+)
+# what may precede an engine's note where it opens: the engine's
+# announcement (the claude-code engine joins its turns without a
+# separator), a label, an apology, a hedge
 _LEAD_IN = (
-    rf"(?:(?:{_ANNOUNCE}|{_NARRATION})\W*)?"
-    r"(?:(?:note|error|warning|transcription)\s*:\W*)?"
+    rf"(?:{_ANNOUNCING}\W*)?"
+    rf"(?:{_LABEL}\W*)?"
     rf"(?:(?:(?:I{_A}m|I am)\s+(?:sorry|afraid)|I apologi[sz]e|Apologies"
     r"|Sorry|Unfortunately)\W*(?:but\s+)?)?"
     r"(?:it\s+(?:seems|looks|appears)(?:\s+like|\s+that)?\s+)?"
@@ -229,16 +260,18 @@ _PAGE_LABEL = (
 )
 # a page heading: a page's label opening a line, set off by marks or not
 # ("--- Page 2 ---", "**Page 2**", "[Page 2]", "Page 2:"), or opening the
-# output after a sentence announcing the read
-_PAGE_HEADING = (
-    rf"(?:\A(?:\W*(?:{_ANNOUNCE}|{_NARRATION}))?|\n)"
-    rf"[^\w\n]*{_PAGE_LABEL}[^\w\n]*"
-)
+# output after the engine's announcement
+_PAGE_HEADING = rf"(?:\A(?:\W*{_ANNOUNCING})?|\n)[^\w\n]*{_PAGE_LABEL}[^\w\n]*"
 # an editorial mark that is a page heading ("[Page 2]"): kept in the text
-# an engine-voice signature reads
+# an engine-voice signature reads where it opens a line
 _PAGE_MARK = re.compile(rf"\[\s*{_PAGE_LABEL}\s*\]", re.IGNORECASE)
-# a line that opens with a label: "Note:", "(Note: ...)", "*Error:* ..."
-_LABELLED_LINE = r"\n(?=[^\w\n]*(?:note|error|warning)\s*:)"
+_LINE_START = re.compile(r"(?:\A|\n)[^\S\n]*\Z")
+# a line that opens with a label other than "Transcription": "Note:",
+# "(Note: ...)", "*Error:* ...", "NB:"
+_LABELLED_LINE = (
+    r"\n(?=[^\w\n]*(?:(?:note|nb|error|warning)[^\w\n]{0,3}"
+    r"(?::|[^\S\n]*\n)|n\.b\.))"
+)
 # the text before a note that opens the output, a page section or a
 # labelled line
 _OPENING = re.compile(
@@ -295,10 +328,10 @@ def in_engine_voice(subject: str, match: re.Match[str]) -> bool:
     task.
 
     It is when the note opens the output, a page section or a labelled
-    line ("Note: ..."), after at most a sentence announcing the read, a
-    label, an apology and a hedge, or when it names the pages it skipped;
-    and never when the words after it make what it names the
-    correspondents' own.
+    line ("Note: ..."), after at most the engine's announcement, a label,
+    an apology and a hedge, or when it names the pages it skipped; and
+    never when the words after it make what it names the correspondents'
+    own.
     """
     if _THEIRS.match(subject, match.end()):
         return False
@@ -362,14 +395,19 @@ SIGNATURES: tuple[Signature, ...] = (
         rf"\b{_I}?{_DECLINE}\s+"
         r"(?:read|open|render|convert|load|process|view|access|see|display)"
         rf"\b(?:{_GAP}\b{_MEDIA}\b|\s+(?:the\s+)?{_PAGE})"
+        # "I'll read the image.I couldn't open it": "it" is the medium the
+        # announcement named
+        rf"|{_ANNOUNCING}\W*{_I}?{_DECLINE}\s+"
+        r"(?:read|open|render|convert|load|process|view|access|see|display)"
+        r"\s+(?:it|them)\b"
         # "The PDF could not be rendered", "The scanned image could not be
-        # read", "Page 2 of the PDF could not be read", "Page 2 could not
-        # be read"
-        rf"|(?:{_PAGE}\s+of\s+\b{_THE}{_MEDIA}|\b{_THE}{_MEDIA}|{_PAGE})\s+"
-        rf"(?:{_NEGATED_MODAL}|failed to)\s+be\s+"
+        # read", "The image you provided could not be read", "Page 2 of
+        # the PDF could not be read", "Page 2 could not be read"
+        rf"|(?:{_PAGE}\s+of\s+\b{_THE}{_MEDIA}|\b{_THE}{_MEDIA}{_YOU_GAVE}?"
+        rf"|{_PAGE})\s+(?:{_NEGATED_MODAL}|failed to)\s+be\s+"
         r"(?:read|opened|rendered|converted|loaded|processed|displayed)\b"
         # "The image file appears to be corrupted"
-        rf"|\b{_THE}{_MEDIA}\s+(?:appears|seems)\s+to\s+be\s+"
+        rf"|\b{_THE}{_MEDIA}{_YOU_GAVE}?\s+(?:appears|seems)\s+to\s+be\s+"
         r"(?:corrupt(?:ed)?|damaged|encrypted|password-protected"
         r"|unreadable)\b",
         engine_voice=True,
@@ -383,13 +421,13 @@ SIGNATURES: tuple[Signature, ...] = (
         r"(?:provided|attached|shared|uploaded|included)\b",
         engine_voice=True,
     ),
-    # the whole output is one sentence announcing that the engine is about
-    # to read the media: it stopped before transcribing anything. (Such a
-    # sentence followed by text is an ordinary preamble and passes.)
+    # the whole output is the engine's announcement of what it will do
+    # (_ANNOUNCE, _NARRATION): it stopped before transcribing anything.
+    # (Such a sentence followed by text is an ordinary preamble and passes.)
     _signature(
         "narration-only",
         TOOL_FAILURE,
-        rf"\A\W*{_NARRATION}\s*\Z",
+        rf"\A\W*{_ANNOUNCING}\s*\Z",
     ),
     # -- refusals: the engine declines, in its own voice ------------------
     # declining to transcribe the task's document, or nothing named, as an
@@ -489,15 +527,23 @@ def minimum_text_chars(pages: int | None) -> int:
 
 
 def _keep_page_mark(mark: re.Match[str]) -> str:
-    return mark.group(0) if _PAGE_MARK.fullmatch(mark.group(0)) else " "
+    """A page mark that opens its line, kept as a page heading; any other
+    editorial mark, a space. (A line start is looked for among the 80
+    characters before the mark.)"""
+    start = mark.start()
+    if _PAGE_MARK.fullmatch(mark.group(0)) and _LINE_START.search(
+        mark.string, max(0, start - 80), start
+    ):
+        return mark.group(0)
+    return " "
 
 
 def find_signature(text: str) -> tuple[Signature, str] | None:
     """The first signature `text` matches, with the matched phrase.
 
     An engine-voice signature matches only where `in_engine_voice` holds,
-    and reads the text with its page marks ("[Page 2]") kept, since they
-    head page sections."""
+    and reads the text with the page marks ("[Page 2]") that open a line
+    kept, since they head page sections."""
     unmarked = outside_editorial_marks(text).strip()
     paged = EDITORIAL_MARK.sub(_keep_page_mark, text).strip()
     for signature in SIGNATURES:
