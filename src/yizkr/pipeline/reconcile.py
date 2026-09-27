@@ -146,7 +146,7 @@ WHERE {{
   OPTIONAL {{ ?deathEvent wdt:{participant} ?item ;
                           wdt:{instance_of} wd:{death_item} ;
                           wdt:{point_in_time} ?deathEventDate . }}
-  # relation labels carry QIDs: bare labels are ambiguous (two Davids)
+  # relation labels carry QIDs: bare labels are ambiguous (two Ursulas)
   OPTIONAL {{ ?item wdt:{spouse} ?spouseItem .
               ?spouseItem rdfs:label ?spouseLabel .
               FILTER(LANG(?spouseLabel) = "en")
@@ -256,7 +256,7 @@ def _name_tokens(*names: str) -> set[str]:
 
 
 def _tokens_overlap(first: set[str], second: set[str]) -> bool:
-    """Prefix-aware token match: 'Alex' must block against 'Alexander'
+    """Prefix-aware token match: 'Hilde' must block against 'Hildegard'
     (nicknames and clipped forms are how family documents refer to
     people)."""
     if first & second:
@@ -443,11 +443,11 @@ def impossible_pair(
         ):
             return "place-containment"
         # label form: one candidate is named exactly like a CONTAINER of the
-        # other — e.g. a new "Poland" (no QID) vs the graph's Chełmno camp,
-        # which sits inside a place labelled "Poland". Skip when the two
-        # share a label: eponymous nested places exist ("New York" the city
-        # inside "New York" the state), so an equal label may be the SAME
-        # place, not its container — never prune that (recall-safe).
+        # other — e.g. a new "Klurnau" (no QID) vs the graph's Lager Klurnau,
+        # which sits inside a place labelled "Klurnau". Skip when the two
+        # share a label: eponymous nested places exist (the town "Rekau"
+        # inside the urban district "Rekau"), so an equal label may be the
+        # SAME place, not its container — never prune that (recall-safe).
         if a.label != b.label:
             if (
                 b.qid

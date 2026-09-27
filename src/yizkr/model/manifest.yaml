@@ -509,7 +509,7 @@ items:
   family:
     label: family
     description: >-
-      a named family or household unit ("the Wulffs", "the Franklin
+      a named family or household unit ("the Löbigs", "the Lobig
       family") — a collective of related people (ADR-0014); members
       attach via kinship or `member of`
     wikidata: Q8436
@@ -527,7 +527,7 @@ items:
     label: legal instrument
     description: >-
       a law, decree, statute, gazette, or official register cited by a
-      source (ADR-0014) — e.g. the Reichsabgabenordnung, Reichsgesetzblatt
+      source (ADR-0014) — e.g. a civil code or a law gazette
     aliases:
       - law
       - statute

@@ -7,7 +7,7 @@ dumped into the escape hatch that plainly fits a real kind. It FLAGS,
 never rewrites: findings are surfaced to the human curator at the
 existing review gate. It is the reconciliation adjudicator's pattern
 applied to extraction, and it is what catches the "MOTHER as a name" and
-"mill as a place" errors without a human eyeballing raw output.
+"hat shop as a place" errors without a human eyeballing raw output.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ Flag, as a genuine concern only:
 - an alias that is a ROLE or FORM-FIELD label, not a name — MOTHER,
   FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS — or a relational /
   perspectival reference ("my husband", "our great grandmother", "Oma",
-  "Tante Rosa", "the deceased") recorded as if it were a name. These are
+  "Nana Maisie", "the deceased") recorded as if it were a name. These are
   not names: suggest recording the term as `relative` + `kinship_type`
   (a literal kinship term) or `referred_to_as` (a courtesy/pet name),
   NOT as an alias (ADR-0018);
