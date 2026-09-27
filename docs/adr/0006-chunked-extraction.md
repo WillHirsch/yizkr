@@ -187,9 +187,9 @@ Deterministic, no model involvement:
 
 Amended by #87 (2026-09-27), which made the phases stages in a stage
 store, and by #225 (2026-09-27), which replaced the store with the LLM
-cache of ADR-0032 (docs/LLM_CACHE.md). The extractor keeps no state of
-its own. Every call goes through the client it is given, and with the
-cache each answer is kept under a key built from what the call sends, so a
+cache of ADR-0032 (docs/LLM_CACHE.md). The extractor keeps no state of its
+own. Every call goes through the client it is given, and with the cache
+each answer is kept under a key built from what the call sends, so a
 re-run replays the calls that completed and asks the engine only for the
 rest: a failed chunk costs one chunk. Parsing, the merge and validation
 run whenever the batch is made again (in a fresh state directory, or on
@@ -199,22 +199,24 @@ old code accepted. A chunk cut off before its sentinel is rejected in the
 cache: it is kept aside for inspection and never served again, so the
 retry, or the next run, asks the engine anew, and a parser fix does not
 recover a response the old parser rejected. The entity manifest and the
-segmentation are asked in two attempts each, keyed apart in the cache,
-and a refused answer is kept, so a later run replays the same attempts
-and takes the same fallback (ADR-0032 §5). When a fork misses behind a
-cached manifest, the conversation is resumed exactly from what the cache
-kept; a replay that answers differently starts the extraction over from
-the new answer (ADR-0032 §6). A fallback tier is taken only when the engine
-answered: an outage fails the extraction, to be retried. Per-chunk
+segmentation are asked in two attempts each, keyed apart in the cache, and
+a refused answer is kept, so a later run replays the same attempts and
+takes the same fallback (ADR-0032 §5). When a fork misses behind a cached
+manifest, the conversation is resumed exactly from the session the cache
+kept for the manifest it serves; a replay that answers differently starts
+the extraction over from the new answer (ADR-0032 §6). A cut-off chunk
+answer the cache kept from an earlier call spends no retry: the engine is
+asked once more (ADR-0032 §4). A fallback tier is taken only when the
+engine answered: an outage fails the extraction, to be retried. Per-chunk
 progress is the log, and the chunks that failed, with the first reason,
-are the extraction's error. Coverage, rejects and gaps are side outputs
-in the extractor's state directory (`<doc>/extraction/` under `ingest
-run`, `<out>.chunks/` for `ingest extract`), written for a complete
-extraction. Sidecar state from before the store is never read. `yizkr
-ingest run` sets aside whole a document directory without
-`derivations.json`, and starts it afresh, as it does one whose source
-bytes changed (ADR-0010); nothing in it is deleted. The layout this
-section first described:
+are the extraction's error. Coverage, rejects and gaps are side outputs in
+the extractor's state directory (`<doc>/extraction/` under `ingest run`,
+`<out>.chunks/` for `ingest extract`), written for a complete extraction.
+Sidecar state from before the store is never read. `yizkr ingest run` sets
+aside whole a document directory without `derivations.json`, and starts it
+afresh, as it does one whose source bytes changed (ADR-0010); nothing in
+it is deleted. The layout this section first described:
+
 
 All intermediate state lives beside the output (runtime state, so under
 `var/` or wherever `--out` points):

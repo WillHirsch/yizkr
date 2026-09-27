@@ -335,7 +335,9 @@ class LlmClaimExtractor:
     asks the engine again next time rather than serving it: one with no
     claim JSON or no valid claim (the extraction then fails), and one
     without its terminal sentinel, which may be cut off (the claims it
-    holds are still returned)."""
+    holds are still returned). An answer the client kept from an earlier
+    call is asked for once more when it is rejected, and the engine's
+    answer is used in its place, as it would be without the cache."""
 
     def __init__(
         self,
@@ -361,6 +363,20 @@ class LlmClaimExtractor:
             language=transcription.language,
             text=transcription.text,
         )
+        try:
+            return self._extract(prompt)
+        except _KeptAnswerRejected:
+            return self._extract(prompt, again=True)
+
+    def _extract(self, prompt: str, again: bool = False) -> ClaimBatch:
+        """The batch one answer gives. A rejected answer the client kept
+        from an earlier call raises _KeptAnswerRejected, unless this is
+        the call made `again` after one."""
+
+        def reject_answer(response: str, reason: str) -> None:
+            if reject_response(self.client, response, reason) and not again:
+                raise _KeptAnswerRejected(reason)
+
         response = self.client.complete(prompt)
         if self.raw_dump is not None:
             # Engine output is expensive; persist it before anything that
@@ -371,7 +387,7 @@ class LlmClaimExtractor:
         try:
             payload = _parse_response(response)
         except ValueError:
-            reject_response(self.client, response, "extraction: no claim JSON")
+            reject_answer(response, "extraction: no claim JSON")
             raise
         finished = any(
             obj.get("done") is True for obj in scan_json_objects(response)
@@ -387,9 +403,7 @@ class LlmClaimExtractor:
             else:
                 self.rejects_dump.unlink(missing_ok=True)  # no stale rejects
         if not batch.claims:
-            reject_response(
-                self.client, response, "extraction: no valid claim"
-            )
+            reject_answer(response, "extraction: no valid claim")
             detail = "\n  ".join(
                 problem
                 for reject in rejects[:20]
@@ -400,10 +414,13 @@ class LlmClaimExtractor:
                 f"({len(rejects)} rejects):\n  {detail}"
             )
         if not finished:
-            reject_response(
-                self.client, response, "extraction: no terminal sentinel"
-            )
+            reject_answer(response, "extraction: no terminal sentinel")
         return batch
+
+
+class _KeptAnswerRejected(Exception):
+    """An answer the client kept from an earlier call was rejected: the
+    engine has not answered the call yet, and is asked once more."""
 
 
 class ClaimFileExtractor:

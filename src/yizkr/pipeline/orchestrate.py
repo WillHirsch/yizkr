@@ -26,7 +26,10 @@ for it are unchanged, and made again when they change, or when
 `--refresh` names the role that makes it (MODEL_ROLES), which makes it
 again in place. A changed prompt, model or piece of code does not by
 itself make a view stale; a scratch run starts from fresh state
-directories instead. The model calls a view is made with go through the
+directories instead. The one check a view must still pass is the
+transcription check: a vision or text-file transcription is checked
+again whenever it is reused, and one that now fails is moved aside and
+made again in the run. The model calls a view is made with go through the
 LLM cache when the run has one (ADR-0032): an accelerator, which the
 pipeline runs the same without. The client factory (yizkr.pipeline.llm)
 wraps the run's engine clients in it; the orchestrator only names the
@@ -289,10 +292,11 @@ class Derivations:
         self._save(data)
 
     def forget(self, *outputs: Path) -> None:
+        """Forget what `outputs` were made from, and their content."""
         data = self._load()
         for output in outputs:
-            data["derived"].pop(output.name, None)
-            data["reviews"].pop(output.name, None)
+            for section in ("derived", "reviews", "content"):
+                data[section].pop(output.name, None)
         self._save(data)
 
     def consents(self, reviewed: Path) -> bool:
@@ -703,18 +707,44 @@ class Orchestrator:
         return result
 
     def _reused_view(
-        self, doc: DocumentRun, view: Path, load: Callable[[str], Any]
+        self,
+        doc: DocumentRun,
+        view: Path,
+        load: Callable[[str], Any],
+        recheck: Callable[[Any], str | None] | None = None,
     ) -> Any:
         """The document's `view`, loaded, when it stands: it is current
-        (Derivations.current) and `--refresh` does not name its role. A
-        reuse is an event, with the attention reasons noted when the view
-        was made. None when the view is to be made."""
+        (Derivations.current), `--refresh` does not name its role, and
+        `recheck`, when given, finds no reason it fails. A reuse is an
+        event, with the attention reasons noted when the view was made.
+        A view `recheck` fails is moved aside, never deleted, with a
+        `set-aside` event that gives the reason, and its record is
+        forgotten. None when the view is to be made."""
         role, stage = doc.views[view]
         if role in self.refresh or not doc.derivations.current(view):
             return None
         try:
             loaded = load(view.read_text())
         except (OSError, ValueError):
+            return None
+        failure = recheck(loaded) if recheck is not None else None
+        if failure is not None:
+            kept = _supersede(view)
+            doc.derivations.forget(view)
+            self.rundir.emit(
+                SET_ASIDE,
+                subject=doc.sha1,
+                kind=doc.kind,
+                stage=stage,
+                reason=failure[:500],
+                kept=kept.name if kept is not None else None,
+            )
+            self.log(
+                f"  {doc.source.name}: {view.name} fails its check now "
+                f"({failure}); kept as "
+                f"{kept.name if kept is not None else 'nothing'}, making it "
+                f"again"
+            )
             return None
         noted = (doc.state.detail or {}).get("attention") or {}
         self.rundir.emit(
@@ -821,14 +851,29 @@ class Orchestrator:
     def _transcription(self, doc: DocumentRun):
         """The document's transcription view, reused when it stands
         (`_reused_view`) and made otherwise, then recorded with its
-        canonical content hash; once per run."""
+        canonical content hash; once per run. A vision or text-file
+        transcription, the routes whose transcribers check their output,
+        is checked again when it is reused: the check may have become
+        stricter since the view was made, and one it now fails is made
+        again."""
         from yizkr.pipeline.transcribe import Transcription
 
         memo = (doc.sha1, doc.transcription.name)
         if memo in self._views:
             return self._views[memo]
+        checked = route_transcription(doc.source, doc.correction) in (
+            "vision",
+            "text-file",
+        )
         transcription = self._reused_view(
-            doc, doc.transcription, Transcription.model_validate_json
+            doc,
+            doc.transcription,
+            Transcription.model_validate_json,
+            recheck=(
+                functools.partial(self._transcription_failure, doc)
+                if checked
+                else None
+            ),
         )
         if transcription is None:
             transcription = self._step_transcribe(doc)
@@ -842,6 +887,22 @@ class Orchestrator:
             doc.derivations.record(doc.transcription)
         self._views[memo] = transcription
         return transcription
+
+    def _transcription_failure(
+        self, doc: DocumentRun, transcription
+    ) -> str | None:
+        """Why the transcription check fails `transcription` of the
+        document now, or None when it passes."""
+        from yizkr.pipeline.transcription_check import (
+            TranscriptionCheckFailed,
+            check_transcription,
+            media_page_count,
+        )
+
+        check = check_transcription(
+            transcription.text, pages=media_page_count(doc.source)
+        )
+        return None if check.passed else str(TranscriptionCheckFailed(check))
 
     def _step_transcribe(self, doc: DocumentRun):
         """Transcribe the document by its route, record the language it
@@ -1151,8 +1212,9 @@ class Orchestrator:
         differs from the batch the document's derived files were made from.
 
         Content is compared by canonical hash (run timestamps left out),
-        so an identical recompute, or a deleted view rebuilt, invalidates
-        nothing."""
+        so an identical recompute invalidates nothing: a deleted view
+        rebuilt with the same content, as the cache or the GEDCOM adapter
+        gives it, included."""
         digest = content_hash(
             batch.model_dump(mode="json"), volatile=BATCH_VOLATILE
         )
@@ -1550,7 +1612,8 @@ class Orchestrator:
         # once for the whole run, before any document: a PDF needs the
         # renderer the vision engine reads it through and the page count
         # the transcription check takes, whether its transcription comes
-        # from the engine or from the cache
+        # from the engine or from the cache, or is a view the run reuses
+        # and checks again
         preflight_vision_transcription(
             doc.source for doc in docs if doc.kind == "media"
         )

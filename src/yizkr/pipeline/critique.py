@@ -135,7 +135,9 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
     refusal, an answer cut off, a usage-limit notice) still gives the
     findings it holds, and is rejected through the client
     (llm.reject_response), so that a client that keeps answers asks the
-    critic again next time rather than serving it.
+    critic again next time rather than serving it. One the client kept
+    from an earlier call is asked for once more, and the engine's answer
+    is used in its place, as it would be without the cache.
     """
     if not batch.entities and not batch.claims:
         return []
@@ -144,6 +146,18 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
         claims_block=_claims_block(batch) or "(none)",
     )
     response = client.complete(prompt)
+    findings, finished = _parse_critique(response)
+    if not finished and _reject(client, response):
+        response = client.complete(prompt)
+        findings, finished = _parse_critique(response)
+        if not finished:
+            _reject(client, response)
+    return findings
+
+
+def _parse_critique(response: str) -> tuple[list[Finding], bool]:
+    """(the findings a critique answer holds, whether it has its terminal
+    sentinel)."""
     findings: list[Finding] = []
     finished = False
     for obj in scan_json_objects(response):
@@ -155,9 +169,18 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
                 findings.append(Finding.model_validate(obj))
             except Exception:
                 continue
-    if not finished:
-        try:
-            reject_response(client, response, "critique: no terminal sentinel")
-        except Exception as exc:  # the critic never blocks the pipeline
-            logger.warning("could not reject a critique answer: %s", exc)
-    return findings
+    return findings, finished
+
+
+def _reject(client: LlmClient, response: str) -> bool:
+    """Reject a critique answer without its sentinel; True when it was one
+    the client kept from an earlier call (llm.reject_response). A
+    rejection that fails is only a warning: the critic never blocks the
+    pipeline."""
+    try:
+        return reject_response(
+            client, response, "critique: no terminal sentinel"
+        )
+    except Exception as exc:
+        logger.warning("could not reject a critique answer: %s", exc)
+        return False

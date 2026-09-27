@@ -63,7 +63,8 @@ was made from, and is reused while those are unchanged:
 - the later files as before (§11).
 
 A change of prompt, model or code never makes a stored view stale by
-itself. There are two ways to make views again:
+itself, with one exception: the transcription check, below. There are two
+ways to make views again:
 
 - `--refresh ROLE` makes the role's views again in place, current or not,
   bypassing both the view and the cache (§7). A view made again with the
@@ -71,15 +72,31 @@ itself. There are two ways to make views again:
 - A scratch run starts from fresh state directories (#194), where every
   view is made again and the cache makes that cheap.
 
-A reused view is a `reused` event for its stage (§8). It is not checked
-again: the transcription check ran when it was made (§4).
+A reused view is a `reused` event for its stage (§8). A vision or
+text-file transcription, the routes whose transcribers check their
+output, is checked again each time it is reused, with the transcription
+check as it is now (§4); a curator's correction and slide text are never
+checked. A transcription the check now fails is moved aside as
+`transcription.superseded-<n>.json`, never deleted, with a `set-aside`
+event giving the reason; its record is forgotten, and it is made again in
+the same run. The new transcription is checked as any other, and when the
+batch made from it differs, the reviews of the old batch are moved aside
+as usual. So a check made stricter reaches every stored transcription,
+and a failed one never stays under its batch and its reviews on the way
+to the write. The check needs only the text and, for a PDF, its page
+count.
 
 The LLM cache (§2 to §6) is then only an accelerator: it saves the engine
 calls of a view made again. Without it (`--no-cache`) the pipeline
-behaves the same, apart from making those calls. A unit test holds this:
-with no cache and an engine that words its answers afresh on every call,
-a document passes both review gates across runs and is written, with no
-review moved aside.
+behaves the same, apart from making those calls. Where a caller rejects an
+answer the cache kept from an earlier call (a transcription a stricter
+check fails, say), it asks once more in the same run, so the engine
+answers the call there as it would without the cache (§4). Unit tests
+hold this: with no cache and an engine that words its answers afresh on
+every call, a document passes both review gates across runs and is
+written, with no review moved aside; and in a fresh state directory, a
+cached transcription a stricter check fails ends the run with the status
+a run without the cache reaches.
 
 ### 2. Model responses are reused, keyed on what each call sends
 
@@ -108,7 +125,8 @@ A key is the SHA-256 of the canonical JSON of:
   prompt names; the engine's system prompt tells the model to read no
   others, though its Read tool does not enforce that;
 - for a fork, the key chain of the conversation it forks and the SHA-256
-  of the conversation's opening answer, which the fork's context holds
+  of the conversation's opening answer, which the fork's context holds: a
+  kept session is resumed only for the opening answer it was made on
   (§6);
 - the attempt, for a caller that asks again after an answer it cannot use
   and then falls back (§5); 0 otherwise;
@@ -157,7 +175,8 @@ engine again for its extraction. Transcription prompts cite none.
   aside as replaced. Both are kept for inspection under names no lookup
   reads.
 - A conversation's opening turn keeps, beside its entry, the session files
-  the engine needs to resume it exactly (§6).
+  the engine needs to resume it exactly, under the SHA-256 of the opening
+  answer they hold (§6).
 - The entries are model responses, the raw material of proposals, not a
   second store of assertions: the graph stays the system of record, as it
   was with the stage store.
@@ -170,14 +189,23 @@ have. The entry is moved aside with the reason and never served again, so
 the next identical call, a retry in the same run or a call in the next
 one, goes to the engine. A rejection moves only the answer it names: the
 entry is first renamed to a private name and only then compared, and an
-answer another caller stored meanwhile stays live. The rejectors are:
+answer another caller stored meanwhile stays live.
+
+A rejection also tells the caller whether the answer was one the cache
+kept from an earlier call (a hit) rather than the engine's answer to this
+call. When it was, the engine has not answered the call in this run, so
+the caller asks once more, once, and the engine's answer takes the
+rejected one's place, just as it would without the cache: a chunk spends
+no retry on it, and the transcriber, the critic and the single-call
+extractor use the new answer. The rejectors are:
 
 - the transcription check, which runs on every transcription a run makes,
-  from the engine or from the cache. A cached transcription it fails is
-  rejected, its document fails, and the next run transcribes it again. No
-  check version is keyed: a stricter check applies to every transcription
-  made after it, which in a scratch run's fresh state directories is
-  every transcription (§1);
+  from the engine or from the cache, and on every transcription view a run
+  reuses (§1). A cached transcription it fails is rejected and asked for
+  once more; a failure of the engine's own answer fails the document, and
+  the next run transcribes it again. No check version is keyed: a
+  stricter check applies to every transcription, the stored views
+  included;
 - the chunked extractor, for a chunk cut off before its terminal
   sentinel;
 - the critic, for an answer without its terminal sentinel (a refusal, one
@@ -219,18 +247,27 @@ fork's context assumes:
   the cache keeps what the engine needs to resume it
   (`ResumableLlmClient`): for claude-code, the session's transcript files,
   beside the opening turn's entry under the cache folder (local-only, in
-  `var/`). They are put back into the CLI's projects folder for `--resume
-  … --fork-session`, and released after the forks, as llm.py releases
-  every transcript. The API engine rebuilds the conversation from the
-  opening turn's prompt and cached answer, with no call.
+  `var/`). They are kept under the SHA-256 of the opening answer the
+  session holds (`<key>.session/<opening>/`), published whole with it, and
+  a fork resumes only the session kept for the opening answer the cache
+  serves. Two callers that open the same conversation at once, or a replay
+  that stored a new answer but could not keep its session, can leave a
+  session beside an entry that holds another answer; that session is never
+  resumed for it: a fork resumes the session kept for the served answer,
+  when there is one, and otherwise replays the opening turn. The files are
+  put back into the CLI's projects folder for `--resume … --fork-session`,
+  and released after the forks, as llm.py releases every transcript. The
+  API engine rebuilds the conversation from the opening turn's prompt and
+  cached answer, with no call.
 - **Replayed, only when nothing usable is kept.** The opening turn is
   asked again, and its answer compared with the cached one. When they
   match, the replay's session serves the forks, and is kept for the next
   run to resume. When they differ, the whole conversation is a miss: the
   replay's answer becomes the opening turn's entry (the old one is kept
-  aside), the fork raises `ConversationChanged`, and the extractor starts
-  over from the new answer, whose forks are keyed apart from the old ones
-  and are made on the replay's session.
+  aside), its session is kept under the new answer, the fork raises
+  `ConversationChanged`, and the extractor starts over from the new
+  answer, whose forks are keyed apart from the old ones and are made on
+  the replay's session.
 
 A session, however obtained, serves every later fork of the conversation
 in the run. Every fork entry records how its session was obtained
@@ -253,8 +290,9 @@ their prompts, and so their keys, stay the same from run to run.
   so an epoch applies to the views a run makes again: combine it with
   `--refresh` to re-sample them.
 - `--no-cache` calls the engine directly: no wrapper, nothing read or
-  written. The run is otherwise the same (§1); a unit test also shows that
-  a replay from the cache and a run without it give the same views.
+  written. The run is otherwise the same (§1): a rejected answer the cache
+  kept is asked for once more in its run (§4), and a unit test also shows
+  that a replay from the cache and a run without it give the same views.
   `--refresh` and `--epoch` act through the cache, and are refused with
   `--no-cache`.
 - `yizkr ingest extract --cache DIR` takes the single step's calls through
@@ -270,7 +308,9 @@ conversation resumed exactly), `cache-replay` (whether the answers
 matched), `cache-reject` (the reason; only when an answer was moved
 aside) and `cache-adopt`. All but rejections and adoptions name the kind
 of call. A view a run reuses is a `reused` stage event, with the attention
-reasons noted when it was made. The monitor (#195) and the run report
+reasons noted when it was made; a transcription view that fails the check
+again is a `set-aside` event, with its stage, the reason and the name it
+is kept under (§1). The monitor (#195) and the run report
 (#124) count reuse from them, and `yizkr stages state` prints the cache
 counts per role, as totals over every invocation of the run directory.
 
@@ -353,7 +393,10 @@ longer wrapping the client.
   change to a prompt, a model or the code reaches existing views only
   through a refresh or a fresh state directory. So the scratch driver
   (#194) must start every scratch run from fresh state directories, and
-  it is there that a code change shows in a scratch diff.
+  it is there that a code change shows in a scratch diff. The one
+  exception is the transcription check: a change to it reaches every
+  stored vision and text-file transcription on the next run, and makes
+  again the ones it fails, with their batches.
 - **One-off invalidation.** The first run on a state directory made
   before this change finds no record for its views, and files derived
   from the batch recorded by the view's bytes where they are now recorded
@@ -390,10 +433,23 @@ longer wrapping the client.
   draft). Rejected: the pipeline's stability then depends on the cache.
   Without it, a sampled model changes the batch on every run, reviews are
   moved aside, and no document passes a gate.
-- **Check reused views again on every run.** Rejected: a code change to
-  the check would then make stored views stale by itself (§1). A scratch
-  run makes every transcription again in fresh state directories, and
-  checks each.
+- **Leave a reused transcription unchecked**, so that a change to the
+  check reaches only the transcriptions made after it. Rejected: a failed
+  transcription that a stricter check catches would then stay under its
+  batch and pass the gates to the write, in every run on its state
+  directory. The check is cheap, and only a transcription it fails is made
+  again (§1).
+- **Fail the document when a cached answer is rejected, and ask the
+  engine in the next run.** Rejected: a run with the cache would then end
+  differently from one without it, and the first scratch run after a
+  stricter check would fail every document it affects instead of
+  transcribing it again (§4).
+- **Keep one session per conversation, and resume whatever is kept.**
+  Rejected: two callers opening the same conversation at once, or a
+  replay whose session could not be kept, leave a session made on another
+  opening answer than the one the cache serves, and a fork resumed on it
+  is stored under a key that names the served answer, in every later run
+  (§6).
 - **Keep the stage store and key its stages on `config_hash` and the check
   version (#218).** Rejected: it keeps the registry and its judgement, and
   a parser fix still recomputes the stage's calls.

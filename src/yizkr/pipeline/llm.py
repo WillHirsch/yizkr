@@ -93,17 +93,26 @@ class RejectingLlmClient(Protocol):
     call asks the engine again rather than being answered with the same
     text. Only a client that keeps responses has anything to reject; see
     `reject_response`.
+
+    `reject` returns whether the response was one the client kept from an
+    earlier call, rather than the engine's answer to this one. The engine
+    has then not answered the call in this run: a caller that asks once
+    more gets the engine's answer, as it would have without the keeping
+    client, and every rejector does so once.
     """
 
-    def reject(self, response: str, reason: str) -> None: ...
+    def reject(self, response: str, reason: str) -> bool: ...
 
 
-def reject_response(client: Any, response: str, reason: str) -> None:
+def reject_response(client: Any, response: str, reason: str) -> bool:
     """Reject `response`, which `client` returned, when the client can
     take a rejection (the LLM cache's client can); an engine's own client
-    keeps nothing, so there is nothing to do."""
+    keeps nothing, so there is nothing to do. Returns whether the response
+    was a kept answer, which the engine has not given in this run: the
+    caller then asks once more (RejectingLlmClient)."""
     if isinstance(client, RejectingLlmClient):
-        client.reject(response, reason)
+        return bool(client.reject(response, reason))
+    return False
 
 
 @runtime_checkable

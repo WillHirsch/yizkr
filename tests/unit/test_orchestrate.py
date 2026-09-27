@@ -771,8 +771,10 @@ class TestFreshness:
         assert doc.state.status == AWAITING_EQUIVALENCES
 
     def test_rebuilt_batch_view_invalidates_nothing(self, tmp_path):
-        """A deleted view is rebuilt with the same content, so the reviews
-        and the write it fed stay valid."""
+        """A deleted batch view rebuilt with the same content (the scripted
+        engine answers as the cache would) leaves the reviews and the write
+        it fed valid. Without the cache, a sampled engine words it afresh,
+        and the reviews are moved aside (docs/LLM_CACHE.md)."""
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         doc.batch.unlink()
@@ -971,6 +973,18 @@ class TestViews:
         assert derived["critique.json"] == {
             "batch.json": content["batch.json"]
         }
+
+    def test_a_forgotten_view_keeps_no_content(self, tmp_path):
+        """A view whose record is forgotten (one set aside) leaves no
+        content hash behind for the views made from it to match."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        assert doc.derivations.content(doc.transcription.name) is not None
+        doc.derivations.forget(doc.transcription)
+        assert doc.derivations.content(doc.transcription.name) is None
+        assert not doc.derivations.current(doc.transcription)
+        assert not doc.derivations.current(doc.batch)
 
     def test_a_deleted_view_is_made_again_alone(self, tmp_path):
         orchestrator = make_run(tmp_path)

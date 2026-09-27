@@ -20,12 +20,16 @@ Every engine's `transcribe()` runs the transcription check
 `TranscriptionCheckFailed` instead of returning an output that fails it:
 a tool-failure message or a refusal is never handed on as a
 transcription. The check runs on every output, whether the engine made
-it in this call or the LLM cache kept it from an earlier one (ADR-0032),
-so a stricter check applies to every transcription; the vision
-transcriber rejects a failing output through its client, so the engine
-is asked again rather than served it. `transcribe_unchecked()` is the
+it in this call or the LLM cache kept it from an earlier one (ADR-0032).
+The vision transcriber rejects a failing output through its client, so
+that a client that keeps answers never serves it again; when the failing
+output was one the client kept, rather than the engine's answer now, it
+asks once more, and the engine's answer is checked in its place, as it
+would have been without the cache. `transcribe_unchecked()` is the
 transcription step alone, for a caller that runs the check as a step of
-its own.
+its own. A caller that keeps transcriptions checks the ones it reuses
+again (yizkr.pipeline.orchestrate), so a stricter check applies to every
+transcription.
 
 Vision transcription of a PDF needs poppler-utils on the ingestion host:
 the claude-code engine's Read tool renders the pages with ``pdftoppm``,
@@ -133,18 +137,27 @@ class _CheckedTranscriber:
     def transcribe(
         self, media_path: Path, artifact_qid: str | None = None
     ) -> Transcription:
-        transcription = self.transcribe_unchecked(media_path, artifact_qid)
-        self.last_check = check_transcription(
-            transcription.text, pages=media_page_count(media_path)
-        )
-        if not self.last_check.passed:
+        """The checked transcription of `media_path`. An output that fails
+        the check is rejected; one its client kept from an earlier call,
+        rather than the engine's answer now, is asked for once more, and
+        the engine's answer is checked in its place."""
+        pages = media_page_count(media_path)
+        for _ask in range(2):
+            transcription = self.transcribe_unchecked(media_path, artifact_qid)
+            self.last_check = check_transcription(
+                transcription.text, pages=pages
+            )
+            if self.last_check.passed:
+                return transcription
             failed = TranscriptionCheckFailed(self.last_check)
-            self._reject(failed)
-            raise failed
-        return transcription
+            if not self._reject(failed):
+                break
+        raise failed
 
-    def _reject(self, failed: TranscriptionCheckFailed) -> None:
-        """Nothing to reject: no engine answered for this output."""
+    def _reject(self, failed: TranscriptionCheckFailed) -> bool:
+        """Nothing to reject: no engine answered for this output, so
+        asking again would give the same one."""
+        return False
 
 
 class LlmVisionTranscriber(_CheckedTranscriber):
@@ -177,11 +190,14 @@ class LlmVisionTranscriber(_CheckedTranscriber):
             engine=f"llm-vision:{self.client.model_identifier}",
         )
 
-    def _reject(self, failed: TranscriptionCheckFailed) -> None:
-        """Reject the engine's answer through the client, so that a client
-        that keeps answers asks the engine again next time."""
-        if self._response is not None:
-            reject_response(self.client, self._response, str(failed))
+    def _reject(self, failed: TranscriptionCheckFailed) -> bool:
+        """Reject the answer through the client, so that a client that
+        keeps answers asks the engine again rather than serving it; True
+        when the answer was a kept one, which the engine has not given in
+        this call (llm.reject_response)."""
+        if self._response is None:
+            return False
+        return reject_response(self.client, self._response, str(failed))
 
 
 class TextFileTranscriber(_CheckedTranscriber):

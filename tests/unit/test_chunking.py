@@ -695,6 +695,41 @@ class TestEntityFirstExtractor:
         assert response == cut
         assert reason.startswith("chunk: no terminal sentinel")
 
+    @pytest.mark.parametrize("kept", [1, 2])
+    def test_a_kept_cut_off_answer_spends_no_retry(self, tmp_path, kept):
+        """A cut-off answer the client kept from an earlier call is
+        rejected and asked for once more without spending a retry: the
+        engine then has the tries it would have without the cache (#230).
+        A second kept answer is no longer free."""
+
+        class Keeping(Rejecting):
+            def reject(self, response, reason):
+                super().reject(response, reason)
+                return len(self.rejected) <= kept
+
+        cut = json.dumps(claim("e1", "e1", 1917))  # no sentinel
+        llm = Keeping(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    cut,  # c001: an answer kept from an earlier call
+                    *([cut] if kept == 2 else []),  # a second kept answer
+                    placeholder_claims("e1"),  # c001: the engine's answer
+                    placeholder_claims("e2"),  # c002
+                ]
+            )
+        )
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=0
+        )
+        batch = extractor.extract(transcription(), "Q23")
+        if kept == 1:
+            assert len(batch.claims) == 2
+            assert extractor.failed_chunks == []
+        else:
+            assert extractor.failed_chunks == ["c001"]
+        assert [response for response, _ in llm.rejected] == [cut] * kept
+
     def test_count_mismatch_chunk_accepted_without_retry(self, tmp_path):
         # the c007/c019 case: a complete response whose sentinel
         # undercounts is kept as-is and does NOT burn a retry

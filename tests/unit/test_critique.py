@@ -126,17 +126,32 @@ class TestCritique:
 
 
 class Rejecting(ScriptedLlm):
-    """A client that takes rejections, as the LLM cache's does (#225)."""
+    """A client that takes rejections, as the LLM cache's does (#225):
+    its first `kept` answers are ones it kept from earlier calls, and a
+    rejection says whether the answer rejected was one of them."""
 
-    def __init__(self, response: str, *, refuse: bool = False) -> None:
-        super().__init__(response)
+    def __init__(
+        self, *responses: str, refuse: bool = False, kept: int = 0
+    ) -> None:
+        super().__init__(responses[0])
+        self.responses = list(responses)
         self.rejected: list[tuple[str, str]] = []
         self.refuse = refuse
+        self.kept = kept
+        self.asked = 0
+
+    def complete(self, prompt, image_paths=()):
+        self.response = self.responses[
+            min(self.asked, len(self.responses) - 1)
+        ]
+        self.asked += 1
+        return super().complete(prompt, image_paths)
 
     def reject(self, response, reason):
         if self.refuse:
             raise OSError("the cache folder is read-only")
         self.rejected.append((response, reason))
+        return self.asked <= self.kept
 
 
 FINDING = {"target": "e04", "issue": "agent typed as place"}
@@ -165,6 +180,23 @@ class TestUnfinishedAnswers:
         llm = Rejecting(cut)
         assert [f.target for f in run_critique(llm, batch())] == ["e04"]
         assert [rejected for rejected, _ in llm.rejected] == [cut]
+
+    def test_a_kept_answer_is_asked_for_once_more(self):
+        """An unfinished answer the client kept from an earlier call is
+        rejected and asked for once more, and the engine's answer is used
+        in its place, as it would be without the cache (#230)."""
+        refusal = "I can't help with reviewing this document."
+        llm = Rejecting(refusal, response([FINDING]), kept=1)
+        assert [f.target for f in run_critique(llm, batch())] == ["e04"]
+        assert [rejected for rejected, _ in llm.rejected] == [refusal]
+        # the engine's own unfinished answer is not asked for again
+        llm = Rejecting(refusal, response([FINDING]), kept=0)
+        assert run_critique(llm, batch()) == []
+        assert len(llm.rejected) == 1
+        # nor is a second unfinished answer
+        llm = Rejecting(refusal, refusal, response([FINDING]), kept=2)
+        assert run_critique(llm, batch()) == []
+        assert len(llm.rejected) == 2
 
     def test_a_failed_rejection_never_raises(self, caplog):
         llm = Rejecting("You've hit your usage limit.", refuse=True)

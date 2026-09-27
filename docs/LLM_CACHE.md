@@ -15,7 +15,9 @@ Development runs the whole corpus through the pipeline again and again
   done with the answer (parsing, the merge, validation, the transcription
   check) runs whenever the view is made. The cache is only an
   accelerator: without it the pipeline behaves the same, apart from
-  making the calls.
+  making the calls. An answer the cache kept that a caller now rejects
+  (below) is asked for once more in the same run, as the engine would
+  have been asked without the cache.
 
 The run directory beside them records what each run did, for the driver
 (#194), the live monitor (#195), the anomaly checks (#196), pacing (#101)
@@ -46,13 +48,21 @@ The source is not recorded: the directory is kept for one source's bytes,
 and a changed source sets it aside (below). Each view is recorded in
 `derivations.json` with its inputs' content hashes, and a view whose
 inputs still hash the same stands: the run reuses it, with a `reused`
-event, and does not check it again. A change to a prompt, a model or the
-code never makes a view stale by itself. `--refresh ROLE` makes the
-role's views again, in place, current or not (their calls then go to the
-engine whatever the cache holds); a view made again with the same
-content invalidates nothing after it. The extractor's side outputs
-(`extraction/coverage.json`, `rejects.json`, `gaps.ndjson`) are written
-with the batch they describe.
+event. A change to a prompt, a model or the code never makes a view stale
+by itself, with one exception: a vision or text-file transcription is
+checked again, with the transcription check as it is now, each time it is
+reused. One the check now fails is moved aside as
+`transcription.superseded-<n>.json`, never deleted, with a `set-aside`
+event that gives the reason; its record is forgotten, and it is made
+again in the same run: with the cache, the failing answer it kept is
+rejected and the engine is asked (Rejection, below). When the batch made
+from the new transcription differs, the reviews of the old one are moved
+aside, as below. A curator's correction and slide text are never checked.
+`--refresh ROLE` makes the role's views again, in place, current or not
+(their calls then go to the engine whatever the cache holds); a view made
+again with the same content invalidates nothing after it. The extractor's
+side outputs (`extraction/coverage.json`, `rejects.json`, `gaps.ndjson`)
+are written with the batch they describe.
 
 The later files are recorded the same way:
 
@@ -68,7 +78,10 @@ The later files are recorded the same way:
 
 - A batch whose canonical content changed invalidates every file derived
   from it and moves the reviewed CSVs aside; a batch made again with the
-  same content, or a deleted view rebuilt, invalidates nothing.
+  same content invalidates nothing. So a deleted `batch.json` rebuilt
+  with the same content, as the cache or the GEDCOM adapter gives it,
+  invalidates nothing; rebuilt without the cache, the engine words it
+  afresh, and the reviews are moved aside.
 - A re-exported CSV whose content changed moves its reviewed file aside;
   an identical re-export keeps it.
 - A reviewed CSV consents for the CSV it was first seen with: saving it
@@ -119,7 +132,7 @@ A key is the SHA-256 of the canonical JSON of its components:
 | `prompt` | SHA-256 of the text the engine sends (claude-code: the prompt after the line that points the Read tool at each image), with every path of a file the call is given replaced by `sha256:<the file's content SHA-256>` |
 | `files` | The content SHA-256 of each file the call may read: the files its caller passes (`image_paths`), in order |
 | `parent` | For a fork, the keys of the conversation it forks |
-| `opening` | For a fork, the SHA-256 of the conversation's opening answer, which the fork's context holds |
+| `opening` | For a fork, the SHA-256 of the conversation's opening answer, which the fork's context holds: a kept session is resumed only for the answer it was made on |
 | `attempt` | Which attempt at the call this is, for a caller that asks again and then falls back (the entity manifest, the segmentation); 0 otherwise |
 | `epoch` | The role's epoch: 0 unless `--epoch ROLE=N` says otherwise |
 
@@ -153,7 +166,8 @@ var/llm-cache/                     (--cache; mode 700)
     <key>.json                     the entry the call is served
     <key>.rejected-<stamp>.json    a response a caller rejected
     <key>.replaced-<stamp>.json    an entry a newer one displaced
-    <key>.session/                 an opening turn's session files
+    <key>.session/<opening>/       an opening turn's session files, under
+                                   the SHA-256 of the answer they hold
 ```
 
 An entry holds `format`, `key`, `components` (the key's components, whose
@@ -186,13 +200,25 @@ reason, and is never served again: the next call under the key, a retry
 in the same run or a call in the next, goes to the engine, and its miss
 says `rejected`. A rejection moves only the answer it names: the entry is
 renamed to a private name first and only then compared, and an answer
-another caller stored under the key meanwhile stays live. Rejected are:
+another caller stored under the key meanwhile stays live.
+
+**A kept answer rejected is asked for once more.** A rejection tells the
+caller whether the answer was a hit, one the cache kept from an earlier
+call, rather than the engine's answer to this call. When it was, the
+engine has not answered the call in this run, so the caller asks once
+more, once: the call misses as `rejected`, and the engine's answer takes
+the rejected one's place, as it would without the cache. A chunk spends
+no retry on it; the transcriber, the critic and the single-call extractor
+use the new answer. So a check or a parser made stricter ends a run with
+the cache as it ends one without it. Rejected are:
 
 - a transcription that fails the transcription check. The check runs on
-  every transcription a run makes, from the engine or from the cache; the
-  document fails, and the next run transcribes it again. A stricter check
-  applies to every transcription made after it: in a scratch run's fresh
-  state directories, every one;
+  every transcription a run makes, from the engine or from the cache, and
+  on every vision or text-file transcription view a run reuses (above). A
+  failing answer the cache kept is asked for once more; a failing answer
+  of the engine's fails the document, and the next run transcribes it
+  again. A stricter check applies to every transcription, the stored
+  views included;
 - a chunk response cut off before its terminal sentinel;
 - a critique without its terminal sentinel (a refusal, one cut off, a
   usage-limit notice): its findings are kept, and the critic never
@@ -222,21 +248,27 @@ of a conversation the cache opened, needs the engine to hold the
 conversation exactly as the fork's context assumes:
 
 1. **Resumed exactly.** When a conversation is opened, the cache keeps
-   what the engine needs to resume it, beside the opening turn's entry
-   (`<key>.session/`): for claude-code, the session's transcript files.
-   They are put back into the CLI's projects folder for `--resume …
-   --fork-session`, and released after the forks, as every transcript is.
-   The API engine rebuilds the conversation from the opening turn's
-   prompt and cached answer. No call is made; the event is
-   `cache-resume`.
+   what the engine needs to resume it, beside the opening turn's entry and
+   under the SHA-256 of the opening answer it holds
+   (`<key>.session/<opening>/`, published whole): for claude-code, the
+   session's transcript files. A fork resumes only the session kept for
+   the opening answer the cache serves, and replays when none is kept for
+   it: a session made on another answer (by two callers that opened the
+   conversation at once, or a replay whose session could not be kept) is
+   never resumed for it. The files are put back into the CLI's projects
+   folder for `--resume … --fork-session`, and released after the forks,
+   as every transcript is. The API engine rebuilds the conversation from
+   the opening turn's prompt and cached answer. No call is made; the event
+   is `cache-resume`.
 2. **Replayed**, only when nothing usable is kept. The opening turn is
    asked again and its answer compared with the cached one
    (`cache-replay`, with `matches`). When they match, the replay's session
    serves the forks and is kept for the next run. When they differ, the
    whole conversation is a miss: the replay's answer becomes the opening
-   turn's entry (the old one is kept aside as replaced), and the extractor
-   starts over from the new answer, whose forks are keyed apart and are
-   made on the replay's session.
+   turn's entry (the old one is kept aside as replaced), its session is
+   kept under the new answer, and the extractor starts over from the new
+   answer, whose forks are keyed apart and are made on the replay's
+   session.
 
 A session, however obtained, serves every later fork of the conversation
 in the run.
@@ -245,7 +277,8 @@ in the run.
 
 - `yizkr ingest run --cache DIR`: the cache (default `var/llm-cache`).
 - `--no-cache`: the engine directly; nothing is read or written. Views
-  persist and are reused as with the cache, so the run is otherwise the
+  persist and are reused as with the cache, and a rejected answer the
+  cache kept is asked for again in its run, so the run is otherwise the
   same.
 - `--refresh ROLE` (repeatable; `transcribe`, `extract`, `critique`): the
   role's views are made again in the run, current or not, and their calls
@@ -318,7 +351,7 @@ stage events add `stage` (`transcription`, `extraction`, `critique` or
 | `reused` | a stage's view was current and stands | `attention`: the reasons noted when it was made |
 | `failed` | a stage failed | `reason` |
 | `held` | the control file stopped a stage's dispatch | `reason` |
-| `set-aside` | a document directory was moved aside and started afresh | `reason` (`content changed`, no `derivations.json`, or no `state.json`), `kept` |
+| `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
 | `cache-hit` | the cache answered a call | `reason`: `key match`, or an adoption's reason |
 | `cache-miss` | the engine was asked | `reason`: `absent`, `rejected` or `refresh` |
 | `cache-resume` | a conversation was resumed exactly for a fork | |
@@ -374,8 +407,9 @@ run directory has seen.
 
 **The PDF renderer** (poppler-utils) is checked once per run, before any
 document, whenever the run holds a PDF: the vision engine reads a PDF
-through it, and the transcription check counts its pages with it,
-whether the transcription comes from the engine or the cache.
+through it, and the transcription check counts its pages with it
+(`pdfinfo`), whether the transcription comes from the engine or the
+cache, or is a view the run reuses and checks again.
 
 The per-document path goes when the scratch driver has run the corpus
 end to end (#119). Until #128 and #103 land, it still registers the

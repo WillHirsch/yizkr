@@ -72,12 +72,16 @@ tool-failure message or a refusal instead of the page's text, fails its
 document the same way: the reason is recorded as the `error` in the
 document's `state.json` and in the run's events, and no transcription is
 kept. The check runs on every vision and text-file transcription a run
-makes, whether its answer comes from the engine or from the LLM cache. A
-transcription that stands (below) is not checked again, so a stricter
-check applies to every transcription made after it: in a scratch run's
-fresh state directories, all of them. A vision transcription that fails
-it is rejected in the cache, and the next run asks the engine again.
-Slide text from a deck and a curator's correction are not checked.
+makes, whether its answer comes from the engine or from the LLM cache,
+and again on every one it reuses (below), so a stricter check applies to
+every transcription, the stored ones included. A stored transcription
+it now fails is moved aside as `transcription.superseded-<n>.json`, with
+a `set-aside` event, and made again in the same run. An answer the cache
+kept that fails it is rejected in the cache and asked for once more in
+the same run, as the engine would have been asked without the cache; an
+answer of the engine's that fails it fails the document, and the next
+run asks again. Slide text from a deck and a curator's correction are
+not checked.
 
 State for each document lives in `var/runs/<folder>/<doc>/`: its views
 (`transcription.json`, `batch.json`, `critique.json`, and the extractor's
@@ -87,11 +91,12 @@ was made from are unchanged (the transcription is made from the source,
 or a curator's correction; the batch from the transcription's content;
 the critique from the batch's), so a re-run asks the engine nothing for a
 document that has not changed, with or without a cache. A change to a
-prompt, a model or the code does not make a view stale by itself:
-`--refresh ROLE` makes a role's views again, in place, and a scratch run
-starts from fresh state directories. The model calls a view is made with
-go through the LLM cache (`var/llm-cache`, `--cache`; ADR-0032): a call
-made before with the same key (built from what the call sends: its prompt
+prompt, a model or the code does not make a view stale by itself (the
+transcription check aside, above): `--refresh ROLE` makes a role's views
+again, in place, and a scratch run starts from fresh state directories.
+The model calls a view is made with go through the LLM cache
+(`var/llm-cache`, `--cache`; ADR-0032): a call made before with the same
+key (built from what the call sends: its prompt
 text, the files it reads, and the engine, model, effort and configuration)
 is answered from the cache, while parsing, merging and the transcription
 check run whenever the view is made. So a fix to them costs no model call,
@@ -143,7 +148,9 @@ The machine that runs `ingest run` needs, besides the stack in `deploy/`:
   Without it, `ingest run` refuses to start when the folder holds a
   PDF, with that instruction, before any document is touched: it checks
   once per run, since a PDF needs the renderer even when its
-  transcription comes from the LLM cache. Images need no renderer.
+  transcription comes from the LLM cache, and `pdfinfo` even when its
+  transcription is a view the run reuses and checks again. Images need
+  no renderer.
 
 ## The corpus and the never-ingest list
 
@@ -188,11 +195,12 @@ re-running one step in isolation — but for a normal ingest you only ever run
   alike; slide text and a curator's correction are not checked. It is
   `yizkr.pipeline.transcription_check`, a step with its own version,
   apart from the transcription's. It runs on every transcription a run
-  makes, from the engine or the LLM cache, so a changed check applies to
-  every transcription made after it without asking the engine again for
-  one it passes, and one that now fails is rejected in the cache and
-  transcribed again (docs/LLM_CACHE.md). It
-  fails the document when the output
+  makes, from the engine or the LLM cache, and on every transcription
+  view a run reuses, so a changed check applies to every transcription
+  without asking the engine again for one it passes. A stored view it
+  now fails is moved aside and made again, and a cached answer it fails
+  is rejected in the cache and asked for once more (docs/LLM_CACHE.md).
+  It fails the document when the output
   matches a tool-failure or refusal signature (the PDF renderer missing,
   a CLI or API error, "I can't transcribe this document"), or when a
   document of two or more pages yields fewer than 3 letters or digits per

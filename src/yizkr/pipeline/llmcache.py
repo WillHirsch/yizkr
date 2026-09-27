@@ -40,7 +40,7 @@ Layout under the cache root (runtime state, kept under var/, mode 700):
     <root>/<first two hex digits of the key>/<key>.json
                                             /<key>.rejected-<stamp>.json
                                             /<key>.replaced-<stamp>.json
-                                            /<key>.session/...
+                                            /<key>.session/<opening>/...
 
 ``<key>.json`` is the one entry a call is served. It holds the key's
 components, the response, its origin (``engine``, or the reason it was
@@ -54,8 +54,11 @@ the key already has one, so a reader sees an entry whole or not at all,
 and the cache deletes nothing: an entry a caller rejects, and any entry
 a newer one displaces (a refresh's, a racing call's, or one damaged), is
 moved aside under a name no lookup reads, and kept for inspection.
-``<key>.session/`` keeps the session files of a conversation's opening
-turn, for the engines that need them to resume it exactly.
+``<key>.session/<opening>/`` keeps the session files of a conversation's
+opening turn, for the engines that need them to resume it exactly, under
+the SHA-256 of the opening answer the session holds: a session is resumed
+only for the answer it was made on, whichever answer a racing call or a
+replay has since stored under the key.
 
 docs/LLM_CACHE.md describes the cache, its events and the run directory.
 """
@@ -125,6 +128,7 @@ RESUMED = "resumed"
 REPLAYED = "replayed"
 RECOMPUTED = "recomputed"
 
+# a key, or the SHA-256 of the opening answer a kept session holds
 _KEY = re.compile(r"^[0-9a-f]{64}$")
 # how many times a publish moves a newer entry aside before it gives up
 _PUBLISH_TRIES = 20
@@ -353,18 +357,26 @@ class EngineCache:
 
     # -- kept sessions -------------------------------------------------------
 
-    def _session_dir(self, key: str) -> Path:
-        return self.path(key).with_suffix(".session")
+    def _session_dir(self, key: str, opening: str) -> Path:
+        if not _KEY.match(opening or ""):
+            raise ValueError(f"not an opening answer's SHA-256: {opening!r}")
+        return self.path(key).with_suffix(".session") / opening
 
-    def keep_session(self, key: str, files: Mapping[str, bytes]) -> None:
-        """Keep the session files of the conversation opened under `key`,
-        replacing (and keeping aside) any kept before."""
+    def keep_session(
+        self, key: str, opening: str, files: Mapping[str, bytes]
+    ) -> None:
+        """Keep the session files of the conversation opened under `key`
+        whose opening answer has the SHA-256 `opening`, replacing (and
+        keeping aside) any kept before for that answer. The files are
+        published whole, by renaming their folder into place, so the
+        answer they are kept under names the session they hold."""
         if not files:
             return
-        target = self._session_dir(key)
+        target = self._session_dir(key, opening)
         self._directory(target.parent)
         staging = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
         try:
+            staging.mkdir(mode=0o700)
             for name, content in files.items():
                 path = (staging / name).resolve()
                 if not path.is_relative_to(staging.resolve()):
@@ -379,10 +391,11 @@ class EngineCache:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    def kept_session(self, key: str) -> dict[str, bytes]:
-        """The session files kept for the conversation opened under `key`,
-        by their relative paths; empty when none are kept."""
-        folder = self._session_dir(key)
+    def kept_session(self, key: str, opening: str) -> dict[str, bytes]:
+        """The session files kept for the conversation opened under `key`
+        with the opening answer whose SHA-256 is `opening`, by their
+        relative paths; empty when none are kept for that answer."""
+        folder = self._session_dir(key, opening)
         if not folder.is_dir():
             return {}
         return {
@@ -394,8 +407,14 @@ class EngineCache:
     # -- helpers -------------------------------------------------------------
 
     def _directory(self, directory: Path) -> None:
-        for folder in (self.root, directory):
-            folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        """Make `directory`, and each folder from the root down to it,
+        private to its owner."""
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        folders = [self.root]
+        for part in directory.relative_to(self.root).parts:
+            folders.append(folders[-1] / part)
+        for folder in folders:
+            folder.mkdir(mode=0o700, exist_ok=True)
             if stat.S_IMODE(folder.stat().st_mode) != 0o700:
                 os.chmod(folder, 0o700)
 
@@ -440,14 +459,18 @@ def _link(source: Path, target: Path) -> bool:
 
 
 class CachedResponse(str):
-    """A response, and the key it is cached under; in every other respect
-    it is the text. It copies and pickles with its key."""
+    """A response, the key it is cached under, and whether the cache
+    answered the call with it (`hit`) rather than the engine in this call;
+    in every other respect it is the text. It copies and pickles with
+    both."""
 
     key: str
+    hit: bool
 
-    def __new__(cls, text: str, key: str) -> CachedResponse:
+    def __new__(cls, text: str, key: str, hit: bool = False) -> CachedResponse:
         response = super().__new__(cls, text)
         response.key = key
+        response.hit = hit
         return response
 
     def __getnewargs__(self) -> tuple[str, str]:
@@ -621,7 +644,7 @@ class CachingClient:
                     key=key,
                     reason=KEY_MATCH if origin == ENGINE else origin,
                 )
-                return CachedResponse(entry["response"], key), False
+                return CachedResponse(entry["response"], key, hit=True), False
         if refresh:
             reason = REFRESH
         elif self.cache.rejected(key):
@@ -670,11 +693,14 @@ class CachingClient:
 
     # -- rejection and adoption ---------------------------------------------
 
-    def reject(self, response: str, reason: str) -> None:
+    def reject(self, response: str, reason: str) -> bool:
         """Reject `response`, which this client returned: the entry under
         its key is moved aside with `reason` and never served again, so
         the next identical call asks the engine. The rejection is an
-        event when an entry was moved."""
+        event when an entry was moved. Returns whether the cache answered
+        the call with `response` (a hit), rather than the engine in this
+        call: a caller that asks once more then has the engine's answer,
+        as it would without the cache (llm.RejectingLlmClient)."""
         key = getattr(response, "key", None)
         if not isinstance(key, str):
             raise ValueError(
@@ -682,6 +708,7 @@ class CachingClient:
             )
         if self.cache.reject(key, str(response), reason, role=self.role):
             self._emit(REJECT, key=key, reason=reason[:500])
+        return bool(getattr(response, "hit", False))
 
     def seed(
         self,
@@ -718,8 +745,9 @@ class ConversationalCachingClient(CachingClient):
 
     * the conversation is resumed exactly, without a call, from what the
       cache kept when it was opened (llm.ResumableLlmClient): the session
-      files of an engine that stores sessions, or the turn itself for one
-      that needs nothing more;
+      files of an engine that stores sessions, kept under the opening
+      answer they hold and resumed only for that answer, or the turn
+      itself for an engine that needs nothing more;
     * failing that, the opening turn is replayed. A replay that gives the
       cached answer again serves the conversation's forks. One that
       answers differently makes the whole conversation a miss: the
@@ -742,10 +770,11 @@ class ConversationalCachingClient(CachingClient):
 
         response, asked = self._serve(OPEN, components, ask)
         if asked:
-            self._keep(response.key, sessions[0])
-            return response, Conversation(
+            conversation = Conversation(
                 components, prompt, str(response), sessions[0], LIVE
             )
+            self._keep(response.key, conversation.opening_sha256, sessions[0])
+            return response, conversation
         session = self.cache.take_session(response.key, self.client)
         origin = RECOMPUTED if session is not None else None
         return response, Conversation(
@@ -769,21 +798,25 @@ class ConversationalCachingClient(CachingClient):
         )
         return self._serve(FORK, components, ask)[0]
 
-    def _keep(self, key: str, session: Any) -> None:
+    def _keep(self, key: str, opening: str, session: Any) -> None:
         """Keep what the engine needs to resume the conversation opened
-        under `key` exactly (nothing, for an engine that cannot)."""
+        under `key` exactly, under the SHA-256 of the opening answer the
+        session holds (nothing, for an engine that cannot). A session that
+        cannot be kept is only a warning: no fork resumes it, and one that
+        misses replays the opening turn instead."""
         keep = getattr(self.client, "keep_conversation", None)
         if not callable(keep):
             return
         try:
-            self.cache.keep_session(key, keep(session))
+            self.cache.keep_session(key, opening, keep(session))
         except (OSError, ValueError) as exc:
             logger.warning("could not keep the session of %s: %s", key, exc)
 
     def _session(self, conversation: Conversation) -> Any:
         """The engine's handle for `conversation` (see the class
-        docstring): resumed exactly, or replayed and found the same; a
-        replay that differs raises ConversationChanged."""
+        docstring): resumed exactly, from the session kept for its opening
+        answer, or replayed and found the same; a replay that differs
+        raises ConversationChanged."""
         with conversation.lock:
             key = conversation.chain[-1]
             if conversation.changed:
@@ -796,7 +829,9 @@ class ConversationalCachingClient(CachingClient):
                     session = resume(
                         conversation.prompt,
                         conversation.response,
-                        self.cache.kept_session(key),
+                        self.cache.kept_session(
+                            key, conversation.opening_sha256
+                        ),
                     )
                 except Exception as exc:  # nothing kept, or unusable
                     logger.info("could not resume %s: %s", key, exc)
@@ -819,7 +854,7 @@ class ConversationalCachingClient(CachingClient):
             if matches:
                 conversation.session = session
                 conversation.origin = REPLAYED
-                self._keep(key, session)
+                self._keep(key, conversation.opening_sha256, session)
                 return session
             self.cache.put(
                 key,
@@ -830,7 +865,7 @@ class ConversationalCachingClient(CachingClient):
                     {"recomputed": True},
                 ),
             )
-            self._keep(key, session)
+            self._keep(key, sha256_text(response), session)
             self.cache.remember_session(key, self.client, session)
             conversation.changed = True
             raise _changed(key)

@@ -588,7 +588,10 @@ class ChunkedClaimExtractor:
     terminal sentinel is rejected through it (llm.reject_response): behind
     the LLM cache (ADR-0032) that makes the retry, in this run or the
     next, ask the engine again rather than be answered with the same text,
-    and a chunk that failed every retry is asked again in the next run.
+    and a chunk that failed every retry is asked again in the next run. A
+    rejected answer the cache kept from an earlier call spends no retry:
+    the engine has not answered the chunk yet, and has as many tries as
+    it would without the cache.
     The entity manifest and the segmentation are asked in two attempts
     each, keyed apart behind the cache (llm.for_attempt): a refused
     answer is kept, so a later run replays the same attempts and takes the
@@ -960,11 +963,16 @@ class ChunkedClaimExtractor:
     ) -> tuple[list[dict], str]:
         """(claims, response) for one chunk: call (fork if possible) and
         parse, with retries. A response cut off before its sentinel is
-        rejected, so the retry asks again. A conversation that changed
+        rejected, so the retry asks again; one the client kept from an
+        earlier call is asked for once more without spending a retry
+        (llm.reject_response). A conversation that changed
         (ConversationChanged) is no failure of the chunk: it ends the
         extraction's pass, which starts over."""
         last_error: Exception = ChunkIncomplete("not attempted")
-        for _attempt in range(1 + self.retries):
+        tries = 1 + self.retries
+        kept_rejected = False
+        while tries:
+            tries -= 1
             try:
                 if handle is not None:
                     try:
@@ -987,7 +995,10 @@ class ChunkedClaimExtractor:
                 return parse_chunk_response(response, warn=self._log), response
             except ChunkIncomplete as exc:
                 last_error = exc
-                reject_response(self.client, response, f"chunk: {exc}")
+                kept = reject_response(self.client, response, f"chunk: {exc}")
+                if kept and not kept_rejected:
+                    kept_rejected = True
+                    tries += 1
         raise last_error
 
     # -- orchestration ---------------------------------------------------
