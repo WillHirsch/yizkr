@@ -9,29 +9,31 @@ whether the output may go downstream. It fails the output on either of:
 
 * **A signature**: a phrase in the engine's own voice that no source
   document writes. Tool-specific tokens (``pdftoppm``, a Python
-  traceback, an API error type) match anywhere. Phrases such as "I
-  cannot transcribe" or "As an AI" match outside editorial brackets,
-  because the transcription prompt asks the engine to mark what it
-  cannot read in brackets (``[illegible]``), and a bracketed note is
-  that convention at work. Any match fails the whole output: a
-  multi-page reading that failed on one page is missing that page.
+  traceback, an API error type) match anywhere. The other signatures,
+  such as "As an AI", match outside editorial brackets, because the
+  transcription prompt asks the engine to mark what it cannot read in
+  brackets (``[illegible]``), and a bracketed note is that convention
+  at work. Any match fails the whole output: a multi-page reading that
+  failed on one page is missing that page.
 
   Some engine phrases are also the words of a letter or an email, such
   as correspondence about family research, so those signatures count
   only where the engine speaks for itself. A note about the media or the
-  request ("I couldn't open the PDF", "No image was provided", "I'm
-  unable to assist with this request") counts where it opens the output
-  or a page section, or where it names the pages it skipped ("I was
-  unable to read page 2 of the PDF"), and only while it names the task's
-  medium or request plainly. Correspondence names its own by what it
-  holds ("the PDF of the census page", "your request for copies of the
-  register"), who sent it ("the attachment you sent"), what it came in
-  ("in the envelope") or where it was opened ("on my computer"); such a
-  note is the source's own sentence, as is one in the middle of a text
-  that names no page. A bare decline ("I can't help with that", "I'm
-  unable to complete this task") counts only opening a short output, and
-  a sentence announcing that the engine is about to read the file only
-  as the whole output.
+  request, or a refusal to transcribe ("I couldn't open the PDF", "No
+  image was provided", "I'm unable to assist with this request", "I
+  can't transcribe this document"), counts where it opens the output or
+  a page section, or where it names the pages it skipped ("I was unable
+  to read page 2 of the PDF"), and only while it names the task's
+  medium, document or request plainly. Correspondence names its own by
+  what it holds ("the PDF of the census page", "your request for copies
+  of the register"), who sent it ("the attachment you sent"), what it
+  came in ("in the envelope"), where it was opened ("on my computer") or
+  what writing it carries ("the old handwriting on the back of the
+  photograph"); such a note is the source's own sentence, as is one in
+  the middle of a text that names no page. A bare decline ("I can't help
+  with that", "I'm unable to complete this task") counts only opening a
+  short output, and a sentence announcing that the engine is about to
+  read the file only as the whole output.
 * **Implausible length**: a document of two or more pages must hold at
   least `MIN_TEXT_CHARS_PER_PAGE` letters or digits per page, counted
   outside editorial brackets. The floor sits far below any written page
@@ -159,6 +161,22 @@ _PAGE = (
     r"\s+pages?"
     r"|rest\s+of\s+the\s+(?:PDF|document|file|pages))\b"
 )
+# what an engine declines to transcribe: the task's document named plainly
+# ("this document", "the image", "documents"), pages, writing placed in the
+# task's medium ("the handwriting in this image"), or a pronoun ("it")
+_TASK_DOCUMENT = (
+    r"(?:(?:\w+\s+){1,3}?(?:in|on)\s+(?:this|the)\s+"
+    r"(?:document|image|page|PDF|file|scan|picture)s?"
+    rf"|{_PAGE}"
+    r"|(?:(?:a|an|this|that|these|those|the|your|any|such)\s+)?"
+    r"(?:\w+\s+){0,2}?"
+    r"(?:document|image|page|text|file|PDF|scan|photo|photograph|picture"
+    r"|record|material|content)s?"
+    r"|it|this|that|them|these|those|anything)\b"
+)
+# the end of a decline that names nothing: the clause ends, or a reason
+# follows
+_BARE = r"(?=\s*(?:[.,;:!?)]|\Z)|\s+(?:because|since|due)\b)"
 # a sentence announcing that the engine is about to read the media
 _NARRATION = (
     rf"(?:I{_A}ll|I will|Let me|I{_A}m going to)\s+"
@@ -170,10 +188,11 @@ _NARRATION = (
 )
 
 # -- the engine's own voice ---------------------------------------------
-# A note about the media or the request is also a letter's or an email's
-# sentence ("I couldn't open the attachment you sent"). The engine's note
-# opens its output or a page section, or names the page it skipped, and
-# names the task's medium and request plainly; correspondence names its
+# A note about the media, the request or transcribing is also a letter's
+# or an email's sentence ("I couldn't open the attachment you sent", "I
+# can't transcribe the old handwriting"). The engine's note opens its
+# output or a page section, or names the page it skipped, and names the
+# task's medium, document and request plainly; correspondence names its
 # own.
 
 # what may precede an engine's note that opens the output or a page
@@ -235,13 +254,14 @@ _THEIRS = re.compile(
 
 
 def in_engine_voice(subject: str, match: re.Match[str]) -> bool:
-    """Whether `match`, a note about the media or the request found in
-    `subject`, is the engine speaking about its own task.
+    """Whether `match`, a note about the media, the request or
+    transcribing found in `subject`, is the engine speaking about its own
+    task.
 
     It is when the note opens the output or a page section, after at most
     a sentence announcing the read, a label, an apology and a hedge, or
     when it names the pages it skipped; and never when the words after it
-    make its medium or request the correspondents' own.
+    make what it names the correspondents' own.
     """
     if _THEIRS.match(subject, match.end()):
         return False
@@ -334,12 +354,18 @@ SIGNATURES: tuple[Signature, ...] = (
         rf"\A\W*{_NARRATION}\s*\Z",
     ),
     # -- refusals: the engine declines, in its own voice ------------------
+    # declining to transcribe the task's document, or nothing named, as an
+    # engine-voice note (in_engine_voice); a letter declines to transcribe
+    # its own writing by name ("I can't transcribe the old handwriting on
+    # the back of the photograph")
     _signature(
         "refusal-transcribe",
         REFUSAL,
-        rf"\b{_DECLINE}\s+"
+        rf"\b{_I}?{_DECLINE}\s+"
         r"(?:transcribe|provide (?:a|the|any) transcription"
-        r"|(?:help|assist)(?: you)? with transcrib\w*)\b",
+        r"|(?:help|assist)(?: you)? with transcrib\w*)"
+        rf"(?:\s+of)?(?:\s+{_TASK_DOCUMENT}|{_BARE})",
+        engine_voice=True,
     ),
     # declining the request itself, as an engine-voice note
     # (in_engine_voice): a reply letter declines its reader's request in

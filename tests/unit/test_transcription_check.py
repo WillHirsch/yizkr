@@ -164,6 +164,14 @@ REPLIES = [
     "as the office is closed until the spring.",
 ]
 
+# letters that decline to transcribe their own writing, which they name
+TRANSCRIBING_LETTERS = [
+    "I can't transcribe the old handwriting on the back of the photograph; "
+    "could you?",
+    "Dear Nora, I cannot transcribe the old script, so I have sent the card "
+    "on to Friedl.",
+]
+
 # engine notes on the pages they skipped, each after a page of text
 PAGE_FAILURES = [
     PAGE_FAILURE,
@@ -233,12 +241,42 @@ class TestSignatures:
                 "I cannot fulfil your request for a transcription of these "
                 "records.",
             ),
+            # declining the task's document, or nothing named
+            ("refusal-transcribe", "I can't transcribe it."),
+            (
+                "refusal-transcribe",
+                "I'm unable to transcribe the handwriting in this image "
+                "because it is too faint.",
+            ),
+            (
+                "refusal-transcribe",
+                "I cannot transcribe because the image is too blurry.",
+            ),
+            # a hedging preamble that declines the task's document
+            (
+                "refusal-transcribe",
+                "I cannot transcribe this image fully, but here is what I "
+                "can read:",
+            ),
         ],
     )
     def test_engine_note_opening_the_output_fails(self, name, text):
         check = check_transcription(text, pages=1)
         assert not check.passed
         assert check.signature == name
+
+    def test_refusal_on_a_skipped_page_fails_after_text(self):
+        text = f"{a_page()}\n\nI can't transcribe page 2 because it is faint."
+        check = check_transcription(text, pages=2)
+        assert not check.passed
+        assert check.signature == "refusal-transcribe"
+
+    @pytest.mark.parametrize("line", TRANSCRIBING_LETTERS)
+    def test_letter_declining_its_own_writing_passes(self, line):
+        # a letter names the writing it cannot transcribe; the engine
+        # declines the task's document ("this document", "it")
+        assert check_transcription(line, pages=1).passed
+        assert check_transcription(f"{a_page()}\n{line}", pages=2).passed
 
     @pytest.mark.parametrize("line", CORRESPONDENCE)
     def test_correspondence_about_its_own_media_passes(self, line):
@@ -584,7 +622,9 @@ class TestTranscribers:
         result = TextFileTranscriber(text_file).transcribe(text_file)
         assert result.text == "1937"
 
-    @pytest.mark.parametrize("line", CORRESPONDENCE + REPLIES)
+    @pytest.mark.parametrize(
+        "line", CORRESPONDENCE + REPLIES + TRANSCRIBING_LETTERS
+    )
     def test_text_file_of_correspondence_passes(self, tmp_path, line):
         # an email or letter kept as a text file is checked too
         text_file = tmp_path / "email.txt"
