@@ -195,7 +195,13 @@ extras of the batch record. `--resume` reuses records whose key matches; a
 failed chunk's logged response is re-parsed before the model is called
 again, and a parser version bump re-parses stored raw responses. A
 recorded fallback is stored only when the engine answered: an outage
-fails the stage, to be retried. The layout this section first described:
+fails the stage, to be retried. Sidecar state and batches made before the
+store are never read as stage outputs: they carry no key, and archived
+outputs enter the store only through the import in #104, under keys of
+their own (ADR-0025). `yizkr ingest run` holds a document whose directory
+holds such outputs, with its files and reviews untouched, until a run
+opts in with `--rederive-unrecorded` (docs/STAGE_STORE.md). The layout
+this section first described:
 
 All intermediate state lives beside the output (runtime state, so under
 `var/` or wherever `--out` points):

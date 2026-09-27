@@ -569,6 +569,7 @@ def cmd_run(args) -> int:
         exclusions=exclusions,
         store_dir=args.store,
         recompute=args.recompute or (),
+        rederive_unrecorded=args.rederive_unrecorded,
     ).run()
 
 
@@ -1128,6 +1129,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="STAGE",
         help="recompute this stage even where its key matches (repeatable; "
         f"one of {', '.join(STAGE_NAMES)})",
+    )
+    p.add_argument(
+        "--rederive-unrecorded",
+        action="store_true",
+        help="derive every stage again for a document whose directory "
+        "holds stage outputs (transcription.json, batch.json, "
+        "critique.json) that neither its derivations.json nor the stage "
+        "store records. This recomputes those stages, calling the engine "
+        "for all but a GEDCOM file, and replaces those files; unless the "
+        "new batch has the same content as batch.json, the reviewed CSVs "
+        "are moved aside. Without it such a document is held, with its "
+        "directory untouched",
     )
     p.set_defaults(func=cmd_run)
 

@@ -12,6 +12,7 @@ import csv
 import json
 import os
 import re
+import shutil
 
 import pytest
 
@@ -24,6 +25,7 @@ from yizkr.pipeline.orchestrate import (
     DUPLICATE,
     FAILED,
     PAUSED,
+    UNRECORDED,
     WRITTEN,
     DocumentRun,
     Orchestrator,
@@ -127,6 +129,14 @@ class ScriptedModel:
         )
 
 
+class DriftingModel(ScriptedModel):
+    """The scripted engine answering the same prompts again, differently,
+    as a model can: it reads the year 1901 as 1902."""
+
+    def complete(self, prompt, image_paths=()):
+        return super().complete(prompt, image_paths).replace("1901", "1902")
+
+
 class ScriptedOrchestrator(Orchestrator):
     """Every wiki step replaced with a scripted fake, the engine with a
     scripted model; transcription (text files), extraction, critique and
@@ -190,6 +200,11 @@ class ScriptedOrchestrator(Orchestrator):
         }
 
 
+class DriftingOrchestrator(ScriptedOrchestrator):
+    def _llm(self, role, doc):
+        return DriftingModel(self.calls, doc.source.name, fail=self.fail_step)
+
+
 def quiet(*args, **kwargs):
     pass
 
@@ -249,6 +264,33 @@ def saved_last(path) -> None:
     )
     stamp = newest + 1_000_000_000
     os.utime(path, ns=(stamp, stamp))
+
+
+def completed_run(tmp_path, **kwargs):
+    """A one-document run taken through both gates to `written`."""
+    orchestrator = make_run(tmp_path, **kwargs)
+    orchestrator.run()
+    (doc,) = orchestrator.documents()
+    approve_all_equivalences(doc)
+    orchestrator.run()
+    (doc,) = orchestrator.documents()
+    approve_all_claims(doc)
+    assert orchestrator.run() == 0
+    return orchestrator
+
+
+def snapshot(directory) -> dict:
+    """Every file in a document directory but its state.json, with its
+    bytes and modification time: a run that touches none of them leaves
+    this unchanged."""
+    return {
+        path.relative_to(directory): (
+            path.read_bytes(),
+            path.stat().st_mtime_ns,
+        )
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and path.name != "state.json"
+    }
 
 
 class TestGates:
@@ -565,18 +607,12 @@ class TestFreshness:
     """Make-style dependencies by content hash: upstream redos invalidate
     downstream outputs AND the human gates (a corrected transcription must
     force re-extraction, re-review, re-write), and an identical recompute
-    invalidates nothing (#87)."""
+    invalidates nothing. A directory that has lost its derivations.json
+    while the stage store still holds its stages is adopted once, by
+    modification times (#87)."""
 
     def completed_run(self, tmp_path):
-        orchestrator = make_run(tmp_path)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_equivalences(doc)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_claims(doc)
-        assert orchestrator.run() == 0
-        return orchestrator
+        return completed_run(tmp_path)
 
     def test_corrected_transcription_invalidates_derived_files_and_gates(
         self, tmp_path
@@ -649,13 +685,14 @@ class TestFreshness:
         assert doc.batch.exists()
         assert doc.review_reviewed.exists()
 
-    def test_a_directory_from_before_the_records_keeps_its_files(
-        self, tmp_path
-    ):
-        """A document directory written before derivations were recorded
-        by content hash keeps its derived files and reviews: each is no
-        older than what it was made from, so it is adopted as current
-        once, not re-derived."""
+    def test_a_directory_the_store_records_keeps_its_files(self, tmp_path):
+        """A directory that has lost its derivations.json, while the stage
+        store still holds its stages, keeps its derived files and reviews
+        with no calls: the stages are reused by key, and each derived file
+        is no older than what it was made from, so it is adopted as
+        current, once. Without those store records the stages would be
+        computed again, so a directory from before the records is held
+        instead (TestUnrecordedDirectory)."""
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         (doc.dir / "derivations.json").unlink()
@@ -668,7 +705,8 @@ class TestFreshness:
         assert not (doc.dir / "review.reviewed.superseded-1.csv").exists()
 
     def stale_review(self, tmp_path):
-        """A directory from before the records, held at the claim gate,
+        """A directory waiting at the claim gate that has lost its
+        derivations.json, while the store still holds its stages, and
         whose claim review is older than its CSV: the CSV was re-exported
         with other rows after the review was saved."""
         orchestrator = make_run(tmp_path)
@@ -687,7 +725,8 @@ class TestFreshness:
         """A claim review older than its CSV decided on rows that have
         since been replaced. Adoption does not bind it: it is moved aside,
         the gate waits, and nothing is written until the current rows are
-        reviewed."""
+        reviewed. The store holds the directory's stages, so the document
+        is adopted rather than held, and no stage is computed."""
         orchestrator = self.stale_review(tmp_path)
         before = len(orchestrator.calls)
         assert orchestrator.run() == 2
@@ -705,9 +744,10 @@ class TestFreshness:
         ]
 
     def test_an_interrupted_adoption_adopts_again(self, tmp_path, monkeypatch):
-        """An adoption that stops before its record is saved leaves none,
-        so the next run adopts again, and a review it judged stale never
-        comes to consent."""
+        """An adoption (of a directory whose stages the store holds) that
+        stops before its record is saved leaves none, so the next run
+        adopts again, and a review it judged stale never comes to
+        consent."""
         import yizkr.pipeline.orchestrate as orchestrate
 
         orchestrator = self.stale_review(tmp_path)
@@ -730,9 +770,10 @@ class TestFreshness:
     def test_adoption_re_resolves_after_a_newer_equivalence_review(
         self, tmp_path
     ):
-        """In a directory from before the records, an equivalence review
-        saved again after the resolved batch was made is newer than it, so
-        the resolved batch is not adopted: it is resolved again with the
+        """In a directory that has lost its derivations.json, while the
+        store still holds its stages, an equivalence review saved again
+        after the resolved batch was made is newer than it, so the
+        resolved batch is not adopted: it is resolved again with the
         curator's new decisions, and the claim review of the old
         resolution is moved aside instead of written."""
 
@@ -777,8 +818,9 @@ class TestFreshness:
         assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
 
     def test_after_adoption_modification_times_are_not_read(self, tmp_path):
-        """Adoption happens once. After it, a CSV that is only touched,
-        not changed, re-arms nothing: content hashes decide."""
+        """Adoption (here of a directory whose stages the store holds)
+        happens once. After it, a CSV that is only touched, not changed,
+        re-arms nothing: content hashes decide."""
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         (doc.dir / "derivations.json").unlink()
@@ -861,6 +903,290 @@ class TestFreshness:
             [c for c in orchestrator.calls if c.startswith("write")]
         )
         assert writes_after == writes_before + 1
+
+
+class TestUnrecordedDirectory:
+    """A document directory from before the stage records: its stage
+    outputs (transcription.json, batch.json, critique.json) and reviews
+    are in place, but it has no derivations.json and the stage store holds
+    none of its stages. Deriving them again would call the engine and,
+    when a model answers differently, move the reviews aside, so the run
+    holds the document until it opts in with --rederive-unrecorded (#87).
+    """
+
+    VIEWS = ["transcription.json", "batch.json", "critique.json"]
+
+    def from_before_the_records(self, tmp_path):
+        """A written document's directory as a run before the records left
+        it: every file in place, no derivations.json, and no stage store."""
+        orchestrator = completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        (doc.dir / "derivations.json").unlink()
+        shutil.rmtree(orchestrator.store.root)
+        return orchestrator
+
+    def test_a_directory_from_before_the_records_is_held(self, tmp_path):
+        """No stage runs and no file in the directory changes. The hold
+        and its reason are in state.json, a held event, an alert, the log
+        and the exit code, on every run until one opts in."""
+        orchestrator = self.from_before_the_records(tmp_path)
+        (doc,) = orchestrator.documents()
+        files = snapshot(doc.dir)
+        calls = list(orchestrator.calls)
+        lines: list[str] = []
+        orchestrator.log = collect(lines)
+        assert orchestrator.run() == 2
+        # no wiki, engine or gate step, and no stage output stored
+        assert orchestrator.calls == calls
+        assert not orchestrator.store.root.exists()
+        assert snapshot(doc.dir) == files
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == UNRECORDED
+        held = doc.state.detail["held"]
+        assert held["outputs"] == self.VIEWS
+        assert held["previous_status"] == WRITTEN
+        assert "--rederive-unrecorded" in held["reason"]
+        assert "calling the engine" in held["reason"]
+        assert any(f"held: {held['reason']}" in line for line in lines)
+        (event,) = [
+            e for e in orchestrator.rundir.events() if e["event"] == "held"
+        ]
+        assert (event["subject"], event["stage"]) == (
+            doc.sha1,
+            "transcription",
+        )
+        assert "unrecorded outputs" in event["reason"]
+        (alert,) = orchestrator.rundir.alerts()
+        assert alert["check"] == "unrecorded outputs"
+        assert alert["value"] == self.VIEWS
+        assert doc.sha1.startswith(alert["subject"])
+        state = run_state(orchestrator.rundir, orchestrator.store)[
+            (doc.sha1, "transcription", None)
+        ]
+        assert (state.status, state.reason) == ("pending", event["reason"])
+        # the next run holds it again, and still touches nothing
+        assert orchestrator.run() == 2
+        assert orchestrator.calls == calls
+        assert snapshot(doc.dir) == files
+        (doc,) = orchestrator.documents()
+        assert doc.state.detail["held"]["previous_status"] == WRITTEN
+        assert len(orchestrator.rundir.alerts()) == 2
+
+    def test_rederiving_moves_the_reviews_aside_when_the_batch_differs(
+        self, tmp_path
+    ):
+        """With --rederive-unrecorded every stage is derived again. A
+        model's second answer can differ from its first; when the batch
+        does, what was made from the old one is derived again, and the
+        reviews are moved aside, never deleted."""
+        first = self.from_before_the_records(tmp_path)
+        assert first.run() == 2  # held
+        lines: list[str] = []
+        orchestrator = DriftingOrchestrator(
+            first.folder,
+            first.state_dir,
+            log=collect(lines),
+            rederive_unrecorded=True,
+        )
+        assert orchestrator.run() == 2
+        assert [c.split(":")[0] for c in orchestrator.calls] == [
+            "manifest",
+            "chunk",
+            "critique",
+            "reconcile",
+        ]
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+        assert "held" not in doc.state.detail
+        assert not doc.write_result.exists()
+        assert not doc.equivalences_reviewed.exists()
+        assert not doc.review_reviewed.exists()
+        assert (doc.dir / "equivalences.reviewed.superseded-1.csv").exists()
+        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
+        assert any("no record of" in line for line in lines)
+        assert any(
+            "equivalences.reviewed.csv, review.reviewed.csv moved aside"
+            in line
+            for line in lines
+        )
+        batch = ClaimBatch.model_validate_json(doc.batch.read_text())
+        assert batch.claims[0].value.year == 1902
+
+    def test_rederiving_the_same_batch_keeps_the_reviews(self, tmp_path):
+        """Stages derived again that give the directory's batch back
+        change nothing after it: the hold is over, the reviews stay bound,
+        the write stands, and from then on the directory is recorded."""
+        first = self.from_before_the_records(tmp_path)
+        assert first.run() == 2  # held
+        orchestrator = ScriptedOrchestrator(
+            first.folder, first.state_dir, log=quiet, rederive_unrecorded=True
+        )
+        # the extract-only pass (serial mode's first) reports the batch
+        (doc,) = orchestrator.documents()
+        assert orchestrator.advance(doc, stop_after_extract=True) == BATCHED
+        assert orchestrator.run() == 0
+        assert [c.split(":")[0] for c in orchestrator.calls] == [
+            "manifest",
+            "chunk",
+            "critique",
+        ]
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+        assert "held" not in doc.state.detail
+        assert doc.equivalences_reviewed.exists()
+        assert doc.review_reviewed.exists()
+        assert not list(doc.dir.glob("*.superseded-*"))
+        again = ScriptedOrchestrator(first.folder, first.state_dir, log=quiet)
+        assert again.run() == 0
+        assert again.calls == []
+
+    def test_a_directory_that_lost_its_state_is_held_too(self, tmp_path):
+        """Without state.json the document has no artifact QID, but its
+        stage outputs are still unrecorded: it is held before it is
+        registered again, and nothing in the directory changes."""
+        orchestrator = self.from_before_the_records(tmp_path)
+        (doc,) = orchestrator.documents()
+        doc.state_path.unlink()
+        files = snapshot(doc.dir)
+        calls = list(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert orchestrator.calls == calls
+        assert snapshot(doc.dir) == files
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == UNRECORDED
+        assert doc.state.artifact_qid is None
+
+    def test_a_first_run_that_stopped_before_its_batch_is_not_held(
+        self, tmp_path
+    ):
+        """A first run that fails before the batch leaves transcription.json
+        and no derivations.json. The store holds that transcription, so
+        the next run carries on instead of holding the document."""
+        orchestrator = make_run(tmp_path, fail_step="manifest")
+        assert orchestrator.run() == 1
+        (doc,) = orchestrator.documents()
+        assert doc.transcription.exists()
+        assert not (doc.dir / "derivations.json").exists()
+        orchestrator.fail_step = None
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+
+    def test_a_partly_recorded_directory_is_held_for_the_rest(self, tmp_path):
+        """A store that holds some of a directory's stages, and not the
+        stages behind batch.json and critique.json, would have those
+        computed again: the document is held, naming those two."""
+        orchestrator = completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        (doc.dir / "derivations.json").unlink()
+        scope = orchestrator.store.root / "doc" / doc.sha1
+        for stage in ("entity_manifest", "chunk", "batch", "critique"):
+            shutil.rmtree(scope / stage)
+        files = snapshot(doc.dir)
+        before = list(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert orchestrator.calls == before
+        assert snapshot(doc.dir) == files
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == UNRECORDED
+        assert doc.state.detail["held"]["outputs"] == [
+            "batch.json",
+            "critique.json",
+        ]
+
+    def test_serial_mode_reports_a_hold_once(self, tmp_path):
+        """Serial mode advances a document twice in one run (extract-only,
+        then in sequence); a held document is reported once."""
+        first = self.from_before_the_records(tmp_path)
+        orchestrator = ScriptedOrchestrator(
+            first.folder, first.state_dir, log=quiet, serial=True
+        )
+        assert orchestrator.run() == 2
+        assert orchestrator.calls == []
+        events = orchestrator.rundir.events()
+        assert [e["event"] for e in events].count("held") == 1
+        assert len(orchestrator.rundir.alerts()) == 1
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == UNRECORDED
+
+    def test_a_copy_of_a_held_written_document_is_a_duplicate(self, tmp_path):
+        """A document held after it was written is still the one ingested
+        for its bytes (ADR-0010): a renamed copy is a duplicate, and is
+        never registered, transcribed or extracted."""
+        orchestrator = self.from_before_the_records(tmp_path)
+        assert orchestrator.run() == 2
+        folder = orchestrator.folder
+        (folder / "a-copy.txt").write_bytes(
+            (folder / "letter.txt").read_bytes()
+        )
+        again = ScriptedOrchestrator(folder, orchestrator.state_dir, log=quiet)
+        assert again.run() == 2
+        assert again.calls == []
+        assert {d.source.name: d.state.status for d in again.documents()} == {
+            "a-copy.txt": DUPLICATE,
+            "letter.txt": UNRECORDED,
+        }
+
+    def test_a_gedcom_directory_is_held_only_without_its_stage(self, tmp_path):
+        """A GEDCOM document's one stage output is batch.json, from the
+        gedcom stage, which calls no engine. With the store holding that
+        stage, a lost derivations.json is adopted; without it the document
+        is held."""
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "family.ged").write_text(
+            "0 @I1@ INDI\n1 NAME Klara /Löbig/\n1 BIRT\n2 DATE 1917\n0 TRLR\n"
+        )
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        (doc.dir / "derivations.json").unlink()
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+        (doc.dir / "derivations.json").unlink()
+        shutil.rmtree(orchestrator.store.root)
+        files = snapshot(doc.dir)
+        assert orchestrator.run() == 2
+        assert snapshot(doc.dir) == files
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == UNRECORDED
+        held = doc.state.detail["held"]
+        assert held["outputs"] == ["batch.json"]
+        assert "calling the engine" not in held["reason"]
+        events = orchestrator.rundir.events()
+        assert [e["stage"] for e in events if e["event"] == "held"] == [
+            "gedcom"
+        ]
+
+    def test_ingest_run_opts_in_by_flag(self, tmp_path, monkeypatch):
+        from yizkr.cli import build_parser
+        from yizkr.core.corpus import CORPUS_DIR_VAR, EXCLUDE_FILE_VAR
+
+        listed = tmp_path / "exclude.txt"
+        listed.write_text("")
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"{EXCLUDE_FILE_VAR}={listed}\n")
+        monkeypatch.setenv("YIZKR_ENV_FILE", str(env_file))
+        monkeypatch.delenv(EXCLUDE_FILE_VAR, raising=False)
+        monkeypatch.delenv(CORPUS_DIR_VAR, raising=False)
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        seen = []
+        monkeypatch.setattr(
+            Orchestrator,
+            "run",
+            lambda self: seen.append(self.rederive_unrecorded) or 0,
+        )
+        state = str(tmp_path / "state")
+        for flags in ([], ["--rederive-unrecorded"]):
+            args = build_parser().parse_args(
+                ["ingest", "run", str(folder), "--state", state, *flags]
+            )
+            assert args.func(args) == 0
+        assert seen == [False, True]
 
 
 class TestStageStore:

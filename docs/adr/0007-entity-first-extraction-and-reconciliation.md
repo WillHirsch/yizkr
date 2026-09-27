@@ -187,7 +187,10 @@ unchanged. Reconciliation artifacts (`roster.json`, `candidates.json`,
 Amended by #87 (2026-09-27): the entity manifest, or its recorded
 line-range fallback, is the `entity_manifest` stage in the stage store
 (ADR-0006 §5, docs/STAGE_STORE.md); a fallback is an attention reason on
-its record rather than a `manifest-fallback.txt` file.
+its record rather than a `manifest-fallback.txt` file. An
+`entity-manifest.json` or `manifest-fallback.txt` from before the store
+is not read; `ingest run` holds a document whose stage outputs the store
+does not record until `--rederive-unrecorded` (ADR-0006 §5).
 
 ### Testing
 

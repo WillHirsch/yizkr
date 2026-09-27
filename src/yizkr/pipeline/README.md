@@ -59,13 +59,15 @@ never auto-confirmed and no claim reaches the graph without an explicit
 `approve` (R3, ADR-0007).
 
 **Reading a run.** Each document prints a status — `awaiting equivalences
-review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done), or
-`failed` (errored; just re-run to retry). The exit code summarises the
-batch: `0` all written, `2` something awaits you, `1` something failed.
-Re-running is always safe: finished work is skipped, and a corrected
-upstream file re-does only what depends on it (make-style, by content hash;
-modification times are read only once, to adopt a document directory that
-has no `derivations.json`, as docs/STAGE_STORE.md describes).
+review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done),
+`held: unrecorded outputs` (a directory from before the stage store; see
+below), or `failed` (errored; just re-run to retry). The exit code
+summarises the batch: `0` all written, `2` something awaits you, `1`
+something failed. Re-running is always safe: finished work is skipped, and
+a corrected upstream file re-does only what depends on it (make-style, by
+content hash; modification times are read only once, to adopt a document
+directory that has no `derivations.json`, as docs/STAGE_STORE.md
+describes).
 
 Every stage before the gates reads and writes through the stage store
 (`var/stages`, `--store`): each output is keyed by its input content and
@@ -76,9 +78,16 @@ views of the stage outputs (`transcription.json`, `batch.json`,
 `critique.json`) and the files the later steps derive from them. To correct
 a transcription, save the corrected text as `transcription.corrected.txt`
 there. `var/runs/<folder>/` is also the run directory, with an event for
-every stage reuse, store and failure. See
+every stage reuse, store and failure. A document directory from before the
+stage store (stage outputs such as `batch.json`, but no `derivations.json`
+and nothing in the store for them) is **held**, with every file left as it
+is: deriving its stages again would call the engine and, if the batch came
+out different, move its reviewed CSVs aside. The run says so in the
+document's `state.json`, an event and an alert, and exits `2`; pass
+`--rederive-unrecorded` to derive such documents again. See
 [docs/STAGE_STORE.md](../../../docs/STAGE_STORE.md) for keys, reuse, the
-stage-version registry (`yizkr stages check`) and the run directory.
+stage-version registry (`yizkr stages check`), the run directory and these
+held directories.
 GEDCOM (`.ged`) files take a deterministic adapter in place of
 transcribe/extract; the gates, resolve, and write are identical.
 

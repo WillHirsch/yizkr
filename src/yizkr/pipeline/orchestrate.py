@@ -35,12 +35,22 @@ derived from it and moves the reviewed files aside as
 `*.reviewed.superseded-<n>.csv`; a re-exported CSV whose content changed
 moves its reviewed file aside too; and a reviewed file is consent only
 for the CSV it was first seen with, so editing the reviewed CSV
-re-writes and editing the CSV it reviews re-arms the gate. A directory
-that has state but no `derivations.json` is recorded once from its
-files' modification times, the only dependency information it holds: a
-file older than an input is derived again, and a reviewed file older
-than its CSV is moved aside (Derivations.adopt). Modification times are
-read nowhere else.
+re-writes and editing the CSV it reviews re-arms the gate.
+
+A directory without `derivations.json` holds files that no content hash
+records. When the store holds no record of the stage behind one of its
+stage outputs (`transcription.json`, `batch.json`, `critique.json`),
+deriving the stages would compute them all again, calling the engine
+for those that use one, and a batch that came out different would move
+the directory's reviews aside. So the document is held before any stage
+runs, with every file left as it is, and its status, the run's events
+and its alerts say why, until a run opts in to deriving it again
+(`rederive_unrecorded`). Otherwise a directory that has state is
+recorded once from its files' modification times, the only dependency
+information it holds: a file older than an input is derived again, and
+a reviewed file older than its CSV is moved aside (Derivations.adopt).
+Modification times are read nowhere else.
+
 A reviewed file's PRESENCE is the gate: the orchestrator never
 interprets a half-filled CSV as consent. Documents whose reconcile
 produced no proposals skip the first gate (there is nothing to review).
@@ -118,6 +128,13 @@ FAILED = "failed"
 DUPLICATE = "duplicate"
 # the run's control file held the document's next stage
 PAUSED = "paused"
+# the document's directory holds stage outputs that neither its
+# derivations.json nor the stage store records; the run left it untouched
+UNRECORDED = "held: unrecorded outputs"
+# the alert a held document raises
+UNRECORDED_CHECK = "unrecorded outputs"
+# the characters of a document's SHA-1 an alert names it by
+ALERT_SUBJECT_CHARS = 12
 
 # the stages the store holds for each kind of document, in order
 _EXTRACTED = ("transcription", "entity_manifest", "chunk", "batch", "critique")
@@ -260,6 +277,18 @@ class Derivations:
         last: an adoption that stops part way leaves no record, so the
         next run adopts again rather than binding a review it had judged
         stale.
+
+        Adoption covers only the files made from the batch and the
+        reviews; it says nothing about the stages before the gates. Those
+        are reused from the stage store only where it holds them, and are
+        computed again where it does not, calling the engine for those
+        that use one. A batch that then differs from the directory's
+        `batch.json` invalidates what adoption recorded and moves the
+        reviews aside. So the orchestrator adopts a directory only when
+        the store holds the stages behind its stage outputs, or when the
+        run opts in to deriving them again; otherwise it holds the
+        document, and nothing is adopted
+        (Orchestrator._unrecorded_outputs).
         """
         if not self.unrecorded:
             return []
@@ -389,6 +418,18 @@ class DocumentRun:
     def kind(self) -> str:
         return document_kind(self.source)
 
+    @property
+    def views(self) -> dict[Path, str]:
+        """Each plain-file view of a stage output in the directory, and
+        the stage whose output it shows."""
+        if self.kind == "gedcom":
+            return {self.batch: "gedcom"}
+        return {
+            self.transcription: "transcription",
+            self.batch: "batch",
+            self.critique: "critique",
+        }
+
     def save(self) -> None:
         self.state.save(self.state_path)
 
@@ -430,6 +471,7 @@ class Orchestrator:
         exclusions: ExclusionList | None = None,
         store_dir: Path | None = None,
         recompute: Collection[str] = (),
+        rederive_unrecorded: bool = False,
         log=print,
     ) -> None:
         self.folder = folder
@@ -445,6 +487,13 @@ class Orchestrator:
         self.rundir = RunDir(state_dir)
         # stages to recompute once in this run even when a key matches
         self.recompute = Recompute(recompute)
+        # derive again the stages of a document whose directory holds
+        # stage outputs that nothing records; without it such a document
+        # is held (see _unrecorded_outputs)
+        self.rederive_unrecorded = rederive_unrecorded
+        # documents held in this run, so each is reported once even when
+        # serial mode advances it twice
+        self._held: set[str] = set()
         self.llm = llm
         self.artifact_type = artifact_type
         self.language = language
@@ -1044,6 +1093,80 @@ class Orchestrator:
 
     # -- views and derivations ----------------------------------------------
 
+    def _unrecorded_outputs(self, doc: DocumentRun) -> list[Path]:
+        """The stage outputs in a directory without derivations.json whose
+        stage the store holds no record of, under any key, for the
+        document.
+
+        An output is reused only on an exact key match or a recorded
+        equivalence (ADR-0025), and these files have neither. Running the
+        stages would compute every one again, calling the engine for each
+        stage that uses one, and replace the files; a batch that came out
+        different would then move the directory's reviews aside. A
+        directory whose views the store does record (its derivations.json
+        was lost, or another state directory ran the document through the
+        same store) has none, and is adopted instead (Derivations.adopt).
+        """
+        if doc.derivations.path.exists():
+            return []
+        scope = doc_scope(doc.sha1)
+        return [
+            view
+            for view, stage in doc.views.items()
+            if view.exists() and not self.store.records(scope, stage)
+        ]
+
+    def _hold_unrecorded(self, doc: DocumentRun, outputs: list[Path]) -> str:
+        """Hold a document whose stage outputs nothing records, with every
+        file in its directory as it is, and say why: in state.json, in a
+        `held` event for its first stage, in an alert and on stderr."""
+        names = [path.name for path in outputs]
+        calls_engine = any(
+            STAGES[stage].llm for stage in DOCUMENT_STAGES[doc.kind]
+        )
+        reason = (
+            f"no record of {', '.join(names)}: the directory has no "
+            f"derivations.json, and the stage store holds none of these "
+            f"stage outputs for this document. Nothing was changed. A run "
+            f"with --rederive-unrecorded derives every stage again"
+            f"{', calling the engine,' if calls_engine else ''} and "
+            f"replaces these files; unless the new batch has the same "
+            f"content as batch.json, the reviewed CSVs are then moved aside."
+        )
+        held = (doc.state.detail or {}).get("held") or {}
+        previous = (
+            held.get("previous_status", doc.state.status)
+            if doc.state.status == UNRECORDED
+            else doc.state.status
+        )
+        doc.state.status = UNRECORDED
+        doc.state.detail = (doc.state.detail or {}) | {
+            "held": {
+                "reason": reason,
+                "outputs": names,
+                "previous_status": previous,
+            }
+        }
+        if doc.sha1 not in self._held:
+            self._held.add(doc.sha1)
+            stage = DOCUMENT_STAGES[doc.kind][0]
+            self.rundir.emit(
+                "held",
+                subject=doc.sha1,
+                kind=doc.kind,
+                stage=stage,
+                reason=f"unrecorded outputs: {', '.join(names)}",
+            )
+            self.rundir.alert(
+                stage=stage,
+                check=UNRECORDED_CHECK,
+                subject=doc.sha1[:ALERT_SUBJECT_CHARS],
+                value=names,
+                carried=False,
+            )
+            self.log(f"  {doc.source.name}: held: {reason}", file=sys.stderr)
+        return UNRECORDED
+
     def _update_batch_view(self, doc: DocumentRun, batch: ClaimBatch) -> bool:
         """Write `batch.json` for the current batch; True when its content
         differs from the batch the document's derived files were made from.
@@ -1164,6 +1287,25 @@ class Orchestrator:
             return DUPLICATE
         self._seen_hashes[content_sha1] = doc.source.name
 
+        # stage outputs that nothing records hold the document here, before
+        # any wiki or engine call and before any file in its directory is
+        # moved or replaced, unless the run opts in to deriving them again
+        unrecorded = self._unrecorded_outputs(doc)
+        if unrecorded and not self.rederive_unrecorded:
+            return self._hold_unrecorded(doc, unrecorded)
+        if unrecorded:
+            self.log(
+                f"  no record of "
+                f"{', '.join(path.name for path in unrecorded)}: deriving "
+                f"every stage again (--rederive-unrecorded)"
+            )
+        if "held" in (doc.state.detail or {}):
+            doc.state.detail = {
+                key: value
+                for key, value in doc.state.detail.items()
+                if key != "held"
+            }
+
         if doc.state.artifact_qid is None:
             # register is a wiki write; the lock keeps concurrent extract-all
             # documents (extract_concurrency > 1) from racing on the client.
@@ -1184,8 +1326,9 @@ class Orchestrator:
             doc.save()
             self.log(f"  derived media: {len(derived)} item(s)")
 
-        # a directory with state but no derivation record is recorded once,
-        # as it stands, before anything below rewrites a file in it
+        # a directory with state but no derivation record, whose stage
+        # outputs the store holds or the run derives again, is recorded
+        # once, as it stands, before anything below rewrites a file in it
         for reviewed in doc.derivations.adopt():
             self.log(
                 f"  {reviewed.name} does not review the current "
@@ -1207,15 +1350,23 @@ class Orchestrator:
             doc.derivations.forget(*stale)
             # the reviewed files decide rows of the OLD batch: move them
             # aside, never deleting a human's decisions
-            for reviewed in (doc.equivalences_reviewed, doc.review_reviewed):
+            reviews = (doc.equivalences_reviewed, doc.review_reviewed)
+            moved = [reviewed for reviewed in reviews if reviewed.exists()]
+            for reviewed in moved:
                 _supersede(reviewed)
-                doc.derivations.forget(reviewed)
+            doc.derivations.forget(*reviews)
             doc.state.status = BATCHED
             doc.save()
             self.log(f"  batch: {len(batch.claims)} claims")
+            if moved:
+                self.log(
+                    f"  the batch changed: "
+                    f"{', '.join(reviewed.name for reviewed in moved)} moved "
+                    f"aside (review the new rows)"
+                )
             # open-schema harness (ADR-0013): surface unmappable relations
             self._surface_gaps(doc)
-        elif doc.state.status in (FAILED, PAUSED, REGISTERED):
+        elif doc.state.status in (FAILED, PAUSED, REGISTERED, UNRECORDED):
             # the batch stands, so an earlier failure or hold is over; the
             # gates below re-derive the real status
             doc.state.status = BATCHED
@@ -1316,8 +1467,10 @@ class Orchestrator:
         Reads persisted per-document state (runtime state in var/, not a
         second store of assertions), so it degrades gracefully: if that
         state is cleared, the file is simply re-extracted and the writer
-        still dedups. Only WRITTEN documents seed the map — an unfinished
-        prior run must not block a fresh attempt from completing.
+        still dedups. Only documents written to the graph seed the map
+        (WRITTEN ones, and ones held for unrecorded outputs after they were
+        written) — an unfinished prior run must not block a fresh attempt
+        from completing.
         """
         seen: dict[str, str] = {}
         if not self.state_dir.exists():
@@ -1330,7 +1483,7 @@ class Orchestrator:
                 state = DocumentState.load(state_file)
             except (TypeError, ValueError):  # malformed/foreign state: skip
                 continue
-            if state.status == WRITTEN and state.content_sha1:
+            if _was_written(state) and state.content_sha1:
                 seen.setdefault(state.content_sha1, Path(state.file).name)
         return seen
 
@@ -1347,6 +1500,7 @@ class Orchestrator:
                 "review_effort": self.review_effort,
                 "extract_model": self.extract_model,
                 "recompute": sorted(self.recompute.stages),
+                "rederive_unrecorded": self.rederive_unrecorded,
             },
             documents=[
                 {
@@ -1369,6 +1523,7 @@ class Orchestrator:
             self.log(f"no supported documents in {self.folder}")
             return 0
         self._warn_unpinned(docs)
+        self._held = set()
         # seed with content already fully ingested in prior runs, so a
         # renamed copy skips the pipeline (cross-run dedup, ADR-0010)
         self._seen_hashes = self._prior_written_hashes()
@@ -1410,7 +1565,7 @@ class Orchestrator:
             return 1
         if any(
             doc.state.status.startswith("awaiting")
-            or doc.state.status == PAUSED
+            or doc.state.status in (PAUSED, UNRECORDED)
             for doc in docs
         ):
             return 2
@@ -1479,6 +1634,15 @@ class Orchestrator:
             if entity.extract:
                 keys |= _name_tokens(entity.label, *entity.aliases)
         return keys
+
+
+def _was_written(state: DocumentState) -> bool:
+    """Was the document written to the graph? It is WRITTEN, or it was
+    WRITTEN when it was held for unrecorded outputs."""
+    if state.status != UNRECORDED:
+        return state.status == WRITTEN
+    held = state.detail.get("held") if isinstance(state.detail, dict) else None
+    return isinstance(held, dict) and held.get("previous_status") == WRITTEN
 
 
 def _no_input_newer(output: Path, *inputs: Path) -> bool:
