@@ -357,30 +357,32 @@ class TestEquivalencesCsv:
         from yizkr.pipeline.reconcile import read_reviewed_aliases
 
         path = tmp_path / "equivalences.csv"
+        # a multi-word alias, which review must keep whole, and a role label
+        as_written = "Hildegard Löbig geborene Laudler"
         noisy = [
             EntityRecord(
                 id="e1",
                 label="Hildegard Löbig",
-                aliases=["Hilde", "MOTHER"],
+                aliases=[as_written, "MOTHER"],
                 kind="human",
             )
         ]
         export_equivalences_csv(self.proposals(), noisy, roster(), path)
         content = path.read_text()
-        assert "Hilde|MOTHER" in content  # visible to reviewer
+        assert f"{as_written}|MOTHER" in content  # visible to reviewer
         # the reviewer prunes the role label and approves
-        content = content.replace("Hilde|MOTHER", "Hilde")
+        content = content.replace(f"{as_written}|MOTHER", as_written)
         content = content.replace("same spouse,", "same spouse,approve")
         path.write_text(content)
         approved = read_approved_equivalences(path)
         reviewed = read_reviewed_aliases(path)
-        assert reviewed == {"e1": ["Hilde"]}
+        assert reviewed == {"e1": [as_written]}
         applied = apply_equivalences(
             batch(entity_list=noisy), approved, reviewed
         )
         (entity,) = applied.entities
         assert entity.qid == "Q40"
-        assert entity.aliases == ["Hilde"]  # MOTHER pruned
+        assert entity.aliases == [as_written]  # MOTHER pruned
 
     def test_old_csvs_without_aliases_column_still_apply(self, tmp_path):
         from yizkr.pipeline.reconcile import read_reviewed_aliases
@@ -571,6 +573,16 @@ class TestImpossiblePair:
         assert impossible_pair(_facts(a), _facts(b)) == "kinship-edge"
 
 
+# A son and his father whose names block each other: one name for both (a
+# "Jr." case, with tokens long enough to block), and the universe's Gustav
+# and his father Sebastian, who share only the surname.
+FATHER_AND_SON = pytest.mark.parametrize(
+    ("son", "father"),
+    [("Xxx Yyy", "Xxx Yyy"), ("Gustav Löbig", "Sebastian Löbig")],
+    ids=["same-name", "shared-surname"],
+)
+
+
 class TestBlockingWithImpossibility:
     def test_containment_candidate_is_pruned_from_blocking(self):
         places = [EntityRecord(id="e1", label="Germany", kind="place")]
@@ -588,10 +600,11 @@ class TestBlockingWithImpossibility:
             == {}
         )
 
-    def test_batch_kinship_qidref_prunes_candidate(self):
+    @FATHER_AND_SON
+    def test_batch_kinship_qidref_prunes_candidate(self, son, father):
         # a batch entity whose father is ALREADY the graph candidate (a
         # QidRef) cannot be that same candidate — pruned before adjudication.
-        entity = EntityRecord(id="e1", label="Gustav Löbig", kind="human")
+        entity = EntityRecord(id="e1", label=son, kind="human")
         b = batch(
             claims=[
                 {
@@ -606,27 +619,23 @@ class TestBlockingWithImpossibility:
             ],
             entity_list=[entity],
         )
-        roster_people = [
-            RosterEntity(qid="Q84", label="Sebastian Löbig", kind="human")
-        ]
+        roster_people = [RosterEntity(qid="Q84", label=father, kind="human")]
         assert block_candidates([entity], roster_people, batch=b) == {}
         # without the batch (no resolved father) the pair survives to review
         assert block_candidates([entity], roster_people)["e1"][0].qid == "Q84"
 
-    def test_graph_pair_pruning_drops_impossible_pairs(self):
-        # roster x roster: a father edge between two items that share a
-        # surname means the graph-dedup pass never even asks the model
-        # about them.
+    @FATHER_AND_SON
+    def test_graph_pair_pruning_drops_impossible_pairs(self, son, father):
+        # roster x roster: a father edge between two same-name items (or two
+        # that share only a surname) means the graph-dedup pass never even
+        # asks the model about them.
         from yizkr.pipeline.reconcile import propose_graph_pairs
 
         pair_roster = [
             RosterEntity(
-                qid="Q1",
-                label="Gustav Löbig",
-                kind="human",
-                father_qids=["Q2"],
+                qid="Q1", label=son, kind="human", father_qids=["Q2"]
             ),
-            RosterEntity(qid="Q2", label="Sebastian Löbig", kind="human"),
+            RosterEntity(qid="Q2", label=father, kind="human"),
         ]
 
         class _Boom:
@@ -638,6 +647,15 @@ class TestBlockingWithImpossibility:
                 )
 
         assert propose_graph_pairs(_Boom(), pair_roster) == []
+        # without the father edge the names still block: the pair reaches
+        # the adjudicator
+        unlinked = [
+            RosterEntity(qid="Q1", label=son, kind="human"),
+            RosterEntity(qid="Q2", label=father, kind="human"),
+        ]
+        llm = ScriptedLlm(json.dumps({"done": True, "proposals_emitted": 0}))
+        propose_graph_pairs(llm, unlinked)
+        assert len(llm.prompts) == 1
 
 
 class TestContainmentHandoff:
