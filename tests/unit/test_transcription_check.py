@@ -1199,10 +1199,13 @@ class TestOrchestratorContract:
                 **options,
             )
             doc = DocumentRun(source, tmp_path / state)
+            # the state directory's event log keeps every earlier run's
+            # events, so only those this run appends count
+            seen = len(orch.rundir.events())
             status = orch.advance(doc, stop_after_extract=True)
             events = [
-                (event["event"], event.get("reason"))
-                for event in orch.rundir.events()
+                (event["event"], event.get("reason") or event.get("stage"))
+                for event in orch.rundir.events()[seen:]
             ]
             return status, doc, events
 
@@ -1223,7 +1226,7 @@ class TestOrchestratorContract:
 
         status, doc, events = run("state")
         assert status == BATCHED
-        assert ("reused", None) in events
+        assert ("reused", "transcription") in events
         status, doc, events = run("fresh")
         assert status == BATCHED
         assert ("cache-hit", "key match") in events
@@ -1257,10 +1260,13 @@ class TestOrchestratorContract:
                 **options,
             )
             doc = DocumentRun(scan, tmp_path / state)
+            # the state directory's event log keeps every earlier run's
+            # events, so only those this run appends count
+            seen = len(orch.rundir.events())
             status = orch.advance(doc, stop_after_extract=True)
             events = [
-                (event["event"], event.get("reason"))
-                for event in orch.rundir.events()
+                (event["event"], event.get("reason") or event.get("stage"))
+                for event in orch.rundir.events()[seen:]
             ]
             return status, doc, events
 
@@ -1286,7 +1292,7 @@ class TestOrchestratorContract:
         # the next run reuses the view, as the check's signatures pass it
         status, doc, events = run("state")
         assert status == BATCHED
-        assert ("reused", None) in events
+        assert ("reused", "transcription") in events
         assert len(cli.calls) == 2
         # an epoch asks the engine only in the runs it is given for
         status, doc, _ = run("epoch", epochs={"transcribe": 1})
