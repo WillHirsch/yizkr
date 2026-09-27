@@ -193,7 +193,7 @@ Rules — these mirror the archive's non-negotiable conventions:
   exact words. Record `sex_or_gender` (male/female vocab) when a source
   gives it.
 - Relational / perspectival appellations (ADR-0018): a reference like
-  "our great grandmother", "meine Oma", "Tante Rosa", "my husband" is
+  "our great grandmother", "meine Oma", "Aunt Pünktchen", "my husband" is
   NOT a name and never an alias. Two cases:
   * If it is a LITERAL kinship term, record the kinship — `relative` +
     `kinship_type` (the term verbatim) with the OTHER party (the "our" /
@@ -216,7 +216,7 @@ Rules — these mirror the archive's non-negotiable conventions:
   relative's address (e.g. a newborn at the parents' address), lower its
   confidence to mark the inference.
 - Persecution and displacement are EVENTS, not relations and not
-  locations on a person (ADR-0014). "Deported to X in 1942" is a
+  locations on a person (ADR-0014). "Deported to Klurnau in 1942" is a
   `deportation`; "held at", "interned at", "taken to" an
   `imprisonment`; "released from", "freed from" a `release`. Put the
   claims on the EVENT: `participant` (the person), `location` (the
@@ -306,20 +306,20 @@ occupation_class, label in the source's exact wording). A hospital,
 clinic, school, or congregation is an `organization` even when the
 source names it only as WHERE an event happened (a place of birth or
 death): an organization HAS a location, it is not one. Also: a named
-family or household ("the Wulffs") is a `family`; a ship is a `vessel`;
+family or household ("the Löbigs") is a `family`; a ship is a `vessel`;
 a cited law, decree, gazette, or register is a `legal_instrument`; a
 regiment or brigade is a `military_unit`. A forced removal is a
 `deportation` event, a detention an `imprisonment` event, a freeing a
 `release` event (each an event with a person participant, a place, and
 a date) — not a place or a bare relation. Unify aliases: one entity that
-appears as "Rosa Genserowski", "Rosa", and "R. Genserowski" is ONE
+appears as "Cäcilie Löbig", "Cäcilie", and "C. Löbig" is ONE
 manifest entry whose label is the fullest form the document gives and
 whose aliases list every other NAME form, verbatim. Aliases are actual
 NAMES the document uses for the entity. They are NOT:
 - role or form-field labels — MOTHER, FATHER, CHILD, INFORMANT, BRIDE,
   WITNESS name a ROLE, not the person;
 - relational or perspectival references — "our great grandmother", "my
-  husband", "Tante Rosa", "Oma", "the deceased". These describe a
+  husband", "Aunt Pünktchen", "Oma", "the deceased". These describe a
   relationship or viewpoint, not a name; they are captured as claims at
   extraction, not as aliases (a literal kinship term becomes `relative` +
   `kinship_type`; a courtesy/pet name becomes `referred_to_as`). Never
@@ -327,21 +327,21 @@ NAMES the document uses for the entity. They are NOT:
 
 Name composition and the canonical label (ADR-0022):
 - Do NOT enumerate full-name PERMUTATIONS as aliases. A "/" between family
-  names ("Frida Hollfeld/Falk/Gellerowski") is ONE person with alternative
-  family names held at different times: give the label ONE clean form (given
-  + one surname), list the OTHER surname forms as aliases, and do NOT emit the
-  composed cross-products ("Frida Falk", "Frida Gellerowski"). Never guess
-  which surname is maiden vs married — that is a name TYPE, recorded only when
-  the source marks it, at extraction.
-- Do NOT list a bare given name ("Sigmund") or an initialism ("S. Gellerowski")
+  names ("Ida Sörne/Löbig") is ONE person with alternative family names held
+  at different times: give the label ONE clean form (given + one surname),
+  list the OTHER surname forms as aliases, and do NOT emit the composed
+  cross-products ("Ida Löbig"). Never guess which surname is maiden vs
+  married — that is a name TYPE, recorded only when the source marks it, at
+  extraction.
+- Do NOT list a bare given name ("Sebastian") or an initialism ("S. Löbig")
   as an alias — a reader derives those from a fuller form. A genuinely
-  distinct informal form ("Siggi") IS an alias.
+  distinct informal form ("Wastl") IS an alias.
 - Keep the canonical label CLEAN: parenthetical name metadata is NOT part of
-  it. "Rieke Sadelman-Rauholz (b. Gellerowski)" has label "Rieke
-  Sadelman-Rauholz"; "Lazar Gellerowski (later Leon Gell)" has label "Lazar
-  Gellerowski" with "Leon Gell" as an alias. Keep hyphenated and
-  space-separated compound/particle surnames ("de la Cruz", "van der Berg")
-  WHOLE — never split them. Never infer given vs family from word order.
+  it. "Hildegard Löbig (b. Laudler)" has label "Hildegard Löbig"; "Gustav
+  Löbig (later Gustave Lobig)" has label "Gustav Löbig" with "Gustave Lobig"
+  as an alias. Keep hyphenated and space-separated compound/particle
+  surnames ("A-B", "de la Cruz", "van der Berg") WHOLE — never split them.
+  Never infer given vs family from word order.
 
 Output ONE JSON object, no prose, no code fences:
 {{"entities": [{{"id": "e01", "label": "<canonical, fullest form>",
@@ -364,17 +364,17 @@ Rules:
   invalid.
 - Prefer completeness: an entity mentioned once still gets an entry.
 - extract=false for entities that appear ONLY in non-assertive context:
-  travel/event logistics, room or seating assignments, contemporary
-  trip participants, boilerplate. They are recorded for audit but no
+  present-day arrangements (schedules, bookings, contact lists) and the
+  people named only in them, boilerplate. They are recorded for audit but no
   claims are extracted about them. Entities the document asserts
   historical/genealogical facts about get extract=true.
 - On official certificates and registers the administrative apparatus is
   boilerplate: the registrar, officiant, or witness who certifies the
-  record; the issuing authority (e.g. a General Register Office); and the
-  register or certificate the document cites as its own source are all
-  extract=false. They attest the record — they are not its genealogical
-  subject. (A witness or officiant who is ALSO a relative of the subject
-  is the exception: extract=true for the relationship.)
+  record; the issuing authority (e.g. a civil registry office such as a
+  Standesamt); and the register or certificate the document cites as its
+  own source are all extract=false. They attest the record — they are not
+  its genealogical subject. (A witness or officiant who is ALSO a relative
+  of the subject is the exception: extract=true for the relationship.)
 - summary is evidence for later identity matching: pack it with the
   document's key facts (born/died/married when-where, parents, spouse).
 
