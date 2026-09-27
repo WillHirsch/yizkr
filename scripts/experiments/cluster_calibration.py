@@ -33,9 +33,11 @@ Blocking strategies (every pair is same-kind):
   names and nicknames, where the surname is any later token of the same
   name form or a surname of the mention's lifted kin (given names
   prefix-aware, accents folded); the weaker variants are measured too.
-  Places: the name before the first comma. Organizations: one name's
-  distinctive tokens contained in the other's. Events: same kind with a
-  blocked pair among their participants. Other kinds: the whole name.
+  Places: a token (four or more characters) of the name before the
+  first comma; the whole first component is measured too.
+  Organizations: one name's distinctive tokens contained in the
+  other's. Events: same kind with a blocked pair among their
+  participants. Other kinds: the whole name.
 * ``gedcom-anchored``: ``name-key`` plus keyless people (one name token,
   no kin) against GEDCOM people of a compatible given name, except that
   a mention with a GEDCOM match pairs only with those GEDCOM anchors,
@@ -508,15 +510,31 @@ def _normal(name: str) -> str:
     return " ".join(_folded_tokens(name))
 
 
-def place_keys(mention: Mention) -> set[str]:
-    """The name before the first comma: "Oakfield, Norland" -> oakfield."""
+# Place-key variants, stricter first; the last is the recommended one.
+PLACE_KEY_VARIANTS = ("first-component", "first-component-token")
+DEFAULT_PLACE_KEY = PLACE_KEY_VARIANTS[-1]
+
+
+def place_keys(mention: Mention, variant: str = DEFAULT_PLACE_KEY) -> set[str]:
+    """Keys from the name before the first comma ("Oakfield Camp,
+    Norland" -> "oakfield camp"): the whole component, or each of its
+    tokens of four or more characters (a longer or shorter form of the
+    same name still shares one)."""
     return _cached(
-        mention,
-        "place",
-        lambda m: {
-            key for name in m.names if (key := _normal(name.split(",")[0]))
-        },
+        mention, f"place:{variant}", lambda m: _place_keys(m, variant)
     )
+
+
+def _place_keys(mention: Mention, variant: str) -> set[str]:
+    firsts = [name.split(",")[0] for name in mention.names]
+    if variant == "first-component":
+        return {key for first in firsts if (key := _normal(first))}
+    return {
+        token
+        for first in firsts
+        for token in _folded_tokens(first)
+        if len(token) >= 4 and not any(c.isdigit() for c in token)
+    }
 
 
 def place_parts(mention: Mention) -> list[frozenset[str]]:
@@ -1264,6 +1282,12 @@ def verdict_calibration(
                         human_keys(doc, variant), human_keys(other, variant)
                     )
                     for variant in HUMAN_KEY_VARIANTS
+                } | {
+                    variant: doc.kind == PLACE_KIND
+                    and bool(
+                        place_keys(doc, variant) & place_keys(other, variant)
+                    )
+                    for variant in PLACE_KEY_VARIANTS
                 }
                 anchored = name_key or bool(
                     other.source == "gedcom"
@@ -1333,6 +1357,17 @@ def summarize_verdicts(rows: list[dict]) -> dict:
             ).items()
         )
     )
+    places = [row for row in rows if row["kind"] == PLACE_KIND]
+    place_variants = {
+        variant: dict(
+            sorted(
+                Counter(
+                    row["verdict"] for row in places if row[f"key:{variant}"]
+                ).items()
+            )
+        )
+        for variant in PLACE_KEY_VARIANTS
+    }
     confidence = {
         verdict: dict(
             sorted(
@@ -1374,6 +1409,10 @@ def summarize_verdicts(rows: list[dict]) -> dict:
         ),
         "per_kind": dict(sorted(per_kind.items())),
         "human_key_variants": variants,
+        "places_by_verdict": dict(
+            sorted(Counter(row["verdict"] for row in places).items())
+        ),
+        "place_key_variants": place_variants,
         "confidence_by_verdict": confidence,
         "confidence_by_verdict_on_anchored": confidence_kept,
         "proxy_vs_verdict_on_anchored": proxy_vs_verdict,
@@ -1644,6 +1683,17 @@ def run_experiment(
     variant_pairs["kin-surnames + keyless vs GEDCOM"] = _cross_manifest(
         block_humans(human_mentions) | partial_anchor_pairs(mentions), index
     )
+    place_mentions = [m for m in mentions if m.kind == PLACE_KIND]
+    place_variant_pairs = {
+        variant: _cross_manifest(
+            _block_by_keys(
+                place_mentions,
+                lambda m, variant=variant: place_keys(m, variant),
+            ),
+            index,
+        )
+        for variant in PLACE_KEY_VARIANTS
+    }
     homonyms = homonym_groups(mentions)
     serial_plain = simulate_serial(all_manifests, pairs_per_call)
     serial_merged = simulate_serial(
@@ -1679,6 +1729,7 @@ def run_experiment(
             "partial_name_people": len(partial),
             "partial_name_pairs_if_one_token": len(partial_pairs),
             "human_pairs_by_key_variant": variant_pairs,
+            "place_pairs_by_key_variant": place_variant_pairs,
         },
         "assumptions": {
             "pairs_per_call": pairs_per_call,
@@ -1970,6 +2021,24 @@ def render_verdicts(verdicts: dict, inputs: dict) -> list[str]:
                 for v, n in people.items()
             )
             + f" | {corpus.get(variant, '')} |"
+        )
+    places = verdicts["places_by_verdict"]
+    place_corpus = inputs.get("place_pairs_by_key_variant", {})
+    lines += [
+        "",
+        "| place key | "
+        + " | ".join(f"{v} kept (of {n})" for v, n in places.items())
+        + " | corpus pairs |",
+        "|---" * (2 + len(places)) + "|",
+    ]
+    for variant, kept in verdicts["place_key_variants"].items():
+        lines.append(
+            f"| {variant} | "
+            + " | ".join(
+                f"{kept.get(v, 0)} ({_pct(kept.get(v, 0), n)})"
+                for v, n in places.items()
+            )
+            + f" | {place_corpus.get(variant, '')} |"
         )
     lines += [
         "",

@@ -180,6 +180,29 @@ def test_given_names_match_by_prefix_not_by_surname_alone():
     assert not cc.keys_match(theo, bram)
 
 
+def test_place_key_variants():
+    found, _ = mentions(
+        manifest(
+            "a" * 40,
+            [
+                {
+                    "id": "e1",
+                    "label": "Oakfield Camp, Norland",
+                    "kind": "place",
+                },
+                {"id": "e2", "label": "Oakfield", "kind": "place"},
+            ],
+        )
+    )
+    camp, town = found
+    assert cc.place_keys(camp, "first-component") == {"oakfield camp"}
+    assert cc.place_keys(camp) == {"oakfield", "camp"}
+    assert not cc.place_keys(camp, "first-component") & cc.place_keys(
+        town, "first-component"
+    )
+    assert cc.place_keys(camp) & cc.place_keys(town)
+
+
 # -- blocking -----------------------------------------------------------------
 
 
