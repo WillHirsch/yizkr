@@ -1,13 +1,16 @@
 """Validation tests for the claim schema (pytest, offline)."""
 
+import hashlib
 import json
 
 import pytest
 from pydantic import ValidationError
 
 from yizkr.claims import (
+    ArtifactRef,
     Claim,
     ClaimBatch,
+    QidRef,
     RegionPercent,
     TimeValue,
     load_vocabulary,
@@ -22,9 +25,14 @@ RUN = {
 }
 
 
+# the bytes of a fictional scan; claims cite it by their SHA-1 (#102)
+MEDIA = b"fictional scan: an example certificate, page 1"
+MEDIA_SHA1 = hashlib.sha1(MEDIA).hexdigest()
+
+
 def source(**overrides) -> dict:
     base = {
-        "artifact": {"kind": "qid", "qid": "Q23"},
+        "artifact": {"kind": "artifact", "sha1": MEDIA_SHA1},
         "page_number": "1",
         "region": {"x": 10, "y": 42.5, "width": 60, "height": 8},
         "transcription_excerpt": {"text": "married 1933", "language": "en"},
@@ -138,6 +146,90 @@ class TestEntityRefs:
     def test_local_ref_requires_local_id(self):
         with pytest.raises(ValidationError):
             batch(spouse_claim(subject={"kind": "local", "label": "x"}))
+
+
+class TestArtifactRef:
+    """Claims cite their source artifact by the SHA-1 of its media, so a
+    batch names the same artifact on any instance and after a reset
+    (#102, ADR-0010)."""
+
+    def test_source_artifact_is_content_addressed(self):
+        cited = batch(spouse_claim()).claims[0].source.artifact
+        assert cited == ArtifactRef(sha1=MEDIA_SHA1)
+
+    def test_from_bytes_and_from_path_hash_the_media(self, tmp_path):
+        scan = tmp_path / "certificate-scan.png"
+        scan.write_bytes(MEDIA)
+        renamed = tmp_path / "another-name.png"
+        renamed.write_bytes(MEDIA)
+        expected = ArtifactRef(sha1=MEDIA_SHA1)
+        assert ArtifactRef.from_bytes(MEDIA) == expected
+        # the key is the bytes, whatever the file is called
+        assert ArtifactRef.from_path(scan) == expected
+        assert ArtifactRef.from_path(renamed) == expected
+        assert ArtifactRef.from_bytes(MEDIA + b"!") != expected
+
+    def test_capitalised_digest_names_the_same_bytes(self):
+        assert ArtifactRef(sha1=MEDIA_SHA1.upper()) == ArtifactRef(
+            sha1=MEDIA_SHA1
+        )
+
+    @pytest.mark.parametrize(
+        "sha1",
+        [
+            MEDIA_SHA1[:39],  # truncated
+            MEDIA_SHA1 + "0",  # too long
+            "g" * 40,  # not hex
+            hashlib.sha256(MEDIA).hexdigest(),  # another digest
+            "Q23",  # an item id is not a content key
+            "",
+        ],
+    )
+    def test_malformed_digest_rejected(self, sha1):
+        with pytest.raises(ValidationError):
+            batch(
+                spouse_claim(
+                    source=source(artifact={"kind": "artifact", "sha1": sha1})
+                )
+            )
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            {"kind": "local", "local_id": "artifact-1", "label": "a letter"},
+            {"kind": "vocab", "key": "letter"},
+        ],
+    )
+    def test_entity_refs_cannot_name_the_source(self, ref):
+        # an artifact is never proposed by extraction or named by a
+        # vocabulary key: only its content (or its registered item) is
+        with pytest.raises(ValidationError):
+            batch(spouse_claim(source=source(artifact=ref)))
+
+    def test_qid_names_an_item_on_the_target_instance(self):
+        cited = (
+            batch(
+                spouse_claim(
+                    source=source(artifact={"kind": "qid", "qid": "Q23"})
+                )
+            )
+            .claims[0]
+            .source.artifact
+        )
+        assert cited == QidRef(qid="Q23")
+
+    def test_display_form_is_the_prefixed_digest(self):
+        # the review CSV shows a source artifact through str()
+        assert str(ArtifactRef(sha1=MEDIA_SHA1)) == f"sha1:{MEDIA_SHA1}"
+
+    def test_json_round_trip_keeps_the_digest(self):
+        parsed = batch(spouse_claim())
+        payload = json.loads(parsed.model_dump_json())
+        assert payload["claims"][0]["source"]["artifact"] == {
+            "kind": "artifact",
+            "sha1": MEDIA_SHA1,
+        }
+        assert ClaimBatch.model_validate(payload) == parsed
 
 
 class TestTimeValues:
@@ -422,3 +514,10 @@ class TestJsonSchemaExport:
         # source must be a required property of a claim in the schema too
         claim_schema = schema["$defs"]["Claim"]
         assert "source" in claim_schema["required"]
+
+    def test_source_artifact_offers_only_artifact_and_qid(self):
+        schema = ClaimBatch.model_json_schema()
+        artifact = schema["$defs"]["SourceReference"]["properties"]["artifact"]
+        assert set(artifact["discriminator"]["mapping"]) == {"artifact", "qid"}
+        sha1 = schema["$defs"]["ArtifactRef"]["properties"]["sha1"]
+        assert sha1["pattern"] == "^[0-9a-f]{40}$"
