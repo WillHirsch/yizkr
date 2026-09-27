@@ -60,13 +60,13 @@ Input: the transcription with numbered lines. Output: a
 
     SegmentationUnit:
       id:         str            # stable within the run, e.g. "u07"
-      label:      str            # e.g. "Lina Genserowski entry"
+      label:      str            # e.g. "Rahel Löbig entry"
       kind:       str            # free text: "person entry", "narrative section", ...
       first_line: int            # 1-based, inclusive
       last_line:  int
       context:    str            # ancestor path / preamble the unit needs,
-                                 # e.g. "child of Samuel Moses Genserowski
-                                 # and Fanny Hirschfeld (generation 2)"
+                                 # e.g. "child of Eugen Löbig
+                                 # and Cäcilie Tarle (generation 2)"
       extract:    bool           # False = deliberately skipped (logistics,
                                  # boilerplate) — recorded, not extracted
 
@@ -112,8 +112,8 @@ available first:
    the follow-up "emit claims for unit(s) X only". Every fork sees the
    full document **and the segmentation turn itself** — the complete
    unit roster with canonical labels, which directly improves the
-   label-keyed merge (a fork says "Rosa Genserowski" where an isolated
-   call would say "Rosa"). Because all forks share a byte-identical
+   label-keyed merge (a fork says "Rahel Löbig" where an isolated
+   call would say "Rahel"). Because all forks share a byte-identical
    prefix, prompt caching prices the document at cache-read rates after
    the first call: full-context accuracy at roughly compressed-context
    cost.
