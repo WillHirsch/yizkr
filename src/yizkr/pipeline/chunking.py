@@ -480,7 +480,7 @@ def _rewrite_local_refs(claim: dict, fix) -> dict:
         if (
             isinstance(ref, dict)
             and ref.get("kind") == "local"
-            and "local_id" in ref
+            and isinstance(ref.get("local_id"), str)
         ):
             fix(ref)
 
@@ -1129,12 +1129,24 @@ class ChunkedClaimExtractor:
         self.failed_chunks.sort()
 
         raw_claims: list[dict] = []
+        transform_rejects: list[dict] = []
         gaps: list[dict] = []
         for chunk_id, parsed in zip(chunk_ids, outcomes, strict=True):
             if parsed is not None:
-                raw_claims.extend(
-                    transform(claim, chunk_id) for claim in parsed
-                )
+                for claim in parsed:
+                    # one malformed claim must never sink the whole
+                    # document's merge — degrade it to a reject, the way
+                    # salvage_valid_claims does downstream (a double-nested
+                    # local_id once aborted a 283-claim run entirely)
+                    try:
+                        raw_claims.append(transform(claim, chunk_id))
+                    except Exception as exc:  # keep the other claims
+                        transform_rejects.append(
+                            {
+                                "claim": claim,
+                                "problems": [f"transform failed: {exc}"],
+                            }
+                        )
                 # gaps come from the persisted raw response, so they cost
                 # no extra model call and survive resume (ADR-0013)
                 raw = self._read(f"{chunk_id}.raw.txt")
@@ -1154,6 +1166,7 @@ class ChunkedClaimExtractor:
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
             entities=entities_payload,
         )
+        rejects = transform_rejects + rejects
         if rejects:
             self._write("rejects.json", json.dumps(rejects, indent=2))
         if entities is not None:
