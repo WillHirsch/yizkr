@@ -3,108 +3,150 @@
 **The rule.** Every example in code, comments, prompts, tests, ADRs,
 issues and PRs comes only from the fictional universe defined in
 [`tests/fixtures/example_universe.py`](../tests/fixtures/example_universe.py).
-Never use real family data, not even partially anonymised: no real name
+Never use real family data, not even partly anonymised: no real name
 with a changed surname, no real date shifted by a year, no real town,
-address or family firm. If an example needs a pattern the universe
-lacks, add it to the universe first (see *Extending* below).
+street, address, firm or institution. If an example needs a pattern the
+universe lacks, add it to the universe first (see *Extending* below).
+Placeholders such as `A /B/` are fine where no example is needed.
 
 **Why.** The archive holds records about real, partly living people, and
 examples travel: prompts go to models, issues and PRs are read by agents,
 and the repository may be shared. One consistent cast also lets tests,
 prompts and ADRs tell the same story.
 
+## How it was made
+
+The universe was written in a clean room: its author never saw the
+archive's records, nor the values of the earlier example universe it
+replaces. Instead of recalling names and dates, every specific was drawn
+by [`tests/fixtures/universe_draws.py`](../tests/fixtures/universe_draws.py)
+with a fixed seed from broad tables (period given names, ordinary
+trades, large regions, syllables for surnames and towns), then read over
+for plausibility. The module's docstring lists every hand change. A
+separate checker, who can see the real corpus, compares the result
+against it before it merges. Real geography appears only at the
+broadest level: Germany, Hesse, Australia and Victoria. Every town,
+street, firm, institution, ship and document is invented.
+
 ## The world
 
-Everything is invented, down to the countries.
-
-- **Exampleland** (German *Beispielland*), German-speaking: Example County
-  holds the towns of Springfield (with Rosengasse 12, the Lower Town and
-  Springfield Hospital) and Lakeside (with Lakeside Cemetery). Capital
-  City is a city inside a city-state of the same name, with the Capital
-  City police prison. Musterfeld camp is in the Eastern Province.
-- **Havenland** (German *Hafenland*), English-speaking: Sampleton, with
-  4 Station Road and Laurel Bank Maternity Home. Older sources place it in
-  Westshire, newer ones in South Westshire (created 1974).
+- **Hesse, Germany.** Kreis Peiltal holds the town of Peiltal (with the
+  court prison, *Gerichtsgefängnis Peiltal*, and the photo studio
+  Atelier Brüsrich), the town of Dönwald and the town of **Flörburg**:
+  Brunnenring 35 (the firm and the family home), Mühlenweg 16,
+  Angerring 57 and the cemetery, *Friedhof Flörburg*. Flörburg became
+  **Bad Flörburg** in 1954. Fläckfeld lies in Kreis Mockburg or Kreis
+  Peiltal, depending on the source. Moshausen is placed only in Germany.
+- **Klurnau**, with the camp *Lager Klurnau*: no source says where it
+  lay, so these are the only places that reach no country.
+- **Victoria, Australia.** The town of Stupfield, with 8 Hawthorn Road
+  and 31 Juniper Street.
 
 ## The family
 
-The Beispiels became the Examples after emigrating to Havenland.
+The Schösers are hatters. Two grandchildren emigrated to Australia and
+became the Shosers.
 
 ```
-0  Gustav Beispiel (1851-1909) = Ottilie Faber          founded the firm 1887
+1  Alfred "Muckel" (1850-1927) = 1879 Wilhelmine Tarle "Minna" (c. 1855-1928)
+   |  founded Schöser & Sohn, hatters, in 1885
+2  Johann "Hans" (1881-1953) = 1905 Hedwig Laudler "Hedi" (1884-1968)
+   Paula (1882-after 1945)
+   Julius (1884-1942) = Gertrud Sörne "Peppi" (1887-1946)
    |
-1  Bern Beispiel (c. 1880-1950) = 1902 Alma Hedwig Muster "Hedi"
-   |  Hugo Beispiel sen. (1882-after Oct 1942) = 1900 Leonore Grau "Lore"
+3  of Johann and Hedwig:
+     Josef "Sepp" (1907-1996), later Joseph "Joe" Shoser,
+       = 1945 Christine Faxridge (1923-1963)
+     Martha "Bubi" (1910-2001), later Martha Shoser
+     Frieda (1911-1941)
+   of Julius and Gertrud:
+     Karl (1914-1960), Rudolf "Rudi" (1916-1941), an unnamed infant (1925)
    |
-2  Carla Beispiel (1910/12-1994) = 1935 Dov Muster (div. 1939), = 1946 Roland Thorne
-   Hugo Beispiel jun. (1901-1987) = 1924 Margarete Sommer "Gretl"
-   |
-3  Gustav "Gus" (1925-2004), Irmgard "Irmi" Example-Hollis (1927-2011)
-   = Neville Hollis, Ignaz "Iggy" (1929-2015, later Ian Example)
-   |
-4  Nora Example (b. 1958), daughter of Gus
+4  Jonathan Shoser (b. 1953), son of Josef and Christine
 ```
 
-Bern and Hugo sen. are brothers, and Carla is Bern's daughter. Hugo jun.
-is Hugo sen.'s son. Not kin: Elfriede "Friedl" Kranich (later Elfreda
-Crane), a family friend, and the tree's unfilled *Nameless Placeholder*.
+Not kin: a widow listed in the 1912 directory as *Schöser, Frieda,
+Wwe.*, who shares a name with Johann's daughter.
+
+## Sources
+
+Thirteen invented documents carry transcribed text (`Source.text`), and
+every assertion quotes the passage that makes it (`Assertion.excerpt`).
+
+| Key | What | Language |
+|---|---|---|
+| `studio-photo-1890s` | studio portrait, names pencilled on the back | none |
+| `marriage-cert-1905` | civil marriage certificate, Johann and Hedwig | German |
+| `directory-1912` | Flörburg address book: the firm and the widow | German |
+| `death-notice-1927` | Alfred's death notice, with the funeral date | German |
+| `school-report-1930` | Rudolf's school report | German |
+| `birth-extract-1938` | Josef's birth register extract, issued for emigration | German |
+| `letter-1938` | Johann to Martha in Australia, on the firm's letterhead | German |
+| `transport-list-1942` | Gertrud's deportation | German |
+| `registration-card-1945` | Gertrud's post-war card, with Julius's arrest | English |
+| `naturalisation-1952` | Josef's naturalisation as Joseph Shoser | English |
+| `gravestone-photo-1978` | photograph of Alfred and Wilhelmine's gravestone | German |
+| `family-tree-1984` | the tree Martha drew in Australia | English |
+| `interview-2002` | oral history with Jonathan (possibly living) | English |
 
 ## Pattern index
 
 | Pattern | In the universe |
 |---|---|
-| Birth, married and nick names (ADR-0011) | Alma: born *Alma Hedwig Muster*, married *Alma Beispiel*, nickname *Hedi* |
-| German and English forms | Beispiel/Example, Kranich/Crane, Muster/Masters; Ignaz/Ian, Margarete/Peggy; Exampleland/Beispielland, Lower Town/Unterstadt |
-| Diminutives | German *Gretl, Irmi, Friedl, Lore, Gustl, Hedi*; English *Gus, Iggy, Peggy* |
-| Names as sources write them (ADR-0022) | *Carla Beispiel/Muster/Thorne*; *Irmgard Example-Hollis (b. Beispiel)*; *Dov Muster (later Don Masters)*; *Elfriede (Friedl) Kranich*; *Ian "Iggy" Example*; *Hugo Beispiel sen.* / *jun.*; the ambiguous initial *G. Beispiel* |
-| Homonyms (ADR-0017) | two Gustav Beispiels with disjoint lifespans; two Hugo Beispiels who are father and son. Alma's Musters and Dov's Musters share a surname but are unrelated |
-| Spouses and parents, 3+ generations | Gustav, Hugo sen., Hugo jun., Gus, Nora; seven marriages, one ended by divorce |
-| Kinship terms and courtesy titles (ADR-0018) | literal: *Oma Lore*, *Opa Hugo*, *Großtante Alma* (Ignaz's memoir), *our Uroma Lore* (Nora's tree); courtesy: *Oma Friedl*, who is no relation; pet name: *Mäuschen* |
-| Family firm (ADR-0012) | Beispiel & Söhne (in full *Seifenfabrik Beispiel & Söhne*), a soap works in the Lower Town, employing Hugo sen. as *Prokurist* and Hugo jun.; OCR form *Seifen=Fabrik Beispiel & Söhne*, a Fraktur double hyphen. It is named after people but is an organization |
-| Other agents and kinds | Example Academy; Example County Fire Office (*Feuerkasse Kreis Beispiel*; issuing authority, so boilerplate); Exampleland Tracing Service; Sampleton Refugee Committee; vessel SS Havenstar; family *the Beispiels* |
-| Occupation wording | *Cigar maker* (tree) and *Zigarrenmacher* (address book) |
-| Street address and containment (ADR-0009) | Rosengasse 12, Springfield, Example County, Exampleland; 4 Station Road, Sampleton, Westshire or South Westshire, Havenland |
-| Resolution and naming conventions | *Springfield Hospital, Lindenallee* and *Springfield* for one birth; *Sampleton, Westshire, Havenland* and *Sampleton, South Westshire*; *Capital City* and *Capital City, Exampleland*; the misspelling *Espringfeld* |
-| Eponymous nesting | the city of Capital City inside the city-state of Capital City |
-| Persecution events (ADR-0014) | deportation of Hugo sen. and Leonore to Musterfeld camp (Oct 1942); imprisonment of Dov in the Capital City police prison (November 1938 to January 1939, as he recalled in a 1978 interview) and his release; Leonore's release from Musterfeld (May 1945) |
-| Contradictory dates (ADR-0002) | Leonore born 3 Nov 1880 (marriage register) and 3 Nov 1881 (deportation list); the family's emigration in Aug 1938 (passenger list) and 1939 (memoir) |
-| Refinement, not contradiction | Ignaz born 3 Mar 1929 (certificate) and 1929 (memoir); at Springfield Hospital and in Springfield |
-| Uncertain dates | circa: Bern *c. 1880* (`ABT 1880`); before: Alma *before 8 May 1945* (`BEF`); after: Hugo sen. *after October 1942* (`AFT`); between: Carla *1910 to 1912* (`BET 1910 AND 1912`); decade: Ottilie's weathered *185_* |
-| A date never guessed | the placeholder record's `SOMEDAY MAYBE` |
-| Privacy (ADR-0020) | Nora Example (b. 1958, no death asserted) is possibly living |
-| Sample texts | `Source.text`: German (birth certificate, insurance policy, address book, deportation list, gravestone) and English (memoir, passenger list, newspaper interview, death notice) |
+| Birth, married and nick names (ADR-0011) | Gertrud: born *Gertrud Sörne*, married *Gertrud Schöser*, nickname *Peppi*; likewise Wilhelmine (*Minna*) and Hedwig (*Hedi*) |
+| German and English forms | Schöser/Shoser, Josef/Joseph, Flörburg/Floerburg, Gerichtsgefängnis Peiltal/Peiltal court prison, Schöser & Sohn/Schöser and Son, Hutmacher/hatter |
+| Diminutives | German *Hans, Minna, Hedi, Sepp, Rudi*; English *Joe*; pet names *Muckel, Peppi, Bubi* |
+| Names as sources write them (ADR-0022) | *Wilhelmine Schöser geb. Tarle*; *Hedwig Schöser geborene Laudler*; *SCHÖSER, Gertrud, née SÖRNE*; *Joseph SHOSER (formerly Josef SCHÖSER)*; *Schöser, Frieda, Wwe.*; *Johann 'Hans'*; the placeholder *N.N. Schöser* |
+| Homonyms (ADR-0017) | two Frieda Schösers: Johann's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow |
+| Spouses and parents, 3+ generations | four generations, Alfred to Jonathan; marriages in 1879, 1905, an undated one and 1945 |
+| Kinship terms (ADR-0018) | *Dein Vater* (the letter, from Martha's view); *Dad*, *Aunt Bubi*, *Great-uncle Julius* (the interview, from Jonathan's view) |
+| Family firm (ADR-0012) | Schöser & Sohn, hat makers, founded 1885 (*gegr. 1885*), at Brunnenring 35, owned by Johann in 1912 (*Inh. Johann Schöser*), gone *before 1940* |
+| Other agents and kinds | Standesamt Flörburg, Städtische Realschule Flörburg, Flörburger Anzeiger, Atelier Brüsrich (organisations); RMS Flund (vessel); occupations *Hatter* and *Master hatter* |
+| Street address and containment (ADR-0009) | Brunnenring 35 → Brunnenring → Flörburg → Kreis Peiltal → Hesse → Germany; 8 Hawthorn Road → Hawthorn Road → Stupfield → Victoria → Australia |
+| A place named two ways over time | Flörburg, *Bad Flörburg* from 1954; the 1984 tree uses the new name for an 1850 birth, the naturalisation spells it *Floerburg* |
+| A place under two parents | Fläckfeld: Kreis Mockburg (1905) or Kreis Peiltal (1984) |
+| A place with no known location | Klurnau |
+| Persecution events (ADR-0014) | Julius's arrest (3 Sep 1939), imprisonment in the Peiltal court prison and release (1 Oct 1939); Gertrud's deportation to Lager Klurnau (21 Aug 1942) and liberation at Klurnau (28 Jan 1945). Emigrations are `migration` events too |
+| Contradictory dates (ADR-0002) | Josef born 6 Sep 1907 (civil register) and 9 June 1907 (naturalisation): day and month transposed. Also Fläckfeld's district |
+| Refinement, not contradiction | Alfred died 1927 (gravestone) and 20 Mar 1927 (death notice); Martha left in '37 or '38 (interview) and on 12 Mar 1938 (letter); Julius held "in Peiltal" and in its court prison |
+| Uncertain dates | circa: Wilhelmine *c. 1855* (`ABT 1855`); before: the firm gone *before 1940* (`BEF 1940`); after: Paula died *after 1945* (`AFT 1945`); between: Martha left *between 1937 and 1938* (`BET 1937 AND 1938`); decade: the studio portrait, *1890s* (`BET 1890 AND 1899`) |
+| A person without name or sex | the infant of 1925, *N.N. Schöser* (`SEX U`) |
+| Privacy (ADR-0020) | Jonathan Shoser (b. 1953, no death asserted) is possibly living; he is dated to the year only |
+| GEDCOM rendering (ADR-0021) | `tests/fixtures/example-family.ged`: typed names, `NICK`, an inline `(Peppi)`, `_MARNM`, `TYPE immigrant`, a dated burial, cause of death, child count, residences at street addresses, an `EDUC` and a `NOTE` the adapter reports as unsupported, and the studio portrait as a shared `OBJE` |
 
 ## Using it
 
 ```python
 from tests.fixtures import example_universe as u
 
-u.about("leonore", "date_of_birth")    # both assertions, one per source
-u.containment_paths("rosengasse_12")   # street -> town -> region -> country
-str(u.Date(1910, qualifier="between", until=u.Date(1912)))  # between 1910 and 1912
+u.about("josef-schoeser", "date_of_birth")   # three sources, two days
+u.containment_paths("brunnenring-35")        # address -> ... -> country
+str(u.Date(1937, qualifier="between", until=u.Date(1938)))
+# 'between 1937 and 1938'
 ```
 
-The module keeps a ground truth (who exists, which place contains which)
-so tests can check identity and containment decisions against it.
-Everything said *about* people is a source-attributed `Assertion`, like
-the archive itself. `CONTRADICTIONS` and `REFINEMENTS` name the deliberate
-cases. `tests/fixtures/example-family.ged` is an excerpt of the family
-tree's GEDCOM export, and each person's `gedcom_xref` points into it.
+People, places, entities (organisations, occupations, a vessel,
+events) and sources are ground truth, so tests can check identity and
+containment decisions against it. Everything said *about* them is a
+source-attributed `Assertion` in the archive's own vocabulary: manifest
+property ids, entity kinds and artifact classes. `CONTRADICTIONS` and
+`REFINEMENTS` name the deliberate cases. Each person's `gedcom_xref`
+points into `tests/fixtures/example-family.ged`, and
+`tests/unit/test_example_universe.py` checks that the GEDCOM file says
+nothing the sources do not.
 
 ## Extending
 
 Add to the module rather than inventing a one-off name inline, and keep
-`tests/unit/test_example_universe.py` green. Before committing, check
-every new name, place, organisation and exact date against the
-out-of-repo denylist (#35), both its enforced and its review lists.
-Prefer names built on the universe's own roots (Beispiel, Muster,
-Example, Sample-) to real small towns or real surnames.
+`tests/unit/test_example_universe.py` green. Draw new specifics the way
+the rest were drawn: append a round to `universe_draws.py` (never edit
+an earlier one, so earlier draws stay put), run it, and note any hand
+change in the module docstring. Before committing, check every new name,
+place, organisation and exact date against the out-of-repo denylist
+(#35), both its enforced and its review lists.
 
 ## Status
 
-- `tests/fixtures/example-family.ged` predates the universe. The records
-  for Alma Beispiel and Elfriede Kranich (see their `gedcom_xref`) still
-  carry earlier names, and Alma's an earlier birth date. Other tests,
-  prompts and ADRs still use earlier examples too. Replacing them is #31,
-  #32 and #33.
+- Other tests, prompts, source comments and ADRs still use earlier
+  examples; replacing them is #31, #32 and #33.
 - CLAUDE.md and docs/AGENT_PROTOCOL.md state the rule once #20 lands.
