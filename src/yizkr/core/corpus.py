@@ -1,4 +1,4 @@
-"""The corpus location and the never-ingest list (#29).
+"""The corpus location and the never-ingest list.
 
 The source corpus lives outside the working tree, in a private local
 folder named by ``$YIZKR_CORPUS_DIR``, which is the default folder for
