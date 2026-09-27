@@ -32,6 +32,21 @@ def _load_batch(path: Path) -> ClaimBatch:
     return ClaimBatch.model_validate_json(path.read_text())
 
 
+def _refuse_if_excluded(args, path: Path | None) -> None:
+    """Honour the never-ingest list (#29) in a single-file step.
+
+    The single steps are debugging tools and run without a list; when one
+    is configured, a file on it is refused before anything reads it. The
+    extract-all command, `ingest run`, requires the list (cmd_run)."""
+    from yizkr.core.corpus import is_excluded, load_exclusions
+
+    if path is None:
+        return
+    exclusions = load_exclusions(required=False, env_file=args.env_file)
+    if exclusions is not None and is_excluded(exclusions, path):
+        sys.exit(f"{path.name} is on the never-ingest list; refusing")
+
+
 # -- top-level commands -------------------------------------------------
 
 
@@ -209,6 +224,7 @@ def cmd_claims(args) -> int:
 def cmd_register(args) -> int:
     from yizkr.pipeline.registrar import register_artifact
 
+    _refuse_if_excluded(args, args.file)
     result = register_artifact(
         _client(args),
         media_path=args.file,
@@ -222,6 +238,7 @@ def cmd_register(args) -> int:
 
 
 def cmd_transcribe(args) -> int:
+    _refuse_if_excluded(args, args.file)
     if args.engine == "textfile":
         if not args.text_file:
             sys.exit("--engine textfile requires --text-file")
@@ -349,6 +366,7 @@ def cmd_resolve(args) -> int:
 def cmd_gedcom(args) -> int:
     from yizkr.pipeline.gedcom import adapt_gedcom, format_unsupported_tags
 
+    _refuse_if_excluded(args, args.file)
     result = adapt_gedcom(args.file.read_text(), artifact_qid=args.artifact)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(result.batch.model_dump_json(indent=2))
@@ -512,13 +530,23 @@ def cmd_write(args) -> int:
 
 
 def cmd_run(args) -> int:
+    from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
     from yizkr.pipeline.orchestrate import Orchestrator
 
-    if not args.folder.is_dir():
-        sys.exit(f"{args.folder} is not a directory")
-    state_dir = args.state or Path("var/runs") / args.folder.resolve().name
+    # fail closed (#29): no never-ingest list, no run, before any file is
+    # read. An empty list file is an explicit, allowed configuration.
+    exclusions = load_exclusions(required=True, env_file=args.env_file)
+    folder = args.folder or corpus_dir(args.env_file)
+    if folder is None:
+        sys.exit(
+            f"no folder given and {CORPUS_DIR_VAR} is not set; name the "
+            f"folder, or set {CORPUS_DIR_VAR} (see deploy/README.md)"
+        )
+    if not folder.is_dir():
+        sys.exit(f"{folder} is not a directory")
+    state_dir = args.state or Path("var/runs") / folder.resolve().name
     return Orchestrator(
-        args.folder,
+        folder,
         state_dir,
         llm=args.llm,
         artifact_type=args.type,
@@ -534,12 +562,14 @@ def cmd_run(args) -> int:
         serial=args.serial,
         extract_concurrency=args.extract_concurrency,
         env_file=args.env_file,
+        exclusions=exclusions,
     ).run()
 
 
 def cmd_detect_faces(args) -> int:
     from yizkr.pipeline.faces import Gallery, make_detector, proposals_to_batch
 
+    _refuse_if_excluded(args, args.file)
     detector = make_detector(args.engine)
     detection = detector.detect(args.file, artifact_qid=args.artifact)
     args.detections.write_text(detection.model_dump_json(indent=2))
@@ -916,7 +946,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="walk a folder through the whole pipeline, pausing at the "
         "review gates; re-run to resume (item 15)",
     )
-    p.add_argument("folder", type=Path, help="folder of documents to ingest")
+    p.add_argument(
+        "folder",
+        type=Path,
+        nargs="?",
+        help="folder of documents to ingest (default $YIZKR_CORPUS_DIR). "
+        "Refuses to run unless $YIZKR_EXCLUDE_FILE names a never-ingest "
+        "list; see deploy/README.md",
+    )
     p.add_argument(
         "--state",
         type=Path,

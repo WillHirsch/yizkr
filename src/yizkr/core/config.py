@@ -50,6 +50,16 @@ def resolve_env_file(explicit: Path | None = None) -> Path | None:
     return None
 
 
+def env_setting(key: str, env_file: Path | None = None) -> str:
+    """One setting, read like Config.load reads its values: the
+    environment first, then the env file. Empty when set in neither."""
+    value = os.environ.get(key)
+    if value:
+        return value
+    path = resolve_env_file(env_file)
+    return read_env_file(path).get(key, "") if path else ""
+
+
 class ConfigError(SystemExit):
     """Missing configuration; message tells the user what to set."""
 

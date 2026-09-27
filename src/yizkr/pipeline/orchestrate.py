@@ -13,6 +13,11 @@ every document as far as it can and then STOPS at the human gates:
   (same convention for claim decisions and corrections — R3: human
   confirmation is part of the data flow).
 
+A run refuses to start without a never-ingest list
+(``$YIZKR_EXCLUDE_FILE``; an empty list is allowed), and a document on
+the list is skipped at discovery, before any step reads it (#29,
+yizkr.core.corpus).
+
 A reviewed file's PRESENCE (and freshness) is the gate: the
 orchestrator never interprets a half-filled CSV as consent, and a
 reviewed file older than the CSV it reviews is a decision about
@@ -45,6 +50,12 @@ from pathlib import Path
 
 from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
+from yizkr.core.corpus import (
+    MISSING_LIST,
+    ExclusionConfigError,
+    ExclusionList,
+    is_excluded,
+)
 from yizkr.core.wiki import WikiClient
 
 GEDCOM_SUFFIXES = {".ged"}
@@ -147,9 +158,13 @@ class Orchestrator:
         serial: bool = False,
         extract_concurrency: int = 1,
         env_file: Path | None = None,
+        exclusions: ExclusionList | None = None,
         log=print,
     ) -> None:
         self.folder = folder
+        # the never-ingest list (#29). run() refuses to start without one:
+        # an empty ExclusionList is an explicit configuration, None is none.
+        self.exclusions = exclusions
         self.state_dir = state_dir
         self.llm = llm
         self.artifact_type = artifact_type
@@ -205,24 +220,27 @@ class Orchestrator:
     # -- document discovery --------------------------------------------------
 
     def documents(self) -> list[DocumentRun]:
-        files = sorted(
-            path
-            for path in self.folder.iterdir()
-            if path.is_file()
-            and not path.name.startswith(".")
-            and path.suffix.lower() in SUPPORTED_SUFFIXES
-        )
-        skipped = [
-            path.name
-            for path in sorted(self.folder.iterdir())
-            if path.is_file()
-            and not path.name.startswith(".")
-            and path.suffix.lower() not in SUPPORTED_SUFFIXES
-        ]
-        for name in skipped:
-            self.log(
-                f"skipping {name}: unsupported file type", file=sys.stderr
-            )
+        files = []
+        for path in sorted(self.folder.iterdir()):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            # the never-ingest list (#29) is asked first, before any step
+            # reads the document, and whatever the file's type: an excluded
+            # file gets no state, no artifact and no transcription
+            if self.exclusions is not None and is_excluded(
+                self.exclusions, path
+            ):
+                self.log(
+                    f"excluding {path.name}: on the never-ingest list",
+                    file=sys.stderr,
+                )
+            elif path.suffix.lower() not in SUPPORTED_SUFFIXES:
+                self.log(
+                    f"skipping {path.name}: unsupported file type",
+                    file=sys.stderr,
+                )
+            else:
+                files.append(path)
         return [DocumentRun(path, self.state_dir) for path in files]
 
     # -- pipeline steps (override points for tests) ---------------------------
@@ -771,6 +789,10 @@ class Orchestrator:
         return seen
 
     def run(self) -> int:
+        # fail closed (#29): extract-all work never starts without a
+        # never-ingest list, so a missing list cannot pass as an empty one
+        if self.exclusions is None:
+            raise ExclusionConfigError(MISSING_LIST)
         docs = self.documents()
         if not docs:
             self.log(f"no supported documents in {self.folder}")

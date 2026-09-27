@@ -77,6 +77,27 @@ Connection settings come from `deploy/.env` (same variables as the
 smoke test); the vocabulary comes from `model/manifest.yaml` resolved
 against the live instance (run `model/bootstrap.py` first).
 
+## The corpus and the never-ingest list
+
+The corpus lives outside the repository, in the private folder named by
+`$YIZKR_CORPUS_DIR`, the default folder for `ingest run`.
+`$YIZKR_EXCLUDE_FILE` names the never-ingest list. Both are set in
+`deploy/.env` or the environment; the setup and the list's format are in
+[deploy/README.md](../../../deploy/README.md#the-corpus-and-the-never-ingest-list).
+
+- **Fail closed.** `ingest run`, like any later production or extract-all
+  mode, refuses to start without a list; an empty file is an explicit,
+  allowed list. A configured list that is missing or unreadable, or that
+  holds a line which would silently match nothing, is an error.
+- **One shared check.** Every entry point that reads source documents asks
+  `yizkr.core.corpus.is_excluded()` before it uses a document's content.
+  `ingest run` drops a listed document at discovery, so it gets no
+  artifact, no transcription and no state. The single-file steps
+  (`register`, `transcribe`, `gedcom`, `detect-faces`) run without a list,
+  but refuse a listed file once one is configured. New entry points must
+  call it too: write-time registration (#103), transcription import
+  (#104), the run driver (#118) and faces (#160).
+
 ## The stages, individually
 
 The stages below are what `ingest run` orchestrates for you. Each is also a
