@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 import weakref
 from collections.abc import Iterable, Sequence
@@ -173,6 +174,11 @@ class CliVersionMismatch(PassPaused):
     to."""
 
 
+class CliConfigEnvironment(PassPaused):
+    """The claude CLI's global config sets environment variables, which the
+    CLI would add to every call."""
+
+
 def _version_mismatch(
     found: str, pinned: str, where: str
 ) -> CliVersionMismatch:
@@ -251,10 +257,9 @@ def pinned_cli_version() -> str | None:
 
 
 # The only environment variables a call inherits: those that find and run
-# the CLI, locate its login and session store, place its temporary files,
-# and carry the machine's proxy and certificate setup. None of them
-# changes how the CLI handles a call; everything else stays behind.
-# The CLI reads dozens of variables that do change a call, and a new
+# the CLI, locate its config directory, place its temporary files, and
+# carry the machine's proxy and certificate setup. Everything else stays
+# behind. The CLI reads dozens of variables that change a call, and a new
 # version can add more. Among them, MAX_THINKING_TOKENS changes the
 # model's output; the DISABLE_PROMPT_CACHING, ENABLE_PROMPT_CACHING_1H and
 # FORCE_PROMPT_CACHING_5M families change caching, and so the cost that
@@ -266,13 +271,17 @@ def pinned_cli_version() -> str | None:
 # silently switch this engine to per-token billing, which is exactly what
 # choosing it opts out of. SHELL and the locale stay behind too: the CLI
 # names the shell in the model's context and formats some numbers there
-# with its runtime's default locale, and it runs without either.
+# with its runtime's default locale, and it runs without either. The
+# config directory these variables locate still shapes a call: its login
+# decides the account and how it is billed, and its global config can add
+# variables of its own, which check_global_config refuses.
 _PASSED_VARIABLES = frozenset(
     {
         # finds the CLI and the programs it runs
         "PATH",
-        # the login and session store: under the home directory, or in
-        # the directory named instead, or a subscription token
+        # the config directory, with the login, the global config and the
+        # session store: under the home directory, or the one named
+        # instead; and a subscription token used in place of the login
         "HOME",
         "CLAUDE_CONFIG_DIR",
         "CLAUDE_CODE_OAUTH_TOKEN",
@@ -304,6 +313,12 @@ _PINNED_ENVIRONMENT = {
     "DISABLE_GROWTHBOOK": "1",
     "DISABLE_TELEMETRY": "1",
 }
+# Passed with --settings. The CLI takes a setting from the settings sources
+# it loads, --settings among them, and for a few keys falls back to its
+# global config when none of those sets the key. autoCompactEnabled is one
+# of them: an autoCompactEnabled: false there would otherwise stop a long
+# call compacting when its context fills.
+_PINNED_SETTINGS = {"autoCompactEnabled": True}
 
 # Where the transcripts of pipeline calls go: a directory (the run
 # record) to move them into, or "delete". Unset means delete.
@@ -317,6 +332,70 @@ def claude_projects_dir() -> Path:
     if configured:
         return Path(configured).expanduser() / "projects"
     return Path.home() / ".claude" / "projects"
+
+
+def claude_global_config_path() -> Path:
+    """The CLI's global config file: ``.config.json`` in its config
+    directory ($CLAUDE_CONFIG_DIR, or ~/.claude when that is unset) if that
+    file exists, else ``.claude.json`` in $CLAUDE_CONFIG_DIR, or in the
+    home directory when that is unset."""
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    base = Path(configured).expanduser() if configured else None
+    preferred = (base or Path.home() / ".claude") / ".config.json"
+    if preferred.exists():
+        return preferred
+    return (base or Path.home()) / ".claude.json"
+
+
+def check_global_config() -> None:
+    """Refuse to go on while the CLI's global config sets environment
+    variables.
+
+    At every start the CLI copies the ``env`` map of its global config into
+    its own environment, past both ``--setting-sources`` and the allowlist,
+    so those variables would shape every call without showing in
+    ``config_hash``. Raises ``CliConfigEnvironment`` when the map is not
+    empty, naming the file and the variables but never their values, or
+    when the file cannot be read as JSON. A file caught mid-write is read
+    once more.
+    """
+    path = claude_global_config_path()
+    config: Any = None
+    for attempt in (1, 2):
+        try:
+            config = json.loads(path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as exc:
+            if attempt == 2:
+                raise CliConfigEnvironment(
+                    f"the claude CLI's global config {path} cannot be read "
+                    f"as JSON ({type(exc).__name__}), so the environment "
+                    "variables it would add to every call cannot be "
+                    "checked. The pass is paused and makes no further "
+                    "calls; its completed outputs are kept. Repair the "
+                    "file, then run the pass again."
+                ) from None
+            time.sleep(0.2)
+        else:
+            break
+    env = config.get("env") if isinstance(config, dict) else None
+    if not env:
+        return
+    names = (
+        ", ".join(sorted(env))
+        if isinstance(env, dict)
+        else "an env entry that is not a map"
+    )
+    raise CliConfigEnvironment(
+        f"the claude CLI's global config {path} sets environment variables "
+        f"that the CLI adds to every call: {names}. They could change a "
+        "pipeline call without changing its config_hash. Move them to the "
+        "shell, or to the env block of user settings (settings.json in the "
+        "CLI's config directory), which pipeline calls do not load. The "
+        "pass is paused and makes no further calls; its completed outputs "
+        "are kept. Run it again once that map is empty."
+    )
 
 
 def transcript_destination(
@@ -445,12 +524,16 @@ class ClaudeCodeClient:
 
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit only the environment variables
-    on an allowlist (``_PASSED_VARIABLES``: what runs the CLI, finds its
-    login and reaches the API), and run in a dedicated directory, so
-    neither the owner's configuration nor a Claude Code session that
-    launched the pass shapes a call. ``effective_config`` lists
-    everything besides the prompt that does, and ``config_hash``
-    fingerprints it for the run record.
+    on an allowlist (``_PASSED_VARIABLES``: what runs the CLI, locates its
+    config directory and reaches the API), pin compaction on, and run in a
+    dedicated directory. A client neither starts nor calls while the CLI's
+    global config sets environment variables of its own
+    (``check_global_config``). So neither the owner's configuration nor a
+    Claude Code session that launched the pass shapes a call. Two things
+    the engine does not control still do: the login, which decides the
+    account, and machine-managed settings, which are machine policy.
+    ``effective_config`` lists what the engine sets for a call besides the
+    prompt, and ``config_hash`` fingerprints it for the run record.
 
     **Transcripts.** The CLI stores every session under its projects
     directory, and forks resume from there, so sessions stay persistent
@@ -499,6 +582,7 @@ class ClaudeCodeClient:
         self.transcripts = transcript_destination(transcripts)
         self._pin = _PIN
         self._pin.raise_if_paused()
+        check_global_config()
         try:
             installed = subprocess.run(
                 [self.executable, "--version"],
@@ -555,6 +639,11 @@ class ClaudeCodeClient:
             "",
             "--strict-mcp-config",
             "--disable-slash-commands",
+            # settings the CLI would otherwise take from its global config
+            "--settings",
+            json.dumps(
+                _PINNED_SETTINGS, sort_keys=True, separators=(",", ":")
+            ),
             # Denied tool calls still consume turns in -p mode; a planning
             # tool grabbed mid-extraction can burn the whole cap. Forbid
             # everything except reading the files we point at.
@@ -584,13 +673,14 @@ class ClaudeCodeClient:
 
     @property
     def effective_config(self) -> dict[str, Any]:
-        """Everything besides the prompt that shapes this client's calls:
-        the pinned CLI version, its arguments (the executable's path and
-        the per-call session arguments aside), the directory it runs in,
-        and its environment: the settings pinned for every call and the
-        names of the variables passed through. The values passed through
-        (paths on this machine, the login, the proxy) are never
-        included."""
+        """What this client sets for its calls besides the prompt: the
+        pinned CLI version, its arguments (the pinned settings among them;
+        the executable's path and the per-call session arguments aside),
+        the directory it runs in, and its environment: the variables pinned
+        for every call and the names of those passed through. The values
+        passed through (paths on this machine, the login, the proxy) are
+        never included. Not covered: the login itself, machine-managed
+        settings, and the machine."""
         return {
             "engine": "claude-code",
             "cli_version": self.cli_version,
@@ -605,7 +695,7 @@ class ClaudeCodeClient:
     @property
     def config_hash(self) -> str:
         """SHA-256 of ``effective_config`` in canonical JSON: one value
-        that changes whenever anything that shapes a call does."""
+        that changes whenever anything in it does."""
         canonical = json.dumps(
             self.effective_config,
             sort_keys=True,
@@ -668,6 +758,7 @@ class ClaudeCodeClient:
         it ends, unless ``hold`` keeps a successful call's session open
         for forking."""
         self._pin.raise_if_paused()
+        check_global_config()
         self.workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
         stdout = ""
         held = False
