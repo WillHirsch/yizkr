@@ -1,9 +1,13 @@
 """Run directory: the manifest, event log, alerts and control requests of
 one run, and the run state derived from them.
 
-    <run dir>/run.json       the run manifest: run id, the LLM cache, the
-                             planned documents (SHA-1, kind, stages) and
-                             the run's configuration
+    <run dir>/run.json       the run manifest: run id, what shapes the run
+                             (mode, project stage, engine and CLI version,
+                             each role's model, effort, epoch and client
+                             configuration hash, the LLM cache, the corpus
+                             and its never-ingest list, the code version),
+                             the planned documents (SHA-1, kind, stages)
+                             and each invocation's start, end and outcome
     <run dir>/events.jsonl   append-only events, one JSON object per line
     <run dir>/alerts.jsonl   append-only anomaly alerts
     <run dir>/control.jsonl  append-only pause/resume/abort requests
@@ -15,7 +19,13 @@ completion and failure is an event, and so is every view a run reuses
 (yizkr.pipeline.orchestrate) and every answer the LLM cache gives or
 cannot give (yizkr.pipeline.llmcache); the driver, the live monitor, the
 anomaly checks and pacing all read and write these files, and
-docs/LLM_CACHE.md is their contract.
+docs/LLM_CACHE.md and docs/RUN_MANIFEST.md are their contract.
+
+The manifest records settings and hashes, never a prompt or any document
+content. It describes the run as its latest invocation ran it. A run
+that must keep its settings across invocations (``fixed_settings``)
+refuses an invocation that asks for others (RunSettingsConflict); one
+that may change them, as `ingest run` may, records the latest.
 
 Run state per document and stage is derived from the run manifest and
 the events alone (never from file modification times or a per-document
@@ -28,20 +38,56 @@ again, with the reason, while the control file holds it.
 
 from __future__ import annotations
 
+import copy
+import functools
+import hashlib
 import json
+import os
+import re
+import subprocess
 import threading
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from yizkr.pipeline.stages import atomic_write_text, read_jsonl
+from yizkr import __version__
+from yizkr.pipeline.stages import (
+    atomic_write_text,
+    canonical_json,
+    read_jsonl,
+    sha256_text,
+)
 
 MANIFEST = "run.json"
 EVENTS = "events.jsonl"
 ALERTS = "alerts.jsonl"
 CONTROL = "control.jsonl"
+
+# the version of run.json's layout (docs/RUN_MANIFEST.md); a reader that
+# meets a later one knows it may find fields it does not know
+MANIFEST_FORMAT = 1
+
+# the project stage a run belongs to (ADR-0024 §7, ADR-0025 §6): runs are
+# in the development stage until keeper mode records the kept state
+DEVELOPMENT_STAGE = "development"
+KEPT_STAGE = "kept"
+
+# how an invocation ended: it went through its documents; the control
+# file stopped it; Ctrl-C; the pass paused (llm.PassPaused); it refused
+# to go on with other settings than its run's (RunSettingsConflict); or
+# an error escaped it
+OUTCOMES = (
+    "finished",
+    "stopped",
+    "interrupted",
+    "paused",
+    "refused",
+    "failed",
+)
 
 # event names
 RUN_START = "run-start"
@@ -85,6 +131,224 @@ def _now() -> str:
 
 def new_run_id() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:6]
+
+
+# -- what shapes a run --------------------------------------------------------
+
+# the manifest's settings: a run that keeps its settings must be invoked
+# again with the same values for each
+SETTINGS = (
+    "mode",
+    "project_stage",
+    "engine",
+    "roles",
+    "corpus",
+    "code",
+    "config",
+)
+# settings that may still change between the invocations of such a run: a
+# refresh belongs to its invocation, how many calls run at once shapes
+# pacing and not what is made, and what an engine applies (its CLI
+# version and its clients) is checked when the engine starts
+# (RunDir.record_engine)
+_NOT_FIXED = (
+    "engine.cli_version",
+    "roles.*.refresh",
+    "roles.*.client",
+    "roles.*.client.*",
+    "config.refresh",
+    "config.chunk_concurrency",
+    "config.extract_concurrency",
+)
+# what a role's engine client applies, which must stay the same once
+# recorded in a run that keeps its settings
+_CLIENT_FIXED = ("model", "effort", "config_hash")
+
+
+class RunSettingsConflict(BaseException):
+    """An invocation of a run that keeps its settings asked for others
+    than the ones the run recorded.
+
+    Like a paused pass (yizkr.pipeline.llm.PassPaused), it is no
+    document's failure: it passes through the per-document isolation and
+    stops the invocation, before any call is made with the other
+    settings. `conflicts` lists (setting, recorded, asked for)."""
+
+    def __init__(
+        self, run: Path, conflicts: list[tuple[str, Any, Any]]
+    ) -> None:
+        self.conflicts = conflicts
+        lines = "\n".join(
+            f"  {name}: {recorded!r} recorded, {asked!r} now"
+            for name, recorded, asked in conflicts
+        )
+        super().__init__(
+            f"{Path(run) / MANIFEST} records other settings for this run:\n"
+            f"{lines}\n"
+            "A run is resumed only with the settings it started with. "
+            "Invoke it again with those, or start a new run in a new run "
+            "directory: the LLM cache answers every call the change leaves "
+            "the same."
+        )
+
+
+def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
+    """Nested objects as dotted paths to their leaves; a list, or an empty
+    object, is one leaf."""
+    if isinstance(value, dict) and value:
+        flat: dict[str, Any] = {}
+        for key, item in value.items():
+            flat.update(_flatten(item, f"{prefix}.{key}" if prefix else key))
+        return flat
+    return {prefix: value}
+
+
+def _fixed_settings(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    flat = _flatten({name: manifest.get(name) for name in SETTINGS})
+    return {
+        path: value
+        for path, value in flat.items()
+        if not any(fnmatchcase(path, pattern) for pattern in _NOT_FIXED)
+    }
+
+
+def settings_conflicts(
+    recorded: Mapping[str, Any], asked: Mapping[str, Any]
+) -> list[tuple[str, Any, Any]]:
+    """(setting, recorded, asked for) for every setting a run that keeps
+    its settings would change, by dotted path ("roles.extract.model");
+    what may change between its invocations is left out (_NOT_FIXED)."""
+    before = _fixed_settings(recorded)
+    after = _fixed_settings(json.loads(json.dumps(dict(asked))))
+    return [
+        (path, before.get(path), after.get(path))
+        for path in sorted(before.keys() | after.keys())
+        if before.get(path) != after.get(path)
+    ]
+
+
+def _keep_observed(
+    recorded: Mapping[str, Any], fields: dict[str, Any]
+) -> dict[str, Any]:
+    """`fields` with what the run's engines recorded when they started
+    (the CLI version, each role's client) carried over from `recorded`,
+    for a run that keeps its settings: a later invocation that starts no
+    engine still says what the run ran on."""
+    fields = copy.deepcopy(fields)
+    cli_version = (recorded.get("engine") or {}).get("cli_version")
+    if cli_version and isinstance(fields.get("engine"), dict):
+        fields["engine"]["cli_version"] = cli_version
+    for role, settings in (fields.get("roles") or {}).items():
+        client = ((recorded.get("roles") or {}).get(role) or {}).get("client")
+        if client and isinstance(settings, dict):
+            settings["client"] = client
+    return fields
+
+
+# the package's source folder, whose git checkout gives the code version
+PACKAGE_DIR = Path(__file__).resolve().parents[1]
+
+
+def _git(where: Path, *arguments: str) -> bytes | None:
+    """A git command's output in `where`, or None when git is missing or
+    the command fails (not a checkout, say). The code version is a
+    record, never a precondition: no failure to ask git stops a run."""
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=where,
+            capture_output=True,
+            timeout=60,
+        )
+        return result.stdout if result.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def code_version(where: Path = PACKAGE_DIR) -> dict[str, Any]:
+    """The code a run runs: the package `version`, and, when it runs from
+    a git checkout, the `commit` and whether tracked files differ from it
+    (`dirty`), with the SHA-256 of that difference (`diff_sha256`), so
+    two runs of one commit with different edits tell apart. Untracked
+    files are not counted. The difference itself is not recorded. Outside
+    a checkout, or without git, the commit and the flag are None.
+    Measured once per process for each location."""
+    return dict(_code_version(Path(where)))
+
+
+@functools.cache
+def _code_version(where: Path) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "version": __version__,
+        "commit": None,
+        "dirty": None,
+        "diff_sha256": None,
+    }
+    commit = _git(where, "rev-parse", "HEAD")
+    if commit is None:
+        return record
+    record["commit"] = commit.decode().strip()
+    diff = _git(
+        where,
+        "diff",
+        "HEAD",
+        "--binary",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+    )
+    if diff is not None:
+        record["dirty"] = bool(diff)
+        if diff:
+            record["diff_sha256"] = hashlib.sha256(diff).hexdigest()
+    return record
+
+
+def exclusions_record(exclusions: Any) -> dict[str, Any] | None:
+    """The never-ingest list a run honours (yizkr.core.corpus.
+    ExclusionList): the file it was read from, and the SHA-256 of what it
+    excludes (its SHA-1s and its globs, each sorted), so two lists that
+    exclude the same hash the same whatever their comments and order. The
+    entries themselves are not recorded. None for no list."""
+    if exclusions is None:
+        return None
+    source = getattr(exclusions, "source", None)
+    return {
+        "file": os.path.abspath(source) if source else None,
+        "sha256": sha256_text(
+            canonical_json(
+                {
+                    "sha1s": sorted(exclusions.sha1s),
+                    "patterns": sorted(exclusions.patterns),
+                }
+            )
+        ),
+    }
+
+
+# a context-window selector an engine accepts after a model name ("[1m]")
+_MODEL_SELECTOR = re.compile(r"\[[^\]]*\]$")
+
+
+def model_alias(name: str | None) -> bool:
+    """Whether a configured model name is an alias, which the engine
+    resolves to a model of its own choosing: one that asks for the latest
+    model (`...-latest`), or one that names no version at all (the claude
+    CLI's `sonnet`, `opus`, `default` and the like). A full model id names
+    its version. No name is no alias: the engine then runs its own
+    default, which the LLM cache warns is not keyed. An undated name of a
+    model that also has dated snapshots cannot be told from a full id by
+    its form, and passes."""
+    if not name or not name.strip():
+        return False
+    base = _MODEL_SELECTOR.sub("", name.strip())
+    return base.lower().endswith("-latest") or not any(
+        character.isdigit() for character in base
+    )
+
+
+class ModelAliasRefused(ValueError):
+    """A run's configuration names a model by an alias (model_alias)."""
 
 
 @dataclass(frozen=True)
@@ -140,6 +404,9 @@ class RunDir:
         self.path = Path(path)
         self.invocation = invocation or uuid.uuid4().hex[:12]
         self._lock = threading.Lock()
+        # whether this invocation has started (start): what an engine
+        # applies is recorded only within an invocation
+        self._started = False
 
     # -- append-only logs ---------------------------------------------------
 
@@ -239,29 +506,136 @@ class RunDir:
         except (OSError, ValueError):
             return {}
 
+    def _write_manifest(self, manifest: dict) -> None:
+        atomic_write_text(
+            self.path / MANIFEST,
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+        )
+
     def update_manifest(self, **fields: Any) -> dict:
         """Merge fields into run.json (replaced atomically)."""
         with self._lock:
             manifest = self.manifest()
             manifest.update(fields)
-            atomic_write_text(
-                self.path / MANIFEST,
-                json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-            )
+            self._write_manifest(manifest)
         return manifest
 
-    def start(self, **fields: Any) -> dict:
-        """Open an invocation: a run id on first start, a control marker
-        that clears earlier requests, and a run-start event."""
-        manifest = self.manifest()
-        run_id = manifest.get("run_id") or new_run_id()
-        manifest = self.update_manifest(run_id=run_id, **fields)
+    def start(self, *, fixed_settings: bool = False, **fields: Any) -> dict:
+        """Open an invocation: a run id on first start, the fields merged
+        into the manifest, the invocation's start among its
+        `invocations`, a control marker that clears earlier requests, and
+        a run-start event.
+
+        With `fixed_settings`, an invocation of a run that has started
+        before must ask for the settings it recorded (SETTINGS, without
+        what may change between invocations): otherwise it raises
+        RunSettingsConflict and changes nothing. What the run's engines
+        recorded when they started is kept."""
+        now = _now()
+        with self._lock:
+            manifest = self.manifest()
+            if fixed_settings and manifest.get("run_id"):
+                conflicts = settings_conflicts(manifest, fields)
+                if conflicts:
+                    raise RunSettingsConflict(self.path, conflicts)
+                fields = _keep_observed(manifest, fields)
+            manifest.update(fields)
+            # the format and the run id lead, for a reader of the file
+            manifest = {
+                "format": MANIFEST_FORMAT,
+                "run_id": manifest.get("run_id") or new_run_id(),
+            } | {
+                key: value
+                for key, value in manifest.items()
+                if key not in ("format", "run_id")
+            }
+            manifest.setdefault("started_at", now)
+            manifest["ended_at"] = None
+            manifest["invocations"] = [
+                *(manifest.get("invocations") or []),
+                {
+                    "invocation": self.invocation,
+                    "started_at": now,
+                    "ended_at": None,
+                    "outcome": None,
+                },
+            ]
+            self._write_manifest(manifest)
+            self._started = True
         self._append(
             CONTROL,
-            {"at": _now(), "action": "start", "invocation": self.invocation},
+            {"at": now, "action": "start", "invocation": self.invocation},
         )
-        self.emit(RUN_START, run_id=run_id)
+        self.emit(RUN_START, run_id=manifest["run_id"])
         return manifest
+
+    def end(self, outcome: str, *, reason: str | None = None) -> dict:
+        """Close the invocation in the manifest: its end, its `outcome`
+        (OUTCOMES) and, when it did not finish, the `reason` (the control
+        request that stopped it, or the exception's name). The run's
+        `ended_at` is the latest invocation's end."""
+        if outcome not in OUTCOMES:
+            raise ValueError(f"unknown outcome {outcome!r}")
+        now = _now()
+        with self._lock:
+            manifest = self.manifest()
+            for entry in manifest.get("invocations") or []:
+                if entry.get("invocation") == self.invocation:
+                    entry.update(ended_at=now, outcome=outcome)
+                    if reason:
+                        entry["reason"] = reason
+            manifest["ended_at"] = now
+            self._write_manifest(manifest)
+        return manifest
+
+    def record_engine(
+        self,
+        role: str,
+        client: Mapping[str, Any],
+        *,
+        cli_version: str | None = None,
+        fixed_settings: bool = False,
+    ) -> None:
+        """Record what a role's engine client applies once it has started
+        (`roles[role].client`: its model, effort, configuration hash and
+        model identifier) and the CLI version the pass is pinned to
+        (`engine.cli_version`). Outside an invocation (before `start`)
+        nothing is recorded.
+
+        With `fixed_settings`, a client or a CLI version other than the one
+        the run recorded raises RunSettingsConflict, and nothing is
+        recorded."""
+        if not self._started:
+            return
+        with self._lock:
+            manifest = self.manifest()
+            roles = manifest.setdefault("roles", {})
+            settings = roles.get(role)
+            if not isinstance(settings, dict):
+                settings = roles[role] = {}
+            engine = manifest.get("engine")
+            if not isinstance(engine, dict):
+                engine = manifest["engine"] = {}
+            if fixed_settings:
+                recorded = settings.get("client") or {}
+                conflicts = [
+                    (f"roles.{role}.client.{key}", recorded[key], client[key])
+                    for key in _CLIENT_FIXED
+                    if key in recorded
+                    and key in client
+                    and recorded[key] != client[key]
+                ]
+                pinned = engine.get("cli_version")
+                if cli_version and pinned and pinned != cli_version:
+                    conflicts.append(
+                        ("engine.cli_version", pinned, cli_version)
+                    )
+                if conflicts:
+                    raise RunSettingsConflict(self.path, conflicts)
+            settings["client"] = dict(client)
+            if cli_version is not None:
+                engine["cli_version"] = cli_version
+            self._write_manifest(manifest)
 
 
 # -- run state ----------------------------------------------------------------
@@ -332,3 +706,80 @@ def cache_counts(run: RunDir) -> dict[str, dict[str, int]]:
         role = counts.setdefault(event.get("role") or "?", {})
         role[label] = role.get(label, 0) + 1
     return counts
+
+
+def describe_manifest(manifest: Mapping[str, Any]) -> list[str]:
+    """What shapes a run, one line per setting, from its manifest: for
+    `yizkr stages manifest` and anything else that shows a run's
+    configuration to a person. Each role shows what its engine client
+    applied when one started in the latest invocation, else what the run
+    configured."""
+
+    def short(digest: Any) -> str:
+        return str(digest)[:12] if digest else "none"
+
+    engine = manifest.get("engine") or {}
+    code = manifest.get("code") or {}
+    corpus = manifest.get("corpus") or {}
+    exclusions = corpus.get("exclusions")
+    invocations = manifest.get("invocations") or []
+    stage = manifest.get("project_stage")
+    lines = [
+        f"run         {manifest.get('run_id')} ({manifest.get('mode')}"
+        + (f", {stage} stage" if stage else "")
+        + ")",
+        f"engine      {engine.get('name') or '?'}"
+        + (
+            f", CLI {engine['cli_version']}"
+            if engine.get("cli_version")
+            else ""
+        ),
+        "code        "
+        + (short(code.get("commit")) if code.get("commit") else "unknown")
+        + (
+            f", dirty (diff {short(code.get('diff_sha256'))})"
+            if code.get("dirty")
+            else ""
+        )
+        + (f", version {code['version']}" if code.get("version") else ""),
+        f"corpus      {corpus.get('folder') or '?'}",
+        "exclusions  "
+        + (
+            f"{exclusions.get('file') or 'no file'} "
+            f"(sha256 {short(exclusions.get('sha256'))})"
+            if isinstance(exclusions, dict)
+            else "none recorded"
+        ),
+        f"cache       {manifest.get('cache') or 'off'}",
+    ]
+    for role, settings in (manifest.get("roles") or {}).items():
+        settings = settings or {}
+        client = settings.get("client") or {}
+        model = client.get("model") if client else settings.get("model")
+        effort = client.get("effort") if client else settings.get("effort")
+        parts = [
+            f"model {model or 'engine default'}",
+            f"effort {effort or 'none'}",
+            f"epoch {settings.get('epoch', 0)}",
+        ]
+        if settings.get("refresh"):
+            parts.append("refreshed")
+        parts.append(
+            f"config {short(client.get('config_hash'))}"
+            if client
+            else "not started"
+        )
+        lines.append(f"role        {role}: " + ", ".join(parts))
+    last = invocations[-1] if invocations else {}
+    lines.append(
+        f"started     {manifest.get('started_at') or '?'}; "
+        + (
+            f"ended {manifest['ended_at']}"
+            if manifest.get("ended_at")
+            else "not ended"
+        )
+        + (f" ({last['outcome']})" if last.get("outcome") else "")
+        + f"; {len(invocations)} invocation"
+        + ("" if len(invocations) == 1 else "s")
+    )
+    return lines
