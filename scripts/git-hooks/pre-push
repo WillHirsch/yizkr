@@ -1,0 +1,37 @@
+#!/bin/sh
+# yizkr-pre-push: refuse direct pushes to main (ADR-0024).
+#
+# Installed by `make hooks`. Every change reaches main through a pull
+# request that the owner merges on GitHub (docs/AGENT_PROTOCOL.md), so a
+# push that would create, move or delete main on any remote is refused.
+#
+# git passes one line per ref being pushed on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# Every line is checked, so `git push origin feature main`,
+# `git push origin HEAD:main` and `git push --all` are refused too.
+#
+# This is a tripwire against mistakes, not an access control:
+# `git push --no-verify` skips it. That is for a deliberate owner action
+# only; agents never use it.
+
+remote="$1"
+refused=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "pre-push: refusing to update main on '$remote'" \
+            "(from $local_ref)." >&2
+        refused=1
+    fi
+done
+
+if [ "$refused" -ne 0 ]; then
+    cat >&2 <<'EOF'
+pre-push: changes reach main only through a pull request that the owner
+merges (ADR-0024, docs/AGENT_PROTOCOL.md). Push your issue branch
+instead, e.g. `git push -u origin <issue-number>-<slug>`, and open a
+draft PR with `gh pr create --draft --base main`.
+EOF
+    exit 1
+fi
+exit 0

@@ -12,8 +12,21 @@ export GID := $(shell id -g)
 install:            ## create/update the uv-managed venv (with dev tools)
 	$(UV) sync --dev
 
-hooks:              ## install the git pre-commit hooks (ruff format + lint)
+# Hooks live in the common git dir, so one run covers every worktree.
+# The pre-push hook is a plain script, not a pre-commit stage: pre-commit
+# shows its hooks only the first ref being pushed, and none for a delete.
+PRE_PUSH_HOOK = scripts/git-hooks/pre-push
+
+hooks:              ## install git hooks: pre-commit (ruff), pre-push (no pushes to main)
 	$(UV) run pre-commit install
+	@dest="$$(git rev-parse --git-path hooks)/pre-push"; \
+	if [ -e "$$dest" ] && ! grep -q '^# yizkr-pre-push:' "$$dest"; then \
+		echo "make hooks: $$dest exists and is not yizkr's;" \
+			"move it aside and re-run" >&2; \
+		exit 1; \
+	fi; \
+	install -m 755 $(PRE_PUSH_HOOK) "$$dest" && \
+	echo "pre-push installed at $$dest"
 
 test:               ## offline unit tests
 	$(UV) run pytest
