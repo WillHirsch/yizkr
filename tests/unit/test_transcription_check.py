@@ -14,6 +14,8 @@ name, so those lines invent a witness in its town.
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import subprocess
 import time
@@ -1090,9 +1092,10 @@ class TestOrchestratorContract:
     transcribes again."""
 
     @staticmethod
-    def orchestrator(tmp_path, monkeypatch, engine):
+    def orchestrator(tmp_path, monkeypatch, engine, state="state", **options):
         """A folder orchestrator over one scan, transcribing with `engine`
-        and extracting nothing: (the orchestrator, the scan)."""
+        and extracting nothing, with its state under `tmp_path / state` and
+        any other `options` it takes: (the orchestrator, the scan)."""
         import yizkr.pipeline.llm as llm
 
         monkeypatch.setattr(llm, "make_client", lambda *a, **k: engine)
@@ -1110,9 +1113,11 @@ class TestOrchestratorContract:
                 return []
 
         folder = tmp_path / "docs"
-        folder.mkdir()
+        folder.mkdir(exist_ok=True)
         (folder / "scan.png").write_bytes(b"not really a png")
-        orch = Orch(folder, tmp_path / "state", log=lambda *a, **k: None)
+        orch = Orch(
+            folder, tmp_path / state, log=lambda *a, **k: None, **options
+        )
         return orch, folder / "scan.png"
 
     def test_failed_check_is_not_kept_and_is_retried(
@@ -1163,3 +1168,107 @@ class TestOrchestratorContract:
         assert orch.advance(doc, stop_after_extract=True) == BATCHED
         assert engine.calls == 2
         assert doc.state.error is None
+
+    def test_only_a_fresh_start_reaches_a_transcription_made_before(
+        self, tmp_path, monkeypatch
+    ):
+        """The limit the transcription check's module docstring states, and
+        its remedy (#213, #244). A transcription made before the engine
+        read its stream's tool errors holds no record of the error its
+        input meets, in its view or in the answer the cache kept. A refresh
+        fails the document in its run but stores nothing, so both stand:
+        the next run reuses the view. An epoch asks the engine only in its
+        own runs, and a fresh state directory at epoch 0 is served the kept
+        answer. Only a fresh state directory with the role's answers moved
+        out of the cache asks the engine again, which fails."""
+        import yizkr.pipeline.llm as llm
+
+        cli = install_fake_cli(monkeypatch, tmp_path)
+        engine = ClaudeCodeClient()
+        cache = tmp_path / "cache"
+
+        def run(state, **options):
+            orch, scan = self.orchestrator(
+                tmp_path,
+                monkeypatch,
+                engine,
+                state=state,
+                cache_dir=cache,
+                **options,
+            )
+            doc = DocumentRun(scan, tmp_path / state)
+            status = orch.advance(doc, stop_after_extract=True)
+            events = [
+                (event["event"], event.get("reason"))
+                for event in orch.rundir.events()
+            ]
+            return status, doc, events
+
+        cli.answer = a_page()
+        cli.tool_events = read_events(
+            (tmp_path / "docs" / "scan.png").resolve(), error=NOT_AN_IMAGE
+        )
+        # made by an engine that did not read its stream's tool results
+        with monkeypatch.context() as before:
+            before.setattr(llm, "tool_failures", lambda *a, **k: [])
+            status, doc, _ = run("state")
+        assert status == BATCHED
+        assert len(cli.calls) == 1
+
+        status, doc, _ = run("state", refresh=("transcribe",))
+        assert status == FAILED
+        assert "Read (corrupt)" in doc.state.error
+        assert len(cli.calls) == 2
+        assert doc.transcription.exists()
+        kept = role_entries(cache, "transcribe")
+        assert [entry["response"] for entry in kept.values()] == [a_page()]
+
+        # the next run reuses the view, as the check's signatures pass it
+        status, doc, events = run("state")
+        assert status == BATCHED
+        assert ("reused", None) in events
+        assert len(cli.calls) == 2
+        # an epoch asks the engine only in the runs it is given for
+        status, doc, _ = run("epoch", epochs={"transcribe": 1})
+        assert status == FAILED
+        assert len(cli.calls) == 3
+        # and a fresh state directory is served the kept answer
+        status, doc, events = run("fresh")
+        assert status == BATCHED
+        assert ("cache-hit", "key match") in events
+        assert len(cli.calls) == 3
+
+        aside = tmp_path / "aside"
+        for path in kept:
+            target = aside / path.relative_to(cache)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            path.rename(target)
+        status, doc, events = run("fresher")
+        assert status == FAILED
+        assert "Read (corrupt)" in doc.state.error
+        assert ("cache-miss", "absent") in events
+        assert len(cli.calls) == 4
+        assert not role_entries(cache, "transcribe")
+
+
+# what the Read tool says of a file named as an image that holds none, as
+# CLI 2.1.237 words it
+NOT_AN_IMAGE = (
+    "File has an image extension but its content is not a valid "
+    "PNG/JPEG/GIF/WebP. Detected: unknown."
+)
+
+
+def role_entries(cache, role: str) -> dict:
+    """The entries of the LLM cache under `cache` whose calls `role` made,
+    by path, with their contents: what is moved out of the cache so that
+    the role's calls ask the engine again. Entries moved aside (rejected
+    or replaced) are not served, and are left where they are."""
+    entries = {}
+    for path in sorted(cache.glob("??/*.json")):
+        if not re.fullmatch(r"[0-9a-f]{64}\.json", path.name):
+            continue
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        if entry.get("provenance", {}).get("role") == role:
+            entries[path] = entry
+    return entries

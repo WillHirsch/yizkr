@@ -35,7 +35,8 @@ alone, for a caller that runs the check as a step of its own; an engine
 error, the tool error among them, still raises from it. A caller that
 keeps transcriptions checks the ones it reuses again
 (yizkr.pipeline.orchestrate), so a stricter check applies to every
-transcription.
+transcription, apart from its reading of tool errors, which only a call
+records (yizkr.pipeline.transcription_check).
 
 Vision transcription of a PDF needs poppler-utils on the ingestion host:
 the claude-code engine's Read tool renders the pages with ``pdftoppm``,

@@ -75,10 +75,17 @@ needs it. The transcribers check every output they return, whether the
 engine made it in this call or the LLM cache kept it from an earlier one,
 and the orchestrator checks every transcription view it reuses (ADR-0032
 §1), so a stricter check applies to every transcription, the stored ones
-included (docs/LLM_CACHE.md). A tool error is the exception: only a call
-has its record, so a stricter reading of tool errors reaches the calls
-made after it, and a stored view or kept answer through a refresh
-(`--refresh transcribe`).
+included (docs/LLM_CACHE.md). Its reading of tool errors is the
+exception. Only a call has that record, so a stricter reading reaches the
+calls made after it and nothing made before: a transcription view, or an
+answer the cache kept, made before it passes on the signatures alone.
+Such a transcription meets the new reading only when the engine is asked
+again for it, in a fresh state directory with none of the transcribe
+role's answers in the LLM cache (moved out of it, or a new cache
+directory). A refresh (`--refresh transcribe`) is no remedy: when the
+refreshed call raises, nothing is stored, so the kept answer and the view
+stay, and the next run reuses them. Nor is an epoch, which keys only the
+runs it is given for.
 """
 
 from __future__ import annotations
