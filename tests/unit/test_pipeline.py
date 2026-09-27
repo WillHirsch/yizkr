@@ -992,6 +992,9 @@ class TestWriterTypeStatements:
 DIRECTORY_SHA1 = hashlib.sha1(
     "fictional scan: the 1912 Flörburg address book".encode()
 ).hexdigest()
+DIRECTORY_PAGE_2_SHA1 = hashlib.sha1(
+    "fictional scan: the 1912 Flörburg address book, page 2".encode()
+).hexdigest()
 DIRECTORY_RUN = dict(RUN, started_at="2026-07-13T09:00:00Z")
 FIRM_ENTRY = "Hutmacherei zum Blauen Hut, gegr. 1863"
 
@@ -1384,6 +1387,41 @@ class TestWriterLaterSourceTypes:
         assert excerpt.datavalue["value"]["text"] == FIRM_ENTRY
         assert directory.type_statements_written == 0
         assert directory.type_statements_referenced == 0
+
+    def test_a_reference_block_already_there_is_not_repeated(self):
+        # the batch cites two pages of the directory: the firm's first
+        # mention is on one, its explicit kind claim on the other, so the
+        # kind statement already cites this batch's run
+        wiki = FakeWiki(
+            {
+                INTERVIEW_SHA1: "Q25",
+                DIRECTORY_SHA1: "Q26",
+                DIRECTORY_PAGE_2_SHA1: "Q28",
+            }
+        )
+        firm = (
+            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
+        )
+        claim = {
+            "property": "instance_of",
+            "value": {
+                "type": "item",
+                "value": {"kind": "vocab", "key": "organization"},
+            },
+            "source": {
+                "artifact": {"kind": "artifact", "sha1": DIRECTORY_PAGE_2_SHA1}
+            },
+        }
+        directory = BatchWriter(wiki).write_batch(
+            _directory_batch(extra_claims=(claim,))
+        )
+        kinds = _by_value(_statements(wiki, firm, "instance_of"))
+        assert _sources(kinds[ITEMS["organization"]]) == [
+            (["Q28"], []),
+            ([], [directory.run_qid]),
+            (["Q26"], []),
+        ]
+        assert directory.type_statements_referenced == 1
 
 
 class TestPrivacyDefaults:
