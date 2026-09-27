@@ -593,7 +593,20 @@ class TestCritiqueNotes:
 class TestCorrections:
     """ROADMAP item 11: the correction column produces curator claims."""
 
-    def test_date_correction_replaces_value_and_marks_curated(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("correction", "expected"),
+        [
+            # a day above 12, which cannot be read as a month
+            ("1914-05-29", (1914, 5, 29)),
+            # day and month both 12 or less: in ISO order still one date,
+            # 1 July 1919, where the slash form below leaves two open
+            ("1919-07-01", (1919, 7, 1)),
+        ],
+        ids=["day-above-12", "day-and-month-both-12-or-less"],
+    )
+    def test_date_correction_replaces_value_and_marks_curated(
+        self, tmp_path, correction, expected
+    ):
         source = batch()
         csv_path = tmp_path / "review.csv"
         export_review_csv(source, csv_path)
@@ -602,7 +615,7 @@ class TestCorrections:
             for row in rows:
                 row["decision"] = "approve"
                 if row["property"] == "date_of_birth":
-                    row["correction"] = "1914-05-29"
+                    row["correction"] = correction
             return rows
 
         TestReviewRoundTrip.edit_csv(csv_path, correct_birth)
@@ -611,11 +624,8 @@ class TestCorrections:
         (birth,) = [
             c for c in approved.claims if c.property == "date_of_birth"
         ]
-        assert (birth.value.year, birth.value.month, birth.value.day) == (
-            1914,
-            5,
-            29,
-        )
+        value = birth.value
+        assert (value.year, value.month, value.day) == expected
         assert birth.value.precision == "day"
         assert birth.curated is True
         (spouse,) = [c for c in approved.claims if c.property == "spouse"]

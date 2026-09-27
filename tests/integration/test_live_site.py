@@ -41,9 +41,10 @@ from tests.fixtures import example_universe as u
 from yizkr.claims import ClaimBatch
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
+from yizkr.queries.publish import load_templates, render_for_instance
 from yizkr.staticsite import publish_site
 
-from .conftest import wait_for_query_service
+from .conftest import run_sparql, wait_for_query_service
 
 pytestmark = pytest.mark.live
 
@@ -86,6 +87,13 @@ HOME = (
     "Ehefrau Hildegard Löbig geborene Laudler zu Flörburg in seiner Wohnung"
 )
 ADDRESS_IN_TOWN = "wohnhaft in Flörburg, Brunnenring 35"
+
+# the disagreement report's containment filters, found by their path
+CONTAINMENT_FILTER = re.compile(
+    r"FILTER NOT EXISTS \{[^\n]*?"
+    + re.escape("(wdt:{P:location}|wdt:{P:part_of})+")
+    + r"[^\n]*?\}"
+)
 
 RUN = {
     "model_identifier": "integration-test",
@@ -200,6 +208,7 @@ class Site:
     out: Path
     summary: dict
     person: str  # the seeded person's QID
+    places: dict[str, str]  # "address", "street", "town" -> QID
     sources: dict[str, str]  # universe source key -> artifact QID
     photo_file: str  # the gravestone photograph's file page
 
@@ -241,6 +250,10 @@ def site(client, config, tmp_path_factory):
             out=out,
             summary=publish_site(config, out),
             person=written.created_items["person"],
+            places={
+                local_id: written.created_items[local_id]
+                for local_id in ("address", "street", "town")
+            },
             sources=sources,
             photo_file=registered[PHOTO].file_page,
         )
@@ -345,7 +358,7 @@ def test_sources_hyperlink_to_artifact_pages_with_downloads(site):
         assert any(shown(birth.value) in row for row in about_person)
 
 
-def test_inconsistencies_suppress_recorded_containment(site):
+def test_inconsistencies_suppress_recorded_containment(site, client, config):
     rows = [
         row
         for row in elements(site.read("inconsistencies.html"), "tr")
@@ -362,10 +375,29 @@ def test_inconsistencies_suppress_recorded_containment(site):
     # resolution, which the report leaves out
     assert not [row for row in rows if html.escape(ADDRESS) in row]
 
-    # ... and leaves out on purpose: both places are asserted, and the
-    # places page shows the recorded containment
-    person = site.read(f"people/{site.person}.html")
-    assert html.escape(ADDRESS) in person and html.escape(TOWN) in person
+    # ... and only its containment filters leave the pair out: the same
+    # query without them lists the two birthplaces, so the report does
+    # compare the places
+    template, filters = CONTAINMENT_FILTER.subn(
+        "", load_templates()["disagreement-report"]
+    )
+    assert filters == 2, "the report's containment filters have changed"
+    properties, items = client.vocabulary()
+    query = render_for_instance(
+        template, properties, items, config.concept_uri
+    )
+    entity = f"{config.concept_uri}/entity/"
+    compared = {
+        frozenset((row["valueA"]["value"], row["valueB"]["value"]))
+        for row in run_sparql(config, query)
+        if row["entity"]["value"] == entity + site.person
+    }
+    places = frozenset(
+        entity + site.places[key] for key in ("address", "town")
+    )
+    assert places in compared
+
+    # and the places page shows the recorded containment
     chain = "".join(
         (
             f"<li>{html.escape(TOWN)}<ul>",
