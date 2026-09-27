@@ -4,6 +4,10 @@ Status: **accepted** — implemented (manifest `referred_to_as` +
 `perspective`, extraction-prompt routing, critic update). No retro-fit:
 the model applies to a clean re-ingest, not a migration of existing rows
 (see Rulings).
+Amended by #222 (2026-09-27): in "Reciprocal / dyadic naming", the
+example records the literal "Oma" as (A), `relative` + `kinship_type`, as
+Ruling 2 routes it, and the section tells the two statements apart by
+subject and ego (the `relative` object or the `perspective` qualifier).
 
 ## Context
 
@@ -111,13 +115,14 @@ relational name for the other worth recording — a grandmother known to her
 grandchild as "Oma" while the grandchild is known to her as "Bubele"; two
 sisters who each call the other "Schwesterchen". This falls out of the
 design because **every appellation is a statement whose SUBJECT is the
-referent and whose perspective is the other party**:
+referent and whose ego is the other party**:
 
 - The two directions are **two independent statements on two different
-  subjects** — `grandmother —referred_to_as→ "Oma" ; perspective =
-  grandchild` and `grandchild —referred_to_as→ "Bubele" ; perspective =
+  subjects** — `grandmother —relative→ grandchild ; kinship_type =
+  "Oma"` and `grandchild —referred_to_as→ "Bubele" ; perspective =
   grandmother`. There is no dyad object to build and nothing to keep in
-  sync; the subject/perspective pair distinguishes them.
+  sync; the subject and the ego (the `relative` object on one side, the
+  `perspective` qualifier on the other) distinguish them.
 - A **symmetric term** ("Schwesterchen" both ways) is still two statements,
   disambiguated by subject — never one conflated value. Neither shadows the
   other.
@@ -125,13 +130,14 @@ referent and whose perspective is the other party**:
   on one side, "Bubele" is a pet name → (B) on the other. The two
   mechanisms compose without special-casing.
 - For the (A)/kinship direction, the **inverse is derived, not stored**:
-  if `grandchild —relative→ grandmother` is recorded, the calculus yields
-  the grandmother→grandchild direction, so a reciprocal kinship pair need
+  if `grandmother —relative→ grandchild` is recorded, the calculus yields
+  the grandchild→grandmother direction, so a reciprocal kinship pair need
   be asserted only once (recording both is allowed but redundant — a
   match, per ADR-0014, corroborates).
 - One source frequently records **both directions at once** ("your loving
   Oma" over a signature, a letter that names writer and recipient); both
-  statements cite the same artifact, kept apart by subject + perspective.
+  statements cite the same artifact, kept apart by subject and ego (the
+  `relative` object or the `perspective` qualifier).
 
 ### Decoding otherwise-context-free references
 

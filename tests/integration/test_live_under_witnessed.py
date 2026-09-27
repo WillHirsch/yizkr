@@ -7,6 +7,8 @@ exact statements the API holds:
 * a machine statement with ONE stated-in source and no curator sibling is
   listed — even beside a coexisting machine value from another source
   (machine siblings are not witnesses; ADR-0002 coexistence stays visible);
+* the subject's type statement, which the writer wrote when it minted the
+  subject, is such a machine statement and is listed (#88);
 * an agreeing second source (the writer's appended reference) takes a
   statement OUT of the queue;
 * a curator (run-reference-free) sibling on the same subject+property takes
@@ -38,7 +40,9 @@ pytestmark = pytest.mark.live
 SUBJECT = {
     "kind": "local",
     "local_id": "queue-person",
-    "label": "Queue Fixture Person",
+    # Not the label of earlier runs: a subject minted before #88 has a
+    # type statement with no run reference, which the queue never lists.
+    "label": "Queue Fixture Subject",
     "instance_of": "human",
 }
 TOWN = {
@@ -228,9 +232,12 @@ def test_queue_lists_exactly_the_under_witnessed_machine_statements(
 
     residences = statements(client, subject, "residence")
     assert len(residences) == 2  # the fixture's two distinct assertions
+    # the kind the writer wrote when it minted the subject
+    (kind,) = statements(client, subject, "instance_of")
     expected = {
         statement_uri(config, s["id"])
         for s in [
+            kind,
             pick(client, subject, "date_of_birth", "1911"),
             pick(client, subject, "date_of_birth", "1912"),
             pick(client, subject, "married_name", "Queue Fixture Wedded"),
