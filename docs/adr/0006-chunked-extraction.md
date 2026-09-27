@@ -6,6 +6,8 @@ the reviewed single-shot batch — 99% of facts identical, the remainder
 explained: richer symmetric spouse claims, and an ambiguous date
 correctly downgraded to year precision instead of silently guessed).
 Amended by #87 (2026-09-27): chunk state lives in the stage store (§5).
+Amended by #225 (2026-09-27): the stage store gives way to the LLM cache
+of ADR-0032, and `--cache` replaces `--resume` (§5, §7).
 
 ## Context
 
@@ -183,29 +185,38 @@ Deterministic, no model involvement:
 
 ### 5. State, failure, and resume
 
-Amended by #87 (2026-09-27): the entity manifest (or segmentation), every
-chunk and the merged batch are now stages in the stage store
-(docs/STAGE_STORE.md), each stored under a key built from the
-transcription's content, the prompt templates, the manifest and the model,
-with every raw response beside its parsed output. The sidecar files below
-are gone: per-chunk status is the store's records and the run's events,
-failures go to the stage's append-only `failures.jsonl` (reason, attempts,
-and the raw response of a truncation), and coverage, rejects and gaps are
-extras of the batch record. `--resume` reuses records whose key matches; a
-failed chunk's logged response is re-parsed before the model is called
-again, and a parser version bump re-parses stored raw responses. A
-recorded fallback is stored only when the engine answered: an outage
-fails the stage, to be retried. Sidecar state and batches made before the
-store are never read as stage outputs: they carry no key, and archived
-outputs enter the store only through the import in #104, under keys of
-their own (ADR-0025). `yizkr ingest run` holds a document whose directory
-has files but no `derivations.json`, whatever the shared store holds,
-changing nothing in it but the `state.json` that records the hold, until
-a run opts in with `--rederive-unrecorded`; that run keeps a copy of each
-stage output before deriving the stages again. A document whose source
-bytes changed is a different artifact (ADR-0010): its directory is moved
-aside whole, with nothing in it deleted, and the new bytes are ingested
-afresh (docs/STAGE_STORE.md). The layout this section first described:
+Amended by #87 (2026-09-27), which made the phases stages in a stage
+store, and by #225 (2026-09-27), which replaced the store with the LLM
+cache of ADR-0032 (docs/LLM_CACHE.md). The extractor keeps no state of its
+own. Every call goes through the client it is given, and with the cache
+each answer is kept under a key built from what the call sends, so a
+re-run replays the calls that completed and asks the engine only for the
+rest: a failed chunk costs one chunk. Parsing, the merge and validation
+run whenever the batch is made again (in a fresh state directory, or on
+`--refresh extract`; `ingest run` otherwise reuses the batch view,
+ADR-0032 §1), so a fix to them costs no model call for any response the
+old code accepted. A chunk cut off before its sentinel is rejected in the
+cache: it is kept aside for inspection and never served again, so the
+retry, or the next run, asks the engine anew, and a parser fix does not
+recover a response the old parser rejected. The entity manifest and the
+segmentation are asked in two attempts each, keyed apart in the cache, and
+a refused answer is kept, so a later run replays the same attempts and
+takes the same fallback (ADR-0032 §5). When a fork misses behind a cached
+manifest, the conversation is resumed exactly from the session the cache
+kept for the manifest it serves; a replay that answers differently starts
+the extraction over from the new answer (ADR-0032 §6). A cut-off chunk
+answer the cache kept from an earlier call spends no retry: the engine is
+asked once more (ADR-0032 §4). A fallback tier is taken only when the
+engine answered: an outage fails the extraction, to be retried. Per-chunk
+progress is the log, and the chunks that failed, with the first reason,
+are the extraction's error. Coverage, rejects and gaps are side outputs in
+the extractor's state directory (`<doc>/extraction/` under `ingest run`,
+`<out>.chunks/` for `ingest extract`), written for a complete extraction.
+Sidecar state from before the store is never read. `yizkr ingest run` sets
+aside whole a document directory without `derivations.json`, and starts it
+afresh, as it does one whose source bytes changed (ADR-0010); nothing in
+it is deleted. The layout this section first described:
+
 
 All intermediate state lives beside the output (runtime state, so under
 `var/` or wherever `--out` points):
@@ -252,7 +263,11 @@ loop in v1.
     yizkr ingest extract ... --strategy auto|single|chunked
                              --chunk-budget CHARS   (default 2000)
                              --chunk-retries N      (default 2)
-                             --resume
+                             --cache DIR
+
+Amended by #225 (2026-09-27): `--cache DIR` replaces `--resume`. The calls
+a previous run completed are answered from that LLM cache (ADR-0032);
+without it every call goes to the engine.
 
 `auto` (the default) picks chunked when the transcription exceeds a
 conservative threshold (default 4,000 chars). Density — the real

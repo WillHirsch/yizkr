@@ -15,6 +15,7 @@ import os
 import pwd
 import subprocess
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +61,8 @@ class FakeCli:
         # the tools the init event reports offering the model (None: no
         # tools key, as in older streams)
         self.tools: list[str] | None = ["Read"]
+        # the model the init event reports answering (None: no model key)
+        self.model: str | None = None
         self.returncode = 0
         self.timeout = False
         self.probes: list[dict] = []  # kwargs of each --version probe
@@ -108,6 +111,8 @@ class FakeCli:
         }
         if self.tools is not None:
             init["tools"] = self.tools
+        if self.model is not None:
+            init["model"] = self.model
         events = [
             init,
             {
@@ -540,6 +545,58 @@ class TestEffectiveConfig:
         )
 
 
+class TestWhatACallSends:
+    """What the LLM cache keys a call on and records with its answer
+    (#225, ADR-0032): the text the CLI is sent, the system prompt every
+    call appends, and what a call's stream reports."""
+
+    def test_call_text_is_what_the_cli_receives(self, cli, tmp_path):
+        image = tmp_path / "scan.png"
+        image.write_bytes(b"png")
+        client = ClaudeCodeClient()
+        client.complete("Transcribe.", [image])
+        _, kwargs = cli.calls[0]
+        assert kwargs["input"] == client.call_text("Transcribe.", [image])
+        assert str(image.resolve()) in kwargs["input"]
+        assert client.call_text("Transcribe.") == "Transcribe."
+
+    def test_the_system_prompt_is_what_every_call_appends(self, cli):
+        client = ClaudeCodeClient()
+        client.complete("transcribe")
+        command, _ = cli.calls[0]
+        appended = command[command.index("--append-system-prompt") + 1]
+        assert appended == client.system_prompt
+        assert client.system_prompt in client.effective_config["arguments"]
+
+    def test_a_call_reports_its_model_and_version(self, cli):
+        cli.model = "claude-sonnet-5-20260901"
+        client = ClaudeCodeClient(model="claude-sonnet-5")
+        assert client.last_report() == {}
+        client.complete("transcribe")
+        report = client.last_report()
+        assert report["model"] == "claude-sonnet-5-20260901"
+        assert report["cli_version"] == PINNED
+        assert uuid.UUID(report["session_id"])
+
+    def test_a_report_is_its_threads_and_a_failed_call_makes_none(self, cli):
+        client = ClaudeCodeClient()
+        seen = []
+
+        def call():
+            client.complete("transcribe")
+            seen.append(client.last_report())
+
+        thread = threading.Thread(target=call)
+        thread.start()
+        thread.join()
+        assert seen[0]["cli_version"] == PINNED
+        assert client.last_report() == {}  # another thread's call
+        cli.returncode = 1
+        with pytest.raises(RuntimeError):
+            client.complete("transcribe")
+        assert client.last_report() == {}
+
+
 class TestVersionPin:
     def test_first_client_pins_the_installed_version(self, cli):
         assert pinned_cli_version() is None
@@ -669,6 +726,65 @@ class TestTranscripts:
         client.close_conversation(handle)
         assert cli.transcripts() == set()
         assert (record / f"{handle}.jsonl").exists()
+
+    def test_a_kept_conversation_resumes_exactly(self, cli):
+        """The LLM cache keeps an open conversation's session files beside
+        its opening turn (#225). Put back by a later client, they let it
+        fork the conversation as it was opened, with no call to open it
+        again, and are released as an opened conversation's are."""
+        first = ClaudeCodeClient()
+        _, handle = first.open_conversation("list the entities")
+        kept = first.keep_conversation(handle)
+        assert set(kept) == {f"{PROJECT}/{handle}.jsonl"}
+        first.close_conversation(handle)
+        assert cli.transcripts() == set()
+        calls = len(cli.calls)
+        second = ClaudeCodeClient()
+        session = second.resume_conversation(
+            "list the entities", "answer", kept
+        )
+        assert session == handle
+        assert len(cli.calls) == calls
+        transcript = cli.projects / PROJECT / f"{handle}.jsonl"
+        assert transcript.read_bytes() == kept[f"{PROJECT}/{handle}.jsonl"]
+        assert second.fork(session, "chunk 1") == "answer"
+        command, _ = cli.calls[-1]
+        assert command[command.index("--resume") + 1] == handle
+        assert "--fork-session" in command
+        second.close_conversation(session)
+        assert not transcript.exists()
+
+    @pytest.mark.parametrize(
+        "names",
+        [
+            [],
+            [
+                f"{PROJECT}/{uuid.uuid4()}.jsonl",
+                f"{PROJECT}/{uuid.uuid4()}.jsonl",
+            ],
+            [f"{PROJECT}/not-a-session.jsonl"],
+            [f"../elsewhere/{uuid.uuid4()}.jsonl"],
+        ],
+        ids=["nothing", "two", "not-a-uuid", "outside"],
+    )
+    def test_unusable_kept_files_are_refused(self, cli, tmp_path, names):
+        with pytest.raises(ValueError):
+            ClaudeCodeClient().resume_conversation(
+                "list the entities", "answer", dict.fromkeys(names, b"{}\n")
+            )
+        assert not (tmp_path / "claude-config" / "elsewhere").exists()
+
+    def test_a_conversation_open_already_is_not_resumed(self, cli):
+        """Resuming a session the client holds open would let the second
+        holder's release pull the transcript from under the first."""
+        client = ClaudeCodeClient()
+        _, handle = client.open_conversation("list the entities")
+        kept = client.keep_conversation(handle)
+        with pytest.raises(ValueError, match="open already"):
+            client.resume_conversation("list the entities", "answer", kept)
+        assert cli.transcripts() == {f"{handle}.jsonl"}
+        client.close_conversation(handle)
+        assert cli.transcripts() == set()
 
     def test_close_releases_open_conversations(self, cli):
         with ClaudeCodeClient() as client:

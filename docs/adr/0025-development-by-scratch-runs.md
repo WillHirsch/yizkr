@@ -12,6 +12,19 @@ ADR-0005 in every stage. The operational rules are in
 CLAUDE.md carries the short form. Small changes amend this ADR in place
 with a dated "Amended by #n" line; reversing a ruling takes a new ADR.
 
+Superseded in part by
+[ADR-0032](0032-output-reuse-at-the-engine-boundary.md) (#225,
+2026-09-27): reuse moves from §2's stage store and stage-version registry
+to a cache of model responses at the engine boundary, keyed on what each
+call sends. §2's goals stand: reuse of unchanged work, visible
+equivalences, and nothing completed lost on abort. A document's views
+persist in its state directory and are reused while their inputs are
+unchanged, so the cache only saves engine calls, and a scratch run starts
+from fresh state directories. Where this ADR speaks of the stage store,
+stage keys, stage or method versions and reused stage outputs, ADR-0032
+rules; §2's write-side key, §3's run report and §4's diff are amended in
+place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -176,7 +189,8 @@ a second store of assertions: the graph stays the system of record.
   identity-map hash, the batch keys, and the writer and manifest
   versions. A run skips reset and write only when that key equals the
   recorded instance-contents key and no other write has cleared it
-  (#200).
+  (#200). Amended by #225 (2026-09-27): the batches' canonical content
+  hashes take the place of the batch keys (ADR-0032 §11).
 
 This keeps the stateless, file-based core of ADR-0019 §4: a run
 re-derives what to do from durable files and resumes by re-running. What
@@ -230,7 +244,11 @@ futile, and explain itself afterwards.
   wall time; and content counts (documents, entities, claims, rejects,
   critic findings, clusters, and held depicts proposals). It writes
   `report.html` and `report.json`, which stay local, and an
-  aggregate-only `report.md` that is safe to post.
+  aggregate-only `report.md` that is safe to post. Amended by #225
+  (2026-09-27): a recompute is attributed through the LLM cache's entries
+  for its calls, which keep their keys' components (the prompt, a file,
+  the model, the config hash, the attempt, the epoch), compared with the
+  baseline's calls (ADR-0032 §11).
 
 ### 4. Checking prompt, schema and model changes: `needs:scratch-diff`
 
@@ -244,7 +262,9 @@ futile, and explain itself afterwards.
   `stage:*` label of each stage changed, and `needs:scratch-diff` when
   the stage already runs.
 - **The diff says what changed and why.** Per stage, it shows what was
-  reused by reason or recomputed, and which key component changed. It
+  reused by reason or recomputed, and which key component changed (by
+  the components the cache's entries keep, ADR-0032 §11; amended by #225,
+  2026-09-27). It
   gives count deltas, new and resolved anomalies, failures, flags and
   contradictions. It lists claims added, removed and changed per
   document and property, matched by the shared claim fingerprints

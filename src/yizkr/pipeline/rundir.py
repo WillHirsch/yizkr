@@ -1,7 +1,7 @@
 """Run directory: the manifest, event log, alerts and control requests of
-one run, and the run state derived from them and the stage store.
+one run, and the run state derived from them.
 
-    <run dir>/run.json       the run manifest: run id, stage store, the
+    <run dir>/run.json       the run manifest: run id, the LLM cache, the
                              planned documents (SHA-1, kind, stages) and
                              the run's configuration
     <run dir>/events.jsonl   append-only events, one JSON object per line
@@ -10,17 +10,20 @@ one run, and the run state derived from them and the stage store.
 
 Every file is append-only JSON lines except run.json, which is replaced
 atomically. Readers skip a torn last line, so a reader never needs a lock
-and an interrupted writer never corrupts the log. Every stage reuse,
-start, store and failure is an event; the driver, the live monitor, the
+and an interrupted writer never corrupts the log. Every stage start,
+completion and failure is an event, and so is every view a run reuses
+(yizkr.pipeline.orchestrate) and every answer the LLM cache gives or
+cannot give (yizkr.pipeline.llmcache); the driver, the live monitor, the
 anomaly checks and pacing all read and write these files, and
-docs/STAGE_STORE.md is their contract.
+docs/LLM_CACHE.md is their contract.
 
-Run state per document and stage is derived from the run manifest, the
-events and the store (never from file modification times or a per-document
-status file): a stage is pending until an event names it; reused (with
-the reason) or done when its record is in the store; failed, with the
-reason, until a later run stores it; and needs attention when its stored
-output carries attention reasons.
+Run state per document and stage is derived from the run manifest and
+the events alone (never from file modification times or a per-document
+status file): a stage is pending until an event names it; running once
+it has started; done, or needs attention when its output carries
+attention reasons, whether it was made in the run or reused from an
+earlier one; failed, with the reason, until a later start; and pending
+again, with the reason, while the control file holds it.
 """
 
 from __future__ import annotations
@@ -33,12 +36,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from yizkr.pipeline.stages import (
-    StageStore,
-    atomic_write_text,
-    read_jsonl,
-    subject_scope,
-)
+from yizkr.pipeline.stages import atomic_write_text, read_jsonl
 
 MANIFEST = "run.json"
 EVENTS = "events.jsonl"
@@ -49,7 +47,18 @@ CONTROL = "control.jsonl"
 RUN_START = "run-start"
 RUN_END = "run-end"
 RUN_INTERRUPTED = "run-interrupted"
-STAGE_EVENTS = ("reused", "started", "stored", "failed", "held")
+SET_ASIDE = "set-aside"
+# a stage's events: "reused" says its view was current and stands
+STAGE_EVENTS = ("started", "done", "reused", "failed", "held")
+# the LLM cache's events (yizkr.pipeline.llmcache), counted per role
+CACHE_EVENTS = (
+    "cache-hit",
+    "cache-miss",
+    "cache-resume",
+    "cache-replay",
+    "cache-reject",
+    "cache-adopt",
+)
 
 # control actions; "start" is the marker a new invocation writes, after
 # which earlier requests no longer apply
@@ -61,10 +70,13 @@ CONTROL_ACTIONS = (PAUSE, RESUME, ABORT)
 # run states of one stage of one document
 PENDING = "pending"
 RUNNING = "running"
-REUSED = "reused"
 DONE = "done"
 FAILED = "failed"
 NEEDS_ATTENTION = "needs attention"
+
+
+class DispatchStopped(Exception):
+    """The run's control file paused or aborted this stage's slice."""
 
 
 def _now() -> str:
@@ -160,8 +172,8 @@ class RunDir:
         **fields: Any,
     ) -> dict:
         """Append an anomaly alert, and an event pointing at it. `carried`
-        marks an alert on a reused output (new ones are on outputs
-        computed in this run)."""
+        marks an alert on an output made from answers the LLM cache gave
+        (new ones are on outputs the engine answered in this run)."""
         entry = {
             "at": _now(),
             "invocation": self.invocation,
@@ -259,78 +271,64 @@ class RunDir:
 class StageState:
     status: str
     reason: str | None = None
-    key: str | None = None
 
 
 def _state_from_event(event: dict) -> StageState:
     kind = event["event"]
-    key = event.get("key")
-    if kind == "reused":
+    if kind in ("done", "reused"):
         if event.get("attention"):
-            return StageState(
-                NEEDS_ATTENTION, "; ".join(event["attention"]), key
-            )
-        return StageState(REUSED, event.get("reason"), key)
-    if kind == "stored":
-        if event.get("attention"):
-            return StageState(
-                NEEDS_ATTENTION, "; ".join(event["attention"]), key
-            )
-        return StageState(DONE, event.get("reason"), key)
+            return StageState(NEEDS_ATTENTION, "; ".join(event["attention"]))
+        return StageState(DONE)
     if kind == "failed":
-        return StageState(FAILED, event.get("reason"), key)
+        return StageState(FAILED, event.get("reason"))
     if kind == "held":
-        return StageState(PENDING, event.get("reason"), key)
-    return StageState(RUNNING, None, key)
+        return StageState(PENDING, event.get("reason"))
+    return StageState(RUNNING)
 
 
-def run_state(
-    run: RunDir, store: StageStore
-) -> dict[tuple[str, str, str | None], StageState]:
-    """State per (document SHA-1 or 'corpus', stage, item).
+def run_state(run: RunDir) -> dict[tuple[str, str], StageState]:
+    """State per (document SHA-1, stage).
 
-    `item` names a part of a stage with several outputs per document (a
-    chunk), and is None otherwise. Every stage the manifest plans starts
-    as pending; the latest event for it sets its state; and the store has
-    the last word: an output that is gone is pending again, and a failure
-    whose key has since been stored is done.
-    """
-    states: dict[tuple[str, str, str | None], StageState] = {}
+    Every stage the manifest plans starts as pending, and the latest event
+    for it sets its state. A stage that started and has no later event is
+    running, or was interrupted: the next run starts it again."""
+    states: dict[tuple[str, str], StageState] = {}
     for document in run.manifest().get("documents") or []:
         for stage in document.get("stages") or []:
-            states[(document["sha1"], stage, None)] = StageState(PENDING)
+            states[(document["sha1"], stage)] = StageState(PENDING)
     for event in run.events():
         if event.get("event") not in STAGE_EVENTS:
             continue
         subject, stage = event.get("subject"), event.get("stage")
-        if not subject or not stage:
-            continue
-        item = event.get("item")
-        if item is not None:
-            placeholder = states.get((subject, stage, None))
-            if placeholder is not None and placeholder.status == PENDING:
-                del states[(subject, stage, None)]
-        states[(subject, stage, item)] = _state_from_event(event)
-    for ident, state in states.items():
-        subject, stage, _item = ident
-        if state.key is None:
-            continue
-        found = store.lookup(subject_scope(subject), stage, state.key)
-        if state.status in (REUSED, DONE, NEEDS_ATTENTION) and found is None:
-            states[ident] = StageState(
-                PENDING, "output no longer in the store", state.key
-            )
-        elif state.status in (FAILED, RUNNING) and found is not None:
-            states[ident] = StageState(DONE, "stored", state.key)
+        if subject and stage:
+            states[(subject, stage)] = _state_from_event(event)
     return states
 
 
 def summarise(
-    states: dict[tuple[str, str, str | None], StageState],
+    states: dict[tuple[str, str], StageState],
 ) -> dict[str, dict[str, int]]:
     """stage -> status -> count, for a quick look at a run."""
     summary: dict[str, dict[str, int]] = {}
-    for (_subject, stage, _item), state in states.items():
+    for (_subject, stage), state in states.items():
         counts = summary.setdefault(stage, {})
         counts[state.status] = counts.get(state.status, 0) + 1
     return summary
+
+
+def cache_counts(run: RunDir) -> dict[str, dict[str, int]]:
+    """role -> what the LLM cache did for it -> count: lifetime totals,
+    over every invocation the run directory has seen. Hits and misses
+    are counted by reason ("hit: key match", "miss: absent"), besides
+    resumes, replays, rejections and adoptions."""
+    counts: dict[str, dict[str, int]] = {}
+    for event in run.events():
+        name = event.get("event")
+        if name not in CACHE_EVENTS:
+            continue
+        label = name.removeprefix("cache-")
+        if name in ("cache-hit", "cache-miss") and event.get("reason"):
+            label = f"{label}: {event['reason']}"
+        role = counts.setdefault(event.get("role") or "?", {})
+        role[label] = role.get(label, 0) + 1
+    return counts

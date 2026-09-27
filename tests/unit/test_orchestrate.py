@@ -1,24 +1,28 @@
 """Offline tests for folder orchestration (ROADMAP item 15).
 
 The wiki steps are replaced with scripted fakes and the engine with a
-scripted model; what is under test is the state machine: per-document
-state, the stage store underneath it (#87), the two human gates, resume,
-and per-document failure isolation.
+scripted model, called directly: these tests run without the LLM cache
+(#225), which tests/unit/test_llmcache.py takes the orchestrator through.
+What is under test is the state machine: per-document state, the two
+human gates, derivation by content hash, the set-aside of a directory
+whose source changed or that has no record, the run directory, and
+per-document failure isolation.
 """
 
 from __future__ import annotations
 
 import csv
+import itertools
 import json
 import os
 import re
-import shutil
 from pathlib import Path
 
 import pytest
 
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
+from yizkr.pipeline import transcribe
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     AWAITING_EQUIVALENCES,
@@ -26,19 +30,15 @@ from yizkr.pipeline.orchestrate import (
     DUPLICATE,
     FAILED,
     PAUSED,
-    UNRECORDED,
     WRITTEN,
     DocumentRun,
     Orchestrator,
     slugify,
 )
-from yizkr.pipeline.reconcile import (
-    EQUIVALENCE_FIELDS,
-    apply_equivalences,
-    read_approved_equivalences,
-)
+from yizkr.pipeline.reconcile import EQUIVALENCE_FIELDS
 from yizkr.pipeline.review import CSV_COLUMNS, export_review_csv
-from yizkr.pipeline.rundir import run_state
+from yizkr.pipeline.rundir import NEEDS_ATTENTION, run_state
+from yizkr.pipeline.transcribe import MissingPrerequisite
 
 RUN = {
     "model_identifier": "fake-model",
@@ -130,18 +130,10 @@ class ScriptedModel:
         )
 
 
-class DriftingModel(ScriptedModel):
-    """The scripted engine answering the same prompts again, differently,
-    as a model can: it reads the year 1901 as 1902."""
-
-    def complete(self, prompt, image_paths=()):
-        return super().complete(prompt, image_paths).replace("1901", "1902")
-
-
 class ScriptedOrchestrator(Orchestrator):
     """Every wiki step replaced with a scripted fake, the engine with a
-    scripted model; transcription (text files), extraction, critique and
-    the stage store run for real."""
+    scripted model that each step calls directly; transcription (text
+    files), extraction and critique run for real."""
 
     def __init__(self, *args, proposals=1, fail_step=None, **kwargs):
         # run() refuses without a never-ingest list (#29); the state-machine
@@ -201,9 +193,17 @@ class ScriptedOrchestrator(Orchestrator):
         }
 
 
-class DriftingOrchestrator(ScriptedOrchestrator):
-    def _llm(self, role, doc):
-        return DriftingModel(self.calls, doc.source.name, fail=self.fail_step)
+# the steps that touch the wiki or wait on a gate, as the scripted
+# orchestrator logs them; the rest of its calls are the engine's
+WIKI_STEPS = ("register", "reconcile", "resolve", "export", "write")
+
+
+def steps(calls: list[str]) -> list[str]:
+    return [call.split(":")[0] for call in calls]
+
+
+def wiki_steps(calls: list[str]) -> list[str]:
+    return [step for step in steps(calls) if step in WIKI_STEPS]
 
 
 def quiet(*args, **kwargs):
@@ -280,23 +280,6 @@ def completed_run(tmp_path, **kwargs):
     return orchestrator
 
 
-def stale_claim_review(tmp_path):
-    """A directory waiting at the claim gate that has lost its
-    derivations.json, and whose claim review is older than its CSV: the
-    CSV was re-exported with other rows after the review was saved."""
-    orchestrator = make_run(tmp_path)
-    orchestrator.run()
-    (doc,) = orchestrator.documents()
-    approve_all_equivalences(doc)
-    orchestrator.run()
-    (doc,) = orchestrator.documents()
-    approve_all_claims(doc)
-    export_review_csv(make_batch(), doc.review)
-    saved_last(doc.review)
-    (doc.dir / "derivations.json").unlink()
-    return orchestrator
-
-
 def snapshot(directory, *, skip=("state.json",)) -> dict:
     """Every file under `directory` but those named in `skip` (its
     state.json, by default), with its bytes and modification time: a run
@@ -309,6 +292,26 @@ def snapshot(directory, *, skip=("state.json",)) -> dict:
         for path in sorted(directory.rglob("*"))
         if path.is_file() and path.name not in skip
     }
+
+
+def contents(directory) -> dict:
+    """Every file under `directory` with its bytes: what a run that
+    rewrites nothing, or rewrites it the same, leaves unchanged."""
+    return {
+        path.relative_to(directory): path.read_bytes()
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
+    }
+
+
+def this_run(orchestrator, *names: str) -> list[dict]:
+    """The events of these names the orchestrator's invocation wrote."""
+    return [
+        event
+        for event in orchestrator.rundir.events()
+        if event["event"] in names
+        and event["invocation"] == orchestrator.rundir.invocation
+    ]
 
 
 class TestGates:
@@ -368,29 +371,27 @@ class TestGates:
 
 class TestResume:
     def test_steps_are_not_repeated_on_rerun(self, tmp_path):
+        """A re-run reuses the document's views, whose inputs are
+        unchanged (#225): it asks the engine nothing, even without a
+        cache, and repeats no wiki or gate step."""
         orchestrator = make_run(tmp_path)
         orchestrator.run()
         calls_after_first = list(orchestrator.calls)
         orchestrator.run()  # still waiting: nothing new should execute
         repeated = orchestrator.calls[len(calls_after_first) :]
-        # every stage before the gates is reused from the store
-        assert not any(
-            call.startswith(("register", "manifest", "chunk", "critique"))
-            for call in repeated
-        )
+        assert repeated == []
+        reused = [event["stage"] for event in this_run(orchestrator, "reused")]
+        assert reused == ["transcription", "extraction", "critique"]
+        assert this_run(orchestrator, "started") == []
 
-    def test_written_document_is_a_noop(self, tmp_path):
-        orchestrator = make_run(tmp_path)
-        orchestrator.run()
+    def test_written_document_changes_nothing_on_a_rerun(self, tmp_path):
+        orchestrator = completed_run(tmp_path)
         (doc,) = orchestrator.documents()
-        approve_all_equivalences(doc)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_claims(doc)
-        orchestrator.run()
         before = list(orchestrator.calls)
+        files = contents(doc.dir)
         assert orchestrator.run() == 0
-        assert orchestrator.calls == before
+        assert wiki_steps(orchestrator.calls[len(before) :]) == []
+        assert contents(doc.dir) == files
 
     def test_state_survives_new_orchestrator(self, tmp_path):
         first = make_run(tmp_path)
@@ -457,7 +458,6 @@ class TestIsolationAndDiscovery:
         orchestrator.run()
         names = sorted(p.name for p in orchestrator.state_dir.iterdir())
         assert names == [
-            ".stages",
             "control.jsonl",
             "events.jsonl",
             "letter",
@@ -597,10 +597,9 @@ class TestContentDedup:
         # the alphabetically-first ("fresh") canonical and the other a dup
         by_name = {d.source.name: d for d in second.documents()}
         assert by_name["fresh.txt"].state.status != DUPLICATE
-        # it advances through the pipeline; the identical bytes reuse the
-        # stored extraction instead of calling the model again (#87)
+        assert by_name["stalled.txt"].state.status == DUPLICATE
+        # it advances through the pipeline
         assert "reconcile:fresh.txt" in second.calls
-        assert "manifest:fresh.txt" not in second.calls
 
     def test_changed_content_forces_reingest(self, tmp_path):
         folder = self._folder(tmp_path)
@@ -634,7 +633,6 @@ class TestContentDedup:
         (doc,) = orchestrator.documents()
         if not recorded:
             (doc.dir / "derivations.json").unlink()
-            shutil.rmtree(orchestrator.store.root)
         before = snapshot(doc.dir, skip=())
         doc.source.write_text("Klara was born in 1917.")
         lines: list[str] = []
@@ -643,7 +641,7 @@ class TestContentDedup:
         assert orchestrator.run() == 2
         kept = doc.dir.with_name(".letter.superseded-1")
         assert snapshot(kept, skip=()) == before
-        assert [c.split(":")[0] for c in orchestrator.calls[calls:]] == [
+        assert steps(orchestrator.calls[calls:]) == [
             "register",
             "manifest",
             "chunk",
@@ -659,6 +657,9 @@ class TestContentDedup:
         assert doc.state.status == AWAITING_EQUIVALENCES
         assert (doc.dir / "derivations.json").exists()
         assert not doc.equivalences_reviewed.exists()
+        (event,) = this_run(orchestrator, "set-aside")
+        assert event["reason"] == "content changed"
+        assert event["kept"] == ".letter.superseded-1"
         # a second change keeps the first set-aside directory too
         doc.source.write_text("Gustav was born in 1919.")
         orchestrator.run()
@@ -704,8 +705,7 @@ class TestFreshness:
     """Make-style dependencies by content hash: upstream redos invalidate
     downstream outputs AND the human gates (a corrected transcription must
     force re-extraction, re-review, re-write), and an identical recompute
-    invalidates nothing. A directory that has lost its derivations.json is
-    adopted once, by modification times, when a run opts in (#87)."""
+    invalidates nothing. Modification times are never read."""
 
     def completed_run(self, tmp_path):
         return completed_run(tmp_path)
@@ -735,24 +735,26 @@ class TestFreshness:
 
     def test_identical_recompute_invalidates_nothing(self, tmp_path):
         """Early cutoff: a correction that says what the source says is a
-        new transcription with the same content, so nothing downstream is
-        recomputed and every gate stays open."""
+        new transcription with the same content, so the batch comes out
+        the same, nothing after it is redone and every gate stays open."""
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         doc.correction.write_text(doc.source.read_text())
         before = list(orchestrator.calls)
         assert orchestrator.run() == 0
-        assert orchestrator.calls == before  # no extraction, no write
+        assert wiki_steps(orchestrator.calls[len(before) :]) == []
         (doc,) = orchestrator.documents()
         assert doc.state.status == WRITTEN
-        latest = {
-            event["stage"]: event["event"]
-            for event in orchestrator.rundir.events()
-            if event["event"] in ("stored", "reused")
-        }
-        assert latest["transcription"] == "stored"
-        assert latest["entity_manifest"] == "reused"
-        assert latest["critique"] == "reused"
+        assert json.loads(doc.transcription.read_text())["engine"] == (
+            "correction"
+        )
+        # the transcription is made again, from the correction; the batch
+        # it gives is the one recorded, so the batch and the critique stand
+        done = [e["stage"] for e in this_run(orchestrator, "done")]
+        assert done == ["transcription"]
+        reused = [e["stage"] for e in this_run(orchestrator, "reused")]
+        assert reused == ["extraction", "critique"]
+        assert steps(orchestrator.calls[len(before) :]) == []
 
     def test_repeated_redo_keeps_every_superseded_review(self, tmp_path):
         orchestrator = self.completed_run(tmp_path)
@@ -769,180 +771,35 @@ class TestFreshness:
         assert doc.state.status == AWAITING_EQUIVALENCES
 
     def test_rebuilt_batch_view_invalidates_nothing(self, tmp_path):
-        """A deleted view is rebuilt from the store with the same content,
-        so the reviews and the write it fed stay valid."""
+        """A deleted batch view rebuilt with the same content (the scripted
+        engine answers as the cache would) leaves the reviews and the write
+        it fed valid. Without the cache, a sampled engine words it afresh,
+        and the reviews are moved aside (docs/LLM_CACHE.md)."""
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         doc.batch.unlink()
         before = list(orchestrator.calls)
         assert orchestrator.run() == 0
-        assert orchestrator.calls == before
+        assert wiki_steps(orchestrator.calls[len(before) :]) == []
         (doc,) = orchestrator.documents()
         assert doc.batch.exists()
         assert doc.review_reviewed.exists()
 
-    def test_opting_in_adopts_a_directory_and_reuses_what_the_store_holds(
-        self, tmp_path
-    ):
-        """A directory that has lost its derivations.json is held, although
-        the store holds its stages. A run that opts in adopts it: the
-        stages are reused by key, so there are no calls, and each derived
-        file is no older than what it was made from, so it is adopted as
-        current, once. The reviews and the write stand."""
+    def test_modification_times_are_never_read(self, tmp_path):
+        """A CSV that is only touched, not changed, re-arms nothing, and a
+        review older than its CSV still consents while the CSV's content
+        is the one it was bound to: content hashes decide."""
         orchestrator = self.completed_run(tmp_path)
-        (doc,) = orchestrator.documents()
-        (doc.dir / "derivations.json").unlink()
-        before = list(orchestrator.calls)
-        assert orchestrator.run() == 2
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == UNRECORDED
-        orchestrator.rederive_unrecorded = True
-        assert orchestrator.run() == 0
-        assert orchestrator.calls == before
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == WRITTEN
-        assert doc.review_reviewed.exists()
-        assert not list(doc.dir.glob("*.reviewed.superseded-*"))
-
-    def stale_review(self, tmp_path):
-        """stale_claim_review, from a run that opts in, so the directory is
-        adopted; the store still holds its stages under their current
-        keys."""
-        orchestrator = stale_claim_review(tmp_path)
-        orchestrator.rederive_unrecorded = True
-        return orchestrator
-
-    def test_adoption_moves_aside_a_review_older_than_its_csv(self, tmp_path):
-        """A claim review older than its CSV decided on rows that have
-        since been replaced. Adoption does not bind it: it is moved aside,
-        the gate waits, and nothing is written until the current rows are
-        reviewed. The store holds the stages under their current keys, so
-        no stage is computed."""
-        orchestrator = self.stale_review(tmp_path)
-        before = len(orchestrator.calls)
-        assert orchestrator.run() == 2
-        assert orchestrator.calls[before:] == []
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == AWAITING_CLAIMS
-        assert not doc.write_result.exists()
-        assert not doc.review_reviewed.exists()
-        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
-        # a review of the CSV as it is now opens the gate
-        approve_all_claims(doc)
-        assert orchestrator.run() == 0
-        assert [c.split(":")[0] for c in orchestrator.calls[before:]] == [
-            "write"
-        ]
-
-    def test_an_interrupted_adoption_adopts_again(self, tmp_path, monkeypatch):
-        """An adoption that stops before its record is saved leaves none,
-        so the next run adopts again, and a review it judged stale never
-        comes to consent. The copies of the stage outputs kept before it
-        are not made twice."""
-        import yizkr.pipeline.orchestrate as orchestrate
-
-        orchestrator = self.stale_review(tmp_path)
-        supersede = orchestrate._supersede
-
-        def refuse(path, keep=False):
-            if keep:  # the copies of the stage outputs are made
-                return supersede(path, keep=True)
-            raise OSError("the disk refused")
-
-        monkeypatch.setattr(orchestrate, "_supersede", refuse)
-        assert orchestrator.run() == 1
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == FAILED
-        assert not (doc.dir / "derivations.json").exists()
-        assert (doc.dir / "batch.superseded-1.json").exists()
-        monkeypatch.undo()
-        assert orchestrator.run() == 2
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == AWAITING_CLAIMS
-        assert not any(c.startswith("write") for c in orchestrator.calls)
-        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
-        assert not list(doc.dir.glob("*.superseded-2.*"))
-
-    def test_adoption_re_resolves_after_a_newer_equivalence_review(
-        self, tmp_path
-    ):
-        """In a directory that has lost its derivations.json, adopted on
-        the opt-in, an equivalence review saved again after the resolved
-        batch was made is newer than it, so the resolved batch is not
-        adopted: it is resolved again with the curator's new decisions,
-        and the claim review of the old resolution is moved aside instead
-        of written."""
-
-        class Resolves(ScriptedOrchestrator):
-            """Resolves with the reviewed equivalence decisions, as the
-            real step does before its graph lookups."""
-
-            def _step_resolve(self, doc, batch):
-                self.calls.append(f"resolve:{doc.source.name}")
-                return apply_equivalences(
-                    batch,
-                    read_approved_equivalences(doc.equivalences_reviewed),
-                )
-
-        first = make_run(tmp_path)
-        orchestrator = Resolves(first.folder, first.state_dir, log=quiet)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_equivalences(doc)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_claims(doc)
-        assert orchestrator.run() == 0
-        (doc,) = orchestrator.documents()
-        resolved = ClaimBatch.model_validate_json(doc.resolved.read_text())
-        assert resolved.claims[0].subject.kind == "qid"
-        # the curator saves the equivalence review again, rejecting the match
-        decide_all_equivalences(doc, "reject")
-        saved_last(doc.equivalences_reviewed)
-        (doc.dir / "derivations.json").unlink()
-        orchestrator.rederive_unrecorded = True
-        before = len(orchestrator.calls)
-        assert orchestrator.run() == 2
-        assert [c.split(":")[0] for c in orchestrator.calls[before:]] == [
-            "resolve",
-            "export",
-        ]
-        (doc,) = orchestrator.documents()
-        resolved = ClaimBatch.model_validate_json(doc.resolved.read_text())
-        assert resolved.claims[0].subject.kind == "local"
-        assert doc.state.status == AWAITING_CLAIMS
-        assert not doc.review_reviewed.exists()
-        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
-
-    def test_after_adoption_modification_times_are_not_read(self, tmp_path):
-        """Adoption happens once. After it, a CSV that is only touched, not
-        changed, re-arms nothing: content hashes decide."""
-        orchestrator = self.completed_run(tmp_path)
-        (doc,) = orchestrator.documents()
-        (doc.dir / "derivations.json").unlink()
-        orchestrator.rederive_unrecorded = True
-        assert orchestrator.run() == 0
         (doc,) = orchestrator.documents()
         saved_last(doc.review)
         saved_last(doc.equivalences)
         before = list(orchestrator.calls)
         assert orchestrator.run() == 0
-        assert orchestrator.calls == before
+        assert wiki_steps(orchestrator.calls[len(before) :]) == []
         (doc,) = orchestrator.documents()
         assert doc.state.status == WRITTEN
         assert doc.review_reviewed.exists()
         assert doc.equivalences_reviewed.exists()
-
-    def test_adoption_leaves_a_recorded_directory_alone(self, tmp_path):
-        """A directory with a record is never judged by modification
-        times: adopting it moves nothing and changes no record."""
-        orchestrator = self.completed_run(tmp_path)
-        (doc,) = orchestrator.documents()
-        record = (doc.dir / "derivations.json").read_text()
-        saved_last(doc.review)
-        assert doc.derivations.adopt() == []
-        assert doc.review_reviewed.exists()
-        assert (doc.dir / "derivations.json").read_text() == record
 
     def test_edited_csv_rearms_its_gate(self, tmp_path):
         """A reviewed file is consent for the CSV it was first seen with:
@@ -1013,145 +870,238 @@ class TestFreshness:
         assert writes_after == writes_before + 1
 
 
-class TestUnrecordedDirectory:
-    """A document directory from before the stage records: its stage
-    outputs (transcription.json, batch.json, critique.json) and reviews
-    are in place, but it has no derivations.json, so nothing records what
-    its files were derived from, and the stage store, which every run
-    directory shares, cannot vouch for them. The run holds the document,
-    whatever the store holds, until it opts in with --rederive-unrecorded,
-    which keeps a copy of each stage output and adopts the directory (#87).
-    """
+class SampledModel(ScriptedModel):
+    """The scripted engine worded afresh on every call, as a sampled model
+    is: the critic's finding and each claim's confidence differ from one
+    call to the next, the facts do not."""
 
-    VIEWS = ["transcription.json", "batch.json", "critique.json"]
-    KEPT = [
-        "batch.superseded-1.json",
-        "critique.superseded-1.json",
-        "transcription.superseded-1.json",
-    ]
+    def __init__(self, calls, name, draws):
+        super().__init__(calls, name)
+        self.draws = draws
+
+    def complete(self, prompt, image_paths=()):
+        answer = super().complete(prompt, image_paths)
+        draw = next(self.draws)
+        if prompt.startswith("You review a genealogical extraction"):
+            finding = {
+                "target": "e1",
+                "issue": f"is the year right? (draw {draw})",
+                "suggestion": "keep",
+            }
+            return (
+                json.dumps(finding) + '\n{"done": true, "findings_emitted": 1}'
+            )
+        if '"claims_emitted"' in answer:
+            claim, sentinel = answer.splitlines()
+            sampled = json.loads(claim) | {"confidence": (draw % 9 + 1) / 10}
+            return json.dumps(sampled) + "\n" + sentinel
+        return answer
+
+
+class Sampled(ScriptedOrchestrator):
+    """The scripted orchestrator with a sampled engine and the real review
+    export, which carries the critic's findings into the review CSV."""
+
+    _step_export_review = Orchestrator._step_export_review
+
+    def __init__(self, *args, draws=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.draws = draws if draws is not None else itertools.count()
+
+    def _llm(self, role, doc):
+        return SampledModel(self.calls, doc.source.name, self.draws)
+
+
+def engine_steps(calls: list[str]) -> list[str]:
+    return [step for step in steps(calls) if step not in WIKI_STEPS]
+
+
+class TestViews:
+    """A document's views (its transcription, batch and critique) persist
+    in its directory, recorded in derivations.json by content hash, and
+    are reused while their inputs are unchanged: the pipeline stands
+    still without the LLM cache (#225). `--refresh ROLE` makes a role's
+    views again, in place."""
+
+    def sampled(self, tmp_path, **kwargs):
+        folder = tmp_path / "docs"
+        folder.mkdir(exist_ok=True)
+        (folder / "letter.txt").write_text("Klara was born in 1917.")
+        kwargs.setdefault("log", quiet)
+        return Sampled(folder, tmp_path / "state", **kwargs)
+
+    def test_a_sampled_engine_without_a_cache_reaches_written(self, tmp_path):
+        orchestrator = self.sampled(tmp_path)
+        assert orchestrator.cache_dir is None
+        assert orchestrator.run() == 2
+        asked = len(orchestrator.calls)
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+        approve_all_equivalences(doc)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_CLAIMS
+        assert "is the year right?" in doc.review.read_text()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+        assert orchestrator.run() == 0
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+        # the engine was asked in the first run only, no review was moved
+        # aside, and no cache was read or written
+        assert engine_steps(orchestrator.calls[asked:]) == []
+        assert list(doc.dir.glob("*superseded*")) == []
+        assert not any(
+            event["event"].startswith("cache-")
+            for event in orchestrator.rundir.events()
+        )
+
+    def test_the_views_are_recorded_by_content(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        record = json.loads((doc.dir / "derivations.json").read_text())
+        derived, content = record["derived"], record["content"]
+        assert derived["transcription.json"] == {
+            "transcription.corrected.txt": None
+        }
+        assert derived["batch.json"] == {
+            "transcription.json": content["transcription.json"]
+        }
+        assert derived["critique.json"] == {
+            "batch.json": content["batch.json"]
+        }
+
+    def test_a_forgotten_view_keeps_no_content(self, tmp_path):
+        """A view whose record is forgotten (one set aside) leaves no
+        content hash behind for the views made from it to match."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        assert doc.derivations.content(doc.transcription.name) is not None
+        doc.derivations.forget(doc.transcription)
+        assert doc.derivations.content(doc.transcription.name) is None
+        assert not doc.derivations.current(doc.transcription)
+        assert not doc.derivations.current(doc.batch)
+
+    def test_a_deleted_view_is_made_again_alone(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        doc.critique.unlink()
+        asked = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert steps(orchestrator.calls[asked:]) == ["critique"]
+        reused = [event["stage"] for event in this_run(orchestrator, "reused")]
+        assert reused == ["transcription", "extraction"]
+
+    def test_refresh_makes_a_role_view_again_in_place(self, tmp_path):
+        orchestrator = self.sampled(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        critique, batch = doc.critique.read_text(), doc.batch.read_bytes()
+        refreshed = self.sampled(
+            tmp_path, refresh=["critique"], draws=orchestrator.draws
+        )
+        assert refreshed.run() == 2
+        (doc,) = refreshed.documents()
+        assert engine_steps(refreshed.calls) == ["critique"]
+        assert doc.critique.read_text() != critique
+        assert doc.batch.read_bytes() == batch
+        assert doc.state.status == AWAITING_CLAIMS
+        # the next run without the flag reuses the view made again
+        again = self.sampled(tmp_path, draws=orchestrator.draws)
+        assert again.run() == 2
+        assert engine_steps(again.calls) == []
+        (doc,) = again.documents()
+        assert doc.critique.read_text() != critique
+
+    def test_a_refreshed_view_that_comes_out_the_same_stands(self, tmp_path):
+        """Early cutoff: a transcription made again with the same content
+        leaves the batch and the critique standing, and every gate open."""
+        first = completed_run(tmp_path)
+        again = ScriptedOrchestrator(
+            first.folder, first.state_dir, log=quiet, refresh=["transcribe"]
+        )
+        assert again.run() == 0
+        assert [e["stage"] for e in this_run(again, "done")] == [
+            "transcription"
+        ]
+        assert [e["stage"] for e in this_run(again, "reused")] == [
+            "extraction",
+            "critique",
+        ]
+        assert again.calls == []
+
+    def test_serial_mode_makes_a_refreshed_view_once(self, tmp_path):
+        first = make_run(tmp_path)
+        first.run()
+        serial = ScriptedOrchestrator(
+            first.folder,
+            first.state_dir,
+            log=quiet,
+            serial=True,
+            refresh=["extract"],
+        )
+        assert serial.run() == 2
+        assert engine_steps(serial.calls) == ["manifest", "chunk"]
+
+    def test_views_without_their_state_are_set_aside(self, tmp_path):
+        """Views whose state.json is lost were made for a registration
+        nothing records: the directory is set aside whole, and the
+        document starts afresh."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        doc.state_path.unlink()
+        before = snapshot(doc.dir, skip=())
+        asked = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        kept = doc.dir.with_name(".letter.superseded-1")
+        assert snapshot(kept, skip=()) == before
+        (event,) = this_run(orchestrator, "set-aside")
+        assert "no state.json" in event["reason"]
+        assert steps(orchestrator.calls[asked:]) == [
+            "register",
+            "manifest",
+            "chunk",
+            "critique",
+            "reconcile",
+        ]
+
+
+class TestUnrecordedDirectory:
+    """A document directory without derivations.json, from before the
+    records or one that lost its record: nothing says what its files were
+    derived from, so it is set aside whole, as a changed source is, and
+    the document starts afresh in a new one (#225)."""
 
     def from_before_the_records(self, tmp_path):
         """A written document's directory as a run before the records left
-        it: every file in place, no derivations.json, and no stage store."""
+        it: every file in place, and no derivations.json."""
         orchestrator = completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         (doc.dir / "derivations.json").unlink()
-        shutil.rmtree(orchestrator.store.root)
         return orchestrator
 
-    def kept(self, doc) -> list[str]:
-        return sorted(
-            path.name
-            for path in doc.dir.glob("*.superseded-*")
-            if ".reviewed." not in path.name
-        )
-
-    def test_a_directory_from_before_the_records_is_held(self, tmp_path):
-        """No stage runs and no file in the directory changes. The hold
-        and its reason are in state.json, a held event, an alert, the log
-        and the exit code, on every run until one opts in."""
+    def test_it_is_set_aside_whole_and_started_afresh(self, tmp_path):
         orchestrator = self.from_before_the_records(tmp_path)
         (doc,) = orchestrator.documents()
-        files = snapshot(doc.dir)
-        calls = list(orchestrator.calls)
+        before = snapshot(doc.dir, skip=())
         lines: list[str] = []
         orchestrator.log = collect(lines)
+        calls = len(orchestrator.calls)
         assert orchestrator.run() == 2
-        # no wiki, engine or gate step, and no stage output stored
-        assert orchestrator.calls == calls
-        assert not orchestrator.store.root.exists()
-        assert snapshot(doc.dir) == files
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == UNRECORDED
-        held = doc.state.detail["held"]
-        assert held["outputs"] == self.VIEWS
-        assert held["previous_status"] == WRITTEN
-        assert "--rederive-unrecorded" in held["reason"]
-        assert "keeps a copy of each stage output" in held["reason"]
-        assert "calling the engine" in held["reason"]
-        assert any(f"held: {held['reason']}" in line for line in lines)
-        (event,) = [
-            e for e in orchestrator.rundir.events() if e["event"] == "held"
-        ]
-        assert (event["subject"], event["stage"]) == (
-            doc.sha1,
-            "transcription",
-        )
-        assert "unrecorded outputs" in event["reason"]
-        (alert,) = orchestrator.rundir.alerts()
-        assert alert["check"] == "unrecorded outputs"
-        assert alert["value"] == self.VIEWS
-        assert doc.sha1.startswith(alert["subject"])
-        state = run_state(orchestrator.rundir, orchestrator.store)[
-            (doc.sha1, "transcription", None)
-        ]
-        assert (state.status, state.reason) == ("pending", event["reason"])
-        # the next run holds it again, and still touches nothing
-        assert orchestrator.run() == 2
-        assert orchestrator.calls == calls
-        assert snapshot(doc.dir) == files
-        (doc,) = orchestrator.documents()
-        assert doc.state.detail["held"]["previous_status"] == WRITTEN
-        assert len(orchestrator.rundir.alerts()) == 2
-
-    def test_a_shared_store_does_not_stand_in_for_a_directory(self, tmp_path):
-        """Two folders hold the same letter, and their state directories
-        share one store; both are from before the records. Opting in for
-        the first stores its stages again, from a model that now answers
-        differently. The second is still held, with every file as it was:
-        a record in the store says nothing about another directory's
-        files."""
-        store = tmp_path / "stages"
-        runs = []
-        for name in ("x", "y"):
-            (tmp_path / name).mkdir()
-            runs.append(completed_run(tmp_path / name, store_dir=store))
-        for orchestrator in runs:
-            (doc,) = orchestrator.documents()
-            (doc.dir / "derivations.json").unlink()
-        shutil.rmtree(store)
-        x, y = runs
-        rederived = DriftingOrchestrator(
-            x.folder,
-            x.state_dir,
-            log=quiet,
-            store_dir=store,
-            rederive_unrecorded=True,
-        )
-        assert rederived.run() == 2
-        assert "manifest:letter.txt" in rederived.calls
-        (doc,) = y.documents()
-        files = snapshot(doc.dir)
-        again = ScriptedOrchestrator(
-            y.folder, y.state_dir, log=quiet, store_dir=store
-        )
-        assert again.run() == 2
-        assert again.calls == []
-        assert snapshot(doc.dir) == files
-        (doc,) = again.documents()
-        assert doc.state.status == UNRECORDED
-
-    def test_rederiving_moves_the_reviews_aside_when_the_batch_differs(
-        self, tmp_path
-    ):
-        """With --rederive-unrecorded a copy of each stage output is kept,
-        with its bytes and time, and every stage is derived again. A
-        model's second answer can differ from its first; when the batch
-        does, what was made from the old one is derived again, and the
-        reviews are moved aside, never deleted."""
-        first = self.from_before_the_records(tmp_path)
-        assert first.run() == 2  # held
-        (doc,) = first.documents()
-        before = snapshot(doc.dir)
-        lines: list[str] = []
-        orchestrator = DriftingOrchestrator(
-            first.folder,
-            first.state_dir,
-            log=collect(lines),
-            rederive_unrecorded=True,
-        )
-        assert orchestrator.run() == 2
-        assert [c.split(":")[0] for c in orchestrator.calls] == [
+        kept = doc.dir.with_name(".letter.superseded-1")
+        assert snapshot(kept, skip=()) == before
+        # the document is registered and derived again, in a new directory
+        assert steps(orchestrator.calls[calls:]) == [
+            "register",
             "manifest",
             "chunk",
             "critique",
@@ -1159,159 +1109,104 @@ class TestUnrecordedDirectory:
         ]
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES
-        assert "held" not in doc.state.detail
-        assert not doc.write_result.exists()
+        assert (doc.dir / "derivations.json").exists()
         assert not doc.equivalences_reviewed.exists()
-        assert not doc.review_reviewed.exists()
-        assert (doc.dir / "equivalences.reviewed.superseded-1.csv").exists()
-        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
-        assert self.kept(doc) == self.KEPT
-        after = snapshot(doc.dir)
-        for view in self.VIEWS:
-            copy = view.replace(".json", ".superseded-1.json")
-            assert after[Path(copy)] == before[Path(view)]
-        old = ClaimBatch.model_validate_json(
-            (doc.dir / "batch.superseded-1.json").read_text()
-        )
-        new = ClaimBatch.model_validate_json(doc.batch.read_text())
-        assert (old.claims[0].value.year, new.claims[0].value.year) == (
-            1901,
-            1902,
-        )
-        assert any("no derivations.json: kept" in line for line in lines)
         assert any(
-            "equivalences.reviewed.csv, review.reviewed.csv moved aside"
-            in line
+            "no derivations.json records what the files in its directory "
+            "were derived from; the old directory is kept as "
+            ".letter.superseded-1" in line
             for line in lines
         )
+        (event,) = this_run(orchestrator, "set-aside")
+        assert event["subject"] == doc.sha1
+        assert event["kept"] == ".letter.superseded-1"
+        assert "no derivations.json" in event["reason"]
+        # from then on the directory is recorded, and nothing more moves
+        assert orchestrator.run() == 2
+        assert not doc.dir.with_name(".letter.superseded-2").exists()
 
-    def test_rederiving_the_same_batch_keeps_the_reviews(self, tmp_path):
-        """Stages derived again that give the directory's batch back
-        change nothing after it: the hold is over, the reviews stay bound,
-        the write stands, and from then on the directory is recorded. The
-        copies of the stage outputs are kept all the same."""
-        first = self.from_before_the_records(tmp_path)
-        assert first.run() == 2  # held
-        orchestrator = ScriptedOrchestrator(
-            first.folder, first.state_dir, log=quiet, rederive_unrecorded=True
-        )
-        # the extract-only pass (serial mode's first) reports the batch
-        (doc,) = orchestrator.documents()
-        assert orchestrator.advance(doc, stop_after_extract=True) == BATCHED
-        assert orchestrator.run() == 0
-        assert [c.split(":")[0] for c in orchestrator.calls] == [
-            "manifest",
-            "chunk",
-            "critique",
-        ]
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == WRITTEN
-        assert "held" not in doc.state.detail
-        assert doc.equivalences_reviewed.exists()
-        assert doc.review_reviewed.exists()
-        assert not list(doc.dir.glob("*.reviewed.superseded-*"))
-        assert self.kept(doc) == self.KEPT
-        again = ScriptedOrchestrator(first.folder, first.state_dir, log=quiet)
-        assert again.run() == 0
-        assert again.calls == []
-        assert self.kept(doc) == self.KEPT
-
-    def test_a_directory_that_lost_its_state_is_held_too(self, tmp_path):
-        """Without state.json the document has no artifact QID, but its
-        stage outputs are still unrecorded: it is held before it is
-        registered again, and nothing in the directory changes."""
+    @pytest.mark.parametrize(
+        "keep", [(), ("state.json",)], ids=["no-state", "state-only"]
+    )
+    def test_any_file_without_a_record_sets_it_aside(self, tmp_path, keep):
+        """A directory that lost its state.json too, or holds nothing but
+        a state.json (a document whose registration failed before the
+        records, say), is set aside all the same."""
         orchestrator = self.from_before_the_records(tmp_path)
         (doc,) = orchestrator.documents()
-        doc.state_path.unlink()
-        files = snapshot(doc.dir)
-        calls = list(orchestrator.calls)
+        for path in doc.dir.iterdir():
+            if path.is_file() and path.name not in keep:
+                path.unlink()
+        before = snapshot(doc.dir, skip=())
+        assert before
         assert orchestrator.run() == 2
-        assert orchestrator.calls == calls
-        assert snapshot(doc.dir) == files
+        assert (
+            snapshot(doc.dir.with_name(".letter.superseded-1"), skip=())
+            == before
+        )
         (doc,) = orchestrator.documents()
-        assert doc.state.status == UNRECORDED
-        assert doc.state.artifact_qid is None
+        assert doc.state.status == AWAITING_EQUIVALENCES
 
-    def test_opting_in_adopts_a_directory_that_lost_its_state(self, tmp_path):
-        """A directory from before the records waits at the claim gate:
-        review.csv was saved again, with the same rows, after its review.
-        It has also lost its state.json, and is unrecorded all the same, so
-        the opt-in adopts it by modification times. The review is moved
-        aside and the gate waits, as it would with state.json in place; it
-        is not bound on first sight to the re-exported CSV, and nothing is
-        written."""
-        orchestrator = make_run(tmp_path)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_equivalences(doc)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_claims(doc)
-        saved_last(doc.review)
-        for lost in (doc.dir / "derivations.json", doc.state_path):
-            lost.unlink()
-        shutil.rmtree(orchestrator.store.root)
-        # the first run after the loss opts in (a held run would save a
-        # new state.json first)
-        orchestrator.rederive_unrecorded = True
+    def test_a_gedcom_directory_is_set_aside_too(self, tmp_path):
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "family.ged").write_text(
+            "0 @I1@ INDI\n1 NAME Klara /Löbig/\n1 BIRT\n2 DATE 1917\n0 TRLR\n"
+        )
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
-        assert doc.state.status == AWAITING_CLAIMS
-        assert not doc.review_reviewed.exists()
-        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
-        assert not doc.write_result.exists()
-        assert not any(c.startswith("write") for c in orchestrator.calls)
-
-    def test_a_recorded_directory_whose_store_is_gone_is_recomputed(
-        self, tmp_path
-    ):
-        """A directory with its derivations.json is recorded, whatever the
-        store holds. With the store gone its stages are computed again,
-        not held, and the batch, the same as before, leaves the reviews
-        and the write as they are."""
-        orchestrator = completed_run(tmp_path)
-        shutil.rmtree(orchestrator.store.root)
-        before = len(orchestrator.calls)
-        assert orchestrator.run() == 0
-        assert [c.split(":")[0] for c in orchestrator.calls[before:]] == [
-            "manifest",
-            "chunk",
-            "critique",
-        ]
+        (doc.dir / "derivations.json").unlink()
+        assert orchestrator.run() == 2
+        assert doc.dir.with_name(".family.superseded-1").is_dir()
         (doc,) = orchestrator.documents()
-        assert doc.state.status == WRITTEN
-        assert orchestrator.rundir.alerts() == []
-        assert not list(doc.dir.glob("*.superseded-*"))
+        assert doc.state.status == AWAITING_EQUIVALENCES
 
-    def test_a_first_run_that_stopped_before_its_batch_is_not_held(
+    def test_serial_mode_sets_it_aside_once(self, tmp_path):
+        """Serial mode advances a document twice in one run (extract-only,
+        then in sequence); the directory is set aside on the first."""
+        first = self.from_before_the_records(tmp_path)
+        orchestrator = ScriptedOrchestrator(
+            first.folder, first.state_dir, log=quiet, serial=True
+        )
+        assert orchestrator.run() == 2
+        assert len(this_run(orchestrator, "set-aside")) == 1
+        (doc,) = orchestrator.documents()
+        assert doc.dir.with_name(".letter.superseded-1").is_dir()
+        assert not doc.dir.with_name(".letter.superseded-2").exists()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+
+    def test_a_first_run_that_stopped_before_its_batch_carries_on(
         self, tmp_path
     ):
         """A directory is recorded from its first run: derivations.json is
         written before any other file. A first run that fails before the
-        batch leaves transcription.json, and the next run carries on
-        instead of holding the document, even with the store gone."""
+        batch leaves transcription.json, and the next run carries on in
+        the same directory."""
         orchestrator = make_run(tmp_path, fail_step="manifest")
         assert orchestrator.run() == 1
         (doc,) = orchestrator.documents()
         assert doc.transcription.exists()
         assert (doc.dir / "derivations.json").exists()
-        shutil.rmtree(orchestrator.store.root)
         orchestrator.fail_step = None
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES
+        assert this_run(orchestrator, "set-aside") == []
 
     @pytest.mark.parametrize(
         "error",
         [OSError("the disk refused"), KeyboardInterrupt()],
         ids=["failure", "interrupt"],
     )
-    def test_a_stop_before_the_first_record_leaves_nothing_to_hold(
+    def test_a_stop_before_the_first_record_leaves_nothing_behind(
         self, tmp_path, monkeypatch, error
     ):
         """A run that stops while a new directory's record is being written
-        saves no state there, so the directory does not look unrecorded
-        and the next run starts it afresh instead of holding it."""
+        saves no state there, so the next run starts it afresh in place
+        rather than setting it aside."""
         import yizkr.pipeline.orchestrate as orchestrate
 
         def refuse(self):
@@ -1331,36 +1226,11 @@ class TestUnrecordedDirectory:
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES
-
-    def test_a_directory_with_only_its_state_is_held(self, tmp_path):
-        """A directory whose only file is state.json (a document whose
-        registration failed before the records, say) is unrecorded too: it
-        is held before it is registered, with no stage outputs to name."""
-        folder = tmp_path / "docs"
-        folder.mkdir()
-        (folder / "letter.txt").write_text("Ursula was born in 1911.")
-        (doc,) = ScriptedOrchestrator(
-            folder, tmp_path / "state", log=quiet
-        ).documents()
-        doc.state.status = FAILED
-        doc.state.error = "RuntimeError: wiki down"
-        doc.state.content_sha1 = doc.sha1
-        doc.state.save(doc.state_path)
-        orchestrator = ScriptedOrchestrator(
-            folder, tmp_path / "state", log=quiet
-        )
-        assert orchestrator.run() == 2
-        assert orchestrator.calls == []
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == UNRECORDED
-        held = doc.state.detail["held"]
-        assert held["outputs"] == []
-        assert "stage outputs" not in held["reason"]
-        assert held["previous_status"] == FAILED
+        assert not doc.dir.with_name(".letter.superseded-1").exists()
 
     def test_a_duplicate_is_recorded_from_its_first_run(self, tmp_path):
         """A duplicate's directory gets its record too, so when the file
-        it duplicated is gone it is ingested, not held."""
+        it duplicated is gone it is ingested in place, not set aside."""
         folder = tmp_path / "docs"
         folder.mkdir()
         (folder / "a-original.txt").write_text("Leopold was born in 1914.")
@@ -1375,209 +1245,127 @@ class TestUnrecordedDirectory:
         assert orchestrator.run() == 2
         (copy,) = orchestrator.documents()
         assert copy.state.status == AWAITING_EQUIVALENCES
+        assert this_run(orchestrator, "set-aside") == []
 
-    def test_serial_mode_reports_a_hold_once(self, tmp_path):
-        """Serial mode advances a document twice in one run (extract-only,
-        then in sequence); a held document is reported once, and the
-        sequence stops at it as held."""
-        first = self.from_before_the_records(tmp_path)
-        lines: list[str] = []
-        orchestrator = ScriptedOrchestrator(
-            first.folder, first.state_dir, log=collect(lines), serial=True
-        )
-        assert orchestrator.run() == 2
-        assert orchestrator.calls == []
-        events = orchestrator.rundir.events()
-        assert [e["event"] for e in events].count("held") == 1
-        assert len(orchestrator.rundir.alerts()) == 1
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == UNRECORDED
-        assert any(
-            "(serial) paused: letter.txt is held" in line for line in lines
-        )
-        assert not any("is written" in line for line in lines)
 
-    def test_a_copy_of_a_held_written_document_is_a_duplicate(self, tmp_path):
-        """A document held after it was written is still the one ingested
-        for its bytes (ADR-0010): a renamed copy is a duplicate, and is
-        never registered, transcribed or extracted."""
-        orchestrator = self.from_before_the_records(tmp_path)
-        assert orchestrator.run() == 2
-        folder = orchestrator.folder
-        (folder / "a-copy.txt").write_bytes(
-            (folder / "letter.txt").read_bytes()
-        )
-        again = ScriptedOrchestrator(folder, orchestrator.state_dir, log=quiet)
-        assert again.run() == 2
-        assert again.calls == []
-        assert {d.source.name: d.state.status for d in again.documents()} == {
-            "a-copy.txt": DUPLICATE,
-            "letter.txt": UNRECORDED,
-        }
+class TestRunDirectory:
+    """The run directory records what each run did: an event per stage
+    started, done or failed, and run state derived from the events."""
 
-    def test_a_gedcom_directory_from_before_the_records_is_held(
-        self, tmp_path
+    def test_the_manifest_names_the_cache_by_its_absolute_path(
+        self, tmp_path, monkeypatch
     ):
-        """A GEDCOM document's one stage output is batch.json, from the
-        gedcom stage, which calls no engine. Without derivations.json the
-        document is held, although the store holds that stage. The opt-in
-        keeps a copy of batch.json, the adapter gives the same batch back,
-        and the equivalences CSV stands."""
-        folder = tmp_path / "docs"
-        folder.mkdir()
-        (folder / "family.ged").write_text(
-            "0 @I1@ INDI\n1 NAME Klara /Löbig/\n1 BIRT\n2 DATE 1917\n0 TRLR\n"
-        )
-        orchestrator = ScriptedOrchestrator(
-            folder, tmp_path / "state", log=quiet
-        )
-        assert orchestrator.run() == 2
-        (doc,) = orchestrator.documents()
-        (doc.dir / "derivations.json").unlink()
-        files = snapshot(doc.dir)
-        assert orchestrator.run() == 2
-        assert snapshot(doc.dir) == files
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == UNRECORDED
-        held = doc.state.detail["held"]
-        assert held["outputs"] == ["batch.json"]
-        assert "calling the engine" not in held["reason"]
-        events = orchestrator.rundir.events()
-        assert [e["stage"] for e in events if e["event"] == "held"] == [
-            "gedcom"
-        ]
-        orchestrator.rederive_unrecorded = True
-        before = len(orchestrator.calls)
-        assert orchestrator.run() == 2
-        assert orchestrator.calls[before:] == []
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == AWAITING_EQUIVALENCES
-        assert self.kept(doc) == ["batch.superseded-1.json"]
-
-    def test_ingest_run_opts_in_by_flag(self, tmp_path, monkeypatch):
-        from yizkr.cli import build_parser
-        from yizkr.core.corpus import CORPUS_DIR_VAR, EXCLUDE_FILE_VAR
-
-        listed = tmp_path / "exclude.txt"
-        listed.write_text("")
-        env_file = tmp_path / "test.env"
-        env_file.write_text(f"{EXCLUDE_FILE_VAR}={listed}\n")
-        monkeypatch.setenv("YIZKR_ENV_FILE", str(env_file))
-        monkeypatch.delenv(EXCLUDE_FILE_VAR, raising=False)
-        monkeypatch.delenv(CORPUS_DIR_VAR, raising=False)
-        folder = tmp_path / "docs"
-        folder.mkdir()
-        seen = []
-        monkeypatch.setattr(
-            Orchestrator,
-            "run",
-            lambda self: seen.append(self.rederive_unrecorded) or 0,
-        )
-        state = str(tmp_path / "state")
-        for flags in ([], ["--rederive-unrecorded"]):
-            args = build_parser().parse_args(
-                ["ingest", "run", str(folder), "--state", state, *flags]
-            )
-            assert args.func(args) == 0
-        assert seen == [False, True]
-
-
-class TestStageStore:
-    """The stages before the gates read and write through the stage store,
-    and the run directory records what each run did (#87)."""
-
-    def test_second_run_reuses_every_stage(self, tmp_path):
-        orchestrator = make_run(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        orchestrator = make_run(tmp_path, cache_dir=Path("var/llm-cache"))
         orchestrator.run()
-        first = len(orchestrator.rundir.events())
-        orchestrator.run()
-        second = [
-            event
-            for event in orchestrator.rundir.events()[first:]
-            if event.get("stage")
-        ]
-        assert {event["event"] for event in second} == {"reused"}
-        assert {event["reason"] for event in second} == {"key match"}
-        assert {event["stage"] for event in second} == {
-            "transcription",
-            "entity_manifest",
-            "chunk",
-            "batch",
-            "critique",
-        }
+        assert orchestrator.rundir.manifest()["cache"] == os.path.join(
+            os.getcwd(), "var", "llm-cache"
+        )
 
-    def test_run_state_is_derived_from_events_and_store(self, tmp_path):
+    def test_every_stage_is_an_event(self, tmp_path):
         orchestrator = make_run(tmp_path)
         orchestrator.run()
         (doc,) = orchestrator.documents()
-        states = run_state(orchestrator.rundir, orchestrator.store)
-        by_stage = {
-            stage: state.status for (_, stage, _), state in states.items()
-        }
-        assert by_stage == {
+        stages = [
+            (event["event"], event["stage"])
+            for event in this_run(orchestrator, "started", "done")
+        ]
+        assert stages == [
+            ("started", "transcription"),
+            ("done", "transcription"),
+            ("started", "extraction"),
+            ("done", "extraction"),
+            ("started", "critique"),
+            ("done", "critique"),
+        ]
+        assert {
+            (event["subject"], event["kind"])
+            for event in this_run(orchestrator, "started")
+        } == {(doc.sha1, "text")}
+        manifest = orchestrator.rundir.manifest()
+        assert manifest["documents"] == [
+            {
+                "sha1": doc.sha1,
+                "file": "letter.txt",
+                "kind": "text",
+                "stages": ["transcription", "extraction", "critique"],
+            }
+        ]
+        assert manifest["cache"] is None
+
+    def test_run_state_is_derived_from_the_events(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        states = run_state(orchestrator.rundir)
+        assert {
+            stage: state.status for (_, stage), state in states.items()
+        } == {
             "transcription": "done",
-            "entity_manifest": "done",
-            "chunk": "done",
-            "batch": "done",
+            "extraction": "done",
             "critique": "done",
         }
-        assert {subject for subject, _, _ in states} == {doc.sha1}
-        orchestrator.run()
-        states = run_state(orchestrator.rundir, orchestrator.store)
-        assert {state.status for state in states.values()} == {"reused"}
+        assert {subject for subject, _ in states} == {doc.sha1}
 
-    def test_failed_stage_retries_and_keeps_its_reason(self, tmp_path):
+    def test_a_failed_stage_keeps_its_reason(self, tmp_path):
         orchestrator = make_run(tmp_path, fail_step="critique")
         assert orchestrator.run() == 1
         (doc,) = orchestrator.documents()
         assert doc.state.status == FAILED
-        states = run_state(orchestrator.rundir, orchestrator.store)
-        critique = states[(doc.sha1, "critique", None)]
+        critique = run_state(orchestrator.rundir)[(doc.sha1, "critique")]
         assert critique.status == "failed"
         assert "critique engine down" in critique.reason
-        # the stages before it are stored and are not redone
+        # the next run reuses the views that stand and makes the critique
         orchestrator.fail_step = None
         orchestrator.calls.clear()
         assert orchestrator.run() == 2
-        assert [c.split(":")[0] for c in orchestrator.calls] == [
-            "critique",
-            "reconcile",
+        assert steps(orchestrator.calls) == ["critique", "reconcile"]
+        states = run_state(orchestrator.rundir)
+        assert states[(doc.sha1, "critique")].status == "done"
+        assert states[(doc.sha1, "extraction")].status == "done"
+
+    def test_attention_reaches_the_run_state(self, tmp_path):
+        """An extraction that fell back to line-range segmentation and to
+        line windows is done, and needs attention, with its reasons."""
+
+        class NoManifest(ScriptedModel):
+            def complete(self, prompt, image_paths=()):
+                if "manifest of EVERY distinct entity" in prompt:
+                    self.calls.append(f"manifest:{self.name}")
+                    return "no manifest here"
+                if prompt.startswith("You segment a document"):
+                    self.calls.append(f"segmentation:{self.name}")
+                    return "no segmentation either"
+                return super().complete(prompt, image_paths)
+
+        class Falls(ScriptedOrchestrator):
+            def _llm(self, role, doc):
+                return NoManifest(self.calls, doc.source.name)
+
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "letter.txt").write_text("Ursula was born in 1911.")
+        orchestrator = Falls(folder, tmp_path / "state", log=quiet)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        extraction = run_state(orchestrator.rundir)[(doc.sha1, "extraction")]
+        assert extraction.status == NEEDS_ATTENTION
+        assert "fell back to line-range segmentation" in extraction.reason
+        assert "fell back to line windows" in extraction.reason
+        # a run that reuses the batch view carries its reasons on
+        assert orchestrator.run() == 2
+        (reused,) = [
+            event
+            for event in this_run(orchestrator, "reused")
+            if event["stage"] == "extraction"
         ]
-        states = run_state(orchestrator.rundir, orchestrator.store)
-        assert states[(doc.sha1, "critique", None)].status == "done"
-        failures = orchestrator.store.failures(f"doc/{doc.sha1}", "critique")
-        assert "critique engine down" in failures[0]["reason"]
-
-    def test_recompute_forces_one_stage(self, tmp_path):
-        orchestrator = make_run(tmp_path)
-        orchestrator.run()
-        again = ScriptedOrchestrator(
-            orchestrator.folder,
-            orchestrator.state_dir,
-            log=quiet,
-            recompute=["critique"],
-        )
-        again.run()
-        assert [c.split(":")[0] for c in again.calls] == ["critique"]
-        again.run()  # once per run: a second pass reuses it
-        assert [c.split(":")[0] for c in again.calls] == ["critique"]
-
-    def test_stages_share_a_named_store_across_state_dirs(self, tmp_path):
-        store = tmp_path / "stages"
-        first = make_run(tmp_path, store_dir=store)
-        first.run()
-        second = ScriptedOrchestrator(
-            first.folder, tmp_path / "other-state", log=quiet, store_dir=store
-        )
-        second.run()
-        assert not any(
-            c.startswith(("manifest", "chunk", "critique"))
-            for c in second.calls
-        )
+        assert reused["attention"] == extraction.reason.split("; ")
+        again = run_state(orchestrator.rundir)[(doc.sha1, "extraction")]
+        assert again == extraction
 
     def test_a_held_stage_pauses_the_document(self, tmp_path):
         """A pause request for a stage stops its dispatch; nothing fails,
-        completed outputs stay stored, and the next run resumes."""
+        and the next run resumes."""
 
         class PausesCritique(ScriptedOrchestrator):
             def _step_register(self, doc):
@@ -1591,17 +1379,16 @@ class TestStageStore:
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == PAUSED
-        assert "critique" not in [c.split(":")[0] for c in orchestrator.calls]
-        states = run_state(orchestrator.rundir, orchestrator.store)
-        assert states[(doc.sha1, "batch", None)].status == "done"
-        assert states[(doc.sha1, "critique", None)].status == "pending"
+        assert "critique" not in steps(orchestrator.calls)
+        states = run_state(orchestrator.rundir)
+        assert states[(doc.sha1, "extraction")].status == "done"
+        critique = states[(doc.sha1, "critique")]
+        assert critique.status == "pending"
+        assert critique.reason == "stage:critique paused"
         # a new invocation starts clear of the old requests
         resumed = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         assert resumed.run() == 2
-        assert [c.split(":")[0] for c in resumed.calls] == [
-            "critique",
-            "reconcile",
-        ]
+        assert steps(resumed.calls) == ["critique", "reconcile"]
 
     def test_run_abort_stops_dispatch(self, tmp_path):
         class AbortsAfterFirst(ScriptedOrchestrator):
@@ -1620,50 +1407,228 @@ class TestStageStore:
         assert events[0] == "run-start" and events[-1] == "run-end"
 
 
-class TestUnpinnedModel:
-    """A key names only the model that configuration names. With none,
-    the engine's own default model is outside the keys, and a run that
-    calls the engine says so (#87, #133)."""
+class TestEngines:
+    """One engine client per role serves a whole run, and the client
+    factory wraps it with the LLM cache only when the run has one."""
 
-    @staticmethod
-    def warnings(lines):
-        return [line for line in lines if "no model is pinned" in line]
+    class Engine:
+        model_identifier = "scripted"
+        config_hash = "c" * 64
 
-    def test_roles_without_a_model_are_unpinned(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
-        orchestrator = make_run(tmp_path, extract_model="model-for-extraction")
-        assert orchestrator.unpinned_roles() == ["transcribe", "critique"]
-        monkeypatch.setenv("YIZKR_LLM_MODEL", "model-from-env")
-        assert orchestrator.unpinned_roles() == []
+        def __init__(self, role):
+            self.role = role
+            self.closed = False
 
-    def test_a_run_warns_about_unpinned_roles(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
-        lines: list[str] = []
-        make_run(tmp_path, log=collect(lines)).run()
-        (warning,) = self.warnings(lines)
-        assert "transcribe, extract, critique" in warning
-        assert "'engine default'" in warning
+        def complete(self, prompt, image_paths=()):  # pragma: no cover
+            raise AssertionError("not called here")
 
-    def test_pinned_models_need_no_warning(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("YIZKR_LLM_MODEL", "model-from-env")
-        lines: list[str] = []
-        make_run(tmp_path, log=collect(lines)).run()
-        assert self.warnings(lines) == []
+        def close(self):
+            self.closed = True
 
-    def test_a_run_without_engine_stages_needs_no_model(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
+    def orchestrator(self, tmp_path, monkeypatch, **kwargs):
+        from yizkr.pipeline import llm
+
+        made = []
+
+        def make_client(engine, *, effort=None, model=None, **_):
+            made.append((effort, model))
+            return self.Engine(len(made))
+
+        monkeypatch.setattr(llm, "make_client", make_client)
         folder = tmp_path / "docs"
         folder.mkdir()
-        (folder / "family.ged").write_text(
-            "0 @I1@ INDI\n1 NAME Klara /Löbig/\n1 BIRT\n2 DATE 1917\n0 TRLR\n"
+        return Orchestrator(folder, tmp_path / "state", **kwargs), made
+
+    def test_one_engine_per_role_serves_every_document(
+        self, tmp_path, monkeypatch
+    ):
+        orchestrator, made = self.orchestrator(
+            tmp_path, monkeypatch, extract_model="model-x"
         )
-        lines: list[str] = []
-        ScriptedOrchestrator(
-            folder, tmp_path / "state", log=collect(lines)
-        ).run()
-        assert self.warnings(lines) == []
+        docs = [
+            DocumentRun(tmp_path / name, tmp_path / "state")
+            for name in ("a.txt", "b.txt")
+        ]
+        for doc in docs:
+            doc.source.write_text(doc.source.name)
+            for role in ("transcribe", "extract", "critique"):
+                orchestrator._llm(role, doc)
+        assert made == [("low", None), ("low", "model-x"), ("high", None)]
+        engines = list(orchestrator._engines.values())
+        orchestrator._close_engines()
+        assert all(engine.closed for engine in engines)
+        assert orchestrator._engines == {}
+
+    def test_without_a_cache_the_engine_is_called_directly(
+        self, tmp_path, monkeypatch
+    ):
+        orchestrator, _ = self.orchestrator(tmp_path, monkeypatch)
+        doc = DocumentRun(tmp_path / "a.txt", tmp_path / "state")
+        doc.source.write_text("a")
+        assert isinstance(orchestrator._llm("extract", doc), self.Engine)
+        assert not (tmp_path / "state").exists()
+
+    def test_with_a_cache_the_factory_wraps_the_engine(
+        self, tmp_path, monkeypatch
+    ):
+        from yizkr.pipeline.llm import RejectingLlmClient
+
+        orchestrator, _ = self.orchestrator(
+            tmp_path,
+            monkeypatch,
+            cache_dir=tmp_path / "cache",
+            refresh=["critique"],
+            epochs={"extract": 2},
+        )
+        doc = DocumentRun(tmp_path / "a.txt", tmp_path / "state")
+        doc.source.write_text("a")
+        client = orchestrator._llm("extract", doc)
+        assert isinstance(client, RejectingLlmClient)
+        assert client.cache.refresh == {"critique"}
+        assert client.cache.epoch("extract") == 2
+        # one cache per run, shared by every client
+        assert orchestrator._llm("critique", doc).cache is client.cache
+
+
+class TestPreflight:
+    """The PDF renderer is checked once for the whole run, before any
+    document, whether its transcriptions come from the engine or the
+    cache (#218, #225)."""
+
+    def folder(self, tmp_path):
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "a-scan.pdf").write_bytes(b"%PDF-1.4 not really")
+        (folder / "b-scan.pdf").write_bytes(b"%PDF-1.4 not really either")
+        (folder / "c-letter.txt").write_text("Ursula was born in 1911.")
+        return folder
+
+    def test_a_missing_renderer_stops_the_run_before_any_document(
+        self, tmp_path, monkeypatch
+    ):
+        asked = []
+
+        def which(name):
+            asked.append(name)
+            return None
+
+        monkeypatch.setattr(transcribe.shutil, "which", which)
+        orchestrator = ScriptedOrchestrator(
+            self.folder(tmp_path), tmp_path / "state", log=quiet
+        )
+        with pytest.raises(MissingPrerequisite, match="poppler-utils"):
+            orchestrator.run()
+        assert orchestrator.calls == []
+        assert not (tmp_path / "state").exists()
+        assert asked == ["pdftoppm", "pdfinfo"]  # once, for both PDFs
+
+    def test_a_run_without_pdfs_needs_no_renderer(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(transcribe.shutil, "which", lambda name: None)
+        assert make_run(tmp_path).run() == 2
+
+    def test_ingest_run_says_what_to_install(self, tmp_path, monkeypatch):
+        from yizkr.cli import build_parser
+        from yizkr.core.corpus import CORPUS_DIR_VAR, EXCLUDE_FILE_VAR
+
+        listed = tmp_path / "exclude.txt"
+        listed.write_text("")
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"{EXCLUDE_FILE_VAR}={listed}\n")
+        monkeypatch.setenv("YIZKR_ENV_FILE", str(env_file))
+        monkeypatch.delenv(EXCLUDE_FILE_VAR, raising=False)
+        monkeypatch.delenv(CORPUS_DIR_VAR, raising=False)
+        monkeypatch.setattr(transcribe.shutil, "which", lambda name: None)
+        args = build_parser().parse_args(
+            [
+                "ingest",
+                "run",
+                str(self.folder(tmp_path)),
+                "--state",
+                str(tmp_path / "state"),
+                "--no-cache",
+            ]
+        )
+        with pytest.raises(SystemExit, match="apt-get install poppler-utils"):
+            args.func(args)
+
+
+class TestIngestRunFlags:
+    def parse(self, tmp_path, monkeypatch, *flags):
+        from yizkr.cli import build_parser
+        from yizkr.core.corpus import CORPUS_DIR_VAR, EXCLUDE_FILE_VAR
+
+        listed = tmp_path / "exclude.txt"
+        listed.write_text("")
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"{EXCLUDE_FILE_VAR}={listed}\n")
+        monkeypatch.setenv("YIZKR_ENV_FILE", str(env_file))
+        monkeypatch.delenv(EXCLUDE_FILE_VAR, raising=False)
+        monkeypatch.delenv(CORPUS_DIR_VAR, raising=False)
+        folder = tmp_path / "docs"
+        folder.mkdir(exist_ok=True)
+        seen = []
+        monkeypatch.setattr(
+            Orchestrator, "run", lambda self: seen.append(self) or 0
+        )
+        state = str(tmp_path / "state")
+        args = build_parser().parse_args(
+            ["ingest", "run", str(folder), "--state", state, *flags]
+        )
+        assert args.func(args) == 0
+        return seen[0]
+
+    def test_the_cache_is_on_by_default(self, tmp_path, monkeypatch):
+        orchestrator = self.parse(tmp_path, monkeypatch)
+        assert orchestrator.cache_dir == Path("var/llm-cache")
+        assert orchestrator.refresh == ()
+        assert orchestrator.epochs == {}
+
+    def test_no_cache_calls_the_engine_directly(self, tmp_path, monkeypatch):
+        orchestrator = self.parse(tmp_path, monkeypatch, "--no-cache")
+        assert orchestrator.cache_dir is None
+        assert orchestrator._llm_cache() is None
+
+    def test_cache_refresh_and_epoch(self, tmp_path, monkeypatch):
+        orchestrator = self.parse(
+            tmp_path,
+            monkeypatch,
+            "--cache",
+            str(tmp_path / "cache"),
+            "--refresh",
+            "critique",
+            "--refresh",
+            "transcribe",
+            "--epoch",
+            "extract=2",
+        )
+        assert orchestrator.cache_dir == tmp_path / "cache"
+        assert orchestrator.refresh == ("critique", "transcribe")
+        assert orchestrator.epochs == {"extract": 2}
+
+    @pytest.mark.parametrize(
+        "flags",
+        [
+            ["--refresh", "reconcile"],
+            ["--epoch", "extract"],
+            ["--epoch", "extract=-1"],
+            ["--epoch", "nobody=1"],
+            ["--cache", "x", "--no-cache"],
+        ],
+    )
+    def test_bad_flags_are_refused(self, tmp_path, monkeypatch, flags):
+        with pytest.raises(SystemExit):
+            self.parse(tmp_path, monkeypatch, *flags)
+
+    @pytest.mark.parametrize(
+        "flags",
+        [["--refresh", "critique"], ["--epoch", "extract=1"]],
+        ids=["refresh", "epoch"],
+    )
+    def test_no_cache_refuses_the_cache_switches(
+        self, tmp_path, monkeypatch, flags
+    ):
+        with pytest.raises(SystemExit, match="act through the LLM cache"):
+            self.parse(tmp_path, monkeypatch, "--no-cache", *flags)
 
 
 class TestTranscribeLanguage:
@@ -1912,11 +1877,9 @@ class TestNeverIngestList:
         assert [c for c in orch.calls if c.startswith("register:")] == [
             "register:naturalisation-1952.txt"
         ]
-        # document directories only: the store and run files sit beside
+        # document directories only: the run files sit beside them
         assert sorted(
-            p.name
-            for p in (tmp_path / "state").iterdir()
-            if p.is_dir() and not p.name.startswith(".")
+            p.name for p in (tmp_path / "state").iterdir() if p.is_dir()
         ) == ["naturalisation-1952"]
         assert [d.source.name for d in orch.documents()] == [
             "naturalisation-1952.txt"

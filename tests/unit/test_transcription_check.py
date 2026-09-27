@@ -414,10 +414,13 @@ class TestSignatures:
     )
     def test_long_repetitive_text_checks_quickly(self, text):
         # no pattern backtracks across a long run of list words, or of
-        # announcement-like phrases on one line
-        started = time.perf_counter()
+        # announcement-like phrases on one line. The limit is on this
+        # process's CPU time, which other load on the machine does not
+        # inflate, and is far above a linear check's milliseconds while
+        # far below a backtracking one's minutes (#223)
+        started = time.process_time()
         check_transcription(text)
-        assert time.perf_counter() - started < 1.0
+        assert time.process_time() - started < 5.0
 
     def test_page_that_could_not_be_read_fails_even_in_a_letter(self):
         # a page named as unread fails anywhere: a silent partial
@@ -677,6 +680,25 @@ class FakeLlm:
         return self.responses.pop(0)
 
 
+class KeepingLlm(FakeLlm):
+    """A client that keeps answers, as the LLM cache's does: the first
+    `kept` answers are ones it kept from earlier calls, and a rejection
+    says whether the answer rejected was one of them."""
+
+    def __init__(self, *responses: str, kept: int = 1) -> None:
+        super().__init__(*responses)
+        self.kept = kept
+        self.rejected: list[tuple[str, bool]] = []
+
+    def complete(self, prompt, image_paths=()):
+        self.last_kept = self.calls < self.kept
+        return super().complete(prompt, image_paths)
+
+    def reject(self, response, reason):
+        self.rejected.append((response, self.last_kept))
+        return self.last_kept
+
+
 def no_tools(name):
     return None
 
@@ -711,14 +733,22 @@ class TestPreflight:
                 [tmp_path / "a.jpg", tmp_path / "b.PDF"], which
             )
 
-    def test_vision_pdf_fails_before_the_engine_is_called(
+    def test_the_transcriber_leaves_the_host_check_to_the_run(
         self, tmp_path, monkeypatch
     ):
-        monkeypatch.setattr(transcribe.shutil, "which", no_tools)
-        llm = FakeLlm("never used")
-        with pytest.raises(MissingPrerequisite):
-            LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.pdf")
-        assert llm.calls == 0
+        """A run checks the host once, before any document, with
+        preflight_vision_transcription (tests/unit/test_orchestrate.py,
+        #225); the transcriber does not ask again for each document."""
+        asked = []
+        monkeypatch.setattr(transcribe.shutil, "which", asked.append)
+        monkeypatch.setattr(
+            transcription_check.subprocess, "run", FakeRun("Pages: 1\n")
+        )
+        result = LlmVisionTranscriber(FakeLlm(STAMP)).transcribe(
+            tmp_path / "scan.pdf"
+        )
+        assert result.text == STAMP
+        assert asked == []
 
     def test_images_need_no_renderer(self, tmp_path, monkeypatch):
         monkeypatch.setattr(transcribe.shutil, "which", no_tools)
@@ -763,6 +793,31 @@ class TestTranscribers:
             FakeLlm(FAILURES[0][1])
         ).transcribe_unchecked(tmp_path / "scan.png")
         assert "pdftoppm" in result.text
+
+    def test_a_kept_answer_that_fails_is_asked_for_once_more(self, tmp_path):
+        """A failing answer the client kept from an earlier call is
+        rejected, and the engine is asked in the same call, as it would be
+        without the cache; its answer is checked in its place (#230)."""
+        failing = FAILURES[0][1]
+        llm = KeepingLlm(failing, a_page())
+        result = LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+        assert result.text == a_page()
+        assert llm.calls == 2
+        assert llm.rejected == [(failing, True)]
+
+    def test_the_engines_failing_answer_is_not_asked_for_again(self, tmp_path):
+        llm = KeepingLlm(FAILURES[0][1], a_page(), kept=0)
+        with pytest.raises(TranscriptionCheckFailed):
+            LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+        assert llm.calls == 1
+        assert llm.rejected == [(FAILURES[0][1], False)]
+
+    def test_a_kept_answer_is_asked_for_once_more_at_most(self, tmp_path):
+        failing = FAILURES[0][1]
+        llm = KeepingLlm(failing, failing, a_page(), kept=2)
+        with pytest.raises(TranscriptionCheckFailed):
+            LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+        assert llm.calls == 2
 
     def test_text_file_with_a_refusal_raises(self, tmp_path):
         text_file = tmp_path / "external-tool-output.txt"

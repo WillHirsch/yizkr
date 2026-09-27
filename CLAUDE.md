@@ -60,24 +60,26 @@ values and N source-attributed values, and everything still works.*
   the deployed stack via `make test-live`. Substantial behavior changes
   to write paths get a live test, not just a session's manual check.
   Live tests run on the one instance, which scratch runs reset.
-- Scratch-diff evidence: a change to a stage before write (its source
-  with a version bump, a prompt, the manifest, a model or its
-  parameters) is checked by a whole-corpus scratch run: its aggregate
-  report and its diff against the latest run on main
-  (`needs:scratch-diff`, plus the matching `stage:*` label; ADR-0025).
-  There is no gold set or synthetic eval.
+- Scratch-diff evidence: a change to a stage before write (its code, a
+  prompt, the manifest, a model or its parameters) is checked by a
+  whole-corpus scratch run: its aggregate report and its diff against
+  the latest run on main (`needs:scratch-diff`, plus the matching
+  `stage:*` label; ADR-0025, ADR-0032). There is no gold set or
+  synthetic eval.
 - Lint/format: ruff (`make lint` / `make fmt`); CI runs lint + unit
   tests on every push.
 - Reads: SPARQL against the bundled query service.
 - Bulk human review: CSV artifacts consumable by OpenRefine.
 - Idempotency: all bootstrap/import scripts must be safely re-runnable.
-- Pipeline outputs (the stage store, scratch-run directories, reports
-  and diffs, batches, review CSVs, galleries) are runtime state: keep
-  them in `var/` (gitignored) or outside the repo. The stage store keys
-  each stage output by its input content, stage version, route, prompt
-  and manifest hashes, and full model id and parameters, never by QIDs,
-  mtimes or timestamps; stages before write never read the wiki
-  (ADR-0025 §2).
+- Pipeline outputs (the LLM cache, scratch-run directories and their
+  document views, reports and diffs, batches, review CSVs, galleries)
+  are runtime state: keep them in `var/` (gitignored) or outside the
+  repo. A document's views persist and are reused while their inputs are
+  unchanged; the LLM cache keys each model response by what its call
+  sends (prompt text, files by content hash, engine, model, effort and
+  configuration), never by mtimes or timestamps, and a prompt that cites
+  an artifact QID is keyed on it until #127; stages before write never
+  read the wiki (ADR-0025 §2, ADR-0032).
 - Docs move with code: update ADRs/MODELING.md in the same PR as any
   behavior change; new architectural decisions get a new ADR.
 - Examples: every example in code, comments, prompts, tests, docs,
@@ -101,8 +103,8 @@ merge; see `docs/AGENT_PROTOCOL.md` and ADR-0024.
 - **Local-only data** is read only by local sessions and never copied
   into the repository, GitHub or a cloud agent's session: the corpus
   (`import/`, or `YIZKR_CORPUS_DIR` once moved out of the tree), `var/`
-  (the stage store, run directories, live status pages, `report.html`,
-  `report.json` and detailed diffs included), `bundle/`,
+  (the LLM cache, run directories with their document views, live status
+  pages, `report.html`, `report.json` and detailed diffs included), `bundle/`,
   `~/yizkr-private/` and its archives, backups, the exclusion list, the
   private audit inventory, and any live or dev graph. Only a run's
   aggregate report and diff summary may leave the machine. Work that
