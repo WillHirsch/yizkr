@@ -1,75 +1,253 @@
 0 HEAD
-1 SOUR Example Genealogy Suite
+1 SOUR yizkr-example-universe
 1 GEDC
 2 VERS 5.5.1
 1 CHAR UTF-8
 0 @I1@ INDI
-1 NAME Anna Maria /Beispiel/
+1 NAME Eugen /Löbig/
 2 TYPE birth
-2 NICK Annie
-1 NAME Anna /Muster/
+2 NICK Muckel
+1 SEX M
+1 BIRT
+2 DATE 1836
+2 PLAC Bad Flörburg, Hesse, Germany
+1 DEAT
+2 DATE 16 MAR 1909
+2 PLAC Flörburg, Hesse, Germany
+2 CAUS Dropsy
+1 BURI
+2 DATE 20 MAR 1909
+2 PLAC Friedhof Flörburg, Hesse, Germany
+1 OCCU Master hatter
+1 NCHI 3
+1 OBJE @O1@
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Cäcilie /Tarle/
+2 TYPE birth
+2 NICK Cilli
+1 NAME Cäcilie /Löbig/
 2 TYPE married
 1 SEX F
 1 BIRT
-2 DATE 12 AUG 1885
-2 PLAC Springfield, Example County
+2 DATE ABT 1833
+2 PLAC Kredfeld, Hesse, Germany
 1 DEAT
-2 DATE BEF 8 MAY 1945
-2 PLAC Lakeside, Example County
-1 BURI
-2 DATE 1945
-2 PLAC Lakeside Cemetery, Example County
-1 NCHI 1
+2 DATE 1902
+1 OBJE @O1@
 1 FAMS @F1@
-0 @I2@ INDI
-1 NAME Bern /Beispiel/
+0 @I3@ INDI
+1 NAME Sebastian /Löbig/
+2 TYPE birth
+2 NICK Wastl
 1 SEX M
 1 BIRT
-2 DATE ABT 1880
+2 DATE 15 FEB 1862
+2 PLAC Flörburg, Hesse, Germany
 1 DEAT
-2 DATE MAR 1950
-2 CAUS Heart failure
-1 FAMS @F1@
-1 OCCU Cigar maker
-1 EDUC Example Academy
-0 @I3@ INDI
-1 NAME Carla /Beispiel/
-1 SEX F
-1 BIRT
-2 DATE BET 1910 AND 1912
-2 PLAC Springfield, Example County
+2 DATE 1945
+1 OCCU Hatter
+1 RESI
+2 DATE 8 JAN 1919
+2 PLAC Brunnenring 35, Flörburg, Hesse, Germany
+1 OBJE @O1@
 1 FAMC @F1@
 1 FAMS @F2@
 0 @I4@ INDI
-1 NAME Dov /Muster/
-1 SEX M
-1 BIRT
-2 DATE 1908
-1 FAMS @F2@
-0 @I5@ INDI
-1 NAME Nameless Placeholder
-1 BIRT
-2 DATE SOMEDAY MAYBE
-0 @I6@ INDI
-1 NAME Rosa (Rosie) /Weiss/
-1 NAME Rosalind /Weiss/
-2 TYPE official
+1 NAME Hildegard /Laudler/
+2 TYPE birth
+2 NICK Hilde
+1 NAME Hildegard /Löbig/
+2 TYPE married
 1 SEX F
 1 BIRT
+2 DATE 19 MAR 1876
+2 PLAC Fläckfeld, Kreis Mockburg, Hesse, Germany
+1 DEAT
+2 DATE 1968
+1 FAMS @F2@
+0 @I5@ INDI
+1 NAME Rahel /Löbig/
+1 SEX F
+1 BIRT
+2 DATE 1871
+1 DEAT
+2 DATE AFT 1945
+1 OBJE @O1@
+1 FAMC @F1@
+0 @I6@ INDI
+1 NAME Felix /Löbig/
+1 SEX M
+1 BIRT
+2 DATE 1867
+1 DEAT
+2 DATE 1931
+1 OCCU Hatter
+1 RESI
+2 DATE 1930
+2 PLAC Wasserallee 59, Flörburg, Hesse, Germany
+1 OBJE @O1@
+1 FAMC @F1@
+1 FAMS @F3@
+0 @I7@ INDI
+1 NAME Ida (Peppi) /Sörne/
+1 _MARNM Ida /Löbig/
+1 SEX F
+1 BIRT
+2 DATE 17 APR 1881
+2 PLAC Moshausen, Germany
+1 DEAT
+2 DATE 1946
+1 FAMS @F3@
+0 @I8@ INDI
+1 NAME Gustav /Löbig/
+2 TYPE birth
+2 NICK Gustl
+1 NAME Gustave /Lobig/
+2 TYPE immigrant
+1 SEX M
+1 BIRT
+2 DATE 7 JAN 1919
+2 PLAC Flörburg, Hesse, Germany
+1 DEAT
+2 DATE 1996
+1 BURI
+2 PLAC Stupfield, Victoria, Australia
+1 OCCU Hatter
+1 RESI
+2 DATE 1952
+2 PLAC 8 Hawthorn Road, Stupfield, Victoria, Australia
+1 FAMC @F2@
+1 FAMS @F4@
+0 @I9@ INDI
+1 NAME Klara /Löbig/
+2 TYPE birth
+2 NICK Pünktchen
+1 NAME Clara /Lobig/
+2 TYPE immigrant
+1 SEX F
+1 BIRT
+2 DATE 1917
+1 DEAT
+2 DATE 2001
+1 RESI
+2 DATE 19 AUG 1938
+2 PLAC 31 Juniper Street, Stupfield, Victoria, Australia
+1 FAMC @F2@
+0 @I10@ INDI
+1 NAME Ursula /Löbig/
+1 SEX F
+1 BIRT
+2 DATE 1911
+1 DEAT
+2 DATE 1941
+1 FAMC @F2@
+0 @I11@ INDI
+1 NAME Leopold /Löbig/
+1 SEX M
+1 BIRT
+2 DATE 29 MAY 1914
+1 DEAT
+2 DATE 1960
+1 FAMC @F3@
+1 FAMS @F5@
+0 @I12@ INDI
+1 NAME Rudolf /Löbig/
+2 NICK Rudi
+1 SEX M
+1 BIRT
+2 DATE 24 OCT 1916
+1 DEAT
+2 DATE 1941
+1 EDUC Städtische Realschule Flörburg
+2 DATE 1930
+1 FAMC @F3@
+0 @I13@ INDI
+1 NAME N.N. /Löbig/
+1 SEX U
+1 BIRT
+2 DATE 1922
+1 DEAT
+2 DATE 1922
+1 FAMC @F3@
+0 @I14@ INDI
+1 NAME Florence /Faxridge/
+2 TYPE birth
+1 NAME Florence /Lobig/
+2 TYPE married
+1 SEX F
+1 BIRT
+2 DATE 1914
+1 DEAT
+2 DATE 1963
+1 FAMS @F4@
+0 @I15@ INDI
+1 NAME Nicholas /Lobig/
+1 SEX M
+1 BIRT
+2 DATE 1950
+2 PLAC Stupfield, Victoria, Australia
+1 FAMC @F4@
+0 @I16@ INDI
+1 NAME Ursula /Löbig/
+1 SEX F
+1 RESI
 2 DATE 1912
-1 _MARNM Rosa Braun
+2 PLAC Angerring 57, Flörburg, Hesse, Germany
+1 NOTE Listed as a widow in the 1912 Flörburg directory; no relation
+2 CONC  to the family is known.
+0 @I17@ INDI
+1 NAME Agnes /Nertler/
+2 TYPE birth
+1 NAME Agnes /Löbig/
+2 TYPE married
+1 SEX F
+1 BIRT
+2 DATE 20 APR 1912
+2 PLAC Kredfeld, Hesse, Germany
+1 DEAT
+2 DATE 1974
+1 FAMS @F5@
 0 @F1@ FAM
-1 HUSB @I2@
-1 WIFE @I1@
+1 HUSB @I1@
+1 WIFE @I2@
 1 CHIL @I3@
+1 CHIL @I6@
+1 CHIL @I5@
 1 MARR
-2 DATE 2 APR 1902
-2 PLAC Springfield, Example County
+2 DATE 1859
 0 @F2@ FAM
-1 HUSB @I4@
-1 WIFE @I3@
+1 HUSB @I3@
+1 WIFE @I4@
+1 CHIL @I10@
+1 CHIL @I9@
+1 CHIL @I8@
 1 MARR
-2 DATE 30 JUL 1935
+2 DATE 15 DEC 1905
+2 PLAC Flörburg, Hesse, Germany
+0 @F3@ FAM
+1 HUSB @I6@
+1 WIFE @I7@
+1 CHIL @I11@
+1 CHIL @I12@
+1 CHIL @I13@
+0 @F4@ FAM
+1 HUSB @I8@
+1 WIFE @I14@
+1 CHIL @I15@
+1 MARR
+2 DATE 1942
+0 @F5@ FAM
+1 HUSB @I11@
+1 WIFE @I17@
+1 MARR
+2 DATE 8 FEB 1947
+2 PLAC Flörburg, Hesse, Germany
 1 DIV
-2 DATE 10 OCT 1939
+2 DATE 2 JAN 1957
+0 @O1@ OBJE
+1 FILE studio-portrait-1890s.jpg
+2 FORM jpg
+2 TITL Studio portrait of the Löbig family
+1 DATE BET 1890 AND 1899
 0 TRLR

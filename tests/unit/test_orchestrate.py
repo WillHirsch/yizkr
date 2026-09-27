@@ -721,14 +721,16 @@ class TestNeverIngestList:
         sources = {source.key: source for source in u.SOURCES}
         folder = tmp_path / "docs"
         folder.mkdir()
-        memoir = sources["memoir_1995"].text
-        (folder / "memoir_1995.txt").write_text(memoir)
-        (folder / "memoir copy.txt").write_text(memoir)  # same bytes
-        (folder / "Springfield address book.txt").write_text(
-            sources["address_book_1932"].text
+        postcard = sources["postcard-1938"].text
+        (folder / "postcard-1938.txt").write_text(postcard)
+        (folder / "postcard copy.txt").write_text(postcard)  # same bytes
+        (folder / "Flörburg address book.txt").write_text(
+            sources["directory-1912"].text
         )
         (folder / "address book.docx").write_text("unsupported and listed")
-        (folder / "gazette_1978.txt").write_text(sources["gazette_1978"].text)
+        (folder / "naturalisation-1952.txt").write_text(
+            sources["naturalisation-1952"].text
+        )
         return folder
 
     def test_no_list_no_run(self, tmp_path):
@@ -745,20 +747,20 @@ class TestNeverIngestList:
         folder = self._folder(tmp_path)
         orch = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         assert [d.source.name for d in orch.documents()] == [
-            "Springfield address book.txt",
-            "gazette_1978.txt",
-            "memoir copy.txt",
-            "memoir_1995.txt",
+            "Flörburg address book.txt",
+            "naturalisation-1952.txt",
+            "postcard copy.txt",
+            "postcard-1938.txt",
         ]
 
     def test_listed_documents_are_never_touched(self, tmp_path):
         import hashlib
 
         folder = self._folder(tmp_path)
-        memoir_sha1 = hashlib.sha1(
-            (folder / "memoir_1995.txt").read_bytes()
+        postcard_sha1 = hashlib.sha1(
+            (folder / "postcard-1938.txt").read_bytes()
         ).hexdigest()
-        listed = ExclusionList.parse(f"{memoir_sha1}\n*address*book*\n")
+        listed = ExclusionList.parse(f"{postcard_sha1}\n*address*book*\n")
         logged = []
         orch = ScriptedOrchestrator(
             folder,
@@ -773,11 +775,11 @@ class TestNeverIngestList:
         assert len(excluded) == 4
         assert not any("unsupported" in line for line in logged)
         assert [c for c in orch.calls if c.startswith("register:")] == [
-            "register:gazette_1978.txt"
+            "register:naturalisation-1952.txt"
         ]
         assert sorted(p.name for p in (tmp_path / "state").iterdir()) == [
-            "gazette_1978"
+            "naturalisation-1952"
         ]
         assert [d.source.name for d in orch.documents()] == [
-            "gazette_1978.txt"
+            "naturalisation-1952.txt"
         ]
