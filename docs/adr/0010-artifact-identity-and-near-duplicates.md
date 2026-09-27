@@ -75,6 +75,12 @@ not by name:
 - **no media to hash** (re-registration of an existing artifact) → fall
   back to the label key, unchanged.
 
+Amended by #50 (2026-09-27): media derived from a compound artifact
+(ADR-0008) are artifacts with media too. They carry `media SHA-1`,
+referenced `stated in →` the deck that embeds them, and are resolved by
+it the same way, so one image embedded in several decks is one item,
+`part of` each (see ADR-0008's amendment).
+
 The orchestrator adds **content dedup** ahead of the expensive steps. It
 hashes each file at the top of `advance`, and a file whose bytes were
 already claimed is marked `duplicate` and is *not* transcribed,

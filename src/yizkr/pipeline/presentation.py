@@ -11,12 +11,15 @@ context). This module extracts:
 * embedded media, mapped to the slide(s) that reference them.
 
 Registration of the derived media follows the deck-asserts-its-own-
-composition convention: every statement on a derived item is
-referenced ``stated in -> the presentation`` (MODELING.md; ADR-0003).
+composition convention: every statement a deck contributes to a derived
+item is referenced ``stated in -> that presentation`` (MODELING.md;
+ADR-0003). Derived items are keyed on content (ADR-0010), so an image
+shared by several decks is one item that is ``part of`` each of them.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 import xml.etree.ElementTree as ET
 import zipfile
@@ -182,6 +185,33 @@ def slide_transcript(content: PresentationContent) -> str:
     return "\n".join(blocks)
 
 
+def _files_holding(
+    client, file_pages: set[str], content_sha1: str
+) -> list[str]:
+    """The wiki files among `file_pages` whose current bytes have this
+    SHA-1, by MediaWiki's own hash of each file (imageinfo)."""
+    if not file_pages:
+        return []
+    data = client.api_get(
+        {
+            "action": "query",
+            "titles": "|".join(sorted(file_pages)),
+            "prop": "imageinfo",
+            "iiprop": "sha1",
+        }
+    )
+    query = data.get("query", {})
+    # map API-normalised titles back to the statement values asked for
+    asked = {
+        entry["to"]: entry["from"] for entry in query.get("normalized", [])
+    }
+    return sorted(
+        asked.get(page["title"], page["title"])
+        for page in query.get("pages", {}).values()
+        if (page.get("imageinfo") or [{}])[0].get("sha1") == content_sha1
+    )
+
+
 def register_derived_media(
     client,
     deck_qid: str,
@@ -189,61 +219,130 @@ def register_derived_media(
     content: PresentationContent,
     workdir: Path,
 ) -> dict[str, str]:
-    """Upload each embedded image and mint its derived artifact item.
+    """Ensure each embedded image has its derived artifact item and file.
 
-    Idempotent: media items are matched by their deck-prefixed label
-    (labels are the system-wide idempotency key); wiki file names are
-    deck-prefixed for uniqueness. Every statement is referenced
-    `stated in -> the presentation` (ADR-0008). Returns
-    {media name -> QID}.
+    Keyed on content (ADR-0010): a medium is matched by the SHA-1 of its
+    bytes first, so the same image embedded in several decks (or also
+    ingested on its own) is ONE artifact item, and its bytes are uploaded
+    only when none of the item's wiki files holds them yet. An item
+    registered before the hash key is matched by its deck-prefixed label,
+    and adopted and backfilled when its wiki file holds the same bytes; a
+    same-label item with DIFFERENT bytes is different content, so the new
+    item gets a content-tagged label and file name.
+
+    Each deck's assertions are then ensured additively (ADR-0008): one
+    `part of -> deck` per slide the medium is on, slide-qualified, plus
+    `instance of`, `media file` and `media SHA-1`, each referenced
+    `stated in -> this deck`. A statement that another deck (or the
+    artifact itself) already made gains this deck's reference instead
+    of a duplicate; nothing existing is removed or rewritten (CLAUDE.md
+    rule 3). Idempotent on re-run. Returns {media name -> QID}.
     """
+    from wikibaseintegrator.datatypes import String
+
     from yizkr.pipeline.registrar import (
-        _append,
-        _existing_claim_targets,
+        _ensure_referenced,
+        _existing_claim_strings,
         _item_claim,
         _string_claim,
     )
 
+    derived: dict[str, str] = {}
+    if not content.media:
+        return derived
     properties, items = client.vocabulary()
     instance_of = properties["instance_of"]
     part_of = properties["part_of"]
     stated_in = properties["stated_in"]
     media_file = properties["media_file"]
+    media_sha1 = properties["media_sha1"]
     page_number = properties["page_number"]
 
-    from wikibaseintegrator.datatypes import String
-
-    derived: dict[str, str] = {}
+    # one lag-free enumeration per deck, kept current as items are minted
+    by_hash = dict(client.string_statement_index(media_sha1))
     prefix = (
         re.sub(r"[^A-Za-z0-9 _.-]+", "", deck_title).strip() or "presentation"
     )
     workdir.mkdir(parents=True, exist_ok=True)
     for medium in content.media:
+        content_sha1 = hashlib.sha1(medium.data).hexdigest()
         label = f"{deck_title} — {medium.name}"
-        existing = client.find_item_by_label(label)
-        if existing:
-            derived[medium.name] = existing
-            continue
-        local = workdir / f"{prefix} {medium.name}"
-        local.write_bytes(medium.data)
-        file_page = client.upload_file(local)
-        item = client.wbi.item.new()
-        item.labels.set("en", label)
-        slide_list = ", ".join(str(number) for number in medium.slides)
-        item.descriptions.set(
-            "en", f"media embedded in the presentation (slide {slide_list})"
-        )
-        item = item.write(summary="ingest: derived media from presentation")
+        filename = f"{prefix} {medium.name}"
+        item = None
+        held: list[str] = []  # the item's wiki files holding these bytes
+        qid = by_hash.get(content_sha1)
+        if qid is not None:
+            item = client.wbi.item.get(qid)
+            held = _files_holding(
+                client, _existing_claim_strings(item, media_file), content_sha1
+            )
+        else:
+            labelled = client.find_item_by_label(label)
+            if labelled is not None:
+                # a same-label item without a hash predates the key: it is
+                # this medium only if its wiki file holds these bytes (or
+                # it has no file yet — a write interrupted before its
+                # statements); a hashed one is different bytes by now
+                candidate = client.wbi.item.get(labelled)
+                files = _existing_claim_strings(candidate, media_file)
+                held = _files_holding(client, files, content_sha1)
+                hashed = _existing_claim_strings(candidate, media_sha1)
+                if not hashed and (held or not files):
+                    item = candidate  # adopt; the hash is backfilled below
+                else:
+                    # same deck title and media name, different bytes (a
+                    # deck re-exported with a changed image): a distinct
+                    # artifact, so its label and file name must differ
+                    held = []
+                    label = f"{label} [{content_sha1[:8]}]"
+                    filename = f"{prefix} {content_sha1[:8]} {medium.name}"
+
+        # the bytes are uploaded only if no file of the item holds them
+        # already, so a medium reused by another deck adds no second blob
+        if not held:
+            local = workdir / filename
+            local.write_bytes(medium.data)
+            held = [client.upload_file(local)]
+
+        if item is None:
+            item = client.wbi.item.new()
+            item.labels.set("en", label)
+            slide_list = ", ".join(str(number) for number in medium.slides)
+            item.descriptions.set(
+                "en",
+                f"media embedded in the presentation (slide {slide_list})",
+            )
+            changed = True
+        else:
+            changed = False
+            # another deck's name for the same bytes becomes an alias, as
+            # the registrar keeps an alternate filename (MODELING.md)
+            current = str(item.labels.get("en") or "")
+            aliases = {str(alias) for alias in item.aliases.get("en") or []}
+            if label != current and label not in aliases:
+                item.aliases.set("en", label)
+                changed = True
+
         kind = items["photograph"] if medium.is_image else items["artifact"]
-        if kind not in _existing_claim_targets(item, instance_of):
-            _append(item, _item_claim(instance_of, kind, stated_in, deck_qid))
-        _append(
-            item, _string_claim(media_file, file_page, stated_in, deck_qid)
-        )
+        statements = [
+            _item_claim(instance_of, kind, stated_in, deck_qid),
+            *(
+                _string_claim(media_file, page, stated_in, deck_qid)
+                for page in held
+            ),
+            _string_claim(media_sha1, content_sha1, stated_in, deck_qid),
+        ]
         for slide in medium.slides:
             claim = _item_claim(part_of, deck_qid, stated_in, deck_qid)
             claim.qualifiers.add(String(prop_nr=page_number, value=str(slide)))
-            _append(item, claim)
-        item.write(summary="ingest: derived media statements")
+            statements.append(claim)
+        for claim in statements:
+            outcome = _ensure_referenced(item, claim, stated_in, deck_qid)
+            changed = changed or outcome != "present"
+        if changed:
+            item = item.write(
+                summary="ingest: derived media from presentation"
+            )
+        by_hash[content_sha1] = item.id
         derived[medium.name] = item.id
     return derived

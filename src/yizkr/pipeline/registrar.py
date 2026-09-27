@@ -29,6 +29,7 @@ blob by SHA-1).
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -68,6 +69,67 @@ def _existing_claim_strings(entity, pid: str) -> set[str]:
         if isinstance(value, str):
             values.add(value)
     return values
+
+
+def _statement_key(claim) -> tuple:
+    """Property, value and qualifiers of a statement, ignoring its
+    references and snak hashes. Same value with different qualifiers is
+    a different assertion (ADR-0002), as in the writer's matching."""
+
+    def value_key(datavalue) -> str:
+        value = (datavalue or {}).get("value")
+        if isinstance(value, dict) and "id" in value:
+            return value["id"]
+        return json.dumps(value, sort_keys=True)
+
+    qualifiers = sorted(
+        (pid, value_key(snak.datavalue))
+        for pid, snaks in claim.qualifiers.qualifiers.items()
+        for snak in snaks
+    )
+    return (
+        claim.mainsnak.property_number,
+        value_key(claim.mainsnak.datavalue),
+        tuple(qualifiers),
+    )
+
+
+def _cites(claim, stated_in_pid: str, source_qid: str) -> bool:
+    """Does any reference block on `claim` cite `stated in -> source`?"""
+    for reference in claim.references.references:
+        for snak in reference.snaks.get(stated_in_pid) or []:
+            value = (snak.datavalue or {}).get("value") or {}
+            if isinstance(value, dict) and value.get("id") == source_qid:
+                return True
+    return False
+
+
+def _ensure_referenced(
+    entity, claim, stated_in_pid: str, source_qid: str
+) -> str:
+    """Make `entity` carry `claim` as asserted by `source_qid`, additively.
+
+    * no equal statement (same property, value AND qualifiers): `claim`
+      is appended as a new statement -> "added";
+    * an equal statement exists but cites no `stated in -> source`: the
+      claim's reference blocks are appended to it, an agreeing second
+      source (the writer's rule; ADR-0002, ADR-0003) -> "referenced";
+    * already cited -> "present" (safe re-run).
+
+    Existing statements and their references are never removed or
+    rewritten (CLAUDE.md rule 3). The caller writes the entity.
+    """
+    key = _statement_key(claim)
+    for existing in entity.claims.get(claim.mainsnak.property_number):
+        if _statement_key(existing) != key:
+            continue
+        if _cites(existing, stated_in_pid, source_qid):
+            return "present"
+        for reference in claim.references.references:
+            existing.references.add(reference)
+        return "referenced"
+    _append(entity, claim)
+    return "added"
 
 
 def _item_claim(pid: str, qid: str, stated_in_pid: str, source_qid: str):
