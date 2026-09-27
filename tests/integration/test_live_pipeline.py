@@ -1,8 +1,9 @@
 """Live pipeline flow: register -> write, idempotency, the overwrite
 regression (two values on one property must COEXIST — the second write
-must never replace the first; ADR-0002), and the provenance of a minted
+must never replace the first; ADR-0002), the provenance of a minted
 item's type statements, which the reappraisal queue and the unreferenced
-report must count correctly (#88)."""
+report must count correctly (#88), and a later source's kind for an item
+that already exists, which the queue must reflect (#233)."""
 
 from __future__ import annotations
 
@@ -14,8 +15,10 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.fixtures import example_universe as u
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ClaimBatch, QidRef
+from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.registrar import register_artifact
+from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
@@ -1140,3 +1143,330 @@ def test_rewriting_the_slice_writes_nothing(client, typed_firm):
     statements = statements_by_key(client, typed_firm.firm)
     assert len(statements["instance_of"]) == 2
     assert len(statements["type_hint"]) == 1
+
+
+# -- a later source adds to an existing item's kind (#233) ------------------
+#
+# Another slice of the example universe, under a marker of its own. The
+# 1905 marriage certificate's batch mints Sebastian Löbig (human) and his
+# occupation, Hatter. The 2002 interview's batch mints the family firm
+# under the interview's name for it, "the Blue Hat", as an unclassified
+# entity with the type hint "hat shop" (ADR-0013). The 1912 directory's
+# batch then names Sebastian ("Inh. Sebastian Löbig", the firm's owner)
+# and the firm, which it types an organization under its full name.
+# Before it is written it takes the steps a run takes: a reviewer's
+# approved equivalence joins its firm to the interview's item, and the
+# resolve step matches Sebastian by exact label, so its claims name both
+# by QID (ADR-0007).
+#
+# The marker keeps this slice apart from every other test's items, and the
+# fixed run metadata keeps each batch's fingerprint, so a re-run reuses
+# the items and run items and writes nothing.
+
+WITNESS_MARK = "(kind-witness test)"
+MARRIAGE = "marriage-cert-1905"
+WITNESS_RUN = {
+    "model_identifier": "integration-test",
+    "pipeline_version": "0.0.0",
+    "started_at": "2026-09-27T12:00:00+00:00",
+}
+
+
+def witness_marked(label: str) -> str:
+    return f"{label} {WITNESS_MARK}"
+
+
+def says(subject: str, source: str, prop: str) -> u.Assertion:
+    """What `source` says about `subject`'s `prop` in the universe."""
+    (assertion,) = [a for a in u.about(subject, prop) if a.source == source]
+    return assertion
+
+
+def entity_ref(entity: dict) -> dict:
+    """A claim's local ref to a manifest entity, as extraction writes it:
+    with the manifest's canonical label and kind."""
+    return {
+        "kind": "local",
+        "local_id": entity["id"],
+        "label": entity["label"],
+        "instance_of": entity["kind"],
+    }
+
+
+def witness_batch(
+    source: str, sources: dict[str, str], entities: list, claims: list
+) -> ClaimBatch:
+    """`source`'s batch: its manifest, and its claims as (subject entity,
+    property, value, excerpt, qualifiers)."""
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": WITNESS_RUN,
+            "claims": [
+                {
+                    "subject": entity_ref(subject),
+                    "property": prop,
+                    "value": value,
+                    "qualifiers": qualifiers,
+                    "source": {
+                        "artifact": {"kind": "qid", "qid": sources[source]},
+                        "transcription_excerpt": {
+                            "text": excerpt,
+                            "language": UNIVERSE[source].lang,
+                        },
+                    },
+                }
+                for subject, prop, value, excerpt, qualifiers in claims
+            ],
+            "entities": entities,
+        }
+    )
+
+
+def witness_batches(sources: dict[str, str]) -> dict[str, ClaimBatch]:
+    """Each source's batch, by universe source key, as extraction gives
+    it (the directory's before resolution)."""
+    occupation = says("sebastian-loebig", MARRIAGE, "occupation")
+    name = says("zum-blauen-hut", INTERVIEW, "referred_to_as")
+    owner = says("sebastian-loebig", DIRECTORY, "employer")
+    founded = says("zum-blauen-hut", DIRECTORY, "start_time")
+    sebastian = {
+        "id": "sebastian",
+        "label": witness_marked(UNIVERSE["sebastian-loebig"].label),
+        "kind": "human",
+    }
+    hatter = {
+        "id": "hatter",
+        "label": witness_marked(UNIVERSE["hatter"].label),
+        "kind": "occupation_class",
+    }
+    blue_hat = {
+        "id": "firm",
+        "label": witness_marked(name.value),
+        "kind": "unclassified_entity",
+        "type_hint": TYPE_HINT,
+    }
+    firm = {
+        "id": "firm",
+        "label": witness_marked(UNIVERSE["zum-blauen-hut"].label),
+        "kind": "organization",
+    }
+
+    def item(entity: dict) -> dict:
+        return {"type": "item", "value": entity_ref(entity)}
+
+    def year(date: u.Date) -> dict:
+        return {"type": "time", "year": date.year}
+
+    owned_in = dict(owner.qualifiers)["point_in_time"]
+    return {
+        MARRIAGE: witness_batch(
+            MARRIAGE,
+            sources,
+            [sebastian, hatter],
+            [(sebastian, "occupation", item(hatter), occupation.excerpt, [])],
+        ),
+        INTERVIEW: witness_batch(
+            INTERVIEW,
+            sources,
+            [blue_hat],
+            [
+                (
+                    blue_hat,
+                    "referred_to_as",
+                    {
+                        "type": "monolingual",
+                        "value": {
+                            "text": name.value,
+                            "language": UNIVERSE[INTERVIEW].lang,
+                        },
+                    },
+                    name.excerpt,
+                    [],
+                )
+            ],
+        ),
+        DIRECTORY: witness_batch(
+            DIRECTORY,
+            sources,
+            [sebastian, firm],
+            [
+                (
+                    sebastian,
+                    "employer",
+                    item(firm),
+                    owner.excerpt,
+                    [{"property": "point_in_time", "value": year(owned_in)}],
+                ),
+                (firm, "start_time", year(founded.value), founded.excerpt, []),
+            ],
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class WitnessedSlice:
+    items: dict[str, str]  # "sebastian", "hatter", "firm" -> QID
+    sources: dict[str, str]  # universe source key -> artifact QID
+    runs: dict[str, str]  # universe source key -> extraction-run QID
+    batches: dict[str, ClaimBatch]  # as written: the directory's resolved
+
+
+@pytest.fixture(scope="module")
+def witnessed(client, config) -> WitnessedSlice:
+    """Write the slice in source order, the directory's batch after the
+    equivalence and resolve steps, and wait until the query service holds
+    it. Idempotent: a re-run reuses and skips everything."""
+    for key, quoted in (
+        (MARRIAGE, "der Hutmacher Sebastian Löbig"),
+        (INTERVIEW, "The hat shop, the Blue Hat"),
+        (DIRECTORY, "Inh. Sebastian Löbig"),
+    ):
+        assert quoted in UNIVERSE[key].text  # quoted, never paraphrased
+    sources = {
+        key: register_artifact(
+            client,
+            media_path=None,
+            artifact_type=UNIVERSE[key].artifact_class or "artifact",
+            title=witness_marked(UNIVERSE[key].title),
+            description="written by tests/integration; safe to delete",
+        ).artifact_qid
+        for key in (MARRIAGE, INTERVIEW, DIRECTORY)
+    }
+    batches = witness_batches(sources)
+    results = {
+        key: BatchWriter(client).write_batch(batches[key])
+        for key in (MARRIAGE, INTERVIEW)
+    }
+    items = {
+        "sebastian": results[MARRIAGE].created_items["sebastian"],
+        "hatter": results[MARRIAGE].created_items["hatter"],
+        "firm": results[INTERVIEW].created_items["firm"],
+    }
+    approved = apply_equivalences(batches[DIRECTORY], {"firm": items["firm"]})
+    _, item_labels = client.label_index()
+    batches[DIRECTORY] = resolve_batch(approved, item_labels)
+    # the writer sees QIDs only: no local ref of the directory's is left
+    assert [claim.subject for claim in batches[DIRECTORY].claims] == [
+        QidRef(qid=items["sebastian"]),
+        QidRef(qid=items["firm"]),
+    ]
+    assert batches[DIRECTORY].claims[0].value.value == QidRef(
+        qid=items["firm"]
+    )
+    results[DIRECTORY] = BatchWriter(client).write_batch(batches[DIRECTORY])
+    runs = {key: result.run_qid for key, result in results.items()}
+    wait_for_query_service(
+        config,
+        client,
+        [*items.values(), *sources.values(), *runs.values()],
+    )
+    return WitnessedSlice(items, sources, runs, batches)
+
+
+def test_later_source_adds_its_references_to_a_kind(client, witnessed):
+    """The directory names Sebastian, whom the marriage certificate's
+    batch minted a human: his one `instance of` now cites both sources,
+    each beside its extraction run (rules 1 and 2, ADR-0003). Hatter,
+    which the directory does not name, keeps its one source."""
+    _, items = client.vocabulary()
+    sebastian = statements_by_key(client, witnessed.items["sebastian"])
+    (kind,) = sebastian["instance_of"]
+    assert item_value(kind) == items["human"]
+    assert kind["rank"] == "normal"
+    assert cited(client, kind) == [
+        {("stated_in", witnessed.sources[MARRIAGE])},
+        {("inferred_from_extraction_run", witnessed.runs[MARRIAGE])},
+        {("stated_in", witnessed.sources[DIRECTORY])},
+        {("inferred_from_extraction_run", witnessed.runs[DIRECTORY])},
+    ]
+    hatter = statements_by_key(client, witnessed.items["hatter"])
+    (occupation_kind,) = hatter["instance_of"]
+    assert cited(client, occupation_kind) == [
+        {("stated_in", witnessed.sources[MARRIAGE])},
+        {("inferred_from_extraction_run", witnessed.runs[MARRIAGE])},
+    ]
+
+
+def test_later_source_kind_coexists(client, witnessed):
+    """The directory types the firm an organization, which the interview
+    held unclassified with the type hint "hat shop". Both kinds stand at
+    normal rank, each with its own source and run (ADR-0002), and the type
+    hint is as the interview's batch wrote it."""
+    _, items = client.vocabulary()
+    statements = statements_by_key(client, witnessed.items["firm"])
+    kinds = {item_value(s): s for s in statements["instance_of"]}
+    assert set(kinds) == {items["unclassified_entity"], items["organization"]}
+    (hint,) = statements["type_hint"]
+    assert hint["mainsnak"]["datavalue"]["value"] == TYPE_HINT
+    for statement, source in (
+        (kinds[items["unclassified_entity"]], INTERVIEW),
+        (hint, INTERVIEW),
+        (kinds[items["organization"]], DIRECTORY),
+    ):
+        assert statement["rank"] == "normal"
+        assert cited(client, statement) == [
+            {("stated_in", witnessed.sources[source])},
+            {("inferred_from_extraction_run", witnessed.runs[source])},
+        ]
+
+
+def test_queue_reflects_the_added_witness(client, config, witnessed):
+    """ADR-0023 §5: Sebastian's kind has two sources now, so the
+    under-witnessed queue no longer lists it. Every other statement of the
+    slice has one source and no curator sibling, and is listed, one row
+    each: the firm's two kinds among them."""
+    statements = {
+        name: statements_by_key(client, qid)
+        for name, qid in witnessed.items.items()
+    }
+    assert {
+        name: {key: len(claims) for key, claims in by_key.items()}
+        for name, by_key in statements.items()
+    } == {
+        "sebastian": {"instance_of": 1, "occupation": 1, "employer": 1},
+        "hatter": {"instance_of": 1},
+        "firm": {
+            "instance_of": 2,
+            "type_hint": 1,
+            "referred_to_as": 1,
+            "start_time": 1,
+        },
+    }
+    (witnessed_kind,) = statements["sebastian"]["instance_of"]
+    expected = sorted(
+        statement_uri(config, s["id"])
+        for by_key in statements.values()
+        for claims in by_key.values()
+        for s in claims
+        if s["id"] != witnessed_kind["id"]
+    )
+    rows = rows_about(
+        client,
+        config,
+        "under-witnessed-statements",
+        "subject",
+        witnessed.items.values(),
+    )
+    assert sorted(row["statement"]["value"] for row in rows) == expected
+
+
+def test_rewriting_the_later_slice_adds_nothing(client, witnessed):
+    """A re-run of all three batches reuses every item and run item, and
+    adds no statement and no reference block."""
+    before = {
+        qid: statements_by_key(client, qid) for qid in witnessed.items.values()
+    }
+    for key, claims in ((MARRIAGE, 1), (INTERVIEW, 1), (DIRECTORY, 2)):
+        again = BatchWriter(client).write_batch(witnessed.batches[key])
+        assert again.run_qid == witnessed.runs[key]
+        assert (again.written, again.referenced, again.skipped) == (
+            0,
+            0,
+            claims,
+        )
+        assert again.type_statements_written == 0
+        assert again.type_statements_referenced == 0
+    after = {
+        qid: statements_by_key(client, qid) for qid in witnessed.items.values()
+    }
+    assert after == before
