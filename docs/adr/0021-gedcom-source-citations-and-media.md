@@ -33,7 +33,7 @@ because of what these tags *are*:
   that principle: we keep "Gustav was born 7 Jan 1919" but discard "…per
   the birth index, Vol N p M, as cited by the tree".
 - An **`OBJE` object** is a photograph, scan, or clipping — e.g. an
-  *"Obituary notice in <newspaper>"*, dated and placed, with a
+  *"Obituary notice in `<newspaper>`"*, dated and placed, with a
   `newspapers.com` URL. In an Ancestry export the **bytes are remote**: the
   file references media the archive does not hold. Registering media
   (ADR-0004/0010) keys on the SHA-1 of bytes we *have*, and the privacy

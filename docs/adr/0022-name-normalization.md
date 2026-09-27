@@ -49,7 +49,7 @@ analyses had conflated:
   independent rulers with opposite priors (YAGNI-minimalist and structure-honest)
   both ruled against it, at high confidence. The given/family *kind* is
   undecidable without name-order convention (a source-first-forbidden guess that
-  inverts on surname-first cultures — "Nagy/Kovács Erzsébet" — and shatters
+  inverts on surname-first cultures — "Sörne/Löbig Ida" — and shatters
   particle surnames — "van der Berg"); where it *is* cleanly decidable (GEDCOM
   `SURN`/`GIVN`) it is the component ADR-0011 already deferred and yields a
   type-unknown surname the adjudication prompt itself classes as *weak* evidence;
