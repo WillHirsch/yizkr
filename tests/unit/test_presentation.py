@@ -519,6 +519,48 @@ class TestRegisterDerivedMedia:
             wiki.entities[first["image1.png"]] == before[first["image1.png"]]
         )
 
+        # re-running the changed deck writes nothing, and the tagged item
+        # never takes the earlier item's label as an alias
+        snapshot, writes = copy.deepcopy(wiki.entities), wiki.writes
+        again = register(
+            wiki, tmp_path, "Q11", "Deck A", deck_content([1], OTHER_IMAGE)
+        )
+        assert again == changed
+        assert wiki.writes == writes
+        assert wiki.entities == snapshot
+        tagged = wiki.entities[changed["image1.png"]]
+        aliases = tagged.get("aliases", {}).get("en", [])
+        assert "Deck A — image1.png" not in [a["value"] for a in aliases]
+
+    def test_reused_image_never_aliases_another_items_label(self, tmp_path):
+        # a deck whose image is already another deck's medium: its own
+        # deck-prefixed label belongs to a different artifact, so it is
+        # not added as an alias (that would cross-link the two)
+        wiki = FakeWiki()
+        first = register(wiki, tmp_path, "Q10", "Deck A", deck_content([1]))
+        other = register(
+            wiki, tmp_path, "Q20", "Deck B", deck_content([1], OTHER_IMAGE)
+        )
+        before = copy.deepcopy(wiki.entities[first["image1.png"]])
+
+        reused = register(
+            wiki, tmp_path, "Q11", "Deck A", deck_content([2], OTHER_IMAGE)
+        )
+
+        assert reused == other  # same bytes: one artifact (ADR-0010)
+        entity = wiki.entities[other["image1.png"]]
+        assert part_of(entity) == {
+            ("Q20", "1"): ["Q20"],
+            ("Q11", "2"): ["Q11"],
+        }
+        assert "aliases" not in entity or not entity["aliases"].get("en")
+        assert wiki.entities[first["image1.png"]] == before
+        writes = wiki.writes
+        register(
+            wiki, tmp_path, "Q11", "Deck A", deck_content([2], OTHER_IMAGE)
+        )
+        assert wiki.writes == writes
+
     def test_no_media_touches_nothing(self, tmp_path):
         wiki = FakeWiki()
         content = PresentationContent(

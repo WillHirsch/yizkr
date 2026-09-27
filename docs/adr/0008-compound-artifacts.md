@@ -110,4 +110,6 @@ deck's `part of`. Derived items now follow artifact identity (ADR-0010):
   or removed (CLAUDE.md rule 3), and every deck's assertions about the
   item are each referenced `stated in` that deck;
 - a reused image is not uploaded again when one of the item's files
-  already holds its bytes; a later deck's label for it becomes an alias.
+  already holds its bytes; a later deck's label for it becomes an alias
+  unless that label is another item's (the case that content-tagged
+  the item), since that alias would cross-link two artifacts.
