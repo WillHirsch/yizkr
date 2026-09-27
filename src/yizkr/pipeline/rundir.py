@@ -11,17 +11,19 @@ one run, and the run state derived from them.
 Every file is append-only JSON lines except run.json, which is replaced
 atomically. Readers skip a torn last line, so a reader never needs a lock
 and an interrupted writer never corrupts the log. Every stage start,
-completion and failure is an event, and so is every answer the LLM cache
-gives or cannot give (yizkr.pipeline.llmcache); the driver, the live
-monitor, the anomaly checks and pacing all read and write these files,
-and docs/LLM_CACHE.md is their contract.
+completion and failure is an event, and so is every view a run reuses
+(yizkr.pipeline.orchestrate) and every answer the LLM cache gives or
+cannot give (yizkr.pipeline.llmcache); the driver, the live monitor, the
+anomaly checks and pacing all read and write these files, and
+docs/LLM_CACHE.md is their contract.
 
 Run state per document and stage is derived from the run manifest and
 the events alone (never from file modification times or a per-document
 status file): a stage is pending until an event names it; running once
 it has started; done, or needs attention when its output carries
-attention reasons; failed, with the reason, until a later start; and
-pending again, with the reason, while the control file holds it.
+attention reasons, whether it was made in the run or reused from an
+earlier one; failed, with the reason, until a later start; and pending
+again, with the reason, while the control file holds it.
 """
 
 from __future__ import annotations
@@ -46,11 +48,13 @@ RUN_START = "run-start"
 RUN_END = "run-end"
 RUN_INTERRUPTED = "run-interrupted"
 SET_ASIDE = "set-aside"
-STAGE_EVENTS = ("started", "done", "failed", "held")
+# a stage's events: "reused" says its view was current and stands
+STAGE_EVENTS = ("started", "done", "reused", "failed", "held")
 # the LLM cache's events (yizkr.pipeline.llmcache), counted per role
 CACHE_EVENTS = (
     "cache-hit",
     "cache-miss",
+    "cache-resume",
     "cache-replay",
     "cache-reject",
     "cache-adopt",
@@ -271,7 +275,7 @@ class StageState:
 
 def _state_from_event(event: dict) -> StageState:
     kind = event["event"]
-    if kind == "done":
+    if kind in ("done", "reused"):
         if event.get("attention"):
             return StageState(NEEDS_ATTENTION, "; ".join(event["attention"]))
         return StageState(DONE)
@@ -313,9 +317,10 @@ def summarise(
 
 
 def cache_counts(run: RunDir) -> dict[str, dict[str, int]]:
-    """role -> what the LLM cache did for it -> count, over every
-    invocation of the run: hits and misses by reason ("hit: key match",
-    "miss: absent"), and replays, rejections and adoptions."""
+    """role -> what the LLM cache did for it -> count: lifetime totals,
+    over every invocation the run directory has seen. Hits and misses
+    are counted by reason ("hit: key match", "miss: absent"), besides
+    resumes, replays, rejections and adoptions."""
     counts: dict[str, dict[str, int]] = {}
     for event in run.events():
         name = event.get("event")

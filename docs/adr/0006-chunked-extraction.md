@@ -192,13 +192,19 @@ its own. Every call goes through the client it is given, and with the
 cache each answer is kept under a key built from what the call sends, so a
 re-run replays the calls that completed and asks the engine only for the
 rest: a failed chunk costs one chunk. Parsing, the merge and validation
-run on every run, so a fix to them costs no model call for any response
-the old code accepted. A response the extractor cannot use is rejected in
-the cache: a chunk cut off before its sentinel, and an entity manifest or
-a segmentation it refuses. A rejected response is kept aside for
-inspection and never served again, so the retry, or the next run, asks
-the engine anew; a parser fix therefore does not recover a response the
-old parser rejected. A fallback tier is taken only when the engine
+run whenever the batch is made again (in a fresh state directory, or on
+`--refresh extract`; `ingest run` otherwise reuses the batch view,
+ADR-0032 §1), so a fix to them costs no model call for any response the
+old code accepted. A chunk cut off before its sentinel is rejected in the
+cache: it is kept aside for inspection and never served again, so the
+retry, or the next run, asks the engine anew, and a parser fix does not
+recover a response the old parser rejected. The entity manifest and the
+segmentation are asked in two attempts each, keyed apart in the cache,
+and a refused answer is kept, so a later run replays the same attempts
+and takes the same fallback (ADR-0032 §5). When a fork misses behind a
+cached manifest, the conversation is resumed exactly from what the cache
+kept; a replay that answers differently starts the extraction over from
+the new answer (ADR-0032 §6). A fallback tier is taken only when the engine
 answered: an outage fails the extraction, to be retried. Per-chunk
 progress is the log, and the chunks that failed, with the first reason,
 are the extraction's error. Coverage, rejects and gaps are side outputs

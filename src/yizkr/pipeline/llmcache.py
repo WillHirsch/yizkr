@@ -1,14 +1,14 @@
 """The LLM cache: model responses reused at the engine boundary (ADR-0032).
 
-Development runs the whole corpus through the pipeline again and again
-(ADR-0025). The costly, non-deterministic part of a run is the model
-call; everything after it (parsing, merging, validation, the
-transcription check) is code that runs in moments. So each response is
-kept under a key built from what its call sends, and a call made again
-with the same key is answered from the cache. Everything after the call
-runs on every run, whether its response came from the engine or from the
-cache, so a fix to it costs no model call, and no change needs a version
-bump: a change to what a call sends changes its key by itself.
+A run recomputes a document's views (its transcription, batch and
+critique) when their inputs change, when a scratch run starts from fresh
+state directories, or on `--refresh`. The costly, non-deterministic part
+of a recompute is the model call; everything after it (parsing, merging,
+validation, the transcription check) is code that runs in moments. So
+each response is kept under a key built from what its call sends, and a
+call made again with the same key is answered from the cache: an
+accelerator, which the pipeline runs the same without. A change to what a
+call sends changes its key by itself, so no change needs a version bump.
 
 A key is the SHA-256 of the canonical JSON of:
 
@@ -23,7 +23,10 @@ A key is the SHA-256 of the canonical JSON of:
   corpus, a state directory or a temporary file lives;
 * the content SHA-256 of every file the call may read, which are the
   files its caller passes;
-* for a fork, the keys of the conversation it forks;
+* for a fork, the keys of the conversation it forks and the SHA-256 of
+  the conversation's opening answer, which the fork's context holds;
+* the attempt: a caller that asks again after an answer it cannot use,
+  and then falls back, keys each attempt apart (llm.for_attempt);
 * the role's epoch: 0 until someone re-samples the role on purpose.
 
 Nothing on the engine's server is keyed. The account data the claude CLI
@@ -32,32 +35,40 @@ compaction, and the CLI fills in details of its own when it runs, such as
 the date (yizkr.pipeline.llm). Each entry records the model the engine
 reported, so a reuse across such a change can be seen.
 
-Layout under the cache root (runtime state, kept under var/):
+Layout under the cache root (runtime state, kept under var/, mode 700):
 
     <root>/<first two hex digits of the key>/<key>.json
                                             /<key>.rejected-<stamp>.json
                                             /<key>.replaced-<stamp>.json
+                                            /<key>.session/...
 
 ``<key>.json`` is the one entry a call is served. It holds the key's
 components, the response, its origin (``engine``, or the reason it was
 adopted) and its provenance: the role, the engine, the model the engine
-reported, the CLI version, the client's config hash and the time. Only a
-response the engine returned is stored: an error, a timeout or a pause
-(PassPaused) stores nothing. Entries are written atomically, so a reader
-sees one whole or not at all, and calls answered in parallel under one
-key leave one whole entry. The cache deletes nothing: an entry a caller
-rejects, or that a refresh replaces, is moved aside under a name no
-lookup reads, and kept for inspection.
+reported, the CLI version, the client's config hash and the time; a fork
+also records how its session was obtained and the opening answer it was
+made on. Only a response the engine returned with some text in it is
+stored: an error, a timeout, a pause (PassPaused) or an empty answer
+stores nothing. An entry is published whole, by a link that fails where
+the key already has one, so a reader sees an entry whole or not at all,
+and the cache deletes nothing: an entry a caller rejects, and any entry
+a newer one displaces (a refresh's, a racing call's, or one damaged), is
+moved aside under a name no lookup reads, and kept for inspection.
+``<key>.session/`` keeps the session files of a conversation's opening
+turn, for the engines that need them to resume it exactly.
 
 docs/LLM_CACHE.md describes the cache, its events and the run directory.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
 import re
+import shutil
+import stat
 import threading
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -65,7 +76,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from yizkr.pipeline.llm import ConversationalLlmClient
+from yizkr.pipeline.llm import ConversationalLlmClient, ConversationChanged
 from yizkr.pipeline.stages import (
     atomic_write_text,
     canonical_json,
@@ -92,10 +103,11 @@ FORK = "fork"
 # the events a caching client emits
 HIT = "cache-hit"
 MISS = "cache-miss"
+RESUME = "cache-resume"
 REPLAY = "cache-replay"
 REJECT = "cache-reject"
 ADOPT = "cache-adopt"
-EVENTS = (HIT, MISS, REPLAY, REJECT, ADOPT)
+EVENTS = (HIT, MISS, RESUME, REPLAY, REJECT, ADOPT)
 
 # why a call was answered from the cache, besides an adoption's reason
 KEY_MATCH = "key match"
@@ -104,7 +116,18 @@ ABSENT = "absent"
 REJECTED = "rejected"
 REFRESH = "refresh"
 
+# how a fork's session was obtained: from the opening turn asked in this
+# run; resumed exactly from what the cache kept; by a replay of the
+# opening turn that gave the cached answer again; or from an opening turn
+# recomputed in this run because its replay answered differently
+LIVE = "live"
+RESUMED = "resumed"
+REPLAYED = "replayed"
+RECOMPUTED = "recomputed"
+
 _KEY = re.compile(r"^[0-9a-f]{64}$")
+# how many times a publish moves a newer entry aside before it gives up
+_PUBLISH_TRIES = 20
 
 
 def _now() -> str:
@@ -147,10 +170,11 @@ class EngineCache:
     """The entries under one cache root, as one run uses them.
 
     ``refresh`` names roles whose calls go to the engine whatever the
-    cache holds, once per key in the run, the new answer replacing the
+    cache holds, once per key in the run, the new answer displacing the
     entry; ``epochs`` gives roles an epoch other than 0. Nothing is
     written until a call is answered. The root and its subdirectories are
-    private to their owner: the entries hold corpus content."""
+    private to their owner (mode 700, applied to folders that exist
+    already): the entries hold corpus content."""
 
     def __init__(
         self,
@@ -169,6 +193,9 @@ class EngineCache:
         self._refreshed: set[str] = set()
         # roles already warned about an unpinned model
         self._warned: set[str] = set()
+        # key -> (engine client, session) for conversations whose opening
+        # turn was recomputed in this run, until one is opened again
+        self._sessions: dict[str, tuple[Any, Any]] = {}
 
     def epoch(self, role: str) -> int:
         return self.epochs.get(role, 0)
@@ -201,6 +228,22 @@ class EngineCache:
             role,
         )
 
+    def remember_session(self, key: str, client: Any, session: Any) -> None:
+        """Hold the live session of a conversation whose opening turn was
+        recomputed in this run, for the next time it is opened."""
+        with self._lock:
+            self._sessions[key] = (client, session)
+
+    def take_session(self, key: str, client: Any) -> Any:
+        """The live session remembered for `key` with this engine client,
+        once; None when there is none."""
+        with self._lock:
+            held = self._sessions.get(key)
+            if held is None or held[0] is not client:
+                return None
+            del self._sessions[key]
+            return held[1]
+
     # -- entries -----------------------------------------------------------
 
     def path(self, key: str) -> Path:
@@ -218,31 +261,58 @@ class EngineCache:
         path = self.path(key)
         return sorted(path.parent.glob(f"{key}.rejected-*.json"))
 
-    def put(
-        self, key: str, entry: Mapping[str, Any], *, replace: bool = False
-    ) -> None:
-        """Store `entry` under `key`, atomically. With `replace`, an entry
-        the key already has is moved aside first, as replaced."""
+    def put(self, key: str, entry: Mapping[str, Any]) -> None:
+        """Store `entry` under `key`. An entry the key already has, live or
+        damaged, is moved aside as replaced, never overwritten."""
         path = self.path(key)
         self._directory(path.parent)
-        if replace:
-            self._move_aside(path, "replaced", {"replaced": {"at": _now()}})
-        atomic_write_text(path, _dump(entry))
+        staging = staging_path(path)
+        try:
+            write_synced(staging, _dump(entry))
+            for _ in range(_PUBLISH_TRIES):
+                if _link(staging, path):
+                    return
+                self._move_aside(
+                    path, "replaced", {"replaced": {"at": _now()}}
+                )
+            raise RuntimeError(f"could not store the cache entry {path}")
+        finally:
+            staging.unlink(missing_ok=True)
 
     def reject(
         self, key: str, response: str, reason: str, **fields: Any
     ) -> bool:
         """Move the entry under `key` aside, with the reason, if it holds
-        `response`; an entry stored since with another answer stays. The
-        next call under the key goes to the engine. Returns whether an
-        entry was moved."""
+        `response`. The entry is first renamed to a private name and only
+        then read, so an answer stored under the key meanwhile is never
+        the one moved aside: one that is not `response` goes back, unless
+        the key has since been given another, in which case it is kept
+        aside as replaced. The next call under the key goes to the
+        engine. Returns whether `response` was moved aside."""
         path = self.path(key)
-        entry = _read(path, key)
-        if entry is None or entry["response"] != response:
+        held = path.with_name(f".{path.name}.{uuid.uuid4().hex}.rejecting")
+        try:
+            os.rename(path, held)
+        except FileNotFoundError:
             return False
-        rejection = {"at": _now(), "reason": reason}
-        rejection.update({k: v for k, v in fields.items() if v is not None})
-        return self._move_aside(path, "rejected", {"rejected": rejection})
+        entry = _read(held, key)
+        if entry is not None and entry["response"] == response:
+            rejection = {"at": _now(), "reason": reason}
+            rejection.update(
+                {k: v for k, v in fields.items() if v is not None}
+            )
+            aside = self._aside_name(path, "rejected")
+            os.rename(held, aside)
+            atomic_write_text(aside, _dump(entry | {"rejected": rejection}))
+            return True
+        try:
+            if not _link(held, path):
+                self._move_aside(
+                    held, "replaced", {"replaced": {"at": _now()}}, key=key
+                )
+        finally:
+            held.unlink(missing_ok=True)
+        return False
 
     def seed(
         self,
@@ -254,10 +324,18 @@ class EngineCache:
         """Adopt `response` for the call with this key: an answer the
         engine did not give it (an archived transcription, say), stored as
         a visible equivalence. A hit on it reports `reason` rather than a
-        key match, and its provenance is the one given. An entry the key
-        already has is kept and nothing is stored. Returns whether the
-        response was adopted."""
+        key match, and its provenance is the one given. Nothing is stored
+        when the key already has an entry, or when `response` is one a
+        caller rejected under it. Returns whether it was adopted."""
+        if reason == ENGINE:
+            raise ValueError(
+                f"an adoption's reason cannot be {ENGINE!r}: that origin "
+                "marks the engine's own answers"
+            )
         path = self.path(key)
+        for aside in self.rejected(key):
+            if (_read(aside, key) or {}).get("response") == response:
+                return False
         self._directory(path.parent)
         entry = {
             "format": FORMAT,
@@ -269,30 +347,75 @@ class EngineCache:
         staging = staging_path(path)
         try:
             write_synced(staging, _dump(entry))
-            try:
-                # a link fails where the key already has an entry, so an
-                # entry stored meanwhile is never overwritten
-                os.link(staging, path)
-            except FileExistsError:
-                return False
-            except OSError:  # a filesystem without hard links
-                if path.exists():
-                    return False
-                os.replace(staging, path)
-            return True
+            return _link(staging, path)
         finally:
             staging.unlink(missing_ok=True)
 
+    # -- kept sessions -------------------------------------------------------
+
+    def _session_dir(self, key: str) -> Path:
+        return self.path(key).with_suffix(".session")
+
+    def keep_session(self, key: str, files: Mapping[str, bytes]) -> None:
+        """Keep the session files of the conversation opened under `key`,
+        replacing (and keeping aside) any kept before."""
+        if not files:
+            return
+        target = self._session_dir(key)
+        self._directory(target.parent)
+        staging = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            for name, content in files.items():
+                path = (staging / name).resolve()
+                if not path.is_relative_to(staging.resolve()):
+                    raise ValueError(
+                        f"a session file outside its folder: {name}"
+                    )
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                path.write_bytes(content)
+            if target.exists():
+                os.rename(target, self._aside_name(target, "replaced"))
+            os.rename(staging, target)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def kept_session(self, key: str) -> dict[str, bytes]:
+        """The session files kept for the conversation opened under `key`,
+        by their relative paths; empty when none are kept."""
+        folder = self._session_dir(key)
+        if not folder.is_dir():
+            return {}
+        return {
+            path.relative_to(folder).as_posix(): path.read_bytes()
+            for path in sorted(folder.rglob("*"))
+            if path.is_file()
+        }
+
+    # -- helpers -------------------------------------------------------------
+
     def _directory(self, directory: Path) -> None:
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        directory.mkdir(mode=0o700, exist_ok=True)
+        for folder in (self.root, directory):
+            folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if stat.S_IMODE(folder.stat().st_mode) != 0o700:
+                os.chmod(folder, 0o700)
+
+    @staticmethod
+    def _aside_name(path: Path, what: str) -> Path:
+        base = path.name.removesuffix(".json")
+        suffix = ".json" if path.name.endswith(".json") else ""
+        return path.with_name(f"{base}.{what}-{_stamp()}{suffix}")
 
     def _move_aside(
-        self, path: Path, what: str, note: Mapping[str, Any]
+        self,
+        path: Path,
+        what: str,
+        note: Mapping[str, Any],
+        key: str | None = None,
     ) -> bool:
         """Rename the entry at `path` to a name no lookup reads, then add
         `note` to it. Returns whether there was an entry to move."""
-        aside = path.with_name(f"{path.stem}.{what}-{_stamp()}.json")
+        name = self.path(key) if key is not None else path
+        aside = self._aside_name(name, what)
         try:
             os.rename(path, aside)
         except FileNotFoundError:
@@ -302,14 +425,23 @@ class EngineCache:
         except (OSError, ValueError):
             return True
         if isinstance(entry, dict):
-            entry.update(note)
-            atomic_write_text(aside, _dump(entry))
+            atomic_write_text(aside, _dump(entry | dict(note)))
         return True
+
+
+def _link(source: Path, target: Path) -> bool:
+    """Publish `source` as `target` unless `target` exists: True when it
+    was published."""
+    try:
+        os.link(source, target)
+    except FileExistsError:
+        return False
+    return True
 
 
 class CachedResponse(str):
     """A response, and the key it is cached under; in every other respect
-    it is the text."""
+    it is the text. It copies and pickles with its key."""
 
     key: str
 
@@ -318,24 +450,34 @@ class CachedResponse(str):
         response.key = key
         return response
 
+    def __getnewargs__(self) -> tuple[str, str]:
+        return str(self), self.key
+
 
 class Conversation:
     """A conversation opened through the cache.
 
-    It carries the keys of its turns (its forks' parent chain), the prompt
-    and the answer of its opening turn, and the engine's own handle once
-    the engine holds the conversation: from the opening call when that
-    went to the engine, or from one replay of it when the cache answered
-    the opening turn and a fork has to be asked of the engine."""
+    It carries the keys of its turns (its forks' parent chain), the
+    opening turn's key components, prompt and answer with that answer's
+    SHA-256, how its session was, or will be, obtained, and the engine's
+    own handle once the engine holds the conversation."""
 
     def __init__(
-        self, key: str, prompt: str, response: str, session: Any = None
+        self,
+        components: dict[str, Any],
+        prompt: str,
+        response: str,
+        session: Any = None,
+        origin: str | None = None,
     ) -> None:
-        self.chain = (key,)
+        self.components = components
+        self.chain = (call_key(components),)
         self.prompt = prompt
         self.response = response
+        self.opening_sha256 = sha256_text(response)
         self.session = session
-        self.replayed = False
+        self.origin = origin
+        self.changed = False
         self.lock = threading.Lock()
 
 
@@ -356,8 +498,8 @@ class CachingClient:
     extract, critique): the role's epoch is keyed, and its refresh setting
     applies. ``events``, when given, is called with each event's name and
     fields: a hit (with its reason: a key match, or the adoption's
-    reason), a miss (absent, rejected or refresh), a replay, a rejection
-    or an adoption."""
+    reason), a miss (absent, rejected or refresh), a resume, a replay, a
+    rejection or an adoption."""
 
     def __init__(
         self,
@@ -376,12 +518,21 @@ class CachingClient:
         self.cache = cache
         self.role = role
         self._events = events
-        if getattr(client, "model", "") is None:
+        self._attempt = 0
+        # None or "": the engine runs a default model of its own
+        if getattr(client, "model", "unnamed") in (None, ""):
             cache.warn_unpinned(role)
 
     @property
     def model_identifier(self) -> str:
         return self.client.model_identifier
+
+    def attempt(self, number: int) -> CachingClient:
+        """This client for attempt `number` of the same call: each attempt
+        is keyed, and kept, apart (llm.for_attempt)."""
+        sibling = copy.copy(self)
+        sibling._attempt = number
+        return sibling
 
     # -- keys ---------------------------------------------------------------
 
@@ -391,6 +542,7 @@ class CachingClient:
         prompt: str,
         image_paths: Sequence[str | os.PathLike[str]] = (),
         parent: Sequence[str] = (),
+        opening: str | None = None,
     ) -> dict[str, Any]:
         """The components of a call's key (see the module docstring)."""
         client = self.client
@@ -411,7 +563,7 @@ class CachingClient:
         system = getattr(client, "system_prompt", None)
         return {
             "engine": getattr(client, "engine", type(client).__name__),
-            "model": getattr(client, "model", None),
+            "model": getattr(client, "model", None) or None,
             "effort": getattr(client, "effort", None),
             "config": client.config_hash,
             "call": call,
@@ -419,6 +571,8 @@ class CachingClient:
             "prompt": sha256_text(text),
             "files": files,
             "parent": list(parent),
+            "opening": opening,
+            "attempt": self._attempt,
             "epoch": self.cache.epoch(self.role),
         }
 
@@ -442,16 +596,17 @@ class CachingClient:
             COMPLETE,
             self.components(COMPLETE, prompt, image_paths),
             lambda: (self.client.complete(prompt, image_paths), {}),
-        )
+        )[0]
 
     def _serve(
         self,
         call: str,
         components: dict[str, Any],
         ask: Callable[[], tuple[str, dict[str, Any]]],
-    ) -> CachedResponse:
-        """The cached answer to a call, or the engine's, which is then
-        stored. `ask` makes the call and returns its response with any
+    ) -> tuple[CachedResponse, bool]:
+        """(the answer, whether the engine gave it now): the cached answer
+        to a call, or the engine's, which is then stored when it holds
+        some text. `ask` makes the call and returns its response with any
         provenance of its own; whatever it raises propagates, and nothing
         is stored."""
         key = call_key(components)
@@ -466,7 +621,7 @@ class CachingClient:
                     key=key,
                     reason=KEY_MATCH if origin == ENGINE else origin,
                 )
-                return CachedResponse(entry["response"], key)
+                return CachedResponse(entry["response"], key), False
         if refresh:
             reason = REFRESH
         elif self.cache.rejected(key):
@@ -475,14 +630,13 @@ class CachingClient:
             reason = ABSENT
         self._emit(MISS, call=call, key=key, reason=reason)
         response, provenance = ask()
-        self.cache.put(
-            key,
-            self._entry(key, components, response, provenance),
-            replace=refresh,
-        )
-        if refresh:
-            self.cache.refreshed(key)
-        return CachedResponse(response, key)
+        if str(response).strip():
+            self.cache.put(
+                key, self._entry(key, components, response, provenance)
+            )
+            if refresh:
+                self.cache.refreshed(key)
+        return CachedResponse(response, key), True
 
     def _entry(
         self,
@@ -519,14 +673,15 @@ class CachingClient:
     def reject(self, response: str, reason: str) -> None:
         """Reject `response`, which this client returned: the entry under
         its key is moved aside with `reason` and never served again, so
-        the next identical call asks the engine."""
+        the next identical call asks the engine. The rejection is an
+        event when an entry was moved."""
         key = getattr(response, "key", None)
         if not isinstance(key, str):
             raise ValueError(
                 "only a response this client returned can be rejected"
             )
-        self.cache.reject(key, str(response), reason, role=self.role)
-        self._emit(REJECT, key=key, reason=reason[:500])
+        if self.cache.reject(key, str(response), reason, role=self.role):
+            self._emit(REJECT, key=key, reason=reason[:500])
 
     def seed(
         self,
@@ -555,15 +710,29 @@ class ConversationalCachingClient(CachingClient):
     """A caching client for an engine that holds conversations (ADR-0006).
 
     Opening a conversation is a call like any other. A fork is keyed on the
-    keys of the conversation it forks, and a fork the cache answers needs
-    no session. A fork the cache cannot answer, of a conversation whose
-    opening turn it did answer, has no session to fork: the opening turn
-    is replayed once, for real, and the session it gives serves that fork
-    and every later one of the conversation. The replay's own answer is
-    not stored, since the cached one stands, and it may differ from it: the
-    replay event says whether it matched."""
+    keys of the conversation it forks and on its opening answer, and a
+    fork the cache answers needs no session. A fork the cache cannot
+    answer, of a conversation whose opening turn it did answer, needs the
+    engine to hold that conversation exactly as the fork's context
+    assumes:
+
+    * the conversation is resumed exactly, without a call, from what the
+      cache kept when it was opened (llm.ResumableLlmClient): the session
+      files of an engine that stores sessions, or the turn itself for one
+      that needs nothing more;
+    * failing that, the opening turn is replayed. A replay that gives the
+      cached answer again serves the conversation's forks. One that
+      answers differently makes the whole conversation a miss: the
+      replay's answer becomes the opening turn's entry, the replay's
+      session is held for the run, and the fork raises
+      ConversationChanged, so that its caller starts over from the new
+      answer, whose forks are keyed apart from the old ones.
+
+    A session, however obtained, serves every later fork of the
+    conversation in the run."""
 
     def open_conversation(self, prompt: str) -> tuple[str, Conversation]:
+        components = self.components(OPEN, prompt)
         sessions: list[Any] = []
 
         def ask() -> tuple[str, dict[str, Any]]:
@@ -571,14 +740,17 @@ class ConversationalCachingClient(CachingClient):
             sessions.append(session)
             return response, {}
 
-        response = self._serve(OPEN, self.components(OPEN, prompt), ask)
-        conversation = Conversation(
-            response.key,
-            prompt,
-            str(response),
-            sessions[0] if sessions else None,
+        response, asked = self._serve(OPEN, components, ask)
+        if asked:
+            self._keep(response.key, sessions[0])
+            return response, Conversation(
+                components, prompt, str(response), sessions[0], LIVE
+            )
+        session = self.cache.take_session(response.key, self.client)
+        origin = RECOMPUTED if session is not None else None
+        return response, Conversation(
+            components, prompt, str(response), session, origin
         )
-        return response, conversation
 
     def fork(self, handle: Any, prompt: str) -> str:
         if not isinstance(handle, Conversation):
@@ -588,39 +760,98 @@ class ConversationalCachingClient(CachingClient):
             session = self._session(handle)
             response = self.client.fork(session, prompt)
             return response, {
-                "session": "replayed" if handle.replayed else "original"
+                "session": handle.origin,
+                "opening_sha256": handle.opening_sha256,
             }
 
-        return self._serve(
-            FORK, self.components(FORK, prompt, parent=handle.chain), ask
+        components = self.components(
+            FORK, prompt, parent=handle.chain, opening=handle.opening_sha256
         )
+        return self._serve(FORK, components, ask)[0]
+
+    def _keep(self, key: str, session: Any) -> None:
+        """Keep what the engine needs to resume the conversation opened
+        under `key` exactly (nothing, for an engine that cannot)."""
+        keep = getattr(self.client, "keep_conversation", None)
+        if not callable(keep):
+            return
+        try:
+            self.cache.keep_session(key, keep(session))
+        except (OSError, ValueError) as exc:
+            logger.warning("could not keep the session of %s: %s", key, exc)
 
     def _session(self, conversation: Conversation) -> Any:
-        """The engine's handle for `conversation`, replaying its opening
-        turn once when the cache answered it."""
+        """The engine's handle for `conversation` (see the class
+        docstring): resumed exactly, or replayed and found the same; a
+        replay that differs raises ConversationChanged."""
         with conversation.lock:
-            if conversation.session is None:
-                response, session = self.client.open_conversation(
-                    conversation.prompt
+            key = conversation.chain[-1]
+            if conversation.changed:
+                raise _changed(key)
+            if conversation.session is not None:
+                return conversation.session
+            resume = getattr(self.client, "resume_conversation", None)
+            if callable(resume):
+                try:
+                    session = resume(
+                        conversation.prompt,
+                        conversation.response,
+                        self.cache.kept_session(key),
+                    )
+                except Exception as exc:  # nothing kept, or unusable
+                    logger.info("could not resume %s: %s", key, exc)
+                else:
+                    conversation.session = session
+                    conversation.origin = RESUMED
+                    self._emit(RESUME, call=OPEN, key=key)
+                    return session
+            response, session = self.client.open_conversation(
+                conversation.prompt
+            )
+            if not str(response).strip():
+                self._release(session)
+                raise RuntimeError(
+                    f"the replay of the conversation opened under {key} "
+                    "returned no text"
                 )
+            matches = response == conversation.response
+            self._emit(REPLAY, call=OPEN, key=key, matches=matches)
+            if matches:
                 conversation.session = session
-                conversation.replayed = True
-                self._emit(
-                    REPLAY,
-                    call=OPEN,
-                    key=conversation.chain[-1],
-                    matches=response == conversation.response,
-                )
-            return conversation.session
+                conversation.origin = REPLAYED
+                self._keep(key, session)
+                return session
+            self.cache.put(
+                key,
+                self._entry(
+                    key,
+                    conversation.components,
+                    response,
+                    {"recomputed": True},
+                ),
+            )
+            self._keep(key, session)
+            self.cache.remember_session(key, self.client, session)
+            conversation.changed = True
+            raise _changed(key)
 
     def close_conversation(self, handle: Any) -> None:
         """Release the engine's session of a conversation, if it holds
         one."""
-        if not isinstance(handle, Conversation) or handle.session is None:
-            return
+        if isinstance(handle, Conversation) and handle.session is not None:
+            self._release(handle.session)
+
+    def _release(self, session: Any) -> None:
         close = getattr(self.client, "close_conversation", None)
         if callable(close):
-            close(handle.session)
+            close(session)
+
+
+def _changed(key: str) -> ConversationChanged:
+    return ConversationChanged(
+        f"the conversation opened under {key} answered differently when "
+        "it was replayed"
+    )
 
 
 def wrap(

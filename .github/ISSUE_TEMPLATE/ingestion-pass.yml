@@ -36,9 +36,9 @@ body:
     attributes:
       label: Baseline run
       description: >-
-        The run whose stage outputs this run reuses and diffs against,
-        normally the latest completed run on main; "none" for the first
-        run.
+        The run this run diffs against, and whose cached model calls it
+        reuses, normally the latest completed run on main; "none" for the
+        first run.
   - type: input
     id: prs
     attributes:
@@ -90,9 +90,10 @@ body:
     attributes:
       label: Stages
       description: >-
-        Per stage, from the aggregate report.md: computed, reused (key
-        match or adopted), failed and needs attention, with the key
-        component that forced each recompute; calls and wall time.
+        Per stage, from the aggregate report.md: views made and reused,
+        model calls answered by the engine and by the cache (key match or
+        adopted), failed and needs attention, with the call components
+        that forced each engine call; calls and wall time.
   - type: textarea
     id: anomalies
     attributes:

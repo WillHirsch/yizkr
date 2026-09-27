@@ -8,8 +8,10 @@ through the LLM cache in $YIZKR_LIVE_CACHE (default var/live-cache):
 the first run of the test asks the engine, at a few subscription calls,
 and a later run is answered from the cache. Either way the test then
 replays the extraction from the cache with the engine barred, and must
-get the same batch. It prints the cache events of both passes (run
-pytest with -s to see them).
+get the same batch. A second test checks that a conversation the cache
+opened is resumed exactly for a fork, from the session files it kept,
+without opening the conversation again (two calls the first time, none
+later). Both print their cache events (run pytest with -s to see them).
 """
 
 from __future__ import annotations
@@ -41,6 +43,23 @@ CACHE = Path(
     os.environ.get("YIZKR_LIVE_CACHE")
     or Path(__file__).resolve().parents[2] / "var" / "live-cache"
 )
+
+
+class OpeningBarred:
+    """The engine with opening a conversation barred: a fork it makes
+    must run on a session the cache kept and put back."""
+
+    def __init__(self, engine) -> None:
+        self._engine = engine
+
+    def __getattr__(self, name):
+        return getattr(self._engine, name)
+
+    def open_conversation(self, prompt):
+        raise AssertionError("the conversation was opened again")
+
+    def fork(self, handle, prompt):
+        return self._engine.fork(handle, prompt)
 
 
 class Barred:
@@ -114,6 +133,7 @@ def test_chunked_extraction_end_to_end(tmp_path):
     assert {event["event"] for event in run.events()} <= {
         "cache-hit",
         "cache-miss",
+        "cache-resume",
         "cache-replay",
         "cache-reject",
     }
@@ -132,3 +152,44 @@ def test_chunked_extraction_end_to_end(tmp_path):
     assert {event["event"] for event in replay.events()} == {"cache-hit"}
     assert again.claims == batch.claims
     assert again.entities == batch.entities
+
+
+OPENING = (
+    "Remember this code word for a later question: KLARA-1917. "
+    "Reply with OK and nothing else."
+)
+QUESTION = "What was the code word? Reply with the code word alone."
+
+
+def test_a_kept_conversation_resumes_exactly(tmp_path):
+    if not ClaudeCodeClient.available():
+        pytest.skip("claude CLI not installed")
+    engine = ClaudeCodeClient()
+    opened = RunDir(tmp_path / "opened")
+    client = cached_client(
+        engine, open_cache(CACHE), role="extract", events=opened.emit
+    )
+    _, handle = client.open_conversation(OPENING)
+    # the conversation's transcript leaves the CLI's projects folder
+    client.close_conversation(handle)
+
+    resumed = RunDir(tmp_path / "resumed")
+    again = cached_client(
+        OpeningBarred(engine),
+        open_cache(CACHE),
+        role="extract",
+        events=resumed.emit,
+    )
+    _, handle = again.open_conversation(OPENING)
+    answer = again.fork(handle, QUESTION)
+    again.close_conversation(handle)
+    print(
+        f"\nopened: {cache_events(opened)}\nresumed: {cache_events(resumed)}"
+        f"\nanswer: {answer!r}"
+    )
+    assert "KLARA-1917" in answer
+    names = {event["event"] for event in resumed.events()}
+    # the first time the fork misses and resumes the kept session; later
+    # it is answered from the cache
+    first_time = {"cache-hit", "cache-miss", "cache-resume"}
+    assert names in (first_time, {"cache-hit"})

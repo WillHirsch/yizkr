@@ -37,7 +37,9 @@ from yizkr.pipeline.extract import (
 )
 from yizkr.pipeline.llm import (
     ConversationalLlmClient,
+    ConversationChanged,
     LlmClient,
+    for_attempt,
     reject_response,
 )
 from yizkr.pipeline.stages import atomic_write_text
@@ -582,12 +584,17 @@ SIDE_OUTPUTS = ("coverage.json", "rejects.json", "gaps.ndjson")
 class ChunkedClaimExtractor:
     """Entity manifest -> packed chunks -> per-chunk calls -> merge.
 
-    Every call goes to `client`. A response the extractor cannot use is
-    rejected through it (llm.reject_response): an entity manifest or a
-    segmentation it refuses, and a chunk cut off before its terminal
-    sentinel. Behind the LLM cache (ADR-0032) that is what makes a retry,
-    in this run or the next, ask the engine again rather than be answered
-    with the same text; an engine's own client keeps nothing to reject.
+    Every call goes to `client`. A chunk response cut off before its
+    terminal sentinel is rejected through it (llm.reject_response): behind
+    the LLM cache (ADR-0032) that makes the retry, in this run or the
+    next, ask the engine again rather than be answered with the same text,
+    and a chunk that failed every retry is asked again in the next run.
+    The entity manifest and the segmentation are asked in two attempts
+    each, keyed apart behind the cache (llm.for_attempt): a refused
+    answer is kept, so a later run replays the same attempts and takes the
+    same fallback. When a conversation behind the cache has to be opened
+    again and answers differently (llm.ConversationChanged), the
+    extraction starts over from the new answer.
 
     `state_dir`, when given, receives the advisory side outputs of a
     complete extraction: `coverage.json`, and `rejects.json` and
@@ -661,16 +668,47 @@ class ChunkedClaimExtractor:
 
     # -- phase 1a: entity manifest (ADR-0007, the default) ----------------
 
+    def _first_turn(
+        self, prompt: str, parse: Callable[[str], tuple[Any, list[str]]]
+    ) -> tuple[Any, Any, str, bool]:
+        """(parsed answer or None, conversation handle, last error, any call
+        answered) for a turn that opens the extraction: the entity
+        manifest, or the segmentation behind it.
+
+        Two attempts, each asked through `for_attempt`, so that behind the
+        LLM cache a refused answer is kept under its own attempt and a
+        later run replays the same attempts to the same outcome. No handle
+        survives a refused answer: forking would plant known-bad output in
+        every chunk's context."""
+        handle = None
+        answered = False
+        last_error = "engine has no conversation support"
+        for attempt in range(2):
+            client = for_attempt(self.client, attempt)
+            try:
+                if isinstance(client, ConversationalLlmClient):
+                    response, handle = client.open_conversation(prompt)
+                else:
+                    response = client.complete(prompt)
+            except Exception as exc:
+                last_error, handle = f"{type(exc).__name__}: {exc}", None
+                continue
+            answered = True
+            parsed, problems = parse(response)
+            if parsed is not None and not problems:
+                return parsed, handle, "", answered
+            last_error = "; ".join(problems or ["unparseable"])
+            self._close_conversation(handle)
+            handle = None
+        return None, None, last_error, answered
+
     def _entity_manifest(
         self, transcription: Transcription, artifact_qid: str
     ) -> tuple[list[EntityRecord] | None, Any, str, bool]:
         """(entities, conversation handle, last error, any call answered).
 
-        No entities means the manifest was unusable after a retry; the
-        caller falls back to line-range segmentation. As with
-        segmentation fallback, no handle survives a rejected manifest —
-        forking would plant known-bad output in every chunk's context.
-        """
+        No entities means the manifest was unusable in both attempts; the
+        caller falls back to line-range segmentation."""
         line_count = len(transcription.text.splitlines())
         kinds, kind_descriptions = entity_kind_prompt_lines()
         prompt = ENTITY_MANIFEST_PROMPT.format(
@@ -680,31 +718,10 @@ class ChunkedClaimExtractor:
             language=transcription.language,
             numbered_text=number_lines(transcription.text),
         )
-        handle = None
-        answered = False
-        last_error = "engine has no conversation support"
-        for _attempt in range(2):
-            try:
-                if isinstance(self.client, ConversationalLlmClient):
-                    response, handle = self.client.open_conversation(prompt)
-                else:
-                    response = self.client.complete(prompt)
-            except Exception as exc:
-                last_error, handle = f"{type(exc).__name__}: {exc}", None
-                continue
-            answered = True
-            entities, problems = self._parse_entity_manifest(
-                response, line_count
-            )
-            if entities is not None and not problems:
-                return entities, handle, "", answered
-            last_error = "; ".join(problems or ["unparseable"])
-            reject_response(
-                self.client, response, f"entity manifest: {last_error}"
-            )
-            self._close_conversation(handle)
-            handle = None
-        return None, None, last_error, answered
+        return self._first_turn(
+            prompt,
+            lambda response: self._parse_entity_manifest(response, line_count),
+        )
 
     @staticmethod
     def _parse_entity_manifest(
@@ -753,7 +770,7 @@ class ChunkedClaimExtractor:
         A None handle means chunk calls cannot fork (context mode 2/3).
         On segmentation fallback the handle is always None and the reason
         is set: forking a conversation whose segmentation turn was
-        rejected would plant known-bad output in every chunk's context.
+        refused would plant known-bad output in every chunk's context.
         """
         line_count = len(transcription.text.splitlines())
         prompt = SEGMENTATION_PROMPT.format(
@@ -761,30 +778,12 @@ class ChunkedClaimExtractor:
             language=transcription.language,
             numbered_text=number_lines(transcription.text),
         )
-        handle = None
-        answered = False
-        last_error = "engine has no conversation support"
-        for _attempt in range(2):
-            try:
-                if isinstance(self.client, ConversationalLlmClient):
-                    response, handle = self.client.open_conversation(prompt)
-                else:
-                    response = self.client.complete(prompt)
-            except Exception as exc:
-                last_error, handle = f"{type(exc).__name__}: {exc}", None
-                continue
-            answered = True
-            segmentation, problems = self._parse_segmentation(
-                response, line_count
-            )
-            if segmentation is not None and not problems:
-                return segmentation, handle, "", answered
-            last_error = "; ".join(problems or ["unparseable"])
-            reject_response(
-                self.client, response, f"segmentation: {last_error}"
-            )
-            self._close_conversation(handle)
-            handle = None
+        segmentation, handle, last_error, answered = self._first_turn(
+            prompt,
+            lambda response: self._parse_segmentation(response, line_count),
+        )
+        if segmentation is not None:
+            return segmentation, handle, "", answered
         return (
             self._fallback_segmentation(line_count),
             None,
@@ -961,13 +960,17 @@ class ChunkedClaimExtractor:
     ) -> tuple[list[dict], str]:
         """(claims, response) for one chunk: call (fork if possible) and
         parse, with retries. A response cut off before its sentinel is
-        rejected, so the retry asks again."""
+        rejected, so the retry asks again. A conversation that changed
+        (ConversationChanged) is no failure of the chunk: it ends the
+        extraction's pass, which starts over."""
         last_error: Exception = ChunkIncomplete("not attempted")
         for _attempt in range(1 + self.retries):
             try:
                 if handle is not None:
                     try:
                         response = self.client.fork(handle, prompt)
+                    except ConversationChanged:
+                        raise
                     except Exception:
                         # fork machinery failed (session gone, old CLI):
                         # this chunk drops to inline context
@@ -975,6 +978,8 @@ class ChunkedClaimExtractor:
                         response = self.client.complete(fallback_prompt)
                 else:
                     response = self.client.complete(fallback_prompt)
+            except ConversationChanged:
+                raise
             except Exception as exc:
                 last_error = exc
                 continue
@@ -988,6 +993,20 @@ class ChunkedClaimExtractor:
     # -- orchestration ---------------------------------------------------
 
     def extract(
+        self, transcription: Transcription, artifact_qid: str
+    ) -> ClaimBatch:
+        """The document's batch. When its conversation has to be opened
+        again and answers differently (ConversationChanged), the pass is
+        void and the extraction starts over from the new answer, at most
+        twice."""
+        for _pass in range(2):
+            try:
+                return self._extract(transcription, artifact_qid)
+            except ConversationChanged as exc:
+                self._log(f"  {exc}: extracting again from the new answer")
+        return self._extract(transcription, artifact_qid)
+
+    def _extract(
         self, transcription: Transcription, artifact_qid: str
     ) -> ClaimBatch:
         text_lines = transcription.text.splitlines()
@@ -1065,6 +1084,8 @@ class ChunkedClaimExtractor:
                     handle,
                     build_prompt(group, inline_document),
                 )
+            except ConversationChanged:
+                raise
             except Exception as exc:
                 with self._state_lock:
                     self.failed_chunks.append(chunk_id)
@@ -1076,10 +1097,12 @@ class ChunkedClaimExtractor:
             self._note_chunk_done(total, ok=True, claims=len(claims))
             return _Chunk(claims, parse_chunk_gaps(response))
 
-        with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
-            outcomes = list(pool.map(run_one, chunk_ids, chunk_groups))
+        try:
+            with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
+                outcomes = list(pool.map(run_one, chunk_ids, chunk_groups))
+        finally:
+            self._close_conversation(handle)
         self.failed_chunks.sort()
-        self._close_conversation(handle)
 
         batch, extras = self._merge(
             chunk_ids, outcomes, transform, entities, segmentation, text_lines

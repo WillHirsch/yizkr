@@ -125,6 +125,53 @@ class TestCritique:
         assert run_critique(llm, batch()) == []
 
 
+class Rejecting(ScriptedLlm):
+    """A client that takes rejections, as the LLM cache's does (#225)."""
+
+    def __init__(self, response: str, *, refuse: bool = False) -> None:
+        super().__init__(response)
+        self.rejected: list[tuple[str, str]] = []
+        self.refuse = refuse
+
+    def reject(self, response, reason):
+        if self.refuse:
+            raise OSError("the cache folder is read-only")
+        self.rejected.append((response, reason))
+
+
+FINDING = {"target": "e04", "issue": "agent typed as place"}
+
+
+class TestUnfinishedAnswers:
+    """An answer without the terminal sentinel (a refusal, one cut off, a
+    usage-limit notice) still gives the findings it holds, and is rejected
+    through the client, so that a client that keeps answers asks the
+    critic again next time (#225). The critic never raises."""
+
+    def test_a_whole_answer_is_kept(self):
+        llm = Rejecting(response([FINDING]))
+        assert [f.target for f in run_critique(llm, batch())] == ["e04"]
+        assert llm.rejected == []
+
+    def test_a_refusal_is_rejected(self):
+        llm = Rejecting("I can't help with reviewing this document.")
+        assert run_critique(llm, batch()) == []
+        ((rejected, reason),) = llm.rejected
+        assert rejected == "I can't help with reviewing this document."
+        assert "sentinel" in reason
+
+    def test_a_cut_off_answer_gives_its_findings_and_is_rejected(self):
+        cut = json.dumps(FINDING) + '\n{"target": "e01 al'
+        llm = Rejecting(cut)
+        assert [f.target for f in run_critique(llm, batch())] == ["e04"]
+        assert [rejected for rejected, _ in llm.rejected] == [cut]
+
+    def test_a_failed_rejection_never_raises(self, caplog):
+        llm = Rejecting("You've hit your usage limit.", refuse=True)
+        assert run_critique(llm, batch()) == []
+        assert "could not reject" in caplog.text
+
+
 class TestAxis:
     """ADR-0023: a Finding's statement-part axis is derived from its target
     grammar — the general form of ADR-0022 §6's per-name axes."""

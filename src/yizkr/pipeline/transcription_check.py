@@ -58,8 +58,10 @@ has its own name and version (`CHECK_STAGE`, `CHECK_VERSION`), which
 each verdict records: a change to a signature, the floor or the page
 count bumps `CHECK_VERSION`. No key needs it. The transcribers check
 every output they return, whether the engine made it in this call or the
-LLM cache kept it from an earlier one (ADR-0032), so a stricter check
-applies to every transcription in the next run (docs/LLM_CACHE.md).
+LLM cache kept it from an earlier one (ADR-0032). A transcription view
+that stands is not checked again, so a stricter check applies to every
+transcription made after it: a scratch run, which starts from fresh state
+directories, makes and checks every one (docs/LLM_CACHE.md).
 """
 
 from __future__ import annotations

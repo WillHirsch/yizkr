@@ -155,6 +155,22 @@ class TestRunState:
             "stage:critique paused",
         )
 
+    def test_a_reused_view_is_done_with_its_attention(self, tmp_path):
+        """A run that reuses a stage's view (#225) leaves the stage done,
+        or needing attention with the reasons noted when it was made."""
+        run = RunDir(tmp_path)
+        self.plan(run, "transcription", "extraction")
+        self.emit(run, "failed", "transcription", reason="RuntimeError: x")
+        self.emit(run, "reused", "transcription")
+        self.emit(run, "reused", "extraction", attention=["fell back"])
+        states = run_state(run)
+        assert states[(DOC_A, "transcription")].status == DONE
+        extraction = states[(DOC_A, "extraction")]
+        assert (extraction.status, extraction.reason) == (
+            NEEDS_ATTENTION,
+            "fell back",
+        )
+
     def test_a_later_run_retries_a_failed_stage(self, tmp_path):
         run = RunDir(tmp_path)
         self.plan(run, "critique")
@@ -188,6 +204,7 @@ class TestCacheCounts:
             ("cache-hit", "transcribe", "adopted"),
             ("cache-miss", "extract", "absent"),
             ("cache-miss", "extract", "rejected"),
+            ("cache-resume", "extract", None),
             ("cache-replay", "extract", None),
             ("cache-reject", "extract", "chunk: no terminal sentinel"),
             ("cache-adopt", "transcribe", "adopted"),
@@ -203,9 +220,20 @@ class TestCacheCounts:
             "extract": {
                 "miss: absent": 1,
                 "miss: rejected": 1,
+                "resume": 1,
                 "replay": 1,
                 "reject": 1,
             },
+        }
+
+    def test_the_counts_are_totals_over_every_invocation(self, tmp_path):
+        first = RunDir(tmp_path)
+        first.emit("cache-miss", role="extract", reason="absent", key="k")
+        second = RunDir(tmp_path)
+        second.emit("cache-hit", role="extract", reason="key match", key="k")
+        assert first.invocation != second.invocation
+        assert cache_counts(second) == {
+            "extract": {"miss: absent": 1, "hit: key match": 1}
         }
 
 
@@ -228,6 +256,8 @@ class TestStagesStateCommand:
             "hit:",
             "key",
             "match",
+            "(all",
+            "invocations)",
         ]
 
     def test_json(self, tmp_path, capsys):

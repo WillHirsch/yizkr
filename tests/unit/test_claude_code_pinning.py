@@ -727,6 +727,65 @@ class TestTranscripts:
         assert cli.transcripts() == set()
         assert (record / f"{handle}.jsonl").exists()
 
+    def test_a_kept_conversation_resumes_exactly(self, cli):
+        """The LLM cache keeps an open conversation's session files beside
+        its opening turn (#225). Put back by a later client, they let it
+        fork the conversation as it was opened, with no call to open it
+        again, and are released as an opened conversation's are."""
+        first = ClaudeCodeClient()
+        _, handle = first.open_conversation("list the entities")
+        kept = first.keep_conversation(handle)
+        assert set(kept) == {f"{PROJECT}/{handle}.jsonl"}
+        first.close_conversation(handle)
+        assert cli.transcripts() == set()
+        calls = len(cli.calls)
+        second = ClaudeCodeClient()
+        session = second.resume_conversation(
+            "list the entities", "answer", kept
+        )
+        assert session == handle
+        assert len(cli.calls) == calls
+        transcript = cli.projects / PROJECT / f"{handle}.jsonl"
+        assert transcript.read_bytes() == kept[f"{PROJECT}/{handle}.jsonl"]
+        assert second.fork(session, "chunk 1") == "answer"
+        command, _ = cli.calls[-1]
+        assert command[command.index("--resume") + 1] == handle
+        assert "--fork-session" in command
+        second.close_conversation(session)
+        assert not transcript.exists()
+
+    @pytest.mark.parametrize(
+        "names",
+        [
+            [],
+            [
+                f"{PROJECT}/{uuid.uuid4()}.jsonl",
+                f"{PROJECT}/{uuid.uuid4()}.jsonl",
+            ],
+            [f"{PROJECT}/not-a-session.jsonl"],
+            [f"../elsewhere/{uuid.uuid4()}.jsonl"],
+        ],
+        ids=["nothing", "two", "not-a-uuid", "outside"],
+    )
+    def test_unusable_kept_files_are_refused(self, cli, tmp_path, names):
+        with pytest.raises(ValueError):
+            ClaudeCodeClient().resume_conversation(
+                "list the entities", "answer", dict.fromkeys(names, b"{}\n")
+            )
+        assert not (tmp_path / "claude-config" / "elsewhere").exists()
+
+    def test_a_conversation_open_already_is_not_resumed(self, cli):
+        """Resuming a session the client holds open would let the second
+        holder's release pull the transcript from under the first."""
+        client = ClaudeCodeClient()
+        _, handle = client.open_conversation("list the entities")
+        kept = client.keep_conversation(handle)
+        with pytest.raises(ValueError, match="open already"):
+            client.resume_conversation("list the entities", "answer", kept)
+        assert cli.transcripts() == {f"{handle}.jsonl"}
+        client.close_conversation(handle)
+        assert cli.transcripts() == set()
+
     def test_close_releases_open_conversations(self, cli):
         with ClaudeCodeClient() as client:
             client.open_conversation("list the entities")

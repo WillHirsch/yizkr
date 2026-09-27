@@ -36,7 +36,7 @@ from yizkr.claims import (
     validate_against_manifest,
 )
 from yizkr.model.schema import load_manifest
-from yizkr.pipeline.llm import LlmClient
+from yizkr.pipeline.llm import LlmClient, reject_response
 from yizkr.pipeline.transcribe import Transcription
 
 EXTRACTION_PROMPT = """\
@@ -328,6 +328,15 @@ def entity_kind_prompt_lines() -> tuple[str, str]:
 
 
 class LlmClaimExtractor:
+    """Single-call extraction: one prompt, one NDJSON answer.
+
+    An answer the extractor cannot fully use is rejected through the
+    client (llm.reject_response), so that a client that keeps answers
+    asks the engine again next time rather than serving it: one with no
+    claim JSON or no valid claim (the extraction then fails), and one
+    without its terminal sentinel, which may be cut off (the claims it
+    holds are still returned)."""
+
     def __init__(
         self,
         client: LlmClient,
@@ -359,7 +368,14 @@ class LlmClaimExtractor:
             # response recoverable.
             self.raw_dump.parent.mkdir(parents=True, exist_ok=True)
             self.raw_dump.write_text(response)
-        payload = _parse_response(response)
+        try:
+            payload = _parse_response(response)
+        except ValueError:
+            reject_response(self.client, response, "extraction: no claim JSON")
+            raise
+        finished = any(
+            obj.get("done") is True for obj in scan_json_objects(response)
+        )
         batch, rejects = salvage_valid_claims(
             payload.get("claims", []),
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
@@ -371,6 +387,9 @@ class LlmClaimExtractor:
             else:
                 self.rejects_dump.unlink(missing_ok=True)  # no stale rejects
         if not batch.claims:
+            reject_response(
+                self.client, response, "extraction: no valid claim"
+            )
             detail = "\n  ".join(
                 problem
                 for reject in rejects[:20]
@@ -379,6 +398,10 @@ class LlmClaimExtractor:
             raise ValueError(
                 f"every extracted claim failed validation "
                 f"({len(rejects)} rejects):\n  {detail}"
+            )
+        if not finished:
+            reject_response(
+                self.client, response, "extraction: no terminal sentinel"
             )
         return batch
 

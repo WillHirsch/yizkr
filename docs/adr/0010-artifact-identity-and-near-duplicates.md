@@ -5,8 +5,9 @@ deferred, see "Later").
 Amended by #186 (2026-09-27): uploads honour MediaWiki's warnings, with a
 file-naming rule for changed sources (§1, "Media files").
 Amended by #225 (2026-09-27): a document directory without
-`derivations.json` is set aside like a changed source's, and no held
-document seeds content dedup (§1).
+`derivations.json`, or whose files have lost their `state.json`, is set
+aside like a changed source's, and no held document seeds content dedup
+(§1).
 
 ## Context
 
@@ -161,8 +162,9 @@ aside whole, as `.<slug>.superseded-<n>` in the state directory, rather
 than deleting it, and the bytes it recorded seed no content dedup.
 Amended by #225 (2026-09-27): a directory without `derivations.json`,
 from before the records or one that lost its record, is set aside the
-same way and its document starts afresh (ADR-0032); only `written`
-documents seed the map (docs/LLM_CACHE.md).
+same way and its document starts afresh (ADR-0032), as is one whose files
+have lost the `state.json` that names the artifact they were made for;
+only `written` documents seed the map (docs/LLM_CACHE.md).
 
 Together these close the "two items, one blob" leak (correctness) and
 skip redundant LLM passes for renamed-identical files both within a

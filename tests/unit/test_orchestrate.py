@@ -12,6 +12,7 @@ per-document failure isolation.
 from __future__ import annotations
 
 import csv
+import itertools
 import json
 import os
 import re
@@ -370,16 +371,18 @@ class TestGates:
 
 class TestResume:
     def test_steps_are_not_repeated_on_rerun(self, tmp_path):
-        """A re-run derives the stages before the gates again (without a
-        cache, by asking the engine again) and, with the batch unchanged,
-        repeats no wiki or gate step."""
+        """A re-run reuses the document's views, whose inputs are
+        unchanged (#225): it asks the engine nothing, even without a
+        cache, and repeats no wiki or gate step."""
         orchestrator = make_run(tmp_path)
         orchestrator.run()
         calls_after_first = list(orchestrator.calls)
         orchestrator.run()  # still waiting: nothing new should execute
         repeated = orchestrator.calls[len(calls_after_first) :]
-        assert wiki_steps(repeated) == []
-        assert steps(repeated) == ["manifest", "chunk", "critique"]
+        assert repeated == []
+        reused = [event["stage"] for event in this_run(orchestrator, "reused")]
+        assert reused == ["transcription", "extraction", "critique"]
+        assert this_run(orchestrator, "started") == []
 
     def test_written_document_changes_nothing_on_a_rerun(self, tmp_path):
         orchestrator = completed_run(tmp_path)
@@ -745,8 +748,13 @@ class TestFreshness:
         assert json.loads(doc.transcription.read_text())["engine"] == (
             "correction"
         )
+        # the transcription is made again, from the correction; the batch
+        # it gives is the one recorded, so the batch and the critique stand
         done = [e["stage"] for e in this_run(orchestrator, "done")]
-        assert done == ["transcription", "extraction", "critique"]
+        assert done == ["transcription"]
+        reused = [e["stage"] for e in this_run(orchestrator, "reused")]
+        assert reused == ["extraction", "critique"]
+        assert steps(orchestrator.calls[len(before) :]) == []
 
     def test_repeated_redo_keeps_every_superseded_review(self, tmp_path):
         orchestrator = self.completed_run(tmp_path)
@@ -858,6 +866,199 @@ class TestFreshness:
             [c for c in orchestrator.calls if c.startswith("write")]
         )
         assert writes_after == writes_before + 1
+
+
+class SampledModel(ScriptedModel):
+    """The scripted engine worded afresh on every call, as a sampled model
+    is: the critic's finding and each claim's confidence differ from one
+    call to the next, the facts do not."""
+
+    def __init__(self, calls, name, draws):
+        super().__init__(calls, name)
+        self.draws = draws
+
+    def complete(self, prompt, image_paths=()):
+        answer = super().complete(prompt, image_paths)
+        draw = next(self.draws)
+        if prompt.startswith("You review a genealogical extraction"):
+            finding = {
+                "target": "e1",
+                "issue": f"is the year right? (draw {draw})",
+                "suggestion": "keep",
+            }
+            return (
+                json.dumps(finding) + '\n{"done": true, "findings_emitted": 1}'
+            )
+        if '"claims_emitted"' in answer:
+            claim, sentinel = answer.splitlines()
+            sampled = json.loads(claim) | {"confidence": (draw % 9 + 1) / 10}
+            return json.dumps(sampled) + "\n" + sentinel
+        return answer
+
+
+class Sampled(ScriptedOrchestrator):
+    """The scripted orchestrator with a sampled engine and the real review
+    export, which carries the critic's findings into the review CSV."""
+
+    _step_export_review = Orchestrator._step_export_review
+
+    def __init__(self, *args, draws=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.draws = draws if draws is not None else itertools.count()
+
+    def _llm(self, role, doc):
+        return SampledModel(self.calls, doc.source.name, self.draws)
+
+
+def engine_steps(calls: list[str]) -> list[str]:
+    return [step for step in steps(calls) if step not in WIKI_STEPS]
+
+
+class TestViews:
+    """A document's views (its transcription, batch and critique) persist
+    in its directory, recorded in derivations.json by content hash, and
+    are reused while their inputs are unchanged: the pipeline stands
+    still without the LLM cache (#225). `--refresh ROLE` makes a role's
+    views again, in place."""
+
+    def sampled(self, tmp_path, **kwargs):
+        folder = tmp_path / "docs"
+        folder.mkdir(exist_ok=True)
+        (folder / "letter.txt").write_text("Klara was born in 1917.")
+        kwargs.setdefault("log", quiet)
+        return Sampled(folder, tmp_path / "state", **kwargs)
+
+    def test_a_sampled_engine_without_a_cache_reaches_written(self, tmp_path):
+        orchestrator = self.sampled(tmp_path)
+        assert orchestrator.cache_dir is None
+        assert orchestrator.run() == 2
+        asked = len(orchestrator.calls)
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+        approve_all_equivalences(doc)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_CLAIMS
+        assert "is the year right?" in doc.review.read_text()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+        assert orchestrator.run() == 0
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+        # the engine was asked in the first run only, no review was moved
+        # aside, and no cache was read or written
+        assert engine_steps(orchestrator.calls[asked:]) == []
+        assert list(doc.dir.glob("*superseded*")) == []
+        assert not any(
+            event["event"].startswith("cache-")
+            for event in orchestrator.rundir.events()
+        )
+
+    def test_the_views_are_recorded_by_content(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        record = json.loads((doc.dir / "derivations.json").read_text())
+        derived, content = record["derived"], record["content"]
+        assert derived["transcription.json"] == {
+            "transcription.corrected.txt": None
+        }
+        assert derived["batch.json"] == {
+            "transcription.json": content["transcription.json"]
+        }
+        assert derived["critique.json"] == {
+            "batch.json": content["batch.json"]
+        }
+
+    def test_a_deleted_view_is_made_again_alone(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        doc.critique.unlink()
+        asked = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert steps(orchestrator.calls[asked:]) == ["critique"]
+        reused = [event["stage"] for event in this_run(orchestrator, "reused")]
+        assert reused == ["transcription", "extraction"]
+
+    def test_refresh_makes_a_role_view_again_in_place(self, tmp_path):
+        orchestrator = self.sampled(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        critique, batch = doc.critique.read_text(), doc.batch.read_bytes()
+        refreshed = self.sampled(
+            tmp_path, refresh=["critique"], draws=orchestrator.draws
+        )
+        assert refreshed.run() == 2
+        (doc,) = refreshed.documents()
+        assert engine_steps(refreshed.calls) == ["critique"]
+        assert doc.critique.read_text() != critique
+        assert doc.batch.read_bytes() == batch
+        assert doc.state.status == AWAITING_CLAIMS
+        # the next run without the flag reuses the view made again
+        again = self.sampled(tmp_path, draws=orchestrator.draws)
+        assert again.run() == 2
+        assert engine_steps(again.calls) == []
+        (doc,) = again.documents()
+        assert doc.critique.read_text() != critique
+
+    def test_a_refreshed_view_that_comes_out_the_same_stands(self, tmp_path):
+        """Early cutoff: a transcription made again with the same content
+        leaves the batch and the critique standing, and every gate open."""
+        first = completed_run(tmp_path)
+        again = ScriptedOrchestrator(
+            first.folder, first.state_dir, log=quiet, refresh=["transcribe"]
+        )
+        assert again.run() == 0
+        assert [e["stage"] for e in this_run(again, "done")] == [
+            "transcription"
+        ]
+        assert [e["stage"] for e in this_run(again, "reused")] == [
+            "extraction",
+            "critique",
+        ]
+        assert again.calls == []
+
+    def test_serial_mode_makes_a_refreshed_view_once(self, tmp_path):
+        first = make_run(tmp_path)
+        first.run()
+        serial = ScriptedOrchestrator(
+            first.folder,
+            first.state_dir,
+            log=quiet,
+            serial=True,
+            refresh=["extract"],
+        )
+        assert serial.run() == 2
+        assert engine_steps(serial.calls) == ["manifest", "chunk"]
+
+    def test_views_without_their_state_are_set_aside(self, tmp_path):
+        """Views whose state.json is lost were made for a registration
+        nothing records: the directory is set aside whole, and the
+        document starts afresh."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        doc.state_path.unlink()
+        before = snapshot(doc.dir, skip=())
+        asked = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        kept = doc.dir.with_name(".letter.superseded-1")
+        assert snapshot(kept, skip=()) == before
+        (event,) = this_run(orchestrator, "set-aside")
+        assert "no state.json" in event["reason"]
+        assert steps(orchestrator.calls[asked:]) == [
+            "register",
+            "manifest",
+            "chunk",
+            "critique",
+            "reconcile",
+        ]
 
 
 class TestUnrecordedDirectory:
@@ -1037,6 +1238,16 @@ class TestRunDirectory:
     """The run directory records what each run did: an event per stage
     started, done or failed, and run state derived from the events."""
 
+    def test_the_manifest_names_the_cache_by_its_absolute_path(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        orchestrator = make_run(tmp_path, cache_dir=Path("var/llm-cache"))
+        orchestrator.run()
+        assert orchestrator.rundir.manifest()["cache"] == os.path.join(
+            os.getcwd(), "var", "llm-cache"
+        )
+
     def test_every_stage_is_an_event(self, tmp_path):
         orchestrator = make_run(tmp_path)
         orchestrator.run()
@@ -1090,18 +1301,14 @@ class TestRunDirectory:
         critique = run_state(orchestrator.rundir)[(doc.sha1, "critique")]
         assert critique.status == "failed"
         assert "critique engine down" in critique.reason
-        # the next run derives the stages again and gets past it
+        # the next run reuses the views that stand and makes the critique
         orchestrator.fail_step = None
         orchestrator.calls.clear()
         assert orchestrator.run() == 2
-        assert steps(orchestrator.calls) == [
-            "manifest",
-            "chunk",
-            "critique",
-            "reconcile",
-        ]
+        assert steps(orchestrator.calls) == ["critique", "reconcile"]
         states = run_state(orchestrator.rundir)
         assert states[(doc.sha1, "critique")].status == "done"
+        assert states[(doc.sha1, "extraction")].status == "done"
 
     def test_attention_reaches_the_run_state(self, tmp_path):
         """An extraction that fell back to line-range segmentation and to
@@ -1131,6 +1338,16 @@ class TestRunDirectory:
         assert extraction.status == NEEDS_ATTENTION
         assert "fell back to line-range segmentation" in extraction.reason
         assert "fell back to line windows" in extraction.reason
+        # a run that reuses the batch view carries its reasons on
+        assert orchestrator.run() == 2
+        (reused,) = [
+            event
+            for event in this_run(orchestrator, "reused")
+            if event["stage"] == "extraction"
+        ]
+        assert reused["attention"] == extraction.reason.split("; ")
+        again = run_state(orchestrator.rundir)[(doc.sha1, "extraction")]
+        assert again == extraction
 
     def test_a_held_stage_pauses_the_document(self, tmp_path):
         """A pause request for a stage stops its dispatch; nothing fails,
@@ -1157,12 +1374,7 @@ class TestRunDirectory:
         # a new invocation starts clear of the old requests
         resumed = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         assert resumed.run() == 2
-        assert steps(resumed.calls) == [
-            "manifest",
-            "chunk",
-            "critique",
-            "reconcile",
-        ]
+        assert steps(resumed.calls) == ["critique", "reconcile"]
 
     def test_run_abort_stops_dispatch(self, tmp_path):
         class AbortsAfterFirst(ScriptedOrchestrator):
@@ -1392,6 +1604,17 @@ class TestIngestRunFlags:
     def test_bad_flags_are_refused(self, tmp_path, monkeypatch, flags):
         with pytest.raises(SystemExit):
             self.parse(tmp_path, monkeypatch, *flags)
+
+    @pytest.mark.parametrize(
+        "flags",
+        [["--refresh", "critique"], ["--epoch", "extract=1"]],
+        ids=["refresh", "epoch"],
+    )
+    def test_no_cache_refuses_the_cache_switches(
+        self, tmp_path, monkeypatch, flags
+    ):
+        with pytest.raises(SystemExit, match="act through the LLM cache"):
+            self.parse(tmp_path, monkeypatch, "--no-cache", *flags)
 
 
 class TestTranscribeLanguage:

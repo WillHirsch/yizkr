@@ -414,10 +414,13 @@ class TestSignatures:
     )
     def test_long_repetitive_text_checks_quickly(self, text):
         # no pattern backtracks across a long run of list words, or of
-        # announcement-like phrases on one line
-        started = time.perf_counter()
+        # announcement-like phrases on one line. The limit is on this
+        # process's CPU time, which other load on the machine does not
+        # inflate, and is far above a linear check's milliseconds while
+        # far below a backtracking one's minutes (#223)
+        started = time.process_time()
         check_transcription(text)
-        assert time.perf_counter() - started < 1.0
+        assert time.process_time() - started < 5.0
 
     def test_page_that_could_not_be_read_fails_even_in_a_letter(self):
         # a page named as unread fails anywhere: a silent partial

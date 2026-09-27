@@ -18,40 +18,50 @@ A run refuses to start without a never-ingest list
 the list is skipped at discovery, before any step reads it
 (yizkr.core.corpus).
 
-Every run derives the stages before the gates again: transcription,
-extraction and critique, or the GEDCOM adapter. Their model calls go
-through the LLM cache when the run has one (ADR-0032): a call made before
-with the same key is answered from the cache, so an unchanged document
-costs no engine call, while parsing, merging and the transcription check
-run on every run. The orchestrator knows nothing of the cache: it takes
-its clients from the client factory (yizkr.pipeline.llm), which wraps
-them when a cache is configured, and without one the same code calls the
-engine directly. The transcription is routed per document (vision, text
-file, slide text); a curator's `<doc>/transcription.corrected.txt` routes
-it to the correction instead. The PDF renderer the vision engine and the
-transcription check need is checked once, before any document.
+The stages before the gates make a document's views, kept in its
+directory: the transcription (`transcription.json`), the batch
+(`batch.json`, from extraction or from the GEDCOM adapter) and the
+critique (`critique.json`). A view is reused while the inputs recorded
+for it are unchanged, and made again when they change, or when
+`--refresh` names the role that makes it (MODEL_ROLES), which makes it
+again in place. A changed prompt, model or piece of code does not by
+itself make a view stale; a scratch run starts from fresh state
+directories instead. The model calls a view is made with go through the
+LLM cache when the run has one (ADR-0032): an accelerator, which the
+pipeline runs the same without. The client factory (yizkr.pipeline.llm)
+wraps the run's engine clients in it; the orchestrator only names the
+cache folder, the refreshed roles and the epochs, and records the cache's
+events in the run directory. The transcription is routed per document
+(vision, text file, slide text); a curator's
+`<doc>/transcription.corrected.txt` routes it to the correction instead.
+The PDF renderer the vision engine and the transcription check need is
+checked once, before any document.
 
-The document directory keeps plain-file views for reading and review:
-`transcription.json`, `batch.json`, `critique.json` and the files the
-later steps derive from them. Dependencies are make-style by content
-hash (`derivations.json`): a changed batch invalidates every file
-derived from it and moves the reviewed files aside as
-`*.reviewed.superseded-<n>.csv`; a re-exported CSV whose content changed
-moves its reviewed file aside too; and a reviewed file is consent only
-for the CSV it was first seen with, so editing the reviewed CSV
-re-writes and editing the CSV it reviews re-arms the gate. An identical
-recompute, such as one answered from the cache, invalidates nothing.
+Dependencies are make-style by content hash (`derivations.json`): the
+transcription is made from the correction, when there is one; the batch
+from the transcription; the critique from the batch; and the later
+steps' files from those. A transcription or a batch counts by its
+canonical content (the transcription's text, language and artifact; the
+batch without its run stamps), so an identical recompute, such as a
+correction that says what the transcription said, invalidates nothing.
+A changed batch invalidates every file derived from it and moves the
+reviewed files aside as `*.reviewed.superseded-<n>.csv`; a re-exported
+CSV whose content changed moves its reviewed file aside too; and a
+reviewed file is consent only for the CSV it was first seen with, so
+editing the reviewed CSV re-writes and editing the CSV it reviews
+re-arms the gate.
 
 Every directory made here has its `derivations.json` from its first run:
 it is written before any other file, and no state is saved into a
 directory without it. A directory with files but no `derivations.json`
 was made before the records, or has lost its record, so nothing says
-what its files were derived from. It is set aside whole, as
-`.<slug>.superseded-<n>` in the state directory, and the document starts
-afresh in a new one, as a document whose source bytes changed does
-(ADR-0010: different bytes are a different artifact). Nothing in the old
-directory is deleted, and it no longer counts for content dedup.
-Modification times are read nowhere.
+what its files were derived from; one with files beside its record but
+no `state.json` has lost the registration its views were made for. It
+is set aside whole, as `.<slug>.superseded-<n>` in the state directory,
+and the document starts afresh in a new one, as a document whose source
+bytes changed does (ADR-0010: different bytes are a different artifact).
+Nothing in the old directory is deleted, and it no longer counts for
+content dedup. Modification times are read nowhere.
 
 A reviewed file's PRESENCE is the gate: the orchestrator never
 interprets a half-filled CSV as consent. Documents whose reconcile
@@ -59,16 +69,18 @@ produced no proposals skip the first gate (there is nothing to review).
 
 The state directory is also the run directory (yizkr.pipeline.rundir):
 `run.json`, `events.jsonl` with an event for every stage start,
-completion and failure and every answer the cache gives or cannot give,
-and `control.jsonl`, whose pause and abort requests stop dispatch. It is
-runtime state — keep it under var/ or outside the repo. Re-running a
-completed document changes nothing (the writer is idempotent).
+completion, failure and reused view and every answer the cache gives or
+cannot give, and `control.jsonl`, whose pause and abort requests stop
+dispatch. It is runtime state — keep it under var/ or outside the repo.
+Re-running a completed document changes nothing (the writer is
+idempotent).
 """
 
 from __future__ import annotations
 
 import functools
 import json
+import os
 import re
 import sys
 import threading
@@ -144,6 +156,12 @@ BATCH_VOLATILE = (
     "extraction_run.model_identifier",
     "extraction_run.pipeline_version",
 )
+# the field of a transcription that names what made it (the route, and
+# the engine build), left out of its content hash: extraction reads only
+# the text, its language and the artifact
+TRANSCRIPTION_VOLATILE = ("engine",)
+# the event that says a stage's view was current and stands
+REUSED = "reused"
 
 
 def document_kind(source: Path) -> str:
@@ -200,11 +218,11 @@ class Derivations:
     """What each derived file of a document was made from, by content hash.
 
     The make-style dependency record behind safe re-runs, kept in
-    `derivations.json`: a derived file is current while the inputs it was
-    made from still hash the same; a reviewed CSV consents while neither
-    it nor the CSV it reviews has changed since it was first seen; and the
-    batch view's canonical content hash says whether a regenerated batch
-    is really new.
+    `derivations.json`: a derived file, a view included, is current while
+    the inputs it was made from still hash the same; a reviewed CSV
+    consents while neither it nor the CSV it reviews has changed since it
+    was first seen; and the canonical content hashes of the transcription
+    and batch views say whether a view made again is really new.
     """
 
     def __init__(
@@ -241,9 +259,9 @@ class Derivations:
 
     def _inputs(self, output: Path) -> dict[str, str | None]:
         """The files `output` is made from, each by its canonical content
-        hash where one is recorded (the batch view's: its run stamps
-        differ between identical recomputes), and by its bytes
-        otherwise."""
+        hash where one is recorded (the transcription's and the batch's:
+        what made them, and when, differ between identical recomputes),
+        and by its bytes otherwise; a missing file is None."""
         content = self._load()["content"]
         return {
             path.name: content.get(path.name) or sha256_file(path)
@@ -336,9 +354,23 @@ class DocumentRun:
         # open-schema harness (ADR-0013)
         self.gaps = self.dir / "gaps.csv"
         self.critique = self.dir / "critique.json"
+        gedcom = self.kind == "gedcom"
+        # each view the stages before the gates make -> (the model role
+        # that makes it, the stage that makes it)
+        self.views = {
+            self.transcription: ("transcribe", "transcription"),
+            self.batch: ("extract", "gedcom" if gedcom else "extraction"),
+            self.critique: ("critique", "critique"),
+        }
         self.derivations = Derivations(
             self.dir / "derivations.json",
             made_from={
+                self.transcription: (self.correction,),
+                # the GEDCOM adapter reads the source alone, whose bytes
+                # the directory is kept for (a changed source sets it
+                # aside)
+                self.batch: () if gedcom else (self.transcription,),
+                self.critique: (self.batch,),
                 self.equivalences: (self.batch,),
                 self.resolved: (self.batch, self.equivalences_reviewed),
                 self.review: (self.resolved, self.critique),
@@ -370,15 +402,24 @@ class DocumentRun:
 
     @property
     def unrecorded(self) -> bool:
-        """Does the directory hold anything without the derivations.json
-        that says what its files were derived from?
+        """Does the directory hold files nothing records the making of:
+        anything without the derivations.json that says what its files
+        were derived from, or files beside it without the state.json that
+        names the artifact they were made for?
 
         Every directory the orchestrator makes has its record from its
-        first run, so one without it was made before the records, or has
-        lost its record."""
-        if self.derivations.path.exists() or not self.dir.is_dir():
+        first run, and its state from its registration, before any view
+        is made; one without them was made before the records, or has lost
+        them."""
+        if not self.dir.is_dir():
             return False
-        return any(self.dir.iterdir())
+        if not self.derivations.path.exists():
+            return any(self.dir.iterdir())
+        if self.state_path.exists():
+            return False
+        return any(
+            path != self.derivations.path for path in self.dir.iterdir()
+        )
 
     def save(self) -> None:
         """Save the document's state, only into a directory with its
@@ -409,9 +450,12 @@ class Orchestrator:
     from `_llm`, which tests replace with a scripted model.
 
     `cache_dir` names the LLM cache (ADR-0032); None calls the engine
-    directly. `refresh` names roles (MODEL_ROLES) whose calls go to the
-    engine once in this run whatever the cache holds, and `epochs` gives
-    roles an epoch other than 0, to re-sample them.
+    directly. `refresh` names roles (MODEL_ROLES) whose views are made
+    again in this run, current or not, with calls that go to the engine
+    whatever the cache holds. `epochs` gives roles an epoch other than 0:
+    it changes the keys of their calls, so a view made again after it is
+    asked afresh, while a current view stands (combine it with `refresh`
+    to re-sample the views themselves).
     """
 
     def __init__(
@@ -484,6 +528,10 @@ class Orchestrator:
         # media SHA-1 -> the batch derived in this run, so that serial
         # mode's second pass over a document derives nothing again
         self._derived: dict[str, ClaimBatch] = {}
+        # (media SHA-1, view name) -> the view as made or reused in this
+        # run: each view is decided once per run, a refreshed one made
+        # again once
+        self._views: dict[tuple[str, str], Any] = {}
         # the run's engine client per role, and its LLM cache, each made
         # on first use and closed when the run ends
         self._engines: dict[str, Any] = {}
@@ -542,21 +590,35 @@ class Orchestrator:
                 )
             return self._cache
 
-    def _llm(self, role: str, doc: DocumentRun):
-        """The engine for one role, as one document's stages see it: the
-        run's client for the role, wrapped by the LLM cache when the run
-        has one, which then reports what it does to the run directory
-        under the document's SHA-1."""
+    def role_client(
+        self, role: str, *, events: Callable[..., Any] | None = None
+    ) -> Any:
+        """The client this run calls the engine through in `role`
+        (MODEL_ROLES): the run's engine client for the role, with the
+        role's effort and model and the pinned CLI, behind the run's LLM
+        cache when it has one, keyed with the role's epoch. `events`
+        receives what the cache does.
+
+        A tool that adopts answers for the run's calls (CachingClient.
+        complete_key and seed) takes its client from an orchestrator
+        configured as the run is, so that its keys are the ones the run's
+        calls are served under. A CLI update changes the engine's config
+        hash, and with it every key: adoptions made before it are no
+        longer found, and those calls miss as absent."""
         engine = self._engine(role)
         cache = self._llm_cache()
         if cache is None:
             return engine
         from yizkr.pipeline.llm import cached_client
 
-        return cached_client(
-            engine,
-            cache,
-            role=role,
+        return cached_client(engine, cache, role=role, events=events)
+
+    def _llm(self, role: str, doc: DocumentRun):
+        """The engine for one role, as one document's stages see it
+        (`role_client`), with what the cache does reported to the run
+        directory under the document's SHA-1."""
+        return self.role_client(
+            role,
             events=functools.partial(
                 self.rundir.emit, subject=doc.sha1, kind=doc.kind
             ),
@@ -616,7 +678,8 @@ class Orchestrator:
         the document's kind through (DispatchStopped otherwise), and an
         event says when it starts, when it is done (with the reasons its
         output needs attention, if any) and when it fails, with the
-        reason."""
+        reason. The reasons are kept in the document's state, for the
+        runs that reuse the stage's view."""
         where = {"subject": doc.sha1, "kind": doc.kind, "stage": stage}
         stopped = self.rundir.control().stopped(stage=stage, kind=doc.kind)
         if stopped:
@@ -630,8 +693,38 @@ class Orchestrator:
             self.rundir.emit("failed", reason=reason[:500], **where)
             raise
         reasons = list(attention(result)) if attention is not None else []
+        detail = dict(doc.state.detail or {})
+        noted = dict(detail.pop("attention", None) or {})
+        noted.pop(stage, None)
+        if reasons:
+            noted[stage] = reasons
+        doc.state.detail = detail | ({"attention": noted} if noted else {})
         self.rundir.emit("done", attention=reasons or None, **where)
         return result
+
+    def _reused_view(
+        self, doc: DocumentRun, view: Path, load: Callable[[str], Any]
+    ) -> Any:
+        """The document's `view`, loaded, when it stands: it is current
+        (Derivations.current) and `--refresh` does not name its role. A
+        reuse is an event, with the attention reasons noted when the view
+        was made. None when the view is to be made."""
+        role, stage = doc.views[view]
+        if role in self.refresh or not doc.derivations.current(view):
+            return None
+        try:
+            loaded = load(view.read_text())
+        except (OSError, ValueError):
+            return None
+        noted = (doc.state.detail or {}).get("attention") or {}
+        self.rundir.emit(
+            REUSED,
+            subject=doc.sha1,
+            kind=doc.kind,
+            stage=stage,
+            attention=noted.get(stage) or None,
+        )
+        return loaded
 
     # -- pipeline steps (override points for tests) ---------------------------
 
@@ -688,10 +781,11 @@ class Orchestrator:
         )
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
-        if doc.source.suffix.lower() in GEDCOM_SUFFIXES:
+        """Make the document's batch: the GEDCOM adapter's, or extraction
+        from its transcription view."""
+        if doc.kind == "gedcom":
             return self._step_gedcom(doc)
-        transcription = self._step_transcribe(doc)
-        return self._step_extract(doc, transcription)
+        return self._step_extract(doc, self._transcription(doc))
 
     def _step_gedcom(self, doc: DocumentRun) -> ClaimBatch:
         from yizkr.pipeline.gedcom import adapt_gedcom, format_unsupported_tags
@@ -724,7 +818,34 @@ class Orchestrator:
         }
         return result.batch
 
+    def _transcription(self, doc: DocumentRun):
+        """The document's transcription view, reused when it stands
+        (`_reused_view`) and made otherwise, then recorded with its
+        canonical content hash; once per run."""
+        from yizkr.pipeline.transcribe import Transcription
+
+        memo = (doc.sha1, doc.transcription.name)
+        if memo in self._views:
+            return self._views[memo]
+        transcription = self._reused_view(
+            doc, doc.transcription, Transcription.model_validate_json
+        )
+        if transcription is None:
+            transcription = self._step_transcribe(doc)
+            doc.derivations.set_content(
+                doc.transcription.name,
+                content_hash(
+                    transcription.model_dump(mode="json"),
+                    volatile=TRANSCRIPTION_VOLATILE,
+                ),
+            )
+            doc.derivations.record(doc.transcription)
+        self._views[memo] = transcription
+        return transcription
+
     def _step_transcribe(self, doc: DocumentRun):
+        """Transcribe the document by its route, record the language it
+        was found to be in, and write the transcription view."""
         method = route_transcription(doc.source, doc.correction)
         transcription, resolution = self._run_stage(
             doc, "transcription", lambda: self._transcribe(doc, method)
@@ -829,14 +950,18 @@ class Orchestrator:
         # reach the adjudicator, however short the document. Chunking a
         # small document costs a few extra calls and is never incorrect
         # (ADR-0006 §7).
-        extractor = ChunkedClaimExtractor(
-            self._llm("extract", doc),
-            state_dir=doc.extraction,
-            concurrency=self.chunk_concurrency,
-            log=self.log,
-        )
+        extractors: list[ChunkedClaimExtractor] = []
 
         def extract() -> ClaimBatch:
+            # the engine starts inside the stage, so an engine that cannot
+            # start fails the stage, with its event
+            extractor = ChunkedClaimExtractor(
+                self._llm("extract", doc),
+                state_dir=doc.extraction,
+                concurrency=self.chunk_concurrency,
+                log=self.log,
+            )
+            extractors.append(extractor)
             batch = extractor.extract(
                 transcription, artifact_qid=doc.state.artifact_qid
             )
@@ -854,9 +979,9 @@ class Orchestrator:
             doc,
             "extraction",
             extract,
-            attention=lambda _batch: extractor.attention,
+            attention=lambda _batch: extractors[0].attention,
         )
-        doc.gaps_found = extractor.gaps
+        doc.gaps_found = extractors[0].gaps
         return batch
 
     def _step_reconcile(self, doc: DocumentRun, batch: ClaimBatch) -> int:
@@ -940,14 +1065,12 @@ class Orchestrator:
             f"(review {doc.gaps.name})"
         )
 
-    def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
-        from yizkr.pipeline.critique import run_critique
-
-        findings = self._run_stage(
-            doc,
-            "critique",
-            lambda: run_critique(self._llm("critique", doc), batch),
-        )
+    def _critique(self, doc: DocumentRun, batch: ClaimBatch) -> None:
+        """The batch's critique view (ADR-0013), reused when it stands
+        (`_reused_view`) and made otherwise, then recorded."""
+        if self._reused_view(doc, doc.critique, _findings) is not None:
+            return
+        findings = self._step_critique(doc, batch)
         changed = _write_view(
             doc.critique,
             json.dumps(
@@ -955,6 +1078,7 @@ class Orchestrator:
                 indent=2,
             ),
         )
+        doc.derivations.record(doc.critique)
         if findings and changed:
             self.log(
                 f"  critique: {len(findings)} concern(s) flagged for review"
@@ -963,7 +1087,16 @@ class Orchestrator:
                 self.log(
                     f"    - {finding.target}: {finding.issue}", file=sys.stderr
                 )
-        return findings
+
+    def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
+        """The extraction critic's findings on the batch."""
+        from yizkr.pipeline.critique import run_critique
+
+        return self._run_stage(
+            doc,
+            "critique",
+            lambda: run_critique(self._llm("critique", doc), batch),
+        )
 
     def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
         """entity local_id -> concatenated critic concerns, for the review
@@ -1065,11 +1198,24 @@ class Orchestrator:
         return result
 
     def _derive(self, doc: DocumentRun) -> ClaimBatch:
-        """Derive the stages before the gates: the batch and its view, and
-        the critique. A batch whose content changed invalidates everything
-        derived from the old one."""
-        batch = self._step_batch(doc)
-        if self._update_batch_view(doc, batch):
+        """Bring the views before the gates up to date, each after the
+        view it is made from: the transcription, the batch and the
+        critique (a GEDCOM file has only its batch). A view that stands is
+        reused (`_reused_view`); one that does not is made again, and a
+        batch whose content changed invalidates everything derived from
+        the old one."""
+        extracted = doc.kind != "gedcom"
+        if extracted:
+            self._transcription(doc)
+        batch = self._reused_view(
+            doc, doc.batch, ClaimBatch.model_validate_json
+        )
+        changed = False
+        if batch is None:
+            batch = self._step_batch(doc)
+            changed = self._update_batch_view(doc, batch)
+            doc.derivations.record(doc.batch)
+        if changed:
             # a new batch invalidates everything derived from the old one
             # — stale machine outputs must never gate or write
             stale = (doc.equivalences, doc.resolved, doc.review,
@@ -1101,10 +1247,9 @@ class Orchestrator:
             # gates below re-derive the real status
             doc.state.status = BATCHED
             doc.save()
-        # the extraction critic reviews each batch (ADR-0013); with the LLM
-        # cache, an unchanged batch's critique is answered from it
-        if doc.source.suffix.lower() not in GEDCOM_SUFFIXES:
-            self._step_critique(doc, batch)
+        # the extraction critic reviews each batch (ADR-0013)
+        if extracted:
+            self._critique(doc, batch)
         return batch
 
     # -- the state machine ----------------------------------------------------
@@ -1164,16 +1309,21 @@ class Orchestrator:
         # (ADR-0010 — different bytes are a different artifact), so the
         # document starts over in a fresh directory rather than trusting
         # stale derived state. A directory without derivations.json holds
-        # files nothing says were derived from what, and starts over the
-        # same way. Either is moved aside whole, reviews included, and
-        # nothing in it is deleted (_set_aside).
+        # files nothing says were derived from what, and one whose files
+        # have no state.json beside them was made for a registration
+        # nothing records; either starts over the same way. Each is moved
+        # aside whole, reviews included, and nothing in it is deleted
+        # (_set_aside).
         if doc.state.content_sha1 and doc.state.content_sha1 != content_sha1:
             self._set_aside(doc, "content changed")
         elif doc.unrecorded:
             self._set_aside(
                 doc,
                 "no derivations.json records what the files in its "
-                "directory were derived from",
+                "directory were derived from"
+                if not doc.derivations.path.exists()
+                else "no state.json records the artifact the files in its "
+                "directory were made for",
             )
         # a directory is recorded from its first run, before any other file
         # is written to it
@@ -1220,9 +1370,8 @@ class Orchestrator:
             doc.save()
             self.log(f"  derived media: {len(derived)} item(s)")
 
-        # the stages before the gates are derived again once in each run;
-        # with the LLM cache, an unchanged document's calls are answered
-        # from it
+        # the views before the gates are brought up to date once in each
+        # run
         batch = self._derived.get(doc.sha1)
         if batch is None:
             batch = self._derive(doc)
@@ -1361,7 +1510,11 @@ class Orchestrator:
         """Record the run's plan and configuration in the run manifest."""
         self.rundir.start(
             mode="ingest run",
-            cache=str(self.cache_dir) if self.cache_dir is not None else None,
+            cache=(
+                os.path.abspath(self.cache_dir)
+                if self.cache_dir is not None
+                else None
+            ),
             config={
                 "engine": self.llm,
                 "language": self.language,
@@ -1405,6 +1558,7 @@ class Orchestrator:
         # renamed copy skips the pipeline (cross-run dedup, ADR-0010)
         self._seen_hashes = self._prior_written_hashes(docs)
         self._derived = {}
+        self._views = {}
         # each run is an invocation of its own in the run directory
         self.rundir = RunDir(self.state_dir)
         self._start_run(docs)
@@ -1546,6 +1700,14 @@ def _supersede(path: Path) -> Path | None:
         n += 1
     path.rename(target)
     return target
+
+
+def _findings(text: str) -> list:
+    """A critique view's findings; ValueError when it holds no list."""
+    findings = json.loads(text)
+    if not isinstance(findings, list):
+        raise ValueError("a critique view holds a list of findings")
+    return findings
 
 
 def _csv_has_rows(path: Path) -> bool:

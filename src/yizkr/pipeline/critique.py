@@ -12,11 +12,15 @@ applied to extraction, and it is what catches the "MOTHER as a name" and
 
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, ConfigDict, computed_field
 
 from yizkr.claims import ClaimBatch, ItemValue
 from yizkr.pipeline.extract import scan_json_objects
-from yizkr.pipeline.llm import LlmClient
+from yizkr.pipeline.llm import LlmClient, reject_response
+
+logger = logging.getLogger(__name__)
 
 
 def axis_of(target: str) -> str | None:
@@ -127,7 +131,11 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
 
     Advisory only — a malformed or missing sentinel never raises (unlike
     chunk extraction): the critic must never block the pipeline, only
-    inform the reviewer.
+    inform the reviewer. A response without its terminal sentinel (a
+    refusal, an answer cut off, a usage-limit notice) still gives the
+    findings it holds, and is rejected through the client
+    (llm.reject_response), so that a client that keeps answers asks the
+    critic again next time rather than serving it.
     """
     if not batch.entities and not batch.claims:
         return []
@@ -137,12 +145,19 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
     )
     response = client.complete(prompt)
     findings: list[Finding] = []
+    finished = False
     for obj in scan_json_objects(response):
         if obj.get("done") is True:
+            finished = True
             continue
         if "target" in obj and "issue" in obj:
             try:
                 findings.append(Finding.model_validate(obj))
             except Exception:
                 continue
+    if not finished:
+        try:
+            reject_response(client, response, "critique: no terminal sentinel")
+        except Exception as exc:  # the critic never blocks the pipeline
+            logger.warning("could not reject a critique answer: %s", exc)
     return findings

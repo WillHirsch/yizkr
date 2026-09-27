@@ -552,6 +552,12 @@ def cmd_run(args) -> int:
     from yizkr.pipeline.orchestrate import Orchestrator
     from yizkr.pipeline.transcribe import MissingPrerequisite
 
+    if args.no_cache and (args.refresh or args.epoch):
+        sys.exit(
+            "--refresh and --epoch act through the LLM cache, and --no-cache "
+            "runs without one: drop --no-cache (a refreshed role's calls "
+            "then go to the engine whatever the cache holds)"
+        )
     # fail closed: no never-ingest list, no run, before any file is
     # read. An empty list file is an explicit, allowed configuration.
     exclusions = load_exclusions(required=True, env_file=args.env_file)
@@ -637,7 +643,7 @@ def cmd_stages_state(args) -> int:
         rendered = ", ".join(
             f"{count} {label}" for label, count in sorted(counts.items())
         )
-        print(f"cache {role:10} {rendered}")
+        print(f"cache {role:10} {rendered} (all invocations)")
     return 0
 
 
@@ -1123,34 +1129,41 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CACHE,
         metavar="DIR",
         help="the LLM cache, shared across runs (default var/llm-cache; "
-        "ADR-0032): every model call is answered from it when the same "
-        "call, keyed on what it sends, was answered before, and every new "
-        "answer is kept there, so an unchanged document costs no engine "
-        "call while parsing and every later step run again",
+        "ADR-0032): when a view is made again, each model call it makes is "
+        "answered from the cache if the same call, keyed on what it sends, "
+        "was answered before, and every new answer is kept there. It only "
+        "saves engine calls: a document's views persist in its state "
+        "directory and are reused while their inputs are unchanged, with "
+        "or without it",
     )
     cache.add_argument(
         "--no-cache",
         action="store_true",
-        help="call the engine for every call, reading and writing no cache; "
-        "the run is otherwise the same",
+        help="run without the LLM cache: a view that is made again calls "
+        "the engine for every call, and no answer is read or kept. Views "
+        "persist and are reused as with the cache, so the run is otherwise "
+        "the same",
     )
     p.add_argument(
         "--refresh",
         action="append",
         choices=MODEL_ROLES,
         metavar="ROLE",
-        help="ask the engine again for this role's calls, once each in this "
-        "run, even where the cache holds an answer, which the new one "
-        f"replaces (repeatable; one of {', '.join(MODEL_ROLES)})",
+        help="make this role's views again in this run, in place, current "
+        "or not, asking the engine afresh for each call even where the "
+        "cache holds an answer, which the new one replaces (repeatable; "
+        f"one of {', '.join(MODEL_ROLES)}; extract includes the GEDCOM "
+        "adapter's batches)",
     )
     p.add_argument(
         "--epoch",
         action="append",
         type=_role_epoch,
         metavar="ROLE=N",
-        help="key this role's calls under epoch N (default 0), to sample "
-        "the role afresh while the answers of other epochs stay in the "
-        "cache (repeatable)",
+        help="key this role's calls under epoch N (default 0), so that a "
+        "view made again samples the role afresh while the answers of "
+        "other epochs stay in the cache; current views stand, so combine "
+        "it with --refresh to re-sample them (repeatable)",
     )
     p.set_defaults(func=cmd_run)
 
@@ -1219,7 +1232,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = ssub.add_parser(
         "state",
         help="per-stage run state, and what the LLM cache did for each "
-        "role, derived from a run directory's events",
+        "role, derived from a run directory's events; the cache counts are "
+        "totals over every invocation the run directory has seen",
     )
     p.add_argument("run", type=Path, help="run directory (with run.json)")
     p.add_argument(

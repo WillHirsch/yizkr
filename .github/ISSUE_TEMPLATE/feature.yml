@@ -82,9 +82,9 @@ body:
       options:
         - label: Changes a write path (needs:live-test)
         - label: >-
-            Changes a stage before write: its source with a version bump, a
-            prompt, the manifest, or a model or its parameters (the matching
-            stage:* label, plus needs:scratch-diff if the stage already runs)
+            Changes a stage before write: its code, a prompt, the manifest,
+            or a model or its parameters (the matching stage:* label, plus
+            needs:scratch-diff if the stage already runs)
   - type: checkboxes
     id: no-real-data
     attributes:

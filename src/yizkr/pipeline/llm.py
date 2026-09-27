@@ -87,11 +87,12 @@ class ConversationalLlmClient(Protocol):
 class RejectingLlmClient(Protocol):
     """Optional capability: a caller rejects a response it cannot use.
 
-    A transcription that fails the transcription check, a chunk cut off
-    before its sentinel, or an entity manifest the extractor refuses is
-    rejected, so that the next identical call asks the engine again
-    rather than being answered with the same text. Only a client that
-    keeps responses has anything to reject; see `reject_response`.
+    A transcription that fails the transcription check, or an answer cut
+    off before its terminal sentinel (a chunk's, the critic's, a
+    single-call extraction's), is rejected, so that the next identical
+    call asks the engine again rather than being answered with the same
+    text. Only a client that keeps responses has anything to reject; see
+    `reject_response`.
     """
 
     def reject(self, response: str, reason: str) -> None: ...
@@ -103,6 +104,53 @@ def reject_response(client: Any, response: str, reason: str) -> None:
     keeps nothing, so there is nothing to do."""
     if isinstance(client, RejectingLlmClient):
         client.reject(response, reason)
+
+
+@runtime_checkable
+class AttemptingLlmClient(Protocol):
+    """Optional capability: a client that keeps answers tells one attempt
+    at a call from another, so that each attempt keeps its own answer and
+    a later run replays the attempts in the same order; see
+    `for_attempt`."""
+
+    def attempt(self, number: int) -> Any: ...
+
+
+def for_attempt(client: Any, number: int) -> Any:
+    """The client to make attempt `number` (from 0) of the same call with.
+
+    A caller that asks again when it cannot use an answer, and falls back
+    to something else after the last attempt, asks through this: behind
+    the LLM cache each attempt is then answered, and kept, on its own, so
+    the whole sequence, fallback included, replays as it went. Any other
+    client makes every attempt itself."""
+    if number and isinstance(client, AttemptingLlmClient):
+        return client.attempt(number)
+    return client
+
+
+@runtime_checkable
+class ResumableLlmClient(Protocol):
+    """Optional capability: a conversation (ConversationalLlmClient) can be
+    kept after it is opened, and resumed later exactly as it was opened,
+    without asking the engine again. `keep_conversation` gives the files
+    that hold a conversation's session, by path relative to where the
+    engine keeps them (none, for an engine that needs only the turns);
+    `resume_conversation` returns a handle to fork from, rebuilt from the
+    opening turn and those files, and raises when they cannot give one."""
+
+    def keep_conversation(self, handle: Any) -> dict[str, bytes]: ...
+
+    def resume_conversation(
+        self, prompt: str, response: str, files: Mapping[str, bytes]
+    ) -> Any: ...
+
+
+class ConversationChanged(Exception):
+    """A conversation had to be opened again and its opening turn came
+    back different from the answer the caller built on. Every turn made
+    from the old answer is void: the caller starts over from the opening
+    turn, which now gives the new answer."""
 
 
 def _config_hash(config: dict[str, Any]) -> str:
@@ -197,26 +245,39 @@ class AnthropicClient:
             max_tokens=self.MAX_TOKENS,
             messages=messages,
         )
-        self._reports.value = {"model": getattr(response, "model", None)}
-        return "".join(
+        text = "".join(
             block.text for block in response.content if block.type == "text"
         )
+        if not text.strip():
+            raise RuntimeError("the Anthropic API returned no text")
+        self._reports.value = {"model": getattr(response, "model", None)}
+        return text
 
-    def open_conversation(self, prompt: str) -> tuple[str, Any]:
-        """Stateless conversations: the handle IS the message prefix."""
-        first_turn = {
-            "role": "user",
-            "content": [{"type": "text", "text": prompt}],
-        }
-        response = self._create([first_turn])
-        handle = [
-            first_turn,
+    @staticmethod
+    def _conversation(prompt: str, response: str) -> list[dict]:
+        return [
+            {"role": "user", "content": [{"type": "text", "text": prompt}]},
             {
                 "role": "assistant",
                 "content": [{"type": "text", "text": response}],
             },
         ]
-        return response, handle
+
+    def open_conversation(self, prompt: str) -> tuple[str, Any]:
+        """Stateless conversations: the handle IS the message prefix."""
+        response = self._create(self._conversation(prompt, "")[:1])
+        return response, self._conversation(prompt, response)
+
+    def keep_conversation(self, handle: Any) -> dict[str, bytes]:
+        """Nothing beyond the opening turn: the handle is its messages."""
+        return {}
+
+    def resume_conversation(
+        self, prompt: str, response: str, files: Mapping[str, bytes]
+    ) -> Any:
+        """The conversation's messages, rebuilt from its opening turn: the
+        same handle `open_conversation` gave, with no request."""
+        return self._conversation(prompt, response)
 
     def fork(self, handle: Any, prompt: str) -> str:
         """Replay the shared prefix with a cache breakpoint, add one turn.
@@ -703,6 +764,12 @@ class ClaudeCodeClient:
     a fork's as soon as the call returns, a conversation's when
     ``close_conversation`` or ``close`` is called, or at the latest when
     the client is garbage-collected or the process exits.
+    ``keep_conversation`` gives an open conversation's session files, for
+    the LLM cache to keep beside the conversation's opening turn
+    (ADR-0032), and ``resume_conversation`` puts them back under the
+    projects directory, so that a later run forks the conversation
+    exactly as it was opened; a resumed conversation is released as one
+    opened here is.
     """
 
     engine = "claude-code"
@@ -937,6 +1004,60 @@ class ClaudeCodeClient:
         prefix and forks never see each other's turns."""
         return self._run(["--resume", str(handle), "--fork-session"], prompt)
 
+    def keep_conversation(self, handle: Any) -> dict[str, bytes]:
+        """The files of a conversation's session, by path under the CLI's
+        projects directory: its transcript, and the directory beside it
+        when there is one. Empty when the session is no longer stored."""
+        try:
+            name = str(uuid.UUID(str(handle)))
+        except ValueError:
+            return {}
+        projects = claude_projects_dir(self.config_dir)
+        paths = sorted(projects.glob(f"*/{name}.jsonl"))
+        for directory in sorted(projects.glob(f"*/{name}")):
+            if directory.is_dir() and not directory.is_symlink():
+                paths += sorted(p for p in directory.rglob("*") if p.is_file())
+        return {
+            path.relative_to(projects).as_posix(): path.read_bytes()
+            for path in paths
+        }
+
+    def resume_conversation(
+        self, prompt: str, response: str, files: Mapping[str, bytes]
+    ) -> Any:
+        """Resume a kept conversation exactly: its session's files go back
+        under the CLI's projects directory, from which forks resume it, and
+        the session is held like one opened here, until
+        ``close_conversation`` or ``close`` releases its transcript. Raises
+        ValueError when the files hold no single session transcript, name
+        a path outside the projects directory, or belong to a session this
+        client holds open already (whose release would pull its transcript
+        from under the other holder)."""
+        transcripts = [name for name in files if name.endswith(".jsonl")]
+        if len(transcripts) != 1:
+            raise ValueError("the kept files hold no single transcript")
+        session_id = str(uuid.UUID(Path(transcripts[0]).stem))
+        projects = claude_projects_dir(self.config_dir).resolve()
+        targets = {}
+        for name in files:
+            target = (projects / name).resolve()
+            if not target.is_relative_to(projects) or target == projects:
+                raise ValueError(f"a kept file outside the projects: {name}")
+            targets[name] = target
+        with self._conversations_lock:
+            if session_id in self._conversations:
+                raise ValueError(f"the session {session_id} is open already")
+            self._conversations.add(session_id)
+        try:
+            for name, target in targets.items():
+                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                target.write_bytes(files[name])
+        except BaseException:
+            with self._conversations_lock:
+                self._conversations.discard(session_id)
+            raise
+        return session_id
+
     def close_conversation(self, handle: Any) -> None:
         """Release a conversation's transcript once it will not be forked
         again."""
@@ -1130,9 +1251,9 @@ def cached_client(
     and kept. ``role`` names the pipeline step whose calls these are
     (transcribe, extract, critique): its epoch and refresh setting apply.
     ``events``, when given, receives an event for every hit, miss,
-    rejection and adoption. The wrapper presents the conversational
-    capability exactly when ``client`` has it, and adds `reject`
-    (RejectingLlmClient)."""
+    resume, replay, rejection and adoption. The wrapper presents the
+    conversational capability exactly when ``client`` has it, and adds
+    `reject` (RejectingLlmClient) and `attempt` (AttemptingLlmClient)."""
     from yizkr.pipeline.llmcache import wrap
 
     return wrap(client, cache, role=role, events=events)

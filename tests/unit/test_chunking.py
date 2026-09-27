@@ -7,6 +7,7 @@ extractor through the cache (#225).
 """
 
 import json
+import threading
 
 import pytest
 
@@ -24,6 +25,7 @@ from yizkr.pipeline.chunking import (
     prefix_local_ids,
     unit_text,
 )
+from yizkr.pipeline.llm import ConversationChanged
 from yizkr.pipeline.transcribe import Transcription
 
 # a two-person document: one claimable line per person, one logistics line
@@ -216,6 +218,37 @@ class Rejecting:
 
     def close_conversation(self, handle):
         self.closed.append(handle)
+
+
+class Attempting(Rejecting):
+    """A client that takes rejections and tells attempts at a call apart
+    (as the LLM cache's does): `attempt(n)` gives a sibling whose calls
+    are logged in `asked` with n, beside the attempt-0 calls of the client
+    itself."""
+
+    def __init__(self, client, number: int = 0, parent=None) -> None:
+        super().__init__(client)
+        self.number = number
+        if parent is not None:
+            self.rejected, self.closed = parent.rejected, parent.closed
+        self.asked: list[tuple[str, int]] = (
+            parent.asked if parent is not None else []
+        )
+
+    def attempt(self, number):
+        return Attempting(self.client, number, parent=self)
+
+    def complete(self, prompt, image_paths=()):
+        self.asked.append(("complete", self.number))
+        return super().complete(prompt, image_paths)
+
+    def open_conversation(self, prompt):
+        self.asked.append(("open", self.number))
+        return super().open_conversation(prompt)
+
+    def fork(self, handle, prompt):
+        self.asked.append(("fork", self.number))
+        return super().fork(handle, prompt)
 
 
 def placeholder_claims(*ids: str) -> str:
@@ -835,17 +868,20 @@ class TestEntityFirstExtractor:
 class KeyedLlm:
     """Thread-safe fake for concurrent chunks: responses selected by
     which assigned entity id appears in the prompt (pop-order fakes are
-    racy under concurrency)."""
+    racy under concurrency). With a `barrier`, every fork waits there
+    until the barrier's other parties are in flight too."""
 
     model_identifier = "fake-model"
 
     def __init__(
-        self, manifest_response: str, by_entity: dict[str, str]
+        self,
+        manifest_response: str,
+        by_entity: dict[str, str],
+        barrier: threading.Barrier | None = None,
     ) -> None:
         self.manifest_response = manifest_response
         self.by_entity = by_entity
-        import threading
-
+        self.barrier = barrier
         self._lock = threading.Lock()
         self.concurrent_peak = 0
         self._active = 0
@@ -854,12 +890,11 @@ class KeyedLlm:
         return self.manifest_response, "session-abc"
 
     def fork(self, handle, prompt):
-        import time
-
         with self._lock:
             self._active += 1
             self.concurrent_peak = max(self.concurrent_peak, self._active)
-        time.sleep(0.05)  # widen the overlap window
+        if self.barrier is not None:
+            self.barrier.wait()
         try:
             for entity_id, response in self.by_entity.items():
                 if f"- {entity_id}:" in prompt:
@@ -877,12 +912,15 @@ class KeyedLlm:
 
 class TestParallelChunks:
     def test_concurrent_chunks_merge_identically(self, tmp_path):
+        # both chunk calls must be in flight at once to pass the barrier:
+        # run one at a time, the first waits out the timeout and fails
         llm = KeyedLlm(
             entity_manifest_json(),
             {
                 "e1": ndjson([claim("e1", "Anna Example", 1900)]),
                 "e2": ndjson([claim("e2", "Bern Example", 1902)]),
             },
+            barrier=threading.Barrier(2, timeout=30),
         )
         extractor = ChunkedClaimExtractor(
             llm,
@@ -895,6 +933,39 @@ class TestParallelChunks:
         # claims arrive in chunk order regardless of completion order
         assert [c.subject.local_id for c in batch.claims] == ["e1", "e2"]
         assert llm.concurrent_peak == 2  # the calls genuinely overlapped
+
+    def test_a_changed_conversation_restarts_the_extraction(self, tmp_path):
+        """A fork that finds its conversation changed (the LLM cache's
+        client raises ConversationChanged when a replayed opening turn
+        answers differently) voids the pass: the extraction opens the
+        conversation again and forks from its new answer, and no chunk
+        counts as failed."""
+        opened = []
+
+        class Changing(KeyedLlm):
+            def open_conversation(self, prompt):
+                opened.append(prompt)
+                return super().open_conversation(prompt)
+
+            def fork(self, handle, prompt):
+                if len(opened) == 1:
+                    raise ConversationChanged("answered differently")
+                return super().fork(handle, prompt)
+
+        llm = Changing(
+            entity_manifest_json(),
+            {
+                "e1": ndjson([claim("e1", "Anna Example", 1900)]),
+                "e2": ndjson([claim("e2", "Bern Example", 1902)]),
+            },
+        )
+        extractor = ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
+        )
+        batch = extractor.extract(transcription(), "Q23")
+        assert len(opened) == 2
+        assert extractor.failed_chunks == []
+        assert [c.subject.local_id for c in batch.claims] == ["e1", "e2"]
 
     def test_concurrent_failure_isolates_to_its_chunk(self, tmp_path):
         llm = KeyedLlm(
@@ -958,10 +1029,14 @@ class TestFallbackLadder:
         coverage = side_output(tmp_path, "coverage.json")
         assert set(coverage["fallback"]) == {"manifest"}
 
-    def test_rejected_tiers_are_rejected_through_the_client(self, tmp_path):
-        """Each manifest and segmentation the extractor refuses is
-        rejected, and its conversation released, before the next try."""
-        llm = Rejecting(
+    def test_refused_tiers_are_attempted_apart_and_kept(self, tmp_path):
+        """The manifest and the segmentation are each asked in two
+        attempts, the second through the client's `attempt(1)`, which a
+        client that keeps answers keys apart (#225): a refused answer is
+        kept, not rejected, so a later run replays the same attempts and
+        takes the same fallback. Each refused conversation is released
+        before the next try."""
+        llm = Attempting(
             ScriptedLlm(
                 [
                     "no manifest here",
@@ -974,18 +1049,15 @@ class TestFallbackLadder:
         )
         extractor = self.extractor(llm, tmp_path, budget=10_000)
         extractor.extract(transcription(), "Q23")
-        assert [response for response, _ in llm.rejected] == [
-            "no manifest here",
-            "still no manifest",
-            "no segmentation here",
-            "still no segmentation",
+        assert extractor.used_fallback_segmentation
+        assert llm.asked == [
+            ("open", 0),
+            ("open", 1),
+            ("open", 0),
+            ("open", 1),
+            ("complete", 0),
         ]
-        assert [reason.split(":")[0] for _, reason in llm.rejected] == [
-            "entity manifest",
-            "entity manifest",
-            "segmentation",
-            "segmentation",
-        ]
+        assert llm.rejected == []
         assert llm.closed == ["session-abc"] * 4
 
     def test_fallback_tier_offers_the_same_kinds_as_the_manifest(

@@ -190,10 +190,11 @@ Amended by #87 (2026-09-27), which made the entity manifest a stage of
 the stage store, and by #225 (2026-09-27), which replaced the store with
 the LLM cache of ADR-0032: the manifest call, like every call, is answered
 from the cache when it was made before (ADR-0006 §5, docs/LLM_CACHE.md).
-A manifest the extractor refuses is rejected in the cache and asked again.
-A fallback to line-range segmentation is an attention reason on the
-extraction stage's `done` event and a `fallback` entry in
-`coverage.json`, rather than a `manifest-fallback.txt` file. An
+A manifest the extractor refuses is asked once more, as a second attempt
+keyed apart in the cache; both answers are kept, so a later run takes the
+same path (ADR-0032 §5). A fallback to line-range segmentation is an
+attention reason on the extraction stage's `done` event and a `fallback`
+entry in `coverage.json`, rather than a `manifest-fallback.txt` file. An
 `entity-manifest.json` or `manifest-fallback.txt` from before the store is
 not read; `ingest run` sets aside a document directory without
 `derivations.json` and starts it afresh (ADR-0006 §5).
