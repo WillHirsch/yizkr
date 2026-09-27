@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -164,6 +165,11 @@ CORRESPONDENCE = [
     # asking to be told is no announcement of the engine's
     "Let me know if you need the scans. I couldn't open the PDF, so could "
     "you post a copy?",
+    # a page named in the writer's own plan is no page the note skipped
+    "Dear Clara,\n\nThe children are well. I'll look at page 3 again "
+    "tomorrow. I couldn't see it clearly. Love, Nicholas",
+    "I'll send you the last two pages next week. I couldn't read them "
+    "properly.",
 ]
 
 # replies that decline their reader's request in an engine refusal's words
@@ -189,6 +195,7 @@ PAGE_FAILURES = [
     "--- Page 2 ---\nThe image could not be loaded.",
     "Page 2: I could not open the image.",
     "[Page 2]\nI could not open the image.",
+    "**[Page 2]**\nI could not open the image.",
     # opening a labelled line
     "Note: I was unable to open the second image, so it is not transcribed.",
     "(Note: I was unable to open the second image, so it is not transcribed.)",
@@ -400,6 +407,17 @@ class TestSignatures:
         check = check_transcription(text, pages=2)
         assert not check.passed
         assert check.signature == "media-unreadable"
+
+    @pytest.mark.parametrize(
+        "text",
+        ["first and " * 4000 + "x", "Let me read the image, " * 4000 + "x"],
+    )
+    def test_long_repetitive_text_checks_quickly(self, text):
+        # no pattern backtracks across a long run of list words, or of
+        # announcement-like phrases on one line
+        started = time.perf_counter()
+        check_transcription(text)
+        assert time.perf_counter() - started < 1.0
 
     def test_page_that_could_not_be_read_fails_even_in_a_letter(self):
         # a page named as unread fails anywhere: a silent partial

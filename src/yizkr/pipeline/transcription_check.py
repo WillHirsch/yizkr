@@ -168,8 +168,8 @@ _ORDINAL = (
 # pages", "the last two pages", "the remaining pages", "the rest of the
 # PDF"
 _PAGE = (
-    r"\b(?:pages?\s+\d+(?:\s*(?:[-\u2013,&]|and|to)\s*\d+)*"
-    rf"|{_ORDINAL}(?:\s*(?:,|and|&)\s*{_ORDINAL})*"
+    r"\b(?:pages?\s+\d+(?:\s*(?:[-\u2013,&]|and|to)\s*\d+){0,5}"
+    rf"|{_ORDINAL}(?:\s*(?:,|and|&)\s*{_ORDINAL}){{0,5}}"
     r"(?:\s+(?:two|three|four|five|few|\d+))?\s+pages?"
     r"|rest\s+of\s+the\s+(?:PDF|document|file|pages))\b"
 )
@@ -190,14 +190,23 @@ _TASK_DOCUMENT = (
 # the end of a decline that names nothing: the clause ends, or a reason
 # follows
 _BARE = r"(?=\s*(?:[.,;:!?)]|\Z)|\s+(?:because|since|due)\b)"
-# a sentence announcing that the engine is about to read the media
-_NARRATION = (
+# a sentence announcing that the engine is about to read the media, up to
+# the medium it names
+_NARRATING = (
     rf"(?:I{_A}ll|I will|Let me|I{_A}m going to)\s+"
     r"(?:start by\s+|first\s+)?"
     r"(?:read|open|examin|look at|view)(?:e|ing)?\s+"
     r"(?:the|these|this|those)\s+"
     r"(?:(?:image|PDF)\s+)?(?:images?|PDFs?|files?|documents?|scans?)\b"
-    r"[^.!?\n]*[.!?:]?"
+)
+# the whole sentence
+_NARRATION = rf"{_NARRATING}[^.!?\n]*[.!?:]?"
+# how an announcement opens (see _ANNOUNCE)
+_WILL = (
+    r"(?:(?:okay|ok|alright|all right|sure|right|now|first|great)"
+    r"[,.!]?\s+)?"
+    rf"(?:I{_A}ll|I will|Let me(?!\s+know\b)|I{_A}m going to|I am going to)"
+    r"\b"
 )
 # a sentence announcing what the engine will do: it opens with "I'll", "I
 # will", "Let me" (but not "Let me know"), "I'm going to" or "I am going
@@ -208,17 +217,22 @@ _NARRATION = (
 # look at the image.", "I'll use the Read tool to examine the image.",
 # "Let me take a look.")
 _ANNOUNCE = (
-    r"(?:(?:okay|ok|alright|all right|sure|right|now|first|great)"
-    r"[,.!]?\s+)?"
-    rf"(?:I{_A}ll|I will|Let me(?!\s+know\b)|I{_A}m going to|I am going to)"
-    r"\b(?:[^.!?\n]{0,120}?\b(?:images?|PDFs?|files?|documents?|scans?"
-    r"|pages?|Read tool)\b[^.!?\n]{0,60}"
+    rf"{_WILL}(?:[^.!?\n]{{0,120}}?\b(?:images?|PDFs?|files?|documents?"
+    r"|scans?|pages?|Read tool)\b[^.!?\n]{0,60}"
     r"|\s+(?:take|have)\s+a\s+(?:quick\s+|closer\s+)?look"
     r"(?:\s+at\s+(?:it|this|that))?)"
     r"[.!?:]"
 )
 # the engine's announcement, in either form
 _ANNOUNCING = rf"(?:{_ANNOUNCE}|{_NARRATION})"
+# an announcement that names the medium itself (not only a page), which a
+# following "it" or "them" refers to; the read announcement's tail is
+# bounded, for a pattern that may start at any word
+_ANNOUNCING_MEDIUM = (
+    rf"(?:{_WILL}[^.!?\n]{{0,120}}?\b(?:images?|PDFs?|files?|documents?"
+    r"|scans?|Read tool)\b[^.!?\n]{0,60}[.!?:]"
+    rf"|{_NARRATING}[^.!?\n]{{0,120}}[.!?:]?)"
+)
 # the engine's own relative clause after a medium ("the image you
 # provided"); a correspondent's "you sent" is theirs (_THEIRS)
 _YOU_GAVE = (
@@ -263,9 +277,10 @@ _PAGE_LABEL = (
 # output after the engine's announcement
 _PAGE_HEADING = rf"(?:\A(?:\W*{_ANNOUNCING})?|\n)[^\w\n]*{_PAGE_LABEL}[^\w\n]*"
 # an editorial mark that is a page heading ("[Page 2]"): kept in the text
-# an engine-voice signature reads where it opens a line
+# an engine-voice signature reads where only marks precede it on its line
+# ("[Page 2]", "**[Page 2]**", "## [Page 2]")
 _PAGE_MARK = re.compile(rf"\[\s*{_PAGE_LABEL}\s*\]", re.IGNORECASE)
-_LINE_START = re.compile(r"(?:\A|\n)[^\S\n]*\Z")
+_LINE_START = re.compile(r"(?:\A|\n)[^\w\n]*\Z")
 # a line that opens with a label other than "Transcription": "Note:",
 # "(Note: ...)", "*Error:* ...", "NB:"
 _LABELLED_LINE = (
@@ -338,9 +353,10 @@ def in_engine_voice(subject: str, match: re.Match[str]) -> bool:
     start = match.start()
     if _OPENING.search(subject, max(0, start - _OPENING_REACH), start):
         return True
+    # pages named in the note itself, not in an announcement before it
+    note = match.groupdict().get("note") or match.group(0)
     return bool(
-        _PAGE_NAMED.search(match.group(0))
-        or _PAGE_AFTER.match(subject, match.end())
+        _PAGE_NAMED.search(note) or _PAGE_AFTER.match(subject, match.end())
     )
 
 
@@ -396,10 +412,10 @@ SIGNATURES: tuple[Signature, ...] = (
         r"(?:read|open|render|convert|load|process|view|access|see|display)"
         rf"\b(?:{_GAP}\b{_MEDIA}\b|\s+(?:the\s+)?{_PAGE})"
         # "I'll read the image.I couldn't open it": "it" is the medium the
-        # announcement named
-        rf"|{_ANNOUNCING}\W*{_I}?{_DECLINE}\s+"
+        # announcement named; the note itself is the group "note"
+        rf"|{_ANNOUNCING_MEDIUM}\W*(?P<note>{_I}?{_DECLINE}\s+"
         r"(?:read|open|render|convert|load|process|view|access|see|display)"
-        r"\s+(?:it|them)\b"
+        r"\s+(?:it|them)\b)"
         # "The PDF could not be rendered", "The scanned image could not be
         # read", "The image you provided could not be read", "Page 2 of
         # the PDF could not be read", "Page 2 could not be read"
