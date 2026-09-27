@@ -9,17 +9,29 @@ whether the output may go downstream. It fails the output on either of:
 
 * **A signature**: a phrase in the engine's own voice that no source
   document writes. Tool-specific tokens (``pdftoppm``, a Python
-  traceback, an API error type) match anywhere. Phrases such as "I was
-  unable to read the PDF" or "I cannot transcribe" match outside
-  editorial brackets, because the transcription prompt asks the engine
-  to mark what it cannot read in brackets (``[illegible]``), and a
-  bracketed note is that convention at work. Any match fails the whole
-  output: a multi-page reading that failed on one page is missing that
-  page. Two signatures could also match an ordinary sentence, so they
-  apply only to an output that is little else: a bare decline ("I can't
-  help with that", "I'm unable to complete this task") opening a short
-  output, and a lone sentence announcing that the engine is about to
-  read the file.
+  traceback, an API error type) match anywhere. Phrases such as "I
+  cannot transcribe" or "As an AI" match outside editorial brackets,
+  because the transcription prompt asks the engine to mark what it
+  cannot read in brackets (``[illegible]``), and a bracketed note is
+  that convention at work. Any match fails the whole output: a
+  multi-page reading that failed on one page is missing that page.
+
+  Some engine phrases are also the words of a letter or an email, such
+  as correspondence about family research, so those signatures count
+  only where the engine speaks for itself. A note about the media or the
+  request ("I couldn't open the PDF", "No image was provided", "I'm
+  unable to assist with this request") counts where it opens the output
+  or a page section, or where it names the pages it skipped ("I was
+  unable to read page 2 of the PDF"), and only while it names the task's
+  medium or request plainly. Correspondence names its own by what it
+  holds ("the PDF of the census page", "your request for copies of the
+  register"), who sent it ("the attachment you sent"), what it came in
+  ("in the envelope") or where it was opened ("on my computer"); such a
+  note is the source's own sentence, as is one in the middle of a text
+  that names no page. A bare decline ("I can't help with that", "I'm
+  unable to complete this task") counts only opening a short output, and
+  a sentence announcing that the engine is about to read the file only
+  as the whole output.
 * **Implausible length**: a document of two or more pages must hold at
   least `MIN_TEXT_CHARS_PER_PAGE` letters or digits per page, counted
   outside editorial brackets. The floor sits far below any written page
@@ -94,6 +106,9 @@ class Signature:
     outside_marks: bool = True
     # apply only to outputs of at most SHORT_OUTPUT_CHARS characters
     short_output_only: bool = False
+    # count a match only where the engine speaks about its own task (see
+    # in_engine_voice)
+    engine_voice: bool = False
 
 
 def _signature(
@@ -103,6 +118,7 @@ def _signature(
     *,
     outside_marks: bool = True,
     short_output_only: bool = False,
+    engine_voice: bool = False,
 ) -> Signature:
     return Signature(
         name,
@@ -110,6 +126,7 @@ def _signature(
         re.compile(pattern, re.IGNORECASE),
         outside_marks=outside_marks,
         short_output_only=short_output_only,
+        engine_voice=engine_voice,
     )
 
 
@@ -120,7 +137,122 @@ _NEGATED_MODAL = (
 )
 _UNABLE = rf"(?:unable|not able|wasn{_A}t able|failed)\s+to"
 _DECLINE = rf"(?:{_NEGATED_MODAL}|{_UNABLE})"
+# the engine as the subject of its note: "I", "I'm", "I was"
+_I = rf"(?:I(?:{_A}m|{_A}ve been|\s+am|\s+was|\s+have been)?\s+)"
 _MEDIA = r"(?:PDFs?|images?|image files?|attachments?|scans?)"
+# the words between a verb and its medium: within one sentence, and short
+# of any other medium, so that the first medium named is the object
+_GAP = rf"(?:(?!\b{_MEDIA}\b)[^.\n]){{0,40}}?"
+# what may stand before a medium that is a sentence's subject ("the
+# attached PDF")
+_THE = (
+    r"(?:(?:the|this|these|those|that|your)\s+)?"
+    r"(?:(?:attached|uploaded|provided|shared)\s+)?"
+)
+# the pages a note says were skipped, named by number or place: "page 2",
+# "pages 3-4", "the second page", "the remaining pages", "the rest of the
+# PDF"
+_PAGE = (
+    r"\b(?:pages?\s+\d+"
+    r"|(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth"
+    r"|tenth|last|final|remaining|other|later|following|subsequent)"
+    r"\s+pages?"
+    r"|rest\s+of\s+the\s+(?:PDF|document|file|pages))\b"
+)
+# a sentence announcing that the engine is about to read the media
+_NARRATION = (
+    rf"(?:I{_A}ll|I will|Let me|I{_A}m going to)\s+"
+    r"(?:start by\s+|first\s+)?"
+    r"(?:read|open|examin|look at|view)(?:e|ing)?\s+"
+    r"(?:the|these|this|those)\s+"
+    r"(?:(?:image|PDF)\s+)?(?:images?|PDFs?|files?|documents?|scans?)\b"
+    r"[^.!?\n]*[.!?:]?"
+)
+
+# -- the engine's own voice ---------------------------------------------
+# A note about the media or the request is also a letter's or an email's
+# sentence ("I couldn't open the attachment you sent"). The engine's note
+# opens its output or a page section, or names the page it skipped, and
+# names the task's medium and request plainly; correspondence names its
+# own.
+
+# what may precede an engine's note that opens the output or a page
+# section: a sentence announcing the read (the claude-code engine joins
+# its turns without a separator), a label ("Error:"), an apology, a hedge
+_LEAD_IN = (
+    rf"(?:{_NARRATION}\W*)?"
+    r"(?:(?:note|error|warning|transcription)\s*:\W*)?"
+    rf"(?:(?:(?:I{_A}m|I am)\s+(?:sorry|afraid)|I apologi[sz]e|Apologies"
+    r"|Sorry|Unfortunately)\W*(?:but\s+)?)?"
+    r"(?:it\s+(?:seems|looks|appears)(?:\s+like|\s+that)?\s+)?"
+)
+# a page heading opening a line: "Page 2", "--- Page 2 ---", "Page 2 of 3:"
+_PAGE_HEADING = r"(?:\A|\n)[^\w\n]*page\s+\d+(?:\s+of\s+\d+)?[^\w\n]*"
+# the text before a note that opens the output or a page section
+_OPENING = re.compile(rf"(?:\A|{_PAGE_HEADING})\W*{_LEAD_IN}\Z", re.IGNORECASE)
+# how far back from a note its opening is looked for (characters); a page
+# heading and a lead-in are far shorter
+_OPENING_REACH = 400
+_PAGE_NAMED = re.compile(_PAGE, re.IGNORECASE)
+# pages named just after the note: "the PDF's second page", "the image of
+# page 3", "the PDF beyond page 1"
+_PAGE_AFTER = re.compile(
+    rf"(?:{_A}s\s+|\s+(?:of|for|beyond|after|past|from)\s+(?:the\s+)?)"
+    rf"{_PAGE}",
+    re.IGNORECASE,
+)
+# the words after a note that make its medium or request the
+# correspondents' own: what it holds, who sent it, what it came in, or the
+# device it was opened on
+_THEIRS = re.compile(
+    # what it holds: "the PDF of the census page"; the prompt's "image of
+    # a historical document", and a page, are the task's
+    r"\s+of\s+(?!(?:(?:a|an|the|this|that)\s+)?"
+    rf"(?:(?:historical\s+)?(?:document|PDF|file|image|scan)s?\b|{_PAGE}))"
+    # "your request for copies of the register"; a request for a
+    # transcription is the task
+    r"|(?<=request)\s+(?:for|regarding|concerning|about|dated)\s+"
+    r"(?!(?:(?:a|an|the)\s+)?transcri)"
+    # who sent it: "the attachment you sent"
+    r"|\s+(?:that\s+|which\s+)?(?:you|he|she|they|we)"
+    rf"(?:{_A}ve|\s+have)?\s+(?:\w+ly\s+)?"
+    r"(?:sent|posted|mailed|e-?mailed|forwarded|enclosed)\b"
+    # what it came in: "in the envelope", "attached to your email", "on
+    # your last message"; the engine's "your message" is the task's
+    r"|\s+(?:(?:attached|included|enclosed|sent|posted)\s+)?"
+    r"(?:in|on|with|from|inside|to|by|via)\s+"
+    rf"(?:(?:the|your|my|our|his|her|their|this|that|\w+{_A}s)\s+)?"
+    r"(?:(?:(?:last|previous|earlier|latest|recent|other)\s+)?"
+    r"(?:envelope|parcel|package|packet|post|letter|card|e-?mail|mail"
+    r"|reply)s?"
+    r"|(?:last|previous|earlier|latest|recent|other)\s+messages?)\b"
+    # the device it was opened on: "on my computer"
+    r"|\s+(?:on|with|in|using|from)\s+(?:my|our)\s+(?:\w+\s+)?"
+    r"(?:computer|laptop|phone|tablet|machine|PC|Mac|screen|printer"
+    r"|scanner|device|desktop)s?\b",
+    re.IGNORECASE,
+)
+
+
+def in_engine_voice(subject: str, match: re.Match[str]) -> bool:
+    """Whether `match`, a note about the media or the request found in
+    `subject`, is the engine speaking about its own task.
+
+    It is when the note opens the output or a page section, after at most
+    a sentence announcing the read, a label, an apology and a hedge, or
+    when it names the pages it skipped; and never when the words after it
+    make its medium or request the correspondents' own.
+    """
+    if _THEIRS.match(subject, match.end()):
+        return False
+    start = match.start()
+    if _OPENING.search(subject, max(0, start - _OPENING_REACH), start):
+        return True
+    return bool(
+        _PAGE_NAMED.search(match.group(0))
+        or _PAGE_AFTER.match(subject, match.end())
+    )
+
 
 SIGNATURES: tuple[Signature, ...] = (
     # -- tool and engine failures: tokens no source document writes ------
@@ -163,25 +295,35 @@ SIGNATURES: tuple[Signature, ...] = (
         outside_marks=False,
     ),
     # -- the engine could not see the media ------------------------------
+    # engine-voice notes (in_engine_voice): letters and emails say the same
+    # of their own attachments
     _signature(
         "media-unreadable",
         TOOL_FAILURE,
-        rf"\b{_DECLINE}\s+"
+        # "I couldn't open the attached image", "I was unable to read page
+        # 2 of the PDF"
+        rf"\b{_I}?{_DECLINE}\s+"
         r"(?:read|open|render|convert|load|process|view|access|see|display)"
-        rf"\b[^.\n]{{0,40}}?\b{_MEDIA}\b"
-        rf"|\b{_MEDIA}\s+(?:{_NEGATED_MODAL}|failed to)\s+be\s+"
+        rf"\b{_GAP}\b{_MEDIA}\b"
+        # "The PDF could not be rendered", "Page 2 of the PDF could not be
+        # read"
+        rf"|(?:{_PAGE}\s+of\s+)?\b{_THE}{_MEDIA}\s+"
+        rf"(?:{_NEGATED_MODAL}|failed to)\s+be\s+"
         r"(?:read|opened|rendered|converted|loaded|processed|displayed)\b"
-        rf"|\b{_MEDIA}\s+(?:appears|seems)\s+to\s+be\s+"
+        # "The image file appears to be corrupted"
+        rf"|\b{_THE}{_MEDIA}\s+(?:appears|seems)\s+to\s+be\s+"
         r"(?:corrupt(?:ed)?|damaged|encrypted|password-protected"
         r"|unreadable)\b",
+        engine_voice=True,
     ),
     _signature(
         "media-missing",
         TOOL_FAILURE,
-        rf"\b(?:don{_A}t|do not|{_NEGATED_MODAL})\s+see\s+(?:any|an)\s+"
+        rf"\b{_I}?(?:don{_A}t|do not|{_NEGATED_MODAL})\s+see\s+(?:any|an)\s+"
         rf"{_MEDIA}\b"
         rf"|\bno\s+{_MEDIA}\s+(?:was|were|has been|have been)\s+"
         r"(?:provided|attached|shared|uploaded|included)\b",
+        engine_voice=True,
     ),
     # the whole output is one sentence announcing that the engine is about
     # to read the media: it stopped before transcribing anything. (Such a
@@ -189,12 +331,7 @@ SIGNATURES: tuple[Signature, ...] = (
     _signature(
         "narration-only",
         TOOL_FAILURE,
-        rf"\A\W*(?:I{_A}ll|I will|Let me|I{_A}m going to)\s+"
-        r"(?:start by\s+|first\s+)?"
-        r"(?:read|open|examin|look at|view)(?:e|ing)?\s+"
-        r"(?:the|these|this|those)\s+"
-        r"(?:(?:image|PDF)\s+)?(?:images?|PDFs?|files?|documents?|scans?)\b"
-        r"[^.!?\n]*[.!?:]?\s*\Z",
+        rf"\A\W*{_NARRATION}\s*\Z",
     ),
     # -- refusals: the engine declines, in its own voice ------------------
     _signature(
@@ -204,16 +341,19 @@ SIGNATURES: tuple[Signature, ...] = (
         r"(?:transcribe|provide (?:a|the|any) transcription"
         r"|(?:help|assist)(?: you)? with transcrib\w*)\b",
     ),
-    # declining the request itself; declining a "task", or to "complete"
-    # or "process" something, is also a letter's ordinary prose ("I could
-    # not complete this task before the winter"), so those words count
-    # only as a bare decline (refusal-short)
+    # declining the request itself, as an engine-voice note
+    # (in_engine_voice): a reply letter declines its reader's request in
+    # the same words. Declining a "task", or to "complete" or "process"
+    # something, is also a letter's ordinary prose ("I could not complete
+    # this task before the winter"), so those words count only as a bare
+    # decline (refusal-short)
     _signature(
         "refusal-request",
         REFUSAL,
-        rf"\b{_DECLINE}\s+"
+        rf"\b{_I}?{_DECLINE}\s+"
         r"(?:(?:help|assist)(?: you)? with|comply with|fulfil|fulfill)"
         r"\s+(?:this|that|your)\s+request\b",
+        engine_voice=True,
     ),
     _signature(
         "ai-disclaimer",
@@ -285,15 +425,16 @@ def minimum_text_chars(pages: int | None) -> int:
 
 
 def find_signature(text: str) -> tuple[Signature, str] | None:
-    """The first signature `text` matches, with the matched phrase."""
+    """The first signature `text` matches, with the matched phrase. An
+    engine-voice signature matches only where `in_engine_voice` holds."""
     unmarked = outside_editorial_marks(text).strip()
     for signature in SIGNATURES:
         if signature.short_output_only and len(unmarked) > SHORT_OUTPUT_CHARS:
             continue
         subject = unmarked if signature.outside_marks else text
-        match = signature.pattern.search(subject)
-        if match:
-            return signature, " ".join(match.group(0).split())
+        for match in signature.pattern.finditer(subject):
+            if not signature.engine_voice or in_engine_voice(subject, match):
+                return signature, " ".join(match.group(0).split())
     return None
 
 
