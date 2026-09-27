@@ -54,11 +54,16 @@ equivalences sheet's columns. A claims sheet disguised well enough to
 reach `accept_all`'s equivalences branch comes out with those columns,
 so the `approve`s that branch writes are never applied. A per-row
 `approve` passes as it does for any claim, and `apply_review` records it
-on the approved claim (`Claim.row_approval`, the claim's own id). The
-writer refuses a batch with any depicts claim that lacks that record for
-its current content (`unapproved_depicts`), so a batch that never went
-through a review sheet, such as a raw detect-faces batch, cannot write
-one.
+on the approved claim (`Claim.row_approval`, its `approval_digest`: the
+claim's id and the entity-manifest records its local refs resolve
+through). The writer refuses a batch with any depicts claim that lacks
+that record for the claim and those records as they now read, or whose
+item would depend on another claim's ref (`unapproved_depicts`). So a
+batch that never went through a review sheet, such as a raw detect-faces
+batch, cannot write one, and an approved depicts claim that a later
+edit to the claim or to those records retargets has to be decided
+again. The record is not a signature: whoever hand-edits a batch file
+can recompute it.
 
 Sheets are read as UTF-8, with or without the byte-order mark some
 spreadsheets write; `accept_all` refuses a column name that still holds
@@ -78,6 +83,7 @@ from pathlib import Path
 from yizkr.claims import (
     Claim,
     ClaimBatch,
+    EntityRecord,
     ItemValue,
     LocalRef,
     MonolingualText,
@@ -141,21 +147,87 @@ def claim_id(claim: Claim) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
+def _local_refs(claim: Claim) -> list[LocalRef]:
+    """The claim's local refs: its subject, then its value and its
+    qualifiers' values when they are items."""
+    refs = [claim.subject]
+    if isinstance(claim.value, ItemValue):
+        refs.append(claim.value.value)
+    refs.extend(
+        qualifier.value.value
+        for qualifier in claim.qualifiers
+        if isinstance(qualifier.value, ItemValue)
+    )
+    return [ref for ref in refs if isinstance(ref, LocalRef)]
+
+
+def _entity_records(batch: ClaimBatch) -> dict[str, EntityRecord]:
+    """The batch's entity manifest by id, as the writer reads it: the last
+    record with an id is the one that id's local refs resolve through."""
+    return {record.id: record for record in batch.entities}
+
+
+def _approval_digest(claim: Claim, records: dict[str, EntityRecord]) -> str:
+    resolved = {}
+    for ref in _local_refs(claim):
+        record = records.get(ref.local_id)
+        resolved[ref.local_id] = (
+            record.model_dump(mode="json") if record else None
+        )
+    canonical = json.dumps(
+        {"claim_id": claim_id(claim), "entities": resolved}, sort_keys=True
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()[:12]
+
+
+def approval_digest(claim: Claim, batch: ClaimBatch) -> str:
+    """The row approval `apply_review` records on a depicts claim of
+    `batch`: a digest of the claim's id and of the entity-manifest record
+    each of its local refs resolves through, or of that ref having none.
+
+    The writer resolves a local ref through the manifest record of its id
+    when the batch has one (ADR-0007), so the claim's own content does not
+    fix the item it names. The digest covers both: editing the claim, or
+    adding, editing or removing a record one of its local refs resolves
+    through, changes it."""
+    return _approval_digest(claim, _entity_records(batch))
+
+
 def unapproved_depicts(batch: ClaimBatch) -> list[str]:
     """Ids of the batch's `depicts` claims that no curator approved on
-    their own row, as `apply_review` records it (ADR-0005).
+    their own row, for the item they would now depict, as `apply_review`
+    records it (ADR-0005).
 
-    A depicts claim is approved when its `row_approval` equals its id as
-    it now reads. So a claim that never went through `apply_review`, such
-    as a detect-faces proposal, fails, and so does one edited after its
-    approval, since its content, and with it its id, has changed."""
+    A depicts claim is approved when its `row_approval` equals its
+    `approval_digest` against the batch as it now reads. So a claim that
+    never went through `apply_review`, such as a detect-faces proposal,
+    fails, and so does one whose content, or the manifest record one of
+    its local refs resolves through, changed after its approval.
+
+    A local ref without a manifest record is resolved by the writer from
+    the first ref in the batch to its local id, which may be another
+    claim's. So a depicts claim also fails when another ref in the batch
+    to one of those local ids differs from its own: the item it would
+    depict then depends on the batch's order, not on the row the curator
+    approved."""
+    records = _entity_records(batch)
+    unrecorded: dict[str, list[LocalRef]] = {}
+    for claim in batch.claims:
+        for ref in _local_refs(claim):
+            if ref.local_id not in records:
+                unrecorded.setdefault(ref.local_id, []).append(ref)
     unapproved = []
     for claim in batch.claims:
         if claim.property != DEPICTS:
             continue
-        cid = claim_id(claim)
-        if claim.row_approval != cid:
-            unapproved.append(cid)
+        ambiguous = any(
+            other != ref
+            for ref in _local_refs(claim)
+            for other in unrecorded.get(ref.local_id, [])
+        )
+        digest = _approval_digest(claim, records)
+        if ambiguous or claim.row_approval != digest:
+            unapproved.append(claim_id(claim))
     return unapproved
 
 
@@ -326,8 +398,9 @@ def apply_review(
     claim, never from the sheet, so no edit to the sheet's `property`
     cells or columns can hide one. A per-row `approve` on a `depicts`
     claim passes, and the approved claim carries the record of it: its
-    `row_approval` is set to its id, which the writer requires of every
-    depicts claim it writes (`unapproved_depicts`).
+    `row_approval` is set to its `approval_digest` against `batch`, whose
+    entity manifest the approved batch keeps. The writer requires that
+    record of every depicts claim it writes (`unapproved_depicts`).
 
     A sheet with a column like an equivalences sheet's `entity_id` or
     `verdict` raises ValueError too. A claims sheet shaped like an
@@ -336,6 +409,7 @@ def apply_review(
     """
     rows: dict[str, dict] = {}
     warnings: list[str] = []
+    records = _entity_records(batch)
     with open(csv_path, newline="", encoding=SHEET_ENCODING) as f:
         reader = csv.DictReader(f)
         foreign = [
@@ -390,7 +464,7 @@ def apply_review(
                 # a per-row approve: a bulk-accept on a depicts claim was
                 # refused above, before anything was returned
                 claim = claim.model_copy(
-                    update={"row_approval": claim_id(claim)}
+                    update={"row_approval": _approval_digest(claim, records)}
                 )
             approved.append(claim)
         elif decision in REJECT or decision == "":

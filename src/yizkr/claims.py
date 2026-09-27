@@ -408,15 +408,16 @@ class Claim(StrictModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     curated: bool = False
     # That a curator approved the claim on its own row of a review sheet.
-    # `apply_review` sets it on a `depicts` claim, to the claim's review-
-    # sheet id (yizkr.pipeline.review.claim_id), and the writer writes a
-    # depicts claim only when it holds the id of the claim as it now reads
-    # (ADR-0005). It is review state, never extraction output: the JSON
-    # Schema that extraction prompts carry leaves it out, and it is
-    # documented in this comment because the class docstring is that
-    # schema's description. A claim without one serialises exactly as it
-    # would if the field did not exist, so its content hashes are those of
-    # any other claim.
+    # `apply_review` sets it on a `depicts` claim, to a digest of the
+    # claim's review-sheet id and of the entity-manifest records its local
+    # refs resolve through (yizkr.pipeline.review.approval_digest). The
+    # writer writes a depicts claim only when it holds that digest for the
+    # claim and those records as they now read (ADR-0005). It is review
+    # state, never extraction output: the JSON Schema that extraction
+    # prompts carry leaves it out, and it is documented in this comment
+    # because the class docstring is that schema's description. A claim
+    # without one serialises exactly as it would if the field did not
+    # exist, so its content hashes are those of any other claim.
     row_approval: SkipJsonSchema[str | None] = Field(
         default=None, pattern=r"^[0-9a-f]{12}$"
     )
