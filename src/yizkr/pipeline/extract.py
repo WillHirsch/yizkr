@@ -132,9 +132,9 @@ def scan_json_objects(response: str) -> list[dict]:
 def _parse_response(response: str) -> dict:
     """Extract claim JSON from model output.
 
-    Accepts NDJSON claim lines (the current contract), a wrapped
-    {"claims": [...]} object or several concatenated ones (older
-    contract / continuation chunks), or any mix. Salvage property: a
+    Accepts NDJSON claim lines (the format the prompt asks for), a
+    wrapped {"claims": [...]} object or several concatenated ones
+    (continuation chunks), or any mix. Salvage property: a
     response that spans several turns can carry an inexact seam that
     corrupts an enclosing object — every individual claim object that
     still decodes is collected regardless, so one bad seam cannot
@@ -288,9 +288,9 @@ def vocabulary_prompt_lines() -> tuple[str, str]:
     description is where the semantics a model needs to place a claim
     correctly already live: which way a relation points (`employer` is
     the organization, not the employee) and what kind of entity a value
-    must be (`location` takes a place). Rendering keys and datatypes
-    alone left the model to guess both. The words are already authored
-    — this only stops discarding them.
+    must be (`location` takes a place). Keys and datatypes alone would
+    leave the model to guess both, and the manifest already holds the
+    words.
     """
     manifest = load_manifest()
     property_lines = "\n".join(

@@ -23,7 +23,7 @@ def axis_of(target: str) -> str | None:
     """Which universal statement-part a Finding concerns (ADR-0023),
     derived from the `target` grammar: ``claim: e01 prop`` -> predicate,
     ``e01 alias: X`` -> value, bare ``e01`` -> subject. Unrecognised ->
-    None. This is the general form of ADR-0022 §6's per-name axes, now
+    None. This is the general form of ADR-0022 §6's per-name axes,
     addressable across every property; existence-axis concerns have no
     target form and stay None.
     """

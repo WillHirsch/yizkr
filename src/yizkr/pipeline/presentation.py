@@ -225,8 +225,8 @@ def register_derived_media(
     bytes first, so the same image embedded in several decks (or also
     ingested on its own) is ONE artifact item, and its bytes are uploaded
     only when none of the item's wiki files holds them yet. An item
-    registered before the hash key is matched by its deck-prefixed label,
-    and adopted and backfilled when its wiki file holds the same bytes; a
+    without a hash is matched by its deck-prefixed label, and adopted
+    and backfilled when its wiki file holds the same bytes; a
     same-label item with DIFFERENT bytes is different content, so the new
     item gets a content-tagged label and file name.
 
@@ -279,10 +279,11 @@ def register_derived_media(
         else:
             labelled = client.find_item_by_label(label)
             if labelled is not None:
-                # a same-label item without a hash predates the key: it is
-                # this medium only if its wiki file holds these bytes (or
-                # it has no file yet — a write interrupted before its
-                # statements); a hashed one is different bytes by now
+                # a same-label item without a hash is this medium only if
+                # its wiki file holds these bytes (or it has no file yet —
+                # a write interrupted before its statements); a hashed one
+                # holds different bytes, or the hash lookup would have
+                # found it
                 candidate = client.wbi.item.get(labelled)
                 files = _existing_claim_strings(candidate, media_file)
                 held = _files_holding(client, files, content_sha1)

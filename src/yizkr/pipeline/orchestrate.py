@@ -1,4 +1,4 @@
-"""Folder/batch orchestration (ROADMAP item 15): `yizkr ingest run`.
+"""Folder/batch orchestration: `yizkr ingest run`.
 
 One command walks every document in a folder through the pipeline —
 register -> transcribe -> extract (or the deterministic GEDCOM adapter)
@@ -396,10 +396,9 @@ class Orchestrator:
         # always entity-first (ADR-0007), even for documents that fit a
         # single call: reconciliation NEEDS the entity manifest, and a
         # small document without one silently mints duplicates instead
-        # of being adjudicated against the graph (found by the second
-        # trial — a birth certificate's "Donald Bennett" must reach the
-        # adjudicator, not become a second Donald). Chunking a small
-        # document costs a few extra calls and is never incorrect
+        # of being adjudicated against the graph — every entity must
+        # reach the adjudicator, however short the document. Chunking a
+        # small document costs a few extra calls and is never incorrect
         # (ADR-0006 §7).
         extractor = ChunkedClaimExtractor(
             make_client(

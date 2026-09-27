@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Claim JSON schema: the contract between extraction and writing.
 
-Every step of the ingestion pipeline (ADR-0003, ROADMAP W1 task 4)
-exchanges claims in this format: the LLM extractor emits it, entity
-resolution rewrites references in it, the reviewer export renders it to
-CSV, and the writer turns it into Wikibase statements.
+Every step of the ingestion pipeline (ADR-0003) exchanges claims in
+this format: the LLM extractor emits it, entity resolution rewrites
+references in it, the reviewer export renders it to CSV, and the writer
+turns it into Wikibase statements.
 
 The schema makes the archive's core conventions structural:
 
@@ -414,8 +414,9 @@ class ClaimBatch(StrictModel):
     schema_version: Literal[1] = SCHEMA_VERSION
     extraction_run: ExtractionRunMetadata
     claims: list[Claim] = []
-    # entity manifest (ADR-0007); empty for batches from older flows.
-    # When present, every local ref must name one of these ids.
+    # entity manifest (ADR-0007); empty for a batch built without one,
+    # such as a face-proposal batch. When present, every local ref must
+    # name one of these ids.
     entities: list[EntityRecord] = []
 
 

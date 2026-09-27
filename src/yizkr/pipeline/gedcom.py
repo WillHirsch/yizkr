@@ -1,4 +1,4 @@
-"""GEDCOM adapter: structured genealogy exports -> ClaimBatch (item 13).
+"""GEDCOM adapter: structured genealogy exports -> ClaimBatch.
 
 Structured exports never ride the generative path (ADR-0006 context):
 a GEDCOM file is machine-written, so its facts are extracted
@@ -19,7 +19,7 @@ Source-first conventions carry over unchanged:
   A date the grammar cannot parse yields NO date claim and a warning —
   never a guess.
 
-Supported today (the fields family-tree exports actually carry):
+Supported (the fields family-tree exports actually carry):
 individuals (names -> label + aliases, PLUS typed referenced name
 claims: NAME TYPE birth/maiden/married/aka/official, the NICK subtag,
 the non-standard _MARNM tag, and the universal inline convention where a
@@ -41,7 +41,7 @@ derived from shared parents: the export asserts parentage, not
 siblinghood (docs/MODELING.md — never derive). Dates accept the
 GEDCOM-standard English abbreviations plus what hand-maintained trees
 actually contain: full English and German month names, and month-first
-order when the month is named. Tags the adapter still does not map (e.g.
+order when the month is named. Tags the adapter does not map (e.g.
 REPO, SUBM, tool-specific `_` tags) are counted and reported, not
 silently dropped: the census walks every record and nesting level and
 names the top-most unmapped tag in each branch, leaving an already-
@@ -332,9 +332,9 @@ def format_unsupported_tags(unsupported: dict[str, int]) -> str:
     """One-line census for logs: ``OBJE ×4, SOUR ×71``.
 
     The count is kept visibly apart from the tag (a ``×`` behind a space)
-    so it never reads as part of the tag name: ``OBJEx4`` looked like a
-    corrupt tag rather than four OBJE records (issue #8). Single formatter,
-    shared by the CLI and the orchestrator, so the two cannot drift.
+    so it never reads as part of the tag name: ``OBJEx4`` would look like
+    a corrupt tag rather than four OBJE records. Single formatter, shared
+    by the CLI and the orchestrator, so the two cannot drift.
     """
     return ", ".join(
         f"{tag} ×{count}" for tag, count in sorted(unsupported.items())

@@ -1,4 +1,4 @@
-"""Place hierarchy pass (ADR-0009, ROADMAP item 18).
+"""Place hierarchy pass (ADR-0009).
 
 Demand-driven containment: the worklist is derived from the
 inconsistency report's own unresolved place pairs plus deterministic

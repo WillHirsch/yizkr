@@ -6,7 +6,7 @@
 # host, so the query works on any deployment without editing.
 # NOTE: the query-service ImageGrid view hardcodes Commons FilePath
 # URLs and cannot render self-hosted media; this query feeds the static
-# site's gallery (ROADMAP, frontend ladder) and renders here as a table
+# site's gallery (ADR-0004 frontend ladder) and renders here as a table
 # with clickable image links.
 SELECT ?photo ?photoLabel ?image ?containerLabel
 WHERE {

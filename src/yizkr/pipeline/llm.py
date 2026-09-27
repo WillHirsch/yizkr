@@ -339,11 +339,11 @@ def make_client(
 ) -> LlmClient:
     """CLI engine name -> client. Extend here when adding providers.
 
-    ``effort`` is the claude-code reasoning level (low..max); it has no
-    effect on the anthropic API path yet, so it is only threaded there.
-    ``model`` overrides the model for this client (a per-phase override,
-    e.g. a disciplined extraction model distinct from the run's main
-    model); ``None`` inherits $YIZKR_LLM_MODEL as before.
+    ``effort`` is the claude-code reasoning level (low..max); the
+    anthropic API path takes no effort setting, so only the claude-code
+    client receives it. ``model`` overrides the model for this client (a
+    per-phase override, e.g. a disciplined extraction model distinct from
+    the run's main model); ``None`` inherits $YIZKR_LLM_MODEL.
     """
     if engine == "anthropic":
         return AnthropicClient(model=model)

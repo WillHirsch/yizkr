@@ -1,4 +1,4 @@
-"""Backup and export (ROADMAP W1 task 7).
+"""Backup and export.
 
 One `yizkr backup` run produces a timestamped directory containing
 everything needed to rebuild the instance, plus a public export:
@@ -256,9 +256,9 @@ def filter_public_export(
        data.
     3. Sweep orphaned provenance nodes. Reference/value nodes are
        shared, content-addressed resources; once the statements using
-       them are dropped, their triples would still leak (this is where
-       a living person's name first escaped in testing). Only nodes
-       still reachable from a kept statement survive.
+       them are dropped, their triples would still leak what those
+       statements recorded about an excluded person. Only nodes still
+       reachable from a kept statement survive.
 
     Returns (kept, dropped) line counts. Streams the gzipped dump three
     times, holding only node-hash sets in memory.
