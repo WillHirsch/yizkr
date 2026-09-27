@@ -299,6 +299,52 @@ class TestOutcomes:
         events = [event["event"] for event in orchestrator.rundir.events()]
         assert events[0] == "run-start" and events[-1] == "run-end"
 
+    @pytest.mark.parametrize("action", ["abort", "pause"])
+    def test_a_stop_during_the_last_document_stops_it(
+        self, tmp_path, factory, action
+    ):
+        """A request for the whole run that holds a stage of the last
+        document leaves no document to stop the loop at: the held stage
+        says the run was stopped (a rate-limit pause lands the same way)."""
+
+        class Stopping(Run):
+            def _step_register(self, doc):
+                self.rundir.request(action, by="test", reason="a test")
+                return super()._step_register(doc)
+
+        orchestrator = Stopping(a_folder(tmp_path), tmp_path / "state")
+        assert orchestrator.run() == 2
+        held = [
+            event
+            for event in orchestrator.rundir.events()
+            if event["event"] == "held"
+        ]
+        reason = {"abort": "run aborted", "pause": "run paused"}[action]
+        assert [event["reason"] for event in held] == [reason]
+        entry = self.outcome(orchestrator)
+        assert entry["outcome"] == "stopped"
+        assert entry["reason"] == reason
+
+    def test_a_held_stage_or_kind_is_no_stop_of_the_run(
+        self, tmp_path, factory
+    ):
+        """A pause of one stage holds each document at it; the run still
+        goes through its documents, so it finished."""
+
+        class Holding(Run):
+            def _step_register(self, doc):
+                self.rundir.request("pause", stage="transcription", by="test")
+                return super()._step_register(doc)
+
+        orchestrator = Holding(a_folder(tmp_path), tmp_path / "state")
+        orchestrator.run()
+        assert any(
+            event["event"] == "held" for event in orchestrator.rundir.events()
+        )
+        entry = self.outcome(orchestrator)
+        assert entry["outcome"] == "finished"
+        assert "reason" not in entry
+
     @pytest.mark.parametrize(
         ("raised", "outcome"),
         [
@@ -461,9 +507,10 @@ class TestFixedSettings:
             "finished",
             "finished",
         ]
-        # the resumed claude-code clients must run the recorded CLI
-        assert made[-1]["cli_version"] == CLI
-        assert "cli_version" not in made[0]
+        # no version is imposed on a client: the recorded CLI is checked
+        # against the one the client found (TestTheRealClient)
+        assert not any("cli_version" in call for call in made)
+        assert manifest["engine"]["cli_version"] == CLI
 
     def test_other_settings_are_refused_and_change_nothing(
         self, tmp_path, factory
@@ -528,16 +575,21 @@ class TestFixedSettings:
 
 
 class TestTheRealClient:
-    def test_a_claude_code_client_is_recorded_as_it_applies(
-        self, tmp_path, monkeypatch
-    ):
-        """What the manifest reads off the claude-code client: its model,
-        effort, configuration hash and identifier, and the pinned CLI."""
+    @pytest.fixture
+    def installed(self, monkeypatch, tmp_path):
+        """The claude CLI version the real client's probe finds, which a
+        test may change, in a fresh process (no pinned version) with a
+        config directory of its own."""
         from yizkr.pipeline import llm
 
+        version = {"installed": "2.1.0"}
+
         class Completed:
-            stdout = "2.1.0 (Claude Code)\n"
             returncode = 0
+
+            @property
+            def stdout(self):
+                return f"{version['installed']} (Claude Code)\n"
 
         def version_probe(command, **kwargs):
             assert command[1:] == ["--version"]
@@ -545,7 +597,15 @@ class TestTheRealClient:
 
         monkeypatch.setattr(llm, "_PIN", llm._CliPin())
         monkeypatch.setattr(llm.subprocess, "run", version_probe)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
         monkeypatch.setenv("YIZKR_LLM_MODEL", FULL_MODEL)
+        return version
+
+    def test_a_claude_code_client_is_recorded_as_it_applies(
+        self, tmp_path, installed
+    ):
+        """What the manifest reads off the claude-code client: its model,
+        effort, configuration hash and identifier, and the pinned CLI."""
         orchestrator = Orchestrator(
             a_folder(tmp_path),
             tmp_path / "state",
@@ -566,6 +626,95 @@ class TestTheRealClient:
             "config_hash": engine.config_hash,
             "model_identifier": f"claude-code/2.1.0:{FULL_MODEL}",
         }
+
+    def test_a_cli_updated_since_the_run_recorded_it_is_refused(
+        self, tmp_path, installed, monkeypatch
+    ):
+        """A run that keeps its settings, resumed in a new process after
+        the claude CLI updated itself: its first client finds the new
+        version, and the run refuses it as another setting, with guidance,
+        before any call."""
+        from yizkr.pipeline import llm
+
+        calls = []
+        monkeypatch.setattr(
+            llm.ClaudeCodeClient,
+            "complete",
+            lambda self, prompt, image_paths=(): (
+                calls.append(prompt) or '{"done": true, "findings_emitted": 0}'
+            ),
+        )
+
+        class Critic(Run):
+            def __init__(self, *args, **kwargs):
+                kwargs.setdefault("fixed_settings", True)
+                super().__init__(*args, **kwargs)
+
+            def _step_extract(self, doc, transcription):
+                return self._run_stage(doc, "extraction", a_batch)
+
+        folder = a_folder(tmp_path)
+        Critic(folder, tmp_path / "state").run()
+        recorded = RunDir(tmp_path / "state").manifest()
+        assert recorded["engine"]["cli_version"] == "2.1.0"
+        assert calls  # the critic was asked
+        (doc,) = Critic(folder, tmp_path / "state").documents()
+        doc.critique.unlink()  # the next run asks the critic again
+
+        # a new process, after the CLI updated itself
+        monkeypatch.setattr(llm, "_PIN", llm._CliPin())
+        installed["installed"] = "2.1.1"
+        asked = len(calls)
+        again = Critic(folder, tmp_path / "state")
+        with pytest.raises(RunSettingsConflict) as err:
+            again.run()
+        cli = err.value.conflicts[0]
+        assert cli == ("engine.cli_version", "2.1.0", "2.1.1")
+        assert [name for name, _, _ in err.value.conflicts] == [
+            "engine.cli_version",
+            "roles.critique.client.config_hash",
+        ]
+        message = str(err.value)
+        assert "The claude CLI is 2.1.1, not 2.1.0" in message
+        assert "DISABLE_AUTOUPDATER=1" in message
+        assert "new run directory" in message
+        assert len(calls) == asked  # refused before any call
+        manifest = again.rundir.manifest()
+        entry = manifest["invocations"][-1]
+        assert (entry["outcome"], entry["reason"]) == (
+            "refused",
+            "RunSettingsConflict",
+        )
+        # the run still records the version it ran on
+        assert manifest["engine"]["cli_version"] == "2.1.0"
+        client = manifest["roles"]["critique"]["client"]
+        assert client == recorded["roles"]["critique"]["client"]
+
+    def test_a_cli_updated_during_the_process_still_pauses_it(
+        self, tmp_path, installed
+    ):
+        """Within one process the pass's own pin holds: a client that
+        starts after the CLI changed under the pass pauses it."""
+        from yizkr.pipeline import llm
+
+        orchestrator = Orchestrator(
+            a_folder(tmp_path),
+            tmp_path / "state",
+            llm="claude-code",
+            exclusions=ExclusionList(),
+            fixed_settings=True,
+        )
+        orchestrator.rundir.start(roles={}, engine={"name": "claude-code"})
+        try:
+            orchestrator._engine("critique")
+            installed["installed"] = "2.1.1"
+            with pytest.raises(llm.CliVersionMismatch):
+                orchestrator._engine("extract")
+        finally:
+            orchestrator._close_engines()
+        assert orchestrator.rundir.manifest()["engine"]["cli_version"] == (
+            "2.1.0"
+        )
 
 
 class TestRunDirManifest:

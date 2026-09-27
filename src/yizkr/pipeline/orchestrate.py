@@ -485,9 +485,9 @@ class Orchestrator:
 
     `fixed_settings` makes the run keep the settings its manifest records
     (rundir.SETTINGS): a later invocation that asks for others, or whose
-    engine applies others, is refused (RunSettingsConflict), and the
-    claude CLI must be the version the run recorded. Without it, as for
-    `ingest run`, each invocation records its own.
+    engine applies others, a claude CLI other than the version the run
+    recorded included, is refused (RunSettingsConflict). Without it, as
+    for `ingest run`, each invocation records its own.
     """
 
     def __init__(
@@ -571,6 +571,10 @@ class Orchestrator:
         self._engines: dict[str, Any] = {}
         self._cache: Any = None
         self._engine_lock = threading.Lock()
+        # the run-scope control request that held a stage in this run, if
+        # one did: the run was stopped even when no document was left to
+        # dispatch after it
+        self._run_held: str | None = None
 
     # -- lazy connections --------------------------------------------------
 
@@ -629,31 +633,23 @@ class Orchestrator:
                 "instead, such as claude-sonnet-5."
             )
 
-    def _engine_pin(self) -> dict[str, str]:
-        """The CLI version a run that keeps its settings requires of its
-        claude-code clients: the one its manifest recorded, if any."""
-        if not self.fixed_settings or self.llm != "claude-code":
-            return {}
-        recorded = (self.rundir.manifest().get("engine") or {}).get(
-            "cli_version"
-        )
-        return {"cli_version": recorded} if recorded else {}
-
     def _engine(self, role: str) -> Any:
         """The run's engine client for a role, started on first use: one
         per role serves every document, calls in parallel included. What
         the client applies (its model, effort and configuration hash) and
-        the pinned CLI version go into the run manifest when it starts;
-        a run that keeps its settings refuses a client that applies
-        others, before any call."""
+        its CLI version go into the run manifest when it starts; a run
+        that keeps its settings refuses a client that applies others, or
+        runs another CLI version than the run recorded, before any call
+        (RunSettingsConflict). The client is given no version to run: it
+        pins the one installed, so a CLI updated since an earlier
+        invocation is refused as another setting, while one updated
+        during this process pauses the pass (llm.CliVersionMismatch)."""
         with self._engine_lock:
             if role not in self._engines:
                 from yizkr.pipeline.llm import make_client
 
                 effort, model = self._engine_settings(role)
-                engine = make_client(
-                    self.llm, effort=effort, model=model, **self._engine_pin()
-                )
+                engine = make_client(self.llm, effort=effort, model=model)
                 try:
                     self.rundir.record_engine(
                         role,
@@ -781,8 +777,12 @@ class Orchestrator:
         reason. The reasons are kept in the document's state, for the
         runs that reuse the stage's view."""
         where = {"subject": doc.sha1, "kind": doc.kind, "stage": stage}
-        stopped = self.rundir.control().stopped(stage=stage, kind=doc.kind)
+        control = self.rundir.control()
+        stopped = control.stopped(stage=stage, kind=doc.kind)
         if stopped:
+            if control.stopped():
+                # the whole run is held, not only this stage or kind
+                self._run_held = stopped
             self.rundir.emit("held", reason=stopped, **where)
             raise DispatchStopped(f"{stage} not dispatched: {stopped}")
         self.rundir.emit("started", **where)
@@ -1755,8 +1755,10 @@ class Orchestrator:
         self.rundir = RunDir(self.state_dir)
         self._start_run(docs)
 
-        # the control request that stopped the run, if one did
+        # the control request that stopped the run before a document, if
+        # one did, and the run-scope one that held a stage, if one did
         stopped = None
+        self._run_held = None
         try:
             if self.serial:
                 docs = self._serial_sequence(docs)
@@ -1802,6 +1804,9 @@ class Orchestrator:
         for doc in docs:
             self.log(f"{doc.state.status:32} {doc.source.name}")
             statuses[doc.state.status] = statuses.get(doc.state.status, 0) + 1
+        # a run-scope request stopped the run even when it held a stage of
+        # the last document, with no document left to dispatch after it
+        stopped = stopped or self._run_held
         self.rundir.end("stopped" if stopped else "finished", reason=stopped)
         self.rundir.emit(RUN_END, statuses=statuses)
         if any(doc.state.status == FAILED for doc in docs):

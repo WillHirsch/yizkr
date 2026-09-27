@@ -167,7 +167,8 @@ _CLIENT_FIXED = ("model", "effort", "config_hash")
 
 class RunSettingsConflict(BaseException):
     """An invocation of a run that keeps its settings asked for others
-    than the ones the run recorded.
+    than the ones the run recorded, or its engine applies others: a claude
+    CLI updated since the run recorded its version among them.
 
     Like a paused pass (yizkr.pipeline.llm.PassPaused), it is no
     document's failure: it passes through the per-document isolation and
@@ -182,13 +183,29 @@ class RunSettingsConflict(BaseException):
             f"  {name}: {recorded!r} recorded, {asked!r} now"
             for name, recorded, asked in conflicts
         )
+        cli = next(
+            (item for item in conflicts if item[0] == "engine.cli_version"),
+            None,
+        )
         super().__init__(
             f"{Path(run) / MANIFEST} records other settings for this run:\n"
             f"{lines}\n"
             "A run is resumed only with the settings it started with. "
-            "Invoke it again with those, or start a new run in a new run "
-            "directory: the LLM cache answers every call the change leaves "
-            "the same."
+            + (
+                f"The claude CLI is {cli[2]}, not {cli[1]}, the version the "
+                "run recorded: it was updated since, for instance by "
+                "another Claude Code session's auto-update (a client's "
+                "configuration hash covers the CLI version). Install the "
+                "recorded version, keep auto-update off everywhere for the "
+                "length of the run (DISABLE_AUTOUPDATER=1), and invoke the "
+                "run again; or start a new run in a new run directory on "
+                "this version: the LLM cache's keys name the CLI version, so "
+                "it answers none of the new run's calls from this run's."
+                if cli
+                else "Invoke it again with those, or start a new run in a "
+                "new run directory: the LLM cache answers every call the "
+                "change leaves the same."
+            )
         )
 
 
@@ -617,19 +634,22 @@ class RunDir:
             if not isinstance(engine, dict):
                 engine = manifest["engine"] = {}
             if fixed_settings:
+                conflicts = []
+                # a CLI updated since the run recorded its version comes
+                # first: it changes each client's configuration hash too
+                pinned = engine.get("cli_version")
+                if cli_version and pinned and pinned != cli_version:
+                    conflicts.append(
+                        ("engine.cli_version", pinned, cli_version)
+                    )
                 recorded = settings.get("client") or {}
-                conflicts = [
+                conflicts += [
                     (f"roles.{role}.client.{key}", recorded[key], client[key])
                     for key in _CLIENT_FIXED
                     if key in recorded
                     and key in client
                     and recorded[key] != client[key]
                 ]
-                pinned = engine.get("cli_version")
-                if cli_version and pinned and pinned != cli_version:
-                    conflicts.append(
-                        ("engine.cli_version", pinned, cli_version)
-                    )
                 if conflicts:
                     raise RunSettingsConflict(self.path, conflicts)
             settings["client"] = dict(client)
