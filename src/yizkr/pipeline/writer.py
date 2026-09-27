@@ -1,5 +1,14 @@
 """Writer step: approved ClaimBatch -> Wikibase statements (ADR-0003).
 
+Before anything else, the writer refuses a batch that holds a `depicts`
+claim no curator approved on its own review-sheet row (ADR-0005): each
+depicts claim must carry the row approval `apply_review` records on it,
+for the claim as it now reads (`unapproved_depicts` in
+yizkr.pipeline.review). The refusal (UnapprovedDepictsError) names
+every such claim by its review-sheet id, and comes before `write_batch`
+reads from or writes to the instance, in a dry run too. A batch without
+depicts claims is not affected.
+
 Per batch, the writer:
 
 0. resolves every artifact the batch cites, by the SHA-1 of its media,
@@ -52,7 +61,8 @@ Per batch, the writer:
    excerpt.
 
 Nothing here auto-approves: the writer expects the output of
-`apply_review` and trusts the human decision that produced it.
+`apply_review` and trusts the human decisions that produced it, except
+for depicts, whose per-row approval it checks, as above.
 """
 
 from __future__ import annotations
@@ -83,6 +93,24 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline.review import unapproved_depicts
+
+
+class UnapprovedDepictsError(ValueError):
+    """A batch holds depicts claims that no curator approved on their own
+    review-sheet row (ADR-0005)."""
+
+    def __init__(self, claim_ids: list[str]) -> None:
+        self.claim_ids = claim_ids
+        named = ", ".join(f"claim {cid}" for cid in claim_ids)
+        super().__init__(
+            f"{len(claim_ids)} depicts claim(s) carry no per-row human "
+            f"approval: {named}. A depicts claim is written only after a "
+            f"curator approves it on its own row of a review sheet and "
+            f"apply-review records that approval (ADR-0005); export-review "
+            f"this batch, decide these rows by hand, apply-review, and "
+            f"write the batch apply-review writes. Nothing was written."
+        )
 
 
 class UnregisteredArtifactError(LookupError):
@@ -716,6 +744,12 @@ class BatchWriter:
     def write_batch(
         self, batch: ClaimBatch, bulk_accepted: bool = False
     ) -> WriteResult:
+        """Write `batch`. Raises UnapprovedDepictsError, before reading
+        from or writing to the instance, when a depicts claim in it lacks
+        its row approval (the module docstring), in a dry run too."""
+        unapproved = unapproved_depicts(batch)
+        if unapproved:
+            raise UnapprovedDepictsError(unapproved)
         # a bulk-accepted batch (whole-sheet accept-all, ADR-0023) gets a
         # distinct edit summary so MediaWiki history is the low-scrutiny
         # reappraisal queue — no graph flag, no staleness.
