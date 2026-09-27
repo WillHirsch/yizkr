@@ -8,9 +8,9 @@
 # candidates. Properties that legitimately accumulate values over a life
 # (spouse, residence, ...) are excluded — two spouses from one source are
 # remarriages, not a contradiction. Values that differ only in
-# RESOLUTION are suppressed when the graph knows the containment (a
-# maternity home located in the town another source names): recording
-# that hierarchy is what makes this report sharpen over time.
+# RESOLUTION are suppressed when the graph knows the containment (an
+# address located in the town another source names): recording that
+# hierarchy is what makes this report sharpen over time.
 SELECT ?entity ?entityLabel ?propertyLabel
        ?valueA ?valueALabel ?precisionA
        (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceA), "/entity/"), "~", ?sourceALabelRaw); separator="|") AS ?sourcesA)
