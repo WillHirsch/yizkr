@@ -99,11 +99,12 @@ now, one for the registrar and for derived media:
   with several such files, the first by name is used.
 - **File names for changed sources.** When the requested name holds
   different bytes (`exists`), the new bytes go under a content-tagged
-  name, `"<stem> <sha1[:8]><extension>"` (a regenerated
-  `wedding-1924.png` becomes `Wedding-1924 3f2a9c1b.png`), and the stored
-  file keeps its bytes and history. MediaWiki forbids brackets in file
-  names, hence a space rather than the `[…]` of content-tagged labels.
-  If the tagged name also holds other bytes, the upload is refused.
+  name, `"<stem> <sha1[:8]><extension>"` (a re-scanned
+  `portrait-1890s.png` becomes `Portrait-1890s 3f2a9c1b.png`), and the
+  stored file keeps its bytes and history. MediaWiki forbids brackets in
+  file names, hence a space rather than the `[…]` of content-tagged
+  labels. If the tagged name also holds other bytes, the upload is
+  refused.
 - **Warnings about the name alone** (a camera-style prefix, a
   thumbnail-like or corrected name, a near-identical name with another
   extension, a deleted file's name) are overridden deliberately: with no

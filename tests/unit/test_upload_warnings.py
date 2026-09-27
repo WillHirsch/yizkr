@@ -17,11 +17,11 @@ import pytest
 
 from yizkr.core.wiki import NAME_WARNINGS, WikiClient
 
-# Fictional media (docs/EXAMPLES.md): a scan of Hugo jun. and Gretl's
-# 1924 wedding photograph, and a second, different scan of it.
-WEDDING = b"\x89PNG synthetic scan of the 1924 wedding photograph"
-RESCAN = b"\x89PNG synthetic re-scan of the 1924 wedding photograph"
-LETTERHEAD = b"\x89PNG synthetic Beispiel & Soehne letterhead"
+# Fictional media (docs/EXAMPLES.md): a scan of the Löbig family's
+# studio portrait of the 1890s, and a second, different scan of it.
+PORTRAIT = b"\x89PNG synthetic scan of the 1890s studio portrait"
+RESCAN = b"\x89PNG synthetic re-scan of the 1890s studio portrait"
+LETTERHEAD = b"\x89PNG synthetic Hutmacherei zum Blauen Hut letterhead"
 
 
 def sha1(data: bytes) -> str:
@@ -141,42 +141,46 @@ class TestUploadWarnings:
     def test_a_new_file_is_uploaded_with_warnings_honoured(
         self, api, client, tmp_path
     ):
-        page = client.upload_file(media(tmp_path, "wedding-1924.png", WEDDING))
+        page = client.upload_file(
+            media(tmp_path, "portrait-1890s.png", PORTRAIT)
+        )
 
-        assert page == "File:Wedding-1924.png"
-        assert api.current() == {"Wedding-1924.png": sha1(WEDDING)}
+        assert page == "File:Portrait-1890s.png"
+        assert api.current() == {"Portrait-1890s.png": sha1(PORTRAIT)}
         # any ignorewarnings, even "0", would make MediaWiki ignore them
         assert all("ignorewarnings" not in r for r in api.requests)
 
     def test_same_name_same_bytes_reuses_the_file(self, api, client, tmp_path):
-        path = media(tmp_path, "wedding-1924.png", WEDDING)
+        path = media(tmp_path, "portrait-1890s.png", PORTRAIT)
         first = client.upload_file(path)
 
         assert client.upload_file(path) == first  # exists + nochange
-        assert api.versions == {"Wedding-1924.png": [sha1(WEDDING)]}
+        assert api.versions == {"Portrait-1890s.png": [sha1(PORTRAIT)]}
 
     def test_same_bytes_under_a_new_name_reuse_the_stored_file(
         self, api, client, tmp_path
     ):
-        path = media(tmp_path, "wedding-1924.png", WEDDING)
+        path = media(tmp_path, "portrait-1890s.png", PORTRAIT)
         first = client.upload_file(path)
 
-        copy = media(tmp_path, "hugo and gretl.png", WEDDING)
+        copy = media(tmp_path, "muckel and cilli.png", PORTRAIT)
         assert client.upload_file(copy) == first  # duplicate
-        assert api.current() == {"Wedding-1924.png": sha1(WEDDING)}
+        assert api.current() == {"Portrait-1890s.png": sha1(PORTRAIT)}
 
     def test_changed_bytes_never_overwrite_the_stored_file(
         self, api, client, tmp_path
     ):
-        client.upload_file(media(tmp_path, "wedding-1924.png", WEDDING))
+        client.upload_file(media(tmp_path, "portrait-1890s.png", PORTRAIT))
 
-        rescan = media(tmp_path, "wedding-1924.png", RESCAN, folder="rescans")
+        rescan = media(
+            tmp_path, "portrait-1890s.png", RESCAN, folder="rescans"
+        )
         page = client.upload_file(rescan)
 
-        assert page == f"File:{tagged('Wedding-1924', RESCAN)}"
+        assert page == f"File:{tagged('Portrait-1890s', RESCAN)}"
         assert api.versions == {
-            "Wedding-1924.png": [sha1(WEDDING)],  # untouched, one version
-            tagged("Wedding-1924", RESCAN).replace(" ", "_"): [sha1(RESCAN)],
+            "Portrait-1890s.png": [sha1(PORTRAIT)],  # untouched, one version
+            tagged("Portrait-1890s", RESCAN).replace(" ", "_"): [sha1(RESCAN)],
         }
         # again: the tagged file is found as a duplicate, nothing stored
         assert client.upload_file(rescan) == page
@@ -185,14 +189,14 @@ class TestUploadWarnings:
     def test_changed_bytes_already_stored_elsewhere_reuse_that_file(
         self, api, client, tmp_path
     ):
-        api.store("Wedding-1924.png", WEDDING)
+        api.store("Portrait-1890s.png", PORTRAIT)
         api.store("Letterhead.png", LETTERHEAD)
 
         # exists (other bytes) + duplicate (these bytes, another name)
-        path = media(tmp_path, "wedding-1924.png", LETTERHEAD)
+        path = media(tmp_path, "portrait-1890s.png", LETTERHEAD)
         assert client.upload_file(path) == "File:Letterhead.png"
         assert api.current() == {
-            "Wedding-1924.png": sha1(WEDDING),
+            "Portrait-1890s.png": sha1(PORTRAIT),
             "Letterhead.png": sha1(LETTERHEAD),
         }
 
@@ -200,28 +204,28 @@ class TestUploadWarnings:
         self, api, client, tmp_path
     ):
         # legacy duplicates: any of them holds the bytes; the first by name
-        api.store("Wedding-1924.png", WEDDING)
-        api.store("Hugo and gretl.png", WEDDING)
-        path = media(tmp_path, "wedding scan.png", WEDDING)
-        assert client.upload_file(path) == "File:Hugo and gretl.png"
+        api.store("Portrait-1890s.png", PORTRAIT)
+        api.store("Muckel and cilli.png", PORTRAIT)
+        path = media(tmp_path, "portrait scan.png", PORTRAIT)
+        assert client.upload_file(path) == "File:Muckel and cilli.png"
 
     def test_both_names_holding_other_bytes_is_refused(
         self, api, client, tmp_path
     ):
-        api.store("Wedding-1924.png", WEDDING)
-        api.store(tagged("Wedding-1924", RESCAN), LETTERHEAD)
+        api.store("Portrait-1890s.png", PORTRAIT)
+        api.store(tagged("Portrait-1890s", RESCAN), LETTERHEAD)
         before = {name: list(shas) for name, shas in api.versions.items()}
 
-        rescan = media(tmp_path, "wedding-1924.png", RESCAN)
+        rescan = media(tmp_path, "portrait-1890s.png", RESCAN)
         with pytest.raises(RuntimeError, match="neither is overwritten"):
             client.upload_file(rescan)
         assert api.versions == before
 
     def test_a_name_only_warning_is_overridden(self, api, client, tmp_path):
-        page = client.upload_file(media(tmp_path, "IMG_1924.png", WEDDING))
+        page = client.upload_file(media(tmp_path, "IMG_0001.png", PORTRAIT))
 
-        assert page == "File:IMG 1924.png"
-        assert api.current() == {"IMG_1924.png": sha1(WEDDING)}
+        assert page == "File:IMG 0001.png"
+        assert api.current() == {"IMG_0001.png": sha1(PORTRAIT)}
         warned, overridden = api.requests
         assert "ignorewarnings" not in warned
         assert overridden["ignorewarnings"] == "1"
@@ -230,15 +234,17 @@ class TestUploadWarnings:
     def test_every_name_warning_is_overridden(
         self, api, client, tmp_path, warning
     ):
-        api.extra = {warning: "Wedding-1924.png"}
-        page = client.upload_file(media(tmp_path, "wedding-1924.png", WEDDING))
-        assert page == "File:Wedding-1924.png"
-        assert api.current() == {"Wedding-1924.png": sha1(WEDDING)}
+        api.extra = {warning: "Portrait-1890s.png"}
+        page = client.upload_file(
+            media(tmp_path, "portrait-1890s.png", PORTRAIT)
+        )
+        assert page == "File:Portrait-1890s.png"
+        assert api.current() == {"Portrait-1890s.png": sha1(PORTRAIT)}
 
     def test_deleted_bytes_are_refused(self, api, client, tmp_path):
-        api.deleted[sha1(WEDDING)] = "Wedding-1924.png"
+        api.deleted[sha1(PORTRAIT)] = "Portrait-1890s.png"
 
-        path = media(tmp_path, "wedding-1924.png", WEDDING)
+        path = media(tmp_path, "portrait-1890s.png", PORTRAIT)
         with pytest.raises(RuntimeError, match="duplicate-archive"):
             client.upload_file(path)
         assert api.versions == {}
@@ -247,16 +253,16 @@ class TestUploadWarnings:
     def test_deleted_bytes_still_stored_elsewhere_are_reused(
         self, api, client, tmp_path
     ):
-        api.store("Wedding-1924.png", WEDDING)
-        api.deleted[sha1(WEDDING)] = "Wedding copy.png"
+        api.store("Portrait-1890s.png", PORTRAIT)
+        api.deleted[sha1(PORTRAIT)] = "Portrait copy.png"
 
-        path = media(tmp_path, "wedding copy.png", WEDDING)
-        assert client.upload_file(path) == "File:Wedding-1924.png"
-        assert api.current() == {"Wedding-1924.png": sha1(WEDDING)}
+        path = media(tmp_path, "portrait copy.png", PORTRAIT)
+        assert client.upload_file(path) == "File:Portrait-1890s.png"
+        assert api.current() == {"Portrait-1890s.png": sha1(PORTRAIT)}
 
     def test_an_unknown_warning_is_refused(self, api, client, tmp_path):
         api.extra = {"large-file": 99_000_000}
-        path = media(tmp_path, "wedding-1924.png", WEDDING)
+        path = media(tmp_path, "portrait-1890s.png", PORTRAIT)
         with pytest.raises(RuntimeError, match="large-file"):
             client.upload_file(path)
         assert api.versions == {}
@@ -273,7 +279,7 @@ class TestUploadWarnings:
                 return super().post_upload(fields, data)
 
         racing = Racing()
-        path = media(tmp_path, "IMG_1924.png", WEDDING)
+        path = media(tmp_path, "IMG_0001.png", PORTRAIT)
         with pytest.raises(RuntimeError, match="met existing bytes"):
             FakeUploadClient(racing).upload_file(path)
 
@@ -282,6 +288,6 @@ class TestUploadWarnings:
             def post_upload(self, fields, data):
                 return {"error": {"code": "verification-error"}}
 
-        path = media(tmp_path, "wedding-1924.jpg", WEDDING)
+        path = media(tmp_path, "portrait-1890s.jpg", PORTRAIT)
         with pytest.raises(RuntimeError, match="verification-error"):
             FakeUploadClient(Failing()).upload_file(path)

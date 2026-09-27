@@ -20,13 +20,13 @@ from yizkr.pipeline.registrar import register_artifact
 pytestmark = pytest.mark.live
 
 UPLOAD_NAME = "Integration-test upload warnings.png"
-FIRST = png_bytes(fill=b"\x19\x24\x01")
-SECOND = png_bytes(fill=b"\x19\x24\x02")
+FIRST = png_bytes(fill=b"\x4a\x9e\x01")
+SECOND = png_bytes(fill=b"\x4a\x9e\x02")
 
 TITLE = "Integration-test changed source"
 SOURCE_NAME = "integration-test-changed-source.png"
-ORIGINAL = png_bytes(fill=b"\x19\x24\x03")
-CHANGED = png_bytes(fill=b"\x19\x24\x04")
+ORIGINAL = png_bytes(fill=b"\x4a\x9e\x03")
+CHANGED = png_bytes(fill=b"\x4a\x9e\x04")
 DESCRIPTION = "written by tests/integration; safe to delete"
 
 
