@@ -364,11 +364,11 @@ Rules:
   invalid.
 - Prefer completeness: an entity mentioned once still gets an entry.
 - extract=false for entities that appear ONLY in non-assertive context:
-  travel or event logistics of any period (schedules, bookings, room or
-  seating plans, contact lists), people taking part in present-day travel
-  or events, boilerplate. They are recorded for audit but no
-  claims are extracted about them. Entities the document asserts
-  historical/genealogical facts about get extract=true.
+  travel or event logistics of any period (schedules, bookings, contact
+  lists), people taking part in present-day travel or events, boilerplate.
+  They are recorded for audit but no claims are extracted about them.
+  Entities the document asserts historical/genealogical facts about get
+  extract=true.
 - On official certificates and registers the administrative apparatus is
   boilerplate: the registrar, officiant, or witness who certifies the
   record; the issuing authority (e.g. a civil registry office such as a
