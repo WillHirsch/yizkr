@@ -3,8 +3,11 @@
 The example universe in ``example_universe.py`` was written blind: its
 author never saw the project's real records.  Instead of recalling
 names, dates and places (recall is how real data leaks into examples),
-every specific was drawn here from broad tables with a fixed seed and
-then read over for plausibility.  Run it to see the raw draws::
+every specific was drawn here from broad tables with fixed seeds and
+then read over for plausibility: rounds one to four continue one
+stream (``SEED``), the fifth starts its own (``SEED_5``), and where two
+rounds drew the same slot the later one holds.  Run it to see the raw
+draws::
 
     uv run python tests/fixtures/universe_draws.py
 
@@ -540,6 +543,7 @@ def main() -> None:
     show("sources", [kind[0] for kind in kinds])
 
     second_round(rng, show, date)
+    fifth_round()
 
 
 def second_round(rng: random.Random, show, date) -> None:
@@ -626,6 +630,262 @@ def fourth_round(rng: random.Random, show) -> None:
     """The GEDCOM rendering wants a dated burial: the death notice
     (20 March 1927) announces the funeral this many days later."""
     show("funeral days after death", rng.randint(2, 5))
+
+
+# --- fifth round: its own seed ------------------------------------------
+
+# Drawn with ``secrets.randbelow`` when the round was written.  A new
+# stream rather than a continuation, so rounds one to four replay
+# exactly as before.
+SEED_5 = 136490
+
+# Names in the universe after the fourth round, whether the fifth kept
+# or replaced them.  No later round draws one of them, nor a name that
+# shares its first four letters (a variant, such as Paul for Paula), so
+# every name stays distinct from every earlier one.
+USED_GIVEN = (
+    "Alfred",
+    "Wilhelmine",
+    "Johann",
+    "Hedwig",
+    "Paula",
+    "Julius",
+    "Gertrud",
+    "Josef",
+    "Martha",
+    "Frieda",
+    "Karl",
+    "Rudolf",
+    "Christine",
+    "Jonathan",
+)
+USED_SHORT = ("Hans", "Minna", "Hedi", "Sepp", "Joe", "Rudi")
+USED_PET_NAMES = ("Muckel", "Peppi", "Bubi")
+USED_STREET_WORDS = ("Brunnen", "Mühlen", "Anger")
+# Street words that name a trade or a works (kettle, brick); with
+# Mühlen above, none is drawn again.
+TRADE_STREET_WORDS = ("Kessel", "Ziegel")
+
+MORE_PET_NAMES = ("Hasi", "Krümel", "Mucki", "Pünktchen", "Schnecke", "Stups")
+EN_FEMALE = ("Susan", "Linda", "Janet", "Carol", "Gillian", "Judith", "Hilary")
+EN_MALE = (
+    "Stephen",
+    "David",
+    "Michael",
+    "Peter",
+    "Andrew",
+    "Philip",
+    "Anthony",
+    "Nicholas",
+)
+# English diminutives of the English forms in MALE, for an emigrant
+# known by one in his new country.
+EN_DIMINUTIVES = {
+    "William": "Bill",
+    "Frederick": "Fred",
+    "Henry": "Harry",
+    "Charles": "Charlie",
+    "Lewis": "Lew",
+    "Ernest": "Ernie",
+    "George": "Georgie",
+    "Gustave": "Gus",
+    "Walter": "Wally",
+    "Albert": "Bert",
+    "Theodore": "Ted",
+    "Leopold": "Leo",
+    "Bernard": "Bernie",
+    "Edward": "Eddie",
+    "Maurice": "Morrie",
+}
+# Firm names that name no person: a house sign, the street or the town.
+FIRM_PATTERNS_5 = (
+    "Hutmacherei am {Street}",
+    "{Town}er Hutmacherei",
+    "Hutmacherei zum {Sign}",
+    "{Town}er Hutfabrik",
+)
+HOUSE_SIGNS = ("Goldenen Stern", "Grünen Baum", "Blauen Hut", "Weißen Rad")
+DEATH_RECORDS = (
+    "civil death register extract",
+    "probate court entry",
+    "cemetery burial register entry",
+)
+DEPORTATION_RECORDS = ("compensation file entry", "memorial book entry")
+LETTER_FORMS = ("postcard", "private letter")
+CAUSES = (
+    "Altersschwäche",
+    "Lungenentzündung",
+    "Herzschwäche",
+    "Schlaganfall",
+    "Wassersucht",
+)
+
+
+def _fold(text: str) -> str:
+    for umlaut, plain in (("ä", "a"), ("ö", "o"), ("ü", "u"), ("ß", "ss")):
+        text = text.replace(umlaut, plain)
+    return text.lower()
+
+
+def _edits(first: str, second: str) -> int:
+    """Levenshtein distance."""
+    row = list(range(len(second) + 1))
+    for i, a in enumerate(first, 1):
+        previous, row[0] = row[0], i
+        for j, b in enumerate(second, 1):
+            previous, row[j] = (
+                row[j],
+                min(row[j] + 1, row[j - 1] + 1, previous + (a != b)),
+            )
+    return row[-1]
+
+
+def fifth_round() -> None:
+    """Re-draw the family after the first clean-room review (#40).
+
+    A new surname, town, street and firm name; new given names for all
+    of the first two generations but the elder son's wife, and for five
+    of the later ones; new dates for the first two generations, the firm
+    and the gravestone photograph; new birth years for the emigrant
+    son's wife and child; a new person for the arrest; and new kinds for
+    three documents.  The third generation's births (1907-1925) and the
+    births of the two wives who married into generation two (1884 and
+    1887) stay.  Draws repeat until they meet the constraint beside them.
+    """
+    rng = random.Random(SEED_5)
+
+    def show(label: str, value: object) -> None:
+        print(f"{label:28} {value}")
+
+    def syllable(onsets=ONSETS) -> str:
+        return rng.choice(onsets) + rng.choice(VOWELS) + rng.choice(CODAS)
+
+    # sharing neither onset nor ending with Schöser, so the old and new
+    # universes never blur, and with an umlaut for the anglicised form
+    # to drop
+    onsets = tuple(o for o in ONSETS if not o.startswith("Sch"))
+    endings = tuple(e for e in SURNAME_ENDINGS if not e.endswith("er"))
+    tries = 0
+    while True:
+        tries += 1
+        surname = syllable(onsets) + rng.choice(endings)
+        if any(u in surname for u in "äöü") and not surname.endswith("er"):
+            break
+    show("surname (tries)", (surname, tries))
+
+    # a town that, umlauts folded, is no one-letter edit of a name in
+    # the tables, so it cannot be misread as a person
+    names = [*MALE, *FEMALE, *ENGLISH_GIVEN]
+    names += [v[1] for v in (*MALE.values(), *FEMALE.values()) if v[1]]
+    tries = 0
+    while True:
+        tries += 1
+        town = syllable() + rng.choice(TOWN_ENDINGS)
+        if min(_edits(_fold(town), _fold(n)) for n in names) > 1:
+            break
+    show("town (tries)", (town, tries))
+
+    words = [
+        w
+        for w in STREET_WORDS
+        if w not in USED_STREET_WORDS + TRADE_STREET_WORDS
+    ]
+    show(
+        "street, number",
+        (rng.choice(words) + rng.choice(STREET_ENDINGS), rng.randint(21, 60)),
+    )
+    show("firm name", (rng.choice(FIRM_PATTERNS_5), rng.choice(HOUSE_SIGNS)))
+
+    # --- given names -----------------------------------------------------
+    taken = [_fold(n)[:4] for n in USED_GIVEN]
+
+    def pick(pool, need=lambda name: True):
+        for name in pool:
+            if _fold(name)[:4] not in taken and need(name):
+                taken.append(_fold(name)[:4])
+                return name
+        raise LookupError("pool exhausted")
+
+    def has_short(table):
+        return lambda n: table[n][1] and table[n][1] not in USED_SHORT
+
+    male = list(MALE)
+    female = list(FEMALE)
+    rng.shuffle(male)
+    rng.shuffle(female)
+    roles = {
+        "G1 husband": pick(male),
+        "G1 wife (+dim.)": pick(female, has_short(FEMALE)),
+        "G2 elder son (+dim.)": pick(male, has_short(MALE)),
+        "G2 daughter": pick(female),
+        "G2 younger son": pick(male),
+        "G2 younger son's wife": pick(female),
+        "G3 emigrant son (+dims.)": pick(
+            male,
+            lambda n: has_short(MALE)(n) and MALE[n][0] in EN_DIMINUTIVES,
+        ),
+        "G3 emigrant daughter": pick(female),
+        "G3 stayer son": pick(male),
+    }
+    for role, name in roles.items():
+        english, short = MALE[name] if name in MALE else FEMALE[name]
+        show(role, (name, english, short, EN_DIMINUTIVES.get(english)))
+    en_female = list(EN_FEMALE)
+    en_male = list(EN_MALE)
+    rng.shuffle(en_female)
+    rng.shuffle(en_male)
+    show("G3 emigrant son's wife", pick(en_female))
+    show("G4 child", pick(en_male))
+    pets = [p for p in PET_NAMES + MORE_PET_NAMES if p not in USED_PET_NAMES]
+    show("emigrant daughter's pet", rng.choice(pets))
+
+    # --- years -----------------------------------------------------------
+    # a generation earlier than before: G2 in order and born by 1874,
+    # all three to a mother no older than 44
+    tries = 0
+    while True:
+        tries += 1
+        husband = rng.randint(1820, 1839)
+        wife = husband + rng.randint(1, 9)
+        marriage = wife + rng.randint(19, 26)
+        born = [marriage + rng.randint(1, 2)]
+        for _ in range(2):
+            born.append(born[-1] + rng.randint(1, 4))
+        if born[0] >= 1860 and born[-1] <= 1874 and born[-1] - wife <= 44:
+            break
+    show("G1 husband, wife, marriage", (husband, wife, marriage, tries))
+    show("G2 born (son, dau., son)", born)
+    # both alive for the 1890s portrait
+    show(
+        "G1 husband dies (y, m, d)",
+        (rng.randint(1900, 1924), rng.randint(1, 12), rng.randint(1, 28)),
+    )
+    show("G1 husband buried +days", rng.randint(2, 5))
+    show("G1 wife dies", rng.randint(1900, 1924))
+    show("firm founded", rng.randint(husband + 24, husband + 40))
+    show("firm gone before", rng.randint(1920, 1935))
+    # after the 1954 renaming, which the photograph's title uses
+    show("gravestone photographed", rng.randint(1955, 1974))
+    # the emigrant son was born 1907 and married in 1945: a wife of
+    # about his age, a child soon after the marriage
+    while True:
+        mother = rng.randint(1900, 1917)
+        child = rng.randint(1946, 1949)
+        if 20 <= child - mother <= 43:
+            break
+    show("G3 wife born, G4 born", (mother, child))
+
+    # --- documents -------------------------------------------------------
+    show("G1 husband's death record", rng.choice(DEATH_RECORDS))
+    show("  cause, if it gives one", rng.choice(CAUSES))
+    show(
+        "deportation record, year",
+        (rng.choice(DEPORTATION_RECORDS), rng.randint(1950, 1965)),
+    )
+    show("1938 letter as", rng.choice(LETTER_FORMS))
+    # the arrested man: a son of the woman whose post-war card records
+    # the arrest
+    show("arrested 1939", rng.choice(("G3 stayer son", "Rudolf")))
 
 
 if __name__ == "__main__":
