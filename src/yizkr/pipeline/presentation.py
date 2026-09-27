@@ -316,10 +316,19 @@ def register_derived_media(
         else:
             changed = False
             # another deck's name for the same bytes becomes an alias, as
-            # the registrar keeps an alternate filename (MODELING.md)
+            # the registrar keeps an alternate filename (MODELING.md) —
+            # unless the name is another item's: the item was content-
+            # tagged because its plain label was taken, or the label now
+            # names a different artifact. Aliasing it would cross-link two
+            # artifacts (and make a re-run write).
             current = str(item.labels.get("en") or "")
             aliases = {str(alias) for alias in item.aliases.get("en") or []}
-            if label != current and label not in aliases:
+            if (
+                label != current
+                and label not in aliases
+                and current != f"{label} [{content_sha1[:8]}]"
+                and client.find_item_by_label(label) in (None, item.id)
+            ):
                 item.aliases.set("en", label)
                 changed = True
 

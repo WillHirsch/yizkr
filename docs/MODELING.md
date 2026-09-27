@@ -242,8 +242,8 @@ and reference the artifact itself or the producing run.
   each of them (each statement slide-qualified and stated in its own
   container). A statement that several containers make alike (`instance
   of`, `media file`, `media SHA-1`) is one statement citing each of them;
-  a later container's name for the item is an alias (ADR-0008 as
-  amended by #50).
+  a later container's name for the item is an alias, unless another
+  item already has that label (ADR-0008 as amended by #50).
 - Unpacking is deterministic (documented ZIP+XML), never generative;
   only claim extraction from the slide text uses an LLM.
 
