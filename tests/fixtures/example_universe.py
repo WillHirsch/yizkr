@@ -1,18 +1,49 @@
-"""The one fictional example universe (#40; rule and index: docs/EXAMPLES.md).
+"""The fictional example universe (#40): the Löbig family and its world.
 
-Every example in code, comments, prompts, tests, ADRs, issues and PRs comes
-from this module: never from real family data, not even partially
-anonymised. Everything here is invented, down to the countries.
+Every example in this project's code, comments, prompts, tests, ADRs,
+issues and PRs comes from this module and nowhere else (see
+``docs/EXAMPLES.md``).  It is plain importable data: people, places,
+other entities (a firm, organisations, occupations, events), sources
+with transcribed text, and the assertions each source makes, in the
+archive's own vocabulary (manifest property ids, entity kinds and
+artifact classes).
 
-The universe has a ground truth (who exists, which place contains which) so
-tests can check identity and containment decisions against it. What is said
-*about* its people is recorded source-first, like the archive itself: every
-fact is an :class:`Assertion` by a fictional :class:`Source`, and some facts
-are deliberately asserted twice with incompatible values (ADR-0002).
+The family, in four generations:
 
-tests/fixtures/example-family.ged is an excerpt of the family tree's GEDCOM
-export (source ``family_tree_1990``); a person's ``gedcom_xref`` is its
-record there.
+* Eugen Löbig (1836-1909), master hatter, founds the Hutmacherei zum
+  Blauen Hut in 1863 at Brunnenring 35 in Flörburg (Hesse, Germany);
+  he marries Cäcilie Tarle ("Cilli") of Kredfeld.
+* Their children Sebastian ("Wastl"), Felix and Rahel; Sebastian, who
+  owns the firm after his father's death, marries Hildegard Laudler
+  ("Hilde"), and Felix marries Ida Sörne ("Peppi").
+* Felix and Ida's son Leopold is arrested in 1939, held in the court
+  prison at Peiltal and released; Ida, widowed in 1931, is deported to
+  Lager Klurnau in 1942 and liberated at Klurnau in 1945.  Leopold
+  marries Agnes Nertler in 1947, and the Landgericht Rekau divorces
+  them in 1957.
+* Sebastian's children Klara ("Pünktchen") and Gustav ("Gustl")
+  emigrate to Stupfield (Victoria, Australia) in 1938 and 1939 and take
+  the surname Lobig; Gustav marries Florence Faxridge, and their son
+  Nicholas, born 1950, is possibly living.  Nicholas calls a neighbour,
+  Maisie Cutmore, "Nana Maisie", though she is no relation.
+* An unrelated widow in Flörburg shares the name Ursula Löbig with
+  Sebastian's daughter: the homonym.
+
+Flörburg became Bad Flörburg in 1954, so it is named two ways over
+time, and the town of Rekau lies in the urban district of the same
+name.  Gustav's birth date is deliberately contradictory (7 January
+per the civil register, 1 July per his naturalisation: day and month
+transposed), and the sources carry every uncertain date form: circa,
+before, after, between and decade.
+
+``GEDCOM_FIXTURE`` renders the family as a genealogy program would
+export it from these sources; ``tests/unit/test_example_universe.py``
+checks that every name, date, place and family link in it is one the
+data here asserts.
+
+Every specific was invented blind, by seeded random draws from broad
+tables of period names, ordinary trades, large regions and syllables,
+not recalled from any real record.
 """
 
 from __future__ import annotations
@@ -23,18 +54,27 @@ from pathlib import Path
 GEDCOM_FIXTURE = Path(__file__).parent / "example-family.ged"
 
 _MONTHS = (
-    "January", "February", "March", "April", "May", "June", "July",
-    "August", "September", "October", "November", "December",
-)  # fmt: skip
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
 
 
 @dataclass(frozen=True)
 class Date:
-    """A date exactly as precise as its source says; never narrowed.
+    """A date as a source states it: precision and qualifier included.
 
-    ``qualifier`` carries the source's own uncertainty: ``circa``,
-    ``before``, ``after`` or ``between`` (``until`` is then the upper
-    bound). ``decade`` means the source gives only the decade of ``year``.
+    ``qualifier`` is one of ``circa``, ``before``, ``after`` or
+    ``between`` (which needs ``until``); ``decade`` marks "the 1890s".
     """
 
     year: int
@@ -60,7 +100,7 @@ class Date:
 
     @property
     def gedcom(self) -> str:
-        """The GEDCOM 5.5.1 date phrase, as example-family.ged writes it."""
+        """The GEDCOM 5.5.1 date phrase, e.g. ``ABT 1833``."""
         if self.decade:
             return f"BET {self.year} AND {self.year + 9}"
         plain = self._plain(gedcom=True)
@@ -71,7 +111,7 @@ class Date:
 
     def __str__(self) -> str:
         if self.decade:
-            return f"the {self.year}s"
+            return f"{self.year}s"
         plain = self._plain(gedcom=False)
         if self.qualifier == "between" and self.until:
             return f"between {plain} and {self.until}"
@@ -81,11 +121,13 @@ class Date:
 
 @dataclass(frozen=True)
 class Name:
-    """One form of a name. ``form`` is birth, married, nickname or
-    official (the typed kinds, ADR-0011), anglicised (the English form used
-    without a legal change), exonym (a place's other-language name) or
-    as_written (how one source writes it: composites, suffixes, initials).
-    ``lang`` is the language of the form."""
+    """One form of a name.
+
+    ``form`` for people: birth, married, nickname, diminutive,
+    anglicised, as_written (whole, as one source writes it) or
+    placeholder; for places: official, historical, transliterated or
+    translated.
+    """
 
     text: str
     form: str
@@ -96,8 +138,8 @@ class Name:
 class Person:
     key: str
     label: str
-    sex: str | None
-    generation: int | None  # 0 = the firm's founder; None = not kin
+    sex: str | None  # "male", "female" or None (unknown)
+    generation: int | None  # None: not family
     names: tuple[Name, ...]
     gedcom_xref: str | None = None
     note: str = ""
@@ -107,17 +149,17 @@ class Person:
 class Place:
     key: str
     label: str
-    kind: str  # country, region, town, address, building, camp, ...
-    part_of: tuple[str, ...]  # containing places (a DAG, not a tree)
+    kind: str
+    part_of: tuple[str, ...]
     names: tuple[Name, ...] = ()
     note: str = ""
 
 
 @dataclass(frozen=True)
 class Entity:
-    """Any other entity; ``kind`` is a manifest item key with
-    entity_kind (organization, family, vessel, occupation_class, or an
-    event kind such as deportation)."""
+    """Anything that is neither a person nor a place: an organisation,
+    an occupation, a vessel, or an event such as an arrest.  ``kind``
+    is a manifest entity kind."""
 
     key: str
     label: str
@@ -132,19 +174,16 @@ class Source:
     title: str
     lang: str | None
     year: int
-    artifact_class: str | None = None  # manifest artifact item, if one fits
-    text: str = ""  # a short passage, usable as a transcription
+    artifact_class: str | None = None
+    text: str = ""
     note: str = ""
 
 
 @dataclass(frozen=True)
 class Assertion:
-    """What one source says: ``subject`` ``property`` ``value``.
-
-    ``property`` and qualifier keys are manifest property keys
-    (src/yizkr/model/manifest.yaml); item-valued ones hold universe keys,
-    time-valued ones a :class:`Date`.
-    """
+    """One thing one source says, as a manifest property and value.
+    ``excerpt``, when given, is the passage of the source's ``text``
+    that says it."""
 
     subject: str
     property: str
@@ -159,7 +198,11 @@ def _names(*forms: tuple[str, str, str | None]) -> tuple[Name, ...]:
 
 
 def _said(source: str, *rows: tuple) -> list[Assertion]:
-    """Rows of (subject, property, value[, {qualifiers}][, excerpt])."""
+    """Assertions made by one source.
+
+    Each row is ``(subject, property, value)`` followed optionally by a
+    qualifier dict and/or an excerpt string, in either order.
+    """
     said = []
     for subject, prop, value, *rest in rows:
         qualifiers = next((r for r in rest if isinstance(r, dict)), {})
@@ -177,673 +220,1778 @@ def _said(source: str, *rows: tuple) -> list[Assertion]:
     return said
 
 
-# -- people -------------------------------------------------------------------
-# Five generations of the Beispiel family, who became the Examples after
-# emigrating from Exampleland (German-speaking) to Havenland (English-
-# speaking). Two pairs of homonyms: the two Gustavs (disjoint lifespans)
-# and the two Hugos (father and son).
-
 PEOPLE = (
     Person(
-        "gustav_1851", "Gustav Beispiel", "male", 0,
+        "eugen-loebig",
+        "Eugen Löbig",
+        "male",
+        1,
         _names(
-            ("Gustav Beispiel", "birth", "de"),
-            ("G. Beispiel", "as_written", "de"),
-        ),
-        note="founded the family firm in 1887; homonym of gustav_1925",
-    ),
-    Person(
-        "ottilie", "Ottilie Beispiel", "female", 0,
-        _names(
-            ("Ottilie Faber", "birth", "de"),
-            ("Ottilie Beispiel", "married", "de"),
-        ),
-    ),
-    Person(
-        "bern", "Bern Beispiel", "male", 1,
-        _names(
-            ("Bern Beispiel", "birth", "de"),
-            ("Bern Example", "anglicised", "en"),
-        ),
-        gedcom_xref="@I2@",
-        note="cigar maker, not in the family firm; emigrated 1939",
-    ),
-    Person(
-        "alma", "Alma Beispiel", "female", 1,
-        _names(
-            ("Alma Hedwig Muster", "birth", "de"),
-            ("Alma Beispiel", "married", "de"),
-            ("Hedi", "nickname", "de"),
-            ("Alma Hedwig Beispiel", "as_written", "de"),
+            ("Eugen Löbig", "birth", "de"),
+            ("Muckel", "nickname", "de"),
         ),
         gedcom_xref="@I1@",
-        note="her Muster family is unrelated to Dov Muster's",
+        note="Master hatter; founded the Hutmacherei zum Blauen Hut in 1863.",
     ),
     Person(
-        "hugo_sen", "Hugo Beispiel", "male", 1,
+        "caecilie-loebig",
+        "Cäcilie Löbig",
+        "female",
+        1,
         _names(
-            ("Hugo Beispiel", "birth", "de"),
-            ("Hugo Beispiel sen.", "as_written", "de"),
+            ("Cäcilie Tarle", "birth", "de"),
+            ("Cäcilie Löbig", "married", "de"),
+            ("Cilli", "diminutive", "de"),
+            ("Cäcilie Löbig geb. Tarle", "as_written", "de"),
         ),
-        note="the family firm's Prokurist; deported 1942; father of "
-        "hugo_jun",
+        gedcom_xref="@I2@",
+        note="Born in Kredfeld; the tree gives her birth year as circa.",
     ),
     Person(
-        "leonore", "Leonore Beispiel", "female", 1,
+        "sebastian-loebig",
+        "Sebastian Löbig",
+        "male",
+        2,
         _names(
-            ("Leonore Grau", "birth", "de"),
-            ("Leonore Beispiel", "married", "de"),
-            ("Lore", "nickname", "de"),
-        ),
-        note="deported 1942, released 1945; birth date contradicted",
-    ),
-    Person(
-        "hugo_jun", "Hugo Beispiel", "male", 2,
-        _names(
-            ("Hugo Beispiel", "birth", "de"),
-            ("Hugo Beispiel jun.", "as_written", "de"),
-            ("Hugo Example", "anglicised", "en"),
-        ),
-        note="worked in the family firm; emigrated 1938 with wife and "
-        "children",
-    ),
-    Person(
-        "gretl", "Margarete Beispiel", "female", 2,
-        _names(
-            ("Margarete Sommer", "birth", "de"),
-            ("Margarete Beispiel", "married", "de"),
-            ("Gretl", "nickname", "de"),
-            ("Peggy Example", "anglicised", "en"),
-        ),
-    ),
-    Person(
-        "carla", "Carla Beispiel", "female", 2,
-        _names(
-            ("Carla Beispiel", "birth", "de"),
-            ("Carla Muster", "married", "de"),
-            ("Carla Thorne", "married", "en"),
-            ("Carla Beispiel/Muster/Thorne", "as_written", "en"),
+            ("Sebastian Löbig", "birth", "de"),
+            ("Wastl", "diminutive", "de"),
         ),
         gedcom_xref="@I3@",
-        note="married Dov Muster 1935, divorced 1939; Roland Thorne 1946",
+        note="Owned the firm by 1912, after his father's death; never left.",
     ),
     Person(
-        "dov", "Dov Muster", "male", 2,
+        "hildegard-loebig",
+        "Hildegard Löbig",
+        "female",
+        2,
         _names(
-            ("Dov Muster", "birth", "de"),
-            ("Don Masters", "official", "en"),
-            ("Dov Muster (later Don Masters)", "as_written", "en"),
+            ("Hildegard Laudler", "birth", "de"),
+            ("Hildegard Löbig", "married", "de"),
+            ("Hilde", "diminutive", "de"),
+            ("Hildegard Löbig geborene Laudler", "as_written", "de"),
         ),
         gedcom_xref="@I4@",
-        note="imprisoned November 1938, released January 1939; emigrated "
-        "1939",
     ),
     Person(
-        "roland", "Roland Thorne", "male", 2,
-        _names(("Roland Thorne", "birth", "en")),
-    ),
-    Person(
-        "gustav_1925", "Gustav Beispiel", "male", 3,
-        _names(
-            ("Gustav Beispiel", "birth", "de"),
-            ("Gustl", "nickname", "de"),
-            ("Gus", "nickname", "en"),
-            ("Gus Example", "anglicised", "en"),
-            ("G. Beispiel", "as_written", "de"),
-        ),
-        note="named after his great-grandfather gustav_1851",
-    ),
-    Person(
-        "irmgard", "Irmgard Example-Hollis", "female", 3,
-        _names(
-            ("Irmgard Beispiel", "birth", "de"),
-            ("Irmi", "nickname", "de"),
-            ("Irmgard Example-Hollis", "married", "en"),
-            ("Irmgard Example-Hollis (b. Beispiel)", "as_written", "en"),
-        ),
-    ),
-    Person(
-        "neville", "Neville Hollis", "male", 3,
-        _names(("Neville Hollis", "birth", "en")),
-    ),
-    Person(
-        "ignaz", "Ignaz Beispiel", "male", 3,
-        _names(
-            ("Ignaz Beispiel", "birth", "de"),
-            ("Iggy", "nickname", "en"),
-            ("Ian Example", "official", "en"),
-            ('Ian "Iggy" Example', "as_written", "en"),
-        ),
-        note="youngest of three; wrote the 1995 memoir",
-    ),
-    Person(
-        "nora", "Nora Example", "female", 4,
-        _names(("Nora Example", "birth", "en")),
-        note="possibly living (no death asserted); compiled the tree",
-    ),
-    Person(
-        "friedl", "Elfriede Kranich", "female", None,
-        _names(
-            ("Elfriede Kranich", "birth", "de"),
-            ("Friedl", "nickname", "de"),
-            ("Elfreda Crane", "official", "en"),
-            ("Elfriede Braun", "married", "de"),
-            ("Elfriede (Friedl) Kranich", "as_written", "de"),
-        ),
-        gedcom_xref="@I6@",
-        note="family friend, no relation, yet 'Oma Friedl' to Nora",
-    ),
-    Person(
-        "placeholder", "Nameless Placeholder", None, None,
-        _names(("Nameless Placeholder", "as_written", None)),
+        "rahel-loebig",
+        "Rahel Löbig",
+        "female",
+        2,
+        _names(("Rahel Löbig", "birth", "de")),
         gedcom_xref="@I5@",
-        note="a record the compiler never filled in; its birth date "
-        "('SOMEDAY MAYBE') is unparseable and must never be guessed",
+        note="Never married; the tree says only that she died after 1945.",
     ),
-)  # fmt: skip
-
-# -- places -------------------------------------------------------------------
+    Person(
+        "felix-loebig",
+        "Felix Löbig",
+        "male",
+        2,
+        _names(("Felix Löbig", "birth", "de")),
+        gedcom_xref="@I6@",
+        note="Stayed in Flörburg; died in 1931.",
+    ),
+    Person(
+        "ida-loebig",
+        "Ida Löbig",
+        "female",
+        2,
+        _names(
+            ("Ida Sörne", "birth", "de"),
+            ("Ida Löbig", "married", "de"),
+            ("Peppi", "nickname", "de"),
+            ("LÖBIG, Ida, née SÖRNE", "as_written", "en"),
+        ),
+        gedcom_xref="@I7@",
+        note="Deported to Lager Klurnau in 1942; liberated in 1945.",
+    ),
+    Person(
+        "gustav-loebig",
+        "Gustav Löbig",
+        "male",
+        3,
+        _names(
+            ("Gustav Löbig", "birth", "de"),
+            ("Gustl", "diminutive", "de"),
+            ("Gustave Lobig", "anglicised", "en"),
+            ("Gus", "diminutive", "en"),
+            ("Gustave LOBIG (formerly Gustav LÖBIG)", "as_written", "en"),
+        ),
+        gedcom_xref="@I8@",
+        note=(
+            "Emigrated to Australia in 1939.  His birth date is the "
+            "deliberate contradiction."
+        ),
+    ),
+    Person(
+        "klara-loebig",
+        "Klara Löbig",
+        "female",
+        3,
+        _names(
+            ("Klara Löbig", "birth", "de"),
+            ("Pünktchen", "nickname", "de"),
+            ("Clara Lobig", "anglicised", "en"),
+        ),
+        gedcom_xref="@I9@",
+        note="Emigrated first, in 1938; drew the family tree in 1984.",
+    ),
+    Person(
+        "ursula-loebig",
+        "Ursula Löbig",
+        "female",
+        3,
+        _names(("Ursula Löbig", "birth", "de")),
+        gedcom_xref="@I10@",
+        note="Homonym of the unrelated widow ursula-loebig-angerring.",
+    ),
+    Person(
+        "leopold-loebig",
+        "Leopold Löbig",
+        "male",
+        3,
+        _names(("Leopold Löbig", "birth", "de")),
+        gedcom_xref="@I11@",
+        note=(
+            "Arrested and imprisoned in 1939, then released; married "
+            "Agnes Nertler in 1947 and was divorced from her in 1957."
+        ),
+    ),
+    Person(
+        "rudolf-loebig",
+        "Rudolf Löbig",
+        "male",
+        3,
+        _names(
+            ("Rudolf Löbig", "birth", "de"),
+            ("Rudi", "diminutive", "de"),
+        ),
+        gedcom_xref="@I12@",
+    ),
+    Person(
+        "infant-loebig",
+        "Infant Löbig",
+        None,
+        3,
+        _names(("N.N. Löbig", "placeholder", None)),
+        gedcom_xref="@I13@",
+        note="The tree shows a child who died in 1922: no name, no sex.",
+    ),
+    Person(
+        "florence-lobig",
+        "Florence Lobig",
+        "female",
+        3,
+        _names(
+            ("Florence Faxridge", "birth", "en"),
+            ("Florence Lobig", "married", "en"),
+        ),
+        gedcom_xref="@I14@",
+    ),
+    Person(
+        "nicholas-lobig",
+        "Nicholas Lobig",
+        "male",
+        4,
+        _names(("Nicholas Lobig", "birth", "en")),
+        gedcom_xref="@I15@",
+        note=(
+            "Born 1950 and no source asserts a death: possibly living, "
+            "so private by default and dated to the year only."
+        ),
+    ),
+    Person(
+        "ursula-loebig-angerring",
+        "Ursula Löbig",
+        "female",
+        None,
+        _names(("Löbig, Ursula, Wwe.", "as_written", "de")),
+        gedcom_xref="@I16@",
+        note=(
+            "A widow (Wwe.) listed in the 1912 directory; no relation "
+            "to the family is known.  Homonym of ursula-loebig."
+        ),
+    ),
+    Person(
+        "agnes-loebig",
+        "Agnes Löbig",
+        "female",
+        3,
+        _names(
+            ("Agnes Nertler", "birth", "de"),
+            ("Agnes Löbig", "married", "de"),
+            ("Agnes Löbig geb. Nertler", "as_written", "de"),
+        ),
+        gedcom_xref="@I17@",
+        note="Leopold's wife from 1947 until their divorce in 1957.",
+    ),
+    Person(
+        "maisie-cutmore",
+        "Maisie Cutmore",
+        "female",
+        None,
+        _names(("Mrs Cutmore", "as_written", "en")),
+        note=(
+            "A neighbour in Stupfield whom Nicholas called Nana Maisie: "
+            "a courtesy title, not kinship."
+        ),
+    ),
+)
 
 PLACES = (
     Place(
-        "exampleland", "Exampleland", "country", (),
-        _names(("Beispielland", "exonym", "de")),
-        note="German-speaking; the family's home country",
+        "germany",
+        "Germany",
+        "country",
+        (),
+        _names(("Deutschland", "official", "de")),
     ),
     Place(
-        "example_county", "Example County", "region", ("exampleland",),
-        _names(("Kreis Beispiel", "exonym", "de")),
+        "hesse",
+        "Hesse",
+        "region",
+        ("germany",),
+        _names(("Hessen", "official", "de")),
     ),
+    Place("kreis-peiltal", "Kreis Peiltal", "district", ("hesse",)),
+    Place("kreis-mockburg", "Kreis Mockburg", "district", ("hesse",)),
+    Place("peiltal", "Peiltal", "town", ("kreis-peiltal",)),
     Place(
-        "springfield", "Springfield", "town", ("example_county",),
-        _names(("Espringfeld", "as_written", "en")),
-        note="the family's home town; a 1938 clerk wrote 'Espringfeld'",
-    ),
-    Place(
-        "rosengasse_12", "Rosengasse 12", "address", ("springfield",),
-        _names(("Rosengasse 12, Springfield", "as_written", "de")),
-        note="Bern and Alma's home (street -> town -> region -> country)",
-    ),
-    Place(
-        "lower_town", "Lower Town", "locality", ("springfield",),
-        _names(("Unterstadt", "exonym", "de")),
-        note="site of the family firm",
-    ),
-    Place(
-        "springfield_hospital", "Springfield Hospital", "building",
-        ("springfield",),
-        _names(("Springfield Hospital, Lindenallee", "as_written", "de")),
-        note="a birthplace here; an organization when a source treats "
-        "it as an agent (ADR-0012)",
-    ),
-    Place("lakeside", "Lakeside", "town", ("example_county",)),
-    Place(
-        "lakeside_cemetery", "Lakeside Cemetery", "cemetery",
-        ("lakeside",),
-    ),
-    Place(
-        "capital_city_state", "Capital City", "region", ("exampleland",),
-        note="a city-state named after its city (eponymous nesting)",
-    ),
-    Place(
-        "capital_city", "Capital City", "town", ("capital_city_state",),
-    ),
-    Place(
-        "capital_city_police_prison", "Capital City police prison",
-        "prison", ("capital_city",),
-        _names(("Polizeigefängnis Capital City", "exonym", "de")),
-    ),
-    Place(
-        "eastern_province", "Eastern Province", "region", ("exampleland",),
-        _names(("Ostprovinz", "exonym", "de")),
-    ),
-    Place(
-        "musterfeld_camp", "Musterfeld camp", "camp",
-        ("eastern_province",),
+        "floerburg",
+        "Flörburg",
+        "town",
+        ("kreis-peiltal",),
         _names(
-            ("Lager Musterfeld", "exonym", "de"),
-            ("Musterfeld camp, Exampleland", "as_written", "en"),
+            ("Flörburg", "historical", "de"),
+            ("Bad Flörburg", "official", "de"),
+            ("Floerburg", "transliterated", "en"),
+        ),
+        note=(
+            "Renamed Bad Flörburg in 1954 on becoming a spa; the 1984 "
+            "tree uses the new name even for an 1836 birth."
+        ),
+    ),
+    Place("brunnenring", "Brunnenring", "street", ("floerburg",)),
+    Place(
+        "brunnenring-35",
+        "Brunnenring 35",
+        "address",
+        ("brunnenring",),
+        note="The firm's premises and the family home.",
+    ),
+    Place("wasserallee", "Wasserallee", "street", ("floerburg",)),
+    Place("wasserallee-59", "Wasserallee 59", "address", ("wasserallee",)),
+    Place("angerring", "Angerring", "street", ("floerburg",)),
+    Place("angerring-57", "Angerring 57", "address", ("angerring",)),
+    Place(
+        "floerburg-cemetery",
+        "Friedhof Flörburg",
+        "cemetery",
+        ("floerburg",),
+        note="Where Eugen and Cäcilie are buried.",
+    ),
+    Place("kredfeld", "Kredfeld", "town", ("kreis-peiltal",)),
+    Place(
+        "flaeckfeld",
+        "Fläckfeld",
+        "town",
+        ("kreis-mockburg", "kreis-peiltal"),
+        note=(
+            "The 1905 marriage certificate puts it in Kreis Mockburg, "
+            "the 1984 tree in Kreis Peiltal."
         ),
     ),
     Place(
-        "havenland", "Havenland", "country", (),
-        _names(("Hafenland", "exonym", "de")),
-        note="English-speaking; where the family found refuge",
+        "moshausen",
+        "Moshausen",
+        "town",
+        ("germany",),
+        note="No source gives its district or region.",
     ),
     Place(
-        "westshire", "Westshire", "region", ("havenland",),
-        note="historic county",
+        "stadtkreis-rekau",
+        "Rekau",
+        "district",
+        ("hesse",),
+        _names(("Stadtkreis Rekau", "official", "de")),
+        note="An urban district of one town, which bears the same name.",
     ),
     Place(
-        "south_westshire", "South Westshire", "region", ("havenland",),
-        note="created 1974 from part of Westshire",
+        "rekau",
+        "Rekau",
+        "town",
+        ("stadtkreis-rekau",),
+        note="Seat of the Landgericht Rekau; nested in its namesake.",
     ),
     Place(
-        "sampleton", "Sampleton", "town",
-        ("westshire", "south_westshire"),
+        "peiltal-court-prison",
+        "Gerichtsgefängnis Peiltal",
+        "prison",
+        ("peiltal",),
         _names(
-            ("Sampleton, Westshire, Havenland", "as_written", "en"),
-            ("Sampleton, South Westshire", "as_written", "en"),
+            ("Gerichtsgefängnis Peiltal", "official", "de"),
+            ("Peiltal court prison", "translated", "en"),
         ),
-        note="the same town under the old and the 1974 county names",
     ),
     Place(
-        "station_road_4", "4 Station Road", "address", ("sampleton",),
-        _names(("4 Station Road, Sampleton", "as_written", "en")),
+        "klurnau",
+        "Klurnau",
+        "locality",
+        (),
+        note="No source says where Klurnau lay: it reaches no country.",
     ),
     Place(
-        "laurel_bank", "Laurel Bank Maternity Home", "building",
-        ("sampleton",),
+        "klurnau-camp",
+        "Lager Klurnau",
+        "camp",
+        ("klurnau",),
+        _names(
+            ("Lager Klurnau", "official", "de"),
+            ("Klurnau camp", "translated", "en"),
+        ),
     ),
-)  # fmt: skip
-
-# -- organisations, family, vessel, occupations, events -----------------------
+    Place(
+        "australia",
+        "Australia",
+        "country",
+        (),
+        _names(("Australia", "official", "en")),
+    ),
+    Place("victoria", "Victoria", "region", ("australia",)),
+    Place("stupfield", "Stupfield", "town", ("victoria",)),
+    Place("hawthorn-road", "Hawthorn Road", "street", ("stupfield",)),
+    Place("hawthorn-road-8", "8 Hawthorn Road", "address", ("hawthorn-road",)),
+    Place("juniper-street", "Juniper Street", "street", ("stupfield",)),
+    Place(
+        "juniper-street-31",
+        "31 Juniper Street",
+        "address",
+        ("juniper-street",),
+    ),
+)
 
 ENTITIES = (
     Entity(
-        "beispiel_soehne", "Beispiel & Söhne", "organization",
-        ("Seifenfabrik Beispiel & Söhne", "Seifen=Fabrik Beispiel & Söhne"),
-        note="the family firm: a soap works in the Lower Town, founded "
-        "1887 by gustav_1851. The '=' form is how a Fraktur double hyphen "
-        "OCRs from a scan. Named after people, it is still an agent, never "
-        "a place or a human",
+        "zum-blauen-hut",
+        "Hutmacherei zum Blauen Hut",
+        "organization",
+        ("the Blue Hat",),
+        note="The family's hat-making firm at Brunnenring 35, Flörburg.",
     ),
-    Entity("example_academy", "Example Academy", "organization"),
+    Entity("hatter", "Hatter", "occupation_class", ("Hutmacher",)),
     Entity(
-        "fire_office", "Example County Fire Office", "organization",
-        ("Feuerkasse Kreis Beispiel",),
-        note="the county's fire insurer; issuing authority of the 1908 "
-        "policy (boilerplate, not a genealogical subject)",
-    ),
-    Entity(
-        "tracing_service", "Exampleland Tracing Service", "organization",
-        ("Suchdienst Beispielland",),
+        "master-hatter",
+        "Master hatter",
+        "occupation_class",
+        ("Hutmachermeister",),
     ),
     Entity(
-        "refugee_committee", "Sampleton Refugee Committee", "organization",
-    ),
-    Entity("ss_havenstar", "SS Havenstar", "vessel"),
-    Entity("beispiel_family", "the Beispiels", "family", ("the Examples",)),
-    Entity(
-        "cigar_maker", "Cigar maker", "occupation_class",
-        note="the tree's wording",
+        "arrest-1939",
+        "Arrest of Leopold Löbig",
+        "event",
+        note="Persecution event: the arrest.",
     ),
     Entity(
-        "zigarrenmacher", "Zigarrenmacher", "occupation_class",
-        note="the address book's wording for the same trade",
+        "imprisonment-1939",
+        "Imprisonment of Leopold Löbig",
+        "imprisonment",
+        note="Persecution event: four weeks in the Peiltal court prison.",
     ),
     Entity(
-        "prokurist", "Prokurist", "occupation_class",
-        note="authorised signatory: a role, recorded beside the employer",
+        "release-1939",
+        "Release of Leopold Löbig",
+        "release",
+        note="Persecution event: release from prison.",
     ),
     Entity(
-        "deportation_1942", "Deportation of Hugo and Leonore Beispiel",
+        "deportation-1942",
+        "Deportation of Ida Löbig",
         "deportation",
+        note="Persecution event: from Flörburg to Lager Klurnau.",
     ),
-    Entity("imprisonment_1938", "Imprisonment of Dov Muster", "imprisonment"),
-    Entity("release_1939", "Release of Dov Muster", "release"),
-    Entity("release_1945", "Release of Leonore Beispiel", "release"),
     Entity(
-        "emigration_1938", "Emigration of the Hugo Beispiel jun. family",
-        "migration",
-        note="on the SS Havenstar; its date is contradicted",
+        "liberation-1945",
+        "Liberation of Ida Löbig",
+        "release",
+        note="Persecution event: liberation at Klurnau.",
     ),
-)  # fmt: skip
-
-# -- sources ------------------------------------------------------------------
+    Entity("emigration-1938", "Emigration of Klara Löbig", "migration"),
+    Entity("emigration-1939", "Emigration of Gustav Löbig", "migration"),
+    Entity("floerburg-registry", "Standesamt Flörburg", "organization"),
+    Entity(
+        "realschule-floerburg",
+        "Städtische Realschule Flörburg",
+        "organization",
+    ),
+    Entity(
+        "wiedergutmachungsamt-peiltal",
+        "Wiedergutmachungsamt Peiltal",
+        "organization",
+        note="The compensation office that kept the 1953 file.",
+    ),
+    Entity(
+        "landgericht-rekau",
+        "Landgericht Rekau",
+        "organization",
+        ("Rekau regional court",),
+        note="The regional court that divorced Leopold and Agnes in 1957.",
+    ),
+    Entity(
+        "studio-bruesrich",
+        "Photograph Brüsrich",
+        "organization",
+        note="Photographic studio in Peiltal.",
+    ),
+    Entity(
+        "rms-flund",
+        "RMS Flund",
+        "vessel",
+        note="Named in the naturalisation certificate.",
+    ),
+)
 
 SOURCES = (
     Source(
-        "family_tree_1990", "The Example family tree", "en", 1990,
-        "genealogical_report",
-        note="compiled by Nora Example; example-family.ged is an excerpt "
-        "of its GEDCOM export",
+        "studio-photo-1890s",
+        "Studio portrait of the Löbig family",
+        None,
+        1890,
+        "photograph",
+        text=(
+            "[mount] Photograph Brüsrich · Peiltal "
+            "[reverse] Muckel · Cilli · Wastl · Rahel · Felix"
+        ),
+        note="Undated; the studio mount dates it only to the 1890s.",
     ),
     Source(
-        "gravestone_1927", "Gravestone of Gustav and Ottilie Beispiel",
-        "de", 1927, "photograph",
-        text="Gustav Beispiel 1851 - 27. Januar 1909. "
-        "Ottilie Beispiel geb. Faber 185_ - 1927.",
-        note="Lakeside Cemetery; the stone is weathered",
+        "marriage-cert-1905",
+        "Marriage certificate of Sebastian Löbig and Hildegard Laudler",
+        "de",
+        1905,
+        "certificate",
+        text=(
+            "Standesamt Flörburg. Flörburg, am 15. Dezember 1905. Vor dem "
+            "Standesbeamten erschienen zum Zwecke der Eheschließung: der "
+            "Hutmacher Sebastian Löbig, geboren am 15. Februar 1862 zu "
+            "Flörburg, Sohn des Hutmachermeisters Eugen Löbig und "
+            "dessen verstorbener Ehefrau Cäcilie geborene Tarle; und "
+            "die Hildegard Laudler, geboren am 19. März 1876 zu Fläckfeld, "
+            "Kreis Mockburg."
+        ),
     ),
     Source(
-        "marriage_register_1900",
-        "Springfield civil register: marriage of Hugo Beispiel and "
-        "Leonore Grau",
-        "de", 1900, "certificate",
-    ),
-    Source(
-        "insurance_1908", "Fire insurance policy of Beispiel & Söhne",
-        "de", 1908, "certificate",
-        text="Feuerkasse Kreis Beispiel. Versicherungsschein Nr. 4471. "
-        "Versichert: Siedehaus und Lager der Seifen=Fabrik Beispiel & Söhne, "
-        "Unterstadt, Springfield. Springfield, den 14. April 1908. "
-        "ppa. Hugo Beispiel, Prokurist.",
-        note="the '=' is a Fraktur double hyphen as OCR reads it",
-    ),
-    Source(
-        "birth_certificate_1929",
-        "Springfield civil register: birth of Ignaz Beispiel",
-        "de", 1929, "certificate",
-        text="Geboren am dritten März neunzehnhundertneunundzwanzig im "
-        "Springfield Hospital, Lindenallee: Ignaz Beispiel, Sohn des Hugo "
-        "Beispiel und der Margarete Beispiel geb. Sommer.",
-    ),
-    Source(
-        "photo_1929",
-        "Photograph: Hugo and Margarete Beispiel with two children",
-        None, 1929, "photograph",
-        note="caption on the back: 'Hugo, Gretl, Gustl und Irmi, Sommer 1929'",
-    ),
-    Source(
-        "address_book_1932", "Springfield address book", "de", 1932,
+        "directory-1912",
+        "Adressbuch der Stadt Flörburg 1912",
+        "de",
+        1912,
         "address_book",
-        text="Beispiel, Bern, Zigarrenmacher, Rosengasse 12",
+        text=(
+            "Hutmacherei zum Blauen Hut, gegr. 1863, Inh. Sebastian Löbig, "
+            "Brunnenring 35.\n"
+            "Löbig, Ursula, Wwe., Angerring 57."
+        ),
+        note="Two Löbig entries on one page: the homonym.",
     ),
     Source(
-        "passenger_list_1938", "Passenger list of the SS Havenstar", "en",
+        "burial-register-1909",
+        "Burial register of Friedhof Flörburg: Eugen Löbig",
+        "de",
+        1909,
+        "artifact",
+        text=(
+            "Friedhof Flörburg, Beerdigungsbuch 1909.\n"
+            "Name: Löbig, Eugen, Hutmachermeister. Wohnung: Brunnenring "
+            "35. Witwer der Cäcilie Löbig geb. Tarle. Alter: 73 Jahre.\n"
+            "Gestorben: 16. März 1909 in Flörburg. Todesursache: "
+            "Wassersucht.\n"
+            "Beerdigt: 20. März 1909."
+        ),
+        note="One entry in the cemetery's register of burials.",
+    ),
+    Source(
+        "school-report-1930",
+        "School report for Rudolf Löbig",
+        "de",
+        1930,
+        "certificate",
+        text=(
+            "Städtische Realschule zu Flörburg. Schuljahr 1929/30. "
+            "Zeugnis für den Schüler Rudolf Löbig, geb. am 24. "
+            "Oktober 1916, Sohn des Hutmachers Felix Löbig, "
+            "Flörburg, Wasserallee 59."
+        ),
+    ),
+    Source(
+        "birth-extract-1938",
+        "Birth register extract for Gustav Löbig",
+        "de",
         1938,
-        text="BEISPIEL, Hugo, soap maker, last residence Espringfeld; "
-        "destination 4 Station Road, Sampleton, Westshire, Havenland. "
-        "With wife Margarete and children Gustav, Irmgard, Ignaz.",
+        "certificate",
+        text=(
+            "Standesamt Flörburg. Flörburg, am 8. Januar 1919. Der "
+            "Hutmacher Sebastian Löbig, wohnhaft in Flörburg, Brunnenring "
+            "35, zeigte an, daß von seiner Ehefrau Hildegard Löbig "
+            "geborene Laudler zu Flörburg in seiner Wohnung am siebenten "
+            "Januar des Jahres tausend neunhundert und neunzehn ein "
+            "Knabe geboren worden sei, welcher den Vornamen Gustav "
+            "erhalten habe."
+        ),
+        note="Extract issued in 1938 for emigration papers.",
     ),
     Source(
-        "deportation_list_1942", "Deportation list, Springfield", "de",
-        1942,
-        text="Beispiel, Hugo, geb. 1882. "
-        "Beispiel, Leonore geb. Grau, geb. 3.11.1881.",
+        "postcard-1938",
+        "Postcard from Sebastian Löbig to his daughter Klara",
+        "de",
+        1938,
+        "letter",
+        text=(
+            "[postmark] Flörburg 19.8.38\n"
+            "Fräulein Klara Löbig, 31 Juniper Street, Stupfield, "
+            "Victoria, Australien\n"
+            "Liebes Pünktchen! Seit Du am 22. Juni abgereist bist, ist "
+            "es still im Haus. Gustl wartet noch auf sein Visum. Dein "
+            "Vater"
+        ),
+        note="A postcard; only its postmark dates it.",
     ),
     Source(
-        "naturalisation_1947", "Havenland naturalisation certificates",
-        "en", 1947, "certificate",
+        "registration-card-1945",
+        "Post-war registration card for Ida Löbig",
+        "en",
+        1945,
+        "artifact",
+        text=(
+            "LÖBIG, Ida, née SÖRNE. Born 17.4.1881 at Moshausen. "
+            "Last address: Flörburg, Wasserallee 59. Deported 21.8.1942 "
+            "to Klurnau. Liberated at Klurnau 28.1.1945. Husband: "
+            "Felix LÖBIG, died 1931. Son: Leopold LÖBIG, arrested "
+            "3.9.1939, held in Peiltal court prison until 1.10.1939."
+        ),
     ),
     Source(
-        "tracing_letter_1950", "Letter from the Exampleland Tracing Service",
-        "de", 1950, "letter",
+        "naturalisation-1952",
+        "Certificate of naturalisation for Gustave Lobig",
+        "en",
+        1952,
+        "certificate",
+        text=(
+            "Certificate of naturalisation. Gustave LOBIG (formerly "
+            "Gustav LÖBIG), hatter, of 8 Hawthorn Road, Stupfield, "
+            "Victoria. Born 1st July 1919 at Floerburg, Germany. "
+            "Arrived in Australia 1939 per RMS Flund. Granted 1952."
+        ),
+        note="Its birth date transposes the register's day and month.",
     ),
     Source(
-        "gazette_1978", "Sampleton Gazette: interview with Don Masters",
-        "en", 1978, "newspaper_clipping",
-        text="Don Masters, born Dov Muster in Capital City, was arrested "
-        "in November 1938 and held in the city's police prison until "
-        "January 1939.",
-        note="a recollection forty years on: month precision only",
+        "compensation-file-1953",
+        "Compensation file for Ida Löbig",
+        "de",
+        1953,
+        "artifact",
+        text=(
+            "Wiedergutmachungsamt Peiltal, 1953. Antrag des Leopold "
+            "Löbig, Flörburg, für seine verstorbene Mutter Ida "
+            "Löbig geb. Sörne, geb. 17.4.1881, zuletzt wohnhaft in "
+            "Flörburg, Wasserallee 59. Am 21. August 1942 von Flörburg "
+            "in das Lager Klurnau verschleppt, dort befreit, 1946 "
+            "verstorben."
+        ),
+        note="A son's claim for his late mother.",
     ),
     Source(
-        "memoir_1995", "Memoir of Ian Example (born Ignaz Beispiel)", "en",
-        1995,
-        text="I was born in Springfield in 1929, the youngest of three "
-        "children. My father worked in the family soap works, and my "
-        "earliest memories are of the smell of soap on his coat. My mother "
-        "called me Mäuschen. We left for Havenland in 1939. Oma Lore came "
-        "back from Musterfeld in 1945; Opa Hugo did not. Großtante Alma "
-        "never left Exampleland. Dov Muster (later Don Masters) lodged with "
-        "Friedl, who was no relation.",
+        "gravestone-photo-1956",
+        "Photograph of the Löbig gravestone, Bad Flörburg",
+        "de",
+        1956,
+        "photograph",
+        text=(
+            "EUGEN LÖBIG\n1836 – 1909\nCÄCILIE LÖBIG\nGEB. TARLE\n1833 – 1902"
+        ),
+        note="The grave is in the Flörburg cemetery.",
     ),
     Source(
-        "death_notice_2015", "Death notice of Ian Example, Sampleton Gazette",
-        "en", 2015, "newspaper_clipping",
-        text='EXAMPLE, Ian "Iggy" (born Ignaz Beispiel), of Sampleton, '
-        "South Westshire, died peacefully in 2015.",
+        "divorce-judgment-1957",
+        "Divorce judgment for Leopold and Agnes Löbig",
+        "de",
+        1957,
+        "artifact",
+        text=(
+            "Landgericht Rekau. Im Namen des Volkes! Urteil. In der "
+            "Ehesache des Leopold Löbig, geboren am 29. Mai 1914, "
+            "wohnhaft in Flörburg, und der Agnes Löbig geb. Nertler, "
+            "geboren am 20. April 1912 zu Kredfeld, hat das Landgericht "
+            "Rekau am 2. Januar 1957 für Recht erkannt: Die am 8. "
+            "Februar 1947 vor dem Standesbeamten in Flörburg "
+            "geschlossene Ehe der Parteien wird geschieden."
+        ),
+        note="The court's judgment; the day it gives is the divorce date.",
     ),
-)  # fmt: skip
-
-# -- assertions, grouped by the source that makes them ------------------------
+    Source(
+        "family-tree-1984",
+        "Family tree drawn by Clara Lobig",
+        "en",
+        1984,
+        "genealogical_report",
+        text=(
+            "Eugen Löbig, b. Bad Flörburg 1836, d. 1909 = (1859) "
+            "Cäcilie 'Cilli' Tarle of Kredfeld, c. 1833–1902.\n"
+            "Their children: Sebastian 'Wastl' 1862–1945 = Hildegard "
+            "'Hilde' Laudler of Fläckfeld (Kr. Peiltal) 1876–1968; "
+            "Felix 1867–1931 = Ida 'Peppi' Sörne 1881–1946; "
+            "Rahel 1871 – after 1945.\n"
+            "Children of Wastl and Hilde: Ursula 1911–1941; "
+            "Klara 'Pünktchen' 1917; Gustav 'Gustl' 1919 = (1942) "
+            "Florence Faxridge 1914–1963.\n"
+            "Children of Felix and Peppi: Leopold 1914–1960 = (1947) "
+            "Agnes Nertler 1912–1974, div. 1957; "
+            "Rudolf 'Rudi' 1916–1941; infant 1922.\n"
+            "Children of Gustl and Florence: Nicholas 1950."
+        ),
+        note="Hand-drawn in Australia by the emigrant Klara.",
+    ),
+    Source(
+        "interview-2002",
+        "Oral-history interview with Nicholas Lobig",
+        "en",
+        2002,
+        None,
+        text=(
+            "I was born in '50, in Stupfield. Nana Maisie next door "
+            "minded me after school: Mrs Cutmore, no relation, but I "
+            "always called her Nana. Dad — Gus, everyone "
+            "called him — left Germany in the August, just before the "
+            "war. Aunt Pünktchen had gone ahead in '38 or '39. Dad's "
+            "cousin Leopold was taken the first week of the war and "
+            "held about a month in Peiltal. The hat shop, the Blue Hat, "
+            "was gone before 1926. Dad died in '96 and he's buried here "
+            "in Stupfield. Aunt Pünktchen died last year."
+        ),
+        note="A possibly living narrator; family hearsay throughout.",
+    ),
+)
 
 ASSERTIONS = tuple(
     _said(
-        "family_tree_1990",
-        ("hugo_sen", "father", "gustav_1851"),
-        ("hugo_sen", "mother", "ottilie"),
-        ("bern", "father", "gustav_1851"),
-        ("bern", "mother", "ottilie"),
-        ("bern", "date_of_birth", Date(1880, qualifier="circa")),
-        ("bern", "date_of_death", Date(1950, 3)),
-        ("bern", "cause_of_death", "Heart failure"),
-        ("bern", "occupation", "cigar_maker"),
-        ("bern", "educated_at", "example_academy"),
-        ("bern", "spouse", "alma", {"start_time": Date(1902, 4, 2)}),
-        ("alma", "birth_name", "Alma Hedwig Muster"),
-        ("alma", "married_name", "Alma Beispiel"),
-        ("alma", "nickname", "Hedi"),
-        ("alma", "date_of_birth", Date(1885, 10, 17)),
-        ("alma", "place_of_birth", "springfield"),
-        ("alma", "date_of_death", Date(1945, 5, 8, qualifier="before")),
-        ("alma", "place_of_death", "lakeside"),
-        ("alma", "burial_place", "lakeside_cemetery"),
-        ("alma", "number_of_children", 1),
+        "studio-photo-1890s",
+        ("studio-photo-1890s", "point_in_time", Date(1890, decade=True)),
+        ("studio-bruesrich", "location", "peiltal", "Brüsrich · Peiltal"),
         (
-            "carla", "date_of_birth",
-            Date(1910, qualifier="between", until=Date(1912)),
+            "studio-photo-1890s",
+            "depicts",
+            "eugen-loebig",
+            {"referred_to_as": "Muckel"},
+            "Muckel",
         ),
-        ("carla", "place_of_birth", "springfield"),
-        ("carla", "father", "bern"),
-        ("carla", "mother", "alma"),
         (
-            "carla", "spouse", "dov",
-            {"start_time": Date(1935, 7, 30), "end_time": Date(1939, 10, 10)},
+            "studio-photo-1890s",
+            "depicts",
+            "caecilie-loebig",
+            {"referred_to_as": "Cilli"},
+            "Cilli",
         ),
-        ("carla", "married_name", "Carla Muster"),
         (
-            "carla", "married_name", "Carla Thorne",
-            "Carla Beispiel/Muster/Thorne",
+            "studio-photo-1890s",
+            "depicts",
+            "sebastian-loebig",
+            {"referred_to_as": "Wastl"},
+            "Wastl",
         ),
-        ("carla", "spouse", "roland", {"start_time": Date(1946)}),
-        ("carla", "date_of_death", Date(1994)),
-        ("dov", "date_of_birth", Date(1908)),
-        ("dov", "place_of_birth", "capital_city"),
-        ("dov", "date_of_death", Date(1979)),
-        ("roland", "date_of_birth", Date(1906)),
-        ("roland", "place_of_birth", "sampleton"),
-        ("roland", "date_of_death", Date(1971)),
-        ("leonore", "date_of_death", Date(1961)),
-        ("leonore", "place_of_death", "sampleton"),
-        ("hugo_jun", "father", "hugo_sen"),
-        ("hugo_jun", "mother", "leonore"),
-        ("hugo_jun", "date_of_birth", Date(1901, 2, 14)),
-        ("hugo_jun", "spouse", "gretl", {"start_time": Date(1924)}),
-        ("hugo_jun", "date_of_death", Date(1987)),
-        ("hugo_jun", "place_of_death", "sampleton"),
-        ("gretl", "date_of_birth", Date(1903)),
-        ("gretl", "date_of_death", Date(1990)),
-        ("gustav_1925", "father", "hugo_jun"),
-        ("gustav_1925", "mother", "gretl"),
-        ("gustav_1925", "date_of_birth", Date(1925)),
-        ("gustav_1925", "place_of_birth", "springfield"),
-        ("gustav_1925", "date_of_death", Date(2004)),
-        ("gustav_1925", "place_of_death", "sampleton"),
-        ("irmgard", "father", "hugo_jun"),
-        ("irmgard", "mother", "gretl"),
-        ("irmgard", "date_of_birth", Date(1927)),
-        ("irmgard", "spouse", "neville", {"start_time": Date(1950)}),
-        ("irmgard", "date_of_death", Date(2011)),
-        ("neville", "date_of_birth", Date(1924)),
-        ("neville", "date_of_death", Date(1999)),
-        ("nora", "father", "gustav_1925"),
-        ("nora", "date_of_birth", Date(1958)),
-        ("nora", "place_of_birth", "laurel_bank"),
         (
-            "leonore", "relative", "nora", {"kinship_type": "Uroma"},
-            "our Uroma Lore",
+            "studio-photo-1890s",
+            "depicts",
+            "rahel-loebig",
+            {"referred_to_as": "Rahel"},
+            "Rahel",
         ),
-        ("friedl", "date_of_birth", Date(1912)),
-        ("friedl", "date_of_death", Date(1998)),
-        ("friedl", "nickname", "Friedl", "Elfriede (Friedl) Kranich"),
-        ("friedl", "married_name", "Elfriede Braun"),
         (
-            "friedl", "referred_to_as", "Oma Friedl",
-            {"perspective": "nora"}, "Oma Friedl (no relation)",
+            "studio-photo-1890s",
+            "depicts",
+            "felix-loebig",
+            {"referred_to_as": "Felix"},
+            "Felix",
         ),
     )
     + _said(
-        "gravestone_1927",
-        ("gustav_1851", "date_of_birth", Date(1851)),
-        ("gustav_1851", "date_of_death", Date(1909, 1, 27)),
-        ("gustav_1851", "burial_place", "lakeside_cemetery"),
-        ("ottilie", "birth_name", "Ottilie Faber"),
-        ("ottilie", "spouse", "gustav_1851"),
-        ("ottilie", "date_of_birth", Date(1850, decade=True), "185_"),
-        ("ottilie", "date_of_death", Date(1927)),
-        ("ottilie", "burial_place", "lakeside_cemetery"),
-    )
-    + _said(
-        "marriage_register_1900",
-        ("hugo_sen", "spouse", "leonore", {"start_time": Date(1900)}),
-        ("hugo_sen", "date_of_birth", Date(1882)),
-        ("hugo_sen", "father", "gustav_1851"),
-        ("hugo_sen", "mother", "ottilie"),
-        ("leonore", "birth_name", "Leonore Grau"),
+        "marriage-cert-1905",
         (
-            "leonore", "date_of_birth", Date(1880, 11, 3),
-            "geboren am 3. November 1880",
+            "floerburg-registry",
+            "location",
+            "floerburg",
+            "Standesamt Flörburg",
+        ),
+        (
+            "sebastian-loebig",
+            "spouse",
+            "hildegard-loebig",
+            {"start_time": Date(1905, 12, 15), "location": "floerburg"},
+            "Flörburg, am 15. Dezember 1905",
+        ),
+        (
+            "sebastian-loebig",
+            "date_of_birth",
+            Date(1862, 2, 15),
+            "geboren am 15. Februar 1862 zu Flörburg",
+        ),
+        (
+            "sebastian-loebig",
+            "place_of_birth",
+            "floerburg",
+            "geboren am 15. Februar 1862 zu Flörburg",
+        ),
+        (
+            "sebastian-loebig",
+            "occupation",
+            "hatter",
+            "der Hutmacher Sebastian Löbig",
+        ),
+        (
+            "sebastian-loebig",
+            "father",
+            "eugen-loebig",
+            "Sohn des Hutmachermeisters Eugen Löbig",
+        ),
+        (
+            "sebastian-loebig",
+            "mother",
+            "caecilie-loebig",
+            "Cäcilie geborene Tarle",
+        ),
+        (
+            "eugen-loebig",
+            "occupation",
+            "master-hatter",
+            "Hutmachermeisters Eugen Löbig",
+        ),
+        (
+            "caecilie-loebig",
+            "birth_name",
+            "Cäcilie Tarle",
+            "Cäcilie geborene Tarle",
+        ),
+        (
+            "hildegard-loebig",
+            "birth_name",
+            "Hildegard Laudler",
+            "die Hildegard Laudler",
+        ),
+        (
+            "hildegard-loebig",
+            "date_of_birth",
+            Date(1876, 3, 19),
+            "geboren am 19. März 1876 zu Fläckfeld",
+        ),
+        (
+            "hildegard-loebig",
+            "place_of_birth",
+            "flaeckfeld",
+            "geboren am 19. März 1876 zu Fläckfeld",
+        ),
+        (
+            "flaeckfeld",
+            "part_of",
+            "kreis-mockburg",
+            "Fläckfeld, Kreis Mockburg",
         ),
     )
     + _said(
-        "insurance_1908",
+        "directory-1912",
         (
-            "hugo_sen", "employer", "beispiel_soehne",
-            "ppa. Hugo Beispiel, Prokurist",
+            "zum-blauen-hut",
+            "location",
+            "brunnenring-35",
+            {"point_in_time": Date(1912)},
+            "Brunnenring 35",
         ),
-        ("hugo_sen", "occupation", "prokurist"),
-        ("beispiel_soehne", "location", "lower_town"),
-    )
-    + _said(
-        "birth_certificate_1929",
-        ("ignaz", "birth_name", "Ignaz Beispiel"),
-        ("ignaz", "date_of_birth", Date(1929, 3, 3)),
-        ("ignaz", "place_of_birth", "springfield_hospital"),
-        ("ignaz", "father", "hugo_jun", "Sohn des Hugo Beispiel"),
-        ("ignaz", "mother", "gretl"),
         (
-            "gretl", "birth_name", "Margarete Sommer",
-            "Margarete Beispiel geb. Sommer",
+            "sebastian-loebig",
+            "employer",
+            "zum-blauen-hut",
+            {"point_in_time": Date(1912)},
+            "Inh. Sebastian Löbig",
         ),
-    )
-    + _said(
-        "photo_1929",
-        ("photo_1929", "depicts", "hugo_jun"),
-        ("photo_1929", "depicts", "gretl"),
-        ("photo_1929", "depicts", "gustav_1925"),
-        ("photo_1929", "depicts", "irmgard"),
-    )
-    + _said(
-        "address_book_1932",
-        ("bern", "residence", "rosengasse_12", {"point_in_time": Date(1932)}),
-        ("bern", "occupation", "zigarrenmacher"),
-    )
-    + _said(
-        "passenger_list_1938",
-        ("emigration_1938", "participant", "hugo_jun"),
-        ("emigration_1938", "participant", "gretl"),
-        ("emigration_1938", "participant", "gustav_1925"),
-        ("emigration_1938", "participant", "irmgard"),
-        ("emigration_1938", "participant", "ignaz"),
-        ("emigration_1938", "location", "sampleton"),
-        ("emigration_1938", "point_in_time", Date(1938, 8)),
+        ("zum-blauen-hut", "start_time", Date(1863), "gegr. 1863"),
         (
-            "hugo_jun", "residence", "station_road_4",
-            {"point_in_time": Date(1938, 8)},
+            "ursula-loebig-angerring",
+            "residence",
+            "angerring-57",
+            {"point_in_time": Date(1912)},
+            "Löbig, Ursula, Wwe., Angerring 57",
         ),
     )
     + _said(
-        "deportation_list_1942",
-        ("deportation_1942", "participant", "hugo_sen"),
-        ("deportation_1942", "participant", "leonore"),
-        ("deportation_1942", "location", "musterfeld_camp"),
-        ("deportation_1942", "point_in_time", Date(1942, 10)),
-        ("leonore", "date_of_birth", Date(1881, 11, 3), "geb. 3.11.1881"),
-    )
-    + _said(
-        "naturalisation_1947",
-        ("ignaz", "official_name", "Ian Example"),
-        ("dov", "official_name", "Don Masters"),
-        ("friedl", "official_name", "Elfreda Crane"),
-    )
-    + _said(
-        "tracing_letter_1950",
+        "burial-register-1909",
         (
-            "hugo_sen", "date_of_death",
-            Date(1942, 10, qualifier="after"),
-        ),
-        ("hugo_sen", "place_of_death", "musterfeld_camp"),
-        ("release_1945", "participant", "leonore"),
-        ("release_1945", "location", "musterfeld_camp"),
-        ("release_1945", "point_in_time", Date(1945, 5)),
-    )
-    + _said(
-        "gazette_1978",
-        ("imprisonment_1938", "participant", "dov"),
-        ("imprisonment_1938", "location", "capital_city_police_prison"),
-        ("imprisonment_1938", "start_time", Date(1938, 11)),
-        ("imprisonment_1938", "end_time", Date(1939, 1)),
-        ("release_1939", "participant", "dov"),
-        ("release_1939", "location", "capital_city_police_prison"),
-        ("release_1939", "point_in_time", Date(1939, 1)),
-    )
-    + _said(
-        "memoir_1995",
-        ("ignaz", "date_of_birth", Date(1929)),
-        ("ignaz", "place_of_birth", "springfield"),
-        (
-            "hugo_jun", "employer", "beispiel_soehne",
-            "My father worked in the family soap works",
+            "eugen-loebig",
+            "date_of_death",
+            Date(1909, 3, 16),
+            "Gestorben: 16. März 1909",
         ),
         (
-            "emigration_1938", "point_in_time", Date(1939),
-            "We left for Havenland in 1939.",
+            "eugen-loebig",
+            "place_of_death",
+            "floerburg",
+            "Gestorben: 16. März 1909 in Flörburg",
         ),
         (
-            "leonore", "relative", "ignaz", {"kinship_type": "Oma"},
-            "Oma Lore",
+            "eugen-loebig",
+            "cause_of_death",
+            "Wassersucht",
+            "Todesursache: Wassersucht",
+        ),
+        ("eugen-loebig", "age_at_death", "73 Jahre", "Alter: 73 Jahre"),
+        (
+            "eugen-loebig",
+            "burial_place",
+            "floerburg-cemetery",
+            {"point_in_time": Date(1909, 3, 20)},
+            "Beerdigt: 20. März 1909",
         ),
         (
-            "hugo_sen", "relative", "ignaz", {"kinship_type": "Opa"},
-            "Opa Hugo",
+            "eugen-loebig",
+            "occupation",
+            "master-hatter",
+            "Löbig, Eugen, Hutmachermeister",
         ),
         (
-            "alma", "relative", "ignaz", {"kinship_type": "Großtante"},
-            "Großtante Alma",
+            "eugen-loebig",
+            "residence",
+            "brunnenring-35",
+            {"point_in_time": Date(1909, 3, 16)},
+            "Wohnung: Brunnenring 35",
         ),
         (
-            "ignaz", "referred_to_as", "Mäuschen", {"perspective": "gretl"},
-            "My mother called me Mäuschen.",
+            "eugen-loebig",
+            "spouse",
+            "caecilie-loebig",
+            "Witwer der Cäcilie Löbig geb. Tarle",
         ),
         (
-            "friedl", "gave_refuge_to", "dov",
-            "Dov Muster (later Don Masters) lodged with Friedl",
+            "caecilie-loebig",
+            "birth_name",
+            "Cäcilie Tarle",
+            "Cäcilie Löbig geb. Tarle",
         ),
-        ("friedl", "member_of", "refugee_committee"),
-        ("gustav_1925", "nickname", "Gus"),
-        ("irmgard", "birth_name", "Irmgard Beispiel"),
         (
-            "irmgard", "married_name", "Irmgard Example-Hollis",
-            "Irmgard Example-Hollis (b. Beispiel)",
+            "caecilie-loebig",
+            "married_name",
+            "Cäcilie Löbig",
+            "Cäcilie Löbig geb. Tarle",
         ),
     )
     + _said(
-        "death_notice_2015",
-        ("ignaz", "date_of_death", Date(2015)),
-        ("ignaz", "place_of_death", "sampleton"),
-        ("ignaz", "nickname", "Iggy", 'Ian "Iggy" Example'),
+        "school-report-1930",
+        (
+            "realschule-floerburg",
+            "location",
+            "floerburg",
+            "Städtische Realschule zu Flörburg",
+        ),
+        (
+            "rudolf-loebig",
+            "date_of_birth",
+            Date(1916, 10, 24),
+            "geb. am 24. Oktober 1916",
+        ),
+        (
+            "rudolf-loebig",
+            "father",
+            "felix-loebig",
+            "Sohn des Hutmachers Felix Löbig",
+        ),
+        (
+            "rudolf-loebig",
+            "educated_at",
+            "realschule-floerburg",
+            {"point_in_time": Date(1930)},
+            "Städtische Realschule zu Flörburg",
+        ),
+        (
+            "felix-loebig",
+            "occupation",
+            "hatter",
+            "Sohn des Hutmachers Felix Löbig",
+        ),
+        (
+            "felix-loebig",
+            "residence",
+            "wasserallee-59",
+            {"point_in_time": Date(1930)},
+            "Flörburg, Wasserallee 59",
+        ),
     )
-)  # fmt: skip
-
-# One fact, two sources, incompatible values: the healthy resting state the
-# archive must display side by side (CLAUDE.md rule 6), never resolve.
-CONTRADICTIONS = (
-    ("leonore", "date_of_birth"),  # 1880 register vs 1881 deportation list
-    ("emigration_1938", "point_in_time"),  # Aug 1938 list vs 1939 memoir
+    + _said(
+        "birth-extract-1938",
+        (
+            "gustav-loebig",
+            "date_of_birth",
+            Date(1919, 1, 7),
+            "am siebenten Januar des Jahres tausend neunhundert und neunzehn",
+        ),
+        (
+            "gustav-loebig",
+            "place_of_birth",
+            "floerburg",
+            "zu Flörburg in seiner Wohnung",
+        ),
+        ("gustav-loebig", "father", "sebastian-loebig", "Sebastian Löbig"),
+        (
+            "gustav-loebig",
+            "mother",
+            "hildegard-loebig",
+            "Hildegard Löbig geborene Laudler",
+        ),
+        (
+            "hildegard-loebig",
+            "birth_name",
+            "Hildegard Laudler",
+            "Hildegard Löbig geborene Laudler",
+        ),
+        (
+            "hildegard-loebig",
+            "married_name",
+            "Hildegard Löbig",
+            "Hildegard Löbig geborene Laudler",
+        ),
+        (
+            "sebastian-loebig",
+            "occupation",
+            "hatter",
+            "Der Hutmacher Sebastian Löbig",
+        ),
+        (
+            "sebastian-loebig",
+            "residence",
+            "brunnenring-35",
+            {"point_in_time": Date(1919, 1, 8)},
+            "wohnhaft in Flörburg, Brunnenring 35",
+        ),
+    )
+    + _said(
+        "postcard-1938",
+        (
+            "postcard-1938",
+            "point_in_time",
+            Date(1938, 8, 19),
+            "[postmark] Flörburg 19.8.38",
+        ),
+        (
+            "sebastian-loebig",
+            "referred_to_as",
+            "Dein Vater",
+            {"perspective": "klara-loebig"},
+            "Dein Vater",
+        ),
+        ("klara-loebig", "father", "sebastian-loebig", "Dein Vater"),
+        ("klara-loebig", "nickname", "Pünktchen", "Liebes Pünktchen!"),
+        (
+            "emigration-1938",
+            "participant",
+            "klara-loebig",
+            "Seit Du am 22. Juni abgereist bist",
+        ),
+        (
+            "emigration-1938",
+            "point_in_time",
+            Date(1938, 6, 22),
+            "Seit Du am 22. Juni abgereist bist",
+        ),
+        (
+            "klara-loebig",
+            "residence",
+            "juniper-street-31",
+            {"point_in_time": Date(1938, 8, 19)},
+            "31 Juniper Street, Stupfield",
+        ),
+        (
+            "gustav-loebig",
+            "nickname",
+            "Gustl",
+            "Gustl wartet noch auf sein Visum",
+        ),
+    )
+    + _said(
+        "registration-card-1945",
+        ("ida-loebig", "birth_name", "Ida Sörne", "née SÖRNE"),
+        (
+            "ida-loebig",
+            "married_name",
+            "Ida Löbig",
+            "LÖBIG, Ida, née SÖRNE",
+        ),
+        (
+            "ida-loebig",
+            "date_of_birth",
+            Date(1881, 4, 17),
+            "Born 17.4.1881 at Moshausen",
+        ),
+        (
+            "ida-loebig",
+            "place_of_birth",
+            "moshausen",
+            "Born 17.4.1881 at Moshausen",
+        ),
+        (
+            "ida-loebig",
+            "residence",
+            "wasserallee-59",
+            "Last address: Flörburg, Wasserallee 59",
+        ),
+        (
+            "deportation-1942",
+            "participant",
+            "ida-loebig",
+            "Deported 21.8.1942 to Klurnau",
+        ),
+        (
+            "deportation-1942",
+            "point_in_time",
+            Date(1942, 8, 21),
+            "Deported 21.8.1942 to Klurnau",
+        ),
+        (
+            "deportation-1942",
+            "location",
+            "klurnau",
+            "Deported 21.8.1942 to Klurnau",
+        ),
+        (
+            "liberation-1945",
+            "participant",
+            "ida-loebig",
+            "Liberated at Klurnau 28.1.1945",
+        ),
+        (
+            "liberation-1945",
+            "point_in_time",
+            Date(1945, 1, 28),
+            "Liberated at Klurnau 28.1.1945",
+        ),
+        (
+            "liberation-1945",
+            "location",
+            "klurnau",
+            "Liberated at Klurnau 28.1.1945",
+        ),
+        (
+            "ida-loebig",
+            "spouse",
+            "felix-loebig",
+            "Husband: Felix LÖBIG",
+        ),
+        (
+            "leopold-loebig",
+            "mother",
+            "ida-loebig",
+            "Son: Leopold LÖBIG",
+        ),
+        (
+            "arrest-1939",
+            "participant",
+            "leopold-loebig",
+            "Leopold LÖBIG, arrested 3.9.1939",
+        ),
+        (
+            "arrest-1939",
+            "point_in_time",
+            Date(1939, 9, 3),
+            "arrested 3.9.1939",
+        ),
+        (
+            "imprisonment-1939",
+            "participant",
+            "leopold-loebig",
+            "held in Peiltal court prison",
+        ),
+        (
+            "imprisonment-1939",
+            "location",
+            "peiltal-court-prison",
+            "held in Peiltal court prison",
+        ),
+        (
+            "imprisonment-1939",
+            "start_time",
+            Date(1939, 9, 3),
+            "arrested 3.9.1939, held",
+        ),
+        (
+            "imprisonment-1939",
+            "end_time",
+            Date(1939, 10, 1),
+            "until 1.10.1939",
+        ),
+        (
+            "release-1939",
+            "participant",
+            "leopold-loebig",
+            "held in Peiltal court prison until 1.10.1939",
+        ),
+        (
+            "release-1939",
+            "point_in_time",
+            Date(1939, 10, 1),
+            "until 1.10.1939",
+        ),
+        (
+            "release-1939",
+            "location",
+            "peiltal-court-prison",
+            "held in Peiltal court prison until 1.10.1939",
+        ),
+        (
+            "felix-loebig",
+            "date_of_death",
+            Date(1931),
+            "Felix LÖBIG, died 1931",
+        ),
+    )
+    + _said(
+        "naturalisation-1952",
+        (
+            "gustav-loebig",
+            "official_name",
+            "Gustave Lobig",
+            "Gustave LOBIG",
+        ),
+        (
+            "gustav-loebig",
+            "birth_name",
+            "Gustav Löbig",
+            "formerly Gustav LÖBIG",
+        ),
+        (
+            "gustav-loebig",
+            "date_of_birth",
+            Date(1919, 7, 1),
+            "Born 1st July 1919",
+        ),
+        (
+            "gustav-loebig",
+            "place_of_birth",
+            "floerburg",
+            {"referred_to_as": "Floerburg"},
+            "at Floerburg, Germany",
+        ),
+        ("gustav-loebig", "occupation", "hatter", "hatter"),
+        (
+            "gustav-loebig",
+            "residence",
+            "hawthorn-road-8",
+            {"point_in_time": Date(1952)},
+            "8 Hawthorn Road, Stupfield, Victoria",
+        ),
+        (
+            "gustav-loebig",
+            "residence",
+            "australia",
+            {"start_time": Date(1939)},
+            "Arrived in Australia 1939",
+        ),
+        (
+            "gustav-loebig",
+            "country_of_citizenship",
+            "australia",
+            {"start_time": Date(1952)},
+            "Granted 1952",
+        ),
+    )
+    + _said(
+        "compensation-file-1953",
+        (
+            "wiedergutmachungsamt-peiltal",
+            "location",
+            "peiltal",
+            "Wiedergutmachungsamt Peiltal",
+        ),
+        (
+            "leopold-loebig",
+            "mother",
+            "ida-loebig",
+            "für seine verstorbene Mutter",
+        ),
+        (
+            "ida-loebig",
+            "birth_name",
+            "Ida Sörne",
+            "Ida Löbig geb. Sörne",
+        ),
+        (
+            "ida-loebig",
+            "married_name",
+            "Ida Löbig",
+            "Ida Löbig geb. Sörne",
+        ),
+        (
+            "ida-loebig",
+            "date_of_birth",
+            Date(1881, 4, 17),
+            "geb. 17.4.1881",
+        ),
+        (
+            "ida-loebig",
+            "residence",
+            "wasserallee-59",
+            "zuletzt wohnhaft in Flörburg, Wasserallee 59",
+        ),
+        (
+            "deportation-1942",
+            "participant",
+            "ida-loebig",
+            "Am 21. August 1942 von Flörburg in das Lager Klurnau verschleppt",
+        ),
+        (
+            "deportation-1942",
+            "point_in_time",
+            Date(1942, 8, 21),
+            "Am 21. August 1942",
+        ),
+        (
+            "deportation-1942",
+            "location",
+            "klurnau-camp",
+            "in das Lager Klurnau verschleppt",
+        ),
+        (
+            "ida-loebig",
+            "date_of_death",
+            Date(1946),
+            "1946 verstorben",
+        ),
+    )
+    + _said(
+        "gravestone-photo-1956",
+        ("eugen-loebig", "date_of_birth", Date(1836), "1836 – 1909"),
+        ("eugen-loebig", "date_of_death", Date(1909), "1836 – 1909"),
+        ("caecilie-loebig", "date_of_birth", Date(1833), "1833 – 1902"),
+        ("caecilie-loebig", "date_of_death", Date(1902), "1833 – 1902"),
+        (
+            "caecilie-loebig",
+            "birth_name",
+            "Cäcilie Tarle",
+            "GEB. TARLE",
+        ),
+        (
+            "eugen-loebig",
+            "burial_place",
+            "floerburg-cemetery",
+            "EUGEN LÖBIG",
+        ),
+        (
+            "caecilie-loebig",
+            "burial_place",
+            "floerburg-cemetery",
+            "CÄCILIE LÖBIG",
+        ),
+    )
+    + _said(
+        "divorce-judgment-1957",
+        (
+            "landgericht-rekau",
+            "location",
+            "rekau",
+            "hat das Landgericht Rekau",
+        ),
+        (
+            "leopold-loebig",
+            "spouse",
+            "agnes-loebig",
+            {
+                "start_time": Date(1947, 2, 8),
+                "location": "floerburg",
+                "end_time": Date(1957, 1, 2),
+            },
+            "am 2. Januar 1957 für Recht erkannt: Die am 8. Februar 1947 "
+            "vor dem Standesbeamten in Flörburg geschlossene Ehe der "
+            "Parteien wird geschieden",
+        ),
+        (
+            "leopold-loebig",
+            "date_of_birth",
+            Date(1914, 5, 29),
+            "geboren am 29. Mai 1914",
+        ),
+        (
+            "leopold-loebig",
+            "residence",
+            "floerburg",
+            {"point_in_time": Date(1957, 1, 2)},
+            "wohnhaft in Flörburg",
+        ),
+        (
+            "agnes-loebig",
+            "birth_name",
+            "Agnes Nertler",
+            "Agnes Löbig geb. Nertler",
+        ),
+        (
+            "agnes-loebig",
+            "married_name",
+            "Agnes Löbig",
+            "Agnes Löbig geb. Nertler",
+        ),
+        (
+            "agnes-loebig",
+            "date_of_birth",
+            Date(1912, 4, 20),
+            "geboren am 20. April 1912 zu Kredfeld",
+        ),
+        (
+            "agnes-loebig",
+            "place_of_birth",
+            "kredfeld",
+            "geboren am 20. April 1912 zu Kredfeld",
+        ),
+    )
+    + _said(
+        "family-tree-1984",
+        ("eugen-loebig", "number_of_children", 3, "Their children"),
+        (
+            "eugen-loebig",
+            "date_of_birth",
+            Date(1836),
+            "b. Bad Flörburg 1836",
+        ),
+        (
+            "eugen-loebig",
+            "place_of_birth",
+            "floerburg",
+            {"referred_to_as": "Bad Flörburg"},
+            "b. Bad Flörburg 1836",
+        ),
+        ("eugen-loebig", "date_of_death", Date(1909), "d. 1909"),
+        (
+            "eugen-loebig",
+            "spouse",
+            "caecilie-loebig",
+            {"start_time": Date(1859)},
+            "= (1859) Cäcilie 'Cilli' Tarle",
+        ),
+        (
+            "caecilie-loebig",
+            "nickname",
+            "Cilli",
+            "Cäcilie 'Cilli' Tarle",
+        ),
+        (
+            "caecilie-loebig",
+            "birth_name",
+            "Cäcilie Tarle",
+            "Cäcilie 'Cilli' Tarle",
+        ),
+        (
+            "caecilie-loebig",
+            "place_of_birth",
+            "kredfeld",
+            "Tarle of Kredfeld",
+        ),
+        (
+            "caecilie-loebig",
+            "date_of_birth",
+            Date(1833, qualifier="circa"),
+            "c. 1833–1902",
+        ),
+        (
+            "caecilie-loebig",
+            "date_of_death",
+            Date(1902),
+            "c. 1833–1902",
+        ),
+        ("sebastian-loebig", "father", "eugen-loebig", "Their children"),
+        (
+            "sebastian-loebig",
+            "mother",
+            "caecilie-loebig",
+            "Their children",
+        ),
+        (
+            "sebastian-loebig",
+            "nickname",
+            "Wastl",
+            "Sebastian 'Wastl' 1862–1945",
+        ),
+        (
+            "sebastian-loebig",
+            "date_of_birth",
+            Date(1862),
+            "Sebastian 'Wastl' 1862–1945",
+        ),
+        (
+            "sebastian-loebig",
+            "date_of_death",
+            Date(1945),
+            "Sebastian 'Wastl' 1862–1945",
+        ),
+        (
+            "sebastian-loebig",
+            "spouse",
+            "hildegard-loebig",
+            "1862–1945 = Hildegard 'Hilde' Laudler",
+        ),
+        (
+            "hildegard-loebig",
+            "nickname",
+            "Hilde",
+            "Hildegard 'Hilde' Laudler",
+        ),
+        (
+            "hildegard-loebig",
+            "place_of_birth",
+            "flaeckfeld",
+            "Laudler of Fläckfeld",
+        ),
+        (
+            "flaeckfeld",
+            "part_of",
+            "kreis-peiltal",
+            "Fläckfeld (Kr. Peiltal)",
+        ),
+        (
+            "hildegard-loebig",
+            "date_of_birth",
+            Date(1876),
+            "(Kr. Peiltal) 1876–1968",
+        ),
+        (
+            "hildegard-loebig",
+            "date_of_death",
+            Date(1968),
+            "(Kr. Peiltal) 1876–1968",
+        ),
+        ("felix-loebig", "father", "eugen-loebig", "Their children"),
+        (
+            "felix-loebig",
+            "mother",
+            "caecilie-loebig",
+            "Their children",
+        ),
+        ("felix-loebig", "date_of_birth", Date(1867), "Felix 1867–1931"),
+        ("felix-loebig", "date_of_death", Date(1931), "Felix 1867–1931"),
+        (
+            "felix-loebig",
+            "spouse",
+            "ida-loebig",
+            "1867–1931 = Ida 'Peppi' Sörne",
+        ),
+        (
+            "ida-loebig",
+            "nickname",
+            "Peppi",
+            "Ida 'Peppi' Sörne",
+        ),
+        (
+            "ida-loebig",
+            "date_of_birth",
+            Date(1881),
+            "Ida 'Peppi' Sörne 1881–1946",
+        ),
+        (
+            "ida-loebig",
+            "date_of_death",
+            Date(1946),
+            "Ida 'Peppi' Sörne 1881–1946",
+        ),
+        ("rahel-loebig", "father", "eugen-loebig", "Their children"),
+        (
+            "rahel-loebig",
+            "mother",
+            "caecilie-loebig",
+            "Their children",
+        ),
+        (
+            "rahel-loebig",
+            "date_of_birth",
+            Date(1871),
+            "Rahel 1871 – after 1945",
+        ),
+        (
+            "rahel-loebig",
+            "date_of_death",
+            Date(1945, qualifier="after"),
+            "Rahel 1871 – after 1945",
+        ),
+        ("ursula-loebig", "father", "sebastian-loebig", "Wastl and Hilde"),
+        ("ursula-loebig", "mother", "hildegard-loebig", "Wastl and Hilde"),
+        ("ursula-loebig", "date_of_birth", Date(1911), "Ursula 1911–1941"),
+        ("ursula-loebig", "date_of_death", Date(1941), "Ursula 1911–1941"),
+        ("klara-loebig", "father", "sebastian-loebig", "Wastl and Hilde"),
+        ("klara-loebig", "mother", "hildegard-loebig", "Wastl and Hilde"),
+        ("klara-loebig", "nickname", "Pünktchen", "Klara 'Pünktchen' 1917"),
+        (
+            "klara-loebig",
+            "date_of_birth",
+            Date(1917),
+            "Klara 'Pünktchen' 1917",
+        ),
+        ("gustav-loebig", "father", "sebastian-loebig", "Wastl and Hilde"),
+        ("gustav-loebig", "mother", "hildegard-loebig", "Wastl and Hilde"),
+        ("gustav-loebig", "nickname", "Gustl", "Gustav 'Gustl' 1919"),
+        ("gustav-loebig", "date_of_birth", Date(1919), "Gustav 'Gustl' 1919"),
+        (
+            "gustav-loebig",
+            "spouse",
+            "florence-lobig",
+            {"start_time": Date(1942)},
+            "= (1942) Florence Faxridge",
+        ),
+        (
+            "florence-lobig",
+            "birth_name",
+            "Florence Faxridge",
+            "Florence Faxridge 1914–1963",
+        ),
+        (
+            "florence-lobig",
+            "date_of_birth",
+            Date(1914),
+            "Florence Faxridge 1914–1963",
+        ),
+        (
+            "florence-lobig",
+            "date_of_death",
+            Date(1963),
+            "Florence Faxridge 1914–1963",
+        ),
+        ("leopold-loebig", "father", "felix-loebig", "Felix and Peppi"),
+        ("leopold-loebig", "mother", "ida-loebig", "Felix and Peppi"),
+        ("leopold-loebig", "date_of_birth", Date(1914), "Leopold 1914–1960"),
+        ("leopold-loebig", "date_of_death", Date(1960), "Leopold 1914–1960"),
+        (
+            "leopold-loebig",
+            "spouse",
+            "agnes-loebig",
+            {"start_time": Date(1947), "end_time": Date(1957)},
+            "= (1947) Agnes Nertler 1912–1974, div. 1957",
+        ),
+        (
+            "agnes-loebig",
+            "birth_name",
+            "Agnes Nertler",
+            "Agnes Nertler 1912–1974",
+        ),
+        (
+            "agnes-loebig",
+            "date_of_birth",
+            Date(1912),
+            "Agnes Nertler 1912–1974",
+        ),
+        (
+            "agnes-loebig",
+            "date_of_death",
+            Date(1974),
+            "Agnes Nertler 1912–1974",
+        ),
+        (
+            "rudolf-loebig",
+            "father",
+            "felix-loebig",
+            "Felix and Peppi",
+        ),
+        (
+            "rudolf-loebig",
+            "mother",
+            "ida-loebig",
+            "Felix and Peppi",
+        ),
+        ("rudolf-loebig", "nickname", "Rudi", "Rudolf 'Rudi' 1916–1941"),
+        (
+            "rudolf-loebig",
+            "date_of_birth",
+            Date(1916),
+            "Rudolf 'Rudi' 1916–1941",
+        ),
+        (
+            "rudolf-loebig",
+            "date_of_death",
+            Date(1941),
+            "Rudolf 'Rudi' 1916–1941",
+        ),
+        (
+            "infant-loebig",
+            "father",
+            "felix-loebig",
+            "Felix and Peppi",
+        ),
+        (
+            "infant-loebig",
+            "mother",
+            "ida-loebig",
+            "Felix and Peppi",
+        ),
+        ("infant-loebig", "date_of_birth", Date(1922), "infant 1922"),
+        ("infant-loebig", "date_of_death", Date(1922), "infant 1922"),
+        (
+            "nicholas-lobig",
+            "father",
+            "gustav-loebig",
+            "Children of Gustl and Florence",
+        ),
+        (
+            "nicholas-lobig",
+            "mother",
+            "florence-lobig",
+            "Children of Gustl and Florence",
+        ),
+        ("nicholas-lobig", "date_of_birth", Date(1950), "Nicholas 1950"),
+    )
+    + _said(
+        "interview-2002",
+        (
+            "nicholas-lobig",
+            "date_of_birth",
+            Date(1950),
+            "I was born in '50, in Stupfield",
+        ),
+        (
+            "maisie-cutmore",
+            "referred_to_as",
+            "Nana Maisie",
+            {"perspective": "nicholas-lobig"},
+            "Nana Maisie next door",
+        ),
+        (
+            "nicholas-lobig",
+            "place_of_birth",
+            "stupfield",
+            "I was born in '50, in Stupfield",
+        ),
+        (
+            "nicholas-lobig",
+            "father",
+            "gustav-loebig",
+            "Dad — Gus, everyone called him",
+        ),
+        (
+            "gustav-loebig",
+            "referred_to_as",
+            "Dad",
+            {"perspective": "nicholas-lobig"},
+            "Dad — Gus",
+        ),
+        ("gustav-loebig", "nickname", "Gus", "Gus, everyone called him"),
+        (
+            "emigration-1939",
+            "participant",
+            "gustav-loebig",
+            "left Germany in the August, just before the war",
+        ),
+        (
+            "emigration-1939",
+            "point_in_time",
+            Date(1939, 8),
+            "left Germany in the August, just before the war",
+        ),
+        ("klara-loebig", "nickname", "Pünktchen", "Aunt Pünktchen"),
+        (
+            "klara-loebig",
+            "referred_to_as",
+            "Aunt Pünktchen",
+            {"perspective": "nicholas-lobig"},
+            "Aunt Pünktchen",
+        ),
+        (
+            "nicholas-lobig",
+            "relative",
+            "klara-loebig",
+            {"kinship_type": "aunt"},
+            "Aunt Pünktchen",
+        ),
+        (
+            "emigration-1938",
+            "participant",
+            "klara-loebig",
+            "Aunt Pünktchen had gone ahead in '38 or '39",
+        ),
+        (
+            "emigration-1938",
+            "point_in_time",
+            Date(1938, qualifier="between", until=Date(1939)),
+            "Aunt Pünktchen had gone ahead in '38 or '39",
+        ),
+        (
+            "gustav-loebig",
+            "relative",
+            "leopold-loebig",
+            {"kinship_type": "cousin"},
+            "Dad's cousin Leopold",
+        ),
+        (
+            "arrest-1939",
+            "participant",
+            "leopold-loebig",
+            "Dad's cousin Leopold was taken",
+        ),
+        (
+            "arrest-1939",
+            "point_in_time",
+            Date(1939, 9, qualifier="circa"),
+            "taken the first week of the war",
+        ),
+        (
+            "imprisonment-1939",
+            "location",
+            "peiltal",
+            "held about a month in Peiltal",
+        ),
+        (
+            "zum-blauen-hut",
+            "referred_to_as",
+            "the Blue Hat",
+            "The hat shop, the Blue Hat",
+        ),
+        (
+            "zum-blauen-hut",
+            "end_time",
+            Date(1926, qualifier="before"),
+            "was gone before 1926",
+        ),
+        ("gustav-loebig", "date_of_death", Date(1996), "Dad died in '96"),
+        (
+            "gustav-loebig",
+            "burial_place",
+            "stupfield",
+            "he's buried here in Stupfield",
+        ),
+        (
+            "klara-loebig",
+            "date_of_death",
+            Date(2001),
+            "Aunt Pünktchen died last year",
+        ),
+    )
 )
 
-# Same fact at different resolutions: NOT a contradiction.
+# (subject, property) pairs where two sources disagree and nothing in
+# the data says which is right: the resting state, not an error.
+CONTRADICTIONS = (
+    # 7 January 1919 (civil register) vs 1 July 1919 (naturalisation).
+    ("gustav-loebig", "date_of_birth"),
+    # Kreis Mockburg (1905 certificate) vs Kreis Peiltal (1984 tree).
+    ("flaeckfeld", "part_of"),
+)
+
+# (subject, property) pairs where one source is vaguer than another but
+# they agree: the precise value falls inside the vague one.
 REFINEMENTS = (
-    ("ignaz", "date_of_birth"),  # 3 Mar 1929 certificate vs 1929 memoir
-    ("ignaz", "place_of_birth"),  # Springfield Hospital vs Springfield
+    # 1909 (gravestone, tree) narrowed to 16 March 1909 (register).
+    ("eugen-loebig", "date_of_death"),
+    # c. 1833 (tree) and 1833 (gravestone).
+    ("caecilie-loebig", "date_of_birth"),
+    # between 1938 and 1939 (interview) narrowed to 22 June 1938.
+    ("emigration-1938", "point_in_time"),
+    # c. September 1939 (interview) narrowed to 3 September 1939.
+    ("arrest-1939", "point_in_time"),
+    # Peiltal (interview) narrowed to its court prison (card).
+    ("imprisonment-1939", "location"),
+    # Klurnau (card) narrowed to Lager Klurnau (compensation file).
+    ("deportation-1942", "location"),
+    # 1914 (tree) narrowed to 29 May 1914 (divorce judgment).
+    ("leopold-loebig", "date_of_birth"),
+    # 1912 (tree) narrowed to 20 April 1912 (divorce judgment).
+    ("agnes-loebig", "date_of_birth"),
 )
 
 
 def by_key() -> dict[str, Person | Place | Entity | Source]:
-    """Every keyed object in the universe."""
+    """Every person, place, entity and source, keyed by its key."""
     return {obj.key: obj for obj in (*PEOPLE, *PLACES, *ENTITIES, *SOURCES)}
 
 
@@ -857,7 +2005,8 @@ def about(subject: str, prop: str | None = None) -> list[Assertion]:
 
 
 def containment_paths(place_key: str) -> list[list[str]]:
-    """Every part_of path from a place up to a place with no parent."""
+    """Every chain from ``place_key`` up to a root; several when a place
+    has more than one parent."""
     places = {place.key: place for place in PLACES}
     parents = places[place_key].part_of
     if not parents:
