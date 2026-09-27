@@ -237,8 +237,12 @@ class TestAdjudication:
             ("e1", "Q40", "same"),
             ("e1", "Q77", "distinct"),
         ]
-        # the prompt carries relational facts from the batch and roster
-        assert "Sebastian" in llm.prompts[0]
+        # the prompt carries relational facts from the batch (e1's summary)
+        # and from the roster (Q40's spouse), each matched by text that only
+        # its own side renders
+        prompt = llm.prompts[0]
+        assert "married Sebastian Löbig in 1905" in prompt
+        assert "spouse of: Sebastian Löbig" in prompt
 
     def test_rulings_on_unblocked_pairs_are_dropped(self):
         invented = json.dumps(
@@ -471,8 +475,11 @@ class TestImpossiblePair:
         assert impossible_pair(_facts(father), _facts(son)) == "kinship-edge"
 
     def test_spouse_edge_rules_out(self):
-        a = rf(qid="Q1", label="Chris", spouse_qids=["Q2"])
-        b = rf(qid="Q2", label="Chris")
+        # the universe's Sebastian and Hildegard, married in 1905: their
+        # shared surname blocks them as candidates, but the spouse edge
+        # proves they are two people
+        a = rf(qid="Q1", label="Sebastian Löbig", spouse_qids=["Q2"])
+        b = rf(qid="Q2", label="Hildegard Löbig")
         assert impossible_pair(_facts(a), _facts(b)) == "kinship-edge"
 
     @pytest.mark.parametrize(
