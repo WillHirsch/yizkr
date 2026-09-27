@@ -45,13 +45,17 @@ verdict* (same -> approve, distinct -> reject), never a blanket merge.
 A `depicts` claim never takes that path, whether face detection or a
 source's text proposed it: only a per-row human decision confirms one
 (ADR-0005). `accept_all` refuses a claims sheet with any `depicts` row,
-or without the single `property` column that shows them, and
-`apply_review` refuses a `bulk-accept` on any claim whose property in
-the batch is `depicts`, whatever the sheet's cells say. A per-row
-`approve` passes as it does for any claim.
+or without the exactly named `claim_id` and `property` columns that show
+them. It takes any sheet with a column like `claim_id` for a claims
+sheet, so none passes for an equivalences sheet to have its rows
+ratified to `approve`. `apply_review` refuses a `bulk-accept` on any
+claim whose property in the batch is `depicts`, whatever the sheet's
+cells say, and any sheet carrying an equivalences sheet's columns. A
+per-row `approve` passes as it does for any claim.
 
 Sheets are read as UTF-8, with or without the byte-order mark some
-spreadsheets write.
+spreadsheets write; `accept_all` refuses a column name that still holds
+an invisible format character after that, such as a second mark.
 """
 
 from __future__ import annotations
@@ -60,6 +64,7 @@ import csv
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -265,6 +270,19 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
     return claim.model_copy(update={"value": corrected, "curated": True})
 
 
+def _header_key(name: str) -> str:
+    """A column name as the sheet-kind checks compare it: invisible format
+    characters and surrounding space removed, case folded."""
+    visible = "".join(ch for ch in name if unicodedata.category(ch) != "Cf")
+    return visible.strip().casefold()
+
+
+def _has_format_character(name: str) -> bool:
+    """True if `name` holds an invisible format character (Unicode category
+    Cf), such as a byte-order mark or a zero-width space."""
+    return any(unicodedata.category(ch) == "Cf" for ch in name)
+
+
 def apply_review(
     batch: ClaimBatch, csv_path: Path
 ) -> tuple[ClaimBatch, list[str]]:
@@ -276,11 +294,30 @@ def apply_review(
     claim, never from the sheet, so no edit to the sheet's `property`
     cells or columns can hide one. A per-row `approve` on a `depicts`
     claim passes like any other.
+
+    A sheet with a column like an equivalences sheet's `entity_id` or
+    `verdict` raises ValueError too. A claims sheet shaped like an
+    equivalences sheet is malformed, and its `approve` decisions may be
+    ratified machine verdicts rather than a human's.
     """
     rows: dict[str, dict] = {}
     warnings: list[str] = []
     with open(csv_path, newline="", encoding=SHEET_ENCODING) as f:
-        for row in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        foreign = [
+            name
+            for name in reader.fieldnames or []
+            if _header_key(name) in ("entity_id", "verdict")
+        ]
+        if foreign:
+            raise ValueError(
+                f"{csv_path} has an equivalences sheet's column(s) "
+                f"{', '.join(map(repr, foreign))} — a claims sheet shaped "
+                f"like an equivalences sheet is malformed, and its approvals "
+                f"may be ratified machine verdicts; decide a fresh "
+                f"export-review sheet instead"
+            )
+        for row in reader:
             rows[row["claim_id"]] = row
 
     bulk_accepted_depicts = []
@@ -367,17 +404,22 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
 
     Two gates, detected by the CSV's columns:
 
-    * **claims** (`review.csv`: any sheet with a `claim_id` column, whatever
-      else it has): every row -> `bulk-accept` (an approval token that also
-      records the whole-sheet disposition, so the write path can flag
-      these for reappraisal — ADR-0023). Each extracted claim is a
-      proposal to add, so accepting the sheet is approving them all.
-    * **equivalences** (`equivalences.csv`: `entity_id` + `verdict` and no
-      `claim_id`): each row's `decision` is set from its machine `verdict`
-      — accept the verdict, NOT a blanket "same"
+    * **claims** (`review.csv`): any sheet with a column like `claim_id`,
+      compared ignoring case, surrounding space and invisible format
+      characters, whatever else it has. Every row -> `bulk-accept` (an
+      approval token that also records the whole-sheet disposition, so the
+      write path can flag these for reappraisal — ADR-0023). Each
+      extracted claim is a proposal to add, so accepting the sheet is
+      approving them all.
+    * **equivalences** (`equivalences.csv`: `entity_id` + `verdict` and
+      nothing like `claim_id`): each row's `decision` is set from its
+      machine `verdict` — accept the verdict, NOT a blanket "same"
       (`ratify_equivalence_verdicts`). A blanket approve would merge even
       the pairs the machine judged distinct; ratifying rejects those and
       mints the entity fresh.
+
+    So a claims sheet never passes for an equivalences sheet, whose
+    ratified verdicts are written as `approve`.
 
     A curator's deliberate bulk-accept of a whole sheet — the human end of
     the "explicit approve" rule (R3), not auto-confirmation. The machine
@@ -392,13 +434,19 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
 
     * any row's `property` reads `depicts`, ignoring case and surrounding
       space; the error names those rows;
-    * it lacks exactly one `property` column, named as export-review
-      writes it, so its depicts rows cannot be found.
+    * it lacks a `claim_id` column, or exactly one `property` column,
+      named as export-review writes them, so its depicts rows cannot be
+      found.
 
     A cell edited to hide a `depicts` claim gets past these checks but not
-    past `apply_review`, which reads the property from the batch.
-    ValueError is also raised on a CSV that is neither gate (e.g. the
-    reconcile-places sheet).
+    past `apply_review`, which reads the property from the batch and
+    refuses a claims sheet carrying an equivalences sheet's columns.
+
+    Any sheet is refused the same way when a column name still holds an
+    invisible format character after decoding (a second byte-order mark
+    from re-saving, a pasted zero-width space), when a row has more cells
+    than the header, or when it is neither gate (e.g. the reconcile-places
+    sheet).
     """
     with open(source_csv, newline="", encoding=SHEET_ENCODING) as f:
         reader = csv.DictReader(f)
@@ -409,7 +457,30 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
             )
         rows = list(reader)
 
-    if "claim_id" in fieldnames:
+    invisible = [name for name in fieldnames if _has_format_character(name)]
+    if invisible:
+        raise ValueError(
+            f"{source_csv} has column names with invisible format "
+            f"characters: {', '.join(map(repr, invisible))} — a second "
+            f"byte-order mark from re-saving, or a pasted zero-width space; "
+            f"save the sheet without them before accepting it"
+        )
+    ragged = [str(n) for n, row in enumerate(rows, start=2) if None in row]
+    if ragged:
+        raise ValueError(
+            f"{source_csv} has more cells than columns in row(s) "
+            f"{', '.join(ragged)} (the header is row 1) — accept-all copies "
+            f"a sheet whole or not at all"
+        )
+
+    if "claim_id" in {_header_key(name) for name in fieldnames}:
+        if "claim_id" not in fieldnames:
+            raise ValueError(
+                f"{source_csv} has a column like 'claim_id' but none named "
+                f"exactly 'claim_id' — accept-all takes it for a claims "
+                f"sheet, whose columns must be named as export-review "
+                f"writes them"
+            )
         properties = fieldnames.count("property")
         if properties != 1:
             found = (
