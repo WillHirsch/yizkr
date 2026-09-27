@@ -13,7 +13,11 @@ Per batch, the writer:
    themselves; statements stay reserved for source-attributed claims;
 2. creates items for unresolved `local` subjects/values (reusing an
    existing item on exact label match, so re-runs never duplicate
-   people), writing their `instance of` with the artifact as source;
+   people), writing their `instance of`, and an unclassified entity's
+   `type hint`, with two references: stated in -> the artifact that
+   mentions the entity, and inferred from extraction run -> the run
+   item. An entity's kind is the extraction's proposal, a machine
+   write like any claim (ADR-0003);
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / region / excerpt
@@ -219,12 +223,15 @@ class BatchWriter:
             item.aliases.set("en", aliases)
         item = item.write(summary="ingest: entity proposed by extraction")
         qid = item.id
+        # The kind and type hint come from the extraction, never from
+        # review, so they carry the run reference even when the claim
+        # that mentions the entity is a curated one (ADR-0003).
         if instance_of and source_artifact_qid:
             claim = self._item_claim(
                 self.properties["instance_of"], self.items[instance_of]
             )
             claim.references = self._references(
-                artifact_qid=source_artifact_qid
+                artifact_qid=source_artifact_qid, run_qid=result.run_qid
             )
             self._append(item, claim)
             item.write(summary="ingest: instance of")
@@ -238,7 +245,7 @@ class BatchWriter:
                 prop_nr=self.properties["type_hint"], value=type_hint
             )
             hint.references = self._references(
-                artifact_qid=source_artifact_qid
+                artifact_qid=source_artifact_qid, run_qid=result.run_qid
             )
             self._append(item, hint)
             item.write(summary="ingest: type hint (unclassified entity)")

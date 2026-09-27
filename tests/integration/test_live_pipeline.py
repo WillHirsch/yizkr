@@ -1,18 +1,25 @@
-"""Live pipeline flow: register -> write, idempotency, and the overwrite
+"""Live pipeline flow: register -> write, idempotency, the overwrite
 regression (two values on one property must COEXIST — the second write
-must never replace the first; ADR-0002)."""
+must never replace the first; ADR-0002), and the provenance of a minted
+item's type statements, which the reappraisal queue and the unreferenced
+report must count correctly (#88)."""
 
 from __future__ import annotations
 
 import struct
 import zlib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
 
+from tests.fixtures import example_universe as u
 from yizkr.claims import ClaimBatch
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
+from yizkr.queries.publish import load_templates, render_for_instance
+
+from .conftest import run_sparql, wait_for_query_service
 
 pytestmark = pytest.mark.live
 
@@ -847,3 +854,285 @@ def test_adr0014_vocabulary_writes(client, artifact):
         for cs in ev["claims"].values()
         for c in cs
     }
+
+
+# -- a minted item's type statements, and the two queues (#88) -------------
+#
+# A slice of the example universe (tests/fixtures/example_universe.py): the
+# family firm as two of its sources give it. Read alone, the 2002 interview
+# ("The hat shop, the Blue Hat") gives no kind that fits, so its extraction
+# holds the firm as an unclassified entity whose type hint keeps the
+# source's word (ADR-0013). A later run over the 1912 directory types the
+# firm an organization, with an `instance of` claim of its own. The first
+# batch mints the item, so the writer writes its kind and type hint.
+#
+# Every label carries a marker, so the fixture never reuses an item that
+# another test or run wrote, and a re-run reuses and skips everything.
+
+UNIVERSE = u.by_key()
+INTERVIEW = "interview-2002"
+DIRECTORY = "directory-1912"
+TYPE_MARK = "(type-statement test)"
+TYPE_HINT = "hat shop"  # the interview's own word for the firm
+# the directory's entry: a firm, its founding year and its owner
+FIRM_ENTRY = "Hutmacherei zum Blauen Hut, gegr. 1863, Inh. Sebastian Löbig"
+# fixed, so a re-run's batches keep their fingerprints and reuse their
+# extraction-run items
+TYPE_RUN = {
+    "model_identifier": "integration-test",
+    "pipeline_version": "0.0.0",
+    "started_at": "2026-09-27T00:00:00+00:00",
+}
+
+
+def type_marked(key: str) -> str:
+    """The universe's label (or title) for `key`, with this section's
+    marker: a label no other test or run writes."""
+    entry = UNIVERSE[key]
+    return f"{getattr(entry, 'title', None) or entry.label} {TYPE_MARK}"
+
+
+FIRM = type_marked("zum-blauen-hut")
+
+
+def firm_says(source: str, prop: str) -> u.Assertion:
+    """What `source` says about the firm's `prop` in the universe."""
+    (assertion,) = [
+        a for a in u.about("zum-blauen-hut", prop) if a.source == source
+    ]
+    return assertion
+
+
+def firm_batches(sources: dict[str, str]) -> dict[str, ClaimBatch]:
+    """Each source's batch about the firm, by universe source key;
+    `sources` maps those keys to artifact QIDs."""
+
+    def batch(source, kind, claims, type_hint=None) -> ClaimBatch:
+        firm = {
+            "kind": "local",
+            "local_id": "firm",
+            "label": FIRM,
+            "instance_of": kind,
+        }
+        entity = {"id": "firm", "label": FIRM, "kind": kind}
+        if type_hint:
+            entity["type_hint"] = type_hint
+        return ClaimBatch.model_validate(
+            {
+                "extraction_run": TYPE_RUN,
+                "claims": [
+                    {
+                        "subject": firm,
+                        "property": prop,
+                        "value": value,
+                        "source": {
+                            "artifact": {
+                                "kind": "qid",
+                                "qid": sources[source],
+                            },
+                            "transcription_excerpt": {
+                                "text": excerpt,
+                                "language": UNIVERSE[source].lang,
+                            },
+                        },
+                    }
+                    for prop, value, excerpt in claims
+                ],
+                "entities": [entity],
+            }
+        )
+
+    name = firm_says(INTERVIEW, "referred_to_as")
+    name_value = {
+        "type": "monolingual",
+        "value": {"text": name.value, "language": UNIVERSE[INTERVIEW].lang},
+    }
+    founded = firm_says(DIRECTORY, "start_time")
+    founded_value = {"type": "time", "year": founded.value.year}
+    organization = {
+        "type": "item",
+        "value": {"kind": "vocab", "key": "organization"},
+    }
+    return {
+        INTERVIEW: batch(
+            INTERVIEW,
+            "unclassified_entity",
+            [("referred_to_as", name_value, name.excerpt)],
+            type_hint=TYPE_HINT,
+        ),
+        DIRECTORY: batch(
+            DIRECTORY,
+            "organization",
+            [
+                ("instance_of", organization, FIRM_ENTRY),
+                ("start_time", founded_value, founded.excerpt),
+            ],
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class TypedFirm:
+    firm: str  # the firm's QID
+    sources: dict[str, str]  # universe source key -> artifact QID
+    runs: dict[str, str]  # universe source key -> extraction-run QID
+    batches: dict[str, ClaimBatch]  # universe source key -> its batch
+
+
+@pytest.fixture(scope="module")
+def typed_firm(client, config) -> TypedFirm:
+    """Write the slice, the interview's batch first (idempotent: a re-run
+    reuses and skips everything), and wait until the query service holds
+    it."""
+    # quoted, never paraphrased
+    assert TYPE_HINT in UNIVERSE[INTERVIEW].text
+    assert FIRM_ENTRY in UNIVERSE[DIRECTORY].text
+    sources = {
+        key: register_artifact(
+            client,
+            media_path=None,
+            artifact_type=UNIVERSE[key].artifact_class or "artifact",
+            title=type_marked(key),
+            description="written by tests/integration; safe to delete",
+        ).artifact_qid
+        for key in (INTERVIEW, DIRECTORY)
+    }
+    batches = firm_batches(sources)
+    results = {
+        key: BatchWriter(client).write_batch(batches[key])
+        for key in (INTERVIEW, DIRECTORY)
+    }
+    firm = results[INTERVIEW].created_items["firm"]
+    assert results[DIRECTORY].created_items["firm"] == firm  # one item
+    runs = {key: result.run_qid for key, result in results.items()}
+    wait_for_query_service(
+        config, client, [firm, *sources.values(), *runs.values()]
+    )
+    return TypedFirm(firm, sources, runs, batches)
+
+
+def statements_by_key(client, qid: str) -> dict[str, list[dict]]:
+    """The item's statements, by property key (API, lag-free)."""
+    properties, _ = client.vocabulary()
+    key_of = {pid: key for key, pid in properties.items()}
+    data = client.api_get({"action": "wbgetclaims", "entity": qid})
+    return {key_of[pid]: claims for pid, claims in data["claims"].items()}
+
+
+def item_value(statement: dict) -> str:
+    return statement["mainsnak"]["datavalue"]["value"]["id"]
+
+
+def cited(client, statement: dict) -> list[set[tuple[str, str]]]:
+    """Each reference block, as the (property key, item) pairs it cites."""
+    properties, _ = client.vocabulary()
+    key_of = {pid: key for key, pid in properties.items()}
+    return [
+        {
+            (key_of[pid], snak["datavalue"]["value"]["id"])
+            for pid, snaks in reference["snaks"].items()
+            for snak in snaks
+            if snak["datavalue"]["type"] == "wikibase-entityid"
+        }
+        for reference in statement["references"]
+    ]
+
+
+def statement_uri(config, guid: str) -> str:
+    """API statement GUID (``Q5$uuid``) -> its RDF node URI."""
+    return f"{config.concept_uri}/entity/statement/{guid.replace('$', '-', 1)}"
+
+
+def rows_about(client, config, query: str, var: str, qids) -> list[dict]:
+    """The rows of packaged query `query` whose `var` is one of `qids`.
+    Rows about anything else on the instance are dropped before any
+    assertion or failure report can show them."""
+    properties, items = client.vocabulary()
+    rendered = render_for_instance(
+        load_templates()[query], properties, items, config.concept_uri
+    )
+    wanted = {f"{config.concept_uri}/entity/{qid}" for qid in qids}
+    return [
+        row
+        for row in run_sparql(config, rendered)
+        if row[var]["value"] in wanted
+    ]
+
+
+def test_minted_type_statements_cite_artifact_and_run(client, typed_firm):
+    """Rules 1 and 2 (ADR-0003): the kind and type hint the writer wrote
+    when it minted the firm are stated in the interview and, in a second
+    reference, inferred from the interview's extraction run, the shape
+    the directory's own `instance of` claim has."""
+    _, items = client.vocabulary()
+    statements = statements_by_key(client, typed_firm.firm)
+    kinds = {item_value(s): s for s in statements["instance_of"]}
+    assert set(kinds) == {items["unclassified_entity"], items["organization"]}
+    (hint,) = statements["type_hint"]
+    assert hint["mainsnak"]["datavalue"]["value"] == TYPE_HINT
+
+    for statement, source in (
+        (kinds[items["unclassified_entity"]], INTERVIEW),  # minted
+        (hint, INTERVIEW),  # minted
+        (kinds[items["organization"]], DIRECTORY),  # claimed
+    ):
+        assert statement["rank"] == "normal"
+        assert cited(client, statement) == [
+            {("stated_in", typed_firm.sources[source])},
+            {("inferred_from_extraction_run", typed_firm.runs[source])},
+        ]
+
+
+def test_queue_lists_every_type_statement(client, config, typed_firm):
+    """ADR-0023 §5: each of the firm's statements is a machine statement
+    with one source and no curator sibling, so the reappraisal queue lists
+    all five, one row each. The minted kind is not a curator witness for
+    the directory's later `instance of`: both are listed. The artifacts'
+    and run items' own type statements are not machine writes, and none
+    is listed."""
+    statements = statements_by_key(client, typed_firm.firm)
+    # two kinds, the type hint, the interview's name for the firm and the
+    # directory's founding year
+    assert {key: len(s) for key, s in statements.items()} == {
+        "instance_of": 2,
+        "type_hint": 1,
+        "referred_to_as": 1,
+        "start_time": 1,
+    }
+    expected = sorted(
+        statement_uri(config, s["id"])
+        for claims in statements.values()
+        for s in claims
+    )
+    queue = "under-witnessed-statements"
+    rows = rows_about(client, config, queue, "subject", [typed_firm.firm])
+    assert sorted(row["statement"]["value"] for row in rows) == expected
+
+    others = [*typed_firm.sources.values(), *typed_firm.runs.values()]
+    assert rows_about(client, config, queue, "subject", others) == []
+
+
+def test_no_statement_of_the_slice_is_unreferenced(client, config, typed_firm):
+    """ADR-0003 §3: the unreferenced report lists none of the slice's
+    statements, whether the writer or the registrar wrote them."""
+    qids = [
+        typed_firm.firm,
+        *typed_firm.sources.values(),
+        *typed_firm.runs.values(),
+    ]
+    report = "unreferenced-statements"
+    assert rows_about(client, config, report, "entity", qids) == []
+
+
+def test_rewriting_the_slice_writes_nothing(client, typed_firm):
+    """A re-run reuses the firm and both run items: no second kind or type
+    hint, and no claim written again."""
+    for key, claims in ((INTERVIEW, 1), (DIRECTORY, 2)):
+        again = BatchWriter(client).write_batch(typed_firm.batches[key])
+        assert again.created_items["firm"] == typed_firm.firm
+        assert again.run_qid == typed_firm.runs[key]
+        assert again.written == again.referenced == 0
+        assert again.skipped == claims
+    statements = statements_by_key(client, typed_firm.firm)
+    assert len(statements["instance_of"]) == 2
+    assert len(statements["type_hint"]) == 1
