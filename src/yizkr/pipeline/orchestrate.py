@@ -15,8 +15,8 @@ every document as far as it can and then STOPS at the human gates:
 
 A run refuses to start without a never-ingest list
 (``$YIZKR_EXCLUDE_FILE``; an empty list is allowed), and a document on
-the list is skipped at discovery, before any step reads it (#29,
-yizkr.core.corpus).
+the list is skipped at discovery, before any step reads it
+(yizkr.core.corpus).
 
 A reviewed file's PRESENCE (and freshness) is the gate: the
 orchestrator never interprets a half-filled CSV as consent, and a
@@ -162,7 +162,7 @@ class Orchestrator:
         log=print,
     ) -> None:
         self.folder = folder
-        # the never-ingest list (#29). run() refuses to start without one:
+        # the never-ingest list. run() refuses to start without one:
         # an empty ExclusionList is an explicit configuration, None is none.
         self.exclusions = exclusions
         self.state_dir = state_dir
@@ -224,7 +224,7 @@ class Orchestrator:
         for path in sorted(self.folder.iterdir()):
             if not path.is_file() or path.name.startswith("."):
                 continue
-            # the never-ingest list (#29) is asked first, before any step
+            # the never-ingest list is asked first, before any step
             # reads the document, and whatever the file's type: an excluded
             # file gets no state, no artifact and no transcription
             if self.exclusions is not None and is_excluded(
@@ -789,7 +789,7 @@ class Orchestrator:
         return seen
 
     def run(self) -> int:
-        # fail closed (#29): extract-all work never starts without a
+        # fail closed: extract-all work never starts without a
         # never-ingest list, so a missing list cannot pass as an empty one
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)

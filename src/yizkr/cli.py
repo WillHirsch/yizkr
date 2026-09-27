@@ -33,7 +33,7 @@ def _load_batch(path: Path) -> ClaimBatch:
 
 
 def _refuse_if_excluded(args, path: Path | None) -> None:
-    """Honour the never-ingest list (#29) in a single-file step.
+    """Honour the never-ingest list in a single-file step.
 
     The single steps are debugging tools and run without a list; when one
     is configured, a file on it is refused before anything reads it. The
@@ -533,7 +533,7 @@ def cmd_run(args) -> int:
     from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
     from yizkr.pipeline.orchestrate import Orchestrator
 
-    # fail closed (#29): no never-ingest list, no run, before any file is
+    # fail closed: no never-ingest list, no run, before any file is
     # read. An empty list file is an explicit, allowed configuration.
     exclusions = load_exclusions(required=True, env_file=args.env_file)
     folder = args.folder or corpus_dir(args.env_file)
