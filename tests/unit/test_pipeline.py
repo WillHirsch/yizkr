@@ -41,6 +41,8 @@ MEDIA = b"fictional scan: an example marriage certificate"
 MEDIA_SHA1 = hashlib.sha1(MEDIA).hexdigest()
 ARTIFACT = {"kind": "artifact", "sha1": MEDIA_SHA1}
 
+# Person One's dates are Leopold Löbig's in the example universe: born in
+# May 1914 (29 May per the divorce judgment) and married in 1947.
 CLAIMS = [
     {
         "subject": {
@@ -62,7 +64,7 @@ CLAIMS = [
         "qualifiers": [
             {
                 "property": "point_in_time",
-                "value": {"type": "time", "year": 1933},
+                "value": {"type": "time", "year": 1947},
             }
         ],
         "source": {
@@ -80,7 +82,7 @@ CLAIMS = [
             "instance_of": "human",
         },
         "property": "date_of_birth",
-        "value": {"type": "time", "year": 1910, "month": 5},
+        "value": {"type": "time", "year": 1914, "month": 5},
         "source": {"artifact": ARTIFACT},
     },
 ]
@@ -105,11 +107,11 @@ class FakeLlm:
 class TestTranscribe:
     def test_text_file_engine(self, tmp_path):
         source = tmp_path / "scan.txt"
-        source.write_text("Geboren 1910")
+        source.write_text("Geboren 1914")
         result = TextFileTranscriber(source, language="de").transcribe(
             tmp_path / "scan.png", artifact_qid="Q23"
         )
-        assert result.text == "Geboren 1910"
+        assert result.text == "Geboren 1914"
         assert result.language == "de"
         assert result.artifact_qid == "Q23"
         assert result.engine.startswith("text-file:")
@@ -132,7 +134,7 @@ class TestTranscribe:
 
 class TestExtract:
     def transcription(self) -> Transcription:
-        return Transcription(text="married 1933", engine="test")
+        return Transcription(text="married 1947", engine="test")
 
     def test_llm_extractor_validates_response(self):
         llm = FakeLlm(json.dumps({"claims": CLAIMS}))
@@ -241,18 +243,18 @@ class TestExtract:
         unambiguous, so it is repaired rather than rejected."""
         nested = dict(
             CLAIMS[1],
-            value={"type": "time", "value": {"year": 1910, "month": 5}},
+            value={"type": "time", "value": {"year": 1914, "month": 5}},
             qualifiers=[
                 {
                     "property": "latest_date",
-                    "value": {"type": "time", "value": {"year": 1911}},
+                    "value": {"type": "time", "value": {"year": 1915}},
                 }
             ],
         )
         llm = FakeLlm(json.dumps({"claims": [nested]}))
         batch = LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
-        assert batch.claims[0].value.year == 1910
-        assert batch.claims[0].qualifiers[0].value.year == 1911
+        assert batch.claims[0].value.year == 1914
+        assert batch.claims[0].qualifiers[0].value.year == 1915
 
     def test_over_length_excerpts_are_clipped_not_fatal(self):
         """Wikibase caps text values at 400 chars; an excerpt is a
@@ -327,8 +329,8 @@ class TestReviewRoundTrip:
         content = csv_path.read_text()
         assert "claim_id" in content and "decision" in content
         assert "NEW:person-1 (Person One)" in content
-        assert "1910-05" in content
-        assert "point_in_time=1933" in content
+        assert "1914-05" in content
+        assert "point_in_time=1947" in content
         with open(csv_path, newline="") as f:
             sources = {row["source_artifact"] for row in csv.DictReader(f)}
         assert sources == {f"sha1:{MEDIA_SHA1}"}
@@ -600,7 +602,7 @@ class TestCorrections:
             for row in rows:
                 row["decision"] = "approve"
                 if row["property"] == "date_of_birth":
-                    row["correction"] = "1910-05-12"
+                    row["correction"] = "1914-05-29"
             return rows
 
         TestReviewRoundTrip.edit_csv(csv_path, correct_birth)
@@ -610,9 +612,9 @@ class TestCorrections:
             c for c in approved.claims if c.property == "date_of_birth"
         ]
         assert (birth.value.year, birth.value.month, birth.value.day) == (
-            1910,
+            1914,
             5,
-            12,
+            29,
         )
         assert birth.value.precision == "day"
         assert birth.curated is True
@@ -628,7 +630,9 @@ class TestCorrections:
             for row in rows:
                 row["decision"] = "approve"
                 if row["property"] == "date_of_birth":
-                    row["correction"] = "03/05/1950"
+                    # 7 January or 1 July? The universe's two sources for
+                    # Gustav's birth transpose exactly this day and month
+                    row["correction"] = "07/01/1919"
             return rows
 
         TestReviewRoundTrip.edit_csv(csv_path, correct_badly)
@@ -753,7 +757,7 @@ def _citing(*sha1s: str) -> ClaimBatch:
     claims = [
         dict(
             CLAIMS[1],
-            value={"type": "time", "year": 1910 + offset},
+            value={"type": "time", "year": 1914 + offset},
             source={"artifact": {"kind": "artifact", "sha1": sha1}},
         )
         for offset, sha1 in enumerate(sha1s)
@@ -790,7 +794,7 @@ class TestWriterArtifactResolution:
             )
             for statement in person.claims.get(PROPERTIES["date_of_birth"])
         }
-        assert cited == {"+1910": ["Q23"], "+1911": ["Q24"]}
+        assert cited == {"+1914": ["Q23"], "+1915": ["Q24"]}
 
     def test_unregistered_media_writes_nothing(self):
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})

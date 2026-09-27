@@ -233,22 +233,23 @@ class TestArtifactRef:
 
 
 class TestTimeValues:
+    # 19 March 1876 is Hildegard Löbig's birth in the example universe
     def test_precision_inferred_from_finest_field(self):
-        assert TimeValue(year=1929).precision == "year"
-        assert TimeValue(year=1929, month=3).precision == "month"
-        assert TimeValue(year=1929, month=3, day=14).precision == "day"
+        assert TimeValue(year=1876).precision == "year"
+        assert TimeValue(year=1876, month=3).precision == "month"
+        assert TimeValue(year=1876, month=3, day=19).precision == "day"
 
     def test_day_without_month_rejected(self):
         with pytest.raises(ValidationError, match="requires a month"):
-            TimeValue(year=1929, day=14)
+            TimeValue(year=1876, day=19)
 
     def test_fields_finer_than_precision_rejected(self):
         with pytest.raises(ValidationError, match="never narrow"):
-            TimeValue(year=1929, month=3, day=14, precision="month")
+            TimeValue(year=1876, month=3, day=19, precision="month")
 
     def test_precision_finer_than_fields_rejected(self):
         with pytest.raises(ValidationError, match="requires the day field"):
-            TimeValue(year=1929, precision="day")
+            TimeValue(year=1876, precision="day")
 
     def test_decade_and_century(self):
         assert (
@@ -263,8 +264,8 @@ class TestTimeValues:
             TimeValue(year=0)
 
     def test_wikibase_serialization(self):
-        assert TimeValue(year=1929).to_wikibase() == {
-            "time": "+1929-00-00T00:00:00Z",
+        assert TimeValue(year=1876).to_wikibase() == {
+            "time": "+1876-00-00T00:00:00Z",
             "precision": 9,
             "calendarmodel": "http://www.wikidata.org/entity/Q1985727",
         }
@@ -351,18 +352,20 @@ class TestManifestValidation:
 
     def test_referred_to_as_appellation_with_perspective_is_valid(self):
         # ADR-0018: a perspectival appellation is a monolingual statement on
-        # the referent, qualified by the ego (a person/family item).
+        # the referent, qualified by the ego (a person/family item). On the
+        # universe's postcard Sebastian signs himself "Dein Vater": how he
+        # is referred to from his daughter Klara's perspective.
         appellation = {
             "subject": {
                 "kind": "local",
                 "local_id": "person-1",
-                "label": "Rosa",
+                "label": "Sebastian Löbig",
                 "instance_of": "human",
             },
             "property": "referred_to_as",
             "value": {
                 "type": "monolingual",
-                "value": {"text": "Oma", "language": "de"},
+                "value": {"text": "Dein Vater", "language": "de"},
             },
             "qualifiers": [
                 {
@@ -388,7 +391,7 @@ class TestManifestValidation:
             batch(
                 spouse_claim(
                     property="date_of_birth",
-                    value={"type": "string", "value": "1929"},
+                    value={"type": "string", "value": "1876"},
                 )
             )
         )
@@ -446,7 +449,7 @@ class TestManifestValidation:
                 "entities": [
                     {
                         "id": "e01",
-                        "label": "SS Rotterdam",
+                        "label": "RMS Flund",
                         "kind": "unclassified_entity",
                         "type_hint": "ship",
                     }
@@ -462,7 +465,7 @@ class TestManifestValidation:
                 spouse_claim(property="shoe_size"),
                 spouse_claim(
                     property="residence",
-                    value={"type": "string", "value": "Paris"},
+                    value={"type": "string", "value": "Stupfield"},
                 ),
             )
         )
