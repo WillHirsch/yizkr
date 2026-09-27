@@ -334,14 +334,46 @@ Two Anthropic-backed providers, differing in how usage is billed:
   (`claude -p`), using the CLI's own login, so a Claude Pro/Max
   **subscription** covers usage instead of per-token billing. Install
   the CLI and log in once; being logged in is the opt-in. The engine
-  strips `ANTHROPIC_API_KEY` from the child process (a stray key would
-  silently switch back to token billing — use `anthropic` if you want
-  that), restricts the CLI to the Read tool only (images are read from
-  disk for vision; nothing can be executed or written), and runs in a
-  neutral directory so no project CLAUDE.md leaks into prompts. Note
-  subscriptions have rolling usage windows rather than API rate
-  limits — fine for evening-sized ingestion runs, less suited to bulk
-  backlogs.
+  restricts the CLI to the Read tool only (images are read from disk
+  for vision; nothing can be executed or written). Note subscriptions
+  have rolling usage windows rather than API rate limits — fine for
+  evening-sized ingestion runs, less suited to bulk backlogs.
+
+  A pass runs on one **pinned** CLI version (#133). The first client
+  pins the installed version; every later client is checked when it
+  starts, and every call against the version its stream reports. A
+  mismatch (an update landed mid-pass, say from another Claude Code
+  session's auto-update) raises `CliVersionMismatch`, which pauses the
+  pass: it unwinds past per-document error handling, no further call is
+  made, the call's output is discarded and completed outputs are kept.
+  Run the pass again once the version is settled. The engine sets
+  `DISABLE_AUTOUPDATER=1` for its own calls; disable auto-update in your
+  interactive sessions too while a long pass runs.
+
+  Calls are **isolated** from your own Claude Code configuration:
+  `--setting-sources ""` (no user, project or local settings, so no
+  hooks, permission rules, plugins or CLAUDE.md), `--strict-mcp-config`
+  (no MCP servers, claude.ai connectors included),
+  `--disable-slash-commands` (no skills), and a child environment
+  without any `ANTHROPIC_*` or `CLAUDE*` variable except
+  `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` (so a stray API key
+  cannot switch billing, and a Claude Code session that launches the
+  pass leaks nothing into it), with auto-memory, error reporting and
+  telemetry off. Calls run in `<tmp>/yizkr-claude-code`. The client's
+  `effective_config` lists all of this and `config_hash` fingerprints it
+  for the run record.
+
+  **Transcripts.** The CLI stores each session under
+  `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`); sessions
+  stay persistent because forks resume from there. Once a session is
+  finished with, the engine moves its transcript into
+  `$YIZKR_CLAUDE_TRANSCRIPTS` (a directory, normally in the run record)
+  or, when that is unset or `delete`, deletes it: a one-shot call's or a
+  fork's when the call returns, a conversation's when it is closed or
+  its client is garbage-collected, or at process exit. A process killed
+  outright can leave some behind, in the project directory the CLI
+  names after the working directory (`-tmp-yizkr-claude-code` when the
+  temporary directory is `/tmp`).
 
 Pick the model for either provider with `$YIZKR_LLM_MODEL`.
 
