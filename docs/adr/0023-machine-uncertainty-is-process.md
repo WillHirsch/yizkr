@@ -1,9 +1,10 @@
-# ADR-0022: Machine uncertainty is process, not graph data — a general four-axis reappraisal mechanism
+# ADR-0023: Machine uncertainty is process, not graph data — a general four-axis reappraisal mechanism
 
-Status: **proposed** — design settled through an adversarial design panel (three
-approaches, each critiqued, synthesised); implementation (a `Finding.axis` field,
-a review-CSV column, an `accept-all` disposition + writer edit summary, and one
-new SPARQL query) pending. **Amends ADR-0021** (its §6 per-name uncertainty
+Status: **accepted** — design settled through an adversarial design panel (three
+approaches, each critiqued, synthesised); implemented: a `Finding.axis` field,
+a review-CSV column, an `accept-all` disposition + writer edit summary, and the
+`under-witnessed-statements.rq` query (live validation of the query pending,
+#23). Renumbered from local ADR-0022 when reconciling with origin (#18). **Amends ADR-0022** (its §6 per-name uncertainty
 treatment is *generalised*, not overturned) and **ADR-0013** (the extraction
 critic's `Finding` gains an `axis`). Sibling to **ADR-0020** ("don't store a
 derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance),
@@ -13,7 +14,7 @@ and MODELING.md (a human decision's process is the MediaWiki edit history).
 
 A reviewer needs to find and re-appraise the machine's most contentious
 decisions — above all the ones that entered with little human scrutiny
-(auto-/bulk-accepted through `accept-all`). ADR-0021 §6 proposed surfacing this as
+(auto-/bulk-accepted through `accept-all`). ADR-0022 §6 proposed surfacing this as
 a per-*name* uncertainty self-report across bespoke axes (spelling / type /
 composition / identity). That was rightly challenged as **hand-crafted treatment
 of one corner of the schema**: those axes are nothing but the universal parts of
@@ -112,7 +113,7 @@ looks "under-witnessed"; two mutually-corroborating coin-flip readings look
 "witnessed"). We accept not storing it because the only faithful in-graph
 realisation — an uncalibrated float — is worse than the loss.
 
-### 3. Generalise the critic (this replaces ADR-0021 §6's per-name framing)
+### 3. Generalise the critic (this replaces ADR-0022 §6's per-name framing)
 
 Add `axis: Literal["subject", "predicate", "value", "existence"] | None` to
 `critique.Finding`, derived mechanically from the existing `target` grammar
@@ -166,7 +167,7 @@ history. No graph node, no export surface, no staleness.
 1. **No graph-resident machine confidence, contentiousness, or doubt** — the graph
    stays machine-confidence-free.
 2. **Four axes → existing homes** (§1); no per-attribute confidence vector.
-3. **The critic gains an `axis`**, generalising ADR-0021 §6 into a per-property
+3. **The critic gains an `axis`**, generalising ADR-0022 §6 into a per-property
    review-layer channel.
 4. **Coexistence is cross-source value multiplicity only** — never predicate
    hedging or single-source value-doubt (either would corrupt
@@ -223,10 +224,10 @@ history. No graph node, no export surface, no staleness.
 
 - Whether a run-item `ratification_mode` is ever worth its own ADR (only if the
   off-graph CSV + edit-history join proves operationally painful).
-- **Unmatched-entity subject-doubt** (ADR-0021 open Q2): a brand-new entity with
+- **Unmatched-entity subject-doubt** (ADR-0022 open Q2): a brand-new entity with
   no blocking candidate generates no equivalences row, so a low-confidence
   *invented* subject gets no identity-uncertainty surfacing through the reconcile
-  gate — this needs the lightweight unmatched-entity review view ADR-0021 already
+  gate — this needs the lightweight unmatched-entity review view ADR-0022 already
   flagged.
 - **Retention policy for `var/` reviewed CSVs** (ADR-0019): the bulk-accept
   reappraisal dimension depends on these durable artifacts.

@@ -1,4 +1,4 @@
-# Under-witnessed machine statements — the reappraisal QUEUE (ADR-0022), the
+# Under-witnessed machine statements — the reappraisal QUEUE (ADR-0023), the
 # structural COMPLEMENT of the disagreement report. This is NOT a defect
 # report and NOT a contentiousness ranking: it lists machine-written
 # statements that entered with LOW SCRUTINY — a single stated-in source and
@@ -9,7 +9,7 @@
 # Coexistence is a healthy resting state (ADR-0002): a well-witnessed or
 # curator-touched value is deliberately absent. Bulk-accepted writes are the
 # sharpest subset; that disposition lives in the reviewed CSV and MediaWiki
-# history (ADR-0022), not the graph. Scope it by adding a VALUES filter, e.g.
+# history (ADR-0023), not the graph. Scope it by adding a VALUES filter, e.g.
 # `VALUES ?prop { wd:{P:birth_name} wd:{P:married_name} }` for the name case.
 SELECT DISTINCT ?subject ?subjectLabel ?propertyLabel ?value ?valueLabel ?source
 WHERE {

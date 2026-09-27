@@ -20,10 +20,10 @@ from yizkr.pipeline.llm import LlmClient
 
 
 def axis_of(target: str) -> str | None:
-    """Which universal statement-part a Finding concerns (ADR-0022),
+    """Which universal statement-part a Finding concerns (ADR-0023),
     derived from the `target` grammar: ``claim: e01 prop`` -> predicate,
     ``e01 alias: X`` -> value, bare ``e01`` -> subject. Unrecognised ->
-    None. This is the general form of ADR-0021 §6's per-name axes, now
+    None. This is the general form of ADR-0022 §6's per-name axes, now
     addressable across every property; existence-axis concerns have no
     target form and stay None.
     """
@@ -47,7 +47,7 @@ class Finding(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def axis(self) -> str | None:
-        """subject | predicate | value (ADR-0022), derived from `target`."""
+        """subject | predicate | value (ADR-0023), derived from `target`."""
         return axis_of(self.target)
 
 

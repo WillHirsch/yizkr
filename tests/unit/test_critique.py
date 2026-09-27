@@ -121,8 +121,8 @@ class TestCritique:
 
 
 class TestAxis:
-    """ADR-0022: a Finding's statement-part axis is derived from its target
-    grammar — the general form of ADR-0021 §6's per-name axes."""
+    """ADR-0023: a Finding's statement-part axis is derived from its target
+    grammar — the general form of ADR-0022 §6's per-name axes."""
 
     def test_axis_of_each_target_form(self):
         assert axis_of("e01") == "subject"

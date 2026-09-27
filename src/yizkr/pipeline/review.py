@@ -68,7 +68,7 @@ from yizkr.claims import (
 )
 
 # `bulk-accept` is an approval that also records HOW it was accepted (a
-# whole-sheet accept-all, ADR-0022), so the write path can mark those edits
+# whole-sheet accept-all, ADR-0023), so the write path can mark those edits
 # for later reappraisal; it approves like any other token.
 APPROVE = {"approve", "approved", "accept", "yes", "y", "bulk-accept"}
 REJECT = {"reject", "rejected", "no", "n"}
@@ -314,7 +314,7 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
 
     * **claims** (`review.csv`, has `claim_id`): every row -> `bulk-accept`
       (an approval token that also records the whole-sheet disposition, so
-      the write path can flag these for reappraisal — ADR-0022). Each
+      the write path can flag these for reappraisal — ADR-0023). Each
       extracted claim is a proposal to add, so accepting the sheet is
       approving them all.
     * **equivalences** (`equivalences.csv`, has `entity_id` + `verdict`):
@@ -371,7 +371,7 @@ def is_bulk_accepted(csv_path: Path) -> bool:
     """True iff a reviewed claims CSV is a pristine `accept-all` sheet — every
     decision is `bulk-accept` and no row carries a per-row human token. The
     write path uses this to mark the resulting edits as low-scrutiny for
-    reappraisal (ADR-0022); a human who changed any decision demotes the whole
+    reappraisal (ADR-0023); a human who changed any decision demotes the whole
     sheet to an ordinary review. Missing/empty or non-claims CSVs -> False.
     """
     try:

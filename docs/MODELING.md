@@ -286,7 +286,7 @@ Names are modelled in **two layers**:
   name matching another's birth name (a marriage name change) is strong
   identity evidence.
 
-**Name normalization (ADR-0021).** Three axes are kept distinct:
+**Name normalization (ADR-0022).** Three axes are kept distinct:
 *composition* (which token is the fixed part vs. an alternating one — the
 `/` in "Frida Hollfeld/Falk/Gellerowski" prescribes it, so those
 surnames are alternative family names for one person), *kind* (given vs.
@@ -416,7 +416,7 @@ not a signal to grow the schema on.
   accumulate values over a life — spouse, residence — are multi-valued
   by nature: two spouses asserted by one source are remarriages, not a
   contradiction (their start/end qualifiers tell them apart).
-- **Machine uncertainty is process, not graph data (ADR-0022).** The
+- **Machine uncertainty is process, not graph data (ADR-0023).** The
   graph records the *source's* vagueness (circa, ranges, precision) but
   never the *machine's* confidence. Contentiousness surfaces ephemerally
   at review (the critic's per-concern axis: `[subject]`/`[predicate]`/

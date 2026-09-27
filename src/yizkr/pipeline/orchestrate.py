@@ -515,7 +515,7 @@ class Orchestrator:
     def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
         """entity local_id -> concatenated critic concerns, for the review
         CSV `critique_notes` column. Each concern is tagged with the
-        statement-part it doubts (ADR-0022): [subject] / [predicate] /
+        statement-part it doubts (ADR-0023): [subject] / [predicate] /
         [value], derived from the finding's target."""
         if not doc.critique.exists():
             return {}

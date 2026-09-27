@@ -1,4 +1,4 @@
-# ADR-0021: Name normalization — LLM-primary, no new property, composition without kind
+# ADR-0022: Name normalization — LLM-primary, no new property, composition without kind
 
 Status: **accepted** — design settled through three adversarial design passes;
 implemented: the extraction-prompt standards (chunking.py's entity-manifest and
@@ -6,10 +6,11 @@ chunk prompts) and the thin deterministic `pipeline/names.py` validator, wired
 into both the LLM manifest path and the GEDCOM adapter. Still pending: the
 **frontend factoring** layer (§5 — composing display forms and deriving
 short-forms from the atoms), and the §6 confidence surfacing, which was
-generalised and implemented by ADR-0022. **Amends ADR-0011** (re-affirms and
+generalised and implemented by ADR-0023. **Amends ADR-0011** (re-affirms and
 re-grounds the given/family component deferral) and applies ADR-0018's
 derive-don't-store discipline to name surface forms. Validation is the live
-review flow, not a synthetic eval (§Decision 7).
+review flow, not a synthetic eval (§Decision 7). Renumbered from local
+ADR-0021 when reconciling with origin (#18); the GEDCOM ADR kept 0021.
 
 ## Context
 
@@ -146,13 +147,13 @@ without any stored kind.
 
 ### 6. Confidence and axis-resolution are first-class and surfaced for scrutiny
 
-> **Generalised by ADR-0022.** The per-name, per-axis framing below is a special
+> **Generalised by ADR-0023.** The per-name, per-axis framing below is a special
 > case of the universal statement axes (subject/predicate/value/existence).
-> ADR-0022 supersedes it with the general mechanism — a machine-readable
+> ADR-0023 supersedes it with the general mechanism — a machine-readable
 > `Finding.axis` on the extraction critic, inherited by every property — and rules
 > that machine confidence stays out of the graph, with reappraisal delivered as a
 > structural query, not a stored scalar. Read this section as the name instance of
-> that general rule; where they differ, ADR-0022 governs.
+> that general rule; where they differ, ADR-0023 governs.
 
 The "live flow is the eval" strategy (§7) only has teeth if a reviewer can *see
 and attribute* the contentious calls. So the LLM must express, per decision,
