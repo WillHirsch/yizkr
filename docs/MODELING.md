@@ -82,9 +82,15 @@ process is the MediaWiki edit history. The pipeline marks these with
 the claim contract's `curated` flag.
 
 The pipeline's claim JSON contract implementing this pattern is
-`ingest/claims.py` (`ClaimBatch`): sources are required fields there,
+`src/yizkr/claims.py` (`ClaimBatch`): sources are required fields there,
 ranks are unrepresentable, and property/item references use manifest
-keys resolved to local ids only at write time.
+keys resolved to local ids only at write time. A claim cites its source
+artifact by content: the SHA-1 of the artifact's media (`ArtifactRef`,
+see *Artifact identity* below), which holds across instance resets. The
+writer resolves the hash to the artifact item carrying that
+`media SHA-1` at write time, and refuses a batch that cites media no
+item carries before it writes anything (#102). A claim that cites an
+artifact item by QID instead is valid only on that instance.
 
 ## Artifacts and registration
 

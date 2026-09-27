@@ -152,7 +152,9 @@ re-running one step in isolation — but for a normal ingest you only ever run
   explicitly, per row, and the machine never runs it on its own — not
   auto-confirmation. Refuses to overwrite an existing reviewed file
   without `--force`.
-- **write** — mints the extraction-run item, creates items for
+- **write** — resolves each cited artifact's media SHA-1 to its artifact
+  item (refusing the whole batch, before any write, if some media has
+  no item), mints the extraction-run item, creates items for
   unresolved subjects (reusing exact-label matches), writes each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from

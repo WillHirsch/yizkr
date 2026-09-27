@@ -1,11 +1,13 @@
 """Offline tests for pipeline steps (pytest; no instance, no LLM)."""
 
 import csv
+import hashlib
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from yizkr.claims import ClaimBatch, LocalRef, QidRef
+from yizkr.claims import ArtifactRef, ClaimBatch, LocalRef, QidRef
 from yizkr.pipeline.extract import (
     ClaimFileExtractor,
     LlmClaimExtractor,
@@ -26,12 +28,18 @@ from yizkr.pipeline.transcribe import (
     TextFileTranscriber,
     Transcription,
 )
+from yizkr.pipeline.writer import BatchWriter, UnregisteredArtifactError
 
 RUN = {
     "model_identifier": "fake-model",
     "pipeline_version": "0.1.0",
     "started_at": "2026-07-12T09:00:00Z",
 }
+
+# the bytes of a fictional scan; claims cite it by their SHA-1 (#102)
+MEDIA = b"fictional scan: an example marriage certificate"
+MEDIA_SHA1 = hashlib.sha1(MEDIA).hexdigest()
+ARTIFACT = {"kind": "artifact", "sha1": MEDIA_SHA1}
 
 CLAIMS = [
     {
@@ -58,7 +66,7 @@ CLAIMS = [
             }
         ],
         "source": {
-            "artifact": {"kind": "qid", "qid": "Q23"},
+            "artifact": ARTIFACT,
             "page_number": "1",
             "transcription_excerpt": {"text": "married", "language": "en"},
         },
@@ -73,7 +81,7 @@ CLAIMS = [
         },
         "property": "date_of_birth",
         "value": {"type": "time", "year": 1910, "month": 5},
-        "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+        "source": {"artifact": ARTIFACT},
     },
 ]
 
@@ -253,7 +261,7 @@ class TestExtract:
         long_claim = dict(
             CLAIMS[1],
             source={
-                "artifact": {"kind": "qid", "qid": "Q23"},
+                "artifact": ARTIFACT,
                 "transcription_excerpt": {
                     "text": "word " * 100,
                     "language": "en",
@@ -303,6 +311,13 @@ class TestResolve:
         resolve_batch(original, {"Person One": "Q40"})
         assert isinstance(original.claims[0].subject, LocalRef)
 
+    def test_source_artifact_stays_content_addressed(self):
+        # entity resolution maps entities, never the cited artifact:
+        # that resolves to an item only at write time
+        resolved = resolve_batch(batch(), {"Person One": "Q40"})
+        for claim in resolved.claims:
+            assert claim.source.artifact == ArtifactRef(sha1=MEDIA_SHA1)
+
 
 class TestReviewRoundTrip:
     def test_export_columns_and_content(self, tmp_path):
@@ -314,6 +329,9 @@ class TestReviewRoundTrip:
         assert "NEW:person-1 (Person One)" in content
         assert "1910-05" in content
         assert "point_in_time=1933" in content
+        with open(csv_path, newline="") as f:
+            sources = {row["source_artifact"] for row in csv.DictReader(f)}
+        assert sources == {f"sha1:{MEDIA_SHA1}"}
 
     @staticmethod
     def edit_csv(path, transform):
@@ -649,6 +667,196 @@ class TestCorrections:
         assert corrected.curated is True
         with pytest.raises(ValueError, match="not a number"):
             _parse_correction(count, "several")
+
+
+# -- writer: cited artifacts resolve by media SHA-1 at write time (#102) ----
+
+PROPERTIES = {
+    "instance_of": "P1",
+    "stated_in": "P2",
+    "page_number": "P3",
+    "transcription_excerpt": "P4",
+    "inferred_from_extraction_run": "P5",
+    "media_sha1": "P6",
+    "spouse": "P7",
+    "date_of_birth": "P8",
+    "point_in_time": "P9",
+    "relative_position_within_image": "P10",
+    "type_hint": "P11",
+}
+ITEMS = {"human": "Q1", "extraction_run": "Q2"}
+
+
+class FakeItems:
+    """WikibaseIntegrator items held in memory; write() assigns a QID."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, object] = {}
+        self.writes = 0
+        self._next = 100
+
+    def new(self):
+        from wikibaseintegrator import WikibaseIntegrator
+
+        item = WikibaseIntegrator().item.new()
+
+        def write(summary=None, **_):
+            self.writes += 1
+            if item.id is None:
+                item.id = f"Q{self._next}"
+                self._next += 1
+            self.store[item.id] = item
+            return item
+
+        item.write = write
+        return item
+
+    def get(self, qid):
+        return self.store[qid]
+
+
+class FakeWiki:
+    """Just enough of WikiClient for BatchWriter: the vocabulary, the
+    label lookup, the media SHA-1 index and in-memory items."""
+
+    def __init__(self, media: dict[str, str] | None = None) -> None:
+        self.media = dict(media or {})  # media SHA-1 -> artifact QID
+        self.index_reads = 0
+        self.wbi = SimpleNamespace(item=FakeItems())
+
+    def vocabulary(self):
+        return dict(PROPERTIES), dict(ITEMS)
+
+    def find_item_by_label(self, label):
+        for qid, item in self.wbi.item.store.items():
+            if str(item.labels.get("en") or "") == label:
+                return qid
+        return None
+
+    def string_statement_index(self, property_pid):
+        assert property_pid == PROPERTIES["media_sha1"]
+        self.index_reads += 1
+        return dict(self.media)
+
+
+def _cited(statement, key: str) -> list[str]:
+    """The items a statement's references point at through `key`."""
+    return [
+        snak.datavalue["value"]["id"]
+        for reference in statement.references.references
+        for snak in reference.snaks.get(PROPERTIES[key]) or []
+    ]
+
+
+def _citing(*sha1s: str) -> ClaimBatch:
+    """One date-of-birth claim per media SHA-1, each citing that media."""
+    claims = [
+        dict(
+            CLAIMS[1],
+            value={"type": "time", "year": 1910 + offset},
+            source={"artifact": {"kind": "artifact", "sha1": sha1}},
+        )
+        for offset, sha1 in enumerate(sha1s)
+    ]
+    return ClaimBatch.model_validate({"extraction_run": RUN, "claims": claims})
+
+
+OTHER_SHA1 = hashlib.sha1(b"fictional scan: a second example page").hexdigest()
+
+
+class TestWriterArtifactResolution:
+    def test_sha1_resolves_to_the_registered_artifact(self):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        result = BatchWriter(wiki).write_batch(batch())
+        assert result.written == 2
+        person = wiki.wbi.item.get(result.created_items["person-1"])
+        for pid in (PROPERTIES["spouse"], PROPERTIES["date_of_birth"]):
+            (statement,) = person.claims.get(pid)
+            assert _cited(statement, "stated_in") == ["Q23"]
+            assert _cited(statement, "inferred_from_extraction_run") == [
+                result.run_qid
+            ]
+        # a proposed entity's kind is referenced to the same artifact
+        (kind,) = person.claims.get(PROPERTIES["instance_of"])
+        assert _cited(kind, "stated_in") == ["Q23"]
+
+    def test_each_claim_cites_its_own_artifact(self):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23", OTHER_SHA1: "Q24"})
+        result = BatchWriter(wiki).write_batch(_citing(MEDIA_SHA1, OTHER_SHA1))
+        person = wiki.wbi.item.get(result.created_items["person-1"])
+        cited = {
+            statement.mainsnak.datavalue["value"]["time"][:5]: _cited(
+                statement, "stated_in"
+            )
+            for statement in person.claims.get(PROPERTIES["date_of_birth"])
+        }
+        assert cited == {"+1910": ["Q23"], "+1911": ["Q24"]}
+
+    def test_unregistered_media_writes_nothing(self):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        with pytest.raises(UnregisteredArtifactError) as raised:
+            BatchWriter(wiki).write_batch(_citing(MEDIA_SHA1, OTHER_SHA1))
+        assert raised.value.sha1s == [OTHER_SHA1]
+        assert OTHER_SHA1[:12] in str(raised.value)
+        # refused before the first write: no run item, no entities, so
+        # no statement is ever written without its source
+        assert wiki.wbi.item.writes == 0
+
+    def test_dry_run_resolves_the_same_way(self):
+        wiki = FakeWiki()
+        with pytest.raises(UnregisteredArtifactError):
+            BatchWriter(wiki, dry_run=True).write_batch(batch())
+        wiki.media[MEDIA_SHA1] = "Q23"
+        result = BatchWriter(wiki, dry_run=True).write_batch(batch())
+        assert result.written == 2
+        assert wiki.wbi.item.writes == 0
+
+    def test_rewrite_is_skipped_against_the_resolved_artifact(self):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        BatchWriter(wiki).write_batch(batch())
+        again = BatchWriter(wiki).write_batch(batch())
+        assert (again.written, again.skipped, again.referenced) == (0, 2, 0)
+
+    def test_caller_supplied_qids_skip_the_index(self):
+        # write-time registration hands over what it just registered
+        wiki = FakeWiki()
+        writer = BatchWriter(wiki, artifact_qids={MEDIA_SHA1.upper(): "Q23"})
+        result = writer.write_batch(batch())
+        assert wiki.index_reads == 0
+        person = wiki.wbi.item.get(result.created_items["person-1"])
+        (statement,) = person.claims.get(PROPERTIES["date_of_birth"])
+        assert _cited(statement, "stated_in") == ["Q23"]
+
+    def test_index_is_read_once_and_again_for_unseen_media(self):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        writer = BatchWriter(wiki)
+        writer.write_batch(batch())
+        writer.write_batch(batch())
+        assert wiki.index_reads == 1
+        # media registered after the index was read still resolves
+        wiki.media[OTHER_SHA1] = "Q24"
+        resolved = writer.resolve_artifacts(_citing(MEDIA_SHA1, OTHER_SHA1))
+        assert resolved == {MEDIA_SHA1: "Q23", OTHER_SHA1: "Q24"}
+        assert wiki.index_reads == 2
+
+    def test_qid_source_is_written_as_given(self):
+        qid_batch = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    dict(
+                        CLAIMS[1],
+                        source={"artifact": {"kind": "qid", "qid": "Q23"}},
+                    )
+                ],
+            }
+        )
+        wiki = FakeWiki()
+        result = BatchWriter(wiki).write_batch(qid_batch)
+        assert wiki.index_reads == 0
+        person = wiki.wbi.item.get(result.created_items["person-1"])
+        (statement,) = person.claims.get(PROPERTIES["date_of_birth"])
+        assert _cited(statement, "stated_in") == ["Q23"]
 
 
 class TestPrivacyDefaults:

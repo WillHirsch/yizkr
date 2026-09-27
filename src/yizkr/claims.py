@@ -30,10 +30,18 @@ keys exist and that each value's type matches the property's datatype.
 Local P/Q ids never appear in pipeline JSON (they differ per instance);
 only the writer resolves keys to ids, at write time.
 
-Entity references come in three kinds:
+Source artifacts are content-addressed (ADR-0010): a claim's
+`source.artifact` is an ``artifact`` reference holding the SHA-1 of the
+artifact's media bytes, which is the same before registration, after an
+instance reset and on any instance. The writer resolves it to the
+artifact item carrying that `media SHA-1`, at write time. A ``qid``
+reference to an artifact item is accepted there too, and ties the claim
+to that instance.
 
-* ``qid``   — an entity that already exists in the instance (e.g. the
-  artifact item created by the registrar before extraction).
+Entity references (subjects and item values) come in three kinds:
+
+* ``qid``   — an entity that already exists in the instance (e.g. an
+  item a reviewer matched a document's entity to).
 * ``vocab`` — a manifest item by key (e.g. ``circa``, ``yes``).
 * ``local`` — a batch-scoped placeholder (``person-1``) for an entity
   the extractor proposes; entity resolution replaces it with a ``qid``
@@ -47,6 +55,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime
@@ -308,15 +317,57 @@ class RegionPercent(StrictModel):
         return f"{self.x:g}%,{self.y:g}%,{self.width:g}%,{self.height:g}%"
 
 
+class ArtifactRef(StrictModel):
+    """An artifact named by the SHA-1 of its media bytes (ADR-0010).
+
+    The key is the content itself, so it does not depend on registration
+    or on any instance. The writer resolves it to the artifact item that
+    carries this `media SHA-1`, at write time.
+    """
+
+    kind: Literal["artifact"] = "artifact"
+    sha1: str = Field(pattern=r"^[0-9a-f]{40}$")
+
+    @field_validator("sha1", mode="before")
+    @classmethod
+    def lowercase_hex(cls, value):
+        # the registrar stores lowercase hex; the same digest in capitals
+        # names the same bytes
+        return value.lower() if isinstance(value, str) else value
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> ArtifactRef:
+        return cls(sha1=hashlib.sha1(data).hexdigest())
+
+    @classmethod
+    def from_path(cls, path: Path) -> ArtifactRef:
+        """The reference for a media file, hashed as the registrar
+        hashes it: the file's bytes, independent of its name."""
+        return cls.from_bytes(Path(path).read_bytes())
+
+    def __str__(self) -> str:
+        return f"sha1:{self.sha1}"
+
+
+# The artifact a claim cites. An ``artifact`` reference is the
+# content-addressed form. A ``qid`` reference names an artifact item on
+# the target instance directly, so a claim that carries one is valid on
+# that instance only.
+SourceArtifactRef = Annotated[
+    ArtifactRef | QidRef, Field(discriminator="kind")
+]
+
+
 class SourceReference(StrictModel):
     """Where the artifact asserts the claim (ADR-0003).
 
-    `artifact` names the artifact or artifact-fragment item; the
-    locators narrow the pointer inside it. The excerpt supports one-click
-    human verification.
+    `artifact` names the source artifact by the SHA-1 of its media, and
+    the writer resolves it to the artifact item at write time. The
+    locators narrow the pointer inside the artifact: a page number, an
+    image region. The excerpt supports one-click human verification.
     """
 
-    artifact: EntityRef
+    artifact: SourceArtifactRef
     page_number: str | None = None
     region: RegionPercent | None = None
     transcription_excerpt: MonolingualText | None = None
@@ -519,7 +570,6 @@ def validate_against_manifest(
                 qualifier.value,
                 f"{where}.qualifiers[{q_index}]",
             )
-        check_ref(claim.source.artifact, f"{where}.source.artifact")
 
     return errors
 
