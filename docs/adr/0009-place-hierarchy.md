@@ -5,10 +5,10 @@ Status: accepted
 ## Context
 
 Sources name the same real-world place at different resolutions
-("Shrubbery Maternity Home" / "High Wycombe"; "Steinstrasse 16" /
-"Berlin") and under different naming conventions ("Sheffield,
-Yorkshire, England" / "Sheffield, South Yorkshire"). Without recorded
-containment, the inconsistency report (ADR-0002's flagship view)
+("Gerichtsgefängnis Peiltal" / "Peiltal"; "Brunnenring 35" /
+"Flörburg") and under different naming conventions ("Fläckfeld,
+Kreis Mockburg, Hesse, Germany" / "Fläckfeld, Kreis Peiltal"). Without
+recorded containment, the inconsistency report (ADR-0002's flagship view)
 presents differences of resolution as if they were contradictions,
 and the places map cannot group anything.
 
@@ -24,7 +24,7 @@ scarcer resource — in curator review attention. Two observations
    competing values of the same fact — the report's own rows;
 2. front-loading the largest-scale containment lets transitive
    closure eliminate downstream questions wholesale: once
-   Steinstrasse 16 ⊂ Berlin is approved, every question answerable
+   Brunnenring 35 ⊂ Flörburg is approved, every question answerable
    through that edge disappears from the next round's worklist.
 
 ## Decision
@@ -41,7 +41,7 @@ One SPARQL round-trip yields, in order of preference:
    containment filters applied) — answering these directly sharpens
    the report;
 2. **comma-parent candidates**: place labels are usually hierarchy
-   chains ("Sheffield, Yorkshire, England"); a place whose
+   chains ("Fläckfeld, Kreis Mockburg, Hesse, Germany"); a place whose
    comma-suffix matches another place's label or alias gets that
    place as a deterministic parent candidate. Structure never rides
    the generative path (ADR-0006): these arrive pre-evidenced, the

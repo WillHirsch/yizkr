@@ -17,7 +17,7 @@ artifacts in the same folder. Cross-artifact identity is left to a separate
 `reconcile-graph` pass run afterwards.
 
 That shape spends human review twice on the same fact. A person named two
-ways across two artifacts ("Donald" in a letter, "Donald Bennett Hirsch" in
+ways across two artifacts ("Gustl" in a letter, "Gustav Löbig" in
 the tree) is reviewed once per document as a *new* entity — because the
 sibling was invisible — then **again** at `reconcile-graph` as "merge these
 two", after a duplicate item has already been created (merges are also

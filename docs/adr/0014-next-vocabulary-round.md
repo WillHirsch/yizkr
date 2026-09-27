@@ -50,7 +50,7 @@ computation, not a lookup. So we do NOT add `cousin`, `aunt`, etc.
 
 - **Source-asserted compound relations — a single generic `relative`
   (P1038) with a verbatim `kinship type` qualifier.** When a source
-  asserts "Erwin's maternal aunt" and the connecting parent is unknown
+  asserts "Aunt Pünktchen" and the connecting parent is unknown
   or the term is ambiguous (an aunt may be a parent's sister *or* a
   parent's brother's wife — decomposing would narrow what the source
   said, forbidden), the assertion is stored faithfully as `relative →
@@ -70,8 +70,8 @@ assertions like "aunt")*.
 ## 2. Persecution & displacement — events, not relations
 
 The gap log's loudest single entry is **"deported to" (×10)** — but the
-archive already models deportations as **events** (Q202 "Deportation of
-Rosa and Salomon", Q213 "Return…" were reconciled in the trial). The gap
+archive already models deportations as **events** ("Deportation of Ida
+Löbig" and "Liberation of Ida Löbig" were reconciled in the trial). The gap
 appears only because the extractor emitted a person→place *relation*
 where an *event* belongs.
 
@@ -80,9 +80,9 @@ where an *event* belongs.
 existing event machinery — `participant` (person), `location`/
 destination, `point_in_time`. Extractor guidance: "deported to X on
 date" is a deportation *event*, not a property. This also absorbs
-"imprisoned at", "released from", and persecution acts like "forced to
-sit at the Judenbank" (×2). No new relation properties — the event model
-already carries it.
+"imprisoned at", "released from", and persecution acts like an arrest
+("was taken the first week of the war"). No new relation properties —
+the event model already carries it.
 
 ★ **Fork:** event subclasses *(recommended — consistent with the
 existing, already-reconciled deportation events)* vs a flat
@@ -92,21 +92,21 @@ existing, already-reconciled deportation events)* vs a flat
 
 Minted where the hint recurred or is thematically central; ranked:
 
-- **`family` / `household`** (×5: "the Wulffs", "the Schimpf couple",
-  "the Franklin family", "the Sand family") — named family units. This
-  is the long-deferred "collective manifest entities" guidance; members
+- **`family` / `household`** (×5, e.g. "the Löbigs", "the Lobig couple",
+  "the Lobig family") — named family units. This is the long-deferred
+  "collective manifest entities" guidance; members
   attach via the kinship primitives or `member of`.
-- **`vessel`** (×3: RMS Titanic, SS Guine, SS Rotterdam) — the ships
-  people emigrated on; recurs and is central to the migration story.
-- **`legal instrument`** (laws, decrees, gazettes, registers —
-  Reichsabgabenordnung, Reichsgesetzblatt, the Handelsregister; the
-  critic also suggested a `document`/`law` kind for several
+- **`vessel`** (×3, e.g. RMS Flund) — the ships people emigrated on;
+  recurs and is central to the migration story.
+- **`legal instrument`** (laws, decrees, gazettes, registers — a civil
+  code, a law gazette, a civil register; the critic also suggested a
+  `document`/`law` kind for several
   escape-hatch entries). Minting this ALSO closes the escape-hatch
   over-use the critic flagged.
-- **`military unit`** (International Brigades, Reichswehr).
+- **`military unit`** (a regiment, a brigade).
 
-★ **Fork:** defer the singletons — `monument` (Statue of Liberty ×1),
-`dynasty` (House of Glücksburg ×1) — folding them into
+★ **Fork:** defer the singletons — `monument` (a statue ×1),
+`dynasty` (a royal house ×1) — folding them into
 place/organization or leaving them `unclassified_entity` until they
 recur *(recommended)*; or mint them now.
 
@@ -142,13 +142,13 @@ gap log.
 
 - **"bankkonto bei"** (×2) — a bank-account relation; niche, and it
   pairs an account (not yet an entity) with a bank. Defer.
-- **Divorce-as-event** ("Divorce of Erwin Weissrock", hint=divorce) —
+- **Divorce-as-event** ("Divorce of Leopold Löbig", hint=divorce) —
   largely redundant with the existing `spouse` `end_time` qualifier
   (the GEDCOM adapter already maps DIV to it); revisit only if a source
   narrates a divorce with its own participants/date.
 - **Anachronistic tool mentions** (ChatGPT, Google Translate,
-  Transkribus, surfaced from the Rosa-letters compilation's modern
-  editorial notes) — curation noise to reject, not vocabulary.
+  Transkribus, surfaced from a modern transcription's editorial notes) —
+  curation noise to reject, not vocabulary.
 
 ## Consequences
 
