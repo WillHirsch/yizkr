@@ -22,9 +22,18 @@ uv run yizkr publish-queries             # or: make publish-queries
 
 ## Queries
 
-- **disagreement-report** — the flagship R2 view: entity+property pairs
-  holding two or more different attributed values, each labeled by its
-  source. Rows here are a healthy resting state (ADR-0002), not errors.
+- **disagreement-report** — the flagship R2 view: values that different
+  artifacts attribute to the same entity and property, side by side,
+  each with every source that states it. Rows here are a healthy resting
+  state (ADR-0002), not errors. Two readings of one artifact are not two
+  sources (ADR-0023 §4), and a page fragment counts as its artifact; a
+  deprecated statement is left out, and nothing needs a preferred rank.
+  It compares the single-valued properties (dates and places of birth and
+  death, parents, birth name, an event's own point in time, start and end
+  time, a place's identity properties), and the start and end times of
+  one residence place or one spouse that sources date differently. A
+  date inside another's span and a place recorded inside the other are
+  differences of resolution, and are not listed.
 - **person-timeline** — every dated assertion about each person
   (statements, dated qualifiers such as a marriage's point in time, and
   events participated in), plural-by-default with sources (R6).
@@ -49,6 +58,7 @@ vocabulary via `{P:key}`/`{Q:key}`, and re-run the publisher. The
 offline tests (`make test`) verify that every placeholder matches a
 real manifest key, so templates and model cannot drift apart; the live
 tests (`make test-live`) execute every query against WDQS, assert
-the zero-unreferenced-statements invariant, and pin the
-under-witnessed queue's rows on a fictional fixture
-(`tests/integration/test_live_under_witnessed.py`).
+the zero-unreferenced-statements invariant, and pin the rows of the
+under-witnessed queue and the disagreement report on fictional fixtures
+(`tests/integration/test_live_under_witnessed.py`,
+`tests/integration/test_live_disagreement.py`).

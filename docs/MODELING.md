@@ -431,12 +431,25 @@ not a signal to grow the schema on.
   statements at **normal rank**, each with its own references.
 - Rank changes are curator actions, logged by MediaWiki history, and
   optional forever.
-- Disagreement *reporting* applies only to properties that can hold at
-  most one true value per subject (dates/places of birth and death,
-  parents, a place's identity properties). Properties that legitimately
-  accumulate values over a life — spouse, residence — are multi-valued
-  by nature: two spouses asserted by one source are remarriages, not a
-  contradiction (their start/end qualifiers tell them apart).
+- Disagreement *reporting* (`disagreement-report.rq`) pairs values that
+  **different artifacts** attribute: two readings of one artifact (a
+  curator's correction beside the machine reading it corrects) are not
+  two sources, and a page fragment counts as its artifact (ADR-0023 §4).
+  A deprecated statement is left out; a preferred one is listed like any
+  other, so the report never needs a preference.
+- It compares values only for properties that can hold at most one true
+  value per subject (dates/places of birth and death, parents, birth
+  name, an event's own point in time or start/end time, a place's
+  identity properties). Properties that legitimately accumulate values
+  over a life — spouse, residence, married names, nicknames, official
+  names — are multi-valued by nature: two spouses asserted by one source
+  are remarriages, not a contradiction (their start/end qualifiers tell
+  them apart). For one residence place or one spouse, the report
+  compares the start and end times that different sources give
+  ("arrived there in 1938" per one, "in 1939" per another).
+- A date inside another's span (1909 and 16 March 1909) and a place the
+  graph records inside the other differ in resolution, not substance,
+  and are not reported.
 - **Machine uncertainty is process, not graph data (ADR-0023).** The
   graph records the *source's* vagueness (circa, ranges, precision) but
   never the *machine's* confidence. Contentiousness surfaces ephemerally

@@ -1,59 +1,145 @@
-# Inconsistency report — the flagship R2 view.
-# Every entity+property carrying two or more different attributed values,
-# with the sources each value is stated in. Values shown here are a
-# HEALTHY RESTING STATE (ADR-0002), not errors: this report exists so a
-# reader can weigh the evidence, not so someone can "fix" it.
+# Disagreement report — the flagship R2 view.
+# Every entity and property where DIFFERENT ARTIFACTS attribute different
+# values, each value listed with every source that states it. These rows are
+# a HEALTHY RESTING STATE (ADR-0002), not errors: this report exists so a
+# reader can weigh the evidence, never to pick a value or "fix" one.
 #
-# Only properties that can hold at most one true value per person are
-# candidates. Properties that legitimately accumulate values over a life
-# (spouse, residence, ...) are excluded — two spouses from one source are
-# remarriages, not a contradiction. Values that differ only in
-# RESOLUTION are suppressed when the graph knows the containment (an
-# address located in the town another source names): recording that
-# hierarchy is what makes this report sharpen over time.
+# Coexistence here is cross-source value multiplicity (ADR-0023 §4). A pair
+# counts only when its two values are not stated by one and the same
+# artifact alone: two readings of one artifact (a curator's correction
+# beside the machine reading it corrects) are not two sources, and a page
+# fragment counts as the artifact it is part of. A statement a curator
+# DEPRECATED is left out. Nothing needs a preferred rank: a preferred value
+# is listed like any other.
+#
+# Single-valued properties compare their values: dates and places of birth
+# and death, parents, birth name, the dates an event or other entity carries
+# as its own statements (point in time, start time, end time), and a place's
+# identity properties. Names compare as text, ignoring letter case and the
+# language a source wrote them in.
+#
+# Residence and spouse accumulate values over a life (two spouses from one
+# source are remarriages), so their values never conflict. The SAME place or
+# spouse dated differently by another source does: the report compares their
+# start and end times (arrived there in 1938 per one source, in 1939 per
+# another). A point in time on them dates an observation, not the range, and
+# is not compared. Married names, nicknames and official names accumulate
+# too, and are not compared.
+#
+# Differences of RESOLUTION are suppressed: a place the graph records as
+# contained in the other (an address in the town another source names), and
+# a date inside the other's span (1909 and 16 March 1909). Recording the
+# place hierarchy is what makes this report sharpen over time.
 SELECT ?entity ?entityLabel ?propertyLabel
+       ?sharedValue ?sharedValueLabel ?qualifierLabel
        ?valueA ?valueALabel ?precisionA
-       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceA), "/entity/"), "~", ?sourceALabelRaw); separator="|") AS ?sourcesA)
+       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceA), "/entity/"), "~", COALESCE(?sourceALabelRaw, "")); separator="|") AS ?sourcesA)
        ?valueB ?valueBLabel ?precisionB
-       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceB), "/entity/"), "~", ?sourceBLabelRaw); separator="|") AS ?sourcesB)
+       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceB), "/entity/"), "~", COALESCE(?sourceBLabelRaw, "")); separator="|") AS ?sourcesB)
 WHERE {
-  VALUES ?property {
-    wd:{P:date_of_birth} wd:{P:date_of_death}
-    wd:{P:place_of_birth} wd:{P:place_of_death}
-    wd:{P:father} wd:{P:mother}
-    wd:{P:coordinate_location} wd:{P:geonames_id} wd:{P:whg_place_id}
+  {
+    # single-valued properties: two statements' own values
+    VALUES ?property {
+      wd:{P:date_of_birth} wd:{P:date_of_death}
+      wd:{P:place_of_birth} wd:{P:place_of_death}
+      wd:{P:father} wd:{P:mother}
+      wd:{P:birth_name}
+      wd:{P:point_in_time} wd:{P:start_time} wd:{P:end_time}
+      wd:{P:coordinate_location} wd:{P:geonames_id} wd:{P:whg_place_id}
+    }
+    ?property wikibase:claim ?p ;
+              wikibase:statementProperty ?ps .
+    ?entity ?p ?stA , ?stB .
+    ?stA ?ps ?rawValueA ;
+         wikibase:rank ?rankA .
+    ?stB ?ps ?rawValueB ;
+         wikibase:rank ?rankB .
+    # sameTerm, unlike !=, raises no type error on a datatype SPARQL does
+    # not define (a coordinate's)
+    FILTER(!sameTerm(?rawValueA, ?rawValueB))
+    # stated precision for time values: display must never pad or narrow
+    OPTIONAL { ?property wikibase:statementValue ?psvA .
+               ?stA ?psvA ?nodeA .
+               ?nodeA wikibase:timePrecision ?precisionA . }
+    OPTIONAL { ?property wikibase:statementValue ?psvB .
+               ?stB ?psvB ?nodeB .
+               ?nodeB wikibase:timePrecision ?precisionB . }
+  } UNION {
+    # dated multi-valued statements: one place or spouse, dated two ways
+    VALUES (?property ?qualifier) {
+      (wd:{P:residence} wd:{P:start_time}) (wd:{P:residence} wd:{P:end_time})
+      (wd:{P:spouse} wd:{P:start_time}) (wd:{P:spouse} wd:{P:end_time})
+    }
+    ?property wikibase:claim ?p ;
+              wikibase:statementProperty ?ps .
+    ?qualifier wikibase:qualifierValue ?pqv .
+    ?entity ?p ?stA , ?stB .
+    ?stA ?ps ?sharedRawA ;
+         ?pqv ?nodeA ;
+         wikibase:rank ?rankA .
+    ?stB ?ps ?sharedRawB ;
+         ?pqv ?nodeB ;
+         wikibase:rank ?rankB .
+    ?nodeA wikibase:timeValue ?rawValueA ;
+           wikibase:timePrecision ?precisionA .
+    ?nodeB wikibase:timeValue ?rawValueB ;
+           wikibase:timePrecision ?precisionB .
+    FILTER(!sameTerm(?rawValueA, ?rawValueB))
+    OPTIONAL { ?sharedRawA <http://www.w3.org/2002/07/owl#sameAs> ?sharedCanonicalA . }
+    OPTIONAL { ?sharedRawB <http://www.w3.org/2002/07/owl#sameAs> ?sharedCanonicalB . }
+    BIND(COALESCE(?sharedCanonicalA, ?sharedRawA) AS ?sharedValue)
+    FILTER(COALESCE(?sharedCanonicalB, ?sharedRawB) = ?sharedValue)
+    OPTIONAL { ?sharedValue rdfs:label ?sharedValueLabel . FILTER(LANG(?sharedValueLabel) = "en") }
+    OPTIONAL { ?qualifier rdfs:label ?qualifierLabel . FILTER(LANG(?qualifierLabel) = "en") }
   }
-  ?property wikibase:claim ?p ;
-            wikibase:statementProperty ?ps .
-  ?entity ?p ?stA , ?stB .
-  ?stA ?ps ?rawValueA .
-  ?stB ?ps ?rawValueB .
+  # rank is an optional curator overlay: a deprecated statement is out of
+  # contention, while normal and preferred statements are listed alike
+  FILTER(?rankA != wikibase:DeprecatedRank && ?rankB != wikibase:DeprecatedRank)
   # canonicalize through item-merge redirects: a statement written
   # before a merge still points at the redirect, and that indirection
-  # is not an inconsistency
+  # is not a disagreement
   OPTIONAL { ?rawValueA <http://www.w3.org/2002/07/owl#sameAs> ?canonicalA . }
   OPTIONAL { ?rawValueB <http://www.w3.org/2002/07/owl#sameAs> ?canonicalB . }
   BIND(COALESCE(?canonicalA, ?rawValueA) AS ?valueA)
   BIND(COALESCE(?canonicalB, ?rawValueB) AS ?valueB)
-  FILTER(?valueA != ?valueB)
-  FILTER(STR(?stA) < STR(?stB))
-  # a value CONTAINED in the other (per the graph's own location /
+  # a name compares as text: letter case and the language tag record how a
+  # source wrote it, not what it asserts. Each pair is listed once, in value
+  # order.
+  BIND(IF(isLiteral(?valueA) && LANG(?valueA) != "", LCASE(STR(?valueA)), STR(?valueA)) AS ?keyA)
+  BIND(IF(isLiteral(?valueB) && LANG(?valueB) != "", LCASE(STR(?valueB)), STR(?valueB)) AS ?keyB)
+  FILTER(?keyA < ?keyB)
+  # a date inside the other's span is a difference of resolution, not
+  # substance: compare at the coarser of the two stated precisions (month,
+  # year or decade)
+  BIND(IF(?precisionA < ?precisionB, ?precisionA, ?precisionB) AS ?coarser)
+  FILTER(!BOUND(?coarser)
+         || !((?coarser = 10 && YEAR(?valueA) = YEAR(?valueB) && MONTH(?valueA) = MONTH(?valueB))
+              || (?coarser = 9 && YEAR(?valueA) = YEAR(?valueB))
+              || (?coarser = 8 && FLOOR(YEAR(?valueA) / 10) = FLOOR(YEAR(?valueB) / 10))))
+  # a place CONTAINED in the other (per the graph's own location /
   # part-of knowledge) is a difference of resolution, not substance
-  FILTER NOT EXISTS { ?valueA (wdt:{P:location}|wdt:{P:part_of})+ ?valueB . }
-  FILTER NOT EXISTS { ?valueB (wdt:{P:location}|wdt:{P:part_of})+ ?valueA . }
-  # stated precision for time values: display must never pad or narrow
-  OPTIONAL { ?stA ?vpA ?nodeA .
-             ?nodeA wikibase:timeValue ?rawValueA ;
-                    wikibase:timePrecision ?precisionA . }
-  OPTIONAL { ?stB ?vpB ?nodeB .
-             ?nodeB wikibase:timeValue ?rawValueB ;
-                    wikibase:timePrecision ?precisionB . }
+  FILTER NOT EXISTS {
+    VALUES ?property { wd:{P:place_of_birth} wd:{P:place_of_death} }
+    { ?valueA (wdt:{P:location}|wdt:{P:part_of})+ ?valueB . }
+    UNION
+    { ?valueB (wdt:{P:location}|wdt:{P:part_of})+ ?valueA . }
+  }
+  # every stated-in source of each value, looked up once the pairs are
+  # found, with its label and the artifact it belongs to (a page fragment
+  # belongs to the artifact it is part of). A statement with no stated-in
+  # source attributes its value to no artifact, so it takes no part (the
+  # unreferenced-statements report lists it).
   OPTIONAL { ?stA prov:wasDerivedFrom/pr:{P:stated_in} ?sourceA .
-             ?sourceA rdfs:label ?sourceALabelRaw .
-             FILTER(LANG(?sourceALabelRaw) = "en") }
+             OPTIONAL { ?sourceA wdt:{P:instance_of} wd:{Q:artifact_fragment} ;
+                                 wdt:{P:part_of} ?wholeA . }
+             OPTIONAL { ?sourceA rdfs:label ?sourceALabelRaw . FILTER(LANG(?sourceALabelRaw) = "en") } }
   OPTIONAL { ?stB prov:wasDerivedFrom/pr:{P:stated_in} ?sourceB .
-             ?sourceB rdfs:label ?sourceBLabelRaw .
-             FILTER(LANG(?sourceBLabelRaw) = "en") }
+             OPTIONAL { ?sourceB wdt:{P:instance_of} wd:{Q:artifact_fragment} ;
+                                 wdt:{P:part_of} ?wholeB . }
+             OPTIONAL { ?sourceB rdfs:label ?sourceBLabelRaw . FILTER(LANG(?sourceBLabelRaw) = "en") } }
+  FILTER(BOUND(?sourceA) && BOUND(?sourceB))
+  BIND(COALESCE(?wholeA, ?sourceA) AS ?artifactA)
+  BIND(COALESCE(?wholeB, ?sourceB) AS ?artifactB)
   # labels bound directly (the label service is unreliable under
   # GROUP BY); literal values simply have no label
   OPTIONAL { ?entity rdfs:label ?entityLabel . FILTER(LANG(?entityLabel) = "en") }
@@ -62,6 +148,11 @@ WHERE {
   OPTIONAL { ?valueB rdfs:label ?valueBLabel . FILTER(LANG(?valueBLabel) = "en") }
 }
 GROUP BY ?entity ?entityLabel ?propertyLabel
+         ?sharedValue ?sharedValueLabel ?qualifierLabel
          ?valueA ?valueALabel ?precisionA
          ?valueB ?valueBLabel ?precisionB
-ORDER BY ?entityLabel ?propertyLabel
+# only a disagreement BETWEEN artifacts: the two values' sources are not
+# all one and the same artifact
+HAVING (MIN(STR(?artifactA)) != MAX(STR(?artifactB))
+        || MAX(STR(?artifactA)) != MIN(STR(?artifactB)))
+ORDER BY ?entityLabel ?propertyLabel ?sharedValueLabel ?qualifierLabel ?valueA ?valueB

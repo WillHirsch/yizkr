@@ -155,6 +155,57 @@ GALLERY = [
     }
 ]
 
+# disagreement-report rows: the universe's contradiction (Gustav's birth
+# day and month transposed between the civil register extract and the
+# naturalisation), then placeholder rows for a dated residence and a
+# birth name
+INCONSISTENCIES = [
+    {
+        "entity": uri("Q12"),
+        "entityLabel": literal("Gustav Löbig"),
+        "propertyLabel": literal("date of birth"),
+        "valueA": time_literal("+1919-01-07T00:00:00Z"),
+        "precisionA": literal("11"),
+        "sourcesA": literal("Q41~Birth register extract for Gustav Löbig"),
+        "valueB": time_literal("+1919-07-01T00:00:00Z"),
+        "precisionB": literal("11"),
+        "sourcesB": literal(
+            "Q43~Certificate of naturalisation for Gustave Lobig"
+        ),
+    },
+    {
+        "entity": uri("Q60"),
+        "entityLabel": literal("Disagreement Fixture Person"),
+        "propertyLabel": literal("residence"),
+        "sharedValue": uri("Q61"),
+        "sharedValueLabel": literal("Disagreement Fixture Town"),
+        "qualifierLabel": literal("start time"),
+        "valueA": time_literal("+1938-01-01T00:00:00Z"),
+        "precisionA": literal("9"),
+        "sourcesA": literal("Q62~Disagreement fixture source A"),
+        "valueB": time_literal("+1939-01-01T00:00:00Z"),
+        "precisionB": literal("9"),
+        "sourcesB": literal("Q63~Disagreement fixture source B"),
+    },
+    {
+        "entity": uri("Q64"),
+        "entityLabel": literal("Disagreement Fixture Spouse"),
+        "propertyLabel": literal("birth name"),
+        "valueA": {
+            "type": "literal",
+            "value": "Fixture Spouse Birth Name",
+            "xml:lang": "en",
+        },
+        "sourcesA": literal("Q62~Disagreement fixture source A"),
+        "valueB": {
+            "type": "literal",
+            "value": "Fixture Spouse Maiden Name",
+            "xml:lang": "en",
+        },
+        "sourcesB": literal("Q63~Disagreement fixture source B"),
+    },
+]
+
 
 def build(tmp_path, vocabulary, responses):
     calls = []
@@ -181,6 +232,7 @@ RESPONSES = {
     "?kind wdt:": ARTIFACTS,  # artifacts query walks the subclass path
     # assertions query (not ?stA/?stB)
     "?st prov:wasDerivedFrom/pr:": ASSERTIONS,
+    "?sharedValueLabel": INCONSISTENCIES,  # disagreement-report projection
 }
 
 
@@ -277,6 +329,49 @@ class TestSections:
         assert (site / "index.html").exists()
         assert "no place carries" in (site / "places.html").read_text()
         assert summary["people"] == 0
+
+
+class TestInconsistencies:
+    """The disagreement report as a page: both values of every row, each
+    with its sources and at its stated precision (ADR-0002, rule 6)."""
+
+    def page(self, tmp_path, vocabulary) -> str:
+        site, summary = build(tmp_path, vocabulary, RESPONSES)
+        assert summary["inconsistencies"] == len(INCONSISTENCIES)
+        return (site / "inconsistencies.html").read_text()
+
+    def test_both_values_render_with_their_sources(self, tmp_path, vocabulary):
+        text = self.page(tmp_path, vocabulary)
+        assert "1919-01-07" in text and "1919-07-01" in text
+        assert (
+            '<a href="artifacts/Q41.html">'
+            "Birth register extract for Gustav Löbig</a>"
+        ) in text
+        assert (
+            '<a href="artifacts/Q43.html">'
+            "Certificate of naturalisation for Gustave Lobig</a>"
+        ) in text
+
+    def test_dated_residence_names_the_place_and_the_date_compared(
+        self, tmp_path, vocabulary
+    ):
+        text = self.page(tmp_path, vocabulary)
+        assert (
+            "<td>residence (Disagreement Fixture Town), start time</td>"
+            in text
+        )
+        # year precision, never padded to 1 January
+        assert "<td>1938</td>" in text and "<td>1939</td>" in text
+        assert "1938-01-01" not in text
+
+    def test_single_valued_rows_show_the_property_alone(
+        self, tmp_path, vocabulary
+    ):
+        text = self.page(tmp_path, vocabulary)
+        assert "<td>date of birth</td>" in text
+        assert "<td>birth name</td>" in text
+        assert "<td>Fixture Spouse Birth Name</td>" in text
+        assert "<td>Fixture Spouse Maiden Name</td>" in text
 
 
 class TestTimeFormatting:

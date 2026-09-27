@@ -1,5 +1,7 @@
 """Offline tests for the query library (pytest; no instance needed)."""
 
+import re
+
 import pytest
 import yaml
 
@@ -73,6 +75,163 @@ class TestLibrary:
         projection = q.split("WHERE", 1)[0]
         assert "?statement" in projection
         assert "?precision" in projection
+
+
+# a VALUES body: text and {P:key} placeholders (braces nest one level)
+VALUES_BODY = r"\{((?:[^{}]|\{[PQ]:\w+\})*)\}"
+
+
+def values_blocks(template: str, variable: str) -> list[set[str]]:
+    """The property keys of each ``VALUES ?variable { ... }`` block."""
+    return [
+        placeholder_keys(body)[0]
+        for body in re.findall(
+            rf"VALUES\s+\?{variable}\s*" + VALUES_BODY, template
+        )
+    ]
+
+
+def values_pairs(template: str, first: str, second: str) -> set[tuple]:
+    """The key pairs of a ``VALUES (?first ?second) { ... }`` block."""
+    (body,) = re.findall(
+        rf"VALUES\s*\(\s*\?{first}\s+\?{second}\s*\)\s*" + VALUES_BODY,
+        template,
+    )
+    return set(re.findall(r"\(\s*wd:\{P:(\w+)\}\s+wd:\{P:(\w+)\}\s*\)", body))
+
+
+def group_at(template: str, marker: str) -> str:
+    """The ``{ ... }`` group that opens just before ``marker``."""
+    start = template.rindex("{", 0, template.index(marker))
+    depth = 0
+    for index in range(start, len(template)):
+        depth += {"{": 1, "}": -1}.get(template[index], 0)
+        if depth == 0:
+            return template[start : index + 1]
+    raise ValueError(f"unbalanced group at {marker!r}")
+
+
+class TestDisagreementReport:
+    """The flagship R2 view (ADR-0002): values that different artifacts
+    attribute, side by side. Coexistence is cross-source only (ADR-0023
+    §4), rank is an optional overlay, and the rows are a resting state.
+    tests/integration/test_live_disagreement.py pins the rows live."""
+
+    @pytest.fixture
+    def q(self, templates) -> str:
+        return templates["disagreement-report"]
+
+    def test_single_valued_properties_include_event_dates_and_birth_name(
+        self, q
+    ):
+        single_valued = values_blocks(q, "property")[0]
+        assert single_valued == {
+            "date_of_birth",
+            "date_of_death",
+            "place_of_birth",
+            "place_of_death",
+            "father",
+            "mother",
+            "birth_name",
+            # an event's own dates (#136)
+            "point_in_time",
+            "start_time",
+            "end_time",
+            "coordinate_location",
+            "geonames_id",
+            "whg_place_id",
+        }
+
+    def test_accumulating_properties_never_compare_values(self, q):
+        # spouse and residence accumulate over a life (MODELING.md
+        # "Contradictions"), and so do the other typed names
+        single_valued = values_blocks(q, "property")[0]
+        assert not single_valued & {
+            "residence",
+            "spouse",
+            "married_name",
+            "nickname",
+            "official_name",
+            "referred_to_as",
+        }
+
+    def test_one_residence_or_spouse_compares_its_start_and_end(self, q):
+        # "arrived there in 1938 per one source, in 1939 per another"; a
+        # point in time on a residence dates an observation, not the range
+        assert values_pairs(q, "property", "qualifier") == {
+            ("residence", "start_time"),
+            ("residence", "end_time"),
+            ("spouse", "start_time"),
+            ("spouse", "end_time"),
+        }
+
+    def test_containment_is_checked_for_place_values(self, q):
+        # a place inside the other is a difference of resolution; only the
+        # place-valued properties can differ that way
+        assert values_blocks(q, "property")[1] == {
+            "place_of_birth",
+            "place_of_death",
+        }
+        assert "(wdt:{P:location}|wdt:{P:part_of})+" in q
+
+    def test_only_pairs_from_different_artifacts_count(self, q):
+        # a value needs a stated-in source, a page fragment counts as its
+        # artifact, and a group's sources must not all be one artifact
+        assert "FILTER(BOUND(?sourceA) && BOUND(?sourceB))" in q
+        having = q.split("HAVING", 1)[1]
+        for aggregate in ("MIN(STR(?artifactA))", "MAX(STR(?artifactB))"):
+            assert aggregate in having
+        for side in "AB":
+            lookup = group_at(
+                q, f"?st{side} prov:wasDerivedFrom/pr:{{P:stated_in}}"
+            )
+            # the source is looked up after the pairs are found: WDQS
+            # orders a group's required patterns before its UNION, so a
+            # required ?stA pattern there pairs every statement with
+            # every other
+            assert lookup.startswith("{") and q[
+                : q.index(lookup)
+            ].rstrip().endswith("OPTIONAL")
+            # the fragment and label lookups sit inside it: at group level
+            # they would bind a missing source to any fragment or label
+            assert "wd:{Q:artifact_fragment}" in lookup
+            assert f"?source{side}LabelRaw" in lookup
+
+    def test_deprecated_values_are_out_and_preferred_is_never_needed(self, q):
+        assert "wikibase:rank ?rankA" in q and "wikibase:rank ?rankB" in q
+        assert (
+            "FILTER(?rankA != wikibase:DeprecatedRank "
+            "&& ?rankB != wikibase:DeprecatedRank)"
+        ) in q
+        # rule 4: no preference is read, and no best-rank shortcut hides
+        # a normal value beside a preferred one
+        assert "PreferredRank" not in q
+        assert "BestRank" not in q
+        compared = values_blocks(q, "property")[0] | {"residence", "spouse"}
+        for key in compared:
+            assert f"wdt:{{P:{key}}}" not in q, key
+
+    def test_names_compare_as_text_and_dates_at_the_coarser_precision(self, q):
+        assert "LCASE(STR(?valueA))" in q and "LCASE(STR(?valueB))" in q
+        # 1909 and 16 March 1909 agree: a difference of resolution
+        for check in ("YEAR(?valueA) = YEAR(?valueB)", "MONTH(?valueA)"):
+            assert check in q
+
+    def test_projection_carries_what_the_site_renders(self, q):
+        projection = q.split("WHERE", 1)[0]
+        for column in (
+            "?entityLabel",
+            "?propertyLabel",
+            "?sharedValueLabel",
+            "?qualifierLabel",
+            "?valueA",
+            "?precisionA",
+            "?sourcesA",
+            "?valueB",
+            "?precisionB",
+            "?sourcesB",
+        ):
+            assert column in projection, column
 
 
 class TestRendering:
