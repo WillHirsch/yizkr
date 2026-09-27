@@ -697,8 +697,9 @@ PROPERTIES = {
     "point_in_time": "P9",
     "relative_position_within_image": "P10",
     "type_hint": "P11",
+    "referred_to_as": "P12",
 }
-ITEMS = {"human": "Q1", "extraction_run": "Q2"}
+ITEMS = {"human": "Q1", "extraction_run": "Q2", "unclassified_entity": "Q3"}
 
 
 class FakeItems:
@@ -871,6 +872,110 @@ class TestWriterArtifactResolution:
         person = wiki.wbi.item.get(result.created_items["person-1"])
         (statement,) = person.claims.get(PROPERTIES["date_of_birth"])
         assert _cited(statement, "stated_in") == ["Q23"]
+
+
+# -- writer: a minted item's type statements carry both references (#88) ---
+
+# The family firm as the 2002 interview gives it: "The hat shop, the Blue
+# Hat". The extraction holds it as an unclassified entity whose type hint
+# keeps the source's word (ADR-0013).
+INTERVIEW_SHA1 = hashlib.sha1(
+    b"fictional transcript: the 2002 oral-history interview"
+).hexdigest()
+FIRM_LABEL = "Hutmacherei zum Blauen Hut"
+
+
+def _firm_batch(curated: bool = False) -> ClaimBatch:
+    firm = {
+        "kind": "local",
+        "local_id": "firm",
+        "label": FIRM_LABEL,
+        "instance_of": "unclassified_entity",
+    }
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "claims": [
+                {
+                    "subject": firm,
+                    "property": "referred_to_as",
+                    "value": {
+                        "type": "monolingual",
+                        "value": {"text": "the Blue Hat", "language": "en"},
+                    },
+                    "source": {
+                        "artifact": {
+                            "kind": "artifact",
+                            "sha1": INTERVIEW_SHA1,
+                        },
+                        "transcription_excerpt": {
+                            "text": "The hat shop, the Blue Hat",
+                            "language": "en",
+                        },
+                    },
+                    "curated": curated,
+                }
+            ],
+            "entities": [
+                {
+                    "id": "firm",
+                    "label": FIRM_LABEL,
+                    "kind": "unclassified_entity",
+                    "type_hint": "hat shop",
+                }
+            ],
+        }
+    )
+
+
+class TestWriterTypeStatements:
+    """A minted item's `instance of` and `type hint` are machine writes:
+    stated in the artifact that mentions the entity, and inferred from the
+    batch's extraction run (rules 1 and 2, ADR-0003)."""
+
+    def test_minted_subject_and_value_kinds_cite_artifact_and_run(self):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        result = BatchWriter(wiki).write_batch(batch())
+        # person-1 is minted as a claim's subject, person-2 as its value
+        for local_id in ("person-1", "person-2"):
+            item = wiki.wbi.item.get(result.created_items[local_id])
+            (kind,) = item.claims.get(PROPERTIES["instance_of"])
+            assert kind.mainsnak.datavalue["value"]["id"] == ITEMS["human"]
+            assert _cited(kind, "stated_in") == ["Q23"]
+            assert _cited(kind, "inferred_from_extraction_run") == [
+                result.run_qid
+            ]
+
+    def test_type_hint_cites_artifact_and_run(self):
+        wiki = FakeWiki({INTERVIEW_SHA1: "Q25"})
+        result = BatchWriter(wiki).write_batch(_firm_batch())
+        firm = wiki.wbi.item.get(result.created_items["firm"])
+        (kind,) = firm.claims.get(PROPERTIES["instance_of"])
+        (hint,) = firm.claims.get(PROPERTIES["type_hint"])
+        unclassified = ITEMS["unclassified_entity"]
+        assert kind.mainsnak.datavalue["value"]["id"] == unclassified
+        assert hint.mainsnak.datavalue["value"] == "hat shop"
+        for statement in (kind, hint):
+            assert _cited(statement, "stated_in") == ["Q25"]
+            assert _cited(statement, "inferred_from_extraction_run") == [
+                result.run_qid
+            ]
+
+    def test_kind_beside_a_curated_claim_still_cites_the_run(self):
+        # the reviewer corrected the claim's value, not the entity's kind:
+        # the kind and type hint remain the extraction's proposal
+        wiki = FakeWiki({INTERVIEW_SHA1: "Q25"})
+        result = BatchWriter(wiki).write_batch(_firm_batch(curated=True))
+        firm = wiki.wbi.item.get(result.created_items["firm"])
+        (name,) = firm.claims.get(PROPERTIES["referred_to_as"])
+        assert _cited(name, "stated_in") == ["Q25"]
+        assert _cited(name, "inferred_from_extraction_run") == []
+        for pid in (PROPERTIES["instance_of"], PROPERTIES["type_hint"]):
+            (statement,) = firm.claims.get(pid)
+            assert _cited(statement, "stated_in") == ["Q25"]
+            assert _cited(statement, "inferred_from_extraction_run") == [
+                result.run_qid
+            ]
 
 
 class TestPrivacyDefaults:
