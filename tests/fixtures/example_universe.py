@@ -3,19 +3,21 @@
 Every example in this project's code, comments, prompts, tests, ADRs,
 issues and PRs comes from this module and nowhere else (see
 ``docs/EXAMPLES.md``).  It is plain importable data: people, places,
-other entities (a firm, institutions, persecution events), sources
-with transcribed text, and the assertions each source makes.
+other entities (a firm, organisations, occupations, events), sources
+with transcribed text, and the assertions each source makes, in the
+archive's own vocabulary (manifest property ids, entity kinds and
+artifact classes).
 
 The family, in four generations:
 
-* Alfred Schöser (1850-1927), hatter, founds the firm Schöser & Sohn in
-  1885 at Brunnenring 35 in Flörburg (Hesse, Germany); he marries
-  Wilhelmine Tarle ("Minna") of Dönwald.
+* Alfred Schöser (1850-1927), master hatter, founds the firm Schöser &
+  Sohn in 1885 at Brunnenring 35 in Flörburg (Hesse, Germany); he
+  marries Wilhelmine Tarle ("Minna") of Dönwald.
 * Their children Johann ("Hans"), Paula and Julius; Johann marries
   Hedwig Laudler, Julius marries Gertrud Sörne ("Peppi").
 * Julius is arrested in 1939, held in the court prison at Peiltal and
-  released; Gertrud is deported to Klurnau in 1942 and liberated there
-  in 1945.
+  released; Gertrud is deported to Lager Klurnau in 1942 and liberated
+  at Klurnau in 1945.
 * Grandchildren Martha ("Bubi") and Josef ("Sepp") emigrate to
   Stupfield (Victoria, Australia) in 1938 and 1939 and take the surname
   Shoser; Josef's son Jonathan, born 1953, is possibly living.
@@ -28,9 +30,14 @@ per the civil register, 9 June per his naturalisation: day and month
 transposed), and the sources carry every uncertain date form: circa,
 before, after, between and decade.
 
+``GEDCOM_FIXTURE`` renders the family as a genealogy program would
+export it from these sources; ``tests/unit/test_example_universe.py``
+checks that every name, date, place and family link in it is one the
+data here asserts.
+
 How it was made (clean room).  The author never saw the project's real
 records.  Every specific was drawn by ``tests/fixtures/universe_draws.py``
-(``random.Random(58213)``, three rounds, each appended after the last
+(``random.Random(58213)``, four rounds, each appended after the last
 so earlier draws never changed) from broad tables of period given
 names, ordinary trades, large regions and syllables, then read over for
 plausibility.  Hand changes made on that read-over:
@@ -76,7 +83,7 @@ _MONTHS = (
 class Date:
     """A date as a source states it: precision and qualifier included.
 
-    ``qualifier`` is one of ``about``, ``before``, ``after`` or
+    ``qualifier`` is one of ``circa``, ``before``, ``after`` or
     ``between`` (which needs ``until``); ``decade`` marks "the 1890s".
     """
 
@@ -109,7 +116,7 @@ class Date:
         plain = self._plain(gedcom=True)
         if self.qualifier == "between" and self.until:
             return f"BET {plain} AND {self.until.gedcom}"
-        prefix = {"about": "ABT ", "before": "BEF ", "after": "AFT "}
+        prefix = {"circa": "ABT ", "before": "BEF ", "after": "AFT "}
         return prefix.get(self.qualifier or "", "") + plain
 
     def __str__(self) -> str:
@@ -118,7 +125,7 @@ class Date:
         plain = self._plain(gedcom=False)
         if self.qualifier == "between" and self.until:
             return f"between {plain} and {self.until}"
-        prefix = {"about": "c. ", "before": "before ", "after": "after "}
+        prefix = {"circa": "c. ", "before": "before ", "after": "after "}
         return prefix.get(self.qualifier or "", "") + plain
 
 
@@ -127,8 +134,9 @@ class Name:
     """One form of a name.
 
     ``form`` for people: birth, married, nickname, diminutive,
-    anglicised, recorded (as a source wrote it, status unknown) or
-    placeholder; for places: official, historical or transliterated.
+    anglicised, as_written (whole, as one source writes it) or
+    placeholder; for places: official, historical, transliterated or
+    translated.
     """
 
     text: str
@@ -140,8 +148,8 @@ class Name:
 class Person:
     key: str
     label: str
-    sex: str | None
-    generation: int | None
+    sex: str | None  # "male", "female" or None (unknown)
+    generation: int | None  # None: not family
     names: tuple[Name, ...]
     gedcom_xref: str | None = None
     note: str = ""
@@ -159,8 +167,9 @@ class Place:
 
 @dataclass(frozen=True)
 class Entity:
-    """Anything that is neither a person nor a place: a firm, an
-    institution, a ship, or an event such as an arrest."""
+    """Anything that is neither a person nor a place: an organisation,
+    an occupation, a vessel, or an event such as an arrest.  ``kind``
+    is a manifest entity kind."""
 
     key: str
     label: str
@@ -182,8 +191,9 @@ class Source:
 
 @dataclass(frozen=True)
 class Assertion:
-    """One thing one source says.  ``excerpt``, when given, is the
-    passage of the source's ``text`` that says it."""
+    """One thing one source says, as a manifest property and value.
+    ``excerpt``, when given, is the passage of the source's ``text``
+    that says it."""
 
     subject: str
     property: str
@@ -224,32 +234,33 @@ PEOPLE = (
     Person(
         "alfred-schoeser",
         "Alfred Schöser",
-        "M",
+        "male",
         1,
         _names(
             ("Alfred Schöser", "birth", "de"),
             ("Muckel", "nickname", "de"),
         ),
         gedcom_xref="@I1@",
-        note="Hatter; founded Schöser & Sohn in 1885.",
+        note="Master hatter; founded Schöser & Sohn in 1885.",
     ),
     Person(
         "wilhelmine-schoeser",
         "Wilhelmine Schöser",
-        "F",
+        "female",
         1,
         _names(
             ("Wilhelmine Tarle", "birth", "de"),
             ("Wilhelmine Schöser", "married", "de"),
             ("Minna", "diminutive", "de"),
+            ("Wilhelmine Schöser geb. Tarle", "as_written", "de"),
         ),
         gedcom_xref="@I2@",
-        note="Born in Dönwald; her birth year is only circa in the tree.",
+        note="Born in Dönwald; the tree gives her birth year as circa.",
     ),
     Person(
         "johann-schoeser",
         "Johann Schöser",
-        "M",
+        "male",
         2,
         _names(
             ("Johann Schöser", "birth", "de"),
@@ -261,19 +272,20 @@ PEOPLE = (
     Person(
         "hedwig-schoeser",
         "Hedwig Schöser",
-        "F",
+        "female",
         2,
         _names(
             ("Hedwig Laudler", "birth", "de"),
             ("Hedwig Schöser", "married", "de"),
             ("Hedi", "diminutive", "de"),
+            ("Hedwig Schöser geborene Laudler", "as_written", "de"),
         ),
         gedcom_xref="@I4@",
     ),
     Person(
         "paula-schoeser",
         "Paula Schöser",
-        "F",
+        "female",
         2,
         _names(("Paula Schöser", "birth", "de")),
         gedcom_xref="@I5@",
@@ -282,7 +294,7 @@ PEOPLE = (
     Person(
         "julius-schoeser",
         "Julius Schöser",
-        "M",
+        "male",
         2,
         _names(("Julius Schöser", "birth", "de")),
         gedcom_xref="@I6@",
@@ -291,26 +303,28 @@ PEOPLE = (
     Person(
         "gertrud-schoeser",
         "Gertrud Schöser",
-        "F",
+        "female",
         2,
         _names(
             ("Gertrud Sörne", "birth", "de"),
             ("Gertrud Schöser", "married", "de"),
             ("Peppi", "nickname", "de"),
+            ("SCHÖSER, Gertrud, née SÖRNE", "as_written", "en"),
         ),
         gedcom_xref="@I7@",
-        note="Deported to Klurnau in 1942 and liberated there in 1945.",
+        note="Deported to Lager Klurnau in 1942; liberated in 1945.",
     ),
     Person(
         "josef-schoeser",
         "Josef Schöser",
-        "M",
+        "male",
         3,
         _names(
             ("Josef Schöser", "birth", "de"),
             ("Sepp", "diminutive", "de"),
             ("Joseph Shoser", "anglicised", "en"),
             ("Joe", "diminutive", "en"),
+            ("Joseph SHOSER (formerly Josef SCHÖSER)", "as_written", "en"),
         ),
         gedcom_xref="@I8@",
         note=(
@@ -321,7 +335,7 @@ PEOPLE = (
     Person(
         "martha-schoeser",
         "Martha Schöser",
-        "F",
+        "female",
         3,
         _names(
             ("Martha Schöser", "birth", "de"),
@@ -334,7 +348,7 @@ PEOPLE = (
     Person(
         "frieda-schoeser",
         "Frieda Schöser",
-        "F",
+        "female",
         3,
         _names(("Frieda Schöser", "birth", "de")),
         gedcom_xref="@I10@",
@@ -343,7 +357,7 @@ PEOPLE = (
     Person(
         "karl-schoeser",
         "Karl Schöser",
-        "M",
+        "male",
         3,
         _names(("Karl Schöser", "birth", "de")),
         gedcom_xref="@I11@",
@@ -351,7 +365,7 @@ PEOPLE = (
     Person(
         "rudolf-schoeser",
         "Rudolf Schöser",
-        "M",
+        "male",
         3,
         _names(
             ("Rudolf Schöser", "birth", "de"),
@@ -371,7 +385,7 @@ PEOPLE = (
     Person(
         "christine-shoser",
         "Christine Shoser",
-        "F",
+        "female",
         3,
         _names(
             ("Christine Faxridge", "birth", "en"),
@@ -382,7 +396,7 @@ PEOPLE = (
     Person(
         "jonathan-shoser",
         "Jonathan Shoser",
-        "M",
+        "male",
         4,
         _names(("Jonathan Shoser", "birth", "en")),
         gedcom_xref="@I15@",
@@ -394,13 +408,13 @@ PEOPLE = (
     Person(
         "frieda-schoeser-angerring",
         "Frieda Schöser",
-        "F",
+        "female",
         None,
-        _names(("Frieda Schöser", "recorded", "de")),
+        _names(("Schöser, Frieda, Wwe.", "as_written", "de")),
         gedcom_xref="@I16@",
         note=(
-            "A widow listed in the 1912 directory; no relation to the "
-            "family is known.  Homonym of frieda-schoeser."
+            "A widow (Wwe.) listed in the 1912 directory; no relation "
+            "to the family is known.  Homonym of frieda-schoeser."
         ),
     ),
 )
@@ -450,6 +464,13 @@ PLACES = (
     Place("muehlenweg-16", "Mühlenweg 16", "address", ("muehlenweg",)),
     Place("angerring", "Angerring", "street", ("floerburg",)),
     Place("angerring-57", "Angerring 57", "address", ("angerring",)),
+    Place(
+        "floerburg-cemetery",
+        "Friedhof Flörburg",
+        "cemetery",
+        ("floerburg",),
+        note="Where Alfred and Wilhelmine are buried.",
+    ),
     Place("doenwald", "Dönwald", "town", ("kreis-peiltal",)),
     Place(
         "flaeckfeld",
@@ -469,11 +490,31 @@ PLACES = (
         note="No source gives its district or region.",
     ),
     Place(
+        "peiltal-court-prison",
+        "Gerichtsgefängnis Peiltal",
+        "prison",
+        ("peiltal",),
+        _names(
+            ("Gerichtsgefängnis Peiltal", "official", "de"),
+            ("Peiltal court prison", "translated", "en"),
+        ),
+    ),
+    Place(
         "klurnau",
         "Klurnau",
         "locality",
         (),
-        note="Site of Lager Klurnau; no source says where it lay.",
+        note="No source says where Klurnau lay: it reaches no country.",
+    ),
+    Place(
+        "klurnau-camp",
+        "Lager Klurnau",
+        "camp",
+        ("klurnau",),
+        _names(
+            ("Lager Klurnau", "official", "de"),
+            ("Klurnau camp", "translated", "en"),
+        ),
     ),
     Place(
         "australia",
@@ -499,55 +540,73 @@ ENTITIES = (
     Entity(
         "schoeser-und-sohn",
         "Schöser & Sohn",
-        "firm",
+        "organization",
         ("Schöser and Son",),
         note="The family's hat-making firm at Brunnenring 35, Flörburg.",
+    ),
+    Entity("hatter", "Hatter", "occupation_class", ("Hutmacher",)),
+    Entity(
+        "master-hatter",
+        "Master hatter",
+        "occupation_class",
+        ("Hutmachermeister",),
     ),
     Entity(
         "arrest-1939",
         "Arrest of Julius Schöser",
         "event",
-        note="Persecution event: arrest.",
+        note="Persecution event: the arrest.",
     ),
     Entity(
         "imprisonment-1939",
         "Imprisonment of Julius Schöser",
-        "event",
-        note="Persecution event: imprisonment; its end is his release.",
+        "imprisonment",
+        note="Persecution event: four weeks in the Peiltal court prison.",
+    ),
+    Entity(
+        "release-1939",
+        "Release of Julius Schöser",
+        "release",
+        note="Persecution event: release from prison.",
     ),
     Entity(
         "deportation-1942",
-        "Deportation from Flörburg to Klurnau",
-        "event",
-        note="Persecution event: deportation.",
+        "Deportation of Gertrud Schöser",
+        "deportation",
+        note="Persecution event: from Flörburg to Lager Klurnau.",
     ),
     Entity(
         "liberation-1945",
-        "Liberation of Lager Klurnau",
-        "event",
-        note="Persecution event: liberation.",
+        "Liberation of Gertrud Schöser",
+        "release",
+        note="Persecution event: liberation at Klurnau.",
     ),
-    Entity(
-        "peiltal-court-prison",
-        "Gerichtsgefängnis Peiltal",
-        "prison",
-        ("Peiltal court prison",),
-    ),
-    Entity("klurnau-camp", "Lager Klurnau", "camp", ("Klurnau camp",)),
-    Entity("floerburg-registry", "Standesamt Flörburg", "registry office"),
+    Entity("emigration-1938", "Emigration of Martha Schöser", "migration"),
+    Entity("emigration-1939", "Emigration of Josef Schöser", "migration"),
+    Entity("floerburg-registry", "Standesamt Flörburg", "organization"),
     Entity(
         "realschule-floerburg",
         "Städtische Realschule Flörburg",
-        "school",
+        "organization",
     ),
-    Entity("floerburger-anzeiger", "Flörburger Anzeiger", "newspaper"),
+    Entity(
+        "floerburger-anzeiger",
+        "Flörburger Anzeiger",
+        "organization",
+        note="The local newspaper that printed the 1927 death notice.",
+    ),
     Entity(
         "atelier-bruesrich",
         "Atelier Brüsrich",
-        "photo studio",
+        "organization",
         note="Photographic studio in Peiltal.",
     ),
-    Entity("rms-flund", "RMS Flund", "ship"),
+    Entity(
+        "rms-flund",
+        "RMS Flund",
+        "vessel",
+        note="Named in the naturalisation certificate.",
+    ),
 )
 
 SOURCES = (
@@ -584,7 +643,7 @@ SOURCES = (
         "Adressbuch der Stadt Flörburg 1912",
         "de",
         1912,
-        "directory",
+        "address_book",
         text=(
             "Schöser & Sohn, Hutmacherei, Inh. Johann Schöser, "
             "Brunnenring 35.\n"
@@ -594,17 +653,19 @@ SOURCES = (
     ),
     Source(
         "death-notice-1927",
-        "Death notice for Alfred Schöser",
+        "Death notice for Alfred Schöser, Flörburger Anzeiger",
         "de",
         1927,
-        "newspaper",
+        "newspaper_clipping",
         text=(
             "Am 20. März 1927 verschied nach kurzer Krankheit unser "
             "lieber Vater, der Hutmachermeister Alfred Schöser, im 77. "
             "Lebensjahre.\n"
             "Flörburg, Brunnenring 35.\n"
             "In tiefer Trauer: Wilhelmine Schöser geb. Tarle, Johann "
-            "Schöser, Paula Schöser, Julius Schöser."
+            "Schöser, Paula Schöser, Julius Schöser.\n"
+            "Die Beerdigung findet Dienstag, den 22. März, auf dem "
+            "Friedhof Flörburg statt."
         ),
     ),
     Source(
@@ -659,7 +720,7 @@ SOURCES = (
         "Transport list, Flörburg to Lager Klurnau",
         "de",
         1942,
-        "list",
+        "artifact",
         text=(
             "Transport Flörburg – Lager Klurnau, 21. August 1942.\n"
             "Schöser, Gertrud geb. Sörne, geb. 27.9.1887, Flörburg, "
@@ -671,7 +732,7 @@ SOURCES = (
         "Post-war registration card for Gertrud Schöser",
         "en",
         1945,
-        "card",
+        "artifact",
         text=(
             "SCHÖSER, Gertrud, née SÖRNE. Born 27.9.1887 at Moshausen. "
             "Last address: Flörburg, Mühlenweg 16. Deported 21.8.1942 "
@@ -704,13 +765,14 @@ SOURCES = (
             "ALFRED SCHÖSER\n1850 – 1927\n"
             "WILHELMINE SCHÖSER\nGEB. TARLE\n1855 – 1928"
         ),
+        note="The grave is in the Flörburg cemetery.",
     ),
     Source(
         "family-tree-1984",
         "Family tree drawn by Martha Shoser",
         "en",
         1984,
-        "chart",
+        "genealogical_report",
         text=(
             "Alfred Schöser, b. Bad Flörburg 1850, d. 1927 = (1879) "
             "Wilhelmine 'Minna' Tarle of Dönwald, c. 1855–1928.\n"
@@ -725,14 +787,14 @@ SOURCES = (
             "Rudolf 'Rudi' 1916–1941; infant 1925.\n"
             "Children of Sepp and Christine: Jonathan 1953."
         ),
-        note="Hand-drawn in Australia; the GEDCOM rendering follows it.",
+        note="Hand-drawn in Australia by the emigrant Martha.",
     ),
     Source(
         "interview-2002",
         "Oral-history interview with Jonathan Shoser",
         "en",
         2002,
-        "interview",
+        None,
         text=(
             "I was born in '53, in Stupfield. Dad — Joe, everyone "
             "called him — left Germany in the August, just before the "
@@ -746,84 +808,71 @@ SOURCES = (
     ),
 )
 
-_HEARSAY = {"sourcing circumstances": "hearsay"}
-
 ASSERTIONS = tuple(
     _said(
         "studio-photo-1890s",
-        (
-            "studio-photo-1890s",
-            "inception",
-            Date(1890, decade=True),
-            {"sourcing circumstances": "estimated from the studio mount"},
-        ),
-        (
-            "studio-photo-1890s",
-            "created by",
-            "atelier-bruesrich",
-            "Atelier Brüsrich · Peiltal",
-        ),
+        ("studio-photo-1890s", "point_in_time", Date(1890, decade=True)),
         ("atelier-bruesrich", "location", "peiltal", "Brüsrich · Peiltal"),
         (
             "studio-photo-1890s",
             "depicts",
             "alfred-schoeser",
-            {"object named as": "Muckel"},
+            {"referred_to_as": "Muckel"},
             "Muckel",
         ),
         (
             "studio-photo-1890s",
             "depicts",
             "wilhelmine-schoeser",
-            {"object named as": "Minna"},
+            {"referred_to_as": "Minna"},
             "Minna",
         ),
         (
             "studio-photo-1890s",
             "depicts",
             "johann-schoeser",
-            {"object named as": "Hans"},
+            {"referred_to_as": "Hans"},
             "Hans",
         ),
         (
             "studio-photo-1890s",
             "depicts",
             "paula-schoeser",
-            {"object named as": "Paula"},
+            {"referred_to_as": "Paula"},
             "Paula",
         ),
         (
             "studio-photo-1890s",
             "depicts",
             "julius-schoeser",
-            {"object named as": "Julius"},
+            {"referred_to_as": "Julius"},
             "Julius",
         ),
     )
     + _said(
         "marriage-cert-1905",
         (
-            "marriage-cert-1905",
-            "issued by",
             "floerburg-registry",
+            "location",
+            "floerburg",
             "Standesamt Flörburg",
         ),
         (
             "johann-schoeser",
             "spouse",
             "hedwig-schoeser",
-            {"start time": Date(1905, 2, 1)},
+            {"start_time": Date(1905, 2, 1), "location": "floerburg"},
             "Flörburg, am 1. Februar 1905",
         ),
         (
             "johann-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1881, 3, 13),
             "geboren am 13. März 1881 zu Flörburg",
         ),
         (
             "johann-schoeser",
-            "place of birth",
+            "place_of_birth",
             "floerburg",
             "geboren am 13. März 1881 zu Flörburg",
         ),
@@ -848,36 +897,36 @@ ASSERTIONS = tuple(
         (
             "alfred-schoeser",
             "occupation",
-            "master hatter",
+            "master-hatter",
             "Hutmachermeisters Alfred Schöser",
         ),
         (
             "wilhelmine-schoeser",
-            "birth name",
+            "birth_name",
             "Wilhelmine Tarle",
             "Wilhelmine geborene Tarle",
         ),
         (
             "hedwig-schoeser",
-            "birth name",
+            "birth_name",
             "Hedwig Laudler",
             "die Hedwig Laudler",
         ),
         (
             "hedwig-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1884, 6, 10),
             "geboren am 10. Juni 1884 zu Fläckfeld",
         ),
         (
             "hedwig-schoeser",
-            "place of birth",
+            "place_of_birth",
             "flaeckfeld",
             "geboren am 10. Juni 1884 zu Fläckfeld",
         ),
         (
             "flaeckfeld",
-            "part of",
+            "part_of",
             "kreis-mockburg",
             "Fläckfeld, Kreis Mockburg",
         ),
@@ -888,61 +937,63 @@ ASSERTIONS = tuple(
             "schoeser-und-sohn",
             "location",
             "brunnenring-35",
-            {"point in time": Date(1912)},
+            {"point_in_time": Date(1912)},
             "Brunnenring 35",
         ),
         (
-            "schoeser-und-sohn",
-            "owned by",
             "johann-schoeser",
-            {"point in time": Date(1912)},
-            "Inh. Johann Schöser",
-        ),
-        (
+            "employer",
             "schoeser-und-sohn",
-            "industry",
-            "hat making",
-            "Schöser & Sohn, Hutmacherei",
+            {"point_in_time": Date(1912)},
+            "Inh. Johann Schöser",
         ),
         (
             "frieda-schoeser-angerring",
             "residence",
             "angerring-57",
-            {"point in time": Date(1912)},
+            {"point_in_time": Date(1912)},
             "Schöser, Frieda, Wwe., Angerring 57",
         ),
-        ("frieda-schoeser-angerring", "marital status", "widowed", "Wwe."),
     )
     + _said(
         "death-notice-1927",
         (
-            "death-notice-1927",
-            "published in",
-            "floerburger-anzeiger",
-        ),
-        (
             "alfred-schoeser",
-            "date of death",
+            "date_of_death",
             Date(1927, 3, 20),
             "Am 20. März 1927 verschied",
         ),
         (
             "alfred-schoeser",
-            "place of death",
+            "place_of_death",
             "floerburg",
             "Flörburg, Brunnenring 35",
         ),
         (
             "alfred-schoeser",
+            "cause_of_death",
+            "short illness",
+            "nach kurzer Krankheit",
+        ),
+        (
+            "alfred-schoeser",
+            "burial_place",
+            "floerburg-cemetery",
+            {"point_in_time": Date(1927, 3, 22)},
+            "Die Beerdigung findet Dienstag, den 22. März, auf dem "
+            "Friedhof Flörburg statt",
+        ),
+        (
+            "alfred-schoeser",
             "occupation",
-            "master hatter",
+            "master-hatter",
             "der Hutmachermeister Alfred Schöser",
         ),
         (
             "alfred-schoeser",
             "residence",
             "brunnenring-35",
-            {"point in time": Date(1927, 3, 20)},
+            {"point_in_time": Date(1927, 3, 20)},
             "Flörburg, Brunnenring 35",
         ),
         (
@@ -953,13 +1004,13 @@ ASSERTIONS = tuple(
         ),
         (
             "wilhelmine-schoeser",
-            "birth name",
+            "birth_name",
             "Wilhelmine Tarle",
             "Wilhelmine Schöser geb. Tarle",
         ),
         (
             "wilhelmine-schoeser",
-            "married name",
+            "married_name",
             "Wilhelmine Schöser",
             "Wilhelmine Schöser geb. Tarle",
         ),
@@ -970,8 +1021,14 @@ ASSERTIONS = tuple(
     + _said(
         "school-report-1930",
         (
+            "realschule-floerburg",
+            "location",
+            "floerburg",
+            "Städtische Realschule zu Flörburg",
+        ),
+        (
             "rudolf-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1916, 10, 24),
             "geb. am 24. Oktober 1916",
         ),
@@ -983,9 +1040,9 @@ ASSERTIONS = tuple(
         ),
         (
             "rudolf-schoeser",
-            "educated at",
+            "educated_at",
             "realschule-floerburg",
-            {"point in time": Date(1930)},
+            {"point_in_time": Date(1930)},
             "Städtische Realschule zu Flörburg",
         ),
         (
@@ -998,27 +1055,21 @@ ASSERTIONS = tuple(
             "julius-schoeser",
             "residence",
             "muehlenweg-16",
-            {"point in time": Date(1930)},
+            {"point_in_time": Date(1930)},
             "Flörburg, Mühlenweg 16",
         ),
     )
     + _said(
         "birth-extract-1938",
         (
-            "birth-extract-1938",
-            "issued by",
-            "floerburg-registry",
-            "Standesamt Flörburg",
-        ),
-        (
             "josef-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1907, 9, 6),
             "am sechsten September des Jahres tausend neunhundert und sieben",
         ),
         (
             "josef-schoeser",
-            "place of birth",
+            "place_of_birth",
             "floerburg",
             "zu Flörburg in seiner Wohnung",
         ),
@@ -1031,8 +1082,14 @@ ASSERTIONS = tuple(
         ),
         (
             "hedwig-schoeser",
-            "birth name",
+            "birth_name",
             "Hedwig Laudler",
+            "Hedwig Schöser geborene Laudler",
+        ),
+        (
+            "hedwig-schoeser",
+            "married_name",
+            "Hedwig Schöser",
             "Hedwig Schöser geborene Laudler",
         ),
         (
@@ -1045,32 +1102,31 @@ ASSERTIONS = tuple(
             "johann-schoeser",
             "residence",
             "brunnenring-35",
-            {"point in time": Date(1907, 9, 7)},
+            {"point_in_time": Date(1907, 9, 7)},
             "wohnhaft in Flörburg, Brunnenring 35",
         ),
     )
     + _said(
         "letter-1938",
+        ("letter-1938", "point_in_time", Date(1938, 6, 2), "2. Juni 1938"),
         (
-            "letter-1938",
-            "author",
             "johann-schoeser",
-            {"object named as": "Dein Vater"},
+            "referred_to_as",
+            "Dein Vater",
+            {"perspective": "martha-schoeser"},
             "Dein Vater",
         ),
-        (
-            "letter-1938",
-            "addressee",
-            "martha-schoeser",
-            {"object named as": "Bubi"},
-            "Liebe Bubi!",
-        ),
-        ("letter-1938", "inception", Date(1938, 6, 2), "den 2. Juni 1938"),
         ("martha-schoeser", "father", "johann-schoeser", "Dein Vater"),
         ("martha-schoeser", "nickname", "Bubi", "Liebe Bubi!"),
         (
+            "emigration-1938",
+            "participant",
             "martha-schoeser",
-            "date of emigration",
+            "Seit Du am 12. März abgereist bist",
+        ),
+        (
+            "emigration-1938",
+            "point_in_time",
             Date(1938, 3, 12),
             "Seit Du am 12. März abgereist bist",
         ),
@@ -1078,7 +1134,7 @@ ASSERTIONS = tuple(
             "martha-schoeser",
             "residence",
             "juniper-street-31",
-            {"point in time": Date(1938, 6, 2)},
+            {"point_in_time": Date(1938, 6, 2)},
             "31 Juniper Street, Stupfield",
         ),
         (
@@ -1087,12 +1143,12 @@ ASSERTIONS = tuple(
             "Sepp",
             "Sepp wartet noch auf sein Visum",
         ),
-        ("schoeser-und-sohn", "inception", Date(1885), "gegr. 1885"),
+        ("schoeser-und-sohn", "start_time", Date(1885), "gegr. 1885"),
         (
             "schoeser-und-sohn",
             "location",
             "brunnenring-35",
-            {"point in time": Date(1938, 6, 2)},
+            {"point_in_time": Date(1938, 6, 2)},
             "Flörburg, Brunnenring 35",
         ),
     )
@@ -1100,23 +1156,16 @@ ASSERTIONS = tuple(
         "transport-list-1942",
         (
             "deportation-1942",
-            "point in time",
+            "point_in_time",
             Date(1942, 8, 21),
             "21. August 1942",
         ),
         (
             "deportation-1942",
-            "origin",
-            "floerburg",
-            "Transport Flörburg – Lager Klurnau",
-        ),
-        (
-            "deportation-1942",
-            "destination",
+            "location",
             "klurnau-camp",
             "Transport Flörburg – Lager Klurnau",
         ),
-        ("klurnau-camp", "location", "klurnau", "Lager Klurnau"),
         (
             "deportation-1942",
             "participant",
@@ -1125,13 +1174,13 @@ ASSERTIONS = tuple(
         ),
         (
             "gertrud-schoeser",
-            "birth name",
+            "birth_name",
             "Gertrud Sörne",
             "Schöser, Gertrud geb. Sörne",
         ),
         (
             "gertrud-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1887, 9, 27),
             "geb. 27.9.1887",
         ),
@@ -1139,28 +1188,28 @@ ASSERTIONS = tuple(
             "gertrud-schoeser",
             "residence",
             "muehlenweg-16",
-            {"point in time": Date(1942, 8, 21)},
+            {"point_in_time": Date(1942, 8, 21)},
             "Flörburg, Mühlenweg 16",
         ),
     )
     + _said(
         "registration-card-1945",
-        ("gertrud-schoeser", "birth name", "Gertrud Sörne", "née SÖRNE"),
+        ("gertrud-schoeser", "birth_name", "Gertrud Sörne", "née SÖRNE"),
         (
             "gertrud-schoeser",
-            "married name",
+            "married_name",
             "Gertrud Schöser",
             "SCHÖSER, Gertrud, née SÖRNE",
         ),
         (
             "gertrud-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1887, 9, 27),
             "Born 27.9.1887 at Moshausen",
         ),
         (
             "gertrud-schoeser",
-            "place of birth",
+            "place_of_birth",
             "moshausen",
             "Born 27.9.1887 at Moshausen",
         ),
@@ -1178,13 +1227,13 @@ ASSERTIONS = tuple(
         ),
         (
             "deportation-1942",
-            "point in time",
+            "point_in_time",
             Date(1942, 8, 21),
             "Deported 21.8.1942 to Klurnau",
         ),
         (
             "deportation-1942",
-            "destination",
+            "location",
             "klurnau",
             "Deported 21.8.1942 to Klurnau",
         ),
@@ -1196,7 +1245,7 @@ ASSERTIONS = tuple(
         ),
         (
             "liberation-1945",
-            "point in time",
+            "point_in_time",
             Date(1945, 1, 28),
             "Liberated at Klurnau 28.1.1945",
         ),
@@ -1220,7 +1269,7 @@ ASSERTIONS = tuple(
         ),
         (
             "arrest-1939",
-            "point in time",
+            "point_in_time",
             Date(1939, 9, 3),
             "arrested 3.9.1939",
         ),
@@ -1238,50 +1287,61 @@ ASSERTIONS = tuple(
         ),
         (
             "imprisonment-1939",
-            "start time",
+            "start_time",
             Date(1939, 9, 3),
             "arrested 3.9.1939, held",
         ),
         (
             "imprisonment-1939",
-            "end time",
+            "end_time",
             Date(1939, 10, 1),
             "until 1.10.1939",
         ),
         (
-            "peiltal-court-prison",
-            "location",
-            "peiltal",
-            "Peiltal court prison",
+            "release-1939",
+            "participant",
+            "julius-schoeser",
+            "held in Peiltal court prison until 1.10.1939",
         ),
-        ("julius-schoeser", "date of death", Date(1942), "died 1942"),
+        (
+            "release-1939",
+            "point_in_time",
+            Date(1939, 10, 1),
+            "until 1.10.1939",
+        ),
+        (
+            "release-1939",
+            "location",
+            "peiltal-court-prison",
+            "held in Peiltal court prison until 1.10.1939",
+        ),
+        ("julius-schoeser", "date_of_death", Date(1942), "died 1942"),
     )
     + _said(
         "naturalisation-1952",
         (
             "josef-schoeser",
-            "name",
+            "official_name",
             "Joseph Shoser",
-            {"language": "en"},
             "Joseph SHOSER",
         ),
         (
             "josef-schoeser",
-            "birth name",
+            "birth_name",
             "Josef Schöser",
             "formerly Josef SCHÖSER",
         ),
         (
             "josef-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1907, 6, 9),
             "Born 9th June 1907",
         ),
         (
             "josef-schoeser",
-            "place of birth",
+            "place_of_birth",
             "floerburg",
-            {"object named as": "Floerburg"},
+            {"referred_to_as": "Floerburg"},
             "at Floerburg, Germany",
         ),
         ("josef-schoeser", "occupation", "hatter", "hatter"),
@@ -1289,64 +1349,71 @@ ASSERTIONS = tuple(
             "josef-schoeser",
             "residence",
             "hawthorn-road-8",
-            {"point in time": Date(1952)},
+            {"point_in_time": Date(1952)},
             "8 Hawthorn Road, Stupfield, Victoria",
         ),
         (
             "josef-schoeser",
             "residence",
             "australia",
-            {"start time": Date(1939)},
+            {"start_time": Date(1939)},
             "Arrived in Australia 1939",
         ),
-        ("josef-schoeser", "arrived aboard", "rms-flund", "per RMS Flund"),
         (
             "josef-schoeser",
-            "country of citizenship",
+            "country_of_citizenship",
             "australia",
-            {"start time": Date(1952)},
+            {"start_time": Date(1952)},
             "Granted 1952",
         ),
     )
     + _said(
         "gravestone-photo-1978",
-        ("alfred-schoeser", "date of birth", Date(1850), "1850 – 1927"),
-        ("alfred-schoeser", "date of death", Date(1927), "1850 – 1927"),
-        ("wilhelmine-schoeser", "date of birth", Date(1855), "1855 – 1928"),
-        ("wilhelmine-schoeser", "date of death", Date(1928), "1855 – 1928"),
+        ("alfred-schoeser", "date_of_birth", Date(1850), "1850 – 1927"),
+        ("alfred-schoeser", "date_of_death", Date(1927), "1850 – 1927"),
+        ("wilhelmine-schoeser", "date_of_birth", Date(1855), "1855 – 1928"),
+        ("wilhelmine-schoeser", "date_of_death", Date(1928), "1855 – 1928"),
         (
             "wilhelmine-schoeser",
-            "birth name",
+            "birth_name",
             "Wilhelmine Tarle",
             "GEB. TARLE",
+        ),
+        (
+            "alfred-schoeser",
+            "burial_place",
+            "floerburg-cemetery",
+            "ALFRED SCHÖSER",
+        ),
+        (
+            "wilhelmine-schoeser",
+            "burial_place",
+            "floerburg-cemetery",
+            "WILHELMINE SCHÖSER",
         ),
     )
     + _said(
         "family-tree-1984",
-        (
-            "family-tree-1984",
-            "author",
-            "martha-schoeser",
-        ),
+        ("alfred-schoeser", "number_of_children", 3, "Their children"),
         (
             "alfred-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1850),
             "b. Bad Flörburg 1850",
         ),
         (
             "alfred-schoeser",
-            "place of birth",
+            "place_of_birth",
             "floerburg",
-            {"object named as": "Bad Flörburg"},
+            {"referred_to_as": "Bad Flörburg"},
             "b. Bad Flörburg 1850",
         ),
-        ("alfred-schoeser", "date of death", Date(1927), "d. 1927"),
+        ("alfred-schoeser", "date_of_death", Date(1927), "d. 1927"),
         (
             "alfred-schoeser",
             "spouse",
             "wilhelmine-schoeser",
-            {"start time": Date(1879)},
+            {"start_time": Date(1879)},
             "= (1879) Wilhelmine 'Minna' Tarle",
         ),
         (
@@ -1357,19 +1424,25 @@ ASSERTIONS = tuple(
         ),
         (
             "wilhelmine-schoeser",
-            "place of birth",
+            "birth_name",
+            "Wilhelmine Tarle",
+            "Wilhelmine 'Minna' Tarle",
+        ),
+        (
+            "wilhelmine-schoeser",
+            "place_of_birth",
             "doenwald",
             "Tarle of Dönwald",
         ),
         (
             "wilhelmine-schoeser",
-            "date of birth",
-            Date(1855, qualifier="about"),
+            "date_of_birth",
+            Date(1855, qualifier="circa"),
             "c. 1855–1928",
         ),
         (
             "wilhelmine-schoeser",
-            "date of death",
+            "date_of_death",
             Date(1928),
             "c. 1855–1928",
         ),
@@ -1383,13 +1456,13 @@ ASSERTIONS = tuple(
         ("johann-schoeser", "nickname", "Hans", "Johann 'Hans' 1881–1953"),
         (
             "johann-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1881),
             "Johann 'Hans' 1881–1953",
         ),
         (
             "johann-schoeser",
-            "date of death",
+            "date_of_death",
             Date(1953),
             "Johann 'Hans' 1881–1953",
         ),
@@ -1402,25 +1475,25 @@ ASSERTIONS = tuple(
         ("hedwig-schoeser", "nickname", "Hedi", "Hedwig 'Hedi' Laudler"),
         (
             "hedwig-schoeser",
-            "place of birth",
+            "place_of_birth",
             "flaeckfeld",
             "Laudler of Fläckfeld",
         ),
         (
             "flaeckfeld",
-            "part of",
+            "part_of",
             "kreis-peiltal",
             "Fläckfeld (Kr. Peiltal)",
         ),
         (
             "hedwig-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1884),
             "(Kr. Peiltal) 1884–1968",
         ),
         (
             "hedwig-schoeser",
-            "date of death",
+            "date_of_death",
             Date(1968),
             "(Kr. Peiltal) 1884–1968",
         ),
@@ -1433,13 +1506,13 @@ ASSERTIONS = tuple(
         ),
         (
             "paula-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1882),
             "Paula 1882 – after 1945",
         ),
         (
             "paula-schoeser",
-            "date of death",
+            "date_of_death",
             Date(1945, qualifier="after"),
             "Paula 1882 – after 1945",
         ),
@@ -1450,8 +1523,8 @@ ASSERTIONS = tuple(
             "wilhelmine-schoeser",
             "Their children",
         ),
-        ("julius-schoeser", "date of birth", Date(1884), "Julius 1884–1942"),
-        ("julius-schoeser", "date of death", Date(1942), "Julius 1884–1942"),
+        ("julius-schoeser", "date_of_birth", Date(1884), "Julius 1884–1942"),
+        ("julius-schoeser", "date_of_death", Date(1942), "Julius 1884–1942"),
         (
             "julius-schoeser",
             "spouse",
@@ -1466,42 +1539,42 @@ ASSERTIONS = tuple(
         ),
         (
             "gertrud-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1887),
             "Gertrud 'Peppi' Sörne 1887–1946",
         ),
         (
             "gertrud-schoeser",
-            "date of death",
+            "date_of_death",
             Date(1946),
             "Gertrud 'Peppi' Sörne 1887–1946",
         ),
         ("josef-schoeser", "father", "johann-schoeser", "Hans and Hedi"),
         ("josef-schoeser", "mother", "hedwig-schoeser", "Hans and Hedi"),
         ("josef-schoeser", "nickname", "Sepp", "Josef 'Sepp' 1907"),
-        ("josef-schoeser", "date of birth", Date(1907), "Josef 'Sepp' 1907"),
+        ("josef-schoeser", "date_of_birth", Date(1907), "Josef 'Sepp' 1907"),
         (
             "josef-schoeser",
             "spouse",
             "christine-shoser",
-            {"start time": Date(1945)},
+            {"start_time": Date(1945)},
             "= (1945) Christine Faxridge",
         ),
         (
             "christine-shoser",
-            "birth name",
+            "birth_name",
             "Christine Faxridge",
             "Christine Faxridge 1923–1963",
         ),
         (
             "christine-shoser",
-            "date of birth",
+            "date_of_birth",
             Date(1923),
             "Christine Faxridge 1923–1963",
         ),
         (
             "christine-shoser",
-            "date of death",
+            "date_of_death",
             Date(1963),
             "Christine Faxridge 1923–1963",
         ),
@@ -1510,18 +1583,18 @@ ASSERTIONS = tuple(
         ("martha-schoeser", "nickname", "Bubi", "Martha 'Bubi' 1910"),
         (
             "martha-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1910),
             "Martha 'Bubi' 1910",
         ),
         ("frieda-schoeser", "father", "johann-schoeser", "Hans and Hedi"),
         ("frieda-schoeser", "mother", "hedwig-schoeser", "Hans and Hedi"),
-        ("frieda-schoeser", "date of birth", Date(1911), "Frieda 1911–1941"),
-        ("frieda-schoeser", "date of death", Date(1941), "Frieda 1911–1941"),
+        ("frieda-schoeser", "date_of_birth", Date(1911), "Frieda 1911–1941"),
+        ("frieda-schoeser", "date_of_death", Date(1941), "Frieda 1911–1941"),
         ("karl-schoeser", "father", "julius-schoeser", "Julius and Peppi"),
         ("karl-schoeser", "mother", "gertrud-schoeser", "Julius and Peppi"),
-        ("karl-schoeser", "date of birth", Date(1914), "Karl 1914–1960"),
-        ("karl-schoeser", "date of death", Date(1960), "Karl 1914–1960"),
+        ("karl-schoeser", "date_of_birth", Date(1914), "Karl 1914–1960"),
+        ("karl-schoeser", "date_of_death", Date(1960), "Karl 1914–1960"),
         (
             "rudolf-schoeser",
             "father",
@@ -1537,13 +1610,13 @@ ASSERTIONS = tuple(
         ("rudolf-schoeser", "nickname", "Rudi", "Rudolf 'Rudi' 1916–1941"),
         (
             "rudolf-schoeser",
-            "date of birth",
+            "date_of_birth",
             Date(1916),
             "Rudolf 'Rudi' 1916–1941",
         ),
         (
             "rudolf-schoeser",
-            "date of death",
+            "date_of_death",
             Date(1941),
             "Rudolf 'Rudi' 1916–1941",
         ),
@@ -1559,8 +1632,8 @@ ASSERTIONS = tuple(
             "gertrud-schoeser",
             "Julius and Peppi",
         ),
-        ("infant-schoeser", "date of birth", Date(1925), "infant 1925"),
-        ("infant-schoeser", "date of death", Date(1925), "infant 1925"),
+        ("infant-schoeser", "date_of_birth", Date(1925), "infant 1925"),
+        ("infant-schoeser", "date_of_death", Date(1925), "infant 1925"),
         (
             "jonathan-shoser",
             "father",
@@ -1573,19 +1646,19 @@ ASSERTIONS = tuple(
             "christine-shoser",
             "Children of Sepp and Christine",
         ),
-        ("jonathan-shoser", "date of birth", Date(1953), "Jonathan 1953"),
+        ("jonathan-shoser", "date_of_birth", Date(1953), "Jonathan 1953"),
     )
     + _said(
         "interview-2002",
         (
             "jonathan-shoser",
-            "date of birth",
+            "date_of_birth",
             Date(1953),
             "I was born in '53, in Stupfield",
         ),
         (
             "jonathan-shoser",
-            "place of birth",
+            "place_of_birth",
             "stupfield",
             "I was born in '53, in Stupfield",
         ),
@@ -1593,68 +1666,103 @@ ASSERTIONS = tuple(
             "jonathan-shoser",
             "father",
             "josef-schoeser",
-            {"object named as": "Dad"},
             "Dad — Joe, everyone called him",
         ),
         (
             "josef-schoeser",
-            "nickname",
-            "Joe",
-            "Joe, everyone called him",
+            "referred_to_as",
+            "Dad",
+            {"perspective": "jonathan-shoser"},
+            "Dad — Joe",
+        ),
+        ("josef-schoeser", "nickname", "Joe", "Joe, everyone called him"),
+        (
+            "emigration-1939",
+            "participant",
+            "josef-schoeser",
+            "left Germany in the August, just before the war",
         ),
         (
-            "josef-schoeser",
-            "date of emigration",
+            "emigration-1939",
+            "point_in_time",
             Date(1939, 8),
             "left Germany in the August, just before the war",
         ),
         ("martha-schoeser", "nickname", "Bubi", "Aunt Bubi"),
         (
             "martha-schoeser",
-            "date of emigration",
-            Date(1937, qualifier="between", until=Date(1938)),
-            _HEARSAY,
+            "referred_to_as",
+            "Aunt Bubi",
+            {"perspective": "jonathan-shoser"},
+            "Aunt Bubi",
+        ),
+        (
+            "jonathan-shoser",
+            "relative",
+            "martha-schoeser",
+            {"kinship_type": "aunt"},
+            "Aunt Bubi",
+        ),
+        (
+            "emigration-1938",
+            "participant",
+            "martha-schoeser",
             "Aunt Bubi had gone ahead in '37 or '38",
+        ),
+        (
+            "emigration-1938",
+            "point_in_time",
+            Date(1937, qualifier="between", until=Date(1938)),
+            "Aunt Bubi had gone ahead in '37 or '38",
+        ),
+        (
+            "julius-schoeser",
+            "referred_to_as",
+            "Great-uncle Julius",
+            {"perspective": "jonathan-shoser"},
+            "Great-uncle Julius",
+        ),
+        (
+            "jonathan-shoser",
+            "relative",
+            "julius-schoeser",
+            {"kinship_type": "great-uncle"},
+            "Great-uncle Julius",
         ),
         (
             "arrest-1939",
             "participant",
             "julius-schoeser",
-            _HEARSAY,
             "Great-uncle Julius was taken",
         ),
         (
             "arrest-1939",
-            "point in time",
-            Date(1939, 9, qualifier="about"),
-            _HEARSAY,
+            "point_in_time",
+            Date(1939, 9, qualifier="circa"),
             "taken the first week of the war",
         ),
         (
             "imprisonment-1939",
             "location",
             "peiltal",
-            _HEARSAY,
             "held about a month in Peiltal",
         ),
         (
             "schoeser-und-sohn",
-            "name",
+            "referred_to_as",
             "Schöser and Son",
-            {"language": "en"},
             "The hat shop, Schöser and Son",
         ),
         (
             "schoeser-und-sohn",
-            "dissolved",
+            "end_time",
             Date(1940, qualifier="before"),
-            _HEARSAY,
             "was gone before 1940",
         ),
-        ("josef-schoeser", "date of death", Date(1996), "Dad died in '96"),
+        ("josef-schoeser", "date_of_death", Date(1996), "Dad died in '96"),
         (
             "martha-schoeser",
-            "date of death",
+            "date_of_death",
             Date(2001),
             "Aunt Bubi died last year",
         ),
@@ -1665,22 +1773,26 @@ ASSERTIONS = tuple(
 # the data says which is right: the resting state, not an error.
 CONTRADICTIONS = (
     # 6 September 1907 (civil register) vs 9 June 1907 (naturalisation).
-    ("josef-schoeser", "date of birth"),
+    ("josef-schoeser", "date_of_birth"),
     # Kreis Mockburg (1905 certificate) vs Kreis Peiltal (1984 tree).
-    ("flaeckfeld", "part of"),
+    ("flaeckfeld", "part_of"),
 )
 
 # (subject, property) pairs where one source is vaguer than another but
 # they agree: the precise value falls inside the vague one.
 REFINEMENTS = (
     # 1927 (gravestone, tree) narrowed to 20 March 1927 (death notice).
-    ("alfred-schoeser", "date of death"),
+    ("alfred-schoeser", "date_of_death"),
     # c. 1855 (tree) and 1855 (gravestone).
-    ("wilhelmine-schoeser", "date of birth"),
+    ("wilhelmine-schoeser", "date_of_birth"),
     # between 1937 and 1938 (interview) narrowed to 12 March 1938.
-    ("martha-schoeser", "date of emigration"),
+    ("emigration-1938", "point_in_time"),
     # c. September 1939 (interview) narrowed to 3 September 1939.
-    ("arrest-1939", "point in time"),
+    ("arrest-1939", "point_in_time"),
+    # Peiltal (interview) narrowed to its court prison (card).
+    ("imprisonment-1939", "location"),
+    # Klurnau (card) narrowed to Lager Klurnau (transport list).
+    ("deportation-1942", "location"),
 )
 
 

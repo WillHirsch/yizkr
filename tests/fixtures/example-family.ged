@@ -1,75 +1,232 @@
 0 HEAD
-1 SOUR Example Genealogy Suite
+1 SOUR yizkr-example-universe
 1 GEDC
 2 VERS 5.5.1
 1 CHAR UTF-8
 0 @I1@ INDI
-1 NAME Anna Maria /Beispiel/
+1 NAME Alfred /Schöser/
 2 TYPE birth
-2 NICK Annie
-1 NAME Anna /Muster/
+2 NICK Muckel
+1 SEX M
+1 BIRT
+2 DATE 1850
+2 PLAC Bad Flörburg, Hesse, Germany
+1 DEAT
+2 DATE 20 MAR 1927
+2 PLAC Flörburg, Hesse, Germany
+2 CAUS Short illness
+1 BURI
+2 DATE 22 MAR 1927
+2 PLAC Friedhof Flörburg, Hesse, Germany
+1 OCCU Master hatter
+1 NCHI 3
+1 OBJE @O1@
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Wilhelmine /Tarle/
+2 TYPE birth
+2 NICK Minna
+1 NAME Wilhelmine /Schöser/
 2 TYPE married
 1 SEX F
 1 BIRT
-2 DATE 12 AUG 1885
-2 PLAC Springfield, Example County
+2 DATE ABT 1855
+2 PLAC Dönwald, Hesse, Germany
 1 DEAT
-2 DATE BEF 8 MAY 1945
-2 PLAC Lakeside, Example County
+2 DATE 1928
 1 BURI
-2 DATE 1945
-2 PLAC Lakeside Cemetery, Example County
-1 NCHI 1
+2 PLAC Friedhof Flörburg, Hesse, Germany
+1 OBJE @O1@
 1 FAMS @F1@
-0 @I2@ INDI
-1 NAME Bern /Beispiel/
+0 @I3@ INDI
+1 NAME Johann /Schöser/
+2 TYPE birth
+2 NICK Hans
 1 SEX M
 1 BIRT
-2 DATE ABT 1880
+2 DATE 13 MAR 1881
+2 PLAC Flörburg, Hesse, Germany
 1 DEAT
-2 DATE MAR 1950
-2 CAUS Heart failure
-1 FAMS @F1@
-1 OCCU Cigar maker
-1 EDUC Example Academy
-0 @I3@ INDI
-1 NAME Carla /Beispiel/
-1 SEX F
-1 BIRT
-2 DATE BET 1910 AND 1912
-2 PLAC Springfield, Example County
+2 DATE 1953
+1 OCCU Hatter
+1 RESI
+2 DATE 7 SEP 1907
+2 PLAC Brunnenring 35, Flörburg, Hesse, Germany
+1 OBJE @O1@
 1 FAMC @F1@
 1 FAMS @F2@
 0 @I4@ INDI
-1 NAME Dov /Muster/
-1 SEX M
-1 BIRT
-2 DATE 1908
-1 FAMS @F2@
-0 @I5@ INDI
-1 NAME Nameless Placeholder
-1 BIRT
-2 DATE SOMEDAY MAYBE
-0 @I6@ INDI
-1 NAME Rosa (Rosie) /Weiss/
-1 NAME Rosalind /Weiss/
-2 TYPE official
+1 NAME Hedwig /Laudler/
+2 TYPE birth
+2 NICK Hedi
+1 NAME Hedwig /Schöser/
+2 TYPE married
 1 SEX F
 1 BIRT
+2 DATE 10 JUN 1884
+2 PLAC Fläckfeld, Kreis Mockburg, Hesse, Germany
+1 DEAT
+2 DATE 1968
+1 FAMS @F2@
+0 @I5@ INDI
+1 NAME Paula /Schöser/
+1 SEX F
+1 BIRT
+2 DATE 1882
+1 DEAT
+2 DATE AFT 1945
+1 OBJE @O1@
+1 FAMC @F1@
+0 @I6@ INDI
+1 NAME Julius /Schöser/
+1 SEX M
+1 BIRT
+2 DATE 1884
+1 DEAT
+2 DATE 1942
+1 OCCU Hatter
+1 RESI
+2 DATE 1930
+2 PLAC Mühlenweg 16, Flörburg, Hesse, Germany
+1 OBJE @O1@
+1 FAMC @F1@
+1 FAMS @F3@
+0 @I7@ INDI
+1 NAME Gertrud (Peppi) /Sörne/
+1 _MARNM Gertrud /Schöser/
+1 SEX F
+1 BIRT
+2 DATE 27 SEP 1887
+2 PLAC Moshausen, Germany
+1 DEAT
+2 DATE 1946
+1 FAMS @F3@
+0 @I8@ INDI
+1 NAME Josef /Schöser/
+2 TYPE birth
+2 NICK Sepp
+1 NAME Joseph /Shoser/
+2 TYPE immigrant
+1 SEX M
+1 BIRT
+2 DATE 6 SEP 1907
+2 PLAC Flörburg, Hesse, Germany
+1 DEAT
+2 DATE 1996
+1 OCCU Hatter
+1 RESI
+2 DATE 1952
+2 PLAC 8 Hawthorn Road, Stupfield, Victoria, Australia
+1 FAMC @F2@
+1 FAMS @F4@
+0 @I9@ INDI
+1 NAME Martha /Schöser/
+2 TYPE birth
+2 NICK Bubi
+1 NAME Martha /Shoser/
+2 TYPE immigrant
+1 SEX F
+1 BIRT
+2 DATE 1910
+1 DEAT
+2 DATE 2001
+1 RESI
+2 DATE 2 JUN 1938
+2 PLAC 31 Juniper Street, Stupfield, Victoria, Australia
+1 FAMC @F2@
+0 @I10@ INDI
+1 NAME Frieda /Schöser/
+1 SEX F
+1 BIRT
+2 DATE 1911
+1 DEAT
+2 DATE 1941
+1 FAMC @F2@
+0 @I11@ INDI
+1 NAME Karl /Schöser/
+1 SEX M
+1 BIRT
+2 DATE 1914
+1 DEAT
+2 DATE 1960
+1 FAMC @F3@
+0 @I12@ INDI
+1 NAME Rudolf /Schöser/
+2 NICK Rudi
+1 SEX M
+1 BIRT
+2 DATE 24 OCT 1916
+1 DEAT
+2 DATE 1941
+1 EDUC Städtische Realschule Flörburg
+2 DATE 1930
+1 FAMC @F3@
+0 @I13@ INDI
+1 NAME N.N. /Schöser/
+1 SEX U
+1 BIRT
+2 DATE 1925
+1 DEAT
+2 DATE 1925
+1 FAMC @F3@
+0 @I14@ INDI
+1 NAME Christine /Faxridge/
+2 TYPE birth
+1 NAME Christine /Shoser/
+2 TYPE married
+1 SEX F
+1 BIRT
+2 DATE 1923
+1 DEAT
+2 DATE 1963
+1 FAMS @F4@
+0 @I15@ INDI
+1 NAME Jonathan /Shoser/
+1 SEX M
+1 BIRT
+2 DATE 1953
+2 PLAC Stupfield, Victoria, Australia
+1 FAMC @F4@
+0 @I16@ INDI
+1 NAME Frieda /Schöser/
+1 SEX F
+1 RESI
 2 DATE 1912
-1 _MARNM Rosa Braun
+2 PLAC Angerring 57, Flörburg, Hesse, Germany
+1 NOTE Listed as a widow in the 1912 Flörburg directory; no relation
+2 CONC  to the family is known.
 0 @F1@ FAM
-1 HUSB @I2@
-1 WIFE @I1@
+1 HUSB @I1@
+1 WIFE @I2@
 1 CHIL @I3@
+1 CHIL @I5@
+1 CHIL @I6@
 1 MARR
-2 DATE 2 APR 1902
-2 PLAC Springfield, Example County
+2 DATE 1879
 0 @F2@ FAM
-1 HUSB @I4@
-1 WIFE @I3@
+1 HUSB @I3@
+1 WIFE @I4@
+1 CHIL @I8@
+1 CHIL @I9@
+1 CHIL @I10@
 1 MARR
-2 DATE 30 JUL 1935
-1 DIV
-2 DATE 10 OCT 1939
+2 DATE 1 FEB 1905
+2 PLAC Flörburg, Hesse, Germany
+0 @F3@ FAM
+1 HUSB @I6@
+1 WIFE @I7@
+1 CHIL @I11@
+1 CHIL @I12@
+1 CHIL @I13@
+0 @F4@ FAM
+1 HUSB @I8@
+1 WIFE @I14@
+1 CHIL @I15@
+1 MARR
+2 DATE 1945
+0 @O1@ OBJE
+1 FILE studio-portrait-1890s.jpg
+2 FORM jpg
+2 TITL Studio portrait of the Schöser family
+1 DATE BET 1890 AND 1899
 0 TRLR

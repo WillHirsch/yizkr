@@ -619,6 +619,14 @@ def third_round(rng: random.Random, show) -> None:
     show("infant's parents", rng.choice(("G2 1881", "G2 1884")))
     show("infant born after marriage +", rng.randint(1, 12))
 
+    fourth_round(rng, show)
+
+
+def fourth_round(rng: random.Random, show) -> None:
+    """The GEDCOM rendering wants a dated burial: the death notice
+    (20 March 1927) announces the funeral this many days later."""
+    show("funeral days after death", rng.randint(2, 5))
+
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,8 @@
-"""Offline tests for the GEDCOM adapter (item 13). Fixture is fictional."""
+"""Offline tests for the GEDCOM adapter (item 13).
+
+The fixture is the example universe's GEDCOM rendering and every inline
+snippet uses the same universe or bare placeholders (docs/EXAMPLES.md).
+"""
 
 from pathlib import Path
 
@@ -33,12 +37,10 @@ class TestParser:
     def test_nesting_and_xrefs(self):
         roots = parse_gedcom(FIXTURE.read_text())
         indi = [r for r in roots if r.tag == "INDI"]
-        assert [r.xref for r in indi] == [
-            "@I1@", "@I2@", "@I3@", "@I4@", "@I5@", "@I6@",
-        ]  # fmt: skip
-        birth = indi[0].first("BIRT")
-        assert birth.text("DATE") == "12 AUG 1885"
-        assert birth.text("PLAC") == "Springfield, Example County"
+        assert [r.xref for r in indi] == [f"@I{n}@" for n in range(1, 17)]
+        birth = indi[2].first("BIRT")
+        assert birth.text("DATE") == "13 MAR 1881"
+        assert birth.text("PLAC") == "Flörburg, Hesse, Germany"
 
     def test_record_lines_round_trip(self):
         roots = parse_gedcom("0 @I1@ INDI\n1 NAME A /B/\n2 SOUR x\n")
@@ -57,30 +59,30 @@ class TestParser:
 
 class TestDates:
     def test_exact_precisions(self):
-        assert parse_gedcom_date("12 AUG 1885")[0] == {
+        assert parse_gedcom_date("13 MAR 1881")[0] == {
             "type": "time",
-            "year": 1885,
-            "month": 8,
-            "day": 12,
+            "year": 1881,
+            "month": 3,
+            "day": 13,
             "precision": "day",
         }
-        assert parse_gedcom_date("MAR 1950")[0]["precision"] == "month"
-        assert parse_gedcom_date("1908")[0]["precision"] == "year"
+        assert parse_gedcom_date("AUG 1939")[0]["precision"] == "month"
+        assert parse_gedcom_date("1907")[0]["precision"] == "year"
 
     def test_abt_maps_to_circa(self):
-        value, quals = parse_gedcom_date("ABT 1880")
-        assert value["year"] == 1880 and value["precision"] == "year"
+        value, quals = parse_gedcom_date("ABT 1855")
+        assert value["year"] == 1855 and value["precision"] == "year"
         assert quals[0]["property"] == "sourcing_circumstances"
         assert quals[0]["value"]["value"]["key"] == "circa"
 
     def test_bef_maps_to_latest_date(self):
-        value, quals = parse_gedcom_date("BEF 8 MAY 1945")
-        assert value["day"] == 8
+        value, quals = parse_gedcom_date("BEF 1 OCT 1939")
+        assert value["day"] == 1
         assert quals == [{"property": "latest_date", "value": value}]
 
     def test_between_maps_to_range(self):
-        value, quals = parse_gedcom_date("BET 1910 AND 1912")
-        assert value["year"] == 1910
+        value, quals = parse_gedcom_date("BET 1937 AND 1938")
+        assert value["year"] == 1937
         assert {q["property"] for q in quals} == {
             "earliest_date",
             "latest_date",
@@ -92,38 +94,38 @@ class TestDates:
 
     def test_full_month_names(self):
         # hand-maintained trees spell months out; still unambiguous
-        assert parse_gedcom_date("9 August 1861")[0] == {
+        assert parse_gedcom_date("20 March 1927")[0] == {
             "type": "time",
-            "year": 1861,
-            "month": 8,
-            "day": 9,
+            "year": 1927,
+            "month": 3,
+            "day": 20,
             "precision": "day",
         }
-        assert parse_gedcom_date("September 1899")[0]["month"] == 9
-        assert parse_gedcom_date("13 Sept 1923")[0]["month"] == 9
+        assert parse_gedcom_date("September 1939")[0]["month"] == 9
+        assert parse_gedcom_date("6 Sept 1907")[0]["month"] == 9
 
     def test_month_first_order_with_named_month(self):
-        assert parse_gedcom_date("January 1 1860")[0] == {
+        assert parse_gedcom_date("February 1 1905")[0] == {
             "type": "time",
-            "year": 1860,
-            "month": 1,
+            "year": 1905,
+            "month": 2,
             "day": 1,
             "precision": "day",
         }
 
     def test_german_month_names(self):
-        assert parse_gedcom_date("27 März 1910")[0] == {
+        assert parse_gedcom_date("13 März 1881")[0] == {
             "type": "time",
-            "year": 1910,
+            "year": 1881,
             "month": 3,
-            "day": 27,
+            "day": 13,
             "precision": "day",
         }
-        assert parse_gedcom_date("1 Dezember 1900")[0]["month"] == 12
+        assert parse_gedcom_date("24 Oktober 1916")[0]["month"] == 10
 
     def test_lowercase_keywords(self):
-        value, quals = parse_gedcom_date("abt 1837")
-        assert value["year"] == 1837
+        value, quals = parse_gedcom_date("abt 1855")
+        assert value["year"] == 1855
         assert quals[0]["property"] == "sourcing_circumstances"
 
 
@@ -140,54 +142,56 @@ class TestAdapter:
 
     def test_entities_carry_names_and_aliases(self):
         batch = fixture_result().batch
-        anna = next(e for e in batch.entities if e.id == "i1")
-        assert anna.label == "Anna Maria Beispiel"
-        assert anna.aliases == ["Anna Muster"]
-        assert anna.kind == "human"
+        wilhelmine = next(e for e in batch.entities if e.id == "i2")
+        assert wilhelmine.label == "Wilhelmine Tarle"
+        assert wilhelmine.aliases == ["Wilhelmine Schöser"]
+        assert wilhelmine.kind == "human"
         # places become entities too, deduplicated by name
-        springfield = [
-            e
-            for e in batch.entities
-            if e.label == "Springfield, Example County"
+        floerburg = [
+            e for e in batch.entities if e.label == "Flörburg, Hesse, Germany"
         ]
-        assert len(springfield) == 1
+        assert len(floerburg) == 1
 
     def test_uncertainty_flows_into_claims(self):
         batch = fixture_result().batch
-        (death,) = claims_for(batch, "i1", "date_of_death")
-        assert death.qualifiers[0].property == "latest_date"
-        (birth,) = claims_for(batch, "i2", "date_of_birth")
+        (death,) = claims_for(batch, "i5", "date_of_death")  # AFT 1945
+        assert death.qualifiers[0].property == "earliest_date"
+        (birth,) = claims_for(batch, "i2", "date_of_birth")  # ABT 1855
         assert birth.qualifiers[0].property == "sourcing_circumstances"
-        (carla_birth,) = claims_for(batch, "i3", "date_of_birth")
-        assert {q.property for q in carla_birth.qualifiers} == {
+        # the studio portrait is dated only to the 1890s
+        (portrait,) = claims_for(batch, "i1", "image")
+        assert {q.property for q in portrait.qualifiers} == {
+            "point_in_time",
             "earliest_date",
             "latest_date",
         }
 
     def test_parentage_and_marriage(self):
         batch = fixture_result().batch
-        (father,) = claims_for(batch, "i3", "father")
-        assert father.value.value.local_id == "i2"
-        (mother,) = claims_for(batch, "i3", "mother")
-        assert mother.value.value.local_id == "i1"
+        (father,) = claims_for(batch, "i8", "father")
+        assert father.value.value.local_id == "i3"
+        (mother,) = claims_for(batch, "i8", "mother")
+        assert mother.value.value.local_id == "i4"
         (marriage,) = [
             c
-            for c in claims_for(batch, "i1", "spouse")
-            if c.value.value.local_id == "i2"
+            for c in claims_for(batch, "i3", "spouse")
+            if c.value.value.local_id == "i4"
         ]
         quals = {q.property for q in marriage.qualifiers}
         assert {"start_time", "location"} <= quals
 
     def test_divorce_becomes_end_time(self):
-        batch = fixture_result().batch
-        (spouse,) = [
-            c
-            for c in claims_for(batch, "i3", "spouse")
-            if c.value.value.local_id == "i4"
-        ]
+        # the universe has no divorce, so placeholders carry this one
+        batch = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME A /B/\n0 @I2@ INDI\n1 NAME C /D/\n"
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n"
+            "1 MARR\n2 DATE 1910\n1 DIV\n2 DATE 1920\n0 TRLR\n",
+            artifact_qid="Q23",
+        ).batch
+        (spouse,) = claims_for(batch, "i1", "spouse")
         quals = {q.property: q for q in spouse.qualifiers}
-        assert quals["start_time"].value.year == 1935
-        assert quals["end_time"].value.year == 1939
+        assert quals["start_time"].value.year == 1910
+        assert quals["end_time"].value.year == 1920
 
     def test_every_claim_carries_verbatim_gedcom_excerpt(self):
         batch = fixture_result().batch
@@ -197,13 +201,20 @@ class TestAdapter:
             assert excerpt is not None and len(excerpt.text) <= 400
             # monolingual text values forbid newlines
             assert "\n" not in excerpt.text
-        (birth,) = claims_for(batch, "i1", "date_of_birth")
-        assert "2 DATE 12 AUG 1885" in birth.source.transcription_excerpt.text
+        (birth,) = claims_for(batch, "i3", "date_of_birth")
+        assert "2 DATE 13 MAR 1881" in birth.source.transcription_excerpt.text
 
     def test_unparseable_date_warns_instead_of_guessing(self):
-        result = fixture_result()
+        result = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE SOMEDAY MAYBE\n"
+            "0 TRLR\n",
+            artifact_qid="Q23",
+        )
         assert any("SOMEDAY MAYBE" in warning for warning in result.warnings)
-        assert claims_for(result.batch, "i5", "date_of_birth") == []
+        assert claims_for(result.batch, "i1", "date_of_birth") == []
+
+    def test_fixture_dates_all_parse(self):
+        assert fixture_result().warnings == []
 
     def test_unsupported_tags_are_counted_not_silent(self):
         result = fixture_result()
@@ -224,36 +235,36 @@ class TestVocabulary:
         place = next(
             e for e in batch.entities if e.id == burial.value.value.local_id
         )
-        assert place.label == "Lakeside Cemetery, Example County"
+        assert place.label == "Friedhof Flörburg, Hesse, Germany"
         assert place.kind == "place"
         (qualifier,) = burial.qualifiers
         assert qualifier.property == "point_in_time"
-        assert qualifier.value.year == 1945
+        assert (qualifier.value.year, qualifier.value.day) == (1927, 22)
 
     def test_occupation_becomes_verbatim_item(self):
         batch = fixture_result().batch
-        (occupation,) = claims_for(batch, "i2", "occupation")
+        (occupation,) = claims_for(batch, "i1", "occupation")
         entity = next(
             e
             for e in batch.entities
             if e.id == occupation.value.value.local_id
         )
-        assert entity.label == "Cigar maker"
+        assert entity.label == "Master hatter"
         assert entity.kind == "occupation_class"
 
     def test_cause_of_death_stays_verbatim(self):
         batch = fixture_result().batch
-        (cause,) = claims_for(batch, "i2", "cause_of_death")
-        assert cause.value.value.text == "Heart failure"
+        (cause,) = claims_for(batch, "i1", "cause_of_death")
+        assert cause.value.value.text == "Short illness"
         assert (
-            "2 CAUS Heart failure" in cause.source.transcription_excerpt.text
+            "2 CAUS Short illness" in cause.source.transcription_excerpt.text
         )
 
     def test_number_of_children_is_a_quantity(self):
         batch = fixture_result().batch
         (count,) = claims_for(batch, "i1", "number_of_children")
         assert count.value.type == "quantity"
-        assert count.value.amount == 1
+        assert count.value.amount == 3
 
     def test_no_sibling_claims_are_derived(self):
         # the export asserts parentage, never siblinghood (docs/MODELING.md)
@@ -262,12 +273,13 @@ class TestVocabulary:
 
     def test_sex_maps_to_sex_or_gender(self):
         # ADR-0014: SEX -> sex_or_gender (male/female vocab), for the
-        # kinship calculus. i1 is F, i2 is M in the fixture.
+        # kinship calculus. i1 is M, i2 is F in the fixture; i13 is U.
         batch = fixture_result().batch
-        (anna_sex,) = claims_for(batch, "i1", "sex_or_gender")
-        assert anna_sex.value.value.key == "female"
-        (bern_sex,) = claims_for(batch, "i2", "sex_or_gender")
-        assert bern_sex.value.value.key == "male"
+        (alfred_sex,) = claims_for(batch, "i1", "sex_or_gender")
+        assert alfred_sex.value.value.key == "male"
+        (wilhelmine_sex,) = claims_for(batch, "i2", "sex_or_gender")
+        assert wilhelmine_sex.value.value.key == "female"
+        assert not claims_for(batch, "i13", "sex_or_gender")
 
     def test_burial_without_place_warns_and_skips(self):
         result = adapt_gedcom(
@@ -279,19 +291,19 @@ class TestVocabulary:
 
     def test_dated_and_placed_occupation_carries_qualifiers(self):
         batch = adapt_gedcom(
-            "0 @I1@ INDI\n1 NAME A /B/\n1 OCCU Baker\n2 DATE 1901\n"
-            "2 PLAC Springfield\n0 TRLR\n",
+            "0 @I1@ INDI\n1 NAME Johann /Schöser/\n1 OCCU Hatter\n"
+            "2 DATE 1907\n2 PLAC Flörburg\n0 TRLR\n",
             artifact_qid="Q23",
         ).batch
         (occupation,) = claims_for(batch, "i1", "occupation")
         quals = {q.property: q for q in occupation.qualifiers}
-        assert quals["point_in_time"].value.year == 1901
+        assert quals["point_in_time"].value.year == 1907
         place = next(
             e
             for e in batch.entities
             if e.id == quals["location"].value.value.local_id
         )
-        assert place.label == "Springfield"
+        assert place.label == "Flörburg"
 
     def test_unparseable_child_count_warns_not_guesses(self):
         result = adapt_gedcom(
@@ -312,27 +324,37 @@ class TestTypedNames:
 
     def test_name_type_birth_and_married(self):
         batch = fixture_result().batch
-        assert self._name(batch, "i1", "birth_name") == ["Anna Maria Beispiel"]
-        assert self._name(batch, "i1", "married_name") == ["Anna Muster"]
+        assert self._name(batch, "i2", "birth_name") == ["Wilhelmine Tarle"]
+        assert self._name(batch, "i2", "married_name") == [
+            "Wilhelmine Schöser"
+        ]
 
     def test_nick_subtag_becomes_nickname(self):
         batch = fixture_result().batch
-        assert self._name(batch, "i1", "nickname") == ["Annie"]
+        assert self._name(batch, "i2", "nickname") == ["Minna"]
 
     def test_inline_parenthetical_nickname_extracted(self):
-        # "Rosa (Rosie) Weiss" -> nickname "Rosie", label keeps the full form
+        # "Gertrud (Peppi) Sörne" -> nickname "Peppi", label keeps it all
         batch = fixture_result().batch
-        assert self._name(batch, "i6", "nickname") == ["Rosie"]
-        rosa = next(e for e in batch.entities if e.id == "i6")
-        assert rosa.label == "Rosa (Rosie) Weiss"
+        assert self._name(batch, "i7", "nickname") == ["Peppi"]
+        gertrud = next(e for e in batch.entities if e.id == "i7")
+        assert gertrud.label == "Gertrud (Peppi) Sörne"
+
+    def test_name_type_immigrant_is_official(self):
+        batch = fixture_result().batch
+        assert self._name(batch, "i8", "official_name") == ["Joseph Shoser"]
 
     def test_name_type_official(self):
-        batch = fixture_result().batch
-        assert self._name(batch, "i6", "official_name") == ["Rosalind Weiss"]
+        batch = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME Josef /Schöser/\n"
+            "1 NAME Joseph /Shoser/\n2 TYPE official\n0 TRLR\n",
+            artifact_qid="Q23",
+        ).batch
+        assert self._name(batch, "i1", "official_name") == ["Joseph Shoser"]
 
     def test_marnm_tag_becomes_married_name(self):
         batch = fixture_result().batch
-        assert "Rosa Braun" in self._name(batch, "i6", "married_name")
+        assert "Gertrud Schöser" in self._name(batch, "i7", "married_name")
 
     def test_name_claims_carry_a_reference(self):
         batch = fixture_result().batch
@@ -355,40 +377,40 @@ class TestTypedNames:
             "nickname",
             "official_name",
         ):
-            assert not claims_for(batch, "i4", prop)  # Dov Muster
+            assert not claims_for(batch, "i5", prop)  # Paula Schöser
 
     def test_label_and_aliases_unchanged_by_typing(self):
         # the two-layer design: typing adds claims, never disturbs the
         # label/alias match index
         batch = fixture_result().batch
-        anna = next(e for e in batch.entities if e.id == "i1")
-        assert anna.label == "Anna Maria Beispiel"
-        assert anna.aliases == ["Anna Muster"]
+        wilhelmine = next(e for e in batch.entities if e.id == "i2")
+        assert wilhelmine.label == "Wilhelmine Tarle"
+        assert wilhelmine.aliases == ["Wilhelmine Schöser"]
 
     def test_explicit_type_gedcom_maiden_and_aka(self):
         batch = adapt_gedcom(
-            "0 @I1@ INDI\n1 NAME Mary /Jones/\n2 TYPE maiden\n"
-            "1 NAME Mary /Smith/\n2 TYPE aka\n0 TRLR\n",
+            "0 @I1@ INDI\n1 NAME Hedwig /Laudler/\n2 TYPE maiden\n"
+            "1 NAME Hedi /Schöser/\n2 TYPE aka\n0 TRLR\n",
             artifact_qid="Q23",
         ).batch
-        assert self._name(batch, "i1", "birth_name") == ["Mary Jones"]
+        assert self._name(batch, "i1", "birth_name") == ["Hedwig Laudler"]
         # an 'aka' name is recorded whole as a nickname
-        assert self._name(batch, "i1", "nickname") == ["Mary Smith"]
+        assert self._name(batch, "i1", "nickname") == ["Hedi Schöser"]
 
 
 RESI_GEDCOM = """\
 0 @I1@ INDI
-1 NAME Dora /Muster/
+1 NAME Martha /Shoser/
 1 RESI
-2 DATE 1939
-2 PLAC Surrey, England
+2 DATE 1938
+2 PLAC Victoria, Australia
 1 RESI
-2 PLAC Guildford, Surrey, England
+2 PLAC 31 Juniper Street, Stupfield, Victoria, Australia
 1 RESI
 2 DATE SOMEDAY MAYBE
 2 PLAC Nowhere
 1 RESI
-2 DATE 1950
+2 DATE 1952
 0 TRLR
 """
 
@@ -403,11 +425,11 @@ class TestResidence:
         ]
         assert len(dated) == 1
         (qualifier,) = dated[0].qualifiers
-        assert qualifier.value.year == 1939
+        assert qualifier.value.year == 1938
         place = next(
             e for e in batch.entities if e.id == dated[0].value.value.local_id
         )
-        assert place.label == "Surrey, England"
+        assert place.label == "Victoria, Australia"
         assert place.kind == "place"
 
     def test_undated_residence_has_no_qualifiers(self):
@@ -439,28 +461,28 @@ CENSUS_GEDCOM = """\
 1 SOUR SomeSoftware
 1 CHAR UTF-8
 0 @S1@ SOUR
-1 TITL General Register Office
+1 TITL Birth register, Standesamt Flörburg
 1 REPO @R1@
 0 @R1@ REPO
-1 NAME GRO
+1 NAME Standesamt Flörburg
 0 @O1@ OBJE
-1 FILE https://example.test/photo.jpg
+1 FILE https://example.test/school-report-1930.jpg
 2 FORM jpg
-2 TITL Family portrait
-1 DATE 1978
+2 TITL School report for Rudolf Schöser
+1 DATE 1930
 0 @I1@ INDI
-1 NAME John /Smith/
-2 GIVN John
-2 SURN Smith
+1 NAME Rudolf /Schöser/
+2 GIVN Rudolf
+2 SURN Schöser
 2 SOUR @S1@
 3 PAGE Vol 3 p 1
 3 _APID 1,2::3
 1 OBJE @O1@
 1 BIRT
-2 DATE 1900
+2 DATE 24 OCT 1916
 2 SOUR @S1@
 3 PAGE Vol 3 p 1
-1 EDUC Somewhere
+1 EDUC Städtische Realschule Flörburg
 0 TRLR
 """
 
@@ -508,7 +530,7 @@ class TestSourceCitations:
         batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
         (birth,) = claims_for(batch, "i1", "date_of_birth")
         excerpt = birth.source.transcription_excerpt.text
-        assert "cited: General Register Office" in excerpt
+        assert "cited: Birth register, Standesamt Flörburg" in excerpt
 
     def test_claim_without_a_citation_has_no_page_number(self):
         batch = adapt_gedcom(
@@ -529,7 +551,7 @@ class TestMediaObjects:
             e for e in batch.entities if e.id == image.value.value.local_id
         )
         assert media.kind == "artifact"  # not photograph: bytes not held
-        assert media.label == "Family portrait"
+        assert media.label == "School report for Rudolf Schöser"
         assert "never fetched" in media.summary
 
     def test_media_association_carries_the_objects_date(self):
@@ -537,7 +559,7 @@ class TestMediaObjects:
         (image,) = claims_for(batch, "i1", "image")
         (qualifier,) = image.qualifiers
         assert qualifier.property == "point_in_time"
-        assert qualifier.value.year == 1978
+        assert qualifier.value.year == 1930
 
     def test_batch_stays_manifest_valid(self):
         batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
@@ -545,9 +567,11 @@ class TestMediaObjects:
 
     def test_shared_object_is_one_media_item(self):
         gedcom = (
-            "0 @O1@ OBJE\n1 FILE p.jpg\n2 TITL Shared photo\n"
-            "0 @I1@ INDI\n1 NAME A /B/\n1 OBJE @O1@\n"
-            "0 @I2@ INDI\n1 NAME C /D/\n1 OBJE @O1@\n0 TRLR\n"
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            "2 TITL Studio portrait of the Schöser family\n"
+            "0 @I1@ INDI\n1 NAME Alfred /Schöser/\n1 OBJE @O1@\n"
+            "0 @I2@ INDI\n1 NAME Wilhelmine /Tarle/\n1 OBJE @O1@\n"
+            "0 TRLR\n"
         )
         batch = adapt_gedcom(gedcom, artifact_qid="Q23").batch
         media = [e for e in batch.entities if e.kind == "artifact"]
