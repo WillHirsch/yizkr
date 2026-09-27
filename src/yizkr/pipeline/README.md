@@ -151,12 +151,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
   page. Editorial marks such as `[illegible]` don't count, and a single
   image has no floor, since a photograph may carry no text at all. A
   note that a printed email or letter could also hold ("I couldn't open
-  the PDF", "unable to comply with your request") counts only in the
-  engine's own voice: opening the output or a page section, or naming
-  the page it skipped, and not about the correspondents' own attachment
-  or request ("the attachment you sent", "your request for copies of the
-  register"). The reason is recorded and the failed output is never
-  passed on.
+  the PDF", "I can't transcribe this", "unable to comply with your
+  request") counts only in the engine's own voice: opening the output or
+  a page section, or naming the page it skipped, and not about the
+  correspondents' own attachment, writing or request ("the attachment you
+  sent", "the old handwriting on the back of the photograph", "your
+  request for copies of the register"). The reason is recorded and the
+  failed output is never passed on.
 - **extract** — engines: `llm` (prompts with the claim JSON Schema and
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
