@@ -1,0 +1,77 @@
+# Real-data check: fails a pull request that would add any token of the
+# owner's private denylist (names, places, organisations, dates) to the
+# repository, its commit messages, or its title and body. It reports
+# location and category only. See .github/realdata/README.md.
+#
+# Security model: pull_request_target runs THIS file as it is on the
+# base branch (main), with the REALDATA_SALT secret available.
+# - Only the base branch is checked out; the checker and hash list come
+#   from it. PR code is never checked out, installed or executed: the
+#   PR is read as text through the API.
+# - No PR-controlled value is interpolated into a script; PR data only
+#   reaches the checker as files.
+# - The token can only read; the salt is exposed to the check step only.
+# Until the REALDATA_SALT secret exists, the check fails closed.
+name: Real-data check
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: realdata-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  realdata:
+    name: real-data check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the base branch only (never the PR)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # On pull_request_target, github.sha is the tip of the base
+          # branch: the commit this workflow definition was read from.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/ci
+            .github/realdata
+
+      - name: Fetch the pull request as text
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          OUT: ${{ runner.temp }}/pr
+        run: |
+          mkdir -p "$OUT"
+          if ! gh api "repos/$REPO/pulls/$PR" \
+              -H "Accept: application/vnd.github.diff" > "$OUT/diff"; then
+            echo "::error::Could not fetch the PR diff (too large for" \
+              "the API?). Failing closed: split the PR."
+            exit 1
+          fi
+          gh api --paginate --slurp "repos/$REPO/pulls/$PR/commits" \
+            > "$OUT/commits.json"
+          gh api "repos/$REPO/pulls/$PR" \
+            --jq '.title + "\n\n" + (.body // "")' > "$OUT/title-and-body"
+
+      - name: Check the added text against the salted hash list
+        env:
+          REALDATA_SALT: ${{ secrets.REALDATA_SALT }}
+          IN: ${{ runner.temp }}/pr
+        run: |
+          python3 scripts/ci/realdata_check.py \
+            --diff "$IN/diff" \
+            --commits-json "$IN/commits.json" \
+            --text "pr-title-and-body=$IN/title-and-body"

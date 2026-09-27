@@ -49,4 +49,6 @@ outside the repo.
 and documentation — no family records or personal data. Deployments
 built from it, however, handle data about living people: nothing in a
 deployment is published or sent to third-party services without
-explicit instruction.
+explicit instruction. Every pull request is checked in CI against a
+salted-hash denylist of real family data
+(`.github/realdata/README.md`).
