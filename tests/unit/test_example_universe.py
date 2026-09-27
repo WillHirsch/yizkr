@@ -138,7 +138,7 @@ class TestNames:
             key
             for key in PEOPLE
             if typed <= {a.property for a in u.about(key)}
-        } >= {"charlotte-loebig", "hedwig-loebig", "katharina-loebig"}
+        } >= {"caecilie-loebig", "emma-loebig", "rebekka-loebig"}
 
     def test_german_and_english_forms_and_diminutives(self):
         crossed = [
@@ -147,7 +147,7 @@ class TestNames:
             if any(n.form == "birth" and n.lang == "de" for n in person.names)
             and any(n.form == "anglicised" for n in person.names)
         ]
-        assert crossed == ["gustav-loebig", "rosa-loebig"]
+        assert crossed == ["gustav-loebig", "anna-loebig"]
         diminutives = {
             n.lang
             for person in u.PEOPLE
@@ -188,7 +188,7 @@ class TestNames:
             "frieda-loebig-angerring",
         }
         # one is family (parents, a generation), the other is not
-        assert values("frieda-loebig", "father") == ["georg-loebig"]
+        assert values("frieda-loebig", "father") == ["sebastian-loebig"]
         assert PEOPLE["frieda-loebig-angerring"].generation is None
         assert not values("frieda-loebig-angerring", "father")
         # the directory lists the widow when the other Frieda is a baby
@@ -209,7 +209,7 @@ class TestFamily:
         while fathers := values(key, "father"):
             key = fathers[0]
             line.append(key)
-        assert line == ["gustav-loebig", "georg-loebig", "moritz-loebig"]
+        assert line == ["gustav-loebig", "sebastian-loebig", "eugen-loebig"]
 
     def test_generation_numbers_follow_parent_edges(self):
         for assertion in u.ASSERTIONS:
@@ -239,7 +239,10 @@ class TestFamily:
             for a in u.ASSERTIONS
             if a.property == "employer" and a.value == firm.key
         }
-        assert staff == {"georg-loebig"}
+        assert staff == {"sebastian-loebig"}
+        # the son owns it in 1912, after his father's death
+        deaths = values("eugen-loebig", "date_of_death")
+        assert deaths and all(when.year < 1912 for when in deaths)
         assert values(firm.key, "start_time") == [u.Date(1863)]
         (ended,) = values(firm.key, "end_time")
         assert ended.qualifier == "before"
@@ -379,7 +382,7 @@ class TestEventsAndDates:
                 "BET 1890 AND 1899",
                 {"earliest_date", "latest_date"},
             ),
-            (u.Date(1919, 12, 6), "6 December 1919", "6 DEC 1919", set()),
+            (u.Date(1911, 10, 1), "1 October 1911", "1 OCT 1911", set()),
         ],
     )
     def test_date_renderings_keep_the_uncertainty(

@@ -4,7 +4,7 @@
 2 VERS 5.5.1
 1 CHAR UTF-8
 0 @I1@ INDI
-1 NAME Moritz /Löbig/
+1 NAME Eugen /Löbig/
 2 TYPE birth
 2 NICK Muckel
 1 SEX M
@@ -12,21 +12,21 @@
 2 DATE 1836
 2 PLAC Bad Flörburg, Hesse, Germany
 1 DEAT
-2 DATE 6 DEC 1919
+2 DATE 1 OCT 1911
 2 PLAC Flörburg, Hesse, Germany
 2 CAUS Dropsy
 1 BURI
-2 DATE 9 DEC 1919
+2 DATE 3 OCT 1911
 2 PLAC Friedhof Flörburg, Hesse, Germany
 1 OCCU Master hatter
 1 NCHI 3
 1 OBJE @O1@
 1 FAMS @F1@
 0 @I2@ INDI
-1 NAME Charlotte /Tarle/
+1 NAME Cäcilie /Tarle/
 2 TYPE birth
-2 NICK Lotte
-1 NAME Charlotte /Löbig/
+2 NICK Cilli
+1 NAME Cäcilie /Löbig/
 2 TYPE married
 1 SEX F
 1 BIRT
@@ -34,17 +34,15 @@
 2 PLAC Kredfeld, Hesse, Germany
 1 DEAT
 2 DATE 1902
-1 BURI
-2 PLAC Friedhof Flörburg, Hesse, Germany
 1 OBJE @O1@
 1 FAMS @F1@
 0 @I3@ INDI
-1 NAME Georg /Löbig/
+1 NAME Sebastian /Löbig/
 2 TYPE birth
-2 NICK Schorsch
+2 NICK Wastl
 1 SEX M
 1 BIRT
-2 DATE 13 MAR 1860
+2 DATE 15 FEB 1868
 2 PLAC Flörburg, Hesse, Germany
 1 DEAT
 2 DATE 1953
@@ -56,32 +54,32 @@
 1 FAMC @F1@
 1 FAMS @F2@
 0 @I4@ INDI
-1 NAME Hedwig /Laudler/
+1 NAME Emma /Laudler/
 2 TYPE birth
-2 NICK Hedi
-1 NAME Hedwig /Löbig/
+2 NICK Emmi
+1 NAME Emma /Löbig/
 2 TYPE married
 1 SEX F
 1 BIRT
-2 DATE 10 JUN 1884
+2 DATE 23 APR 1884
 2 PLAC Fläckfeld, Kreis Mockburg, Hesse, Germany
 1 DEAT
 2 DATE 1968
 1 FAMS @F2@
 0 @I5@ INDI
-1 NAME Luise /Löbig/
+1 NAME Rahel /Löbig/
 1 SEX F
 1 BIRT
-2 DATE 1864
+2 DATE 1871
 1 DEAT
 2 DATE AFT 1945
 1 OBJE @O1@
 1 FAMC @F1@
 0 @I6@ INDI
-1 NAME Ludwig /Löbig/
+1 NAME Felix /Löbig/
 1 SEX M
 1 BIRT
-2 DATE 1866
+2 DATE 1873
 1 DEAT
 2 DATE 1942
 1 OCCU Hatter
@@ -92,11 +90,11 @@
 1 FAMC @F1@
 1 FAMS @F3@
 0 @I7@ INDI
-1 NAME Katharina (Peppi) /Sörne/
-1 _MARNM Katharina /Löbig/
+1 NAME Rebekka (Peppi) /Sörne/
+1 _MARNM Rebekka /Löbig/
 1 SEX F
 1 BIRT
-2 DATE 27 SEP 1887
+2 DATE 1 JUN 1893
 2 PLAC Moshausen, Germany
 1 DEAT
 2 DATE 1946
@@ -113,6 +111,8 @@
 2 PLAC Flörburg, Hesse, Germany
 1 DEAT
 2 DATE 1996
+1 BURI
+2 PLAC Stupfield, Victoria, Australia
 1 OCCU Hatter
 1 RESI
 2 DATE 1952
@@ -120,10 +120,10 @@
 1 FAMC @F2@
 1 FAMS @F4@
 0 @I9@ INDI
-1 NAME Rosa /Löbig/
+1 NAME Anna /Löbig/
 2 TYPE birth
 2 NICK Pünktchen
-1 NAME Rose /Lobig/
+1 NAME Anne /Lobig/
 2 TYPE immigrant
 1 SEX F
 1 BIRT
@@ -170,9 +170,9 @@
 2 DATE 1925
 1 FAMC @F3@
 0 @I14@ INDI
-1 NAME Susan /Faxridge/
+1 NAME Iris /Faxridge/
 2 TYPE birth
-1 NAME Susan /Lobig/
+1 NAME Iris /Lobig/
 2 TYPE married
 1 SEX F
 1 BIRT
@@ -210,7 +210,7 @@
 1 CHIL @I9@
 1 CHIL @I10@
 1 MARR
-2 DATE 1 FEB 1905
+2 DATE 15 DEC 1905
 2 PLAC Flörburg, Hesse, Germany
 0 @F3@ FAM
 1 HUSB @I6@
