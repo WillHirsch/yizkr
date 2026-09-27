@@ -267,10 +267,16 @@ fork's context assumes:
   aside), its session is kept under the new answer, the fork raises
   `ConversationChanged`, and the extractor starts over from the new
   answer, whose forks are keyed apart from the old ones and are made on
-  the replay's session.
+  the replay's session. The session is also held in memory for the rest
+  of the run, with the SHA-256 of the answer the replay gave, and the
+  conversation opened again takes it only when the cache serves that
+  answer: two runs on one cache whose replays answer differently each
+  hold a session, and the run whose answer was displaced releases its
+  own, then resumes the session kept for the served answer, or replays.
 
 A session, however obtained, serves every later fork of the conversation
-in the run. Every fork entry records how its session was obtained
+in the run, and never a conversation opened on another answer than the
+one it holds. Every fork entry records how its session was obtained
 (`live`, `resumed`, `replayed` or `recomputed`) and the opening answer's
 SHA-256. Because forks are served through the cache whether or not a
 session exists, chunk calls always fork (ADR-0006 §3, context mode 1), and
@@ -444,12 +450,12 @@ longer wrapping the client.
   differently from one without it, and the first scratch run after a
   stricter check would fail every document it affects instead of
   transcribing it again (§4).
-- **Keep one session per conversation, and resume whatever is kept.**
-  Rejected: two callers opening the same conversation at once, or a
-  replay whose session could not be kept, leave a session made on another
-  opening answer than the one the cache serves, and a fork resumed on it
-  is stored under a key that names the served answer, in every later run
-  (§6).
+- **Keep one session per conversation, and resume whatever is kept or
+  held.** Rejected: two callers opening the same conversation at once, a
+  replay whose session could not be kept, or two runs on one cache whose
+  replays answer differently, leave a session made on another opening
+  answer than the one the cache serves, and a fork made on it is stored
+  under a key that names the served answer, in every later run (§6).
 - **Keep the stage store and key its stages on `config_hash` and the check
   version (#218).** Rejected: it keeps the registry and its judgement, and
   a parser fix still recomputes the stage's calls.

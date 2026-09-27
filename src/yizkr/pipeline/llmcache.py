@@ -56,8 +56,9 @@ a newer one displaces (a refresh's, a racing call's, or one damaged), is
 moved aside under a name no lookup reads, and kept for inspection.
 ``<key>.session/<opening>/`` keeps the session files of a conversation's
 opening turn, for the engines that need them to resume it exactly, under
-the SHA-256 of the opening answer the session holds: a session is resumed
-only for the answer it was made on, whichever answer a racing call or a
+the SHA-256 of the opening answer the session holds: a session, whether
+kept there or held in memory after a replay, serves a conversation only
+for the answer it was made on, whichever answer a racing call or a
 replay has since stored under the key.
 
 docs/LLM_CACHE.md describes the cache, its events and the run directory.
@@ -197,9 +198,10 @@ class EngineCache:
         self._refreshed: set[str] = set()
         # roles already warned about an unpinned model
         self._warned: set[str] = set()
-        # key -> (engine client, session) for conversations whose opening
-        # turn was recomputed in this run, until one is opened again
-        self._sessions: dict[str, tuple[Any, Any]] = {}
+        # key -> (engine client, session, SHA-256 of the opening answer it
+        # was made on) for conversations whose opening turn was recomputed
+        # in this run, until one is opened again
+        self._sessions: dict[str, tuple[Any, Any, str]] = {}
 
     def epoch(self, role: str) -> int:
         return self.epochs.get(role, 0)
@@ -232,21 +234,25 @@ class EngineCache:
             role,
         )
 
-    def remember_session(self, key: str, client: Any, session: Any) -> None:
+    def remember_session(
+        self, key: str, client: Any, session: Any, opening: str
+    ) -> None:
         """Hold the live session of a conversation whose opening turn was
-        recomputed in this run, for the next time it is opened."""
+        recomputed in this run, with the SHA-256 of the opening answer it
+        was made on, for the next time it is opened."""
         with self._lock:
-            self._sessions[key] = (client, session)
+            self._sessions[key] = (client, session, opening)
 
-    def take_session(self, key: str, client: Any) -> Any:
+    def take_session(self, key: str, client: Any) -> tuple[Any, str] | None:
         """The live session remembered for `key` with this engine client,
-        once; None when there is none."""
+        and the SHA-256 of the opening answer it was made on, once; None
+        when there is none."""
         with self._lock:
             held = self._sessions.get(key)
             if held is None or held[0] is not client:
                 return None
             del self._sessions[key]
-            return held[1]
+            return held[1], held[2]
 
     # -- entries -----------------------------------------------------------
 
@@ -752,12 +758,18 @@ class ConversationalCachingClient(CachingClient):
       cached answer again serves the conversation's forks. One that
       answers differently makes the whole conversation a miss: the
       replay's answer becomes the opening turn's entry, the replay's
-      session is held for the run, and the fork raises
-      ConversationChanged, so that its caller starts over from the new
-      answer, whose forks are keyed apart from the old ones.
+      session is kept under that answer and held for the run with it,
+      and the fork raises ConversationChanged, so that its caller starts
+      over from the new answer, whose forks are keyed apart from the old
+      ones. The conversation opened again takes the held session only
+      when the cache serves it the answer the session was made on; when
+      a racing call or replay has stored another answer since, the held
+      session is released, and a fork resumes the session kept for the
+      served answer, or replays.
 
     A session, however obtained, serves every later fork of the
-    conversation in the run."""
+    conversation in the run, and never a conversation opened on another
+    answer than the one it holds."""
 
     def open_conversation(self, prompt: str) -> tuple[str, Conversation]:
         components = self.components(OPEN, prompt)
@@ -775,11 +787,18 @@ class ConversationalCachingClient(CachingClient):
             )
             self._keep(response.key, conversation.opening_sha256, sessions[0])
             return response, conversation
-        session = self.cache.take_session(response.key, self.client)
-        origin = RECOMPUTED if session is not None else None
-        return response, Conversation(
-            components, prompt, str(response), session, origin
-        )
+        conversation = Conversation(components, prompt, str(response))
+        held = self.cache.take_session(response.key, self.client)
+        if held is not None:
+            session, opening = held
+            if opening == conversation.opening_sha256:
+                conversation.session = session
+                conversation.origin = RECOMPUTED
+            else:
+                # made on another answer than the one served, which a
+                # racing call or replay has since stored under the key
+                self._release(session)
+        return response, conversation
 
     def fork(self, handle: Any, prompt: str) -> str:
         if not isinstance(handle, Conversation):
@@ -865,8 +884,9 @@ class ConversationalCachingClient(CachingClient):
                     {"recomputed": True},
                 ),
             )
-            self._keep(key, sha256_text(response), session)
-            self.cache.remember_session(key, self.client, session)
+            opening = sha256_text(response)
+            self._keep(key, opening, session)
+            self.cache.remember_session(key, self.client, session, opening)
             conversation.changed = True
             raise _changed(key)
 

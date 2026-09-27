@@ -1134,6 +1134,98 @@ class TestForks:
             if entry["components"]["call"] == FORK
         )
 
+    @pytest.mark.parametrize("kept", ["unusable", "nothing at first"])
+    def test_a_held_session_serves_only_the_answer_it_was_made_on(
+        self, tmp_path, kept
+    ):
+        """Two runs on one cache (`ingest run` and `ingest extract --cache`
+        on the same document, say) each replay a conversation's opening
+        turn, because the session kept for the cached answer is unusable
+        or none was kept, and the two replays answer differently. Each
+        stores its answer and holds its session in memory; the second's
+        answer is the one left stored. When the first run starts over,
+        the cache serves it the second's answer, so the session it holds,
+        made on its own answer, is released and never forked: the fork
+        resumes the session kept for the served answer, or replays again
+        (#230). Every fork either run stores is made on the answer its
+        key names."""
+        root = tmp_path / "cache"
+        wrap(
+            AnswerKeepingEngine(keeps=kept == "unusable"),
+            EngineCache(root),
+            role="extract",
+        ).open_conversation("the document")
+        first = AnswerKeepingEngine(first=51)
+        second = AnswerKeepingEngine(first=81)
+        released = {first: [], second: []}
+        for engine in (first, second):
+            engine.close_conversation = released[engine].append
+            if kept == "unusable":
+
+                def unusable(prompt, response, files):
+                    raise ValueError("an engine that cannot resume it")
+
+                engine.resume_conversation = unusable
+        run1 = wrap(first, EngineCache(root), role="extract")
+        run2 = wrap(second, EngineCache(root), role="extract")
+        _, handle1 = run1.open_conversation("the document")
+        _, handle2 = run2.open_conversation("the document")
+        with pytest.raises(ConversationChanged):
+            run1.fork(handle1, "c1")  # stores #51, holds session-51
+        with pytest.raises(ConversationChanged):
+            run2.fork(handle2, "c1")  # stores #81, holds session-81
+        key = handle1.chain[0]
+        assert EngineCache(root).get(key)["response"] == "opening answer #81"
+
+        def start_over(caching):
+            """Start over from the opening turn, as the extractor does."""
+            for _pass in range(3):
+                served, handle = caching.open_conversation("the document")
+                try:
+                    return served, handle, caching.fork(handle, "c1")
+                except ConversationChanged:
+                    continue
+            raise AssertionError("the conversation never settled")
+
+        served, handle, fork = start_over(run1)
+        assert made_on(fork) == served
+        # the session held for #51 is released, not forked on #81
+        assert released[first] == ["session-51"]
+        (entry,) = [e for e in live_entries(tmp_path) if e["response"] == fork]
+        if kept == "unusable":
+            # nothing kept can be resumed: the first run replays again,
+            # stores #52 and forks on the session it holds for it
+            assert served == "opening answer #52"
+            assert entry["provenance"]["session"] == "recomputed"
+        else:
+            # the second run kept its replay's session under #81, and the
+            # first run's fork resumes it
+            assert served == "opening answer #81"
+            assert entry["provenance"]["session"] == "resumed"
+            assert first.resumed[-1] == {
+                "sessions/session-81.jsonl": b"opening answer #81"
+            }
+        # the second run starts over too, after the first's last store
+        served, handle, fork = start_over(run2)
+        assert made_on(fork) == served
+        # its held session is released only when the answer served is not
+        # the one it was made on
+        assert released[second] == (
+            ["session-81"] if kept == "unusable" else []
+        )
+        # every fork stored is made on the answer its key and its
+        # provenance name
+        forks = [
+            entry
+            for entry in live_entries(tmp_path)
+            if entry["components"]["call"] == FORK
+        ]
+        assert forks
+        for entry in forks:
+            made = sha256(made_on(entry["response"]))
+            assert entry["components"]["opening"] == made
+            assert entry["provenance"]["opening_sha256"] == made
+
     def test_a_replay_without_text_changes_nothing(self, tmp_path):
         """A replay that answers with no text is a failed call: the fork
         fails, the opening turn's entry stands, and the replay's session

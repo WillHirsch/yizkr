@@ -268,10 +268,17 @@ conversation exactly as the fork's context assumes:
    turn's entry (the old one is kept aside as replaced), its session is
    kept under the new answer, and the extractor starts over from the new
    answer, whose forks are keyed apart and are made on the replay's
-   session.
+   session. That session is also held in memory for the rest of the run,
+   with the SHA-256 of the answer the replay gave, and the conversation
+   opened again takes it only when the cache serves that answer. When
+   another run on the same cache (`ingest run` and `ingest extract
+   --cache` on the same document, say) has stored another answer
+   meanwhile, the held session is released, and the fork resumes the
+   session kept for the served answer, or replays again.
 
 A session, however obtained, serves every later fork of the conversation
-in the run.
+in the run, and never a conversation opened on another answer than the
+one it holds.
 
 ## Switches
 
