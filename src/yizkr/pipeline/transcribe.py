@@ -14,10 +14,25 @@ Output is a `Transcription` JSON document consumed by the extraction
 step. The transcription itself is NOT written to the graph — only the
 claims extracted from it are, each carrying its fragment locator and
 excerpt (ADR-0003).
+
+Every engine's `transcribe()` runs the transcription check
+(`yizkr.pipeline.transcription_check`) on its output and raises
+`TranscriptionCheckFailed` instead of returning an output that fails it:
+a tool-failure message or a refusal is never handed on as a
+transcription. `transcribe_unchecked()` is the transcription step alone,
+for a caller that runs the check as a step of its own.
+
+Vision transcription of a PDF needs poppler-utils on the ingestion host:
+the claude-code engine's Read tool renders the pages with ``pdftoppm``,
+and the check counts them with ``pdfinfo``. `require_pdf_renderer` fails
+fast, before any engine call, when either is missing, and
+`preflight_vision_transcription` asks once for a whole set of media.
 """
 
 from __future__ import annotations
 
+import shutil
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Protocol
 
@@ -25,6 +40,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from yizkr.pipeline.language import LanguageResolution, resolve_language
 from yizkr.pipeline.llm import LlmClient
+from yizkr.pipeline.transcription_check import (
+    TranscriptionCheck,
+    TranscriptionCheckFailed,
+    check_transcription,
+    media_page_count,
+)
 
 TRANSCRIPTION_PROMPT = """\
 Transcribe every piece of text visible in this image of a historical
@@ -33,6 +54,47 @@ abbreviations, and uncertain readings; mark illegible passages with
 [illegible] and uncertain readings with [?]. Do not translate, do not
 normalise, do not add commentary — output the transcription only.
 """
+
+# The poppler-utils tools a PDF needs: the renderer the vision engine
+# reads pages through, and the page counter the transcription check uses.
+PDF_TOOLS = ("pdftoppm", "pdfinfo")
+PDF_TOOLS_INSTALL = (
+    "install poppler-utils on the ingestion host (Debian/Ubuntu: "
+    "`sudo apt-get install poppler-utils`; macOS: `brew install poppler`), "
+    "check it with `pdftoppm -v`, then re-run"
+)
+
+
+class MissingPrerequisite(RuntimeError):
+    """A host tool the requested transcription needs is not installed."""
+
+
+def require_pdf_renderer(
+    which: Callable[[str], str | None] | None = None,
+) -> None:
+    """Fail fast, with the fix, when the PDF tools are not on PATH.
+
+    `which` looks a tool up (default `shutil.which`)."""
+    which = which or shutil.which
+    missing = [tool for tool in PDF_TOOLS if which(tool) is None]
+    if missing:
+        raise MissingPrerequisite(
+            "vision transcription of a PDF needs poppler-utils (pdftoppm "
+            "renders the pages for the engine, pdfinfo counts them for the "
+            f"transcription check), and {' and '.join(missing)} "
+            f"{'is' if len(missing) == 1 else 'are'} not on PATH: "
+            f"{PDF_TOOLS_INSTALL}"
+        )
+
+
+def preflight_vision_transcription(
+    media_paths: Iterable[Path],
+    which: Callable[[str], str | None] | None = None,
+) -> None:
+    """Check the host once, before a run transcribes any of
+    `media_paths` by vision: a PDF among them needs the PDF renderer."""
+    if any(Path(path).suffix.lower() == ".pdf" for path in media_paths):
+        require_pdf_renderer(which)
 
 
 class Transcription(BaseModel):
@@ -50,7 +112,31 @@ class Transcriber(Protocol):
     ) -> Transcription: ...
 
 
-class LlmVisionTranscriber:
+class _CheckedTranscriber:
+    """`transcribe()` = the engine's `transcribe_unchecked()`, then the
+    transcription check on its output."""
+
+    # the check behind the last transcribe(), for callers to record
+    last_check: TranscriptionCheck | None = None
+
+    def transcribe_unchecked(
+        self, media_path: Path, artifact_qid: str | None = None
+    ) -> Transcription:
+        raise NotImplementedError
+
+    def transcribe(
+        self, media_path: Path, artifact_qid: str | None = None
+    ) -> Transcription:
+        transcription = self.transcribe_unchecked(media_path, artifact_qid)
+        self.last_check = check_transcription(
+            transcription.text, pages=media_page_count(media_path)
+        )
+        if not self.last_check.passed:
+            raise TranscriptionCheckFailed(self.last_check)
+        return transcription
+
+
+class LlmVisionTranscriber(_CheckedTranscriber):
     def __init__(
         self,
         client: LlmClient,
@@ -63,9 +149,11 @@ class LlmVisionTranscriber:
         # the resolution behind the last transcribe(), for callers to log
         self.last_resolution: LanguageResolution | None = None
 
-    def transcribe(
+    def transcribe_unchecked(
         self, media_path: Path, artifact_qid: str | None = None
     ) -> Transcription:
+        if media_path.suffix.lower() == ".pdf":
+            require_pdf_renderer()
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
         self.last_resolution = resolve_language(
             text, self.language, fallback=self.fallback_language
@@ -78,7 +166,7 @@ class LlmVisionTranscriber:
         )
 
 
-class TextFileTranscriber:
+class TextFileTranscriber(_CheckedTranscriber):
     """Wrap an existing transcription file (manual or external tool)."""
 
     def __init__(
@@ -92,7 +180,7 @@ class TextFileTranscriber:
         self.fallback_language = fallback_language
         self.last_resolution: LanguageResolution | None = None
 
-    def transcribe(
+    def transcribe_unchecked(
         self, media_path: Path, artifact_qid: str | None = None
     ) -> Transcription:
         text = self.text_file.read_text()
@@ -117,7 +205,6 @@ class HtrPlatformAdapter:
         self, media_path: Path, artifact_qid: str | None = None
     ) -> Transcription:
         raise NotImplementedError(
-            f"HTR adapter for {self.platform!r} is a stub (ROADMAP W1 task 4 "
-            f"defines it; implementation is deferred). Use the llm or "
-            f"textfile engines meanwhile."
+            f"HTR adapter for {self.platform!r} is a stub and not "
+            f"implemented. Use the llm or textfile engines meanwhile."
         )
