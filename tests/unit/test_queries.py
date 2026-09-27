@@ -61,7 +61,7 @@ class TestLibrary:
         assert "{P:stated_in}" in templates["disagreement-report"]
 
     def test_under_witnessed_query_keys_on_provenance(self, templates):
-        # ADR-0022: reappraisal is a structural query — machine-written
+        # ADR-0023: reappraisal is a structural query — machine-written
         # (run reference) and under-witnessed (one source, no curator sibling)
         q = templates["under-witnessed-statements"]
         assert "{P:inferred_from_extraction_run}" in q

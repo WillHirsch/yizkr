@@ -1,4 +1,4 @@
-"""Offline tests for deterministic name-alias hygiene (ADR-0021 §4)."""
+"""Offline tests for deterministic name-alias hygiene (ADR-0022 §4)."""
 
 from yizkr.pipeline.names import normalize_aliases, normalize_entity_dict
 

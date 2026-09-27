@@ -446,7 +446,7 @@ class BatchWriter:
     def write_batch(
         self, batch: ClaimBatch, bulk_accepted: bool = False
     ) -> WriteResult:
-        # a bulk-accepted batch (whole-sheet accept-all, ADR-0022) gets a
+        # a bulk-accepted batch (whole-sheet accept-all, ADR-0023) gets a
         # distinct edit summary so MediaWiki history is the low-scrutiny
         # reappraisal queue — no graph flag, no staleness.
         claim_summary = (

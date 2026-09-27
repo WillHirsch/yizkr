@@ -1,4 +1,4 @@
-"""Deterministic name-alias hygiene (ADR-0021 §4).
+"""Deterministic name-alias hygiene (ADR-0022 §4).
 
 A thin VALIDATOR, not a parser. The semantic work — composition,
 annotation-stripping, and name TYPING — is the LLM's (through the extraction
@@ -16,7 +16,7 @@ mechanism shared by both ingest paths:
   ``ben Yosef``) stay whole — a naive whitespace atomizer would shatter them
   into particle non-name tokens (rule 6);
 * assert NO name kind (given vs family is undecidable and never stored,
-  ADR-0021) and compose NOTHING (composition is the LLM's job, and the
+  ADR-0022) and compose NOTHING (composition is the LLM's job, and the
   frontend's to render).
 
 Recall-safe: a dropped form's tokens are a strict subset of tokens already on
@@ -54,7 +54,7 @@ def _is_derivable(label_tokens: frozenset[str], alias: str) -> bool:
 
 
 def normalize_aliases(label: str, aliases: Iterable[str]) -> list[str]:
-    """Hygiene one entity's alias bag (ADR-0021 §4): drop blanks, the label
+    """Hygiene one entity's alias bag (ADR-0022 §4): drop blanks, the label
     itself, case-insensitive duplicates, and re-derivable short-forms, keeping
     the order and verbatim spelling of what survives. Never splits, so
     compound/particle surnames stay whole; asserts no kind, composes nothing.

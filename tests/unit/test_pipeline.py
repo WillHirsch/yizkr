@@ -487,7 +487,7 @@ class TestAcceptAll:
 
         assert before.keys() == after.keys()
         for cid, row in after.items():
-            assert row["decision"] == "bulk-accept"  # ADR-0022 disposition
+            assert row["decision"] == "bulk-accept"  # ADR-0023 disposition
             for col, value in before[cid].items():
                 if col != "decision":
                     assert row[col] == value
@@ -499,7 +499,7 @@ class TestAcceptAll:
             accept_all(bad, tmp_path / "out.csv")
 
     def test_bulk_accept_disposition_round_trips(self, tmp_path):
-        # ADR-0022: a pristine accept-all sheet is detectable for the write
+        # ADR-0023: a pristine accept-all sheet is detectable for the write
         # path (which marks its edits low-scrutiny), and still approves.
         source = batch()
         review_csv = tmp_path / "review.csv"

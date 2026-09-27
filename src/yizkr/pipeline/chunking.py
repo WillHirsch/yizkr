@@ -175,7 +175,7 @@ Rules — these mirror the archive's non-negotiable conventions:
   The marker may be CONTEXTUAL (a née/geb. maiden cue, a stated legal or
   immigration change), not only an explicit tag. Never infer a name's kind
   (given vs family) or type from word order or position — type only what a
-  source marks (ADR-0021).
+  source marks (ADR-0022).
 - Kinship: use ONLY the primitives father, mother, spouse, sibling,
   child. Do NOT invent properties for compound relations (aunt, cousin,
   grandmother, brother-in-law) — those are derived from the primitives.
@@ -317,7 +317,7 @@ NAMES the document uses for the entity. They are NOT:
   `kinship_type`; a courtesy/pet name becomes `referred_to_as`). Never
   record any of these as an alias (ADR-0018).
 
-Name composition and the canonical label (ADR-0021):
+Name composition and the canonical label (ADR-0022):
 - Do NOT enumerate full-name PERMUTATIONS as aliases. A "/" between family
   names ("Frida Hollfeld/Falk/Gellerowski") is ONE person with alternative
   family names held at different times: give the label ONE clean form (given
@@ -1024,7 +1024,7 @@ class ChunkedClaimExtractor:
             def transform(claim: dict, chunk_id: str) -> dict:
                 return normalize_to_manifest(claim, records)
 
-            # ADR-0021 §4: hygiene the alias bag (drop derivable short-forms,
+            # ADR-0022 §4: hygiene the alias bag (drop derivable short-forms,
             # keep compounds whole) — the deterministic safety net over the
             # LLM manifest; typing/composition stay the LLM's job.
             from yizkr.pipeline.names import normalize_entity_dict
