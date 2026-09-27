@@ -935,10 +935,11 @@ def propose_graph_pairs(
     name token is shared (prefix-aware); ``impossible_pair`` then prunes a
     pair before adjudication when a structural graph fact rules identity
     out: a kinship edge (father, mother, spouse, child or sibling) between
-    the two, or, for two places, one transitively inside the other.
-    Without ``containment`` only the kinship rule applies. Dates never
-    prune a pair: contradictory dates go to adjudication and review
-    (ADR-0017).
+    the two, or, for two places, one transitively inside the other or
+    named exactly like a place containing the other (never when the two
+    share a label). Without ``containment`` only the kinship rule applies.
+    Dates never prune a pair: contradictory dates go to adjudication and
+    review (ADR-0017).
 
     Executing an approved pair is a curator action (item merge, or a
     referenced `said to be the same as` statement) — deliberately not
