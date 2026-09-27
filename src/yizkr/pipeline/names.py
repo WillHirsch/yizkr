@@ -12,7 +12,7 @@ mechanism shared by both ingest paths:
   >=3-char tokens are a strict subset of the label's) — so the bag holds only
   forms that add a search token;
 * never SPLIT a name, so hyphenated and space-separated compound / nobiliary
-  particle surnames (``Sadelman-Rauholz``, ``de la Cruz``, ``van der Berg``,
+  particle surnames (``A-B``, ``de la Cruz``, ``van der Berg``,
   ``ben Yosef``) stay whole — a naive whitespace atomizer would shatter them
   into particle non-name tokens (rule 6);
 * assert NO name kind (given vs family is undecidable and never stored,
@@ -81,7 +81,7 @@ def normalize_entity_dict(entity: dict) -> dict:
     """Return `entity` with a HUMAN entity's aliases hygiened; every other kind
     (place, organization, ...) passes through UNCHANGED — the derivability
     rules are about personal names, and would wrongly drop a genuine short
-    place name ("Berlin" beside "Berlin, Germany")."""
+    place name ("Flörburg" beside "Flörburg, Hesse, Germany")."""
     if entity.get("kind") != "human":
         return entity
     return {
