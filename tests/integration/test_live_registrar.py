@@ -3,9 +3,12 @@
 never stored twice, so every item's `media file` holds the bytes its
 `media SHA-1` names.
 
-Fictional synthetic images only. Re-runnable against a non-empty graph:
-the images are byte-identical on every run, so a re-run finds every file
-and item in place, and must store and write nothing."""
+Fictional synthetic images only. Every file name and title the tests
+choose carries the SHA-1 prefix of the bytes it is chosen for, so new
+fixture bytes get new names: files and items that runs with other bytes
+left on the instance never meet this run's. Re-runnable against a
+non-empty graph: the images are byte-identical on every run, so a re-run
+finds every file and item in place, and must store and write nothing."""
 
 from __future__ import annotations
 
@@ -19,19 +22,33 @@ from yizkr.pipeline.registrar import register_artifact
 
 pytestmark = pytest.mark.live
 
-UPLOAD_NAME = "Integration-test upload warnings.png"
-FIRST = png_bytes(fill=b"\x4a\x9e\x01")
-SECOND = png_bytes(fill=b"\x4a\x9e\x02")
-
-TITLE = "Integration-test changed source"
-SOURCE_NAME = "integration-test-changed-source.png"
-ORIGINAL = png_bytes(fill=b"\x4a\x9e\x03")
-CHANGED = png_bytes(fill=b"\x4a\x9e\x04")
+# One seed for all four images: a new seed gives every image new bytes
+# and every name below a new SHA-1 prefix. Changing one image alone
+# would leave the others' bytes stored under names this run does not
+# expect.
+SEED = b"\x4a\x9e"
+FIRST = png_bytes(fill=SEED + b"\x01")
+SECOND = png_bytes(fill=SEED + b"\x02")
+ORIGINAL = png_bytes(fill=SEED + b"\x03")
+CHANGED = png_bytes(fill=SEED + b"\x04")
 DESCRIPTION = "written by tests/integration; safe to delete"
 
 
 def sha1(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
+
+
+# FIRST and SECOND are uploaded under one name, ORIGINAL and CHANGED
+# registered under one name and title; each name carries the prefix of
+# the bytes stored under it first.
+UPLOAD_STEM = f"Integration-test upload warnings {sha1(FIRST)[:8]}"
+UPLOAD_NAME = f"{UPLOAD_STEM}.png"
+UPLOAD_COPY_NAME = f"{UPLOAD_STEM} copy.png"
+
+SOURCE_STEM = f"integration-test-changed-source-{sha1(ORIGINAL)[:8]}"
+SOURCE_NAME = f"{SOURCE_STEM}.png"
+SOURCE_COPY_NAME = f"{SOURCE_STEM}-copy.png"
+TITLE = f"Integration-test changed source {sha1(ORIGINAL)[:8]}"
 
 
 def write(tmp_path, folder: str, name: str, data: bytes):
@@ -88,9 +105,7 @@ def test_upload_never_overwrites_or_duplicates(client, tmp_path):
     # the same bytes under the same name, then under another: the stored
     # file is reused and nothing is stored
     assert client.upload_file(first) == page
-    copy = write(
-        tmp_path, "copy", "Integration-test upload warnings copy.png", FIRST
-    )
+    copy = write(tmp_path, "copy", UPLOAD_COPY_NAME, FIRST)
     assert client.upload_file(copy) == page
     assert files_with_bytes(client, sha1(FIRST)) == {db_key(page)}
 
@@ -99,7 +114,7 @@ def test_upload_never_overwrites_or_duplicates(client, tmp_path):
     second = write(tmp_path, "second", UPLOAD_NAME, SECOND)
     tagged = client.upload_file(second)
     tag = sha1(SECOND)[:8]
-    assert tagged == f"File:Integration-test upload warnings {tag}.png"
+    assert tagged == f"File:{UPLOAD_STEM} {tag}.png"
     assert history(client, page) == [sha1(FIRST)]
     assert history(client, tagged) == [sha1(SECOND)]
 
@@ -121,9 +136,7 @@ def test_media_file_and_media_sha1_stay_in_step(client, tmp_path):
 
     original = write(tmp_path, "original", SOURCE_NAME, ORIGINAL)
     changed = write(tmp_path, "changed", SOURCE_NAME, CHANGED)
-    copy = write(
-        tmp_path, "copy", "integration-test-changed-source-copy.png", ORIGINAL
-    )
+    copy = write(tmp_path, "copy", SOURCE_COPY_NAME, ORIGINAL)
 
     first = register(original)
     # the source changes under the same name and title: a new artifact
