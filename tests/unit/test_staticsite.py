@@ -157,8 +157,9 @@ GALLERY = [
 
 # disagreement-report rows: the universe's contradiction (Gustav's birth
 # day and month transposed between the civil register extract and the
-# naturalisation), then placeholder rows for a dated residence and a
-# birth name
+# naturalisation), then placeholder rows for a dated residence, a birth
+# name, and an event date one source gives as a range ("between 1938 and
+# 1939", the universe's form for an emigration) that another contradicts
 INCONSISTENCIES = [
     {
         "entity": uri("Q12"),
@@ -182,6 +183,10 @@ INCONSISTENCIES = [
         "qualifierLabel": literal("start time"),
         "valueA": time_literal("+1938-01-01T00:00:00Z"),
         "precisionA": literal("9"),
+        # a residence statement's own range: it may date either end, so
+        # the start-time row does not show it
+        "earliestA": time_literal("+1937-01-01T00:00:00Z"),
+        "earliestPrecisionA": literal("9"),
         "sourcesA": literal("Q62~Disagreement fixture source A"),
         "valueB": time_literal("+1939-01-01T00:00:00Z"),
         "precisionB": literal("9"),
@@ -202,6 +207,21 @@ INCONSISTENCIES = [
             "value": "Fixture Spouse Maiden Name",
             "xml:lang": "en",
         },
+        "sourcesB": literal("Q63~Disagreement fixture source B"),
+    },
+    {
+        "entity": uri("Q65"),
+        "entityLabel": literal("Disagreement Fixture Emigration"),
+        "propertyLabel": literal("point in time"),
+        "valueA": time_literal("+1938-01-01T00:00:00Z"),
+        "precisionA": literal("9"),
+        "earliestA": time_literal("+1938-01-01T00:00:00Z"),
+        "earliestPrecisionA": literal("9"),
+        "latestA": time_literal("+1939-01-01T00:00:00Z"),
+        "latestPrecisionA": literal("9"),
+        "sourcesA": literal("Q62~Disagreement fixture source A"),
+        "valueB": time_literal("+1940-06-22T00:00:00Z"),
+        "precisionB": literal("11"),
         "sourcesB": literal("Q63~Disagreement fixture source B"),
     },
 ]
@@ -363,6 +383,20 @@ class TestInconsistencies:
         # year precision, never padded to 1 January
         assert "<td>1938</td>" in text and "<td>1939</td>" in text
         assert "1938-01-01" not in text
+
+    def test_a_stated_range_is_shown_beside_its_value(
+        self, tmp_path, vocabulary
+    ):
+        # rule 5: the range a source gives is never silently dropped, and
+        # it is why the pair is listed (1940 lies outside 1938-1939)
+        text = self.page(tmp_path, vocabulary)
+        assert (
+            '<td>1938 <span class="qualifiers">(earliest date: 1938; '
+            "latest date: 1939)</span></td>"
+        ) in text
+        # a residence or spouse row compares a start or end time, which
+        # the statement's range need not bound: it is not shown there
+        assert "earliest date: 1937" not in text
 
     def test_single_valued_rows_show_the_property_alone(
         self, tmp_path, vocabulary

@@ -782,8 +782,10 @@ class SiteBuilder:
             "state, and this page exists so a reader can weigh the evidence. "
             "Two readings of one artifact are not two sources, and a value a "
             "curator deprecated is left out. Differences of resolution are "
-            "not listed: a date that falls inside another's span, or a place "
-            "the graph records as contained in the other.</p>",
+            "not listed: a date whose span lies inside another's (the period "
+            "its precision names, or the range its source states with "
+            "earliest and latest dates), or a place the graph records as "
+            "contained in the other.</p>",
             "<table><tr><th>Who/what</th><th>Property</th>"
             "<th>Value A</th><th>per</th><th>Value B</th><th>per</th></tr>",
         ]
@@ -802,11 +804,34 @@ class SiteBuilder:
                 text += f", {esc(qualifier)}"
             return text
 
+        def stated_range(row: dict, side: str) -> str:
+            """The earliest and latest dates a statement gives its value,
+            as the person page shows qualifiers. A residence or spouse row
+            compares a start or end time, which those dates need not
+            bound, so it shows none."""
+            if cell(row, "qualifierLabel"):
+                return ""
+            bounds = [
+                f"{name} date: "
+                + format_time(
+                    cell(row, f"{name}{side}"),
+                    cell(row, f"{name}Precision{side}"),
+                )
+                for name in ("earliest", "latest")
+                if cell(row, f"{name}{side}")
+            ]
+            if not bounds:
+                return ""
+            return (
+                f' <span class="qualifiers">({esc("; ".join(bounds))})</span>'
+            )
+
         def rendered(row: dict, side: str) -> str:
             value = row.get(f"value{side}", {})
             raw = value.get("value", "")
             if value.get("datatype", "").endswith("dateTime"):
-                return esc(format_time(raw, cell(row, f"precision{side}")))
+                shown = format_time(raw, cell(row, f"precision{side}"))
+                return esc(shown) + stated_range(row, side)
             label = cell(row, f"value{side}Label")
             if label.startswith("http"):
                 label = raw.rsplit("/", 1)[-1]

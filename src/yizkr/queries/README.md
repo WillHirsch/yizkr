@@ -31,9 +31,14 @@ uv run yizkr publish-queries             # or: make publish-queries
   It compares the single-valued properties (dates and places of birth and
   death, parents, birth name, an event's own point in time, start and end
   time, a place's identity properties), and the start and end times of
-  one residence place or one spouse that sources date differently. A
-  date inside another's span and a place recorded inside the other are
-  differences of resolution, and are not listed.
+  one residence place or one spouse that sources date differently (a
+  point in time on those statements is not compared). A date whose span
+  lies inside another's and a place recorded inside the other are
+  differences of resolution, and are not listed: a date's span is the
+  period its precision names or the range its source states with
+  earliest and latest dates, which the report shows beside the value.
+  Spellings of a name that differ only in case or language are one
+  value. See MODELING.md "Contradictions" for the full rules.
 - **person-timeline** — every dated assertion about each person
   (statements, dated qualifiers such as a marriage's point in time, and
   events participated in), plural-by-default with sources (R6).

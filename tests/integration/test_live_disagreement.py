@@ -10,14 +10,21 @@ running stack, then pins the report's rows for the fixture subjects:
   correction beside the machine reading it corrects, and a page fragment
   beside the artifact it is part of;
 * a deprecated value is left out;
-* a date inside another's span is a refinement, not a disagreement: a bare
-  year beside a day in it, and "between 1938 and 1939" beside 22 June 1938
-  (the universe's refinement cases, docs/EXAMPLES.md);
+* a date whose span lies inside another's is a refinement, not a
+  disagreement. The span is the period the precision names (a bare year
+  beside a day in it; the 19th century beside 1850) or the range the
+  source states with earliest and latest dates ("between 1938 and 1939"
+  beside 22 June 1938 and beside 3 March 1939, the universe's forms,
+  docs/EXAMPLES.md). A stated range can make a pair a disagreement: "the
+  1930s, between 1930 and 1935" and 1937 disagree, as do a year narrowed
+  to March-June and 2 November of it (rule 5), and the report carries the
+  range beside the value;
 * an event's own date is compared, and so are the start times of one
   residence place and of one spouse, dated two ways; two residence
   observations at different points in time are not;
-* birth names compare as text, ignoring letter case and language, while
-  nicknames accumulate and are never compared.
+* birth names compare as text: spellings that differ only in letter case
+  and language are one value, listed once with the sources of all of them,
+  while nicknames accumulate and are never compared.
 
 The whole graph is queried, and rows are filtered to the fixture subjects,
 so unrelated data on the instance cannot make the assertions flaky. Like
@@ -54,8 +61,14 @@ def local(local_id: str, label: str, kind: str) -> dict:
 
 PERSON = local("disagreement-person", "Disagreement Fixture Person", "human")
 SPOUSE = local("disagreement-spouse", "Disagreement Fixture Spouse", "human")
+RANGES = local("disagreement-ranges", "Disagreement Fixture Ranges", "human")
 EMIGRATION = local(
     "disagreement-emigration", "Disagreement Fixture Emigration", "migration"
+)
+SECOND_EMIGRATION = local(
+    "disagreement-second-emigration",
+    "Disagreement Fixture Second Emigration",
+    "migration",
 )
 TOWN = local("disagreement-town", "Disagreement Fixture Town", "place")
 OTHER_TOWN = local(
@@ -64,19 +77,28 @@ OTHER_TOWN = local(
 ROLES = {
     "disagreement-person": "person",
     "disagreement-spouse": "spouse",
+    "disagreement-ranges": "ranges",
     "disagreement-emigration": "emigration",
+    "disagreement-second-emigration": "second emigration",
     "disagreement-town": "town",
     "disagreement-other-town": "other town",
 }
-SUBJECTS = ("person", "spouse", "emigration")
+SUBJECTS = ("person", "spouse", "ranges", "emigration", "second emigration")
 
 
-def date(year: int, month: int | None = None, day: int | None = None) -> dict:
+def date(
+    year: int,
+    month: int | None = None,
+    day: int | None = None,
+    precision: str | None = None,
+) -> dict:
     value = {"type": "time", "year": year}
     if month:
         value["month"] = month
     if day:
         value["day"] = day
+    if precision:
+        value["precision"] = precision
     return value
 
 
@@ -159,6 +181,11 @@ def set_rank(client, subject, prop_key, matches, rank: WikibaseRank) -> None:
         entity.write(summary="integration test: curator rank on a fixture")
 
 
+def between(start: dict, end: dict) -> tuple:
+    """The earliest and latest dates a source gives a value."""
+    return (("earliest_date", start), ("latest_date", end))
+
+
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
     """Write the fixture (idempotent: re-runs reuse and skip everything),
@@ -237,8 +264,15 @@ def fixture_graph(client, config):
                 # nicknames accumulate
                 claim(PERSON, "nickname", text("Fixture Nick One"), a),
                 claim(PERSON, "nickname", text("Fixture Nick Two"), b),
+                # two birth names, the first in two spellings
                 claim(
                     SPOUSE, "birth_name", text("Fixture Spouse Birth Name"), a
+                ),
+                claim(
+                    SPOUSE,
+                    "birth_name",
+                    text("FIXTURE SPOUSE BIRTH NAME", "de"),
+                    c,
                 ),
                 claim(
                     SPOUSE, "birth_name", text("Fixture Spouse Maiden Name"), b
@@ -258,6 +292,24 @@ def fixture_graph(client, config):
                     b,
                     (("start_time", date(1946)),),
                 ),
+                # a stated range narrows a decade: 1937 lies outside it
+                claim(
+                    RANGES,
+                    "date_of_birth",
+                    date(1930, precision="decade"),
+                    a,
+                    between(date(1930), date(1935)),
+                ),
+                claim(RANGES, "date_of_birth", date(1937), b),
+                # and a year: 2 November lies outside March to June
+                claim(
+                    RANGES,
+                    "date_of_death",
+                    date(1935),
+                    a,
+                    between(date(1935, 3), date(1935, 6)),
+                ),
+                claim(RANGES, "date_of_death", date(1935, 11, 2), b),
                 # an event's own date: 22 June per one source and 22 July
                 # per another, while "between 1938 and 1939" refines both
                 claim(EMIGRATION, "point_in_time", date(1938, 6, 22), b),
@@ -266,12 +318,31 @@ def fixture_graph(client, config):
                     "point_in_time",
                     date(1938),
                     c,
-                    (
-                        ("earliest_date", date(1938)),
-                        ("latest_date", date(1939)),
-                    ),
+                    between(date(1938), date(1939)),
                 ),
                 claim(EMIGRATION, "point_in_time", date(1938, 7, 22), a),
+                # a day in the stated range's second year refines it too
+                claim(
+                    SECOND_EMIGRATION,
+                    "point_in_time",
+                    date(1938),
+                    c,
+                    between(date(1938), date(1939)),
+                ),
+                claim(
+                    SECOND_EMIGRATION,
+                    "point_in_time",
+                    date(1939, 3, 3),
+                    a,
+                ),
+                # a century is a span: 1850 lies inside the 19th
+                claim(
+                    SECOND_EMIGRATION,
+                    "start_time",
+                    date(1800, precision="century"),
+                    a,
+                ),
+                claim(SECOND_EMIGRATION, "start_time", date(1850), b),
             ]
         )
     )
@@ -322,17 +393,43 @@ def report_rows(client, config, qids: dict[str, str]) -> list[dict]:
     ]
 
 
+def time_shown(value: str, precision: int) -> str:
+    """A time at its stated precision (a century as its first year's
+    century, a decade as its first year)."""
+    day = value.lstrip("+")[:10]
+    year = int(day[:4])
+    if precision <= 7:
+        return f"{year // 100 + 1}th century"
+    if precision == 8:
+        return f"{year // 10 * 10}s"
+    return day[: {9: 4, 10: 7}.get(precision, 10)]
+
+
 def shown(row: dict, side: str) -> str:
     """A value as its sources state it: a time at its stated precision, an
-    item as its QID, a name as its text."""
+    item as its QID, a name as its text (in lower case, since the row shows
+    one of the spellings that differ only in case)."""
     value = row[f"value{side}"]
     if value.get("datatype", "").endswith("dateTime"):
-        precision = int(row[f"precision{side}"]["value"])
-        day = value["value"].lstrip("+")[:10]
-        return day[: {9: 4, 10: 7}.get(precision, 10)]
+        return time_shown(
+            value["value"], int(row[f"precision{side}"]["value"])
+        )
     if value["type"] == "uri":
         return value["value"].rsplit("/", 1)[-1]
-    return value["value"]
+    return value["value"].lower()
+
+
+def stated_range(row: dict, side: str) -> tuple:
+    """The earliest and latest dates the report carries beside a value."""
+    return tuple(
+        time_shown(
+            row[f"{name}{side}"]["value"],
+            int(row[f"{name}Precision{side}"]["value"]),
+        )
+        if f"{name}{side}" in row
+        else None
+        for name in ("earliest", "latest")
+    )
 
 
 def row_key(row: dict, qids: dict[str, str]) -> tuple:
@@ -369,7 +466,7 @@ EXPECTED = {
         "birth name",
         "",
         "",
-        frozenset({"Fixture Spouse Birth Name", "Fixture Spouse Maiden Name"}),
+        frozenset({"fixture spouse birth name", "fixture spouse maiden name"}),
     ),
     (
         "spouse",
@@ -378,6 +475,8 @@ EXPECTED = {
         "start time",
         frozenset({"1946", "1947-02-08"}),
     ),
+    ("ranges", "date of birth", "", "", frozenset({"1930s", "1937"})),
+    ("ranges", "date of death", "", "", frozenset({"1935", "1935-11-02"})),
     (
         "emigration",
         "point in time",
@@ -402,21 +501,26 @@ def test_each_value_names_the_artifacts_that_state_it(
 ):
     qids, source = fixture_graph
     stated_by = {
-        "1919-01-07": source["A"],
-        "1919-07-01": source["B"],
-        "1939": source["A"],
-        "1940": source["B"],
-        "Fixture Spouse Birth Name": source["A"],
-        "Fixture Spouse Maiden Name": source["B"],
-        "1947-02-08": source["A"],
-        "1946": source["B"],
-        "1938-06-22": source["B"],
-        "1938-07-22": source["A"],
+        "1919-01-07": {source["A"]},
+        "1919-07-01": {source["B"]},
+        "1939": {source["A"]},
+        "1940": {source["B"]},
+        # both spellings of one name, listed together
+        "fixture spouse birth name": {source["A"], source["C"]},
+        "fixture spouse maiden name": {source["B"]},
+        "1947-02-08": {source["A"]},
+        "1946": {source["B"]},
+        "1930s": {source["A"]},
+        "1937": {source["B"]},
+        "1935": {source["A"]},
+        "1935-11-02": {source["B"]},
+        "1938-06-22": {source["B"]},
+        "1938-07-22": {source["A"]},
     }
     for row in report_rows(client, config, qids):
         for side in "AB":
-            assert sources(row, side) == {stated_by[shown(row, side)]}, (
-                row_key(row, qids)
+            assert sources(row, side) == stated_by[shown(row, side)], row_key(
+                row, qids
             )
 
 
@@ -432,6 +536,24 @@ def test_values_keep_their_stated_precision(client, config, fixture_graph):
         shown(row, side): row[f"precision{side}"]["value"] for side in "AB"
     }
     assert precision == {"1946": "9", "1947-02-08": "11"}
+
+
+def test_a_stated_range_travels_with_its_value(client, config, fixture_graph):
+    """Rule 5: the range a source states is never silently dropped; it is
+    why "the 1930s" and 1937 disagree."""
+    qids, _ = fixture_graph
+    ranges = {}
+    for row in report_rows(client, config, qids):
+        if row_key(row, qids)[0] != "ranges":
+            continue
+        for side in "AB":
+            ranges[shown(row, side)] = stated_range(row, side)
+    assert ranges == {
+        "1930s": ("1930", "1935"),
+        "1937": (None, None),
+        "1935": ("1935-03", "1935-06"),
+        "1935-11-02": (None, None),
+    }
 
 
 def test_rank_is_an_overlay_never_a_requirement(client, config, fixture_graph):
@@ -490,9 +612,16 @@ def test_what_the_report_leaves_out(client, config, fixture_graph):
             for row in about_person
             if row["propertyLabel"]["value"] == labels[prop_key]
         ], reason
-    # refinements: the bare years never face the days they contain
+    # refinements: a span never faces a date inside it ("between 1938 and
+    # 1939" and 3 March 1939; the 19th century and 1850)
+    second = qids["second emigration"]
+    for prop_key in ("point_in_time", "start_time"):
+        assert len(statements(client, second, prop_key)) == 2, prop_key
+    assert not [
+        row for row in rows if row_key(row, qids)[0] == "second emigration"
+    ]
     shown_values = {value for row in rows for value in row_key(row, qids)[4]}
-    assert not shown_values & {"1919", "1938"}
+    assert not shown_values & {"1919", "1938", "19th century", "1850"}
     # residence observations and a one-sided end time are not compared
     assert len(statements(client, person, "residence")) == 4
     residence_rows = [
