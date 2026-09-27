@@ -58,11 +58,11 @@ def time_literal(value: str) -> dict:
 PEOPLE = [
     {
         "person": uri("Q7"),
-        "personLabel": literal('Rosa "Ro" & Co <Genserowski>'),
-        "personDescription": literal("matriarch"),
+        "personLabel": literal('Eugen "Muckel" & Co <Löbig>'),
+        "personDescription": literal("master hatter"),
         "deceased": literal("true"),
-        "birth": time_literal("+1873-05-10T00:00:00Z"),
-        "aliases": literal("Rosa|our great grandmother"),
+        "birth": time_literal("+1836-01-01T00:00:00Z"),
+        "aliases": literal("Eugen Löbig|Muckel"),
     },
     {
         "person": uri("Q8"),
@@ -75,30 +75,30 @@ PEOPLE = [
 STATEMENTS = [
     {
         "person": uri("Q7"),
-        "propLabel": literal("date of birth"),
+        "propLabel": literal("date of death"),
         "st": uri("s1"),
-        "value": time_literal("+1873-05-10T00:00:00Z"),
+        "value": time_literal("+1909-03-16T00:00:00Z"),
         "precision": literal("11"),
-        "sources": literal("Q23~family tree PDF"),
+        "sources": literal("Q23~burial register"),
         "qualifierTexts": literal(""),
     },
     {
         "person": uri("Q7"),
-        "propLabel": literal("date of birth"),
+        "propLabel": literal("date of death"),
         "st": uri("s2"),
-        "value": time_literal("+1874-01-01T00:00:00Z"),
+        "value": time_literal("+1909-01-01T00:00:00Z"),
         "precision": literal("9"),
-        "sources": literal("Q29~travel notes"),
-        "qualifierTexts": literal("sourcing circumstances: circa"),
+        "sources": literal("Q29~gravestone photograph"),
+        "qualifierTexts": literal(""),
     },
     {
         "person": uri("Q7"),
         "propLabel": literal("spouse"),
         "st": uri("s3"),
         "value": uri("Q9"),
-        "valueLabel": literal("Salomon Rothholz"),
-        "sources": literal("Q23~family tree PDF|Q31~marriage record"),
-        "qualifierTexts": literal("start time: 1901"),
+        "valueLabel": literal("Cäcilie Löbig"),
+        "sources": literal("Q23~burial register|Q31~family tree"),
+        "qualifierTexts": literal("start time: 1859"),
     },
     {
         "person": uri("Q7"),
@@ -106,7 +106,7 @@ STATEMENTS = [
         "st": uri("s4"),
         "value": uri("Q1"),
         "valueLabel": literal("human"),
-        "sources": literal("Q23~family tree PDF"),
+        "sources": literal("Q23~burial register"),
         "qualifierTexts": literal(""),
     },
 ]
@@ -114,21 +114,21 @@ STATEMENTS = [
 TIMELINE = [
     {
         "person": uri("Q7"),
-        "personLabel": literal("Rosa Genserowski"),
-        "what": literal("date of birth"),
-        "date": time_literal("+1873-05-10T00:00:00Z"),
+        "personLabel": literal("Eugen Löbig"),
+        "what": literal("date of death"),
+        "date": time_literal("+1909-03-16T00:00:00Z"),
         "source": uri("Q23"),
-        "sourceLabel": literal("family tree PDF"),
+        "sourceLabel": literal("burial register"),
     }
 ]
 
 ARTIFACTS = [
     {
         "artifact": uri("Q23"),
-        "artifactLabel": literal("family tree PDF"),
-        "artifactDescription": literal("five generations"),
+        "artifactLabel": literal("burial register"),
+        "artifactDescription": literal("Friedhof Flörburg, 1909"),
         "kindLabel": literal("artifact"),
-        "file": literal("File:Family-tree.pdf"),
+        "file": literal("File:Burial-register-1909.pdf"),
     }
 ]
 
@@ -136,9 +136,9 @@ ASSERTIONS = [
     {
         "artifact": uri("Q23"),
         "subject": uri("Q7"),
-        "subjectLabel": literal("Rosa Genserowski"),
-        "propLabel": literal("date of birth"),
-        "value": time_literal("+1873-05-10T00:00:00Z"),
+        "subjectLabel": literal("Eugen Löbig"),
+        "propLabel": literal("date of death"),
+        "value": time_literal("+1909-03-16T00:00:00Z"),
         "precision": literal("11"),
     }
 ]
@@ -190,24 +190,24 @@ class TestPersonPage:
     ):
         site, _ = build(tmp_path, vocabulary, RESPONSES)
         text = (site / "people/Q7.html").read_text()
-        # both attributed birth values, each labeled — nothing picked
-        assert "1873-05-10" in text and "family tree PDF" in text
-        assert ">1874<" in text or "1874" in text  # year precision, not padded
-        assert "1874-01-01" not in text  # precision respected
-        assert "travel notes" in text
+        # both attributed death values, each labeled — nothing picked
+        assert "1909-03-16" in text and "burial register" in text
+        assert ">1909<" in text  # year precision, not padded
+        assert "1909-01-01" not in text  # precision respected
+        assert "gravestone photograph" in text
         # multi-source statement links BOTH sources to artifact pages
-        assert '<a href="../artifacts/Q23.html">family tree PDF</a>' in text
-        assert '<a href="../artifacts/Q31.html">marriage record</a>' in text
+        assert '<a href="../artifacts/Q23.html">burial register</a>' in text
+        assert '<a href="../artifacts/Q31.html">family tree</a>' in text
         # qualifiers rendered
-        assert "start time: 1901" in text
+        assert "start time: 1859" in text
         # item values link to the person page of the target
         assert 'href="Q9.html"' in text
 
     def test_labels_are_escaped(self, tmp_path, vocabulary):
         site, _ = build(tmp_path, vocabulary, RESPONSES)
         text = (site / "people/Q7.html").read_text()
-        assert "&lt;Genserowski&gt;" in text
-        assert "<Genserowski>" not in text
+        assert "&lt;Löbig&gt;" in text
+        assert "<Löbig>" not in text
 
     def test_possibly_living_badge(self, tmp_path, vocabulary):
         # runtime determination (ADR-0020): Q8 has no death evidence, so
@@ -234,10 +234,10 @@ class TestSections:
 
     def test_timeline_page_and_feed(self, tmp_path, vocabulary):
         site, _ = build(tmp_path, vocabulary, RESPONSES)
-        assert "Rosa Genserowski" in (site / "timeline.html").read_text()
+        assert "Eugen Löbig" in (site / "timeline.html").read_text()
         feed = json.loads((site / "timeline.json").read_text())
-        assert feed["events"][0]["start_date"]["year"] == "1873"
-        assert "per family tree PDF" in feed["events"][0]["text"]["text"]
+        assert feed["events"][0]["start_date"]["year"] == "1909"
+        assert "per burial register" in feed["events"][0]["text"]["text"]
 
     def test_artifact_page_has_download_and_assertions(
         self, tmp_path, vocabulary
@@ -246,11 +246,11 @@ class TestSections:
         assert summary["artifacts"] == 1
         text = (site / "artifacts/Q23.html").read_text()
         # raw-content download link
-        assert "Special:FilePath/Family-tree.pdf" in text
+        assert "Special:FilePath/Burial-register-1909.pdf" in text
         assert "download the original" in text
         # assertions table with precision-correct value and person link
-        assert '<a href="../people/Q7.html">Rosa Genserowski</a>' in text
-        assert "1873-05-10" in text
+        assert '<a href="../people/Q7.html">Eugen Löbig</a>' in text
+        assert "1909-03-16" in text
         # index links the artifact page
         index = (site / "index.html").read_text()
         assert 'href="artifacts/Q23.html"' in index
@@ -281,8 +281,8 @@ class TestSections:
 
 class TestTimeFormatting:
     def test_precisions(self):
-        assert format_time("+1873-05-10T00:00:00Z", "11") == "1873-05-10"
-        assert format_time("+1873-05-10T00:00:00Z", "10") == "1873-05"
-        assert format_time("+1873-00-00T00:00:00Z", "9") == "1873"
+        assert format_time("+1909-03-16T00:00:00Z", "11") == "1909-03-16"
+        assert format_time("+1909-03-16T00:00:00Z", "10") == "1909-03"
+        assert format_time("+1909-00-00T00:00:00Z", "9") == "1909"
         assert format_time("+1920-00-00T00:00:00Z", "8") == "1920s"
         assert format_time("+1800-00-00T00:00:00Z", "7") == "19th century"

@@ -82,9 +82,15 @@ process is the MediaWiki edit history. The pipeline marks these with
 the claim contract's `curated` flag.
 
 The pipeline's claim JSON contract implementing this pattern is
-`ingest/claims.py` (`ClaimBatch`): sources are required fields there,
+`src/yizkr/claims.py` (`ClaimBatch`): sources are required fields there,
 ranks are unrepresentable, and property/item references use manifest
-keys resolved to local ids only at write time.
+keys resolved to local ids only at write time. A claim cites its source
+artifact by content: the SHA-1 of the artifact's media (`ArtifactRef`,
+see *Artifact identity* below), which holds across instance resets. The
+writer resolves the hash to the artifact item carrying that
+`media SHA-1` at write time, and refuses a batch that cites media no
+item carries before it writes anything (#102). A claim that cites an
+artifact item by QID instead is valid only on that instance.
 
 ## Artifacts and registration
 
@@ -106,11 +112,17 @@ keys resolved to local ids only at write time.
   the bytes), referenced `stated in → the artifact itself` (for media
   derived from a compound artifact: `stated in → the container`). The
   registrar keys on this hash — identical bytes are one artifact item
-  however they are named, and an alternate filename becomes an alias.
+  however they are named, and an alternate filename becomes an alias
+  unless it is another item's label.
   Bit-identical media is never stored, itemised, or extracted twice.
 - Labels stay unique per kind: when a title already names *different*
   content, the new artifact's label is disambiguated with a short
   content tag (`"<title> [<sha1[:8]>]"`) rather than colliding.
+- **Every `media file` holds the bytes its item's `media SHA-1` names.**
+  A wiki file is never overwritten: bytes whose file name already holds
+  different bytes are uploaded under a content-tagged file name,
+  `"<stem> <sha1[:8]><extension>"`, and bytes the wiki holds already
+  reuse that file (ADR-0010, "Media files").
 - **Near-duplicates are not identities.** Re-encodings, re-scans, and
   crops have different bytes and are (for now) distinct artifacts;
   linking confirmed alternate versions is a curator judgement through a

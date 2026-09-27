@@ -32,7 +32,7 @@ body:
     id: requirement
     attributes:
       label: Requirements served
-      description: See docs/REQUIREMENTS.md. The issue inherits its epic's req labels.
+      description: See docs/REQUIREMENTS.md. The req labels go on the epic only, not on this issue.
       multiple: true
       options:
         - R1
@@ -81,7 +81,10 @@ body:
       label: Verification a local session must add
       options:
         - label: Changes a write path (needs:live-test)
-        - label: Changes prompts, schemas or models (needs:eval)
+        - label: >-
+            Changes a stage before write: its source with a version bump, a
+            prompt, the manifest, or a model or its parameters (the matching
+            stage:* label, plus needs:scratch-diff if the stage already runs)
   - type: checkboxes
     id: no-real-data
     attributes:

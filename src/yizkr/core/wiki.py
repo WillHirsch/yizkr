@@ -343,59 +343,122 @@ class WikiClient:
         filename: str | None = None,
         comment: str = "ingest: artifact media upload",
     ) -> str:
-        """Upload a media file; returns the file page title (File:...).
+        """Store a media file's bytes on the wiki exactly once; returns
+        the page title (File:...) of the file that holds them.
 
-        Re-uploading identical content is treated as success (idempotent);
-        a name collision with different content is an error.
+        A wiki file is never overwritten and the same bytes are never
+        stored twice (ADR-0010), so a `media file` statement always shows
+        the bytes its item's `media SHA-1` names. The upload is sent
+        without `ignorewarnings` (MediaWiki reads a boolean parameter as
+        true whenever it is present, whatever its value), so MediaWiki
+        stops at every warning and each one is answered here:
+
+        * the bytes are stored already (``nochange`` under this name,
+          ``duplicate`` under others): that file is returned and nothing
+          is uploaded;
+        * this name holds different bytes (``exists``): the bytes go
+          under a content-tagged name, ``"<stem> <sha1[:8]><suffix>"``,
+          and the existing file is left as it is;
+        * a warning about the name alone (`NAME_WARNINGS`): no file holds
+          the name, so the upload is repeated with warnings overridden;
+        * any other warning is refused, among them ``duplicate-archive``
+          (these bytes were deleted from the wiki): re-uploading them
+          would undo a curator's deletion, so it is left to a person.
         """
-        filename = filename or path.name
-        # MediaWiki normalizes titles to an uppercase first letter.
-        filename = filename[:1].upper() + filename[1:]
-        session = self.login.get_session()
-        response = session.post(
-            self.api_url,
-            data={
-                "action": "upload",
-                "filename": filename,
-                "comment": comment,
-                "ignorewarnings": "0",
-                "token": self.login.get_edit_token(),
-                "format": "json",
-            },
-            files={"file": (filename, path.open("rb"))},
-            headers={"User-Agent": USER_AGENT},
-            timeout=300,
+        name = filename or path.name
+        content_sha1 = hashlib.sha1(path.read_bytes()).hexdigest()
+        stem, suffix = Path(name).stem, Path(name).suffix
+        for attempt in (name, f"{stem} {content_sha1[:8]}{suffix}"):
+            upload = self._upload(path, attempt, comment)
+            if upload["result"] == "Success":
+                return _file_page(upload["filename"])
+            warnings = upload["warnings"]
+            if "nochange" in warnings:
+                return _file_page(warnings["exists"])
+            if warnings.get("duplicate"):
+                return _file_page(sorted(warnings["duplicate"])[0])
+            if "exists" in warnings:
+                continue  # different bytes hold this name: tag the name
+            refused = set(warnings) - NAME_WARNINGS
+            if refused:
+                raise RuntimeError(
+                    f"Upload of {path.name} as File:{attempt} stopped on "
+                    f"MediaWiki warnings {sorted(refused)} ({warnings}); "
+                    f"these need a person's decision. `duplicate-archive` "
+                    f"means the bytes were deleted from the wiki: restore "
+                    f"that file to reuse it."
+                )
+            upload = self._upload(path, attempt, comment, override=True)
+            clash = {"exists", "duplicate"} & set(upload.get("warnings", {}))
+            if upload["result"] != "Success" or clash:
+                raise RuntimeError(
+                    f"Upload of {path.name} as File:{attempt}, name "
+                    f"warnings overridden, met existing bytes: {upload}"
+                )
+            return _file_page(upload["filename"])
+        raise RuntimeError(
+            f"File:{name} and File:{attempt} both hold other bytes than "
+            f"{path.name}; neither is overwritten."
         )
+
+    def _upload(
+        self, path: Path, filename: str, comment: str, override: bool = False
+    ) -> dict:
+        """One action=upload request; returns its ``upload`` result, a
+        success or a set of warnings, and raises on anything else.
+
+        `override` sends ``ignorewarnings``, so MediaWiki stores the file
+        whatever its warnings; `upload_file` sets it only after a request
+        without it has shown that no warning concerns stored bytes.
+        """
+        fields = {"filename": filename, "comment": comment}
+        if override:
+            fields["ignorewarnings"] = "1"
+        data = self._post_upload(path, fields)
+        upload = data.get("upload") or {}
+        if upload.get("result") == "Success" or upload.get("warnings"):
+            return upload
+        raise RuntimeError(f"Upload of {path.name} failed: {data}")
+
+    def _post_upload(self, path: Path, fields: dict) -> dict:
+        """POST `fields` and the file's bytes as action=upload; returns
+        the decoded response."""
+        with path.open("rb") as handle:
+            response = self.login.get_session().post(
+                self.api_url,
+                data={
+                    **fields,
+                    "action": "upload",
+                    "token": self.login.get_edit_token(),
+                    "format": "json",
+                },
+                files={"file": (fields["filename"], handle)},
+                headers={"User-Agent": USER_AGENT},
+                timeout=300,
+            )
         response.raise_for_status()
-        data = response.json()
-        error_code = data.get("error", {}).get("code")
-        if error_code == "fileexists-no-change":
-            # identical content already uploaded under this name: no-op
-            return f"File:{filename.replace('_', ' ')}"
-        upload = data.get("upload", {})
-        if upload.get("result") == "Success":
-            return f"File:{upload['filename'].replace('_', ' ')}"
-        warnings = upload.get("warnings", {})
-        if "exists" in warnings or "duplicate" in warnings:
-            duplicates = warnings.get("duplicate")
-            if duplicates:
-                # identical content already uploaded under another name
-                return f"File:{duplicates[0].replace('_', ' ')}"
-            existing = self.api_get(
-                {
-                    "action": "query",
-                    "titles": f"File:{filename}",
-                    "prop": "imageinfo",
-                    "iiprop": "sha1",
-                }
-            )
-            local_sha1 = hashlib.sha1(path.read_bytes()).hexdigest()
-            for page in existing["query"]["pages"].values():
-                info = (page.get("imageinfo") or [{}])[0]
-                if info.get("sha1") == local_sha1:
-                    return f"File:{filename.replace('_', ' ')}"
-            raise RuntimeError(
-                f"File:{filename} already exists with different content; "
-                f"choose another filename."
-            )
-        raise RuntimeError(f"Upload failed: {data}")
+        return response.json()
+
+
+# MediaWiki upload warnings about a file's name alone: the name is unusual
+# (a camera-style prefix, a thumbnail-like form, characters MediaWiki
+# replaces) or close to another file's (another extension, a deleted file,
+# a description page with no file). With no `exists` warning no file holds
+# the name, and with no `duplicate` no file holds the bytes, so uploading
+# despite these overwrites nothing and stores nothing twice.
+NAME_WARNINGS = frozenset(
+    {
+        "badfilename",
+        "bad-prefix",
+        "exists-normalized",
+        "page-exists",
+        "thumb",
+        "thumb-name",
+        "was-deleted",
+    }
+)
+
+
+def _file_page(name: str) -> str:
+    """A file name as MediaWiki reports it -> its page title."""
+    return f"File:{name.replace('_', ' ')}"

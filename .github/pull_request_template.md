@@ -20,8 +20,25 @@ people by QID, and give metrics as aggregates only.
 <!--
 Commands run and their results, aggregates only:
 - `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest -q`
-- needs:live-test: `make test-live` results from a local session
-- needs:eval: metrics against the docs/EVAL.md gate from a local session
+- needs:live-test: `make test-live` results from a local session on the one
+  instance, and how the session cleared the instance-contents key
+  (docs/AGENT_PROTOCOL.md §5)
+-->
+
+## Scratch-diff evidence
+
+<!--
+For needs:scratch-diff PRs only (docs/AGENT_PROTOCOL.md §5, ADR-0025). A
+local session fills this in; a cloud agent leaves it for one. Aggregates
+only: never paste report.html, report.json or the detailed diff.
+- Scratch run: its run id and commit, and the other PRs it batched, if any
+- Baseline: the latest completed run on main it reuses and diffs against
+- Stages recomputed, each with the key component that changed
+- The aggregate report.md and the diff summary
+- Verdict: who read it (the owner, or a reviewer agent in a local session),
+  and whether any change is a regression; a PR whose effect stays unclear
+  in a batch gets a run of its own
+Write "not applicable" if the PR has no needs:scratch-diff label.
 -->
 
 ## Checklist
@@ -35,5 +52,11 @@ Commands run and their results, aggregates only:
 - [ ] Comments and docstrings in `src/yizkr/` describe how the code
   works now, with no development history (no issue or PR numbers,
   "previously" notes or bug-hunt accounts); ADR references are fine.
+- [ ] **Stage versions.** This PR changes no stage before write. Or it
+  does, and every source change to a stage or method bumps its version
+  in the stage-version registry or records a functionally neutral entry;
+  and this PR and its issue carry the matching `stage:*` label (plus
+  `needs:scratch-diff` if the stage already runs), as they must for a
+  prompt, manifest, model, effort or parameter change too.
 - [ ] Docs move with code (ADRs, MODELING.md, CLAUDE.md, READMEs).
 - [ ] Owner actions, if any, are listed in one place above.

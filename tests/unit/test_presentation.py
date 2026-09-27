@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.unit.test_upload_warnings import FakeMediaWiki, FakeUploadClient
 from yizkr.pipeline.presentation import (
     EmbeddedMedium,
     PresentationContent,
@@ -224,7 +225,8 @@ class TestOrchestratorBranch:
 class FakeWiki:
     """In-memory stand-in for WikiClient: real WBI item objects over a
     JSON store that round-trips them as the API does, lag-free label and
-    hash lookups, and MediaWiki's SHA-1 dedup on upload."""
+    hash lookups, and the real `WikiClient.upload_file` over a fake
+    MediaWiki upload API (tests/unit/test_upload_warnings.py)."""
 
     PROPERTIES = {
         "instance_of": "P1",
@@ -257,7 +259,7 @@ class FakeWiki:
 
         self.wbi = SimpleNamespace(item=Items())
         self.entities: dict[str, dict] = {}
-        self.files: dict[str, str] = {}  # file page -> sha1
+        self.media = FakeMediaWiki()
         self.writes = 0
         self._next_qid = 100
         self._next_claim = 0
@@ -311,29 +313,58 @@ class FakeWiki:
                 )
         return index
 
+    @property
+    def files(self) -> dict[str, str]:
+        """File page -> SHA-1 of the file's current bytes."""
+        return {
+            f"File:{name.replace('_', ' ')}": sha1
+            for name, sha1 in self.media.current().items()
+        }
+
     def upload_file(self, path):
-        # one blob per new name: no upload-side dedup is relied upon, so a
-        # second blob for the same bytes shows up in `files`; replacing a
-        # file's bytes under its name would fail the test outright
-        sha1 = hashlib.sha1(path.read_bytes()).hexdigest()
-        page = f"File:{path.name[:1].upper()}{path.name[1:]}"
-        assert self.files.get(page, sha1) == sha1, f"{page} overwritten"
-        self.files[page] = sha1
+        # the real upload logic; whatever it does, no stored file may gain
+        # a version and no stored bytes may gain a second file
+        before = copy.deepcopy(self.media.versions)
+        page = FakeUploadClient(self.media).upload_file(path)
+        held = {versions[-1] for versions in before.values()}
+        for name, versions in self.media.versions.items():
+            if name in before:
+                assert versions == before[name], f"File:{name} overwritten"
+            else:
+                assert versions[-1] not in held, f"File:{name} duplicates"
         return page
 
     def api_get(self, params):
         assert params["prop"] == "imageinfo"
-        return {
-            "query": {
-                "pages": {
-                    str(n): {
-                        "title": title,
-                        "imageinfo": [{"sha1": self.files[title]}],
-                    }
-                    for n, title in enumerate(params["titles"].split("|"))
+        current = self.media.current()
+        pages = {}
+        for n, title in enumerate(params["titles"].split("|")):
+            name = FakeMediaWiki.normalise(title.removeprefix("File:"))
+            if name in current:
+                pages[str(n)] = {
+                    "title": title,
+                    "imageinfo": [{"sha1": current[name]}],
                 }
+            else:
+                pages[str(-n - 1)] = {"title": title, "missing": ""}
+        return {"query": {"pages": pages}}
+
+    def drift(self) -> list[tuple[str, str]]:
+        """(item, file page) for every `media file` whose current bytes
+        are not the item's `media SHA-1`."""
+        current = self.files
+        drifted = []
+        for qid, entity in self.entities.items():
+            claims = entity["claims"]
+            hashes = {
+                s["mainsnak"]["datavalue"]["value"]
+                for s in claims.get(self.PROPERTIES["media_sha1"], [])
             }
-        }
+            for statement in claims.get(self.PROPERTIES["media_file"], []):
+                page = statement["mainsnak"]["datavalue"]["value"]
+                if hashes and current.get(page) not in hashes:
+                    drifted.append((qid, page))
+        return drifted
 
 
 IMAGE = b"\x89PNG synthetic image bytes"
@@ -445,6 +476,7 @@ class TestRegisterDerivedMedia:
             "Deck B — image1.png"
         ]
         assert len(wiki.files) == 1
+        assert wiki.drift() == []
 
     def test_regenerated_deck_with_the_same_title(self, tmp_path):
         # the #50 case: new bytes make a new deck item, the image is reused
@@ -513,7 +545,10 @@ class TestRegisterDerivedMedia:
             entity["labels"]["en"]["value"] == f"Deck A — image1.png [{tag}]"
         )
         assert part_of(entity) == {("Q11", "1"): ["Q11"]}
-        assert f"File:Deck A {tag} image1.png" in wiki.files
+        assert wiki.files[f"File:Deck A image1 {tag}.png"] == (
+            hashlib.sha1(OTHER_IMAGE).hexdigest()
+        )
+        assert wiki.drift() == []
         # the earlier artifact is not touched at all
         assert (
             wiki.entities[first["image1.png"]] == before[first["image1.png"]]
@@ -560,6 +595,36 @@ class TestRegisterDerivedMedia:
             wiki, tmp_path, "Q11", "Deck A", deck_content([2], OTHER_IMAGE)
         )
         assert wiki.writes == writes
+
+    def test_an_overwritten_file_is_not_trusted(self, tmp_path):
+        # the item's file was overwritten outside this code (an older
+        # upload that ignored warnings): the next deck finds no file of
+        # the item holding its bytes, so it stores them again under its
+        # own name, and the earlier statement stays as it is (#186)
+        wiki = FakeWiki()
+        first = register(wiki, tmp_path, "Q10", "Deck A", deck_content([1]))
+        qid = first["image1.png"]
+        other = hashlib.sha1(OTHER_IMAGE).hexdigest()
+        wiki.media.versions["Deck_A_image1.png"].append(other)
+        before = copy.deepcopy(wiki.entities[qid])
+
+        again = register(wiki, tmp_path, "Q20", "Deck B", deck_content([1]))
+
+        assert again == first
+        after = wiki.entities[qid]
+        assert_additive(before, after)
+        files = {
+            value(statement): cited(statement)
+            for statement in after["claims"][P["media_file"]]
+        }
+        assert files == {
+            "File:Deck A image1.png": ["Q10"],
+            "File:Deck B image1.png": ["Q20"],
+        }
+        assert wiki.files["File:Deck B image1.png"] == (
+            hashlib.sha1(IMAGE).hexdigest()
+        )
+        assert wiki.drift() == [(qid, "File:Deck A image1.png")]
 
     def test_no_media_touches_nothing(self, tmp_path):
         wiki = FakeWiki()

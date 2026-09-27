@@ -2,8 +2,8 @@
 
 Demand-driven containment: the worklist is derived from the
 inconsistency report's own unresolved place pairs plus deterministic
-comma-parent candidates ("Sheffield, Yorkshire, England" comma-suffixes
-onto "Yorkshire, England" / "England" when those places exist).
+comma-parent candidates ("Flörburg, Hesse, Germany" comma-suffixes
+onto "Hesse, Germany" / "Germany" when those places exist).
 Questions are ordered spine-first (fewer commas ≈ larger scale) and
 each `--apply` round re-derives the worklist through the graph's
 `(location|part_of)+` closure — transitive elimination between rounds.

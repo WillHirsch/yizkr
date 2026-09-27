@@ -1,11 +1,11 @@
 {
   "batch": {
     "fingerprint": "17d9c26b8000c7f46eac1e804a5704cf61b24df6eb96b0a088cd5ab05e7f32d6",
-    "version": 1
+    "version": 2
   },
   "chunk": {
     "fingerprint": "aa61f1b94ef973c52903ce08152efe9e5cb4a36296eef611e8e3e3e3a1a06e4f",
-    "version": 1
+    "version": 2
   },
   "chunk_parse": {
     "fingerprint": "2748478266ca84d907d1249baefbc3898755a169a3cb6d0d0676c053eeaa549a",
@@ -13,11 +13,11 @@
   },
   "critique": {
     "fingerprint": "3bb91bccee16cfb0a67b801c2ee7e698ebc39f72b8d8865a913ba5c2a6a93b5b",
-    "version": 1
+    "version": 2
   },
   "entity_manifest": {
     "fingerprint": "097075afd363b55d151db33e3e5cd9a826a27686505623b7d2b901fd2d010230",
-    "version": 1
+    "version": 2
   },
   "gedcom": {
     "fingerprint": "39d7f5df214be16ea4f1082f5bc8faf189509fd64ba17c7c2edd96c8c9ce38ea",
@@ -36,11 +36,11 @@
     "version": 1
   },
   "transcription:text-file": {
-    "fingerprint": "f716829f11b01708bd03dce8e314b4e55a8d144a0fef9b70620ab9ff65989a66",
-    "version": 1
+    "fingerprint": "8966ce366af4dfa8de4607dc834190530bda20ac9cf453bdf5d3b0c80b1d13fc",
+    "version": 2
   },
   "transcription:vision": {
-    "fingerprint": "43edb0c1ee3c51e75c8cbcb0977b4617612ddea7f4eb6538e18ed1164f03e710",
-    "version": 1
+    "fingerprint": "6c03ef50bf83338c50b3e3f1980cbb0824ee8e9e8b7d142dd67e716d583870fc",
+    "version": 2
   }
 }

@@ -9,7 +9,8 @@ short-forms from the atoms), and the §6 confidence surfacing, which was
 generalised and implemented by ADR-0023. **Amends ADR-0011** (re-affirms and
 re-grounds the given/family component deferral) and applies ADR-0018's
 derive-don't-store discipline to name surface forms. Validation is the live
-review flow, not a synthetic eval (§Decision 7). Renumbered from local
+review flow, not a synthetic eval (§Decision 7), **extended by ADR-0025** to
+whole-corpus scratch runs in the development stage. Renumbered from local
 ADR-0021 when reconciling with origin (#18); the GEDCOM ADR kept 0021.
 
 ## Context
@@ -177,6 +178,15 @@ emits, carried by the existing `confidence` field and the critic/critique_notes
 channel.
 
 ### 7. Validation is the live review flow, not a synthetic eval
+
+> **Extended by ADR-0025.** ADR-0025 reaffirms this ruling and extends it to
+> the whole corpus. In the development stage the live flow is the
+> whole-corpus scratch run: its run report, its diff against the latest run
+> on main, and the views of its graph are where errors show, each
+> attributable to a stage and to the key component that changed, and fixes
+> go into the pipeline, never into the graph. No gold set or synthetic eval
+> is built. From the keeper run on, cluster review and ratification are the
+> human review this section relies on.
 
 No toy eval set is built. The pipeline is file-based and auditable (ADR-0019):
 every machine-written claim references its extraction-run item, every

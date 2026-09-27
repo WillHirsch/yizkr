@@ -636,7 +636,7 @@ class TestContentDedup:
             (doc.dir / "derivations.json").unlink()
             shutil.rmtree(orchestrator.store.root)
         before = snapshot(doc.dir, skip=())
-        doc.source.write_text("Anna was born in 1902.")
+        doc.source.write_text("Klara was born in 1917.")
         lines: list[str] = []
         orchestrator.log = collect(lines)
         calls = len(orchestrator.calls)
@@ -660,7 +660,7 @@ class TestContentDedup:
         assert (doc.dir / "derivations.json").exists()
         assert not doc.equivalences_reviewed.exists()
         # a second change keeps the first set-aside directory too
-        doc.source.write_text("Anna was born in 1903.")
+        doc.source.write_text("Gustav was born in 1919.")
         orchestrator.run()
         assert snapshot(kept, skip=()) == before
         assert doc.dir.with_name(".letter.superseded-2").is_dir()
@@ -672,7 +672,7 @@ class TestContentDedup:
         orchestrator = completed_run(tmp_path)
         folder = orchestrator.folder
         old = (folder / "letter.txt").read_bytes()
-        (folder / "letter.txt").write_text("Anna was born in 1902.")
+        (folder / "letter.txt").write_text("Klara was born in 1917.")
         assert orchestrator.run() == 2
         (folder / "old-copy.txt").write_bytes(old)
         again = ScriptedOrchestrator(folder, orchestrator.state_dir, log=quiet)
@@ -688,7 +688,7 @@ class TestContentDedup:
         orchestrator = completed_run(tmp_path)
         folder = orchestrator.folder
         old = (folder / "letter.txt").read_bytes()
-        (folder / "letter.txt").write_text("Anna was born in 1902.")
+        (folder / "letter.txt").write_text("Klara was born in 1917.")
         (folder / "old-copy.txt").write_bytes(old)
         again = ScriptedOrchestrator(folder, orchestrator.state_dir, log=quiet)
         assert again.run() == 2
@@ -1338,7 +1338,7 @@ class TestUnrecordedDirectory:
         is held before it is registered, with no stage outputs to name."""
         folder = tmp_path / "docs"
         folder.mkdir()
-        (folder / "letter.txt").write_text("Anna was born in 1901.")
+        (folder / "letter.txt").write_text("Ursula was born in 1911.")
         (doc,) = ScriptedOrchestrator(
             folder, tmp_path / "state", log=quiet
         ).documents()
@@ -1363,8 +1363,8 @@ class TestUnrecordedDirectory:
         it duplicated is gone it is ingested, not held."""
         folder = tmp_path / "docs"
         folder.mkdir()
-        (folder / "a-original.txt").write_text("Anna was born in 1901.")
-        (folder / "b-copy.txt").write_text("Anna was born in 1901.")
+        (folder / "a-original.txt").write_text("Leopold was born in 1914.")
+        (folder / "b-copy.txt").write_text("Leopold was born in 1914.")
         orchestrator = ScriptedOrchestrator(
             folder, tmp_path / "state", log=quiet
         )

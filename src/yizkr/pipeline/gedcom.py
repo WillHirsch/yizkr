@@ -23,8 +23,8 @@ Supported (the fields family-tree exports actually carry):
 individuals (names -> label + aliases, PLUS typed referenced name
 claims: NAME TYPE birth/maiden/married/aka/official, the NICK subtag,
 the non-standard _MARNM tag, and the universal inline convention where a
-quoted or parenthetical token is a nickname — "Frederick (Fred) George",
-"Gerhard 'Bubi' Weissrock"; docs/MODELING.md "Names"), birth/death dates
+quoted or parenthetical token is a nickname — "Ida (Peppi) Sörne",
+"Cäcilie 'Cilli' Tarle"; docs/MODELING.md "Names"), birth/death dates
 and places,
 cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
 the record is), occupations (OCCU, minted as occupation items with the
@@ -147,9 +147,9 @@ def parse_gedcom(text: str) -> list[Record]:
 
 
 def _parse_plain_date(text: str) -> dict | None:
-    """'12 AUG 1885' / 'AUG 1885' / '1885' -> flat time value dict.
+    """'7 JAN 1919' / 'JAN 1919' / '1919' -> flat time value dict.
 
-    Month-first order ('January 1 1860') is accepted too: the month is
+    Month-first order ('January 7 1919') is accepted too: the month is
     named, not numbered, so there is nothing ambiguous to guess.
     """
     parts = text.strip().upper().split()
@@ -246,7 +246,7 @@ def parse_gedcom_date(text: str) -> tuple[dict | None, list[dict]]:
 
 
 def _clean_name(name: str) -> str:
-    """GEDCOM NAME ('Samuel /Genserowski/') -> display form."""
+    """GEDCOM NAME ('Eugen /Löbig/') -> display form."""
     return re.sub(r"\s+", " ", name.replace("/", " ")).strip()
 
 
@@ -254,8 +254,8 @@ def _source_title(record: Record) -> str:
     """A level-0 SOUR record's human title (TITL), else its inline value.
 
     Resolves the opaque ``@S..@`` pointer a citation carries to the name
-    of the upstream source the tree relied on ("England & Wales, Civil
-    Registration Marriage Index"). Whitespace-collapsed; never fetched.
+    of the upstream source the tree relied on ("Adressbuch der Stadt
+    Flörburg 1912"). Whitespace-collapsed; never fetched.
     """
     title = record.text("TITL").strip() or record.value.strip()
     return " ".join(title.split())
@@ -300,8 +300,8 @@ _NAME_TYPE_PROPERTY = {
 }
 
 # a quoted or single-word parenthetical token inside a name is the near-
-# universal genealogy convention for a nickname ("Frederick (Fred) George",
-# "Gerhard 'Bubi' Weissrock") — the only way this data expresses them.
+# universal genealogy convention for a nickname ("Ida (Peppi) Sörne",
+# "Cäcilie 'Cilli' Tarle") — the only way this data expresses them.
 _QUOTED_NAME = re.compile(r"[‘'\"“]([^‘’'\"“”]+)[’'\"”]")
 _PAREN_NAME = re.compile(r"\(([^)]+)\)")
 
@@ -329,11 +329,11 @@ class AdapterResult:
 
 
 def format_unsupported_tags(unsupported: dict[str, int]) -> str:
-    """One-line census for logs: ``OBJE ×4, SOUR ×71``.
+    """One-line census for logs: ``EDUC ×1, NOTE ×1``.
 
     The count is kept visibly apart from the tag (a ``×`` behind a space)
-    so it never reads as part of the tag name: ``OBJEx4`` would look like
-    a corrupt tag rather than four OBJE records. Single formatter, shared
+    so it never reads as part of the tag name: ``EDUCx1`` would look like
+    a corrupt tag rather than one EDUC record. Single formatter, shared
     by the CLI and the orchestrator, so the two cannot drift.
     """
     return ", ".join(

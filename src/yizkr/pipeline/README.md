@@ -69,6 +69,16 @@ content hash; modification times are read only once, when
 `--rederive-unrecorded` adopts a document directory that has no
 `derivations.json`, as docs/STAGE_STORE.md describes).
 
+A transcription that fails the transcription check (below), such as a
+tool-failure message or a refusal instead of the page's text, fails its
+document the same way: the reason is recorded as the `error` in the
+document's `state.json` and in the transcription stage's failure log, no
+transcription is stored, and the next run transcribes the document
+again. The check runs when a transcription is computed. A transcription
+the stage store reuses passed the check as it stood when that
+transcription was made, and is not checked again; `--recompute
+transcription` transcribes and checks the run's documents again.
+
 Every stage before the gates reads and writes through the stage store
 (`var/stages`, `--store`): each output is keyed by its input content and
 everything that shapes it, so a re-run reuses what is unchanged and
@@ -107,6 +117,24 @@ Connection settings come from `deploy/.env` (same variables as the
 smoke test); the vocabulary comes from `model/manifest.yaml` resolved
 against the live instance (run `model/bootstrap.py` first).
 
+## Ingestion host prerequisites
+
+The machine that runs `ingest run` needs, besides the stack in `deploy/`:
+
+- **Python 3.11+ and uv.** `uv sync --dev` from the repo root installs
+  the package.
+- **An LLM engine** for vision transcription and extraction: the Claude
+  Code CLI, logged in (`claude-code`), or `uv sync --extra llm` with
+  `ANTHROPIC_API_KEY` set (`anthropic`). See
+  [LLM providers](#llm-providers---llm).
+- **The PDF renderer, from poppler-utils.** Vision transcription of a PDF
+  renders its pages with `pdftoppm`, and the transcription check counts
+  them with `pdfinfo`. Install it with
+  `sudo apt-get install poppler-utils` (Debian/Ubuntu) or
+  `brew install poppler` (macOS), and check it with `pdftoppm -v`.
+  Without it, transcribing a PDF by vision fails at once with that
+  instruction, before any engine call. Images need no renderer.
+
 ## The corpus and the never-ingest list
 
 The corpus lives outside the repository, in the private folder named by
@@ -135,7 +163,8 @@ standalone `yizkr ingest <step>` command (see `--help`) for debugging or
 re-running one step in isolation — but for a normal ingest you only ever run
 `ingest run` and fill the two gates above.
 
-- **register** — uploads media (idempotent by content), ensures the
+- **register** — uploads media (idempotent by content; a wiki file is
+  never overwritten or stored twice, ADR-0010), ensures the
   artifact item (`instance of`, `media file`) and optional page
   fragments (`part of` + page qualifier). Statement provenance:
   `stated in → the artifact itself` (see docs/MODELING.md, "Artifacts
@@ -143,6 +172,29 @@ re-running one step in isolation — but for a normal ingest you only ever run
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (Transkribus-style platform adapter, stub for now).
+- **transcription check** — runs on every engine's output before
+  anything uses it, in `ingest run` and `ingest transcribe` alike
+  (`yizkr.pipeline.transcription_check`, a step with its own version,
+  apart from the transcription's, so changing the check never forces
+  transcriptions to be redone). It fails the document when the output
+  matches a tool-failure or refusal signature (the PDF renderer missing,
+  a CLI or API error, "I can't transcribe this document"), or when a
+  document of two or more pages yields fewer than 3 letters or digits per
+  page. Editorial marks such as `[illegible]` don't count, and a single
+  image has no floor, since a photograph may carry no text at all. A
+  note that a printed email or letter could also hold ("I couldn't open
+  the PDF", "I can't transcribe this", "unable to comply with your
+  request") counts only in the engine's own voice: opening the output, a
+  page section (after a "Page 2" or "[Page 2]" heading) or a line
+  labelled "Note:", "NB:", "Error:" or "Warning:", or naming the page it
+  skipped, and not about the correspondents' own attachment, writing or
+  request ("the attachment you sent", "the old handwriting on the back of
+  the photograph", "your request for copies of the register"). A page
+  named by number or place as the subject or object of a failed read
+  ("Page 2 could not be read", "I couldn't read the remaining pages")
+  fails wherever it stands; other wordings count only where a note
+  opens. The reason is recorded and the failed output is never passed
+  on.
 - **extract** — engines: `llm` (prompts with the claim JSON Schema and
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
@@ -182,7 +234,9 @@ re-running one step in isolation — but for a normal ingest you only ever run
   explicitly, per row, and the machine never runs it on its own — not
   auto-confirmation. Refuses to overwrite an existing reviewed file
   without `--force`.
-- **write** — mints the extraction-run item, creates items for
+- **write** — resolves each cited artifact's media SHA-1 to its artifact
+  item (refusing the whole batch, before any write, if some media has
+  no item), mints the extraction-run item, creates items for
   unresolved subjects (reusing exact-label matches), writes each claim
   at normal rank with two references: `stated in → artifact/fragment`
   (with page/region/excerpt locator qualifiers) and `inferred from
@@ -312,14 +366,108 @@ Two Anthropic-backed providers, differing in how usage is billed:
   (`claude -p`), using the CLI's own login, so a Claude Pro/Max
   **subscription** covers usage instead of per-token billing. Install
   the CLI and log in once; being logged in is the opt-in. The engine
-  strips `ANTHROPIC_API_KEY` from the child process (a stray key would
-  silently switch back to token billing — use `anthropic` if you want
-  that), restricts the CLI to the Read tool only (images are read from
-  disk for vision; nothing can be executed or written), and runs in a
-  neutral directory so no project CLAUDE.md leaks into prompts. Note
-  subscriptions have rolling usage windows rather than API rate
-  limits — fine for evening-sized ingestion runs, less suited to bulk
-  backlogs.
+  restricts the CLI to the Read tool only: `--tools Read` makes it the
+  one tool the model is offered and `--allowedTools Read` the one tool
+  approved, so images and PDFs are read from disk for vision and nothing
+  can be executed or written. A call whose stream reports offering the
+  model any other tool pauses the pass (`CliToolsMismatch`) and its
+  output is discarded. Note subscriptions have rolling usage windows
+  rather than API rate limits — fine for evening-sized ingestion runs,
+  less suited to bulk backlogs.
+
+  A pass runs on one **pinned** CLI version (#133). The first client
+  pins the installed version; every later client is checked when it
+  starts, and every call against the version its stream reports. A
+  mismatch (an update landed mid-pass, say from another Claude Code
+  session's auto-update) raises `CliVersionMismatch`, which pauses the
+  pass: it unwinds past per-document error handling, no further call is
+  made, the call's output is discarded and completed outputs are kept.
+  Run the pass again once the version is settled. The engine sets
+  `DISABLE_AUTOUPDATER=1` for its own calls; disable auto-update in your
+  interactive sessions too while a long pass runs.
+
+  Calls are **isolated** from your own Claude Code configuration:
+  `--setting-sources ""` (no user, project or local settings, so no
+  hooks, permission rules, plugins or CLAUDE.md), `--strict-mcp-config`
+  (no MCP servers, claude.ai connectors included),
+  `--disable-slash-commands` (no skills), `--settings
+  '{"autoCompactEnabled":true}'` (see below), and a child environment
+  built from an **allowlist**. A call inherits only `PATH`; `HOME`,
+  `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` (the config
+  directory, which holds the login, the global config and the session
+  store); `TMPDIR`; and the proxy and certificate variables
+  (`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` in upper or lower case;
+  `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA`, `SSL_CERT_FILE` and
+  `SSL_CERT_DIR`). Nothing else passes from the pipeline's environment:
+  not a stray API key, which would switch billing; not what a Claude
+  Code session that launches the pass exports to it; and not the dozens
+  of variables the CLI reads that change a call, such as the thinking
+  switches (`MAX_THINKING_TOKENS`), the prompt-caching and cache-TTL
+  switches (`DISABLE_PROMPT_CACHING*`, `ENABLE_PROMPT_CACHING_1H`,
+  `FORCE_PROMPT_CACHING_5M`, which change the cost forked extraction
+  relies on), tool search (`ENABLE_TOOL_SEARCH`) and compaction
+  (`DISABLE_COMPACT`, `DISABLE_AUTO_COMPACT`), nor any a later CLI
+  version adds. `SHELL` and the locale stay behind too: the CLI names
+  the shell in the model's context and formats some numbers there with
+  its runtime's default locale. Empty variables are left out, as unset.
+  The CLI would take `CLAUDE_CONFIG_DIR` raw, without expanding `~` and
+  reading a relative value against its own working directory, so a
+  client normalises it once when it starts (`~` is your home directory,
+  and a relative value is taken from the pipeline's working directory)
+  and passes the absolute path on. A relative `HOME` is refused
+  (`CliHomeRelative`).
+  On top, the engine sets `DISABLE_AUTOUPDATER`, `DISABLE_GROWTHBOOK`
+  (no server-side feature flags), `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000`
+  (see below), `CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
+  `DISABLE_ERROR_REPORTING` and `DISABLE_TELEMETRY`. Calls run in
+  `<tmp>/yizkr-claude-code`.
+
+  The config directory still reaches a call. Its **global config**
+  (`.config.json` in the config directory if that exists, else
+  `.claude.json` in `$CLAUDE_CONFIG_DIR`, or in your home directory when
+  that is unset) has an `env` map that the CLI copies into its own
+  environment at every start, past both `--setting-sources` and the
+  allowlist. So a client refuses to start, and the pass pauses before
+  any further call, while that map is not empty (`CliConfigEnvironment`);
+  the error names the file and the variables, never their values. Keep
+  such variables in your shell, or in the `env` block of your user
+  settings (`settings.json` in the config directory), which pipeline
+  calls do not load. The CLI also falls back to the global config for a
+  few settings; the one that changes a call, `autoCompactEnabled`, is
+  pinned on by the `--settings` argument, which outranks that fallback.
+  The **login** in the config directory decides the account and how it
+  is billed. The global config also caches the **account data** the
+  server sends at every start, which your own sessions refresh too. It
+  can change the system-prompt text, the output-token budget, the
+  default model and the auto-compact windows, and no local setting keeps
+  it out. The engine pins what it can: `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+  takes the budget out of its reach (64000, the Claude 5 default, capped
+  at the model's ceiling in the CLI's built-in model catalog, so the
+  budget follows the CLI version and the model alone); `--tools Read`
+  keeps out the tools it can add; and an explicit `--model` wins over
+  its default model. The rest is outside the pipeline's control.
+
+  Machine-managed settings under `/etc/claude-code` always apply to the
+  CLI: they are machine policy, outside the pipeline's control.
+
+  The client's `effective_config` lists what the engine sets for a call:
+  the flags (the pinned settings among them), the working directory, the
+  variables it sets and the names of the variables passed, never their
+  values. `config_hash` fingerprints it for the run record. It follows
+  the working directory, and so `TMPDIR`, but not the login, the
+  server's account data, managed settings or the machine.
+
+  **Transcripts.** The CLI stores each session under
+  `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`); sessions
+  stay persistent because forks resume from there. Once a session is
+  finished with, the engine moves its transcript into
+  `$YIZKR_CLAUDE_TRANSCRIPTS` (a directory, normally in the run record)
+  or, when that is unset or `delete`, deletes it: a one-shot call's or a
+  fork's when the call returns, a conversation's when it is closed or
+  its client is garbage-collected, or at process exit. A process killed
+  outright can leave some behind, in the project directory the CLI
+  names after the working directory (`-tmp-yizkr-claude-code` when the
+  temporary directory is `/tmp`).
 
 Pick the model for either provider with `$YIZKR_LLM_MODEL`.
 

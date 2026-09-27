@@ -96,14 +96,14 @@ STAGES: dict[str, Stage] = {
         ),
         methods={
             "vision": Method(
-                1,
+                2,
                 (
                     "yizkr.pipeline.transcribe:LlmVisionTranscriber",
                     f"{_ORCHESTRATE}._transcribe_vision",
                 ),
             ),
             "text-file": Method(
-                1,
+                2,
                 (
                     "yizkr.pipeline.transcribe:TextFileTranscriber",
                     f"{_ORCHESTRATE}._transcribe_text_file",
@@ -128,7 +128,7 @@ STAGES: dict[str, Stage] = {
         llm=True,
     ),
     "entity_manifest": Stage(
-        version=1,
+        version=2,
         sources=(
             f"{_EXTRACTOR}._phase_one",
             f"{_EXTRACTOR}._entity_manifest",
@@ -145,7 +145,7 @@ STAGES: dict[str, Stage] = {
         llm=True,
     ),
     "chunk": Stage(
-        version=1,
+        version=2,
         sources=(
             "yizkr.pipeline.chunking:pack_entities",
             "yizkr.pipeline.chunking:pack_units",
@@ -175,7 +175,7 @@ STAGES: dict[str, Stage] = {
         stored=False,
     ),
     "batch": Stage(
-        version=1,
+        version=2,
         sources=(
             f"{_EXTRACTOR}._merge",
             f"{_EXTRACTOR}._refuse_empty",
@@ -195,7 +195,7 @@ STAGES: dict[str, Stage] = {
         volatile=BATCH_VOLATILE,
     ),
     "critique": Stage(
-        version=1,
+        version=2,
         sources=(
             "yizkr.pipeline.critique:run_critique",
             "yizkr.pipeline.critique:_entities_block",

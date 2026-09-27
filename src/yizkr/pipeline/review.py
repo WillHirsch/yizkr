@@ -197,8 +197,8 @@ def export_review_csv(
 def _parse_correction(claim: Claim, text: str) -> Claim:
     """A curator's replacement value -> corrected, curator-attributed claim.
 
-    Supported: time values in unambiguous ISO forms (`1885`, `1885-08`,
-    `1885-08-12`), plain text for string / external-id / monolingual
+    Supported: time values in unambiguous ISO forms (`1919`, `1919-01`,
+    `1919-01-07`), plain text for string / external-id / monolingual
     values, and plain numbers for quantity values. Item corrections are
     not expressible as text — reject the
     claim and fix identity through the equivalence flow instead.

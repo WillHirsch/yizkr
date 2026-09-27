@@ -2,6 +2,11 @@
 
 Per batch, the writer:
 
+0. resolves every artifact the batch cites, by the SHA-1 of its media,
+   to the artifact item carrying that `media SHA-1` (ADR-0010). This
+   happens before anything is written: a batch that cites media no item
+   carries is refused whole, since its statements would have no source
+   to reference;
 1. mints an extraction-run item from the batch metadata (idempotent:
    matched by a deterministic label containing the batch content hash),
    with its run details in the label/description — items describe
@@ -32,9 +37,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from yizkr.claims import (
+    ArtifactRef,
     Claim,
     ClaimBatch,
     CoordinateValue,
@@ -46,11 +53,25 @@ from yizkr.claims import (
     MonolingualValue,
     QidRef,
     QuantityValue,
+    SourceArtifactRef,
     StringValue,
     TimeValue,
     VocabRef,
 )
 from yizkr.core.wiki import WikiClient
+
+
+class UnregisteredArtifactError(LookupError):
+    """A batch cites media that no artifact item on the instance carries."""
+
+    def __init__(self, sha1s: list[str]) -> None:
+        self.sha1s = sha1s
+        shown = ", ".join(sha1[:12] for sha1 in sha1s)
+        super().__init__(
+            f"{len(sha1s)} cited artifact(s) not registered on this "
+            f"instance: no item carries media SHA-1 {shown}. Register "
+            f"the media before writing claims that cite it."
+        )
 
 
 @dataclass
@@ -72,7 +93,15 @@ def batch_fingerprint(batch: ClaimBatch) -> str:
 
 
 class BatchWriter:
-    def __init__(self, client: WikiClient, dry_run: bool = False) -> None:
+    def __init__(
+        self,
+        client: WikiClient,
+        dry_run: bool = False,
+        artifact_qids: Mapping[str, str] | None = None,
+    ) -> None:
+        """`artifact_qids` maps media SHA-1 to artifact QID for artifacts
+        the caller has just registered. A cited SHA-1 it does not hold is
+        looked up in the instance's `media SHA-1` index."""
         self.client = client
         self.dry_run = dry_run
         self.properties, self.items = client.vocabulary()
@@ -80,6 +109,52 @@ class BatchWriter:
         # entity manifest of the batch being written (ADR-0007):
         # local_id -> EntityRecord; set per write_batch call
         self._entity_records: dict[str, EntityRecord] = {}
+        # media SHA-1 -> artifact QID, for every artifact resolved so far
+        self._artifact_qids: dict[str, str] = {
+            sha1.lower(): qid for sha1, qid in (artifact_qids or {}).items()
+        }
+        # the instance's lag-free media SHA-1 index, read on first need
+        self._media_sha1_index: dict[str, str] | None = None
+
+    # -- artifact resolution (content-addressed sources) -------------------
+
+    def resolve_artifacts(self, batch: ClaimBatch) -> dict[str, str]:
+        """Media SHA-1 -> artifact QID for every artifact `batch` cites.
+
+        Reads only. Raises UnregisteredArtifactError, naming every
+        unresolved SHA-1, when any cited media has no artifact item.
+        The index is read at most once per call: when a SHA-1 is neither
+        supplied by the caller nor in the index read earlier, the index
+        is read afresh, so media registered since then still resolves.
+        """
+        wanted = sorted(
+            {
+                claim.source.artifact.sha1
+                for claim in batch.claims
+                if isinstance(claim.source.artifact, ArtifactRef)
+            }
+        )
+        cached = self._media_sha1_index or {}
+        if any(
+            sha1 not in self._artifact_qids and sha1 not in cached
+            for sha1 in wanted
+        ):
+            self._media_sha1_index = self.client.string_statement_index(
+                self.properties["media_sha1"]
+            )
+        index = self._media_sha1_index or {}
+        for sha1 in wanted:
+            if sha1 not in self._artifact_qids and sha1 in index:
+                self._artifact_qids[sha1] = index[sha1]
+        missing = [sha1 for sha1 in wanted if sha1 not in self._artifact_qids]
+        if missing:
+            raise UnregisteredArtifactError(missing)
+        return {sha1: self._artifact_qids[sha1] for sha1 in wanted}
+
+    def _source_artifact_qid(self, ref: SourceArtifactRef) -> str:
+        if isinstance(ref, QidRef):
+            return ref.qid
+        return self._artifact_qids[ref.sha1]
 
     # -- reference resolution ---------------------------------------------
 
@@ -454,6 +529,8 @@ class BatchWriter:
             if bulk_accepted
             else "ingest: write reviewed claim"
         )
+        # every cited artifact must resolve before the first write
+        self.resolve_artifacts(batch)
         self._entity_records = {record.id: record for record in batch.entities}
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
@@ -466,9 +543,7 @@ class BatchWriter:
                     )
         result = WriteResult(run_qid=self.ensure_run_item(batch))
         for claim in batch.claims:
-            artifact_qid = self._resolve_ref(
-                claim.source.artifact, result, source_artifact_qid=None
-            )
+            artifact_qid = self._source_artifact_qid(claim.source.artifact)
             subject_qid = self._resolve_ref(
                 claim.subject, result, artifact_qid
             )

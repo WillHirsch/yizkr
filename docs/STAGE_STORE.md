@@ -58,9 +58,12 @@ default of its own choosing: the anthropic engine's built-in default,
 or whatever model the claude-code CLI picks. The key cannot see that
 default, so it holds the literal `engine default`. **A change to an
 engine's default model is not tracked**: the keys stay the same, and
-outputs that the previous default made are reused. Until #133 pins the
-model and the CLI, a key holds the full model id only when one is
-configured. `yizkr ingest run` warns, naming each unpinned role
+outputs that the previous default made are reused. A key holds the
+full model id only when one is configured. The claude-code CLI is pinned
+for each pass (#133), but a key names neither its version nor the
+engine's other settings (the tool set, the output budget): a change to
+them reaches the keys only through a version bump of each stage that
+calls the engine. `yizkr ingest run` warns, naming each unpinned role
 (transcribe, extract, critique), whenever a document's stages call the
 engine. Set `$YIZKR_LLM_MODEL` for any run whose outputs are to be
 reused.
@@ -95,9 +98,14 @@ re-parses that before calling the model, so a parser fix costs no model
 call (ADR-0006).
 
 Corpus stages (the identity map, #105; flags, #112) use the `corpus`
-scope, which the store supports already. The transcription check (#175)
-is to be registered as a stage of its own, with its own version, so that
-landing it does not bump the transcription version.
+scope, which the store supports already. The vision and text-file
+transcribers run the transcription check (#175) inside `transcribe()`,
+so a transcription that fails it raises, is logged as the stage's
+failure and is never stored; their method versions count the check. It
+is not a stage of its own yet: its own version (`CHECK_VERSION`) is in no
+key, so a change to the check recomputes nothing, and a reused
+transcription is not checked again. Registering it, and checking reused
+transcriptions, is follow-up work.
 
 ## Layout
 
