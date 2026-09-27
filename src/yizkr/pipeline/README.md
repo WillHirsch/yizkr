@@ -63,6 +63,15 @@ batch: `0` all written, `2` something awaits you, `1` something failed.
 Re-running is always safe: finished work is skipped, and a corrected
 upstream file re-does only what depends on it (make-style freshness).
 
+A transcription that fails the transcription check (below), such as a
+tool-failure message or a refusal instead of the page's text, fails its
+document the same way: the reason is recorded as the `error` in the
+document's `state.json`, no transcription is kept, and the next run
+transcribes the document again. The check runs when a document is
+transcribed. A `transcription.json` already in the state directory is
+reused without it until the stage store (#87) re-checks stored outputs,
+so delete one you doubt to have it transcribed and checked again.
+
 State for each document lives in `var/runs/<folder>/<doc>/` — every stage's
 output is a plain file you can open, correct, or delete to force a redo.
 GEDCOM (`.ged`) files take a deterministic adapter in place of
@@ -76,6 +85,24 @@ uv run yizkr ingest --help
 Connection settings come from `deploy/.env` (same variables as the
 smoke test); the vocabulary comes from `model/manifest.yaml` resolved
 against the live instance (run `model/bootstrap.py` first).
+
+## Ingestion host prerequisites
+
+The machine that runs `ingest run` needs, besides the stack in `deploy/`:
+
+- **Python 3.11+ and uv.** `uv sync --dev` from the repo root installs
+  the package.
+- **An LLM engine** for vision transcription and extraction: the Claude
+  Code CLI, logged in (`claude-code`), or `uv sync --extra llm` with
+  `ANTHROPIC_API_KEY` set (`anthropic`). See
+  [LLM providers](#llm-providers---llm).
+- **The PDF renderer, from poppler-utils.** Vision transcription of a PDF
+  renders its pages with `pdftoppm`, and the transcription check counts
+  them with `pdfinfo`. Install it with
+  `sudo apt-get install poppler-utils` (Debian/Ubuntu) or
+  `brew install poppler` (macOS), and check it with `pdftoppm -v`.
+  Without it, transcribing a PDF by vision fails at once with that
+  instruction, before any engine call. Images need no renderer.
 
 ## The corpus and the never-ingest list
 
@@ -113,6 +140,17 @@ re-running one step in isolation — but for a normal ingest you only ever run
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (Transkribus-style platform adapter, stub for now).
+- **transcription check** — runs on every engine's output before
+  anything uses it, in `ingest run` and `ingest transcribe` alike
+  (`yizkr.pipeline.transcription_check`, a step with its own version,
+  apart from the transcription's, so changing the check never forces
+  transcriptions to be redone). It fails the document when the output
+  matches a tool-failure or refusal signature (the PDF renderer missing,
+  a CLI or API error, "I can't transcribe this document"), or when a
+  document of two or more pages yields fewer than 3 letters or digits per
+  page. Editorial marks such as `[illegible]` don't count, and a single
+  image has no floor, since a photograph may carry no text at all. The
+  reason is recorded and the failed output is never passed on.
 - **extract** — engines: `llm` (prompts with the claim JSON Schema and
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
