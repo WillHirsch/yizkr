@@ -43,27 +43,43 @@ confirmation rule instead of trusting its input.** The review gates
 detect-faces batch included. Now:
 
 - `apply_review` records each per-row approval of a depicts claim on the
-  approved claim itself: the claim contract's `row_approval` holds the
-  claim's review-sheet id (`claim_id`, the content hash the sheet's rows
-  are matched by). A bulk-accept never records one, since `apply_review`
-  refuses it on a depicts claim.
+  approved claim itself: the claim contract's `row_approval` holds a
+  digest (`approval_digest`) of the claim's review-sheet id (`claim_id`,
+  the content hash the sheet's rows are matched by) and of the batch's
+  entity-manifest record for each of the claim's local refs, or of that
+  ref having none. The writer resolves a local ref through its manifest
+  record when there is one (ADR-0007): the record's `qid`, or else its
+  label, names the item. So the claim's content alone does not fix
+  whom it depicts, and the digest binds both. A bulk-accept never
+  records one, since `apply_review` refuses it on a depicts claim.
 - The writer (`BatchWriter.write_batch`, behind both `ingest write` and
   the orchestrator's write step) refuses a batch holding any depicts
-  claim whose `row_approval` is not its own id as it now reads. It
-  names those claims by id and refuses before it reads from or writes to
-  the instance, in a dry run too. So no batch that a review sheet did not
-  decide can write a depicts statement, whether face detection or a
-  source's text proposed it, and an approved claim edited afterwards has
-  to be decided again.
+  claim whose `row_approval` is not its digest against the batch as it
+  now reads. It also refuses one with a local ref that has no manifest
+  record when another ref in the batch to the same local id differs
+  from it: the writer makes such an id into an item from the first ref
+  it meets, so the item depicted would depend on another claim and the
+  batch's order. It names those claims by id and refuses before it
+  reads from or writes to the instance, in a dry run too. So no batch
+  that a review sheet did not decide can write a depicts statement,
+  whether face detection or a source's text proposed it. An approved
+  claim has to be decided again when it is edited afterwards, or when
+  a manifest record one of its local refs resolves through is added,
+  removed or changed in any field, such as a `qid` set or a `label`
+  changed.
 - The record lives in the batch because the batch file is all
   `ingest write` receives. It is review state, not extraction output:
   the JSON Schema that extraction prompts carry leaves it out, and a
   claim without one serialises as before. So prompts, LLM cache keys
   and claim ids are unchanged, and so is the content hash of every
   batch without an approved depicts claim. The record says that a
-  per-row decision was made and applied; it does not authenticate the
-  curator, and whoever edits a batch file by hand can forge it, as they
-  can any content of that file.
+  per-row decision was made and applied, for the claim and records as
+  they then read; it is not a signature and does not authenticate the
+  curator. Whoever edits a batch file by hand can recompute it, as they
+  can forge any content of that file. Nor does it pin the instance: a
+  local ref whose record gives no `qid`, or that has no record, resolves
+  to the item that carries its label when the batch is written, or to a
+  new one.
 - A batch without depicts claims is not affected. Scratch runs never
   write depicts: ADR-0025 has their write stage (#200) leave depicts
   claims out and count them, so the check never fires there. A depicts

@@ -3,7 +3,9 @@
 Before anything else, the writer refuses a batch that holds a `depicts`
 claim no curator approved on its own review-sheet row (ADR-0005): each
 depicts claim must carry the row approval `apply_review` records on it,
-for the claim as it now reads (`unapproved_depicts` in
+for the claim and the entity-manifest records its local refs resolve
+through as they now read, and no other ref in the batch may change the
+item one of its unrecorded local refs becomes (`unapproved_depicts` in
 yizkr.pipeline.review). The refusal (UnapprovedDepictsError) names
 every such claim by its review-sheet id, and comes before `write_batch`
 reads from or writes to the instance, in a dry run too. A batch without
@@ -105,11 +107,15 @@ class UnapprovedDepictsError(ValueError):
         named = ", ".join(f"claim {cid}" for cid in claim_ids)
         super().__init__(
             f"{len(claim_ids)} depicts claim(s) carry no per-row human "
-            f"approval: {named}. A depicts claim is written only after a "
-            f"curator approves it on its own row of a review sheet and "
-            f"apply-review records that approval (ADR-0005); export-review "
-            f"this batch, decide these rows by hand, apply-review, and "
-            f"write the batch apply-review writes. Nothing was written."
+            f"approval of the item they would depict: {named}. A depicts "
+            f"claim is written only after a curator approves it on its own "
+            f"row of a review sheet and apply-review records that approval "
+            f"(ADR-0005). The record holds while the claim and the entity-"
+            f"manifest records its local refs resolve through read as they "
+            f"did then, and while no other ref in the batch to one of its "
+            f"local ids without a record differs from its own. Export-review "
+            f"this batch, decide these rows by hand, apply-review, and write "
+            f"the batch apply-review writes. Nothing was written."
         )
 
 
