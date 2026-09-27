@@ -5,9 +5,9 @@ author never saw the project's real records.  Instead of recalling
 names, dates and places (recall is how real data leaks into examples),
 every specific was drawn here from broad tables with fixed seeds and
 then read over for plausibility: rounds one to four continue one
-stream (``SEED``), the fifth starts its own (``SEED_5``), and where two
-rounds drew the same slot the later one holds.  Run it to see the raw
-draws::
+stream (``SEED``), the fifth and sixth each start their own (``SEED_5``,
+``SEED_6``), and where two rounds drew the same slot the later one
+holds.  Run it to see the raw draws::
 
     uv run python tests/fixtures/universe_draws.py
 
@@ -544,6 +544,7 @@ def main() -> None:
 
     second_round(rng, show, date)
     fifth_round()
+    sixth_round()
 
 
 def second_round(rng: random.Random, show, date) -> None:
@@ -886,6 +887,289 @@ def fifth_round() -> None:
     # the arrested man: a son of the woman whose post-war card records
     # the arrest
     show("arrested 1939", rng.choice(("G3 stayer son", "Rudolf")))
+
+
+# --- sixth round: its own seed ------------------------------------------
+
+# Drawn with ``secrets.randbelow`` when the round was written, like
+# SEED_5, so rounds one to five replay exactly as before.
+SEED_6 = 238286
+
+# Given names the fifth round drew.  With USED_GIVEN, no later round
+# draws one of them nor a variant of one (``_variant``), and neither may
+# a drawn name's English form or diminutive be one.
+USED_BY_FIFTH = (
+    "Moritz",
+    "Charlotte",
+    "Georg",
+    "Luise",
+    "Ludwig",
+    "Katharina",
+    "Gustav",
+    "Rosa",
+    "Leopold",
+    "Susan",
+    "Nicholas",
+)
+# Short and pet names in the universe after the fifth round.
+USED_SHORT_5 = (*USED_SHORT, "Lotte", "Schorsch", "Gustl", "Gus")
+USED_PET_NAMES_5 = (*USED_PET_NAMES, "Pünktchen")
+
+# More period given names, so the draws spread over a wider table:
+# German name -> (English form, diminutive or None).
+MORE_MALE = {
+    "Abraham": ("Abraham", None),
+    "Adam": ("Adam", None),
+    "Anton": ("Anthony", "Toni"),
+    "Arnold": ("Arnold", None),
+    "August": ("Augustus", None),
+    "Benedikt": ("Benedict", None),
+    "Bruno": ("Bruno", None),
+    "Christoph": ("Christopher", "Stoffel"),
+    "Clemens": ("Clement", None),
+    "Daniel": ("Daniel", None),
+    "Dietrich": ("Dietrich", None),
+    "Eugen": ("Eugene", None),
+    "Felix": ("Felix", None),
+    "Ferdinand": ("Ferdinand", "Ferdl"),
+    "Franz": ("Francis", "Franzl"),
+    "Gottfried": ("Godfrey", "Götz"),
+    "Hugo": ("Hugh", None),
+    "Isidor": ("Isidore", None),
+    "Jakob": ("Jacob", "Jockel"),
+    "Joachim": ("Joachim", "Achim"),
+    "Kaspar": ("Jasper", None),
+    "Konrad": ("Conrad", "Kuno"),
+    "Lorenz": ("Laurence", "Lenz"),
+    "Martin": ("Martin", None),
+    "Matthias": ("Matthew", "Hias"),
+    "Max": ("Max", "Maxl"),
+    "Nikolaus": ("Nicholas", "Klaus"),
+    "Oskar": ("Oscar", None),
+    "Otto": ("Otto", None),
+    "Philipp": ("Philip", None),
+    "Richard": ("Richard", None),
+    "Robert": ("Robert", None),
+    "Salomon": ("Solomon", None),
+    "Samuel": ("Samuel", None),
+    "Sebastian": ("Sebastian", "Wastl"),
+    "Siegfried": ("Siegfried", "Siggi"),
+    "Simon": ("Simon", None),
+    "Valentin": ("Valentine", None),
+    "Viktor": ("Victor", None),
+}
+MORE_FEMALE = {
+    "Adelheid": ("Adelaide", "Heidi"),
+    "Agathe": ("Agatha", None),
+    "Agnes": ("Agnes", None),
+    "Amalie": ("Amelia", "Mali"),
+    "Auguste": ("Augusta", None),
+    "Barbara": ("Barbara", "Bärbel"),
+    "Berta": ("Bertha", None),
+    "Cäcilie": ("Cecilia", "Cilli"),
+    "Dorothea": ("Dorothy", "Dora"),
+    "Eleonore": ("Eleanor", "Lore"),
+    "Emilie": ("Emily", None),
+    "Ernestine": ("Ernestine", "Tini"),
+    "Eugenie": ("Eugenia", None),
+    "Franziska": ("Frances", "Franzi"),
+    "Henriette": ("Henrietta", "Jette"),
+    "Ida": ("Ida", None),
+    "Karoline": ("Caroline", "Lina"),
+    "Magdalena": ("Madeleine", "Leni"),
+    "Mathilde": ("Matilda", "Tilde"),
+    "Natalie": ("Natalie", None),
+    "Olga": ("Olga", None),
+    "Ottilie": ("Ottilie", "Tilli"),
+    "Rahel": ("Rachel", None),
+    "Rebekka": ("Rebecca", None),
+    "Regina": ("Regina", None),
+    "Sara": ("Sarah", None),
+    "Selma": ("Selma", None),
+    "Theresia": ("Theresa", "Resi"),
+    "Ursula": ("Ursula", "Ulla"),
+    "Veronika": ("Veronica", "Vroni"),
+}
+# English given names of women born in the 1910s.
+EN_FEMALE_6 = (
+    "Alice",
+    "Audrey",
+    "Beatrice",
+    "Beryl",
+    "Doris",
+    "Dorothy",
+    "Edith",
+    "Edna",
+    "Eileen",
+    "Elsie",
+    "Enid",
+    "Ethel",
+    "Evelyn",
+    "Florence",
+    "Gladys",
+    "Grace",
+    "Gwen",
+    "Hazel",
+    "Iris",
+    "Ivy",
+    "Jean",
+    "Joyce",
+    "Kathleen",
+    "Lilian",
+    "Lorna",
+    "Mabel",
+    "Marjorie",
+    "Maud",
+    "Mavis",
+    "Muriel",
+    "Myrtle",
+    "Nancy",
+    "Nellie",
+    "Olive",
+    "Pearl",
+    "Phyllis",
+    "Sylvia",
+    "Thelma",
+    "Vera",
+    "Violet",
+    "Winifred",
+)
+# How a studio mount names the studio, other than "Atelier".
+STUDIO_FORMS = ("Photogr. Anstalt", "Photographische Anstalt", "Photograph")
+
+
+def _variant(first: str, second: str) -> bool:
+    """Whether two names, umlauts folded, may be forms of one name: one's
+    first four letters start the other's, one edit turns one into the
+    other (Klara and Clara), or one of four letters or more lies inside
+    the other (a name within a compound name)."""
+    a, b = _fold(first), _fold(second)
+    inside = (len(a) >= 4 and a in b) or (len(b) >= 4 and b in a)
+    return (
+        a[:4].startswith(b[:4])
+        or b[:4].startswith(a[:4])
+        or _edits(a, b) <= 1
+        or inside
+    )
+
+
+def sixth_round() -> None:
+    """Re-draw after the second clean-room review (#40).
+
+    New given names for the first generation, for all of the second
+    (the three siblings and both wives who married in) and for the
+    emigrant daughter and the emigrant son's wife, each from a wider
+    table; new birth years for the second-generation siblings and the
+    younger son's wife; a new death date for the founder; new days for
+    the 1905 marriage and two full birth dates; and a new form for the
+    studio mount.  Everything else stays, including the surname, the
+    places, the third generation's names and births bar the emigrant
+    daughter's name, and the first generation's births and marriage.
+    Draws repeat until they meet the constraint beside them.
+    """
+    rng = random.Random(SEED_6)
+
+    def show(label: str, value: object) -> None:
+        print(f"{label:28} {value}")
+
+    male = {**MALE, **MORE_MALE}
+    female = {**FEMALE, **MORE_FEMALE}
+
+    def forms(name: str) -> list[str]:
+        english, short = male.get(name) or female.get(name) or (name, None)
+        return [
+            form
+            for form in (name, english, short, EN_DIMINUTIVES.get(english))
+            if form
+        ]
+
+    taken = [
+        form for name in (*USED_GIVEN, *USED_BY_FIFTH) for form in forms(name)
+    ] + [*USED_SHORT_5, *USED_PET_NAMES_5]
+
+    def pick(pool, need=lambda name: True):
+        for name in pool:
+            clash = any(_variant(f, t) for f in forms(name) for t in taken)
+            if not clash and need(name):
+                taken.extend(forms(name))
+                return name
+        raise LookupError("pool exhausted")
+
+    def has_short(name: str) -> bool:
+        return bool((male.get(name) or female.get(name))[1])
+
+    def has_english(name: str) -> bool:
+        return _fold(female[name][0]) != _fold(name)
+
+    men = sorted(male)
+    women = sorted(female)
+    rng.shuffle(men)
+    rng.shuffle(women)
+    roles = {
+        "G1 husband": pick(men),
+        "G1 wife (+dim.)": pick(women, has_short),
+        "G2 elder son (+dim.)": pick(men, has_short),
+        "G2 elder son's wife (+dim.)": pick(women, has_short),
+        "G2 daughter": pick(women),
+        "G2 younger son": pick(men),
+        "G2 younger son's wife": pick(women),
+        "G3 emigrant daughter (+Eng.)": pick(women, has_english),
+    }
+    for role, name in roles.items():
+        show(role, (name, *(male.get(name) or female.get(name))))
+    english_women = list(EN_FEMALE_6)
+    rng.shuffle(english_women)
+    show("G3 emigrant son's wife", pick(english_women))
+
+    # --- years and days --------------------------------------------------
+    # after the 1859 marriage, to a mother born c. 1840 and no older
+    # than 44, and none in a year the fifth round gave a sibling
+    tries = 0
+    while True:
+        tries += 1
+        born = [1859 + rng.randint(1, 10)]
+        for _ in range(2):
+            born.append(born[-1] + rng.randint(1, 5))
+        if born[-1] <= 1884 and not {1860, 1864, 1866} & set(born):
+            break
+    show("G2 born (son, dau., son)", (born, tries))
+    # alive at the 1905 marriage (the certificate names him living), dead
+    # by the 1912 directory (his son owns the firm)
+    show(
+        "G1 husband dies (y, m, d)",
+        (rng.randint(1906, 1911), rng.randint(1, 12), rng.randint(1, 28)),
+    )
+    show("G1 husband buried +days", rng.randint(2, 5))
+    # mother of sons born 1914 and 1916 and of the 1925 infant: 18 to 23
+    # at the first, so 29 to 34 at the last
+    show(
+        "G2 younger son's wife born",
+        (rng.randint(1891, 1896), rng.randint(1, 12), rng.randint(1, 28)),
+    )
+    show("1905 marriage (m, d)", (rng.randint(1, 12), rng.randint(1, 28)))
+    show("G2 elder son born (m, d)", (rng.randint(1, 12), rng.randint(1, 28)))
+    show(
+        "G2 elder son's wife (m, d)",
+        (rng.randint(1, 12), rng.randint(1, 28)),
+    )
+    show("studio mount form", rng.choice(STUDIO_FORMS))
+
+
+# Given and short names the sixth round drew (its output), for a later
+# round to exclude, variants included, with USED_GIVEN, USED_BY_FIFTH,
+# USED_SHORT_5 and USED_PET_NAMES_5.
+USED_BY_SIXTH = (
+    "Eugen",
+    "Cäcilie",
+    "Sebastian",
+    "Emma",
+    "Rahel",
+    "Felix",
+    "Rebekka",
+    "Anna",
+    "Iris",
+)
+USED_SHORT_6 = ("Cilli", "Wastl", "Emmi")
 
 
 if __name__ == "__main__":
