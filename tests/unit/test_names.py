@@ -5,11 +5,12 @@ from yizkr.pipeline.names import normalize_aliases, normalize_entity_dict
 
 class TestNormalizeAliases:
     def test_drops_bare_given_and_initialism_keeps_nickname(self):
-        # Case 2: "Sebastian" and "S. Löbig" are derivable from the label;
-        # "Wastl" adds a token blocking can't recover from "sebastian".
+        # Case 2: "Gustav" and "G. Löbig" are derivable from the label;
+        # "Gustl" adds a token blocking can't recover from "gustav": the two
+        # share a prefix, but neither is a prefix of the other.
         assert normalize_aliases(
-            "Sebastian Löbig", ["Sebastian", "Wastl", "S. Löbig"]
-        ) == ["Wastl"]
+            "Gustav Löbig", ["Gustav", "Gustl", "G. Löbig"]
+        ) == ["Gustl"]
 
     def test_keeps_alternative_surnames(self):
         # Case 1: the label carries one surname; the OTHER attested surname
@@ -38,8 +39,8 @@ class TestNormalizeAliases:
         )
 
     def test_is_idempotent(self):
-        label = "Sebastian Löbig"
-        aliases = ["Sebastian", "Wastl", "S. Löbig", "van der Berg"]
+        label = "Gustav Löbig"
+        aliases = ["Gustav", "Gustl", "G. Löbig", "van der Berg"]
         once = normalize_aliases(label, aliases)
         assert normalize_aliases(label, once) == once
 
@@ -49,11 +50,11 @@ class TestNormalizeEntityDict:
         cleaned = normalize_entity_dict(
             {
                 "kind": "human",
-                "label": "Sebastian Löbig",
-                "aliases": ["Sebastian", "Wastl"],
+                "label": "Gustav Löbig",
+                "aliases": ["Gustav", "Gustl"],
             }
         )
-        assert cleaned["aliases"] == ["Wastl"]
+        assert cleaned["aliases"] == ["Gustl"]
 
     def test_place_short_form_is_preserved(self):
         # "Flörburg" is a genuine short place name, NOT a derivable personal
