@@ -59,13 +59,25 @@ values and N source-attributed values, and everything still works.*
   integration tests in `tests/integration` (marked `live`) run against
   the deployed stack via `make test-live`. Substantial behavior changes
   to write paths get a live test, not just a session's manual check.
+  Live tests run on the one instance, which scratch runs reset.
+- Scratch-diff evidence: a change to a stage before write (its source
+  with a version bump, a prompt, the manifest, a model or its
+  parameters) is checked by a whole-corpus scratch run: its aggregate
+  report and its diff against the latest run on main
+  (`needs:scratch-diff`, plus the matching `stage:*` label; ADR-0025).
+  There is no gold set or synthetic eval.
 - Lint/format: ruff (`make lint` / `make fmt`); CI runs lint + unit
   tests on every push.
 - Reads: SPARQL against the bundled query service.
 - Bulk human review: CSV artifacts consumable by OpenRefine.
 - Idempotency: all bootstrap/import scripts must be safely re-runnable.
-- Pipeline outputs (batches, review CSVs, galleries) are runtime state:
-  keep them in `var/` (gitignored) or outside the repo.
+- Pipeline outputs (the stage store, scratch-run directories, reports
+  and diffs, batches, review CSVs, galleries) are runtime state: keep
+  them in `var/` (gitignored) or outside the repo. The stage store keys
+  each stage output by its input content, stage version, route, prompt
+  and manifest hashes, and full model id and parameters, never by QIDs,
+  mtimes or timestamps; stages before write never read the wiki
+  (ADR-0025 §2).
 - Docs move with code: update ADRs/MODELING.md in the same PR as any
   behavior change; new architectural decisions get a new ADR.
 - Examples: every example in code, comments, prompts, tests, docs,
@@ -88,10 +100,13 @@ merge; see `docs/AGENT_PROTOCOL.md` and ADR-0024.
 
 - **Local-only data** is read only by local sessions and never copied
   into the repository, GitHub or a cloud agent's session: the corpus
-  (`import/`, or `YIZKR_CORPUS_DIR` once moved out of the tree), `var/`,
-  `bundle/`, `~/yizkr-private/` and its archives, the gold set, backups,
-  the exclusion list, the private audit inventory, and any live or dev
-  graph. Work that touches them is `exec:local-agent`; cloud agents are
+  (`import/`, or `YIZKR_CORPUS_DIR` once moved out of the tree), `var/`
+  (the stage store, run directories, live status pages, `report.html`,
+  `report.json` and detailed diffs included), `bundle/`,
+  `~/yizkr-private/` and its archives, backups, the exclusion list, the
+  private audit inventory, and any live or dev graph. Only a run's
+  aggregate report and diff summary may leave the machine. Work that
+  touches local-only data is `exec:local-agent`; cloud agents are
   code-only.
 - **Real data stays in the private area.** Never quote, paraphrase or
   identify corpus content anywhere else. GitHub text cites people by
@@ -104,11 +119,31 @@ merge; see `docs/AGENT_PROTOCOL.md` and ADR-0024.
   refuses it. Agent PRs open as drafts and are marked ready only after
   review passes and its fixes land; the owner merges.
 
+## Development stage: whole-corpus scratch runs
+
+Until the owner decides the next run is the keeper run (#159), the
+pipeline is developed by whole-corpus scratch runs (ADR-0025).
+
+- A scratch run is unattended end to end, with no cluster review and no
+  ratification. It writes to the one instance, which one command resets
+  and repopulates per run. Rules 1, 2 and 4 hold for every write.
+- Scratch graphs are development artefacts, never confirmations: never
+  kept, published or exported. Faces and depicts are never part of a
+  scratch run.
+- Problems found in run reports, diffs and views are fixed in the
+  pipeline and regenerated, never repaired in the graph.
+- From the keeper run on, cluster review and ratification apply, rule 3
+  applies in full, and the reset command refuses on the kept instance.
+
 ## What NOT to do
 
 - Do not introduce a second store for assertions (the graph is the
   system of record; other services may hold *media* or *proposals*).
 - Do not build anything that assumes a single canonical value per
   property.
-- Do not auto-confirm machine proposals (extraction or faces); human
-  confirmation is part of the data flow.
+- Do not auto-confirm machine proposals (extraction or faces) in the
+  kept state; human confirmation is part of the data flow. The one
+  exception is the development stage: unattended scratch writes to a
+  reset, never-kept instance (ADR-0025). Faces stay human-gated
+  everywhere: nothing writes a depicts statement without a human
+  confirming it (ADR-0005).
