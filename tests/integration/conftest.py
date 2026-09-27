@@ -8,6 +8,8 @@ their entities — that reuse IS part of what they verify.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 import requests
 
@@ -53,3 +55,52 @@ def run_sparql(config: Config, query: str) -> list[dict]:
     )
     response.raise_for_status()
     return response.json()["results"]["bindings"]
+
+
+def wait_for_query_service(
+    config: Config,
+    client: WikiClient,
+    qids: list[str],
+    timeout: float = 180.0,
+) -> None:
+    """Block until WDQS holds each entity's CURRENT revision.
+
+    The query service follows MediaWiki's recent changes asynchronously,
+    so a query run straight after a write can read the previous graph.
+    Comparing the triple store's ``schema:version`` with the API's
+    ``lastrevid`` is an exact barrier: no fixed sleep, and no false pass
+    against a store that has not caught up yet.
+    """
+    info = client.api_get(
+        {"action": "wbgetentities", "ids": "|".join(qids), "props": "info"}
+    )
+    wanted = {qid: info["entities"][qid]["lastrevid"] for qid in qids}
+    entities = " ".join(f"<{config.concept_uri}/entity/{qid}>" for qid in qids)
+    query = (
+        "PREFIX schema: <http://schema.org/>\n"
+        "SELECT ?entity ?version WHERE {\n"
+        f"  VALUES ?entity {{ {entities} }}\n"
+        "  ?entity schema:version ?version .\n"
+        "}"
+    )
+    deadline = time.monotonic() + timeout
+    while True:
+        seen = {
+            row["entity"]["value"].rsplit("/", 1)[-1]: int(
+                row["version"]["value"]
+            )
+            for row in run_sparql(config, query)
+        }
+        stale = sorted(
+            qid
+            for qid, revision in wanted.items()
+            if seen.get(qid, -1) < revision
+        )
+        if not stale:
+            return
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"WDQS did not catch up with {stale} within {timeout}s; "
+                f"check the wdqs-updater logs"
+            )
+        time.sleep(2)

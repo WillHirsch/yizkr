@@ -67,6 +67,12 @@ class TestLibrary:
         assert "{P:inferred_from_extraction_run}" in q
         assert "{P:stated_in}" in q
         assert "FILTER NOT EXISTS" in q
+        # one row per statement (same-value statements that differ by a
+        # qualifier are distinct assertions), and a time value's stated
+        # precision travels with it (rule 5) — both live-validated in #23
+        projection = q.split("WHERE", 1)[0]
+        assert "?statement" in projection
+        assert "?precision" in projection
 
 
 class TestRendering:

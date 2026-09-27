@@ -35,6 +35,11 @@ uv run yizkr publish-queries             # or: make publish-queries
   (ADR-0003 §3). Expected result: empty.
 - **artifact-assertions** — inventory of everything each artifact
   asserts, for source re-examination.
+- **under-witnessed-statements** — the low-scrutiny reappraisal queue
+  (ADR-0023): machine-written statements with a single stated-in
+  source and no curator statement on the same subject+property, one
+  row per statement, time values with their stated precision. A
+  queue, not a defect report; scope it with a `VALUES ?prop` filter.
 
 ## Adding a query
 
@@ -43,5 +48,7 @@ describing it (it becomes the wiki page description), reference
 vocabulary via `{P:key}`/`{Q:key}`, and re-run the publisher. The
 offline tests (`make test`) verify that every placeholder matches a
 real manifest key, so templates and model cannot drift apart; the live
-tests (`make test-live`) execute every query against WDQS and assert
-the zero-unreferenced-statements invariant.
+tests (`make test-live`) execute every query against WDQS, assert
+the zero-unreferenced-statements invariant, and pin the
+under-witnessed queue's rows on a fictional fixture
+(`tests/integration/test_live_under_witnessed.py`).
