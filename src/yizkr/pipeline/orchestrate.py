@@ -25,7 +25,8 @@ keep it under var/ or outside the repo; the repo carries no personal
 data). Every step's output is a plain file, so any step can be
 inspected, corrected upstream, or re-run by deleting its output;
 dependencies are make-style (a corrected transcription re-extracts, a
-re-extracted batch invalidates every derived file, a re-reviewed CSV
+re-extracted batch invalidates every derived file and moves the reviewed
+files aside as `*.reviewed.superseded-<n>.csv`, a re-reviewed CSV
 re-writes). Re-running a completed document is a no-op (the writer is
 idempotent).
 """
@@ -642,6 +643,12 @@ class Orchestrator:
                           doc.approved, doc.write_result,
                           doc.gaps, doc.critique):  # fmt: skip
                 stale.unlink(missing_ok=True)
+            # the reviewed files decide rows of the OLD batch: move them
+            # aside rather than leave them to an mtime race against the
+            # regenerated CSVs (on a coarse filesystem clock a stale review
+            # can tie with its replacement CSV and pass as consent)
+            for reviewed in (doc.equivalences_reviewed, doc.review_reviewed):
+                _supersede(reviewed)
             doc.batch.write_text(batch.model_dump_json(indent=2))
             doc.state.status = BATCHED
             doc.save()
@@ -863,11 +870,27 @@ def _fresh(output: Path, *inputs: Path) -> bool:
     """
     if not output.exists():
         return False
-    output_mtime = output.stat().st_mtime
+    output_mtime = output.stat().st_mtime_ns
     return all(
-        not path.exists() or path.stat().st_mtime <= output_mtime
+        not path.exists() or path.stat().st_mtime_ns <= output_mtime
         for path in inputs
     )
+
+
+def _supersede(reviewed: Path) -> None:
+    """Move a reviewed file about superseded rows aside, never deleting a
+    human's decisions: `review.reviewed.csv` becomes
+    `review.reviewed.superseded-<n>.csv` (first free n)."""
+    if not reviewed.exists():
+        return
+    n = 1
+    while (
+        target := reviewed.with_name(
+            f"{reviewed.stem}.superseded-{n}{reviewed.suffix}"
+        )
+    ).exists():
+        n += 1
+    reviewed.rename(target)
 
 
 def _csv_has_rows(path: Path) -> bool:
