@@ -1,5 +1,7 @@
 """Offline tests for face proposals (pytest; no detector dependency)."""
 
+import csv
+
 import pytest
 
 from tests.fixtures import example_universe as u
@@ -26,7 +28,12 @@ from yizkr.pipeline.faces import (
     proposals_to_batch,
     to_region,
 )
-from yizkr.pipeline.review import accept_all, claim_id, export_review_csv
+from yizkr.pipeline.review import (
+    accept_all,
+    apply_review,
+    claim_id,
+    export_review_csv,
+)
 
 # Unit-normed toy embeddings: person A along one axis, person B along
 # another, a third vector between them.
@@ -196,39 +203,102 @@ def on_portrait(prop: str, value) -> Claim:
     )
 
 
+def portrait_faces() -> ClaimBatch:
+    """Two faces on the portrait, matched to the enrolled sitters."""
+    batch, unmatched = proposals_to_batch(
+        detection(face(0, A), face(1, B, x=400)), portrait_sitters()
+    )
+    assert (len(batch.claims), unmatched) == (2, [])
+    return batch
+
+
+def portrait_text() -> ClaimBatch:
+    """What extraction reads off the portrait: the 1890s its studio mount
+    gives, then two of the sitters named on its reverse (Eugen, as
+    "Muckel", and Rahel)."""
+    return ClaimBatch(
+        extraction_run=run_metadata("fake-model"),
+        claims=[
+            on_portrait(
+                "point_in_time", TimeValue(year=1890, precision="decade")
+            ),
+            on_portrait("depicts", ItemValue(value=QidRef(qid="Q26"))),
+            on_portrait("depicts", ItemValue(value=QidRef(qid="Q28"))),
+        ],
+    )
+
+
+# Hand edits to a review sheet, as a curator's spreadsheet saves them.
+
+
+def edit_rows(path, edit) -> None:
+    """Re-save a sheet with `edit` applied to each row, a dict by column."""
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        rows = [edit(dict(row)) for row in reader]
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def edit_columns(path, edit) -> None:
+    """Re-save a sheet with `edit(header, body)` applied to its cells as
+    lists, for edits to the columns themselves."""
+    with open(path, newline="") as f:
+        header, *body = csv.reader(f)
+    header, body = edit(header, body)
+    with open(path, "w", newline="") as f:
+        csv.writer(f).writerows([header, *body])
+
+
+def set_depicts_cells(value: str):
+    """A row edit that writes `value` over each `depicts` property cell."""
+
+    def edit(row: dict) -> dict:
+        if row["property"] == "depicts":
+            row["property"] = value
+        return row
+
+    return edit
+
+
+def drop_property(header, body):
+    at = header.index("property")
+    return (
+        header[:at] + header[at + 1 :],
+        [row[:at] + row[at + 1 :] for row in body],
+    )
+
+
+def rename_property(name: str):
+    def edit(header, body):
+        return [name if col == "property" else col for col in header], body
+
+    return edit
+
+
+def add_blank_property(header, body):
+    return [*header, "property"], [[*row, ""] for row in body]
+
+
+def pose_as_equivalences(header, body):
+    """Add an equivalences sheet's columns, judging every row `same`."""
+    return (
+        [*header, "entity_id", "qid", "verdict"],
+        [[*row, f"e{n}", "Q26", "same"] for n, row in enumerate(body, 1)],
+    )
+
+
 class TestAcceptAllRefusesDepicts:
     """ADR-0005: only a per-row human decision confirms a depicts claim,
     whether face detection or a source's text proposed it, so `accept_all`
-    refuses any review sheet with a depicts row, names those rows, and
-    writes nothing (#24)."""
-
-    @staticmethod
-    def face_proposals() -> ClaimBatch:
-        """Two faces on the portrait, matched to the enrolled sitters."""
-        batch, unmatched = proposals_to_batch(
-            detection(face(0, A), face(1, B, x=400)), portrait_sitters()
-        )
-        assert (len(batch.claims), unmatched) == (2, [])
-        return batch
-
-    @staticmethod
-    def portrait_text() -> ClaimBatch:
-        """What extraction reads off the portrait: the 1890s its studio
-        mount gives, then two of the sitters named on its reverse (Eugen,
-        as "Muckel", and Rahel)."""
-        return ClaimBatch(
-            extraction_run=run_metadata("fake-model"),
-            claims=[
-                on_portrait(
-                    "point_in_time", TimeValue(year=1890, precision="decade")
-                ),
-                on_portrait("depicts", ItemValue(value=QidRef(qid="Q26"))),
-                on_portrait("depicts", ItemValue(value=QidRef(qid="Q28"))),
-            ],
-        )
+    refuses a claims sheet with a depicts row, or without the single
+    `property` column that shows them, and writes nothing (#24)."""
 
     def test_depicts_only_sheet_is_refused(self, tmp_path):
-        faces = self.face_proposals()
+        faces = portrait_faces()
         review_csv = tmp_path / "review.csv"
         export_review_csv(faces, review_csv)
         sheet = review_csv.read_bytes()
@@ -242,13 +312,19 @@ class TestAcceptAllRefusesDepicts:
         assert not out.exists()
         assert review_csv.read_bytes() == sheet
 
+    @pytest.mark.parametrize(
+        "encoding", ["utf-8", "utf-8-sig"], ids=["plain", "bom"]
+    )
     def test_mixed_sheet_is_refused_naming_only_its_depicts_rows(
-        self, tmp_path
+        self, tmp_path, encoding
     ):
-        text = self.portrait_text()
+        # "utf-8-sig" saves the sheet with a byte-order mark, as Excel's
+        # "CSV UTF-8" does: it must hide neither the sheet's kind nor a row
+        text = portrait_text()
         date, *depicts = text.claims
         review_csv = tmp_path / "review.csv"
         export_review_csv(text, review_csv)
+        review_csv.write_text(review_csv.read_text(), encoding=encoding)
         sheet = review_csv.read_bytes()
         out = tmp_path / "review.reviewed.csv"
 
@@ -262,9 +338,61 @@ class TestAcceptAllRefusesDepicts:
         assert not out.exists()
         assert review_csv.read_bytes() == sheet
 
+    def test_hand_edited_depicts_cells_are_refused(self, tmp_path):
+        text = portrait_text()
+        _, eugen, rahel = text.claims
+        cells = {claim_id(eugen): " Depicts ", claim_id(rahel): "DEPICTS"}
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        edit_rows(
+            review_csv,
+            lambda row: {
+                **row,
+                "property": cells.get(row["claim_id"], row["property"]),
+            },
+        )
+
+        with pytest.raises(ValueError, match="depicts") as refusal:
+            accept_all(review_csv, tmp_path / "review.reviewed.csv")
+
+        for claim in (eugen, rahel):
+            assert f"claim {claim_id(claim)}" in str(refusal.value)
+
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            pytest.param(drop_property, id="deleted"),
+            pytest.param(rename_property("Property"), id="capitalised"),
+            pytest.param(rename_property(" property"), id="leading-space"),
+            pytest.param(rename_property("property "), id="trailing-space"),
+            pytest.param(rename_property("\ufeffproperty"), id="bom-inside"),
+            pytest.param(add_blank_property, id="blank-duplicate"),
+            pytest.param(
+                lambda header, body: pose_as_equivalences(
+                    *drop_property(header, body)
+                ),
+                id="posing-as-equivalences",
+            ),
+        ],
+    )
+    def test_claims_sheet_without_one_property_column_is_refused(
+        self, tmp_path, edit
+    ):
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(portrait_faces(), review_csv)
+        edit_columns(review_csv, edit)
+        sheet = review_csv.read_bytes()
+        out = tmp_path / "review.reviewed.csv"
+
+        with pytest.raises(ValueError, match="'property' column"):
+            accept_all(review_csv, out)
+
+        assert not out.exists()
+        assert review_csv.read_bytes() == sheet
+
     def test_the_portraits_other_claims_are_still_accepted(self, tmp_path):
         # the refusal keys on the property, not on the photograph
-        text = self.portrait_text()
+        text = portrait_text()
         dated = text.model_copy(update={"claims": text.claims[:1]})
         review_csv = tmp_path / "review.csv"
         export_review_csv(dated, review_csv)
@@ -284,7 +412,7 @@ class TestAcceptAllRefusesDepicts:
             accept_all(sheet, tmp_path / "review.reviewed.csv")
 
     def test_cli_exits_non_zero_and_keeps_the_reviewed_sheet(self, tmp_path):
-        text = self.portrait_text()
+        text = portrait_text()
         _, *depicts = text.claims
         review_csv = tmp_path / "review.csv"
         export_review_csv(text, review_csv)
@@ -303,3 +431,80 @@ class TestAcceptAllRefusesDepicts:
         for claim in depicts:
             assert f"claim {claim_id(claim)}" in message
         assert reviewed.read_text() == "decided by hand\n"
+
+
+class TestApplyReviewRefusesBulkAcceptedDepicts:
+    """ADR-0005 at the gate itself: `apply_review` refuses a bulk-accept on
+    any claim whose property in the batch is depicts, whatever the sheet's
+    cells say, and still takes a per-row human approve (#24)."""
+
+    @pytest.mark.parametrize(
+        "cell",
+        ["point_in_time", "", "P180", "\u200bdepicts"],
+        ids=["another-property", "blank", "wikidata-id", "zero-width-space"],
+    )
+    def test_bulk_accept_on_a_hidden_depicts_claim_is_refused(
+        self, tmp_path, cell
+    ):
+        text = portrait_text()
+        _, *depicts = text.claims
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        edit_rows(review_csv, set_depicts_cells(cell))
+        reviewed = tmp_path / "review.reviewed.csv"
+        accept_all(review_csv, reviewed)  # the edited cells get past it
+
+        with pytest.raises(ValueError, match="bulk-accept") as refusal:
+            apply_review(text, reviewed)
+
+        for claim in depicts:
+            assert f"claim {claim_id(claim)}" in str(refusal.value)
+
+    def test_sheet_posing_as_equivalences_still_gets_bulk_accept(
+        self, tmp_path
+    ):
+        # blanked depicts cells under an equivalences sheet's columns: its
+        # claim_id column keeps it a claims sheet, so accept-all writes
+        # bulk-accept, never the approve an equivalences verdict would get
+        text = portrait_text()
+        _, *depicts = text.claims
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        edit_rows(review_csv, set_depicts_cells(""))
+        edit_columns(review_csv, pose_as_equivalences)
+        reviewed = tmp_path / "review.reviewed.csv"
+
+        assert accept_all(review_csv, reviewed).mode == "claims"
+        with pytest.raises(ValueError, match="bulk-accept") as refusal:
+            apply_review(text, reviewed)
+
+        for claim in depicts:
+            assert f"claim {claim_id(claim)}" in str(refusal.value)
+
+    @pytest.mark.parametrize(
+        "encoding", ["utf-8", "utf-8-sig"], ids=["plain", "bom"]
+    )
+    def test_per_row_approve_on_a_depicts_claim_passes(
+        self, tmp_path, encoding
+    ):
+        # the human gate: approve typed on each depicts row, beside a
+        # bulk-accept on the rest; "utf-8-sig" saves the sheet with a
+        # byte-order mark, as Excel's "CSV UTF-8" does
+        text = portrait_text()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        edit_rows(
+            review_csv,
+            lambda row: {
+                **row,
+                "decision": "approve"
+                if row["property"] == "depicts"
+                else "bulk-accept",
+            },
+        )
+        review_csv.write_text(review_csv.read_text(), encoding=encoding)
+
+        approved, warnings = apply_review(text, review_csv)
+
+        assert approved.claims == text.claims
+        assert warnings == []

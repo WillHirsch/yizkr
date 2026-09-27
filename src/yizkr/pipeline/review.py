@@ -41,9 +41,17 @@ proposals wholesale, still an explicit decision written per row, not the
 machine confirming itself. For a claims sheet that is `bulk-accept` (an
 approval) on every row; for an equivalences sheet it *ratifies each
 verdict* (same -> approve, distinct -> reject), never a blanket merge.
+
 A `depicts` claim never takes that path, whether face detection or a
 source's text proposed it: only a per-row human decision confirms one
-(ADR-0005), so `accept_all` refuses a sheet with any `depicts` row.
+(ADR-0005). `accept_all` refuses a claims sheet with any `depicts` row,
+or without the single `property` column that shows them, and
+`apply_review` refuses a `bulk-accept` on any claim whose property in
+the batch is `depicts`, whatever the sheet's cells say. A per-row
+`approve` passes as it does for any claim.
+
+Sheets are read as UTF-8, with or without the byte-order mark some
+spreadsheets write.
 """
 
 from __future__ import annotations
@@ -74,6 +82,14 @@ from yizkr.claims import (
 # for later reappraisal; it approves like any other token.
 APPROVE = {"approve", "approved", "accept", "yes", "y", "bulk-accept"}
 REJECT = {"reject", "rejected", "no", "n"}
+
+# The property only a per-row human decision confirms (ADR-0005): the
+# whole-sheet paths refuse it.
+DEPICTS = "depicts"
+
+# Review sheets are read as UTF-8 with or without a byte-order mark, which
+# spreadsheets such as Excel write at the start of a "CSV UTF-8" file.
+SHEET_ENCODING = "utf-8-sig"
 
 CSV_COLUMNS = [
     "claim_id",
@@ -252,12 +268,36 @@ def _parse_correction(claim: Claim, text: str) -> Claim:
 def apply_review(
     batch: ClaimBatch, csv_path: Path
 ) -> tuple[ClaimBatch, list[str]]:
-    """(approved batch, warnings). Only explicit approvals pass."""
+    """(approved batch, warnings). Only explicit approvals pass.
+
+    A `depicts` claim is confirmed only by a per-row human decision
+    (ADR-0005). A `bulk-accept` on one raises ValueError naming the claim
+    ids, before anything is returned. The property is read from the batch
+    claim, never from the sheet, so no edit to the sheet's `property`
+    cells or columns can hide one. A per-row `approve` on a `depicts`
+    claim passes like any other.
+    """
     rows: dict[str, dict] = {}
     warnings: list[str] = []
-    with open(csv_path, newline="") as f:
+    with open(csv_path, newline="", encoding=SHEET_ENCODING) as f:
         for row in csv.DictReader(f):
             rows[row["claim_id"]] = row
+
+    bulk_accepted_depicts = []
+    for claim in batch.claims:
+        if claim.property != DEPICTS:
+            continue
+        cid = claim_id(claim)
+        decision = (rows.get(cid, {}).get("decision") or "").strip().lower()
+        if decision == "bulk-accept":
+            bulk_accepted_depicts.append(f"claim {cid}")
+    if bulk_accepted_depicts:
+        raise ValueError(
+            f"{csv_path} has bulk-accept on {len(bulk_accepted_depicts)} "
+            f"depicts claim(s) — a depicts claim takes a per-row human "
+            f"decision (ADR-0005), never a whole-sheet accept; decide these "
+            f"rows by hand: {', '.join(bulk_accepted_depicts)}"
+        )
 
     approved: list[Claim] = []
     for claim in batch.claims:
@@ -307,12 +347,12 @@ class AcceptAllResult:
 
 
 def _depicts_rows(rows: list[dict]) -> list[str]:
-    """Names of the rows whose `property` is `depicts`: `claim <claim_id>`,
-    or `row <n>` for a row with no claim_id, counting the header as row 1
-    as a spreadsheet does."""
+    """Names of the rows whose `property` reads `depicts`, ignoring case and
+    surrounding space: `claim <claim_id>`, or `row <n>` for a row with no
+    claim_id, counting the header as row 1 as a spreadsheet does."""
     names = []
     for n, row in enumerate(rows, start=2):
-        if (row.get("property") or "").strip().lower() != "depicts":
+        if (row.get("property") or "").strip().lower() != DEPICTS:
             continue
         cid = (row.get("claim_id") or "").strip()
         names.append(f"claim {cid}" if cid else f"row {n}")
@@ -327,16 +367,17 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
 
     Two gates, detected by the CSV's columns:
 
-    * **claims** (`review.csv`, has `claim_id`): every row -> `bulk-accept`
-      (an approval token that also records the whole-sheet disposition, so
-      the write path can flag these for reappraisal — ADR-0023). Each
-      extracted claim is a proposal to add, so accepting the sheet is
-      approving them all.
-    * **equivalences** (`equivalences.csv`, has `entity_id` + `verdict`):
-      each row's `decision` is set from its machine `verdict` — accept the
-      verdict, NOT a blanket "same" (`ratify_equivalence_verdicts`). A
-      blanket approve would merge even the pairs the machine judged
-      distinct; ratifying rejects those and mints the entity fresh.
+    * **claims** (`review.csv`: any sheet with a `claim_id` column, whatever
+      else it has): every row -> `bulk-accept` (an approval token that also
+      records the whole-sheet disposition, so the write path can flag
+      these for reappraisal — ADR-0023). Each extracted claim is a
+      proposal to add, so accepting the sheet is approving them all.
+    * **equivalences** (`equivalences.csv`: `entity_id` + `verdict` and no
+      `claim_id`): each row's `decision` is set from its machine `verdict`
+      — accept the verdict, NOT a blanket "same"
+      (`ratify_equivalence_verdicts`). A blanket approve would merge even
+      the pairs the machine judged distinct; ratifying rejects those and
+      mints the entity fresh.
 
     A curator's deliberate bulk-accept of a whole sheet — the human end of
     the "explicit approve" rule (R3), not auto-confirmation. The machine
@@ -346,12 +387,20 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
 
     `depicts` claims are outside that trade, whether face detection or a
     source's text proposed them: only a per-row human decision confirms
-    one (ADR-0005). A sheet with any `depicts` row is refused whole, with
-    a ValueError naming those rows, before anything is written, so
-    `out_csv` is left as it was. ValueError is also raised on a CSV that
-    is neither gate (e.g. the reconcile-places sheet).
+    one (ADR-0005). A claims sheet is refused whole with a ValueError,
+    before anything is written (so `out_csv` is left as it was), when:
+
+    * any row's `property` reads `depicts`, ignoring case and surrounding
+      space; the error names those rows;
+    * it lacks exactly one `property` column, named as export-review
+      writes it, so its depicts rows cannot be found.
+
+    A cell edited to hide a `depicts` claim gets past these checks but not
+    past `apply_review`, which reads the property from the batch.
+    ValueError is also raised on a CSV that is neither gate (e.g. the
+    reconcile-places sheet).
     """
-    with open(source_csv, newline="") as f:
+    with open(source_csv, newline="", encoding=SHEET_ENCODING) as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames or []
         if "decision" not in fieldnames:
@@ -360,16 +409,34 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
             )
         rows = list(reader)
 
-    depicts = _depicts_rows(rows)
-    if depicts:
-        raise ValueError(
-            f"{source_csv} has {len(depicts)} depicts row(s) — accept-all "
-            f"never confirms a depicts claim, which takes a per-row human "
-            f"decision (ADR-0005); decide this sheet by hand. Depicts "
-            f"rows: {', '.join(depicts)}"
+    if "claim_id" in fieldnames:
+        properties = fieldnames.count("property")
+        if properties != 1:
+            found = (
+                f"{properties} 'property' columns"
+                if properties
+                else "no 'property' column"
+            )
+            raise ValueError(
+                f"{source_csv} is a claims sheet (it has 'claim_id') with "
+                f"{found} — accept-all needs exactly one, as export-review "
+                f"writes it, to find the depicts rows only a per-row human "
+                f"decision confirms (ADR-0005)"
+            )
+        depicts = _depicts_rows(rows)
+        if depicts:
+            raise ValueError(
+                f"{source_csv} has {len(depicts)} depicts row(s) — "
+                f"accept-all never confirms a depicts claim, which takes a "
+                f"per-row human decision (ADR-0005); decide this sheet by "
+                f"hand. Depicts rows: {', '.join(depicts)}"
+            )
+        for row in rows:
+            row["decision"] = "bulk-accept"
+        result = AcceptAllResult(
+            mode="claims", total=len(rows), approved=len(rows)
         )
-
-    if "verdict" in fieldnames and "entity_id" in fieldnames:
+    elif "verdict" in fieldnames and "entity_id" in fieldnames:
         from yizkr.pipeline.reconcile import ratify_equivalence_verdicts
 
         counts = ratify_equivalence_verdicts(rows)
@@ -383,10 +450,10 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
             f"only, not this sheet (a reconcile-places CSV?)"
         )
     else:
-        for row in rows:
-            row["decision"] = "bulk-accept"
-        result = AcceptAllResult(
-            mode="claims", total=len(rows), approved=len(rows)
+        raise ValueError(
+            f"{source_csv} has neither a 'claim_id' column nor 'entity_id' "
+            f"+ 'verdict' columns — accept-all handles the claims and "
+            f"equivalences review CSVs only"
         )
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -405,7 +472,7 @@ def is_bulk_accepted(csv_path: Path) -> bool:
     sheet to an ordinary review. Missing/empty or non-claims CSVs -> False.
     """
     try:
-        with open(csv_path, newline="") as f:
+        with open(csv_path, newline="", encoding=SHEET_ENCODING) as f:
             reader = csv.DictReader(f)
             if "decision" not in (reader.fieldnames or []):
                 return False
