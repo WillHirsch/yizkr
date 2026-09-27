@@ -1,6 +1,8 @@
 """The transcription check (#175): tool-failure and refusal outputs never
 pass as transcriptions, a near-empty multi-page output fails, and short
-genuine pages pass.
+genuine pages pass. A tool error the engine's own stream reports on the
+input fails the output whatever it says, with or without the LLM cache
+(#213).
 
 Every failure and refusal output below is invented engine text. Every
 genuine text is a source passage of the fictional universe
@@ -19,8 +21,21 @@ import time
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.unit.test_claude_code_pinning import (
+    RENDERER_MISSING,
+    TOO_MANY_PAGES,
+    install_fake_cli,
+    read_events,
+)
 from yizkr.claims import ClaimBatch
 from yizkr.pipeline import transcribe, transcription_check
+from yizkr.pipeline.llm import (
+    ClaudeCodeClient,
+    EngineToolError,
+    ToolFailure,
+    cached_client,
+    open_cache,
+)
 from yizkr.pipeline.orchestrate import (
     BATCHED,
     FAILED,
@@ -28,6 +43,7 @@ from yizkr.pipeline.orchestrate import (
     Orchestrator,
 )
 from yizkr.pipeline.transcribe import (
+    TRANSCRIPTION_PROMPT,
     LlmVisionTranscriber,
     MissingPrerequisite,
     TextFileTranscriber,
@@ -43,6 +59,7 @@ from yizkr.pipeline.transcription_check import (
     SHORT_OUTPUT_CHARS,
     SIGNATURES,
     TOO_SHORT,
+    TOOL_ERROR,
     TOOL_FAILURE,
     TranscriptionCheck,
     TranscriptionCheckFailed,
@@ -843,6 +860,223 @@ class TestTranscribers:
         assert result.text == line
 
 
+class ScriptedLlm(KeepingLlm):
+    """A keeping client whose steps are answers, or errors the engine
+    raises instead of answering (an EngineToolError, say)."""
+
+    def complete(self, prompt, image_paths=()):
+        self.last_kept = self.calls < self.kept
+        self.calls += 1
+        step = self.responses.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step
+
+
+def tool_error(*errors: str, response: str | None = None) -> EngineToolError:
+    """What the engine raises when its stream reports the Read tool failing
+    on the input with each of `errors`."""
+    return EngineToolError(
+        [ToolFailure("Read", error, 0) for error in errors],
+        a_page() if response is None else response,
+    )
+
+
+class TestToolErrors:
+    """The engine's own record of a call says its Read tool failed on the
+    input (#213): the output fails whatever it says, and the verdict names
+    the tool and the class of its error, never the output's words."""
+
+    def test_a_tool_error_fails_whatever_the_output_says(self):
+        text = a_page()
+        assert check_transcription(text, pages=1).passed
+        failure = ToolFailure("Read", "pdf-renderer-missing", 0)
+        check = check_transcription(text, pages=1, tool_failures=[failure])
+        assert not check.passed
+        assert check.failure == TOOL_ERROR
+        assert (check.tool, check.tool_error) == (
+            "Read",
+            "pdf-renderer-missing",
+        )
+        assert check.signature is None and check.matched is None
+        assert check.text_chars == text_char_count(text)
+        assert check.reason.endswith("Read (pdf-renderer-missing)")
+        assert text[:40] not in check.reason
+
+    def test_the_reason_names_each_tool_error(self):
+        check = check_transcription(
+            a_page(),
+            tool_failures=[
+                ToolFailure("Read", "too-many-pages", 0),
+                ToolFailure("Read", "corrupt", 0),
+            ],
+        )
+        assert check.tool_error == "too-many-pages"
+        assert check.reason.endswith("Read (too-many-pages), Read (corrupt)")
+
+    def test_a_tool_error_comes_before_the_signatures(self):
+        failure = ToolFailure("Read", "pdf-renderer-missing", 0)
+        check = check_transcription(FAILURES[0][1], tool_failures=[failure])
+        assert check.failure == TOOL_ERROR
+        assert check.signature is None
+        assert check_transcription("", tool_failures=[failure]).failure == (
+            TOOL_ERROR
+        )
+
+    def test_verdict_round_trips_and_raises(self):
+        failure = ToolFailure("Read", "corrupt", 0)
+        check = check_transcription(a_page(), tool_failures=[failure])
+        again = TranscriptionCheck.model_validate_json(check.model_dump_json())
+        assert again == check
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            require_valid_transcription(a_page(), tool_failures=[failure])
+        assert str(caught.value) == (
+            f"transcription check v{CHECK_VERSION} failed (tool-error): "
+            f"{check.reason}"
+        )
+
+    def test_the_transcriber_fails_on_the_engines_tool_error(self, tmp_path):
+        """The engine answered this call and nothing kept its answer, so
+        nothing is rejected and it is not asked for again: the document
+        fails, and the next run asks the engine."""
+        llm = ScriptedLlm(tool_error("corrupt"), a_page(), kept=0)
+        transcriber = LlmVisionTranscriber(llm)
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            transcriber.transcribe(tmp_path / "scan.png")
+        check = caught.value.check
+        assert (check.failure, check.tool_error) == (TOOL_ERROR, "corrupt")
+        assert "(tool-error)" in str(caught.value)
+        assert "Read (corrupt)" in str(caught.value)
+        assert transcriber.last_check == check
+        assert isinstance(caught.value.__cause__, EngineToolError)
+        assert llm.calls == 1
+        assert llm.rejected == []
+
+    def test_a_kept_answer_asked_for_again_can_meet_a_tool_error(
+        self, tmp_path
+    ):
+        failing = FAILURES[0][1]
+        llm = ScriptedLlm(failing, tool_error("pdf-renderer-missing"), kept=1)
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+        assert caught.value.check.failure == TOOL_ERROR
+        assert llm.calls == 2
+        assert llm.rejected == [(failing, True)]
+
+    def test_through_the_claude_code_engine(self, tmp_path, monkeypatch):
+        """The signal decides whatever the answer says; the wording
+        signatures stay a backstop for an answer with no tool error."""
+        cli = install_fake_cli(monkeypatch, tmp_path)
+        scan = tmp_path / "scan.png"
+        scan.write_bytes(b"png placeholder")
+        transcriber = LlmVisionTranscriber(ClaudeCodeClient())
+        cli.answer = a_page()
+        cli.tool_events = read_events(scan.resolve(), error=RENDERER_MISSING)
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            transcriber.transcribe(scan)
+        assert caught.value.check.tool_error == "pdf-renderer-missing"
+        cli.tool_events = read_events(scan.resolve())
+        cli.answer = FAILURES[0][1]
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            transcriber.transcribe(scan)
+        assert caught.value.check.signature == "pdf-renderer"
+        cli.answer = a_page()
+        assert transcriber.transcribe(scan).text == a_page()
+
+
+class TestToolErrorsWithTheCache:
+    """An answer whose engine reported a tool failing on the input is an
+    error, so the LLM cache keeps nothing for it (ADR-0032): no later call
+    is answered with it, and the next asks the engine again."""
+
+    @pytest.fixture
+    def rig(self, tmp_path, monkeypatch):
+        cli = install_fake_cli(monkeypatch, tmp_path)
+        scan = tmp_path / "scan.png"
+        scan.write_bytes(b"png placeholder")
+        cache = open_cache(tmp_path / "cache")
+        events: list[tuple[str, str | None]] = []
+
+        def client():
+            return cached_client(
+                ClaudeCodeClient(),
+                cache,
+                role="transcribe",
+                events=lambda event, **fields: events.append(
+                    (event, fields.get("reason"))
+                ),
+            )
+
+        return cli, scan, cache, events, client
+
+    def test_an_answer_with_a_tool_error_is_never_kept(self, rig, tmp_path):
+        cli, scan, cache, events, client = rig
+        cli.answer = a_page()
+        cli.tool_events = read_events(scan.resolve(), error=RENDERER_MISSING)
+        wrapped = client()
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            LlmVisionTranscriber(wrapped).transcribe(scan)
+        assert caught.value.check.failure == TOOL_ERROR
+        key = wrapped.complete_key(TRANSCRIPTION_PROMPT, [scan])
+        assert cache.get(key) is None
+        assert not list((tmp_path / "cache").rglob("*.json"))
+        assert events == [("cache-miss", "absent")]
+        # the next run asks the engine again: nothing was kept, or rejected
+        cli.tool_events = read_events(scan.resolve())
+        assert LlmVisionTranscriber(client()).transcribe(scan).text == a_page()
+        assert events[1:] == [("cache-miss", "absent")]
+        assert cache.get(key)["response"] == a_page()
+        # an answer the engine read its input for is served from then on
+        calls = len(cli.calls)
+        assert LlmVisionTranscriber(client()).transcribe(scan).text == a_page()
+        assert len(cli.calls) == calls
+        assert events[-1] == ("cache-hit", "key match")
+
+    def test_a_kept_answer_is_rejected_not_reused(self, rig):
+        """A kept answer the check fails is moved aside and the engine is
+        asked in its place; when the engine's stream then reports a tool
+        error, the document fails and nothing is kept."""
+        cli, scan, cache, events, client = rig
+        wrapped = client()
+        key = wrapped.complete_key(TRANSCRIPTION_PROMPT, [scan])
+        assert wrapped.seed(key, FAILURES[0][1], {"role": "transcribe"})
+        cli.answer = a_page()
+        cli.tool_events = read_events(scan.resolve(), error=TOO_MANY_PAGES)
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            LlmVisionTranscriber(wrapped).transcribe(scan)
+        assert caught.value.check.tool_error == "too-many-pages"
+        assert cache.get(key) is None
+        assert len(cache.rejected(key)) == 1
+        assert [event for event, _ in events] == [
+            "cache-adopt",
+            "cache-hit",
+            "cache-reject",
+            "cache-miss",
+        ]
+        assert events[-1] == ("cache-miss", "rejected")
+        assert len(cli.calls) == 1
+
+    def test_a_refused_request_made_up_for_is_kept(
+        self, rig, tmp_path, monkeypatch
+    ):
+        """A PDF read first without a page range, then by ranges: the file
+        was read, and the answer is kept and served like any other."""
+        cli, _, cache, events, client = rig
+        monkeypatch.setattr(transcribe, "media_page_count", lambda path: 34)
+        scan = tmp_path / "scan.pdf"
+        scan.write_bytes(b"%PDF-1.4 placeholder")
+        cli.answer = a_page()
+        cli.tool_events = (
+            read_events(scan.resolve(), error=TOO_MANY_PAGES)
+            + read_events(scan.resolve(), pages="1-20")
+            + read_events(scan.resolve(), pages="21-34")
+        )
+        assert LlmVisionTranscriber(client()).transcribe(scan).text == a_page()
+        assert LlmVisionTranscriber(client()).transcribe(scan).text == a_page()
+        assert len(cli.calls) == 1
+        assert events == [("cache-miss", "absent"), ("cache-hit", "key match")]
+
+
 RUN = {
     "model_identifier": "fake-model",
     "pipeline_version": "0.1.0",
@@ -855,12 +1089,12 @@ class TestOrchestratorContract:
     records the reason, keeps no transcription, and the next run
     transcribes again."""
 
-    def test_failed_check_is_not_kept_and_is_retried(
-        self, tmp_path, monkeypatch
-    ):
+    @staticmethod
+    def orchestrator(tmp_path, monkeypatch, engine):
+        """A folder orchestrator over one scan, transcribing with `engine`
+        and extracting nothing: (the orchestrator, the scan)."""
         import yizkr.pipeline.llm as llm
 
-        engine = FakeLlm(FAILURES[0][1], a_page())
         monkeypatch.setattr(llm, "make_client", lambda *a, **k: engine)
 
         class Orch(Orchestrator):
@@ -879,6 +1113,14 @@ class TestOrchestratorContract:
         folder.mkdir()
         (folder / "scan.png").write_bytes(b"not really a png")
         orch = Orch(folder, tmp_path / "state", log=lambda *a, **k: None)
+        return orch, folder / "scan.png"
+
+    def test_failed_check_is_not_kept_and_is_retried(
+        self, tmp_path, monkeypatch
+    ):
+        engine = FakeLlm(FAILURES[0][1], a_page())
+        orch, scan = self.orchestrator(tmp_path, monkeypatch, engine)
+        folder = scan.parent
 
         doc = DocumentRun(folder / "scan.png", tmp_path / "state")
         assert orch.advance(doc, stop_after_extract=True) == FAILED
@@ -891,4 +1133,33 @@ class TestOrchestratorContract:
         assert orch.advance(doc, stop_after_extract=True) == BATCHED
         assert engine.calls == 2
         assert doc.transcription.exists()
+        assert doc.state.error is None
+
+    def test_a_tool_error_fails_the_document_like_a_failed_check(
+        self, tmp_path, monkeypatch
+    ):
+        """The failure is the document's error and the run's failed event,
+        as any other failed check's is (#213)."""
+        engine = ScriptedLlm(
+            tool_error("pdf-renderer-missing"), a_page(), kept=0
+        )
+        orch, scan = self.orchestrator(tmp_path, monkeypatch, engine)
+
+        doc = DocumentRun(scan, tmp_path / "state")
+        assert orch.advance(doc, stop_after_extract=True) == FAILED
+        assert "TranscriptionCheckFailed" in doc.state.error
+        assert "(tool-error)" in doc.state.error
+        assert "Read (pdf-renderer-missing)" in doc.state.error
+        assert not doc.transcription.exists()
+        failed = [
+            event
+            for event in orch.rundir.events()
+            if event["event"] == "failed"
+        ]
+        assert [event["stage"] for event in failed] == ["transcription"]
+        assert "Read (pdf-renderer-missing)" in failed[0]["reason"]
+
+        doc = DocumentRun(scan, tmp_path / "state")
+        assert orch.advance(doc, stop_after_extract=True) == BATCHED
+        assert engine.calls == 2
         assert doc.state.error is None

@@ -5,8 +5,22 @@ PDF renderer missing on the host, a CLI error, a usage-limit notice) or a
 refusal comes back shaped like a transcription. `Transcription` only asks
 for a non-empty string, and language detection reads such text as
 confidently as any other. This step runs after transcription and decides
-whether the output may go downstream. It fails the output on either of:
+whether the output may go downstream. It fails the output on any of:
 
+* **A tool error**: the engine's own record of the call says that its
+  Read tool failed on the input and nothing made up for it
+  (`yizkr.pipeline.llm.tool_failures`: the claude-code engine's stream
+  reports each Read and its result). The engine has not read the input,
+  so the output fails whatever it says, and the verdict names the tool
+  and the class of its error (`pdf-renderer-missing`, `corrupt`,
+  `too-many-pages` and so on), never the error's text or the output's.
+  The engine raises `EngineToolError` for such a call rather than return
+  its answer, so the LLM cache never keeps one (ADR-0032), and the
+  transcribers turn it into this verdict. The record goes with the call:
+  a stored transcription view, or an answer the cache kept, has none, and
+  the signatures below judge it, as they judge the output of an engine
+  that reports no tool errors (the API engine) and a failure no tool
+  reports.
 * **A signature**: a phrase in the engine's own voice that no source
   document writes. Tool-specific tokens (``pdftoppm``, a Python
   traceback, an API error type) match anywhere. The other signatures,
@@ -55,26 +69,33 @@ This module is the single definition of a failed transcription: code that
 judges a transcription, whether freshly made, kept or imported, calls
 `check_transcription` rather than keeping patterns of its own. The step
 has its own name and version (`CHECK_STAGE`, `CHECK_VERSION`), which
-each verdict records: a change to a signature, the floor or the page
-count bumps `CHECK_VERSION`. No key needs it. The transcribers check
-every output they return, whether the engine made it in this call or the
-LLM cache kept it from an earlier one, and the orchestrator checks every
-transcription view it reuses (ADR-0032 §1), so a stricter check applies
-to every transcription, the stored ones included (docs/LLM_CACHE.md).
+each verdict records: a change to what it fails on (a signature, the
+floor, the page count, or the tool errors) bumps `CHECK_VERSION`. No key
+needs it. The transcribers check every output they return, whether the
+engine made it in this call or the LLM cache kept it from an earlier one,
+and the orchestrator checks every transcription view it reuses (ADR-0032
+§1), so a stricter check applies to every transcription, the stored ones
+included (docs/LLM_CACHE.md). A tool error is the exception: only a call
+has its record, so a stricter reading of tool errors reaches the calls
+made after it, and a stored view or kept answer through a refresh
+(`--refresh transcribe`).
 """
 
 from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from yizkr.pipeline.llm import ToolFailure, describe_tool_failures
+
 CHECK_STAGE = "transcription-check"
-CHECK_VERSION = 1
+CHECK_VERSION = 2
 
 # The fewest letters or digits per page a transcription of two or more
 # pages may hold; see the module docstring for why it is this low.
@@ -91,12 +112,15 @@ EDITORIAL_MARK = re.compile(r"\[[^\[\]\n]{0,200}\]")
 # the longest matched phrase a verdict records
 _QUOTE_CHARS = 80
 
+TOOL_ERROR = "tool-error"
 TOOL_FAILURE = "tool-failure"
 REFUSAL = "refusal"
 TOO_SHORT = "too-short"
 EMPTY = "empty"
 
-Failure = Literal["tool-failure", "refusal", "too-short", "empty"]
+Failure = Literal[
+    "tool-error", "tool-failure", "refusal", "too-short", "empty"
+]
 
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff"})
 
@@ -509,6 +533,10 @@ class TranscriptionCheck(BaseModel):
     signature: str | None = None
     # the matched phrase (at most 80 characters), quoted in the reason
     matched: str | None = None
+    # for a tool error: the tool, and the class of its error (the first of
+    # several; the reason names each)
+    tool: str | None = None
+    tool_error: str | None = None
     # letters and digits outside editorial marks
     text_chars: int
     pages: int | None = None
@@ -587,16 +615,35 @@ def _cap(phrase: str) -> str:
 
 
 def check_transcription(
-    text: str, pages: int | None = None
+    text: str,
+    pages: int | None = None,
+    tool_failures: Sequence[ToolFailure] = (),
 ) -> TranscriptionCheck:
     """Judge one transcription of a document of `pages` pages.
 
     `pages` is None when the page count is unknown; the length floor
-    then does not apply, and the signatures still do.
+    then does not apply, and the signatures still do. `tool_failures` are
+    the tool errors the engine's record of the call reports on its input
+    (`EngineToolError.failures`): any of them fails the output, whatever
+    it says.
     """
     chars = text_char_count(text)
     floor = minimum_text_chars(pages)
     verdict = {"text_chars": chars, "pages": pages, "min_text_chars": floor}
+    if tool_failures:
+        first = tool_failures[0]
+        return TranscriptionCheck(
+            passed=False,
+            failure=TOOL_ERROR,
+            tool=first.tool,
+            tool_error=first.error,
+            reason=(
+                "the engine's record of the call reports a tool failing on "
+                "the input, so the output is not a reading of it: "
+                f"{describe_tool_failures(tool_failures)}"
+            ),
+            **verdict,
+        )
     if not text.strip():
         return TranscriptionCheck(
             passed=False,
@@ -639,11 +686,13 @@ def check_transcription(
 
 
 def require_valid_transcription(
-    text: str, pages: int | None = None
+    text: str,
+    pages: int | None = None,
+    tool_failures: Sequence[ToolFailure] = (),
 ) -> TranscriptionCheck:
     """`check_transcription`, raising `TranscriptionCheckFailed` on a
     failed verdict."""
-    check = check_transcription(text, pages)
+    check = check_transcription(text, pages, tool_failures)
     if not check.passed:
         raise TranscriptionCheckFailed(check)
     return check

@@ -25,10 +25,16 @@ The vision transcriber rejects a failing output through its client, so
 that a client that keeps answers never serves it again; when the failing
 output was one the client kept, rather than the engine's answer now, it
 asks once more, and the engine's answer is checked in its place, as it
-would have been without the cache. `transcribe_unchecked()` is the
-transcription step alone, for a caller that runs the check as a step of
-its own. A caller that keeps transcriptions checks the ones it reuses
-again (yizkr.pipeline.orchestrate), so a stricter check applies to every
+would have been without the cache. An engine whose own record of the call
+says its Read tool failed on the input raises `EngineToolError` instead of
+answering (yizkr.pipeline.llm); the transcriber checks that as a tool
+error, which fails the output whatever it says. Nothing kept that answer,
+so it is not asked for again: the document fails, and the next run asks
+the engine again. `transcribe_unchecked()` is the transcription step
+alone, for a caller that runs the check as a step of its own; an engine
+error, the tool error among them, still raises from it. A caller that
+keeps transcriptions checks the ones it reuses again
+(yizkr.pipeline.orchestrate), so a stricter check applies to every
 transcription.
 
 Vision transcription of a PDF needs poppler-utils on the ingestion host:
@@ -49,7 +55,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from yizkr.pipeline.language import LanguageResolution, resolve_language
-from yizkr.pipeline.llm import LlmClient, reject_response
+from yizkr.pipeline.llm import EngineToolError, LlmClient, reject_response
 from yizkr.pipeline.transcription_check import (
     TranscriptionCheck,
     TranscriptionCheckFailed,
@@ -140,10 +146,21 @@ class _CheckedTranscriber:
         """The checked transcription of `media_path`. An output that fails
         the check is rejected; one its client kept from an earlier call,
         rather than the engine's answer now, is asked for once more, and
-        the engine's answer is checked in its place."""
+        the engine's answer is checked in its place. An engine that reports
+        a tool failing on the input answers nothing: the check fails it as
+        a tool error, and it is not asked for again, since nothing kept
+        it."""
         pages = media_page_count(media_path)
         for _ask in range(2):
-            transcription = self.transcribe_unchecked(media_path, artifact_qid)
+            try:
+                transcription = self.transcribe_unchecked(
+                    media_path, artifact_qid
+                )
+            except EngineToolError as exc:
+                self.last_check = check_transcription(
+                    exc.response, pages=pages, tool_failures=exc.failures
+                )
+                raise TranscriptionCheckFailed(self.last_check) from exc
             self.last_check = check_transcription(
                 transcription.text, pages=pages
             )
@@ -178,6 +195,7 @@ class LlmVisionTranscriber(_CheckedTranscriber):
     def transcribe_unchecked(
         self, media_path: Path, artifact_qid: str | None = None
     ) -> Transcription:
+        self._response = None
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
         self._response = text
         self.last_resolution = resolve_language(
