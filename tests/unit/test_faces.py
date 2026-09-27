@@ -2,7 +2,18 @@
 
 import pytest
 
-from yizkr.claims import QidRef, validate_against_manifest
+from tests.fixtures import example_universe as u
+from yizkr.claims import (
+    Claim,
+    ClaimBatch,
+    ItemValue,
+    QidRef,
+    SourceReference,
+    TimeValue,
+    validate_against_manifest,
+)
+from yizkr.cli import build_parser
+from yizkr.pipeline.extract import run_metadata
 from yizkr.pipeline.faces import (
     DEFAULT_THRESHOLD,
     DetectedFace,
@@ -15,7 +26,7 @@ from yizkr.pipeline.faces import (
     proposals_to_batch,
     to_region,
 )
-from yizkr.pipeline.review import export_review_csv
+from yizkr.pipeline.review import accept_all, claim_id, export_review_csv
 
 # Unit-normed toy embeddings: person A along one axis, person B along
 # another, a third vector between them.
@@ -158,3 +169,137 @@ class TestProposals:
         content = csv_path.read_text()
         assert "depicts" in content
         assert "relative_position_within_image=10%,10%,20%,50%" in content
+
+
+# The universe's 1890s studio portrait, under the QID `detection` gives it.
+PORTRAIT = QidRef(qid="Q30")
+
+
+def portrait_sitters() -> Gallery:
+    """Two of the portrait's sitters, enrolled under placeholder QIDs."""
+    people = u.by_key()
+    gallery = Gallery()
+    gallery.enroll(label=people["eugen-loebig"].label, embedding=A, qid="Q26")
+    gallery.enroll(
+        label=people["sebastian-loebig"].label, embedding=B, qid="Q27"
+    )
+    return gallery
+
+
+def on_portrait(prop: str, value) -> Claim:
+    """A claim the portrait makes about itself."""
+    return Claim(
+        subject=PORTRAIT,
+        property=prop,
+        value=value,
+        source=SourceReference(artifact=PORTRAIT),
+    )
+
+
+class TestAcceptAllRefusesDepicts:
+    """ADR-0005: only a per-row human decision confirms a depicts claim,
+    whether face detection or a source's text proposed it, so `accept_all`
+    refuses any review sheet with a depicts row, names those rows, and
+    writes nothing (#24)."""
+
+    @staticmethod
+    def face_proposals() -> ClaimBatch:
+        """Two faces on the portrait, matched to the enrolled sitters."""
+        batch, unmatched = proposals_to_batch(
+            detection(face(0, A), face(1, B, x=400)), portrait_sitters()
+        )
+        assert (len(batch.claims), unmatched) == (2, [])
+        return batch
+
+    @staticmethod
+    def portrait_text() -> ClaimBatch:
+        """What extraction reads off the portrait: the 1890s its studio
+        mount gives, then two of the sitters named on its reverse (Eugen,
+        as "Muckel", and Rahel)."""
+        return ClaimBatch(
+            extraction_run=run_metadata("fake-model"),
+            claims=[
+                on_portrait(
+                    "point_in_time", TimeValue(year=1890, precision="decade")
+                ),
+                on_portrait("depicts", ItemValue(value=QidRef(qid="Q26"))),
+                on_portrait("depicts", ItemValue(value=QidRef(qid="Q28"))),
+            ],
+        )
+
+    def test_depicts_only_sheet_is_refused(self, tmp_path):
+        faces = self.face_proposals()
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(faces, review_csv)
+        sheet = review_csv.read_bytes()
+        out = tmp_path / "review.reviewed.csv"
+
+        with pytest.raises(ValueError, match="depicts") as refusal:
+            accept_all(review_csv, out)
+
+        for claim in faces.claims:
+            assert f"claim {claim_id(claim)}" in str(refusal.value)
+        assert not out.exists()
+        assert review_csv.read_bytes() == sheet
+
+    def test_mixed_sheet_is_refused_naming_only_its_depicts_rows(
+        self, tmp_path
+    ):
+        text = self.portrait_text()
+        date, *depicts = text.claims
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        sheet = review_csv.read_bytes()
+        out = tmp_path / "review.reviewed.csv"
+
+        with pytest.raises(ValueError, match="depicts") as refusal:
+            accept_all(review_csv, out)
+
+        named = str(refusal.value)
+        for claim in depicts:
+            assert f"claim {claim_id(claim)}" in named
+        assert claim_id(date) not in named
+        assert not out.exists()
+        assert review_csv.read_bytes() == sheet
+
+    def test_the_portraits_other_claims_are_still_accepted(self, tmp_path):
+        # the refusal keys on the property, not on the photograph
+        text = self.portrait_text()
+        dated = text.model_copy(update={"claims": text.claims[:1]})
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(dated, review_csv)
+
+        result = accept_all(review_csv, tmp_path / "review.reviewed.csv")
+        assert (result.mode, result.total, result.approved) == ("claims", 1, 1)
+
+    def test_depicts_row_without_claim_id_is_named_by_position(self, tmp_path):
+        # a damaged sheet is still refused
+        sheet = tmp_path / "review.csv"
+        sheet.write_text(
+            "claim_id,property,decision\n"  # row 1, as a spreadsheet counts
+            "0a1b2c3d4e5f,point_in_time,\n"  # row 2
+            ",depicts,\n"  # row 3, its claim_id lost
+        )
+        with pytest.raises(ValueError, match="row 3"):
+            accept_all(sheet, tmp_path / "review.reviewed.csv")
+
+    def test_cli_exits_non_zero_and_keeps_the_reviewed_sheet(self, tmp_path):
+        text = self.portrait_text()
+        _, *depicts = text.claims
+        review_csv = tmp_path / "review.csv"
+        export_review_csv(text, review_csv)
+        reviewed = tmp_path / "review.reviewed.csv"
+        reviewed.write_text("decided by hand\n")
+        args = build_parser().parse_args(
+            ["ingest", "accept-all", "--csv", str(review_csv), "--force"]
+        )
+
+        with pytest.raises(SystemExit) as exit_:
+            args.func(args)
+
+        # sys.exit(message): the message goes to stderr, the status is 1
+        message = exit_.value.code
+        assert isinstance(message, str)
+        for claim in depicts:
+            assert f"claim {claim_id(claim)}" in message
+        assert reviewed.read_text() == "decided by hand\n"

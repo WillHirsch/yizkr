@@ -38,9 +38,12 @@ human confirmation is part of the data flow (R3, ADR-0005). A curator
 who has spot-checked a batch may bulk-accept it with `accept_all` (the
 `accept-all` CLI step): the human choosing to accept the machine's
 proposals wholesale, still an explicit decision written per row, not the
-machine confirming itself. For a claims sheet that is `approve` on every
-row; for an equivalences sheet it *ratifies each verdict* (same ->
-approve, distinct -> reject), never a blanket merge.
+machine confirming itself. For a claims sheet that is `bulk-accept` (an
+approval) on every row; for an equivalences sheet it *ratifies each
+verdict* (same -> approve, distinct -> reject), never a blanket merge.
+A `depicts` claim never takes that path, whether face detection or a
+source's text proposed it: only a per-row human decision confirms one
+(ADR-0005), so `accept_all` refuses a sheet with any `depicts` row.
 """
 
 from __future__ import annotations
@@ -303,6 +306,19 @@ class AcceptAllResult:
     conflicted: int = 0
 
 
+def _depicts_rows(rows: list[dict]) -> list[str]:
+    """Names of the rows whose `property` is `depicts`: `claim <claim_id>`,
+    or `row <n>` for a row with no claim_id, counting the header as row 1
+    as a spreadsheet does."""
+    names = []
+    for n, row in enumerate(rows, start=2):
+        if (row.get("property") or "").strip().lower() != "depicts":
+            continue
+        cid = (row.get("claim_id") or "").strip()
+        names.append(f"claim {cid}" if cid else f"row {n}")
+    return names
+
+
 def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
     """Copy a review CSV to `out_csv` with the `decision` column filled in,
     ratifying the machine wholesale. Only `decision` is touched — every
@@ -326,8 +342,14 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
     the "explicit approve" rule (R3), not auto-confirmation. The machine
     never runs it; the reviewed file it writes is what the gate consumes.
     It trades per-row scrutiny for speed on a trusted or spot-checked
-    batch — not the default. Raises ValueError on a CSV that is neither
-    gate (e.g. the reconcile-places sheet).
+    batch — not the default.
+
+    `depicts` claims are outside that trade, whether face detection or a
+    source's text proposed them: only a per-row human decision confirms
+    one (ADR-0005). A sheet with any `depicts` row is refused whole, with
+    a ValueError naming those rows, before anything is written, so
+    `out_csv` is left as it was. ValueError is also raised on a CSV that
+    is neither gate (e.g. the reconcile-places sheet).
     """
     with open(source_csv, newline="") as f:
         reader = csv.DictReader(f)
@@ -337,6 +359,15 @@ def accept_all(source_csv: Path, out_csv: Path) -> AcceptAllResult:
                 f"{source_csv} is not a review CSV (no 'decision' column)"
             )
         rows = list(reader)
+
+    depicts = _depicts_rows(rows)
+    if depicts:
+        raise ValueError(
+            f"{source_csv} has {len(depicts)} depicts row(s) — accept-all "
+            f"never confirms a depicts claim, which takes a per-row human "
+            f"decision (ADR-0005); decide this sheet by hand. Depicts "
+            f"rows: {', '.join(depicts)}"
+        )
 
     if "verdict" in fieldnames and "entity_id" in fieldnames:
         from yizkr.pipeline.reconcile import ratify_equivalence_verdicts
