@@ -54,10 +54,10 @@ notes in document order, slide→media from the relationship parts).
 In `yizkr ingest run`:
 
 1. register the deck (`presentation`, one fragment per slide);
-2. register derived media (idempotent: labels are idempotency keys;
-   re-runs reuse the items). Non-image media (video, audio) are
-   counted and reported, not uploaded — W1 media handling is
-   image-first;
+2. register derived media (idempotent and keyed on content, see the
+   amendment below; re-runs reuse the items). Non-image media (video,
+   audio) are counted and reported, not uploaded — W1 media handling
+   is image-first;
 3. the transcription is built deterministically, one `[Slide N]`
    block per slide (speaker notes as `[Slide N notes]`) — no
    LLM-vision call; extraction is instructed by the markers to carry
@@ -86,3 +86,28 @@ stack validates upload config and provenance shape.
   practice).
 - Derived items multiply the item count per deck; labels are
   deck-prefixed so idempotency and disambiguation hold.
+
+## Amendments
+
+Amended by #50 (2026-09-27): **one image shared by several decks is one
+derived item, `part of` each deck.** Derived media had been keyed only by
+their deck-prefixed label, so an image that a second deck (or a
+regenerated copy of the same deck) also embeds kept only the first
+deck's `part of`. Derived items now follow artifact identity (ADR-0010):
+
+- each carries `media SHA-1` and is matched by it first, so the same
+  bytes are one item whichever deck or standalone file brings them. A
+  pre-hash item is matched by its label and adopted (hash backfilled)
+  only when its wiki file holds the same bytes (or it has no file yet).
+  A same-label item with different bytes stays a separate artifact, and
+  the new one's label and file name carry a short content tag;
+- every deck that embeds the image contributes its own assertions,
+  each referenced `stated in → that deck`: one `part of → the deck` per
+  slide (slide-number qualified); an `instance of`, `media file` or
+  `media SHA-1` statement that another deck (or the artifact itself)
+  already made gains that deck's reference rather than a duplicate
+  statement (the writer's agreeing-source rule). Nothing is overwritten
+  or removed (CLAUDE.md rule 3), and every deck's assertions about the
+  item are each referenced `stated in` that deck;
+- a reused image is not uploaded again when one of the item's files
+  already holds its bytes; a later deck's label for it becomes an alias.

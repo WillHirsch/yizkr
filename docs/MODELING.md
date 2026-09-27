@@ -103,7 +103,8 @@ keys resolved to local ids only at write time.
 
 - An artifact's identity is its **content**, not its filename. Every
   artifact with media carries a `media SHA-1` statement (hex SHA-1 of
-  the bytes), referenced `stated in → the artifact itself`. The
+  the bytes), referenced `stated in → the artifact itself` (for media
+  derived from a compound artifact: `stated in → the container`). The
   registrar keys on this hash — identical bytes are one artifact item
   however they are named, and an alternate filename becomes an alias.
   Bit-identical media is never stored, itemised, or extracted twice.
@@ -232,9 +233,17 @@ and reference the artifact itself or the producing run.
   `part_of` → the container per slide it appears on, slide-number
   qualified. Derived items are gallery- and faces-flow material in
   their own right.
-- Every statement on a derived item is referenced `stated in → the
-  container` — a compound artifact asserts its own composition, the
-  same convention as fragments and registrar statements above.
+- Every statement a container contributes to a derived item is
+  referenced `stated in → that container` — a compound artifact asserts
+  its own composition, the same convention as fragments and registrar
+  statements above.
+- Derived items follow artifact identity: they carry `media SHA-1`, so
+  one image embedded in several containers is **one** item, `part_of`
+  each of them (each statement slide-qualified and stated in its own
+  container). A statement that several containers make alike (`instance
+  of`, `media file`, `media SHA-1`) is one statement citing each of them;
+  a later container's name for the item is an alias (ADR-0008 as
+  amended by #50).
 - Unpacking is deterministic (documented ZIP+XML), never generative;
   only claim extraction from the slide text uses an LLM.
 
