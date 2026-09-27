@@ -153,6 +153,12 @@ stale derived state. This closes a hole the cross-run skip would
 otherwise expose — a stale hash causing a genuinely-new file to be
 skipped as a "duplicate" of content no longer in the graph.
 
+Amended by #87 (2026-09-27): the reset moves the old document directory
+aside whole, as `.<slug>.superseded-<n>` in the state directory, rather
+than deleting it, and the bytes it recorded seed no content dedup. A
+document held for unrecorded outputs after it was written still seeds
+the map (docs/STAGE_STORE.md).
+
 Together these close the "two items, one blob" leak (correctness) and
 skip redundant LLM passes for renamed-identical files both within a
 batch and across runs (efficiency), which were the concrete costs.

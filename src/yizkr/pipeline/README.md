@@ -49,31 +49,65 @@ save the reviewed CSV, then continues on the next `ingest run`.
   determination, never curation (ADR-0020).
 
 **What keeps it safe.** A gate opens only when its `*.reviewed.csv` exists
-*and* is newer than the CSV it reviews — edit the source CSV and the gate
-re-arms. A re-extracted batch moves both reviewed files aside as
-`*.reviewed.superseded-<n>.csv` (kept, never deleted), so decisions about
-the old rows cannot open gates for the new ones. No reviewed file, nothing
-writes; identity is never auto-confirmed
-and no claim reaches the graph without an explicit `approve` (R3, ADR-0007).
+*and* reviews the CSV as it is now: a reviewed file is bound, by content
+hash, to the CSV it was first seen with, so editing the source CSV re-arms
+the gate. A batch whose content changed moves both reviewed files aside as
+`*.reviewed.superseded-<n>.csv` (kept, never deleted), and so does a
+re-exported CSV whose rows changed, so decisions about the old rows cannot
+open gates for the new ones. No reviewed file, nothing writes; identity is
+never auto-confirmed and no claim reaches the graph without an explicit
+`approve` (R3, ADR-0007).
 
 **Reading a run.** Each document prints a status — `awaiting equivalences
-review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done), or
-`failed` (errored; just re-run to retry). The exit code summarises the
-batch: `0` all written, `2` something awaits you, `1` something failed.
-Re-running is always safe: finished work is skipped, and a corrected
-upstream file re-does only what depends on it (make-style freshness).
+review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done),
+`held: unrecorded outputs` (a directory from before the stage store; see
+below), or `failed` (errored; just re-run to retry). The exit code
+summarises the batch: `0` all written, `2` something awaits you, `1`
+something failed. Re-running is always safe: finished work is skipped, and
+a corrected upstream file re-does only what depends on it (make-style, by
+content hash; modification times are read only once, when
+`--rederive-unrecorded` adopts a document directory that has no
+`derivations.json`, as docs/STAGE_STORE.md describes).
 
 A transcription that fails the transcription check (below), such as a
 tool-failure message or a refusal instead of the page's text, fails its
 document the same way: the reason is recorded as the `error` in the
-document's `state.json`, no transcription is kept, and the next run
-transcribes the document again. The check runs when a document is
-transcribed. A `transcription.json` already in the state directory is
-reused without it until the stage store (#87) re-checks stored outputs,
-so delete one you doubt to have it transcribed and checked again.
+document's `state.json` and in the transcription stage's failure log, no
+transcription is stored, and the next run transcribes the document
+again. The check runs when the vision or text-file method computes a
+transcription. Slide text from a deck and a curator's correction are
+computed, stored and reused without it. A vision or text-file
+transcription the stage store reuses passed the check as it stood when
+it was made, and is not checked again. `--recompute transcription`
+transcribes the run's documents again, which checks the vision and
+text-file ones.
 
-State for each document lives in `var/runs/<folder>/<doc>/` — every stage's
-output is a plain file you can open, correct, or delete to force a redo.
+Every stage before the gates reads and writes through the stage store
+(`var/stages`, `--store`): each output is keyed by its input content and
+everything that shapes it, so a re-run reuses what is unchanged and
+recomputes only what a change reaches; `--recompute <stage>` forces one.
+State for each document lives in `var/runs/<folder>/<doc>/`: plain-file
+views of the stage outputs (`transcription.json`, `batch.json`,
+`critique.json`) and the files the later steps derive from them. To correct
+a transcription, save the corrected text as `transcription.corrected.txt`
+there. `var/runs/<folder>/` is also the run directory, with an event for
+every stage reuse, store and failure. Every document directory the run
+makes has a `derivations.json` from its first run. One from before the
+stage store (a `state.json` or stage outputs such as `batch.json`, but no
+`derivations.json`) is **held**, whatever the shared store holds: deriving
+its stages again would call the engine and, if the batch came out
+different, move its reviewed CSVs aside. Nothing in it changes but its
+`state.json`, which records the hold; the run also says so in an event and
+an alert, and exits `2`. Pass `--rederive-unrecorded` to derive such
+documents again: it first keeps a copy of each stage output
+(`batch.superseded-<n>.json` and so on). A document whose source bytes
+changed is a different artifact (ADR-0010), so it is not held: its
+directory, recorded or not, is moved aside whole as
+`.<doc>.superseded-<n>`, with nothing in it deleted, and the new bytes are
+ingested in a fresh one. See
+[docs/STAGE_STORE.md](../../../docs/STAGE_STORE.md) for keys, reuse, the
+stage-version registry (`yizkr stages check`), the run directory, these
+held directories and changed sources.
 GEDCOM (`.ged`) files take a deterministic adapter in place of
 transcribe/extract; the gates, resolve, and write are identical.
 
@@ -141,11 +175,14 @@ re-running one step in isolation — but for a normal ingest you only ever run
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (Transkribus-style platform adapter, stub for now).
-- **transcription check** — runs on every engine's output before
-  anything uses it, in `ingest run` and `ingest transcribe` alike
-  (`yizkr.pipeline.transcription_check`, a step with its own version,
-  apart from the transcription's, so changing the check never forces
-  transcriptions to be redone). It fails the document when the output
+- **transcription check** — runs on the output of the `llm` and
+  `textfile` engines (in `ingest run`, the vision and text-file methods)
+  before anything uses it, in `ingest run` and `ingest transcribe`
+  alike; slide text and a curator's correction are not checked. It is
+  `yizkr.pipeline.transcription_check`, a step with its own version,
+  apart from the transcription's: changing the check never forces
+  transcriptions to be redone, and re-checks none the stage store holds
+  (docs/STAGE_STORE.md). It fails the document when the output
   matches a tool-failure or refusal signature (the PDF renderer missing,
   a CLI or API error, "I can't transcribe this document"), or when a
   document of two or more pages yields fewer than 3 letters or digits per

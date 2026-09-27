@@ -1,13 +1,16 @@
 """Offline tests for chunked extraction (ADR-0006/0007).
 
-No instance, no LLM.
+No instance, no LLM. The extractor's phases are stages in the stage store
+(#87), so state is inspected through the store's records.
 """
 
+import hashlib
 import json
 
 import pytest
 
 from yizkr.claims import EntityRecord
+from yizkr.pipeline import chunking
 from yizkr.pipeline.chunking import (
     ChunkedClaimExtractor,
     ChunkIncomplete,
@@ -21,6 +24,7 @@ from yizkr.pipeline.chunking import (
     prefix_local_ids,
     unit_text,
 )
+from yizkr.pipeline.stages import StageFailed, StageStore, doc_scope
 from yizkr.pipeline.transcribe import Transcription
 
 # a two-person document: one claimable line per person, one logistics line
@@ -154,21 +158,44 @@ class ScriptedLlm:
         return self._next("fork", prompt)
 
 
-class PlainLlm(ScriptedLlm):
-    """No conversation capability at all (attributes absent)."""
+class PlainLlm:
+    """No conversation capability at all: no open_conversation or fork
+    attribute, so the conversational protocol check fails (a property
+    without a getter would still pass it on Python 3.11)."""
 
-    open_conversation = property()  # never satisfies the protocol
+    model_identifier = "fake-model"
 
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
 
-    def fork(self, handle, prompt):  # pragma: no cover - must not be called
-        raise AssertionError("fork on non-conversational client")
+    def complete(self, prompt, image_paths=()):
+        self.calls.append(("complete", prompt))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def transcription() -> Transcription:
     return Transcription(text=DOC, engine="test", artifact_qid="Q23")
+
+
+def store_scope(tmp_path, text: str = DOC):
+    """The store a standalone extractor keeps in tmp_path/state, and the
+    scope it names the document by (its transcription's SHA-1)."""
+    scope = doc_scope(hashlib.sha1(text.encode()).hexdigest())
+    return StageStore(tmp_path / "state"), scope
+
+
+def stored(tmp_path, stage: str):
+    store, scope = store_scope(tmp_path)
+    return store.records(scope, stage)
+
+
+def failures(tmp_path, stage: str):
+    store, scope = store_scope(tmp_path)
+    return store.failures(scope, stage)
 
 
 class TestSegmentationModel:
@@ -447,14 +474,25 @@ class TestEntityFirstExtractor:
         # fork prompts carry the assignment, not an inline document
         assert "Full transcription" not in llm.calls[1][1]
         assert "e1 = Anna Example" in llm.calls[1][1]  # roster in every chunk
-        state = tmp_path / "state"
-        manifest = json.loads((state / "manifest.json").read_text())
-        assert manifest["strategy"] == "entity"
-        assert manifest["context_mode"] == "fork"
-        assert manifest["session_id"] == "session-abc"
-        coverage = json.loads((state / "coverage.json").read_text())
+        assert extractor.context_mode == "fork"
+        (manifest,) = stored(tmp_path, "entity_manifest")
+        assert manifest.output()["strategy"] == "entity"
+        assert manifest.meta["session_id"] == "session-abc"
+        chunks = stored(tmp_path, "chunk")
+        assert {chunk.meta["context_mode"] for chunk in chunks} == {"fork"}
+        (merged,) = stored(tmp_path, "batch")
+        coverage = json.loads(merged.extra("coverage.json"))
         assert coverage["entities_without_claims"] == []
-        assert (state / "entity-manifest.json").exists()
+        # the raw output of every call is stored beside the parsed output
+        assert manifest.raw() == [entity_manifest_json()]
+        assert sorted(
+            raw for chunk in chunks for raw in chunk.raw()
+        ) == sorted(
+            [
+                ndjson([claim("e1", "Anna", 1900)]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
+        )
 
     def test_prompts_carry_manifest_descriptions(self, tmp_path):
         """The manifest already authors what each kind and property
@@ -562,7 +600,8 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
         assert {c.subject.local_id for c in batch.claims} == {"e1", "e2"}
-        rejects = json.loads((tmp_path / "state" / "rejects.json").read_text())
+        (merged,) = stored(tmp_path, "batch")
+        rejects = json.loads(merged.extra("rejects.json"))
         assert len(rejects) == 1
         assert "entity manifest" in rejects[0]["problems"][0]
 
@@ -629,14 +668,17 @@ class TestEntityFirstExtractor:
         batch = extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c001"]
         assert [c.subject.label for c in batch.claims] == ["Bern Example"]
-        manifest = json.loads(
-            (tmp_path / "state" / "manifest.json").read_text()
-        )
-        assert manifest["chunks"]["c001"]["status"].startswith("failed")
+        (failure,) = failures(tmp_path, "chunk")
+        assert failure["item"] == "c001"
+        assert "engine down" in failure["reason"]
+        # the good chunk is stored; the partial batch is not
+        assert len(stored(tmp_path, "chunk")) == 1
+        assert stored(tmp_path, "batch") == []
 
-    def test_failed_chunk_sidecar_survives_recovery(self, tmp_path):
-        """The reason a chunk first failed lives in an append-only sidecar
-        that a later successful re-run does not overwrite."""
+    def test_failed_chunk_log_survives_recovery(self, tmp_path):
+        """The reason a chunk first failed lives in an append-only log
+        that a later successful re-run does not rewrite; the re-run
+        recomputes only the failed chunk."""
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
@@ -652,32 +694,28 @@ class TestEntityFirstExtractor:
             llm, tmp_path, budget=LINE_LENGTH, retries=1
         )
         extractor.extract(transcription(), "Q23")
-        sidecar = tmp_path / "state" / "c001.fail.ndjson"
-        record = json.loads(sidecar.read_text().splitlines()[0])
-        assert record["chunk"] == "c001"
+        (record,) = failures(tmp_path, "chunk")
+        assert record["item"] == "c001"
         assert record["attempts"] == 2
-        assert "engine down" in record["error"]
-        assert record["raw"] is None  # a call failure left no response
+        assert "engine down" in record["reason"]
+        assert "raw" not in record  # a call failure left no response
 
-        # recover c001 on resume from its now-valid raw; no model call
-        (tmp_path / "state" / "c001.raw.txt").write_text(
-            ndjson([claim("e1", "Anna Example", 1900)])
-        )
-        second = ScriptedLlm([])
+        # the re-run reuses the manifest and c002, and calls only for c001
+        # (inline: a reused manifest has no live session to fork)
+        second = ScriptedLlm([ndjson([claim("e1", "Anna Example", 1900)])])
         extractor = self.extractor(
             second, tmp_path, budget=LINE_LENGTH, resume=True
         )
-        extractor.extract(transcription(), "Q23")
-        assert second.calls == []
-        manifest = json.loads(
-            (tmp_path / "state" / "manifest.json").read_text()
-        )
-        assert manifest["chunks"]["c001"]["status"] == "ok"  # recovered
-        assert record["error"] in sidecar.read_text()  # ...record survives
+        batch = extractor.extract(transcription(), "Q23")
+        assert [call[0] for call in second.calls] == ["complete"]
+        assert extractor.failed_chunks == []
+        assert len(batch.claims) == 2
+        assert len(stored(tmp_path, "batch")) == 1
+        assert failures(tmp_path, "chunk") == [record]  # ...record survives
 
-    def test_truncated_chunk_sidecar_captures_raw(self, tmp_path):
-        """A truncation (no terminal sentinel) records the unparseable
-        response, which raw.txt would otherwise lose to a re-run."""
+    def test_truncated_chunk_failure_keeps_raw(self, tmp_path):
+        """A truncation (no terminal sentinel) logs the unparseable
+        response with the failure, so a re-run cannot lose it."""
         cut = json.dumps(claim("e1", "Anna Example", 1900))  # no sentinel
         llm = ScriptedLlm(
             [
@@ -691,25 +729,21 @@ class TestEntityFirstExtractor:
             llm, tmp_path, budget=LINE_LENGTH, retries=1
         )
         extractor.extract(transcription(), "Q23")
-        record = json.loads(
-            (tmp_path / "state" / "c001.fail.ndjson")
-            .read_text()
-            .splitlines()[0]
-        )
-        assert "truncated" in record["error"]
+        (record,) = failures(tmp_path, "chunk")
+        assert "truncated" in record["reason"]
         assert record["raw"] == cut
 
-    def test_resume_reuses_parsed_and_reparses_raw(self, tmp_path):
-        """Resume must not re-invoke the model for chunks whose output
-        (parsed or raw) already exists — a parser fix never costs a
-        second model run."""
+    def test_parser_fix_recovers_a_logged_failure(self, tmp_path, monkeypatch):
+        """A response that failed to parse is kept with its failure, and a
+        re-run re-parses it before calling the model — a parser fix never
+        costs a second model run (ADR-0006)."""
+        unfinished = json.dumps(claim("e2", "Bern Example", 1902))
         first = ScriptedLlm(
             [
                 entity_manifest_json(),
                 ndjson([claim("e1", "Anna Example", 1900)]),  # c001 ok
-                RuntimeError("timeout"),  # c002 fails (fork)
-                RuntimeError("timeout"),  # c002 fails (inline)
-                RuntimeError("timeout"),  # c002 retry
+                unfinished,  # c002 attempt 1: no sentinel
+                unfinished,  # c002 attempt 2
             ]
         )
         extractor = self.extractor(
@@ -718,11 +752,18 @@ class TestEntityFirstExtractor:
         extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c002"]
 
-        # simulate: c002's raw arrived but parsing had failed; a valid
-        # raw file now exists on disk
-        (tmp_path / "state" / "c002.raw.txt").write_text(
-            ndjson([claim("e2", "Bern Example", 1902)])
-        )
+        # a parser fix: a response without the sentinel is now accepted
+        strict = chunking.parse_chunk_response
+
+        def lenient(response, warn=None):
+            try:
+                return strict(response, warn=warn)
+            except ChunkIncomplete:
+                return strict(
+                    response + '\n{"done": true, "claims_emitted": 1}'
+                )
+
+        monkeypatch.setattr(chunking, "parse_chunk_response", lenient)
         second = ScriptedLlm([])  # NO responses: no model call allowed
         extractor = self.extractor(
             second, tmp_path, budget=LINE_LENGTH, resume=True
@@ -732,28 +773,144 @@ class TestEntityFirstExtractor:
         assert len(batch.claims) == 2
         assert [entity.id for entity in batch.entities] == ["e1", "e2"]
         assert extractor.failed_chunks == []
+        recovered = [
+            record
+            for record in stored(tmp_path, "chunk")
+            if record.meta.get("recovered")
+        ]
+        assert [record.raw() for record in recovered] == [[unfinished]]
+
+    def test_parse_version_bump_reparses_without_a_call(
+        self, tmp_path, monkeypatch
+    ):
+        """A stored chunk whose parser version is out of date is re-parsed
+        from its raw response; the call is never repeated, and an
+        unchanged parse leaves the batch's key, and the batch, alone."""
+        import dataclasses
+
+        from yizkr.pipeline import stageversions
+
+        first = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna Example", 1900)]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
+        )
+        self.extractor(first, tmp_path, budget=LINE_LENGTH).extract(
+            transcription(), "Q23"
+        )
+        stages = dict(stageversions.STAGES)
+        stages["chunk_parse"] = dataclasses.replace(
+            stages["chunk_parse"], version=2
+        )
+        monkeypatch.setattr(stageversions, "STAGES", stages)
+        second = ScriptedLlm([])
+        extractor = self.extractor(
+            second, tmp_path, budget=LINE_LENGTH, resume=True
+        )
+        batch = extractor.extract(transcription(), "Q23")
+        assert second.calls == []
+        assert len(batch.claims) == 2
+        assert len(stored(tmp_path, "batch")) == 1
 
     def test_resume_with_changed_transcription_starts_fresh(self, tmp_path):
+        both = ndjson(
+            [
+                claim("e1", "Anna Example", 1900),
+                claim("e2", "Bern Example", 1902),
+            ]
+        )
+        first = ScriptedLlm([entity_manifest_json(), both])
+        self.extractor(first, tmp_path, budget=10_000).extract(
+            transcription(), "Q23"
+        )
+        changed = Transcription(
+            text=DOC.replace("Dinner is at 7pm.", "Dinner is at 8pm."),
+            engine="test",
+            artifact_qid="Q23",
+        )
+        second = ScriptedLlm([entity_manifest_json(), both])
+        extractor = self.extractor(
+            second, tmp_path, budget=10_000, resume=True
+        )
+        batch = extractor.extract(changed, "Q23")
+        assert len(batch.claims) == 2
+        assert second.calls[0][0] == "open"  # phase 1 re-ran
+
+    def test_resume_reuses_everything_unchanged(self, tmp_path):
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson(
-                    [
-                        claim("e1", "Anna Example", 1900),
-                        claim("e2", "Bern Example", 1902),
-                    ]
-                ),
+                ndjson([claim("e1", "Anna Example", 1900)]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
             ]
         )
-        state = tmp_path / "state"
-        state.mkdir(parents=True)
-        (state / "manifest.json").write_text(
-            json.dumps({"transcription_sha256": "stale", "chunks": {}})
+        first = self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
+            transcription(), "Q23"
         )
-        extractor = self.extractor(llm, tmp_path, budget=10_000, resume=True)
-        batch = extractor.extract(transcription(), "Q23")
-        assert len(batch.claims) == 2
-        assert llm.calls[0][0] == "open"  # phase 1 re-ran
+        again = ScriptedLlm([])
+        extractor = self.extractor(
+            again, tmp_path, budget=LINE_LENGTH, resume=True
+        )
+        second = extractor.extract(transcription(), "Q23")
+        assert again.calls == []
+        assert second == first
+        assert extractor.used_fallback_manifest is False
+
+    def test_without_resume_every_stage_is_recomputed(self, tmp_path):
+        def script():
+            return ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    ndjson([claim("e1", "Anna Example", 1900)]),
+                    ndjson([claim("e2", "Bern Example", 1902)]),
+                ]
+            )
+
+        self.extractor(script(), tmp_path, budget=LINE_LENGTH).extract(
+            transcription(), "Q23"
+        )
+        llm = script()
+        self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
+            transcription(), "Q23"
+        )
+        assert [call[0] for call in llm.calls] == ["open", "fork", "fork"]
+        # recomputed in place: one record per key
+        assert len(stored(tmp_path, "chunk")) == 2
+
+    def test_reuse_rebinds_the_artifact_qid(self, tmp_path):
+        """The artifact QID is a binding, not a key component: after a
+        reset gives the artifact a new QID, every output is reused and
+        rebound to it."""
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna Example", 1900)]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
+        )
+        self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
+            transcription(), "Q23"
+        )
+        again = ScriptedLlm([])
+        batch = self.extractor(
+            again, tmp_path, budget=LINE_LENGTH, resume=True
+        ).extract(transcription(), "Q57")
+        assert again.calls == []
+        assert {claim.source.artifact.qid for claim in batch.claims} == {"Q57"}
+        assert len(stored(tmp_path, "batch")) == 1
+
+    def test_engine_outage_fails_the_manifest_stage(self, tmp_path):
+        """A manifest the engine never answered is a failure to retry,
+        not a fallback to store and reuse."""
+        llm = ScriptedLlm([RuntimeError("down"), RuntimeError("down")])
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
+        with pytest.raises(StageFailed, match="no engine response"):
+            extractor.extract(transcription(), "Q23")
+        assert stored(tmp_path, "entity_manifest") == []
+        (failure,) = failures(tmp_path, "entity_manifest")
+        assert "down" in failure["reason"]
 
     def test_duplicate_claims_collapse(self, tmp_path):
         """Focus drift: two chunks emitting the same claim (identical
@@ -786,7 +943,8 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
-        rejects = json.loads((tmp_path / "state" / "rejects.json").read_text())
+        (merged,) = stored(tmp_path, "batch")
+        rejects = json.loads(merged.extra("rejects.json"))
         assert len(rejects) == 1
         assert "shoe_size" in rejects[0]["problems"][0]
 
@@ -806,7 +964,8 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
-        rejects = json.loads((tmp_path / "state" / "rejects.json").read_text())
+        (merged,) = stored(tmp_path, "batch")
+        rejects = json.loads(merged.extra("rejects.json"))
         assert len(rejects) == 1
 
 
@@ -873,10 +1032,8 @@ class TestParallelChunks:
         # claims arrive in chunk order regardless of completion order
         assert [c.subject.local_id for c in batch.claims] == ["e1", "e2"]
         assert llm.concurrent_peak == 2  # the calls genuinely overlapped
-        manifest = json.loads(
-            (tmp_path / "state" / "manifest.json").read_text()
-        )
-        assert all(c["status"] == "ok" for c in manifest["chunks"].values())
+        assert len(stored(tmp_path, "chunk")) == 2
+        assert failures(tmp_path, "chunk") == []
 
     def test_concurrent_failure_isolates_to_its_chunk(self, tmp_path):
         llm = KeyedLlm(
@@ -932,11 +1089,14 @@ class TestFallbackLadder:
             "c001:p1",
             "c001:p2",
         }
-        manifest = json.loads(
-            (tmp_path / "state" / "manifest.json").read_text()
+        (manifest,) = stored(tmp_path, "entity_manifest")
+        assert manifest.output()["strategy"] == "line-range"
+        # a fallback is stored, flagged for attention
+        assert any(
+            "fell back to line-range" in reason
+            for reason in manifest.attention
         )
-        assert manifest["strategy"] == "line-range"
-        assert (tmp_path / "state" / "manifest-fallback.txt").exists()
+        assert len(manifest.raw()) == 3  # two manifest turns, segmentation
 
     def test_fallback_tier_offers_the_same_kinds_as_the_manifest(
         self, tmp_path
@@ -984,4 +1144,8 @@ class TestFallbackLadder:
         assert len(batch.claims) == 2
         assert llm.calls[-1][0] == "complete"
         assert "Full transcription" in llm.calls[-1][1]
-        assert (tmp_path / "state" / "segmentation-fallback.txt").exists()
+        (manifest,) = stored(tmp_path, "entity_manifest")
+        assert any(
+            "fell back to line windows" in reason
+            for reason in manifest.attention
+        )
