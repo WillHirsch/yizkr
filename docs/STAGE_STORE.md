@@ -149,9 +149,10 @@ An output is reused only when:
 
 Every reuse is an event with its reason. `yizkr ingest run --recompute
 <stage>` (repeatable) recomputes a stage once in a run even where its key
-matches. A plain file that no record accounts for is never reused:
-`ingest run` holds a document whose directory holds such stage outputs
-(see *Directories from before these records*).
+matches. A plain file that no record accounts for is never reused, and
+a record in the store never stands for a directory's own files:
+`ingest run` holds a document whose directory has files but no
+`derivations.json` (see *Directories from before these records*).
 
 ## The version registry
 
@@ -213,7 +214,7 @@ SHA-1, or `corpus`), `kind`, `stage`, `key`, `method` (routed stages) and
 | `stored` | a computed output was stored | `reason` (`computed`, `recomputed`), `attention` |
 | `reused` | an output was reused | `reason` (`key match`, `adopted`), `record` (for adopted), `attention` |
 | `failed` | a computation failed; nothing was stored | `reason` |
-| `held` | the control file stopped dispatch, or `ingest run` held a document whose directory holds unrecorded stage outputs (see *Directories from before these records*) | `reason` |
+| `held` | the control file stopped dispatch, or `ingest run` held a document whose directory has files but no `derivations.json` (see *Directories from before these records*) | `reason` |
 | `alert` | an anomaly alert was appended | `check`, `status` |
 | `run-end` | the invocation finished | `statuses` |
 | `run-interrupted` | the invocation was interrupted (Ctrl-C) | |
@@ -227,8 +228,9 @@ One alert per line: `at`, `stage`, `check`, `subject` (a SHA-1 prefix),
 `value` (the measured value), and `status`: `new` on an output computed
 in this run, `carried` on a reused one. Each alert also appends an
 `alert` event. `ingest run` raises an `unrecorded outputs` alert, with
-`status` `new`, for each document it holds because its directory holds
-stage outputs that nothing records; its `value` lists those files.
+`status` `new`, for each document it holds because its directory has
+files but no `derivations.json`; its `value` lists the stage outputs the
+directory holds.
 
 ### `control.jsonl`
 
@@ -284,70 +286,78 @@ them. Their dependencies are recorded by content hash in
 `equivalences.reviewed.csv` reviews `equivalences.csv`, and
 `review.reviewed.csv` reviews `review.csv`.
 
-**Directories from before these records.** A document directory with a
-`state.json` but no `derivations.json` holds no content hashes: it was
-made under the old modification-time rule, or its `derivations.json` was
-lost. Its stage outputs are `transcription.json`, `batch.json` and
-`critique.json` (`batch.json` alone for a GEDCOM file). What `ingest
-run` does with it depends on whether the stage store holds a record, for
-this document and under any key, of the stage behind each of them.
+**Directories from before these records.** Every document directory
+`ingest run` makes has its `derivations.json` from its first run, written
+before any other file. A directory with files (a `state.json`, a stage
+output, a derived file or a reviewed CSV) but no `derivations.json` was
+made under the old modification-time rule, or has lost its record.
+Nothing then says what its files were derived from, and the stage store
+cannot say either: every run directory shares it (`--store`, default
+`var/stages`), so a record there may come from another directory's run
+of the same document, and it says nothing about this directory's files.
+The stage outputs are `transcription.json`, `batch.json` and
+`critique.json` (`batch.json` alone for a GEDCOM file).
 
-*When the store holds no record of the stage behind one of them*, as for
-every directory made before the stage store, `ingest run` **holds the
-document**. An output is reused only on an exact key match or a recorded
-equivalence (ADR-0025), and these files have neither. Running the stages
-would compute every one again, calling the engine for the entity
-manifest, the chunks and the critique, and for the transcription of a
-scan or an image (a GEDCOM file's adapter calls none). It would replace
-the files, and a batch whose content differed from `batch.json` (a
-model's second answer can differ from its first) would invalidate every
-file made from it and move the reviewed CSVs aside. So the run stops the
-document before any stage or wiki call and before anything in its
-directory is moved or replaced:
+`ingest run` **holds such a document**, whatever the store holds. An
+output is reused only on an exact key match or a recorded equivalence
+(ADR-0025), and these files have neither. Deriving the stages would
+compute every one the store does not hold under its current key, calling
+the engine for the entity manifest, the chunks and the critique, and for
+the transcription of a scan or an image (a GEDCOM file's adapter calls
+none). It would replace the views, and a batch whose content differed
+from `batch.json` (a model's second answer can differ from its first)
+would invalidate every file made from it and move the reviewed CSVs
+aside. So the run stops the document before any stage or wiki call and
+before anything in its directory is moved or replaced:
 
 - its status is `held: unrecorded outputs`, and `state.json` names the
-  files and the reason under `detail.held`, with the status it had
-  before (`previous_status`);
+  stage outputs and the reason under `detail.held`, with the status it
+  had before (`previous_status`);
 - the run appends a `held` event for the document's first stage, whose
   run state stays *pending* with that reason, and an `unrecorded outputs`
   alert; the log says the same on stderr;
 - the run exits with 2, as when a document awaits review, and every
-  later run holds it again until one opts in;
+  later run holds it again until one opts in; in `--serial` mode the
+  sequence stops at it;
 - a document held after it was written still counts as written for
   content dedup (ADR-0010), so a renamed copy of it is a duplicate.
 
-`yizkr ingest run --rederive-unrecorded` opts in. It adopts such a
-directory as below and derives every stage again through the store,
-replacing the views. Where the new batch has the same content as
-`batch.json`, the files made from it stand as adoption recorded them;
-otherwise they are derived again and the reviewed CSVs are moved aside
-as `*.reviewed.superseded-<n>.csv`, which the log reports. Archived
-outputs come into the store only through the import (#104), under
-backfilled keys that never claim the current prompt or model (ADR-0025).
+`yizkr ingest run --rederive-unrecorded` opts in. For each such
+directory it:
 
-*When the store holds those stages* (the `derivations.json` was lost, or
-another state directory ran the document through the same store), or
-the run opts in, `ingest run` adopts the directory once, before anything
-in it is rewritten, by applying the modification-time rule one last
-time to the directory as it was left:
+1. keeps a copy of each stage output beside it, as
+   `<stem>.superseded-<n><suffix>` (`batch.superseded-1.json`, say), with
+   its bytes and modification time. These files are the only copy of
+   what the earlier engine produced, and of what the reviews and the
+   graph write were made from. A retried opt-in does not copy an
+   identical file twice;
+2. adopts the directory once, before anything in it is rewritten, by
+   applying the modification-time rule one last time to the directory as
+   it was left:
+   - a derived file is recorded as current only when no input it was
+     made from is newer than it (a tie counts as not newer). Any other
+     derived file is derived again, and from then on content hashes
+     decide what follows it;
+   - a reviewed CSV is bound only when the CSV it reviews exists and is
+     not newer than it. Otherwise (the CSV is missing, or was re-exported
+     after the review was saved) the review decided on rows that have
+     since been replaced: it is moved aside as
+     `*.reviewed.superseded-<n>.csv` and consents to nothing. Its gate
+     waits for a review of the current rows, and nothing is written from
+     the old one;
+3. derives every stage again through the store and replaces the views.
+   Stages the store holds under their current keys are reused, which
+   costs nothing; the rest are computed. Where the new batch has the same
+   content as `batch.json`, the files made from it stand as adoption
+   recorded them; otherwise they are derived again and the reviewed CSVs
+   are moved aside as `*.reviewed.superseded-<n>.csv`, which the log
+   reports.
 
-- a derived file is recorded as current only when no input it was made
-  from is newer than it (a tie counts as not newer). Any other derived
-  file is derived again, and from then on content hashes decide what
-  follows it;
-- a reviewed CSV is bound only when the CSV it reviews exists and is not
-  newer than it. Otherwise (the CSV is missing, or was re-exported after
-  the review was saved) the review decided on rows that have since been
-  replaced: it is moved aside as `*.reviewed.superseded-<n>.csv` and
-  consents to nothing. Its gate waits for a review of the current rows,
-  and nothing is written from the old one.
-
-Adoption covers only the files made from the batch and the reviews. The
-stages before the gates are still reused only by key: a stage the store
-does not hold under the current key is computed again, and a batch that
-differs from `batch.json` invalidates what adoption recorded and moves
-the reviews aside, as for any changed batch. After adoption,
-modification times are never read again.
+Adoption covers only the files made from the batch and the reviews: by
+itself it neither keeps the reviews nor saves an engine call. After
+adoption, modification times are never read again. Archived outputs come
+into the store only through the import (#104), under backfilled keys
+that never claim the current prompt or model (ADR-0025).
 
 To correct a transcription, save the corrected text as
 `<doc>/transcription.corrected.txt`. The document is routed to the

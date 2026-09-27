@@ -1133,14 +1133,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--rederive-unrecorded",
         action="store_true",
-        help="derive every stage again for a document whose directory "
-        "holds stage outputs (transcription.json, batch.json, "
-        "critique.json) that neither its derivations.json nor the stage "
-        "store records. This recomputes those stages, calling the engine "
-        "for all but a GEDCOM file, and replaces those files; unless the "
-        "new batch has the same content as batch.json, the reviewed CSVs "
-        "are moved aside. Without it such a document is held, with its "
-        "directory untouched",
+        help="adopt a document directory that has files but no "
+        "derivations.json, and derive its stages again. A copy of each "
+        "stage output (transcription.json, batch.json, critique.json) is "
+        "kept first, as batch.superseded-<n>.json and so on; stages the "
+        "store does not hold under their current keys are then computed, "
+        "calling the engine for all but a GEDCOM file, and the views are "
+        "replaced. Unless the new batch has the same content as "
+        "batch.json, the reviewed CSVs are moved aside. Without it such a "
+        "document is held, with its directory untouched, whatever the "
+        "store holds",
     )
     p.set_defaults(func=cmd_run)
 

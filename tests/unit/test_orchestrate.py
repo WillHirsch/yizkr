@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -276,6 +277,23 @@ def completed_run(tmp_path, **kwargs):
     (doc,) = orchestrator.documents()
     approve_all_claims(doc)
     assert orchestrator.run() == 0
+    return orchestrator
+
+
+def stale_claim_review(tmp_path):
+    """A directory waiting at the claim gate that has lost its
+    derivations.json, and whose claim review is older than its CSV: the
+    CSV was re-exported with other rows after the review was saved."""
+    orchestrator = make_run(tmp_path)
+    orchestrator.run()
+    (doc,) = orchestrator.documents()
+    approve_all_equivalences(doc)
+    orchestrator.run()
+    (doc,) = orchestrator.documents()
+    approve_all_claims(doc)
+    export_review_csv(make_batch(), doc.review)
+    saved_last(doc.review)
+    (doc.dir / "derivations.json").unlink()
     return orchestrator
 
 
@@ -607,9 +625,8 @@ class TestFreshness:
     """Make-style dependencies by content hash: upstream redos invalidate
     downstream outputs AND the human gates (a corrected transcription must
     force re-extraction, re-review, re-write), and an identical recompute
-    invalidates nothing. A directory that has lost its derivations.json
-    while the stage store still holds its stages is adopted once, by
-    modification times (#87)."""
+    invalidates nothing. A directory that has lost its derivations.json is
+    adopted once, by modification times, when a run opts in (#87)."""
 
     def completed_run(self, tmp_path):
         return completed_run(tmp_path)
@@ -685,48 +702,43 @@ class TestFreshness:
         assert doc.batch.exists()
         assert doc.review_reviewed.exists()
 
-    def test_a_directory_the_store_records_keeps_its_files(self, tmp_path):
-        """A directory that has lost its derivations.json, while the stage
-        store still holds its stages, keeps its derived files and reviews
-        with no calls: the stages are reused by key, and each derived file
-        is no older than what it was made from, so it is adopted as
-        current, once. Without those store records the stages would be
-        computed again, so a directory from before the records is held
-        instead (TestUnrecordedDirectory)."""
+    def test_opting_in_adopts_a_directory_and_reuses_what_the_store_holds(
+        self, tmp_path
+    ):
+        """A directory that has lost its derivations.json is held, although
+        the store holds its stages. A run that opts in adopts it: the
+        stages are reused by key, so there are no calls, and each derived
+        file is no older than what it was made from, so it is adopted as
+        current, once. The reviews and the write stand."""
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         (doc.dir / "derivations.json").unlink()
         before = list(orchestrator.calls)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == UNRECORDED
+        orchestrator.rederive_unrecorded = True
         assert orchestrator.run() == 0
         assert orchestrator.calls == before
         (doc,) = orchestrator.documents()
         assert doc.state.status == WRITTEN
         assert doc.review_reviewed.exists()
-        assert not (doc.dir / "review.reviewed.superseded-1.csv").exists()
+        assert not list(doc.dir.glob("*.reviewed.superseded-*"))
 
     def stale_review(self, tmp_path):
-        """A directory waiting at the claim gate that has lost its
-        derivations.json, while the store still holds its stages, and
-        whose claim review is older than its CSV: the CSV was re-exported
-        with other rows after the review was saved."""
-        orchestrator = make_run(tmp_path)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_equivalences(doc)
-        orchestrator.run()
-        (doc,) = orchestrator.documents()
-        approve_all_claims(doc)
-        export_review_csv(make_batch(), doc.review)
-        saved_last(doc.review)
-        (doc.dir / "derivations.json").unlink()
+        """stale_claim_review, from a run that opts in, so the directory is
+        adopted; the store still holds its stages under their current
+        keys."""
+        orchestrator = stale_claim_review(tmp_path)
+        orchestrator.rederive_unrecorded = True
         return orchestrator
 
     def test_adoption_moves_aside_a_review_older_than_its_csv(self, tmp_path):
         """A claim review older than its CSV decided on rows that have
         since been replaced. Adoption does not bind it: it is moved aside,
         the gate waits, and nothing is written until the current rows are
-        reviewed. The store holds the directory's stages, so the document
-        is adopted rather than held, and no stage is computed."""
+        reviewed. The store holds the stages under their current keys, so
+        no stage is computed."""
         orchestrator = self.stale_review(tmp_path)
         before = len(orchestrator.calls)
         assert orchestrator.run() == 2
@@ -744,15 +756,18 @@ class TestFreshness:
         ]
 
     def test_an_interrupted_adoption_adopts_again(self, tmp_path, monkeypatch):
-        """An adoption (of a directory whose stages the store holds) that
-        stops before its record is saved leaves none, so the next run
-        adopts again, and a review it judged stale never comes to
-        consent."""
+        """An adoption that stops before its record is saved leaves none,
+        so the next run adopts again, and a review it judged stale never
+        comes to consent. The copies of the stage outputs kept before it
+        are not made twice."""
         import yizkr.pipeline.orchestrate as orchestrate
 
         orchestrator = self.stale_review(tmp_path)
+        supersede = orchestrate._supersede
 
-        def refuse(reviewed):
+        def refuse(path, keep=False):
+            if keep:  # the copies of the stage outputs are made
+                return supersede(path, keep=True)
             raise OSError("the disk refused")
 
         monkeypatch.setattr(orchestrate, "_supersede", refuse)
@@ -760,22 +775,24 @@ class TestFreshness:
         (doc,) = orchestrator.documents()
         assert doc.state.status == FAILED
         assert not (doc.dir / "derivations.json").exists()
+        assert (doc.dir / "batch.superseded-1.json").exists()
         monkeypatch.undo()
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_CLAIMS
         assert not any(c.startswith("write") for c in orchestrator.calls)
         assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
+        assert not list(doc.dir.glob("*.superseded-2.*"))
 
     def test_adoption_re_resolves_after_a_newer_equivalence_review(
         self, tmp_path
     ):
-        """In a directory that has lost its derivations.json, while the
-        store still holds its stages, an equivalence review saved again
-        after the resolved batch was made is newer than it, so the
-        resolved batch is not adopted: it is resolved again with the
-        curator's new decisions, and the claim review of the old
-        resolution is moved aside instead of written."""
+        """In a directory that has lost its derivations.json, adopted on
+        the opt-in, an equivalence review saved again after the resolved
+        batch was made is newer than it, so the resolved batch is not
+        adopted: it is resolved again with the curator's new decisions,
+        and the claim review of the old resolution is moved aside instead
+        of written."""
 
         class Resolves(ScriptedOrchestrator):
             """Resolves with the reviewed equivalence decisions, as the
@@ -804,6 +821,7 @@ class TestFreshness:
         decide_all_equivalences(doc, "reject")
         saved_last(doc.equivalences_reviewed)
         (doc.dir / "derivations.json").unlink()
+        orchestrator.rederive_unrecorded = True
         before = len(orchestrator.calls)
         assert orchestrator.run() == 2
         assert [c.split(":")[0] for c in orchestrator.calls[before:]] == [
@@ -818,12 +836,12 @@ class TestFreshness:
         assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
 
     def test_after_adoption_modification_times_are_not_read(self, tmp_path):
-        """Adoption (here of a directory whose stages the store holds)
-        happens once. After it, a CSV that is only touched, not changed,
-        re-arms nothing: content hashes decide."""
+        """Adoption happens once. After it, a CSV that is only touched, not
+        changed, re-arms nothing: content hashes decide."""
         orchestrator = self.completed_run(tmp_path)
         (doc,) = orchestrator.documents()
         (doc.dir / "derivations.json").unlink()
+        orchestrator.rederive_unrecorded = True
         assert orchestrator.run() == 0
         (doc,) = orchestrator.documents()
         saved_last(doc.review)
@@ -835,6 +853,17 @@ class TestFreshness:
         assert doc.state.status == WRITTEN
         assert doc.review_reviewed.exists()
         assert doc.equivalences_reviewed.exists()
+
+    def test_adoption_leaves_a_recorded_directory_alone(self, tmp_path):
+        """A directory with a record is never judged by modification
+        times: adopting it moves nothing and changes no record."""
+        orchestrator = self.completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        record = (doc.dir / "derivations.json").read_text()
+        saved_last(doc.review)
+        assert doc.derivations.adopt() == []
+        assert doc.review_reviewed.exists()
+        assert (doc.dir / "derivations.json").read_text() == record
 
     def test_edited_csv_rearms_its_gate(self, tmp_path):
         """A reviewed file is consent for the CSV it was first seen with:
@@ -908,13 +937,19 @@ class TestFreshness:
 class TestUnrecordedDirectory:
     """A document directory from before the stage records: its stage
     outputs (transcription.json, batch.json, critique.json) and reviews
-    are in place, but it has no derivations.json and the stage store holds
-    none of its stages. Deriving them again would call the engine and,
-    when a model answers differently, move the reviews aside, so the run
-    holds the document until it opts in with --rederive-unrecorded (#87).
+    are in place, but it has no derivations.json, so nothing records what
+    its files were derived from, and the stage store, which every run
+    directory shares, cannot vouch for them. The run holds the document,
+    whatever the store holds, until it opts in with --rederive-unrecorded,
+    which keeps a copy of each stage output and adopts the directory (#87).
     """
 
     VIEWS = ["transcription.json", "batch.json", "critique.json"]
+    KEPT = [
+        "batch.superseded-1.json",
+        "critique.superseded-1.json",
+        "transcription.superseded-1.json",
+    ]
 
     def from_before_the_records(self, tmp_path):
         """A written document's directory as a run before the records left
@@ -924,6 +959,13 @@ class TestUnrecordedDirectory:
         (doc.dir / "derivations.json").unlink()
         shutil.rmtree(orchestrator.store.root)
         return orchestrator
+
+    def kept(self, doc) -> list[str]:
+        return sorted(
+            path.name
+            for path in doc.dir.glob("*.superseded-*")
+            if ".reviewed." not in path.name
+        )
 
     def test_a_directory_from_before_the_records_is_held(self, tmp_path):
         """No stage runs and no file in the directory changes. The hold
@@ -946,6 +988,7 @@ class TestUnrecordedDirectory:
         assert held["outputs"] == self.VIEWS
         assert held["previous_status"] == WRITTEN
         assert "--rederive-unrecorded" in held["reason"]
+        assert "keeps a copy of each stage output" in held["reason"]
         assert "calling the engine" in held["reason"]
         assert any(f"held: {held['reason']}" in line for line in lines)
         (event,) = [
@@ -972,15 +1015,55 @@ class TestUnrecordedDirectory:
         assert doc.state.detail["held"]["previous_status"] == WRITTEN
         assert len(orchestrator.rundir.alerts()) == 2
 
+    def test_a_shared_store_does_not_stand_in_for_a_directory(self, tmp_path):
+        """Two folders hold the same letter, and their state directories
+        share one store; both are from before the records. Opting in for
+        the first stores its stages again, from a model that now answers
+        differently. The second is still held, with every file as it was:
+        a record in the store says nothing about another directory's
+        files."""
+        store = tmp_path / "stages"
+        runs = []
+        for name in ("x", "y"):
+            (tmp_path / name).mkdir()
+            runs.append(completed_run(tmp_path / name, store_dir=store))
+        for orchestrator in runs:
+            (doc,) = orchestrator.documents()
+            (doc.dir / "derivations.json").unlink()
+        shutil.rmtree(store)
+        x, y = runs
+        rederived = DriftingOrchestrator(
+            x.folder,
+            x.state_dir,
+            log=quiet,
+            store_dir=store,
+            rederive_unrecorded=True,
+        )
+        assert rederived.run() == 2
+        assert "manifest:letter.txt" in rederived.calls
+        (doc,) = y.documents()
+        files = snapshot(doc.dir)
+        again = ScriptedOrchestrator(
+            y.folder, y.state_dir, log=quiet, store_dir=store
+        )
+        assert again.run() == 2
+        assert again.calls == []
+        assert snapshot(doc.dir) == files
+        (doc,) = again.documents()
+        assert doc.state.status == UNRECORDED
+
     def test_rederiving_moves_the_reviews_aside_when_the_batch_differs(
         self, tmp_path
     ):
-        """With --rederive-unrecorded every stage is derived again. A
+        """With --rederive-unrecorded a copy of each stage output is kept,
+        with its bytes and time, and every stage is derived again. A
         model's second answer can differ from its first; when the batch
         does, what was made from the old one is derived again, and the
         reviews are moved aside, never deleted."""
         first = self.from_before_the_records(tmp_path)
         assert first.run() == 2  # held
+        (doc,) = first.documents()
+        before = snapshot(doc.dir)
         lines: list[str] = []
         orchestrator = DriftingOrchestrator(
             first.folder,
@@ -1003,19 +1086,31 @@ class TestUnrecordedDirectory:
         assert not doc.review_reviewed.exists()
         assert (doc.dir / "equivalences.reviewed.superseded-1.csv").exists()
         assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
-        assert any("no record of" in line for line in lines)
+        assert self.kept(doc) == self.KEPT
+        after = snapshot(doc.dir)
+        for view in self.VIEWS:
+            copy = view.replace(".json", ".superseded-1.json")
+            assert after[Path(copy)] == before[Path(view)]
+        old = ClaimBatch.model_validate_json(
+            (doc.dir / "batch.superseded-1.json").read_text()
+        )
+        new = ClaimBatch.model_validate_json(doc.batch.read_text())
+        assert (old.claims[0].value.year, new.claims[0].value.year) == (
+            1901,
+            1902,
+        )
+        assert any("no derivations.json: kept" in line for line in lines)
         assert any(
             "equivalences.reviewed.csv, review.reviewed.csv moved aside"
             in line
             for line in lines
         )
-        batch = ClaimBatch.model_validate_json(doc.batch.read_text())
-        assert batch.claims[0].value.year == 1902
 
     def test_rederiving_the_same_batch_keeps_the_reviews(self, tmp_path):
         """Stages derived again that give the directory's batch back
         change nothing after it: the hold is over, the reviews stay bound,
-        the write stands, and from then on the directory is recorded."""
+        the write stands, and from then on the directory is recorded. The
+        copies of the stage outputs are kept all the same."""
         first = self.from_before_the_records(tmp_path)
         assert first.run() == 2  # held
         orchestrator = ScriptedOrchestrator(
@@ -1035,10 +1130,12 @@ class TestUnrecordedDirectory:
         assert "held" not in doc.state.detail
         assert doc.equivalences_reviewed.exists()
         assert doc.review_reviewed.exists()
-        assert not list(doc.dir.glob("*.superseded-*"))
+        assert not list(doc.dir.glob("*.reviewed.superseded-*"))
+        assert self.kept(doc) == self.KEPT
         again = ScriptedOrchestrator(first.folder, first.state_dir, log=quiet)
         assert again.run() == 0
         assert again.calls == []
+        assert self.kept(doc) == self.KEPT
 
     def test_a_directory_that_lost_its_state_is_held_too(self, tmp_path):
         """Without state.json the document has no artifact QID, but its
@@ -1056,50 +1153,101 @@ class TestUnrecordedDirectory:
         assert doc.state.status == UNRECORDED
         assert doc.state.artifact_qid is None
 
+    def test_opting_in_adopts_a_directory_that_lost_its_state(self, tmp_path):
+        """A directory from before the records waits at the claim gate:
+        review.csv was saved again, with the same rows, after its review.
+        It has also lost its state.json, and is unrecorded all the same, so
+        the opt-in adopts it by modification times. The review is moved
+        aside and the gate waits, as it would with state.json in place; it
+        is not bound on first sight to the re-exported CSV, and nothing is
+        written."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        saved_last(doc.review)
+        for lost in (doc.dir / "derivations.json", doc.state_path):
+            lost.unlink()
+        shutil.rmtree(orchestrator.store.root)
+        # the first run after the loss opts in (a held run would save a
+        # new state.json first)
+        orchestrator.rederive_unrecorded = True
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_CLAIMS
+        assert not doc.review_reviewed.exists()
+        assert (doc.dir / "review.reviewed.superseded-1.csv").exists()
+        assert not doc.write_result.exists()
+        assert not any(c.startswith("write") for c in orchestrator.calls)
+
+    def test_a_recorded_directory_whose_store_is_gone_is_recomputed(
+        self, tmp_path
+    ):
+        """A directory with its derivations.json is recorded, whatever the
+        store holds. With the store gone its stages are computed again,
+        not held, and the batch, the same as before, leaves the reviews
+        and the write as they are."""
+        orchestrator = completed_run(tmp_path)
+        shutil.rmtree(orchestrator.store.root)
+        before = len(orchestrator.calls)
+        assert orchestrator.run() == 0
+        assert [c.split(":")[0] for c in orchestrator.calls[before:]] == [
+            "manifest",
+            "chunk",
+            "critique",
+        ]
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == WRITTEN
+        assert orchestrator.rundir.alerts() == []
+        assert not list(doc.dir.glob("*.superseded-*"))
+
     def test_a_first_run_that_stopped_before_its_batch_is_not_held(
         self, tmp_path
     ):
-        """A first run that fails before the batch leaves transcription.json
-        and no derivations.json. The store holds that transcription, so
-        the next run carries on instead of holding the document."""
+        """A directory is recorded from its first run: derivations.json is
+        written before any other file. A first run that fails before the
+        batch leaves transcription.json, and the next run carries on
+        instead of holding the document, even with the store gone."""
         orchestrator = make_run(tmp_path, fail_step="manifest")
         assert orchestrator.run() == 1
         (doc,) = orchestrator.documents()
         assert doc.transcription.exists()
-        assert not (doc.dir / "derivations.json").exists()
+        assert (doc.dir / "derivations.json").exists()
+        shutil.rmtree(orchestrator.store.root)
         orchestrator.fail_step = None
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES
 
-    def test_a_partly_recorded_directory_is_held_for_the_rest(self, tmp_path):
-        """A store that holds some of a directory's stages, and not the
-        stages behind batch.json and critique.json, would have those
-        computed again: the document is held, naming those two."""
-        orchestrator = completed_run(tmp_path)
-        (doc,) = orchestrator.documents()
-        (doc.dir / "derivations.json").unlink()
-        scope = orchestrator.store.root / "doc" / doc.sha1
-        for stage in ("entity_manifest", "chunk", "batch", "critique"):
-            shutil.rmtree(scope / stage)
-        files = snapshot(doc.dir)
-        before = list(orchestrator.calls)
+    def test_a_duplicate_is_recorded_from_its_first_run(self, tmp_path):
+        """A duplicate's directory gets its record too, so when the file
+        it duplicated is gone it is ingested, not held."""
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "a-original.txt").write_text("Anna was born in 1901.")
+        (folder / "b-copy.txt").write_text("Anna was born in 1901.")
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
+        orchestrator.run()
+        _, copy = orchestrator.documents()
+        assert copy.state.status == DUPLICATE
+        (folder / "a-original.txt").unlink()
         assert orchestrator.run() == 2
-        assert orchestrator.calls == before
-        assert snapshot(doc.dir) == files
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == UNRECORDED
-        assert doc.state.detail["held"]["outputs"] == [
-            "batch.json",
-            "critique.json",
-        ]
+        (copy,) = orchestrator.documents()
+        assert copy.state.status == AWAITING_EQUIVALENCES
 
     def test_serial_mode_reports_a_hold_once(self, tmp_path):
         """Serial mode advances a document twice in one run (extract-only,
-        then in sequence); a held document is reported once."""
+        then in sequence); a held document is reported once, and the
+        sequence stops at it as held."""
         first = self.from_before_the_records(tmp_path)
+        lines: list[str] = []
         orchestrator = ScriptedOrchestrator(
-            first.folder, first.state_dir, log=quiet, serial=True
+            first.folder, first.state_dir, log=collect(lines), serial=True
         )
         assert orchestrator.run() == 2
         assert orchestrator.calls == []
@@ -1108,6 +1256,10 @@ class TestUnrecordedDirectory:
         assert len(orchestrator.rundir.alerts()) == 1
         (doc,) = orchestrator.documents()
         assert doc.state.status == UNRECORDED
+        assert any(
+            "(serial) paused: letter.txt is held" in line for line in lines
+        )
+        assert not any("is written" in line for line in lines)
 
     def test_a_copy_of_a_held_written_document_is_a_duplicate(self, tmp_path):
         """A document held after it was written is still the one ingested
@@ -1127,11 +1279,14 @@ class TestUnrecordedDirectory:
             "letter.txt": UNRECORDED,
         }
 
-    def test_a_gedcom_directory_is_held_only_without_its_stage(self, tmp_path):
+    def test_a_gedcom_directory_from_before_the_records_is_held(
+        self, tmp_path
+    ):
         """A GEDCOM document's one stage output is batch.json, from the
-        gedcom stage, which calls no engine. With the store holding that
-        stage, a lost derivations.json is adopted; without it the document
-        is held."""
+        gedcom stage, which calls no engine. Without derivations.json the
+        document is held, although the store holds that stage. The opt-in
+        keeps a copy of batch.json, the adapter gives the same batch back,
+        and the equivalences CSV stands."""
         folder = tmp_path / "docs"
         folder.mkdir()
         (folder / "family.ged").write_text(
@@ -1143,11 +1298,6 @@ class TestUnrecordedDirectory:
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         (doc.dir / "derivations.json").unlink()
-        assert orchestrator.run() == 2
-        (doc,) = orchestrator.documents()
-        assert doc.state.status == AWAITING_EQUIVALENCES
-        (doc.dir / "derivations.json").unlink()
-        shutil.rmtree(orchestrator.store.root)
         files = snapshot(doc.dir)
         assert orchestrator.run() == 2
         assert snapshot(doc.dir) == files
@@ -1160,6 +1310,13 @@ class TestUnrecordedDirectory:
         assert [e["stage"] for e in events if e["event"] == "held"] == [
             "gedcom"
         ]
+        orchestrator.rederive_unrecorded = True
+        before = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert orchestrator.calls[before:] == []
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+        assert self.kept(doc) == ["batch.superseded-1.json"]
 
     def test_ingest_run_opts_in_by_flag(self, tmp_path, monkeypatch):
         from yizkr.cli import build_parser

@@ -37,19 +37,22 @@ moves its reviewed file aside too; and a reviewed file is consent only
 for the CSV it was first seen with, so editing the reviewed CSV
 re-writes and editing the CSV it reviews re-arms the gate.
 
-A directory without `derivations.json` holds files that no content hash
-records. When the store holds no record of the stage behind one of its
-stage outputs (`transcription.json`, `batch.json`, `critique.json`),
-deriving the stages would compute them all again, calling the engine
-for those that use one, and a batch that came out different would move
-the directory's reviews aside. So the document is held before any stage
-runs, with every file left as it is, and its status, the run's events
-and its alerts say why, until a run opts in to deriving it again
-(`rederive_unrecorded`). Otherwise a directory that has state is
-recorded once from its files' modification times, the only dependency
-information it holds: a file older than an input is derived again, and
-a reviewed file older than its CSV is moved aside (Derivations.adopt).
-Modification times are read nowhere else.
+Every directory made here has its `derivations.json` from its first run.
+A directory with files (its state, a stage output, a derived file or a
+review) but no `derivations.json` holds files that no content hash
+records, and the shared stage store cannot vouch for them: its records
+may come from another directory's run of the same document. Deriving
+the stages would compute every one the store does not hold under its
+current key, calling the engine for those that use one, and a batch that
+came out different would move the directory's reviews aside. So the
+document is held before any stage runs, with every file left as it is,
+and its status, the run's events and its alerts say why, until a run
+opts in (`rederive_unrecorded`). That run keeps a copy of each stage
+output as `<stem>.superseded-<n><suffix>`, records the directory once
+from its files' modification times, the only dependency information it
+holds (a file older than an input is derived again, and a reviewed file
+older than its CSV is moved aside; Derivations.adopt), and then derives
+the stages again. Modification times are read nowhere else.
 
 A reviewed file's PRESENCE is the gate: the orchestrator never
 interprets a half-filled CSV as consent. Documents whose reconcile
@@ -64,6 +67,7 @@ Re-running a completed document is a no-op (the writer is idempotent).
 
 from __future__ import annotations
 
+import filecmp
 import json
 import re
 import shutil
@@ -128,8 +132,8 @@ FAILED = "failed"
 DUPLICATE = "duplicate"
 # the run's control file held the document's next stage
 PAUSED = "paused"
-# the document's directory holds stage outputs that neither its
-# derivations.json nor the stage store records; the run left it untouched
+# the document's directory has files but no derivations.json, so nothing
+# records what they were derived from; the run left it untouched
 UNRECORDED = "held: unrecorded outputs"
 # the alert a held document raises
 UNRECORDED_CHECK = "unrecorded outputs"
@@ -209,7 +213,8 @@ class Derivations:
     it nor the CSV it reviews has changed since it was first seen; and the
     batch view's canonical content hash says whether a regenerated batch
     is really new. Modification times are read in one place only: `adopt`,
-    once, for a directory that has state but no record.
+    once, for a directory that has files but no record, when a run opts in
+    to deriving it again.
     """
 
     def __init__(
@@ -224,11 +229,20 @@ class Derivations:
         self.made_from = {out: tuple(ins) for out, ins in made_from.items()}
         # each reviewed CSV -> the CSV it decides on
         self.reviews = dict(reviews)
-        # a document directory with state but no record: its files carry
-        # no content hashes, so `adopt` records them once
-        self.unrecorded = (
-            not path.exists() and (path.parent / "state.json").exists()
-        )
+
+    def files(self) -> set[Path]:
+        """Every file the record accounts for: each derived file, what it
+        is made from, and each reviewed CSV and the CSV it reviews."""
+        files = set(self.reviews) | set(self.reviews.values())
+        for output, inputs in self.made_from.items():
+            files.add(output)
+            files.update(inputs)
+        return files
+
+    def begin(self) -> None:
+        """Start an empty record for a directory that has none."""
+        if not self.path.exists():
+            self._save(self._load())
 
     def _load(self) -> dict:
         try:
@@ -258,7 +272,7 @@ class Derivations:
         }
 
     def adopt(self) -> list[Path]:
-        """Record a directory that has state but no record, once; returns
+        """Record a directory that has files but no record, once; returns
         the reviewed CSVs it moved aside.
 
         Only the files' modification times say what such a directory's
@@ -280,17 +294,16 @@ class Derivations:
 
         Adoption covers only the files made from the batch and the
         reviews; it says nothing about the stages before the gates. Those
-        are reused from the stage store only where it holds them, and are
-        computed again where it does not, calling the engine for those
-        that use one. A batch that then differs from the directory's
-        `batch.json` invalidates what adoption recorded and moves the
-        reviews aside. So the orchestrator adopts a directory only when
-        the store holds the stages behind its stage outputs, or when the
-        run opts in to deriving them again; otherwise it holds the
-        document, and nothing is adopted
-        (Orchestrator._unrecorded_outputs).
+        are reused from the stage store only where it holds them under
+        their current keys, and are computed again where it does not,
+        calling the engine for those that use one. A batch that then
+        differs from the directory's `batch.json` invalidates what
+        adoption recorded and moves the reviews aside. So the orchestrator
+        adopts a directory only when a run opts in to deriving its stages
+        again, after keeping a copy of each stage output; otherwise it
+        holds the document, and nothing is adopted (DocumentRun.unrecorded).
         """
-        if not self.unrecorded:
+        if self.path.exists():
             return []
         data = self._load()
         for output, inputs in self.made_from.items():
@@ -307,7 +320,6 @@ class Derivations:
         for reviewed in stale:
             _supersede(reviewed)
         self._save(data)
-        self.unrecorded = False
         return stale
 
     def current(self, output: Path) -> bool:
@@ -419,16 +431,27 @@ class DocumentRun:
         return document_kind(self.source)
 
     @property
-    def views(self) -> dict[Path, str]:
-        """Each plain-file view of a stage output in the directory, and
-        the stage whose output it shows."""
+    def views(self) -> tuple[Path, ...]:
+        """The plain-file views of the document's stage outputs."""
         if self.kind == "gedcom":
-            return {self.batch: "gedcom"}
-        return {
-            self.transcription: "transcription",
-            self.batch: "batch",
-            self.critique: "critique",
-        }
+            return (self.batch,)
+        return (self.transcription, self.batch, self.critique)
+
+    @property
+    def unrecorded(self) -> bool:
+        """Does the directory hold files that no derivations.json records?
+
+        Every directory the orchestrator makes has its record from its
+        first run, so a directory without one but with a state.json, a
+        stage view or any file the record accounts for was not made by it,
+        or has lost its record. Nothing then says what its files were
+        derived from. The stage store cannot say either: every run
+        directory shares it, so a record there may come from another
+        directory's run of the same document."""
+        if self.derivations.path.exists():
+            return False
+        files = {self.state_path, *self.views, *self.derivations.files()}
+        return any(path.exists() for path in files)
 
     def save(self) -> None:
         self.state.save(self.state_path)
@@ -487,9 +510,9 @@ class Orchestrator:
         self.rundir = RunDir(state_dir)
         # stages to recompute once in this run even when a key matches
         self.recompute = Recompute(recompute)
-        # derive again the stages of a document whose directory holds
-        # stage outputs that nothing records; without it such a document
-        # is held (see _unrecorded_outputs)
+        # adopt a document directory that has files but no derivations.json
+        # and derive its stages again; without it such a document is held
+        # (DocumentRun.unrecorded)
         self.rederive_unrecorded = rederive_unrecorded
         # documents held in this run, so each is reported once even when
         # serial mode advances it twice
@@ -1093,45 +1116,37 @@ class Orchestrator:
 
     # -- views and derivations ----------------------------------------------
 
-    def _unrecorded_outputs(self, doc: DocumentRun) -> list[Path]:
-        """The stage outputs in a directory without derivations.json whose
-        stage the store holds no record of, under any key, for the
-        document.
+    def _hold_unrecorded(self, doc: DocumentRun) -> str:
+        """Hold a document whose directory has files but no
+        derivations.json (DocumentRun.unrecorded), with every file in it as
+        it is, and say why: in state.json, in a `held` event for its first
+        stage, in an alert and on stderr.
 
         An output is reused only on an exact key match or a recorded
-        equivalence (ADR-0025), and these files have neither. Running the
-        stages would compute every one again, calling the engine for each
-        stage that uses one, and replace the files; a batch that came out
-        different would then move the directory's reviews aside. A
-        directory whose views the store does record (its derivations.json
-        was lost, or another state directory ran the document through the
-        same store) has none, and is adopted instead (Derivations.adopt).
-        """
-        if doc.derivations.path.exists():
-            return []
-        scope = doc_scope(doc.sha1)
-        return [
-            view
-            for view, stage in doc.views.items()
-            if view.exists() and not self.store.records(scope, stage)
-        ]
-
-    def _hold_unrecorded(self, doc: DocumentRun, outputs: list[Path]) -> str:
-        """Hold a document whose stage outputs nothing records, with every
-        file in its directory as it is, and say why: in state.json, in a
-        `held` event for its first stage, in an alert and on stderr."""
-        names = [path.name for path in outputs]
+        equivalence (ADR-0025), and the directory's own files have
+        neither. Deriving the stages would compute every one the store does
+        not hold under its current key, calling the engine for those that
+        use one, and replace the views; a batch that came out different
+        would then move the directory's reviews aside. Only a run that
+        opts in does that (_adopt_unrecorded)."""
+        names = [path.name for path in doc.views if path.exists()]
         calls_engine = any(
             STAGES[stage].llm for stage in DOCUMENT_STAGES[doc.kind]
         )
+        outputs = f" (stage outputs: {', '.join(names)})" if names else ""
+        engine = (
+            ", calling the engine for each stage the store does not hold"
+            if calls_engine
+            else ""
+        )
         reason = (
-            f"no record of {', '.join(names)}: the directory has no "
-            f"derivations.json, and the stage store holds none of these "
-            f"stage outputs for this document. Nothing was changed. A run "
-            f"with --rederive-unrecorded derives every stage again"
-            f"{', calling the engine,' if calls_engine else ''} and "
-            f"replaces these files; unless the new batch has the same "
-            f"content as batch.json, the reviewed CSVs are then moved aside."
+            f"no derivations.json records what the files in this directory "
+            f"were derived from{outputs}. Nothing was changed. A run with "
+            f"--rederive-unrecorded keeps a copy of each stage output (as "
+            f"batch.superseded-<n>.json, and so on), adopts the directory "
+            f"and derives every stage again{engine}; unless the new batch "
+            f"has the same content as batch.json, the reviewed CSVs are then "
+            f"moved aside."
         )
         held = (doc.state.detail or {}).get("held") or {}
         previous = (
@@ -1155,7 +1170,8 @@ class Orchestrator:
                 subject=doc.sha1,
                 kind=doc.kind,
                 stage=stage,
-                reason=f"unrecorded outputs: {', '.join(names)}",
+                reason="unrecorded outputs: the directory has no "
+                "derivations.json",
             )
             self.rundir.alert(
                 stage=stage,
@@ -1166,6 +1182,34 @@ class Orchestrator:
             )
             self.log(f"  {doc.source.name}: held: {reason}", file=sys.stderr)
         return UNRECORDED
+
+    def _adopt_unrecorded(self, doc: DocumentRun) -> None:
+        """Take a directory that has files but no derivations.json into
+        the records, as a run that opts in asks.
+
+        A copy of each stage output is kept first, beside it, as
+        `<stem>.superseded-<n><suffix>`: those files are the only copy of
+        what the earlier engine produced, and of what the reviews and the
+        graph write were made from. The directory is then adopted by its
+        files' modification times (Derivations.adopt), and the stages
+        before the gates are derived again through the store."""
+        kept = [
+            f"{view.name} as {copy.name}"
+            for view in doc.views
+            if (copy := _supersede(view, keep=True)) is not None
+        ]
+        self.log(
+            "  no derivations.json: "
+            + (f"kept {', '.join(kept)}; " if kept else "")
+            + "adopting the directory and deriving every stage again "
+            "(--rederive-unrecorded)"
+        )
+        for reviewed in doc.derivations.adopt():
+            self.log(
+                f"  {reviewed.name} does not review the current "
+                f"{doc.derivations.reviews[reviewed].name}: moved aside "
+                f"(review the current rows)"
+            )
 
     def _update_batch_view(self, doc: DocumentRun, batch: ClaimBatch) -> bool:
         """Write `batch.json` for the current batch; True when its content
@@ -1268,6 +1312,12 @@ class Orchestrator:
             self.log(f"  {doc.source.name}: content changed; re-ingesting")
         doc.state.content_sha1 = content_sha1
 
+        # a directory made here is recorded from its first run, before any
+        # file is written to it, so only a directory the orchestrator did
+        # not make, or one that lost its record, is ever unrecorded
+        if not doc.unrecorded:
+            doc.derivations.begin()
+
         # content-identity dedup (ADR-0010): claim this file's bytes; if an
         # earlier document in this run — or one already ingested to
         # completion in a PRIOR run (see run()'s pre-seed) — already claimed
@@ -1287,18 +1337,14 @@ class Orchestrator:
             return DUPLICATE
         self._seen_hashes[content_sha1] = doc.source.name
 
-        # stage outputs that nothing records hold the document here, before
-        # any wiki or engine call and before any file in its directory is
-        # moved or replaced, unless the run opts in to deriving them again
-        unrecorded = self._unrecorded_outputs(doc)
-        if unrecorded and not self.rederive_unrecorded:
-            return self._hold_unrecorded(doc, unrecorded)
-        if unrecorded:
-            self.log(
-                f"  no record of "
-                f"{', '.join(path.name for path in unrecorded)}: deriving "
-                f"every stage again (--rederive-unrecorded)"
-            )
+        # files that no record accounts for hold the document here, whatever
+        # the store holds, before any wiki or engine call and before any
+        # file in its directory is moved or replaced; a run that opts in
+        # keeps a copy of the stage outputs and adopts the directory
+        if doc.unrecorded:
+            if not self.rederive_unrecorded:
+                return self._hold_unrecorded(doc)
+            self._adopt_unrecorded(doc)
         if "held" in (doc.state.detail or {}):
             doc.state.detail = {
                 key: value
@@ -1325,16 +1371,6 @@ class Orchestrator:
             }
             doc.save()
             self.log(f"  derived media: {len(derived)} item(s)")
-
-        # a directory with state but no derivation record, whose stage
-        # outputs the store holds or the run derives again, is recorded
-        # once, as it stands, before anything below rewrites a file in it
-        for reviewed in doc.derivations.adopt():
-            self.log(
-                f"  {reviewed.name} does not review the current "
-                f"{doc.derivations.reviews[reviewed].name}: moved aside "
-                f"(review the current rows)"
-            )
 
         # every stage before the gates goes through the store: unchanged
         # outputs are reused, so this costs nothing when nothing changed
@@ -1548,7 +1584,11 @@ class Orchestrator:
                 # done. The human clears its gate and re-runs to advance.
                 if self.serial and status not in (WRITTEN, DUPLICATE):
                     self.log(
-                        f"  (serial) paused until {doc.source.name} is written"
+                        f"  (serial) paused: {doc.source.name} is held until "
+                        f"a run with --rederive-unrecorded derives it again"
+                        if status == UNRECORDED
+                        else f"  (serial) paused until {doc.source.name} is "
+                        f"written"
                     )
                     break
         except KeyboardInterrupt:
@@ -1659,20 +1699,30 @@ def _no_input_newer(output: Path, *inputs: Path) -> bool:
     )
 
 
-def _supersede(reviewed: Path) -> None:
-    """Move a reviewed file about superseded rows aside, never deleting a
-    human's decisions: `review.reviewed.csv` becomes
-    `review.reviewed.superseded-<n>.csv` (first free n)."""
-    if not reviewed.exists():
-        return
+def _supersede(path: Path, *, keep: bool = False) -> Path | None:
+    """Set a superseded file aside, never deleting it: `review.reviewed.csv`
+    becomes `review.reviewed.superseded-<n>.csv` (first free n). Moves it,
+    so a review about superseded rows consents to nothing; with `keep`,
+    copies it there instead (times included) and leaves it in place, and a
+    copy identical to the latest one is not made twice. Returns where the
+    file went, or None when there was none."""
+    if not path.exists():
+        return None
     n = 1
-    while (
-        target := reviewed.with_name(
-            f"{reviewed.stem}.superseded-{n}{reviewed.suffix}"
-        )
-    ).exists():
+    while (target := _superseded(path, n)).exists():
         n += 1
-    reviewed.rename(target)
+    if not keep:
+        path.rename(target)
+        return target
+    latest = _superseded(path, n - 1)
+    if n > 1 and filecmp.cmp(path, latest, shallow=False):
+        return latest
+    shutil.copy2(path, target)
+    return target
+
+
+def _superseded(path: Path, n: int) -> Path:
+    return path.with_name(f"{path.stem}.superseded-{n}{path.suffix}")
 
 
 def _csv_has_rows(path: Path) -> bool:
