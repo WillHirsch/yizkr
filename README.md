@@ -17,6 +17,8 @@ Start here:
 - `docs/REQUIREMENTS.md` – the six requirements (acceptance criteria)
 - `docs/adr/` – architecture decisions and their rationale
 - `docs/MODELING.md` – Wikibase modeling conventions
+- `docs/EXAMPLES.md` – the one fictional example universe every example
+  comes from
 - `src/yizkr/pipeline/README.md` – **how ingestion works end to end**: the
   `yizkr ingest run` loop and its two human review gates
 - `ROADMAP.md` – phased build plan
