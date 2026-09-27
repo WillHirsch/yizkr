@@ -134,6 +134,19 @@ batch's run item (ADR-0003 §2). The kind is the extraction's proposal, a
 machine write, so it takes both references rather than the registrar's
 single one.
 
+Amended by #233 (2026-09-27): kinds accumulate across sources, as
+aliases do. When a later batch's manifest names an entity whose item
+already exists (found by exact label, by the writer or the resolve
+step, or named by an approved equivalence) and one of its claims
+mentions the entity, the writer records the kind and type hint that
+batch gives it, citing the artifact of the first such claim and the
+batch's run. A matching `instance of` or `type hint` (a type hint
+compared as free text) gains those two references; a different value
+becomes a statement of its own, coexisting with the others at normal
+rank (ADR-0002). A curated statement, one with no run reference or a
+rank a curator set, is never altered: a source that agrees with it gets
+a statement of its own beside it. A re-run adds nothing.
+
 Coverage report: in place of ADR-0006's line audit, `coverage.json`
 flags transcription lines that mention no manifest entity (heuristic:
 capitalized-token match against labels/aliases) plus manifest entities

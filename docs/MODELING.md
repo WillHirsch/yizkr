@@ -103,7 +103,12 @@ artifact item by QID instead is valid only on that instance.
   `instance of`. Every registrar/writer path therefore writes only
   referenced statements (ADR-0003).
 - Machine-proposed entities (people, places) get their `instance of`
-  statement referenced to the artifact that mentions them.
+  statement referenced to the artifact that mentions them. A later
+  source that names the entity adds its own references (the artifact and
+  its extraction run) to that statement, or, when it gives a different
+  kind, a statement of its own: the kinds different sources give coexist
+  like any other attributed values (ADR-0002, ADR-0007). A `type hint`
+  accumulates the same way, compared as free text.
 
 ## Artifact identity (see ADR-0010)
 
