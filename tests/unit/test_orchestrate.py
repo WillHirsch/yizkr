@@ -10,7 +10,10 @@ from __future__ import annotations
 import csv
 import json
 
+import pytest
+
 from yizkr.claims import ClaimBatch
+from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     AWAITING_EQUIVALENCES,
@@ -59,6 +62,9 @@ class ScriptedOrchestrator(Orchestrator):
     """Every wiki/LLM-touching step replaced with a scripted fake."""
 
     def __init__(self, *args, proposals=1, fail_step=None, **kwargs):
+        # run() refuses without a never-ingest list (#29); the state-machine
+        # tests run with the explicit empty one unless they pass their own
+        kwargs.setdefault("exclusions", ExclusionList())
         super().__init__(*args, **kwargs)
         self.proposals = proposals
         self.fail_step = fail_step
@@ -703,3 +709,75 @@ class TestSerialMode:
         statuses = {d.source.name: d.state.status for d in orch.documents()}
         assert DUPLICATE in statuses.values()
         assert len([c for c in orch.calls if c.startswith("batch:")]) == 1
+
+
+class TestNeverIngestList:
+    """#29: a run refuses to start without a never-ingest list, and a
+    listed document is dropped at discovery, before any step reads it."""
+
+    def _folder(self, tmp_path):
+        from tests.fixtures import example_universe as u
+
+        sources = {source.key: source for source in u.SOURCES}
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        memoir = sources["memoir_1995"].text
+        (folder / "memoir_1995.txt").write_text(memoir)
+        (folder / "memoir copy.txt").write_text(memoir)  # same bytes
+        (folder / "Springfield address book.txt").write_text(
+            sources["address_book_1932"].text
+        )
+        (folder / "address book.docx").write_text("unsupported and listed")
+        (folder / "gazette_1978.txt").write_text(sources["gazette_1978"].text)
+        return folder
+
+    def test_no_list_no_run(self, tmp_path):
+        folder = self._folder(tmp_path)
+        orch = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet, exclusions=None
+        )
+        with pytest.raises(ExclusionConfigError):
+            orch.run()
+        assert orch.calls == []
+        assert not (tmp_path / "state").exists()
+
+    def test_the_empty_list_runs_everything(self, tmp_path):
+        folder = self._folder(tmp_path)
+        orch = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        assert [d.source.name for d in orch.documents()] == [
+            "Springfield address book.txt",
+            "gazette_1978.txt",
+            "memoir copy.txt",
+            "memoir_1995.txt",
+        ]
+
+    def test_listed_documents_are_never_touched(self, tmp_path):
+        import hashlib
+
+        folder = self._folder(tmp_path)
+        memoir_sha1 = hashlib.sha1(
+            (folder / "memoir_1995.txt").read_bytes()
+        ).hexdigest()
+        listed = ExclusionList.parse(f"{memoir_sha1}\n*address*book*\n")
+        logged = []
+        orch = ScriptedOrchestrator(
+            folder,
+            tmp_path / "state",
+            exclusions=listed,
+            log=lambda *a, **k: logged.append(" ".join(map(str, a))),
+        )
+        orch.run()
+        # the hash excludes both names for those bytes; the glob excludes
+        # the directory scan and the unsupported file alike
+        excluded = [line for line in logged if "never-ingest" in line]
+        assert len(excluded) == 4
+        assert not any("unsupported" in line for line in logged)
+        assert [c for c in orch.calls if c.startswith("register:")] == [
+            "register:gazette_1978.txt"
+        ]
+        assert sorted(p.name for p in (tmp_path / "state").iterdir()) == [
+            "gazette_1978"
+        ]
+        assert [d.source.name for d in orch.documents()] == [
+            "gazette_1978.txt"
+        ]

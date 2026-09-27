@@ -40,9 +40,32 @@ services:
       # host-published port and must not leak into the CLI's derived URLs
       # (the concept URI is hostname-only, so it is unaffected either way).
       HTTP_PORT: "80"
+      # The corpus and the never-ingest list live outside the repo (#29).
+      # .env names them by host path; the container sees them read-only at
+      # fixed paths (below), so the variables are rewritten to those paths,
+      # or to empty when unset: `ingest run` then needs a folder argument,
+      # and it refuses to run without a list.
+      YIZKR_CORPUS_DIR: ${YIZKR_CORPUS_DIR:+/corpus}
+      YIZKR_EXCLUDE_FILE: ${YIZKR_EXCLUDE_FILE:+/corpus-exclude.txt}
     volumes:
       # backups and the generated static site land on the host tree
       - ../var:/app/var
+      # A set but wrong path stops `run` with an error instead of leaving
+      # an empty root-owned folder where the list or corpus should be.
+      # When unset, /dev/null stands in (the container variable is empty
+      # then, so nothing reads it).
+      - type: bind
+        source: ${YIZKR_CORPUS_DIR:-/dev/null}
+        target: /corpus
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${YIZKR_EXCLUDE_FILE:-/dev/null}
+        target: /corpus-exclude.txt
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       - wikibase
       - wdqs

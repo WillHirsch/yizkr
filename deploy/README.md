@@ -72,13 +72,18 @@ make cli ARGS="bootstrap"
 ```
 
 `make cli` runs the `yizkr` image built from the repo's `Dockerfile` (base
-package + the `llm` extra). To ingest, mount the input folder into the
-one-off container:
+package + the `llm` extra). To ingest, set `YIZKR_CORPUS_DIR` and
+`YIZKR_EXCLUDE_FILE` in `.env` (see [The corpus and the never-ingest
+list](#the-corpus-and-the-never-ingest-list)). The overlay mounts both
+read-only into the one-off container, at `/corpus` and
+`/corpus-exclude.txt`, and `ingest run` defaults to the corpus:
 
 ```sh
+make cli ARGS="ingest run --llm anthropic --language auto"
+# or, without make:
 cd deploy && docker compose -f docker-compose.yml -f docker-compose.localhost.yml \
-    --profile cli run --rm --user "$(id -u):$(id -g)" -v /path/to/documents:/data \
-    yizkr ingest run /data --llm anthropic --language auto
+    --profile cli run --rm --user "$(id -u):$(id -g)" \
+    yizkr ingest run --llm anthropic --language auto
 ```
 
 `--user "$(id -u):$(id -g)"` makes the outputs the CLI writes into `../var`
@@ -99,6 +104,57 @@ hostnames at all); or use `*.localhost` names, which browsers resolve to
 loopback automatically (but that is a different concept URI than a `.lan`
 backup, so only for a fresh instance); or add the two `/etc/hosts` lines
 just for the browser.
+
+## The corpus and the never-ingest list
+
+The source documents are records about real, partly living people. They
+live in a private local folder **outside the repository**, never under the
+working tree, and a local never-ingest list names documents that must
+never enter the pipeline at all (contact data about living people, for
+instance). Two settings, in `.env` or the environment, name them:
+
+- `YIZKR_CORPUS_DIR`: the corpus folder, the default for
+  `yizkr ingest run [folder]`.
+- `YIZKR_EXCLUDE_FILE`: the never-ingest list.
+
+Use absolute paths, and keep both private (`chmod 700` the folder,
+`chmod 600` the list):
+
+```sh
+YIZKR_CORPUS_DIR=/home/you/private/corpus
+YIZKR_EXCLUDE_FILE=/home/you/private/corpus-exclude.txt
+```
+
+The list is a UTF-8 text file, one entry per line:
+
+```text
+# A line starting with # is a comment; blank lines are ignored.
+# A 40-digit SHA-1 excludes those bytes under any file name. Anything
+# after the hash is ignored, so `sha1sum FILE` output pastes in as is:
+3f786850e387550fdab836ed7e6dc881de23001b  contacts.docx
+# Any other line is a glob matched against the file name (not its
+# folder), ignoring case:
+*contacts*
+```
+
+**It fails closed.**
+
+- `yizkr ingest run` refuses to start unless `YIZKR_EXCLUDE_FILE` is set.
+  An empty file is an explicit, allowed list; no setting is not.
+- A configured list that is missing or unreadable is an error, never an
+  empty list. So is a line that would silently match nothing: a hash that
+  is not a SHA-1 (a pasted SHA-256), or a glob followed by an inline
+  comment.
+- A listed document is dropped before any step reads it: no artifact, no
+  transcription, no state under `var/runs/`.
+- The single-file steps (`ingest register`, `transcribe`, `gedcom`,
+  `detect-faces`) are debugging tools and run without a list, but once one
+  is configured they refuse a listed file.
+
+In the containerised CLI (`docker-compose.localhost.yml`), a set path that
+does not exist stops the container from starting; nothing is created in
+its place. Neither the corpus nor the list belongs in the repository;
+back them up with the other private data.
 
 ## Smoke test
 
