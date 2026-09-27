@@ -4,47 +4,47 @@
 2 VERS 5.5.1
 1 CHAR UTF-8
 0 @I1@ INDI
-1 NAME Alfred /Schöser/
+1 NAME Moritz /Löbig/
 2 TYPE birth
 2 NICK Muckel
 1 SEX M
 1 BIRT
-2 DATE 1850
+2 DATE 1836
 2 PLAC Bad Flörburg, Hesse, Germany
 1 DEAT
-2 DATE 20 MAR 1927
+2 DATE 6 DEC 1919
 2 PLAC Flörburg, Hesse, Germany
-2 CAUS Short illness
+2 CAUS Dropsy
 1 BURI
-2 DATE 22 MAR 1927
+2 DATE 9 DEC 1919
 2 PLAC Friedhof Flörburg, Hesse, Germany
 1 OCCU Master hatter
 1 NCHI 3
 1 OBJE @O1@
 1 FAMS @F1@
 0 @I2@ INDI
-1 NAME Wilhelmine /Tarle/
+1 NAME Charlotte /Tarle/
 2 TYPE birth
-2 NICK Minna
-1 NAME Wilhelmine /Schöser/
+2 NICK Lotte
+1 NAME Charlotte /Löbig/
 2 TYPE married
 1 SEX F
 1 BIRT
-2 DATE ABT 1855
-2 PLAC Dönwald, Hesse, Germany
+2 DATE ABT 1840
+2 PLAC Kredfeld, Hesse, Germany
 1 DEAT
-2 DATE 1928
+2 DATE 1902
 1 BURI
 2 PLAC Friedhof Flörburg, Hesse, Germany
 1 OBJE @O1@
 1 FAMS @F1@
 0 @I3@ INDI
-1 NAME Johann /Schöser/
+1 NAME Georg /Löbig/
 2 TYPE birth
-2 NICK Hans
+2 NICK Schorsch
 1 SEX M
 1 BIRT
-2 DATE 13 MAR 1881
+2 DATE 13 MAR 1860
 2 PLAC Flörburg, Hesse, Germany
 1 DEAT
 2 DATE 1953
@@ -59,7 +59,7 @@
 1 NAME Hedwig /Laudler/
 2 TYPE birth
 2 NICK Hedi
-1 NAME Hedwig /Schöser/
+1 NAME Hedwig /Löbig/
 2 TYPE married
 1 SEX F
 1 BIRT
@@ -69,31 +69,31 @@
 2 DATE 1968
 1 FAMS @F2@
 0 @I5@ INDI
-1 NAME Paula /Schöser/
+1 NAME Luise /Löbig/
 1 SEX F
 1 BIRT
-2 DATE 1882
+2 DATE 1864
 1 DEAT
 2 DATE AFT 1945
 1 OBJE @O1@
 1 FAMC @F1@
 0 @I6@ INDI
-1 NAME Julius /Schöser/
+1 NAME Ludwig /Löbig/
 1 SEX M
 1 BIRT
-2 DATE 1884
+2 DATE 1866
 1 DEAT
 2 DATE 1942
 1 OCCU Hatter
 1 RESI
 2 DATE 1930
-2 PLAC Mühlenweg 16, Flörburg, Hesse, Germany
+2 PLAC Wasserallee 59, Flörburg, Hesse, Germany
 1 OBJE @O1@
 1 FAMC @F1@
 1 FAMS @F3@
 0 @I7@ INDI
-1 NAME Gertrud (Peppi) /Sörne/
-1 _MARNM Gertrud /Schöser/
+1 NAME Katharina (Peppi) /Sörne/
+1 _MARNM Katharina /Löbig/
 1 SEX F
 1 BIRT
 2 DATE 27 SEP 1887
@@ -102,10 +102,10 @@
 2 DATE 1946
 1 FAMS @F3@
 0 @I8@ INDI
-1 NAME Josef /Schöser/
+1 NAME Gustav /Löbig/
 2 TYPE birth
-2 NICK Sepp
-1 NAME Joseph /Shoser/
+2 NICK Gustl
+1 NAME Gustave /Lobig/
 2 TYPE immigrant
 1 SEX M
 1 BIRT
@@ -120,10 +120,10 @@
 1 FAMC @F2@
 1 FAMS @F4@
 0 @I9@ INDI
-1 NAME Martha /Schöser/
+1 NAME Rosa /Löbig/
 2 TYPE birth
-2 NICK Bubi
-1 NAME Martha /Shoser/
+2 NICK Pünktchen
+1 NAME Rose /Lobig/
 2 TYPE immigrant
 1 SEX F
 1 BIRT
@@ -135,7 +135,7 @@
 2 PLAC 31 Juniper Street, Stupfield, Victoria, Australia
 1 FAMC @F2@
 0 @I10@ INDI
-1 NAME Frieda /Schöser/
+1 NAME Frieda /Löbig/
 1 SEX F
 1 BIRT
 2 DATE 1911
@@ -143,7 +143,7 @@
 2 DATE 1941
 1 FAMC @F2@
 0 @I11@ INDI
-1 NAME Karl /Schöser/
+1 NAME Leopold /Löbig/
 1 SEX M
 1 BIRT
 2 DATE 1914
@@ -151,7 +151,7 @@
 2 DATE 1960
 1 FAMC @F3@
 0 @I12@ INDI
-1 NAME Rudolf /Schöser/
+1 NAME Rudolf /Löbig/
 2 NICK Rudi
 1 SEX M
 1 BIRT
@@ -162,7 +162,7 @@
 2 DATE 1930
 1 FAMC @F3@
 0 @I13@ INDI
-1 NAME N.N. /Schöser/
+1 NAME N.N. /Löbig/
 1 SEX U
 1 BIRT
 2 DATE 1925
@@ -170,25 +170,25 @@
 2 DATE 1925
 1 FAMC @F3@
 0 @I14@ INDI
-1 NAME Christine /Faxridge/
+1 NAME Susan /Faxridge/
 2 TYPE birth
-1 NAME Christine /Shoser/
+1 NAME Susan /Lobig/
 2 TYPE married
 1 SEX F
 1 BIRT
-2 DATE 1923
+2 DATE 1914
 1 DEAT
 2 DATE 1963
 1 FAMS @F4@
 0 @I15@ INDI
-1 NAME Jonathan /Shoser/
+1 NAME Nicholas /Lobig/
 1 SEX M
 1 BIRT
-2 DATE 1953
+2 DATE 1947
 2 PLAC Stupfield, Victoria, Australia
 1 FAMC @F4@
 0 @I16@ INDI
-1 NAME Frieda /Schöser/
+1 NAME Frieda /Löbig/
 1 SEX F
 1 RESI
 2 DATE 1912
@@ -202,7 +202,7 @@
 1 CHIL @I5@
 1 CHIL @I6@
 1 MARR
-2 DATE 1879
+2 DATE 1859
 0 @F2@ FAM
 1 HUSB @I3@
 1 WIFE @I4@
@@ -227,6 +227,6 @@
 0 @O1@ OBJE
 1 FILE studio-portrait-1890s.jpg
 2 FORM jpg
-2 TITL Studio portrait of the Schöser family
+2 TITL Studio portrait of the Löbig family
 1 DATE BET 1890 AND 1899
 0 TRLR

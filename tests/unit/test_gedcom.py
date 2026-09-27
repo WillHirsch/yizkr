@@ -39,7 +39,7 @@ class TestParser:
         indi = [r for r in roots if r.tag == "INDI"]
         assert [r.xref for r in indi] == [f"@I{n}@" for n in range(1, 17)]
         birth = indi[2].first("BIRT")
-        assert birth.text("DATE") == "13 MAR 1881"
+        assert birth.text("DATE") == "13 MAR 1860"
         assert birth.text("PLAC") == "Flörburg, Hesse, Germany"
 
     def test_record_lines_round_trip(self):
@@ -59,9 +59,9 @@ class TestParser:
 
 class TestDates:
     def test_exact_precisions(self):
-        assert parse_gedcom_date("13 MAR 1881")[0] == {
+        assert parse_gedcom_date("13 MAR 1860")[0] == {
             "type": "time",
-            "year": 1881,
+            "year": 1860,
             "month": 3,
             "day": 13,
             "precision": "day",
@@ -70,8 +70,8 @@ class TestDates:
         assert parse_gedcom_date("1907")[0]["precision"] == "year"
 
     def test_abt_maps_to_circa(self):
-        value, quals = parse_gedcom_date("ABT 1855")
-        assert value["year"] == 1855 and value["precision"] == "year"
+        value, quals = parse_gedcom_date("ABT 1840")
+        assert value["year"] == 1840 and value["precision"] == "year"
         assert quals[0]["property"] == "sourcing_circumstances"
         assert quals[0]["value"]["value"]["key"] == "circa"
 
@@ -94,11 +94,11 @@ class TestDates:
 
     def test_full_month_names(self):
         # hand-maintained trees spell months out; still unambiguous
-        assert parse_gedcom_date("20 March 1927")[0] == {
+        assert parse_gedcom_date("6 December 1919")[0] == {
             "type": "time",
-            "year": 1927,
-            "month": 3,
-            "day": 20,
+            "year": 1919,
+            "month": 12,
+            "day": 6,
             "precision": "day",
         }
         assert parse_gedcom_date("September 1939")[0]["month"] == 9
@@ -114,9 +114,9 @@ class TestDates:
         }
 
     def test_german_month_names(self):
-        assert parse_gedcom_date("13 März 1881")[0] == {
+        assert parse_gedcom_date("13 März 1860")[0] == {
             "type": "time",
-            "year": 1881,
+            "year": 1860,
             "month": 3,
             "day": 13,
             "precision": "day",
@@ -124,8 +124,8 @@ class TestDates:
         assert parse_gedcom_date("24 Oktober 1916")[0]["month"] == 10
 
     def test_lowercase_keywords(self):
-        value, quals = parse_gedcom_date("abt 1855")
-        assert value["year"] == 1855
+        value, quals = parse_gedcom_date("abt 1840")
+        assert value["year"] == 1840
         assert quals[0]["property"] == "sourcing_circumstances"
 
 
@@ -142,10 +142,10 @@ class TestAdapter:
 
     def test_entities_carry_names_and_aliases(self):
         batch = fixture_result().batch
-        wilhelmine = next(e for e in batch.entities if e.id == "i2")
-        assert wilhelmine.label == "Wilhelmine Tarle"
-        assert wilhelmine.aliases == ["Wilhelmine Schöser"]
-        assert wilhelmine.kind == "human"
+        charlotte = next(e for e in batch.entities if e.id == "i2")
+        assert charlotte.label == "Charlotte Tarle"
+        assert charlotte.aliases == ["Charlotte Löbig"]
+        assert charlotte.kind == "human"
         # places become entities too, deduplicated by name
         floerburg = [
             e for e in batch.entities if e.label == "Flörburg, Hesse, Germany"
@@ -156,7 +156,7 @@ class TestAdapter:
         batch = fixture_result().batch
         (death,) = claims_for(batch, "i5", "date_of_death")  # AFT 1945
         assert death.qualifiers[0].property == "earliest_date"
-        (birth,) = claims_for(batch, "i2", "date_of_birth")  # ABT 1855
+        (birth,) = claims_for(batch, "i2", "date_of_birth")  # ABT 1840
         assert birth.qualifiers[0].property == "sourcing_circumstances"
         # the studio portrait is dated only to the 1890s
         (portrait,) = claims_for(batch, "i1", "image")
@@ -202,7 +202,7 @@ class TestAdapter:
             # monolingual text values forbid newlines
             assert "\n" not in excerpt.text
         (birth,) = claims_for(batch, "i3", "date_of_birth")
-        assert "2 DATE 13 MAR 1881" in birth.source.transcription_excerpt.text
+        assert "2 DATE 13 MAR 1860" in birth.source.transcription_excerpt.text
 
     def test_unparseable_date_warns_instead_of_guessing(self):
         result = adapt_gedcom(
@@ -239,7 +239,7 @@ class TestVocabulary:
         assert place.kind == "place"
         (qualifier,) = burial.qualifiers
         assert qualifier.property == "point_in_time"
-        assert (qualifier.value.year, qualifier.value.day) == (1927, 22)
+        assert (qualifier.value.year, qualifier.value.day) == (1919, 9)
 
     def test_occupation_becomes_verbatim_item(self):
         batch = fixture_result().batch
@@ -255,10 +255,8 @@ class TestVocabulary:
     def test_cause_of_death_stays_verbatim(self):
         batch = fixture_result().batch
         (cause,) = claims_for(batch, "i1", "cause_of_death")
-        assert cause.value.value.text == "Short illness"
-        assert (
-            "2 CAUS Short illness" in cause.source.transcription_excerpt.text
-        )
+        assert cause.value.value.text == "Dropsy"
+        assert "2 CAUS Dropsy" in cause.source.transcription_excerpt.text
 
     def test_number_of_children_is_a_quantity(self):
         batch = fixture_result().batch
@@ -275,10 +273,10 @@ class TestVocabulary:
         # ADR-0014: SEX -> sex_or_gender (male/female vocab), for the
         # kinship calculus. i1 is M, i2 is F in the fixture; i13 is U.
         batch = fixture_result().batch
-        (alfred_sex,) = claims_for(batch, "i1", "sex_or_gender")
-        assert alfred_sex.value.value.key == "male"
-        (wilhelmine_sex,) = claims_for(batch, "i2", "sex_or_gender")
-        assert wilhelmine_sex.value.value.key == "female"
+        (moritz_sex,) = claims_for(batch, "i1", "sex_or_gender")
+        assert moritz_sex.value.value.key == "male"
+        (charlotte_sex,) = claims_for(batch, "i2", "sex_or_gender")
+        assert charlotte_sex.value.value.key == "female"
         assert not claims_for(batch, "i13", "sex_or_gender")
 
     def test_burial_without_place_warns_and_skips(self):
@@ -291,7 +289,7 @@ class TestVocabulary:
 
     def test_dated_and_placed_occupation_carries_qualifiers(self):
         batch = adapt_gedcom(
-            "0 @I1@ INDI\n1 NAME Johann /Schöser/\n1 OCCU Hatter\n"
+            "0 @I1@ INDI\n1 NAME Georg /Löbig/\n1 OCCU Hatter\n"
             "2 DATE 1907\n2 PLAC Flörburg\n0 TRLR\n",
             artifact_qid="Q23",
         ).batch
@@ -324,37 +322,35 @@ class TestTypedNames:
 
     def test_name_type_birth_and_married(self):
         batch = fixture_result().batch
-        assert self._name(batch, "i2", "birth_name") == ["Wilhelmine Tarle"]
-        assert self._name(batch, "i2", "married_name") == [
-            "Wilhelmine Schöser"
-        ]
+        assert self._name(batch, "i2", "birth_name") == ["Charlotte Tarle"]
+        assert self._name(batch, "i2", "married_name") == ["Charlotte Löbig"]
 
     def test_nick_subtag_becomes_nickname(self):
         batch = fixture_result().batch
-        assert self._name(batch, "i2", "nickname") == ["Minna"]
+        assert self._name(batch, "i2", "nickname") == ["Lotte"]
 
     def test_inline_parenthetical_nickname_extracted(self):
-        # "Gertrud (Peppi) Sörne" -> nickname "Peppi", label keeps it all
+        # "Katharina (Peppi) Sörne" -> nickname "Peppi", label keeps it all
         batch = fixture_result().batch
         assert self._name(batch, "i7", "nickname") == ["Peppi"]
-        gertrud = next(e for e in batch.entities if e.id == "i7")
-        assert gertrud.label == "Gertrud (Peppi) Sörne"
+        katharina = next(e for e in batch.entities if e.id == "i7")
+        assert katharina.label == "Katharina (Peppi) Sörne"
 
     def test_name_type_immigrant_is_official(self):
         batch = fixture_result().batch
-        assert self._name(batch, "i8", "official_name") == ["Joseph Shoser"]
+        assert self._name(batch, "i8", "official_name") == ["Gustave Lobig"]
 
     def test_name_type_official(self):
         batch = adapt_gedcom(
-            "0 @I1@ INDI\n1 NAME Josef /Schöser/\n"
-            "1 NAME Joseph /Shoser/\n2 TYPE official\n0 TRLR\n",
+            "0 @I1@ INDI\n1 NAME Gustav /Löbig/\n"
+            "1 NAME Gustave /Lobig/\n2 TYPE official\n0 TRLR\n",
             artifact_qid="Q23",
         ).batch
-        assert self._name(batch, "i1", "official_name") == ["Joseph Shoser"]
+        assert self._name(batch, "i1", "official_name") == ["Gustave Lobig"]
 
     def test_marnm_tag_becomes_married_name(self):
         batch = fixture_result().batch
-        assert "Gertrud Schöser" in self._name(batch, "i7", "married_name")
+        assert "Katharina Löbig" in self._name(batch, "i7", "married_name")
 
     def test_name_claims_carry_a_reference(self):
         batch = fixture_result().batch
@@ -377,30 +373,30 @@ class TestTypedNames:
             "nickname",
             "official_name",
         ):
-            assert not claims_for(batch, "i5", prop)  # Paula Schöser
+            assert not claims_for(batch, "i5", prop)  # Luise Löbig
 
     def test_label_and_aliases_unchanged_by_typing(self):
         # the two-layer design: typing adds claims, never disturbs the
         # label/alias match index
         batch = fixture_result().batch
-        wilhelmine = next(e for e in batch.entities if e.id == "i2")
-        assert wilhelmine.label == "Wilhelmine Tarle"
-        assert wilhelmine.aliases == ["Wilhelmine Schöser"]
+        charlotte = next(e for e in batch.entities if e.id == "i2")
+        assert charlotte.label == "Charlotte Tarle"
+        assert charlotte.aliases == ["Charlotte Löbig"]
 
     def test_explicit_type_gedcom_maiden_and_aka(self):
         batch = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME Hedwig /Laudler/\n2 TYPE maiden\n"
-            "1 NAME Hedi /Schöser/\n2 TYPE aka\n0 TRLR\n",
+            "1 NAME Hedi /Löbig/\n2 TYPE aka\n0 TRLR\n",
             artifact_qid="Q23",
         ).batch
         assert self._name(batch, "i1", "birth_name") == ["Hedwig Laudler"]
         # an 'aka' name is recorded whole as a nickname
-        assert self._name(batch, "i1", "nickname") == ["Hedi Schöser"]
+        assert self._name(batch, "i1", "nickname") == ["Hedi Löbig"]
 
 
 RESI_GEDCOM = """\
 0 @I1@ INDI
-1 NAME Martha /Shoser/
+1 NAME Rose /Lobig/
 1 RESI
 2 DATE 1938
 2 PLAC Victoria, Australia
@@ -468,12 +464,12 @@ CENSUS_GEDCOM = """\
 0 @O1@ OBJE
 1 FILE https://example.test/school-report-1930.jpg
 2 FORM jpg
-2 TITL School report for Rudolf Schöser
+2 TITL School report for Rudolf Löbig
 1 DATE 1930
 0 @I1@ INDI
-1 NAME Rudolf /Schöser/
+1 NAME Rudolf /Löbig/
 2 GIVN Rudolf
-2 SURN Schöser
+2 SURN Löbig
 2 SOUR @S1@
 3 PAGE Vol 3 p 1
 3 _APID 1,2::3
@@ -551,7 +547,7 @@ class TestMediaObjects:
             e for e in batch.entities if e.id == image.value.value.local_id
         )
         assert media.kind == "artifact"  # not photograph: bytes not held
-        assert media.label == "School report for Rudolf Schöser"
+        assert media.label == "School report for Rudolf Löbig"
         assert "never fetched" in media.summary
 
     def test_media_association_carries_the_objects_date(self):
@@ -568,9 +564,9 @@ class TestMediaObjects:
     def test_shared_object_is_one_media_item(self):
         gedcom = (
             "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
-            "2 TITL Studio portrait of the Schöser family\n"
-            "0 @I1@ INDI\n1 NAME Alfred /Schöser/\n1 OBJE @O1@\n"
-            "0 @I2@ INDI\n1 NAME Wilhelmine /Tarle/\n1 OBJE @O1@\n"
+            "2 TITL Studio portrait of the Löbig family\n"
+            "0 @I1@ INDI\n1 NAME Moritz /Löbig/\n1 OBJE @O1@\n"
+            "0 @I2@ INDI\n1 NAME Charlotte /Tarle/\n1 OBJE @O1@\n"
             "0 TRLR\n"
         )
         batch = adapt_gedcom(gedcom, artifact_qid="Q23").batch

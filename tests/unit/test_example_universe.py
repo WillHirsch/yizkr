@@ -138,7 +138,7 @@ class TestNames:
             key
             for key in PEOPLE
             if typed <= {a.property for a in u.about(key)}
-        } >= {"wilhelmine-schoeser", "hedwig-schoeser", "gertrud-schoeser"}
+        } >= {"charlotte-loebig", "hedwig-loebig", "katharina-loebig"}
 
     def test_german_and_english_forms_and_diminutives(self):
         crossed = [
@@ -147,7 +147,7 @@ class TestNames:
             if any(n.form == "birth" and n.lang == "de" for n in person.names)
             and any(n.form == "anglicised" for n in person.names)
         ]
-        assert crossed == ["josef-schoeser", "martha-schoeser"]
+        assert crossed == ["gustav-loebig", "rosa-loebig"]
         diminutives = {
             n.lang
             for person in u.PEOPLE
@@ -184,32 +184,32 @@ class TestNames:
         (label,) = [label for label, n in by_label.items() if n > 1]
         namesakes = [p for p in u.PEOPLE if p.label == label]
         assert {p.key for p in namesakes} == {
-            "frieda-schoeser",
-            "frieda-schoeser-angerring",
+            "frieda-loebig",
+            "frieda-loebig-angerring",
         }
         # one is family (parents, a generation), the other is not
-        assert values("frieda-schoeser", "father") == ["johann-schoeser"]
-        assert PEOPLE["frieda-schoeser-angerring"].generation is None
-        assert not values("frieda-schoeser-angerring", "father")
+        assert values("frieda-loebig", "father") == ["georg-loebig"]
+        assert PEOPLE["frieda-loebig-angerring"].generation is None
+        assert not values("frieda-loebig-angerring", "father")
         # the directory lists the widow when the other Frieda is a baby
-        (listed,) = u.about("frieda-schoeser-angerring", "residence")
+        (listed,) = u.about("frieda-loebig-angerring", "residence")
         listed_in = dict(listed.qualifiers)["point_in_time"]
-        (born,) = values("frieda-schoeser", "date_of_birth")
+        (born,) = values("frieda-loebig", "date_of_birth")
         assert listed_in.year - born.year == 1
 
     def test_a_person_without_name_or_sex(self):
-        infant = PEOPLE["infant-schoeser"]
+        infant = PEOPLE["infant-loebig"]
         assert infant.sex is None
         assert [n.form for n in infant.names] == ["placeholder"]
 
 
 class TestFamily:
     def test_parents_span_four_generations(self):
-        line, key = [], "jonathan-shoser"
+        line, key = [], "nicholas-lobig"
         while fathers := values(key, "father"):
             key = fathers[0]
             line.append(key)
-        assert line == ["josef-schoeser", "johann-schoeser", "alfred-schoeser"]
+        assert line == ["gustav-loebig", "georg-loebig", "moritz-loebig"]
 
     def test_generation_numbers_follow_parent_edges(self):
         for assertion in u.ASSERTIONS:
@@ -231,7 +231,7 @@ class TestFamily:
         assert generations == {1, 2, 3}
 
     def test_family_firm(self):
-        firm = ENTITIES["schoeser-und-sohn"]
+        firm = ENTITIES["zum-blauen-hut"]
         assert firm.kind == "organization"
         assert set(values(firm.key, "location")) == {"brunnenring-35"}
         staff = {
@@ -239,8 +239,8 @@ class TestFamily:
             for a in u.ASSERTIONS
             if a.property == "employer" and a.value == firm.key
         }
-        assert staff == {"johann-schoeser"}
-        assert values(firm.key, "start_time") == [u.Date(1885)]
+        assert staff == {"georg-loebig"}
+        assert values(firm.key, "start_time") == [u.Date(1863)]
         (ended,) = values(firm.key, "end_time")
         assert ended.qualifier == "before"
         # the family trade, in English and German
@@ -350,15 +350,15 @@ class TestEventsAndDates:
         ("when", "text", "gedcom", "qualifiers"),
         [
             (
-                u.Date(1855, qualifier="circa"),
-                "c. 1855",
-                "ABT 1855",
+                u.Date(1840, qualifier="circa"),
+                "c. 1840",
+                "ABT 1840",
                 {"sourcing_circumstances"},
             ),
             (
-                u.Date(1940, qualifier="before"),
-                "before 1940",
-                "BEF 1940",
+                u.Date(1926, qualifier="before"),
+                "before 1926",
+                "BEF 1926",
                 {"latest_date"},
             ),
             (
@@ -379,7 +379,7 @@ class TestEventsAndDates:
                 "BET 1890 AND 1899",
                 {"earliest_date", "latest_date"},
             ),
-            (u.Date(1927, 3, 20), "20 March 1927", "20 MAR 1927", set()),
+            (u.Date(1919, 12, 6), "6 December 1919", "6 DEC 1919", set()),
         ],
     )
     def test_date_renderings_keep_the_uncertainty(
@@ -400,10 +400,10 @@ class TestEventsAndDates:
             if values(key, "date_of_birth")
             and not values(key, "date_of_death")
         ]
-        assert living == ["jonathan-shoser"]
+        assert living == ["nicholas-lobig"]
         assert all(
             when.year >= 1940 and when.precision == "year"
-            for when in values("jonathan-shoser", "date_of_birth")
+            for when in values("nicholas-lobig", "date_of_birth")
         )
 
 
@@ -533,10 +533,10 @@ class TestGedcomFixture:
             assert obje.text("DATE") in _gedcom_dates(key, "point_in_time")
 
     def test_the_possibly_living_person_has_no_death(self, records, by_xref):
-        (jonathan,) = [
+        (nicholas,) = [
             r
             for r in records
-            if r.tag == "INDI" and by_xref[r.xref].key == "jonathan-shoser"
+            if r.tag == "INDI" and by_xref[r.xref].key == "nicholas-lobig"
         ]
-        assert jonathan.first("DEAT") is None
-        assert len(jonathan.first("BIRT").text("DATE")) == 4  # year only
+        assert nicholas.first("DEAT") is None
+        assert len(nicholas.first("BIRT").text("DATE")) == 4  # year only
