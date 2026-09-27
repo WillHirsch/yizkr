@@ -53,7 +53,12 @@ whatever the sheet's cells say. It also refuses any sheet carrying an
 equivalences sheet's columns. A claims sheet disguised well enough to
 reach `accept_all`'s equivalences branch comes out with those columns,
 so the `approve`s that branch writes are never applied. A per-row
-`approve` passes as it does for any claim.
+`approve` passes as it does for any claim, and `apply_review` records it
+on the approved claim (`Claim.row_approval`, the claim's own id). The
+writer refuses a batch with any depicts claim that lacks that record for
+its current content (`unapproved_depicts`), so a batch that never went
+through a review sheet, such as a raw detect-faces batch, cannot write
+one.
 
 Sheets are read as UTF-8, with or without the byte-order mark some
 spreadsheets write; `accept_all` refuses a column name that still holds
@@ -91,7 +96,8 @@ APPROVE = {"approve", "approved", "accept", "yes", "y", "bulk-accept"}
 REJECT = {"reject", "rejected", "no", "n"}
 
 # The property only a per-row human decision confirms (ADR-0005): the
-# whole-sheet paths refuse it.
+# whole-sheet paths refuse it, and the writer writes it only with the
+# record of that decision.
 DEPICTS = "depicts"
 
 # Review sheets are read as UTF-8 with or without a byte-order mark, which
@@ -119,14 +125,38 @@ _CORRECTION_DATE = re.compile(r"^(\d{1,4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$")
 
 
 def claim_id(claim: Claim) -> str:
-    """Stable content hash identifying a claim across export/import."""
+    """Stable content hash identifying a claim across export/import.
+
+    The row approval `apply_review` records on a claim is not content: an
+    approved claim keeps the id it had on its review sheet."""
     canonical = json.dumps(
         claim.model_dump(
-            mode="json", exclude_none=True, exclude_defaults=False
+            mode="json",
+            exclude_none=True,
+            exclude_defaults=False,
+            exclude={"row_approval"},
         ),
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode()).hexdigest()[:12]
+
+
+def unapproved_depicts(batch: ClaimBatch) -> list[str]:
+    """Ids of the batch's `depicts` claims that no curator approved on
+    their own row, as `apply_review` records it (ADR-0005).
+
+    A depicts claim is approved when its `row_approval` equals its id as
+    it now reads. So a claim that never went through `apply_review`, such
+    as a detect-faces proposal, fails, and so does one edited after its
+    approval, since its content, and with it its id, has changed."""
+    unapproved = []
+    for claim in batch.claims:
+        if claim.property != DEPICTS:
+            continue
+        cid = claim_id(claim)
+        if claim.row_approval != cid:
+            unapproved.append(cid)
+    return unapproved
 
 
 def _describe_ref(ref) -> str:
@@ -295,7 +325,9 @@ def apply_review(
     ids, before anything is returned. The property is read from the batch
     claim, never from the sheet, so no edit to the sheet's `property`
     cells or columns can hide one. A per-row `approve` on a `depicts`
-    claim passes like any other.
+    claim passes, and the approved claim carries the record of it: its
+    `row_approval` is set to its id, which the writer requires of every
+    depicts claim it writes (`unapproved_depicts`).
 
     A sheet with a column like an equivalences sheet's `entity_id` or
     `verdict` raises ValueError too. A claims sheet shaped like an
@@ -350,11 +382,17 @@ def apply_review(
             correction = row.get("correction", "").strip()
             if correction:
                 try:
-                    approved.append(_parse_correction(claim, correction))
+                    claim = _parse_correction(claim, correction)
                 except ValueError as exc:
                     warnings.append(f"claim {cid}: {exc}: excluded")
-            else:
-                approved.append(claim)
+                    continue
+            if claim.property == DEPICTS:
+                # a per-row approve: a bulk-accept on a depicts claim was
+                # refused above, before anything was returned
+                claim = claim.model_copy(
+                    update={"row_approval": claim_id(claim)}
+                )
+            approved.append(claim)
         elif decision in REJECT or decision == "":
             if decision == "":
                 warnings.append(f"claim {cid} has no decision: excluded")
