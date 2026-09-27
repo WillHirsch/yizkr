@@ -1,17 +1,19 @@
 """Offline tests for the LLM cache (#225, ADR-0032).
 
 Scripted engines stand in for the model. The first part exercises the
-cache on its own: what a key holds, what is stored and how, rejection,
-forks, the refresh switch, events and seeding. The second takes the real
-pipeline through it: the orchestrator's client wiring, the chunked
-extractor and the transcription check, run once against a scripted
-engine and again from the cache, or without the cache at all.
+cache on its own: what a key holds, what is stored and how, the lock that
+keeps a cache to one process (#236), rejection, forks, the refresh switch,
+events and seeding. The second takes the real pipeline through it: the
+orchestrator's client wiring, the chunked extractor and the transcription
+check, run once against a scripted engine and again from the cache, or
+without the cache at all.
 """
 
 from __future__ import annotations
 
 import contextlib
 import copy
+import functools
 import hashlib
 import json
 import logging
@@ -20,6 +22,8 @@ import pickle
 import re
 import shutil
 import stat
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -49,8 +53,10 @@ from yizkr.pipeline.llm import (
 from yizkr.pipeline.llmcache import (
     COMPLETE,
     FORK,
+    LOCK_FILE,
     OPEN,
     CachedResponse,
+    CacheInUse,
     CachingClient,
     EngineCache,
     call_key,
@@ -397,7 +403,9 @@ class TestKeys:
         with pytest.raises(TypeError, match="config_hash"):
             client(tmp_path, Unkeyable())
 
-    def test_the_real_engines_expose_what_a_key_needs(self, monkeypatch):
+    def test_the_real_engines_expose_what_a_key_needs(
+        self, tmp_path, monkeypatch
+    ):
         """claude-code sends the listing of image paths ahead of the
         prompt and appends its system prompt; both are key components."""
 
@@ -407,7 +415,7 @@ class TestKeys:
         monkeypatch.setattr(llm.subprocess, "run", lambda *a, **k: Completed)
         monkeypatch.setattr(llm, "_PIN", llm._CliPin())
         engine = llm.ClaudeCodeClient(model="claude-sonnet-5", effort="low")
-        caching = client(Path("/nonexistent"), engine)
+        caching = client(tmp_path, engine)
         assert caching.components(COMPLETE, "x")["system"] == (
             hashlib.sha256(engine.SYSTEM_PROMPT.encode()).hexdigest()
         )
@@ -652,10 +660,142 @@ class TestStorage:
             assert twin.key == response.key
             assert twin.hit
 
-    def test_nothing_is_written_until_a_call_is_answered(self, tmp_path):
+    def test_nothing_is_stored_until_a_call_is_answered(self, tmp_path):
+        """Opening a cache makes its root, private, and locks it (#236);
+        it stores nothing until a call is answered."""
         open_cache(tmp_path / "cache")
         client(tmp_path, Engine())
-        assert not (tmp_path / "cache").exists()
+        root = tmp_path / "cache"
+        assert os.listdir(root) == [LOCK_FILE]
+        assert stat.S_IMODE(root.stat().st_mode) == 0o700
+        assert stat.S_IMODE((root / LOCK_FILE).stat().st_mode) == 0o600
+
+
+# -- one process per cache -----------------------------------------------
+
+# a second process: it opens the cache named by its argument, says so, and
+# holds it until its stdin closes
+HOLDER = """
+import sys
+from yizkr.pipeline.llm import open_cache
+open_cache(sys.argv[1])
+print("held", flush=True)
+sys.stdin.read()
+"""
+
+
+@contextlib.contextmanager
+def another_process(root: Path):
+    """A second process holding the cache under `root`, until the block
+    ends (a clean exit) or the test kills it."""
+    process = subprocess.Popen(
+        [sys.executable, "-c", HOLDER, str(root)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert process.stdout.readline() == "held\n", process.stderr.read()
+        yield process
+    finally:
+        if process.poll() is None:
+            process.stdin.close()
+        process.wait(timeout=60)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
+
+
+def opened_elsewhere(root: Path) -> subprocess.CompletedProcess:
+    """A second process that tries to open the cache under `root`."""
+    return subprocess.run(
+        [sys.executable, "-c", HOLDER, str(root)],
+        input="",
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def lock_record(root: Path) -> dict:
+    return json.loads((root / LOCK_FILE).read_text())
+
+
+class TestOneProcess:
+    """One process at a time uses a cache (#236): opening one locks it for
+    the rest of the process, a second process is refused with a message
+    naming the holder, and a holder that crashed blocks nothing."""
+
+    def test_a_second_process_is_refused(self, tmp_path, caplog):
+        root = tmp_path / "cache"
+        with another_process(root) as holder:
+            with pytest.raises(CacheInUse) as refused:
+                EngineCache(root)
+            message = str(refused.value)
+            assert f"process {holder.pid} " in message
+            assert str(root) in message
+            assert refused.value.holder["pid"] == holder.pid
+            # a pause of the pass, which no per-document isolation catches
+            assert isinstance(refused.value, PassPaused)
+            assert not isinstance(refused.value, Exception)
+            # the refused process leaves the holder's record as it was
+            assert lock_record(root)["pid"] == holder.pid
+        # the holder ended cleanly: the cache opens, with nothing to report
+        with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
+            EngineCache(root)
+        assert caplog.records == []
+        assert lock_record(root)["pid"] == os.getpid()
+
+    def test_a_process_is_refused_while_this_one_holds_it(self, tmp_path):
+        root = tmp_path / "cache"
+        EngineCache(root)
+        refused = opened_elsewhere(root)
+        assert refused.returncode != 0
+        assert "CacheInUse" in refused.stderr
+        assert f"process {os.getpid()} " in refused.stderr
+
+    def test_a_crashed_holders_lock_does_not_block(self, tmp_path, caplog):
+        """A holder killed outright releases the lock with its life; the
+        next process to open the cache finds the record it left, says
+        whose it was, and replaces it."""
+        root = tmp_path / "cache"
+        with another_process(root) as holder:
+            holder.kill()
+            holder.wait(timeout=60)
+            assert lock_record(root)["pid"] == holder.pid
+            with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
+                cache = EngineCache(root)
+        (warning,) = caplog.records
+        assert f"process {holder.pid} " in warning.getMessage()
+        assert "ended without clearing its record" in warning.getMessage()
+        assert lock_record(root)["pid"] == os.getpid()
+        # the cache is this process's now, and serves it
+        caching = wrap(Engine(), cache, role="extract")
+        assert caching.complete("Read it.") == ".ti daeR"
+
+    def test_a_process_holds_its_cache_once(self, tmp_path, caplog):
+        """A process opens its cache as often as it likes, under any
+        spelling of the root, and holds it once."""
+        root = tmp_path / "cache"
+        EngineCache(root)
+        record = lock_record(root)
+        (tmp_path / "link").symlink_to(root)
+        with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
+            for spelling in (root, tmp_path / "link", root / ".." / "cache"):
+                EngineCache(spelling)
+        assert caplog.records == []
+        assert lock_record(root) == record
+        assert opened_elsewhere(root).returncode != 0
+
+    def test_a_removed_lock_file_is_locked_again(self, tmp_path, caplog):
+        root = tmp_path / "cache"
+        EngineCache(root)
+        (root / LOCK_FILE).unlink()
+        with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
+            EngineCache(root)
+        assert "removed or replaced" in caplog.text
+        assert lock_record(root)["pid"] == os.getpid()
+        assert f"process {os.getpid()} " in opened_elsewhere(root).stderr
 
 
 # -- rejection ------------------------------------------------------------
@@ -1138,17 +1278,16 @@ class TestForks:
     def test_a_held_session_serves_only_the_answer_it_was_made_on(
         self, tmp_path, kept
     ):
-        """Two runs on one cache (`ingest run` and `ingest extract --cache`
-        on the same document, say) each replay a conversation's opening
+        """Two cache objects on one root in one process (two processes
+        cannot share a cache, #236) each replay a conversation's opening
         turn, because the session kept for the cached answer is unusable
         or none was kept, and the two replays answer differently. Each
         stores its answer and holds its session in memory; the second's
-        answer is the one left stored. When the first run starts over,
-        the cache serves it the second's answer, so the session it holds,
-        made on its own answer, is released and never forked: the fork
-        resumes the session kept for the served answer, or replays again
-        (#230). Every fork either run stores is made on the answer its
-        key names."""
+        answer is the one left stored. When the first starts over, the
+        cache serves it the second's answer, so the session it holds, made
+        on its own answer, is released and never forked: the fork resumes
+        the session kept for the served answer, or replays again (#230).
+        Every fork either stores is made on the answer its key names."""
         root = tmp_path / "cache"
         wrap(
             AnswerKeepingEngine(keeps=kept == "unusable"),
@@ -1229,7 +1368,7 @@ class TestForks:
     def test_a_replay_without_text_changes_nothing(self, tmp_path):
         """A replay that answers with no text is a failed call: the fork
         fails, the opening turn's entry stands, and the replay's session
-        is released."""
+        is released. The conversation's later forks fail at once."""
         self.run_conversation(tmp_path, Engine(conversation_answers), [])
         released = []
 
@@ -1242,9 +1381,147 @@ class TestForks:
         response, handle = caching.open_conversation("the document")
         with pytest.raises(RuntimeError, match="no text"):
             caching.fork(handle, "c1")
+        with pytest.raises(RuntimeError, match="failed earlier"):
+            caching.fork(handle, "c2")
         assert caching.cache.get(response.key)["response"] == response
         assert released == ["session-1"]
         assert kinds(engine) == [OPEN]
+
+    def test_a_failed_replay_is_remembered_for_the_pass(self, tmp_path):
+        """A replay the engine fails fails the fork, and every later fork
+        of the conversation at once, without asking the engine again: a
+        failing engine is asked once per pass, not once per chunk (#236).
+        None of those forks is a miss, since none is asked. The
+        conversation opened again, for a new pass, replays again."""
+        self.run_conversation(tmp_path, Engine(conversation_answers), [])
+
+        class Down(Engine):
+            def open_conversation(self, prompt):
+                self._log(OPEN, prompt)
+                raise RuntimeError("engine down")
+
+        engine = Down(conversation_answers)
+        run = RunDir(tmp_path / "run")
+        caching = client(tmp_path, engine, run=run)
+        _, handle = caching.open_conversation("the document")
+        with pytest.raises(RuntimeError, match="engine down"):
+            caching.fork(handle, "c1")
+        for prompt in ("c1", "c2", "c3"):
+            with pytest.raises(RuntimeError, match="failed earlier.*down"):
+                caching.fork(handle, prompt)
+        assert kinds(engine) == [OPEN]
+        assert events(run, "cache-miss", "cache-replay") == []
+        _, handle = caching.open_conversation("the document")
+        with pytest.raises(RuntimeError, match="engine down"):
+            caching.fork(handle, "c1")
+        assert kinds(engine) == [OPEN, OPEN]
+
+    def test_a_fork_misses_only_when_it_is_asked(self, tmp_path):
+        """A fork the cache cannot answer is a miss once the engine holds
+        its session, just before the fork is asked; a fork that ends for
+        want of one, as the conversation changed, is none (#236)."""
+        self.run_conversation(
+            tmp_path, ResumableEngine(conversation_answers), ["c1"]
+        )
+        run = RunDir(tmp_path / "resumed")
+        self.run_conversation(
+            tmp_path, ResumableEngine(conversation_answers), ["c2"], run=run
+        )
+        assert [(e["event"], e["call"]) for e in run.events()] == [
+            ("cache-hit", OPEN),
+            ("cache-resume", OPEN),
+            ("cache-miss", FORK),
+        ]
+
+        def changed(kind, prompt, opening):
+            if kind == OPEN:
+                return "open again"
+            return conversation_answers(kind, prompt, opening)
+
+        for kept in (tmp_path / "cache").glob("*/*.session"):
+            shutil.rmtree(kept)
+        run = RunDir(tmp_path / "changed")
+        caching = client(tmp_path, Engine(changed), run=run)
+        _, handle = caching.open_conversation("the document")
+        with pytest.raises(ConversationChanged):
+            caching.fork(handle, "c3")
+        assert [e["event"] for e in run.events()] == [
+            "cache-hit",
+            "cache-replay",
+        ]
+        _, handle = caching.open_conversation("the document")
+        caching.fork(handle, "c3")
+        assert [e["event"] for e in run.events()][2:] == [
+            "cache-hit",
+            "cache-miss",
+        ]
+
+    def test_a_held_session_is_taken_once(self, tmp_path):
+        """A session held after a replay is handed out once, and only for
+        the engine client that holds it."""
+        cache = EngineCache(tmp_path / "cache")
+        engine, other = Engine(), Engine()
+        key, opening = "ab" + "0" * 62, sha256("opening answer #51")
+        cache.remember_session(key, engine, "session-51", opening)
+        assert cache.take_session(key, other) is None
+        assert cache.take_session(key, engine) == ("session-51", opening)
+        assert cache.take_session(key, engine) is None
+
+    def test_a_displaced_held_session_is_released(self, tmp_path):
+        """A session held for a key that a later replay's session
+        displaces will never be taken: it is released through its
+        engine's close_conversation (#236). The same session held again
+        is not."""
+        cache = EngineCache(tmp_path / "cache")
+        released = {"first": [], "second": []}
+        first, second = Engine(), Engine()
+        first.close_conversation = released["first"].append
+        second.close_conversation = released["second"].append
+        key = "ab" + "0" * 62
+        cache.remember_session(key, first, "session-51", sha256("#51"))
+        cache.remember_session(key, first, "session-51", sha256("#51"))
+        assert released == {"first": [], "second": []}
+        cache.remember_session(key, second, "session-81", sha256("#81"))
+        assert released == {"first": ["session-51"], "second": []}
+        assert cache.take_session(key, second) == ("session-81", sha256("#81"))
+
+    def test_racing_replays_release_the_session_they_displace(self, tmp_path):
+        """Two callers in one run fork the same conversation, opened from
+        the cache; nothing kept can be resumed, and each replays it, with
+        different answers. The second replay's session displaces the
+        first's, which is released; whoever starts over first takes the
+        session held for the answer served, and the other resumes the
+        session kept for it. Every fork is made on the answer served."""
+        root = tmp_path / "cache"
+        wrap(
+            AnswerKeepingEngine(keeps=False), EngineCache(root), role="extract"
+        ).open_conversation("the document")
+        engine = AnswerKeepingEngine(first=51)
+        released = []
+        engine.close_conversation = released.append
+        caching = wrap(engine, EngineCache(root), role="extract")
+        _, one = caching.open_conversation("the document")
+        _, two = caching.open_conversation("the document")
+        with pytest.raises(ConversationChanged):
+            caching.fork(one, "c1")  # stores #51, holds session-51
+        assert released == []
+        with pytest.raises(ConversationChanged):
+            caching.fork(two, "c1")  # stores #52, holds session-52
+        assert released == ["session-51"]
+        forks = []
+        for _caller in range(2):
+            served, handle = caching.open_conversation("the document")
+            assert served == "opening answer #52"
+            forks.append(caching.fork(handle, f"c{len(forks) + 2}"))
+        assert [made_on(fork) for fork in forks] == ["opening answer #52"] * 2
+        # nothing was kept for the first answer; the second caller resumes
+        # the session kept for the answer served
+        assert engine.resumed == [
+            {},
+            {},
+            {"sessions/session-52.jsonl": b"opening answer #52"},
+        ]
+        assert released == ["session-51"]
 
     def test_a_live_conversation_needs_no_replay(self, tmp_path):
         engine = Engine(conversation_answers)
@@ -1926,6 +2203,32 @@ class TestThePipeline:
         assert extraction.status == FAILED
         assert "not installed" in extraction.reason
 
+    def test_a_run_whose_cache_is_held_stops_before_any_call(self, tmp_path):
+        """A run whose cache another process holds is refused when it
+        first opens the cache, and stops there, as a pause does: no
+        document fails for it, and the engine is never asked (#236)."""
+        folder = folder_of_three(tmp_path)
+        cache = tmp_path / "cache"
+        engine = Engine(pipeline_answers)
+        orchestrator = CachedRun(
+            folder, tmp_path / "state", engine=engine, cache_dir=cache,
+            log=quiet,
+        )  # fmt: skip
+        with (
+            another_process(cache) as holder,
+            pytest.raises(CacheInUse) as refused,
+        ):
+            orchestrator.run()
+        assert f"process {holder.pid} " in str(refused.value)
+        assert engine.calls == []
+        assert this_run(orchestrator, "failed") == []
+        assert FAILED not in {
+            doc.state.status for doc in orchestrator.documents()
+        }
+        # once the other process has ended, the run goes on
+        assert orchestrator.run() == 2
+        assert engine.calls
+
 
 class TestRoleClient:
     """The helper a tool that adopts answers for a run's calls takes its
@@ -2057,6 +2360,42 @@ class SessionModel(Engine):
         return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
 
 
+UNITS = {
+    "units": [
+        {"id": "u1", "label": "Klara", "first_line": 1, "last_line": 1},
+        {"id": "u2", "label": "Gustav", "first_line": 2, "last_line": 2},
+    ]
+}
+
+
+def segmenting(manifest_usable: bool, units: dict = UNITS):
+    """The scripted model for the same document, with the manifest refused
+    unless `manifest_usable`, the segmentation answered with `units`, and
+    each unit's chunk answered with its person's birth."""
+
+    def answer(kind, prompt, opening):
+        if "manifest of EVERY distinct entity" in prompt:
+            if manifest_usable:
+                return extractor_answers()(kind, prompt, opening)
+            return "no manifest here"
+        if "segment a document" in prompt:
+            return json.dumps(units)
+        name, year = (
+            ("Klara Löbig", 1917)
+            if "unit u1" in prompt
+            else ("Gustav Löbig", 1919)
+        )
+        claim = {
+            "subject": {"kind": "local", "local_id": "p1", "label": name},
+            "property": "date_of_birth",
+            "value": {"type": "time", "year": year},
+            "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+        }
+        return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
+
+    return answer
+
+
 def extract(tmp_path, engine, **options):
     caching = client(tmp_path, engine, **options)
     extractor = ChunkedClaimExtractor(caching, budget=10, retries=1)
@@ -2148,46 +2487,11 @@ class TestTheExtractor:
         """A manifest refused in both attempts falls back to segmentation.
         A later run is answered from the cache attempt by attempt, whatever
         the engine would answer now, and gives the same batch (#225)."""
-        units = {
-            "units": [
-                {"id": "u1", "label": "Klara", "first_line": 1,
-                 "last_line": 1},
-                {"id": "u2", "label": "Gustav", "first_line": 2,
-                 "last_line": 2},
-            ]
-        }  # fmt: skip
-
-        def answers(manifest_usable):
-            def answer(kind, prompt, opening):
-                if "manifest of EVERY distinct entity" in prompt:
-                    if manifest_usable:
-                        return extractor_answers()(kind, prompt, opening)
-                    return "no manifest here"
-                if "segment a document" in prompt:
-                    return json.dumps(units)
-                name, year = (
-                    ("Klara Löbig", 1917)
-                    if "unit u1" in prompt
-                    else ("Gustav Löbig", 1919)
-                )
-                claim = {
-                    "subject": {"kind": "local", "local_id": "p1",
-                                "label": name},
-                    "property": "date_of_birth",
-                    "value": {"type": "time", "year": year},
-                    "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
-                }  # fmt: skip
-                return json.dumps(claim) + (
-                    '\n{"done": true, "claims_emitted": 1}'
-                )
-
-            return answer
-
-        first, batch = extract(tmp_path, Engine(answers(False)))
+        first, batch = extract(tmp_path, Engine(segmenting(False)))
         assert first.used_fallback_manifest
         assert len(batch.claims) == 2
         for manifest_usable in (False, True):
-            engine = Engine(answers(manifest_usable))
+            engine = Engine(segmenting(manifest_usable))
             again, replayed = extract(tmp_path, engine)
             assert again.used_fallback_manifest
             assert engine.calls == []
@@ -2223,6 +2527,104 @@ class TestTheExtractor:
         assert replay["matches"] is False
         _, again = extract(tmp_path, Refusing())
         assert facts(again) == facts(batch)
+
+    def test_a_failing_replay_is_asked_once_per_pass(self, tmp_path):
+        """Every chunk's fork misses behind a cached manifest, and the
+        engine fails the replay its session needs. The engine is asked
+        once, not once per chunk: each chunk drops to inline context,
+        here answered from the cache, and no fork is a miss (#236)."""
+
+        class NoForks(Engine):
+            def fork(self, handle, prompt):
+                raise RuntimeError("no fork support")
+
+        class Down(Engine):
+            def open_conversation(self, prompt):
+                self._log(OPEN, prompt)
+                raise RuntimeError("engine down")
+
+        first, batch = extract(tmp_path, NoForks(extractor_answers()))
+        assert first.context_mode == "fork"
+        engine = Down(extractor_answers())
+        run = RunDir(tmp_path / "run")
+        extractor, again = extract(tmp_path, engine, run=run)
+        assert extractor.failed_chunks == []
+        assert again.claims == batch.claims
+        assert kinds(engine) == [OPEN]
+        assert events(run, "cache-miss") == []
+
+    @pytest.mark.parametrize("turn", ["manifest", "segmentation"])
+    def test_a_stored_answer_a_stricter_parser_refuses_is_replayed(
+        self, tmp_path, monkeypatch, turn
+    ):
+        """An entity manifest or segmentation the cache kept, which a
+        parser made stricter since now refuses, is replayed, not rejected
+        (#236, ADR-0032 §5): it spends its attempt, and the next attempt,
+        never asked before, goes to the engine. A later run replays the
+        same attempts and gives the same batch."""
+        if turn == "manifest":
+            answers = extractor_answers
+            parse = "_parse_entity_manifest"
+
+            def stricter_answer(kind, prompt, opening):
+                text = answers()(kind, prompt, opening)
+                if "manifest of EVERY distinct entity" not in prompt:
+                    return text
+                manifest = json.loads(text)
+                for entity in manifest["entities"]:
+                    entity["summary"] = f"{entity['label']}, born here"
+                return json.dumps(manifest)
+
+            def missing(parsed):
+                return [e.id for e in parsed if not e.summary]
+
+        else:
+            answers = functools.partial(segmenting, False)
+            parse = "_parse_segmentation"
+            described = {
+                "units": [
+                    unit | {"context": f"the lines on {unit['label']}"}
+                    for unit in UNITS["units"]
+                ]
+            }
+            stricter_answer = segmenting(False, described)
+
+            def missing(parsed):
+                return [unit.id for unit in parsed.units if not unit.context]
+
+        first, batch = extract(tmp_path, Engine(answers()))
+        assert first.used_fallback_manifest is (turn == "segmentation")
+        # the parser now asks for what the stored answer lacks
+        original = getattr(ChunkedClaimExtractor, parse)
+
+        def stricter(response, line_count):
+            parsed, problems = original(response, line_count)
+            if parsed is not None:
+                problems += [
+                    f"{name}: undescribed" for name in missing(parsed)
+                ]
+            return parsed, problems
+
+        monkeypatch.setattr(
+            ChunkedClaimExtractor, parse, staticmethod(stricter)
+        )
+        engine = Engine(stricter_answer)
+        run = RunDir(tmp_path / "run")
+        extractor, again = extract(tmp_path, engine, run=run)
+        assert not extractor.used_fallback_segmentation
+        assert extractor.used_fallback_manifest is (turn == "segmentation")
+        assert again.claims == batch.claims
+        # the stored answer was served and refused, never rejected: the
+        # engine answered the next attempt, and the chunks made on it
+        assert list((tmp_path / "cache").glob("*/*.rejected-*")) == []
+        assert kinds(engine) == [OPEN, FORK, FORK]
+        opened = [e for e in run.events() if e.get("call") == OPEN]
+        assert [(e["event"], e.get("reason")) for e in opened][-2:] == [
+            ("cache-hit", "key match"),
+            ("cache-miss", "absent"),
+        ]
+        _, replayed = extract(tmp_path, Refusing())
+        assert replayed.claims == batch.claims
 
 
 # -- the single-call extractor through the cache --------------------------
@@ -2389,16 +2791,18 @@ class TestTheSingleCallExtractor:
 
 
 def test_the_cache_root_holds_only_entries(tmp_path):
-    """Every file under the root is an entry or an entry set aside."""
+    """Every file under the root is its lock file, an entry or an entry set
+    aside."""
     caching = client(tmp_path, Engine())
     response = caching.complete("Read it.")
     caching.reject(response, "why")
     caching.complete("Read it.")
-    names = sorted(path.name for path in (tmp_path / "cache").rglob("*"))
     shard = response.key[:2]
-    assert names[0] == shard
+    names = sorted(
+        path.name for path in (tmp_path / "cache" / shard).rglob("*")
+    )
     assert all(
         re.fullmatch(rf"{response.key}(\.rejected-[\w-]+)?\.json", name)
-        for name in names[1:]
+        for name in names
     ), names
-    assert os.listdir(tmp_path / "cache") == [shard]
+    assert sorted(os.listdir(tmp_path / "cache")) == [LOCK_FILE, shard]

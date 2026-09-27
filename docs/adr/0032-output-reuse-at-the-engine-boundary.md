@@ -10,6 +10,13 @@ key, §3's run report, §4's diff). ADR-0006 §5, ADR-0007 and ADR-0010 are
 amended in place where they describe the store. The operational detail
 is in [`docs/LLM_CACHE.md`](../LLM_CACHE.md).
 
+Amended by #236 (2026-09-27): one process at a time uses a cache, which a
+lock enforces (§3); a stored manifest or segmentation that a stricter
+parser refuses is replayed, not rejected, and §5 says why; a held session
+a later replay displaces is released, a failed replay is remembered for
+the pass, and a fork's miss is an event only when the fork is asked (§6,
+§8).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -180,6 +187,18 @@ engine again for its extraction. Transcription prompts cite none.
 - The entries are model responses, the raw material of proposals, not a
   second store of assertions: the graph stays the system of record, as it
   was with the stage store.
+- One process at a time uses a cache (#236). Opening it locks a lock file
+  at its root exclusively (flock) for the rest of the process, and records
+  the process there; a second process is refused at once, with a message
+  naming the holder, and the refusal pauses its pass (`PassPaused`) rather
+  than failing each document. The kernel releases the lock when its holder
+  ends, however it ends, so a crashed holder blocks nothing: the next
+  process reports the record it left and replaces it. Several session
+  paths assume one process: a resumed claude-code session's transcript
+  sits under its original id in the CLI's projects folder, which every
+  process shares, so one process's release could pull it from under
+  another's forks, and a session held after a replay (§6) is known only
+  to its process.
 
 ### 4. Rejection
 
@@ -234,6 +253,20 @@ reason not to key chunk retries this way (a chunk that failed every
 attempt would fail again from the cache in every run) does not apply to
 it. `--refresh extract` or a new epoch asks again.
 
+This holds for a stored answer that a parser made stricter since now
+refuses: it is replayed and refused, not rejected (§4), and spends its
+attempt; a later attempt that no earlier run asked goes to the engine.
+The caller cannot tell such a refusal from the one an answer met when it
+was stored, so rejecting refused answers the cache kept would ask the
+engine again for every refused manifest in every run, and the
+attempt-by-attempt replay above would be lost. The refusal falls back to
+the next tier, as the parser does with an unusable answer with or without
+the cache, rather than failing the document. The price is that a run with
+the cache, after a parser is made stricter, can fall back where one
+without it would have had fresh answers for the attempts the cache
+answered; `--refresh extract` or a new epoch asks them afresh, and the
+change's scratch diff shows its fallbacks (#236).
+
 ### 6. Conversations and forks
 
 Opening a conversation is a call like any other. The handle the cache
@@ -270,13 +303,22 @@ fork's context assumes:
   the replay's session. The session is also held in memory for the rest
   of the run, with the SHA-256 of the answer the replay gave, and the
   conversation opened again takes it only when the cache serves that
-  answer: two runs on one cache whose replays answer differently each
-  hold a session, and the run whose answer was displaced releases its
-  own, then resumes the session kept for the served answer, or replays.
+  answer. A held session made on another answer than the one served,
+  because a racing caller in the run has stored a newer one, is released,
+  and the fork resumes the session kept for the served answer, or
+  replays. So is a held session that a later replay's session displaces
+  under the same key, since nothing will take it.
+- **A failed replay is remembered.** A replay the engine fails (an error,
+  or an answer with no text) fails the fork, and every later fork of the
+  conversation in the pass at once, without asking the engine again: a
+  failing engine is asked once per pass, not once per chunk, and each
+  chunk drops to inline context (#236).
 
 A session, however obtained, serves every later fork of the conversation
 in the run, and never a conversation opened on another answer than the
-one it holds. Every fork entry records how its session was obtained
+one it holds. A fork's miss is an event once its session is held, just
+before the fork is asked, so a fork that ends for want of a session is
+none. Every fork entry records how its session was obtained
 (`live`, `resumed`, `replayed` or `recomputed`) and the opening answer's
 SHA-256. Because forks are served through the cache whether or not a
 session exists, chunk calls always fork (ADR-0006 §3, context mode 1), and
@@ -309,7 +351,8 @@ their prompts, and so their keys, stay the same from run to run.
 Every answer the cache gives or cannot give is an event in the run's
 `events.jsonl`, with the document's SHA-1, its kind, the role and the key:
 `cache-hit` (reason `key match`, or the adoption's reason), `cache-miss`
-(reason `absent`, `rejected` or `refresh`), `cache-resume` (a
+(reason `absent`, `rejected` or `refresh`; a fork's once its session is
+held, §6), `cache-resume` (a
 conversation resumed exactly), `cache-replay` (whether the answers
 matched), `cache-reject` (the reason; only when an answer was moved
 aside) and `cache-adopt`. All but rejections and adoptions name the kind
@@ -452,7 +495,7 @@ longer wrapping the client.
   transcribing it again (§4).
 - **Keep one session per conversation, and resume whatever is kept or
   held.** Rejected: two callers opening the same conversation at once, a
-  replay whose session could not be kept, or two runs on one cache whose
+  replay whose session could not be kept, or two callers in a run whose
   replays answer differently, leave a session made on another opening
   answer than the one the cache serves, and a fork made on it is stored
   under a key that names the served answer, in every later run (§6).
@@ -474,3 +517,18 @@ longer wrapping the client.
   the segmentation, whose refusal falls back (§5).
 - **Delete rejected entries.** Rejected: they are the evidence of what a
   check or a parser refused.
+- **Let several processes share one cache** (a scratch run and `ingest
+  extract --cache` at once). Rejected (#236): kept sessions assume one
+  process. A resumed session's transcript sits in the CLI's shared
+  projects folder under its original id, where one process's release
+  can break another's forks, and a session held after a replay is known
+  only to its process. The lock makes the rule hold rather than leave it
+  to documentation.
+- **Reject a stored manifest or segmentation that a stricter parser now
+  refuses, and ask once more**, as the other rejectors do. Rejected
+  (#236): the caller cannot tell that refusal from the one the answer met
+  when it was stored, so every refused manifest would be asked again in
+  every run, and a fallback would no longer replay (§5). Telling them apart
+  would need the extractor to record each refusal in the cache, for a gain
+  limited to the runs just after a parser change, where `--refresh
+  extract` already asks afresh.
