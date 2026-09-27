@@ -7,7 +7,7 @@ COMPOSE_LOCAL = docker compose -f docker-compose.yml -f docker-compose.localhost
 export UID := $(shell id -u)
 export GID := $(shell id -g)
 
-.PHONY: install hooks test test-live lint fmt up down up-local cli bootstrap smoke publish-queries
+.PHONY: install hooks test test-live lint fmt up down up-local cli bootstrap smoke publish-queries wdqs-sandbox-up wdqs-sandbox-down
 
 install:            ## create/update the uv-managed venv (with dev tools)
 	$(UV) sync --dev
@@ -63,3 +63,12 @@ smoke:              ## deployment smoke test
 
 publish-queries:    ## publish the SPARQL library to wiki pages
 	$(UV) run yizkr publish-queries
+
+# Query reviews: a throwaway, network-less query engine, separate from the
+# stack. Load a scripts/synthetic_graph.py graph into it and run queries
+# with scripts/wdqs_sandbox.py (see its --help).
+wdqs-sandbox-up:    ## start a network-less query-engine sandbox (768 MB cap)
+	$(UV) run python scripts/wdqs_sandbox.py up
+
+wdqs-sandbox-down:  ## remove the query-engine sandbox (safe to repeat)
+	$(UV) run python scripts/wdqs_sandbox.py down
