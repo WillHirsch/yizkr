@@ -2,11 +2,12 @@
 pass as transcriptions, a near-empty multi-page output fails, and short
 genuine pages pass.
 
-Every failure and refusal output below is invented engine text, and every
-genuine text is either a source passage of the fictional universe
-(docs/EXAMPLES.md) or a generic line with no names in it. The one
-exception is SURNAME_LINES: the universe has no one whose surname is also
-a tool's name, so those lines invent a witness in its town.
+Every failure and refusal output below is invented engine text. Every
+genuine text is a source passage of the fictional universe
+(docs/EXAMPLES.md), a generic line with no names in it, or an invented
+letter or email between the universe's people. The one exception is
+SURNAME_LINES: the universe has no one whose surname is also a tool's
+name, so those lines invent a witness in its town.
 """
 
 from __future__ import annotations
@@ -139,6 +140,39 @@ SURNAME_LINES = [
     "The congregation installed Poppler as its cantor.",
 ]
 
+# emails and letters about family research that say what an engine's note
+# says, of their own attachments: naming who sent them, what they came in,
+# what they hold or where they were opened, or in the middle of a message
+CORRESPONDENCE = [
+    "Dear cousin, thank you for your email. I couldn't open the attachment "
+    "you sent, could you send the scans again? I would like to add the "
+    "passenger list to the tree before the reunion. Love, Nora",
+    "Hi Nora, I don't see any attachment on your last message. Best, Iggy",
+    "Sorry, I wasn't able to open the PDF of the census page. Can you "
+    "resend? I want to check the ages against the passenger list before I "
+    "write to the tracing service. Love, Nora",
+    "No scans were included in the envelope.",
+    "Unfortunately the image files could not be opened on my computer.",
+    "Dear Nora, I couldn't open the PDF, so could you post a copy?",
+]
+
+# replies that decline their reader's request in an engine refusal's words
+REPLIES = [
+    "We regret that we are unable to comply with your request for copies "
+    "of the register.",
+    "I am unable to comply with your request for copies of the register, "
+    "as the office is closed until the spring.",
+]
+
+# engine notes on the pages they skipped, each after a page of text
+PAGE_FAILURES = [
+    PAGE_FAILURE,
+    "--- Page 2 ---\nThe image could not be loaded.",
+    "Page 2: I could not open the image.",
+    "The PDF could not be rendered beyond page 1.",
+    "I could not read the rest of the PDF.",
+]
+
 
 def universe_texts() -> list[str]:
     return [source.text for source in u.SOURCES if source.text]
@@ -171,11 +205,62 @@ class TestSignatures:
         refusal = "I'm unable to assist with this request."
         assert check_transcription(refusal).failure == REFUSAL
 
-    def test_failure_partway_through_fails_the_whole_output(self):
-        text = f"{a_page()}\n\n{PAGE_FAILURE}\n"
+    @pytest.mark.parametrize("note", PAGE_FAILURES)
+    def test_failure_partway_through_fails_the_whole_output(self, note):
+        text = f"{a_page()}\n\n{note}\n"
         check = check_transcription(text, pages=2)
         assert not check.passed
         assert check.signature == "media-unreadable"
+
+    @pytest.mark.parametrize(
+        ("name", "text"),
+        [
+            # the claude-code engine joins its turns without a separator
+            (
+                "media-unreadable",
+                "I'll read the PDF file.I wasn't able to open the PDF; it "
+                "may be encrypted.",
+            ),
+            ("media-unreadable", "Error: the PDF could not be read."),
+            (
+                "media-missing",
+                "It looks like no image was attached to your message.",
+            ),
+            ("refusal-request", "Sorry, but I can't help with this request."),
+            # a request for a transcription is the task's own
+            (
+                "refusal-request",
+                "I cannot fulfil your request for a transcription of these "
+                "records.",
+            ),
+        ],
+    )
+    def test_engine_note_opening_the_output_fails(self, name, text):
+        check = check_transcription(text, pages=1)
+        assert not check.passed
+        assert check.signature == name
+
+    @pytest.mark.parametrize("line", CORRESPONDENCE)
+    def test_correspondence_about_its_own_media_passes(self, line):
+        # an email or letter names its own attachment, or says it in the
+        # middle of a message; alone, or after a page of text
+        assert check_transcription(line, pages=1).passed
+        assert check_transcription(f"{a_page()}\n{line}", pages=2).passed
+
+    @pytest.mark.parametrize("line", REPLIES)
+    def test_reply_declining_its_readers_request_passes(self, line):
+        # an archive's or a registrar's reply names the request it declines
+        assert check_transcription(line, pages=1).passed
+        assert check_transcription(f"{a_page()}\n{line}", pages=2).passed
+
+    def test_same_note_mid_text_passes_unless_it_names_a_page(self):
+        # in the middle of a text, a note is a source's own sentence unless
+        # it names the pages it skipped
+        note = "I couldn't open the PDF."
+        assert not check_transcription(note, pages=1).passed
+        assert check_transcription(f"{a_page()}\n{note}", pages=2).passed
+        skipped = f"{a_page()}\nI couldn't open page 2 of the PDF."
+        assert not check_transcription(skipped, pages=2).passed
 
     @pytest.mark.parametrize("text", universe_texts())
     def test_universe_source_texts_pass(self, text):
@@ -498,6 +583,14 @@ class TestTranscribers:
         text_file.write_text("1937")
         result = TextFileTranscriber(text_file).transcribe(text_file)
         assert result.text == "1937"
+
+    @pytest.mark.parametrize("line", CORRESPONDENCE + REPLIES)
+    def test_text_file_of_correspondence_passes(self, tmp_path, line):
+        # an email or letter kept as a text file is checked too
+        text_file = tmp_path / "email.txt"
+        text_file.write_text(line)
+        result = TextFileTranscriber(text_file).transcribe(text_file)
+        assert result.text == line
 
 
 RUN = {
