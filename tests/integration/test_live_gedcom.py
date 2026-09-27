@@ -20,19 +20,19 @@ GEDCOM = """\
 0 HEAD
 1 CHAR UTF-8
 0 @S1@ SOUR
-1 TITL General Register Office Birth Index
+1 TITL Integration birth register
 0 @O1@ OBJE
 1 FILE https://example.test/portrait.jpg
 2 FORM jpg
 2 TITL Integration studio portrait
-1 DATE 1978
+1 DATE 1956
 0 @I1@ INDI
 1 NAME Gedcom Live /Tester/
 1 OBJE @O1@
 1 BIRT
-2 DATE 1958
+2 DATE 1950
 2 SOUR @S1@
-3 PAGE Volume 6a, Page 735
+3 PAGE Volume 1, Page 1
 0 TRLR
 """
 
@@ -109,7 +109,7 @@ def test_gedcom_sour_folds_and_obje_becomes_unheld_media(
         for ref in claim.get("references", [])
         for snak in ref["snaks"].get(properties["page_number"], [])
     ]
-    assert any("Volume 6a" in page for page in pages)
+    assert any("Volume 1" in page for page in pages)
 
 
 def test_gedcom_write_is_idempotent(client, gedcom_artifact):
