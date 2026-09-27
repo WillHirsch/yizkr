@@ -8,7 +8,8 @@
 # git passes one line per ref being pushed on stdin:
 #   <local ref> <local sha> <remote ref> <remote sha>
 # Every line is checked, so `git push origin feature main`,
-# `git push origin HEAD:main` and `git push --all` are refused too.
+# `git push origin HEAD:main`, and `git push --all` when it would move
+# main, are refused too.
 #
 # This is a tripwire against mistakes, not an access control:
 # `git push --no-verify` skips it. That is for a deliberate owner action
