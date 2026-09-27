@@ -10,6 +10,8 @@ as duplicates; the graph-side pass proposed all four known duplicate
 pairs and correctly rejected the two-Davids trap as different
 generations; approved equivalences applied through
 `resolve --equivalences` end to end)
+Amended by #225 (2026-09-27): the entity manifest's state moves from
+the stage store to the LLM cache of ADR-0032 (State and CLI).
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
@@ -184,13 +186,17 @@ recorded fallback (`manifest-fallback.txt`). `--resume` semantics are
 unchanged. Reconciliation artifacts (`roster.json`, `candidates.json`,
 `equivalences.csv`) live beside the batch, runtime-state as always.
 
-Amended by #87 (2026-09-27): the entity manifest, or its recorded
-line-range fallback, is the `entity_manifest` stage in the stage store
-(ADR-0006 §5, docs/STAGE_STORE.md); a fallback is an attention reason on
-its record rather than a `manifest-fallback.txt` file. An
-`entity-manifest.json` or `manifest-fallback.txt` from before the store
-is not read; `ingest run` holds a document directory without
-`derivations.json` until `--rederive-unrecorded` (ADR-0006 §5).
+Amended by #87 (2026-09-27), which made the entity manifest a stage of
+the stage store, and by #225 (2026-09-27), which replaced the store with
+the LLM cache of ADR-0032: the manifest call, like every call, is answered
+from the cache when it was made before (ADR-0006 §5, docs/LLM_CACHE.md).
+A manifest the extractor refuses is rejected in the cache and asked again.
+A fallback to line-range segmentation is an attention reason on the
+extraction stage's `done` event and a `fallback` entry in
+`coverage.json`, rather than a `manifest-fallback.txt` file. An
+`entity-manifest.json` or `manifest-fallback.txt` from before the store is
+not read; `ingest run` sets aside a document directory without
+`derivations.json` and starts it afresh (ADR-0006 §5).
 
 ### Testing
 

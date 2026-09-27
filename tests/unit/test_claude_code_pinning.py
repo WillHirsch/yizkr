@@ -15,6 +15,7 @@ import os
 import pwd
 import subprocess
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +61,8 @@ class FakeCli:
         # the tools the init event reports offering the model (None: no
         # tools key, as in older streams)
         self.tools: list[str] | None = ["Read"]
+        # the model the init event reports answering (None: no model key)
+        self.model: str | None = None
         self.returncode = 0
         self.timeout = False
         self.probes: list[dict] = []  # kwargs of each --version probe
@@ -108,6 +111,8 @@ class FakeCli:
         }
         if self.tools is not None:
             init["tools"] = self.tools
+        if self.model is not None:
+            init["model"] = self.model
         events = [
             init,
             {
@@ -538,6 +543,58 @@ class TestEffectiveConfig:
                 effort="low", model="claude-opus-5"
             ).config_hash
         )
+
+
+class TestWhatACallSends:
+    """What the LLM cache keys a call on and records with its answer
+    (#225, ADR-0032): the text the CLI is sent, the system prompt every
+    call appends, and what a call's stream reports."""
+
+    def test_call_text_is_what_the_cli_receives(self, cli, tmp_path):
+        image = tmp_path / "scan.png"
+        image.write_bytes(b"png")
+        client = ClaudeCodeClient()
+        client.complete("Transcribe.", [image])
+        _, kwargs = cli.calls[0]
+        assert kwargs["input"] == client.call_text("Transcribe.", [image])
+        assert str(image.resolve()) in kwargs["input"]
+        assert client.call_text("Transcribe.") == "Transcribe."
+
+    def test_the_system_prompt_is_what_every_call_appends(self, cli):
+        client = ClaudeCodeClient()
+        client.complete("transcribe")
+        command, _ = cli.calls[0]
+        appended = command[command.index("--append-system-prompt") + 1]
+        assert appended == client.system_prompt
+        assert client.system_prompt in client.effective_config["arguments"]
+
+    def test_a_call_reports_its_model_and_version(self, cli):
+        cli.model = "claude-sonnet-5-20260901"
+        client = ClaudeCodeClient(model="claude-sonnet-5")
+        assert client.last_report() == {}
+        client.complete("transcribe")
+        report = client.last_report()
+        assert report["model"] == "claude-sonnet-5-20260901"
+        assert report["cli_version"] == PINNED
+        assert uuid.UUID(report["session_id"])
+
+    def test_a_report_is_its_threads_and_a_failed_call_makes_none(self, cli):
+        client = ClaudeCodeClient()
+        seen = []
+
+        def call():
+            client.complete("transcribe")
+            seen.append(client.last_report())
+
+        thread = threading.Thread(target=call)
+        thread.start()
+        thread.join()
+        assert seen[0]["cli_version"] == PINNED
+        assert client.last_report() == {}  # another thread's call
+        cli.returncode = 1
+        with pytest.raises(RuntimeError):
+            client.complete("transcribe")
+        assert client.last_report() == {}
 
 
 class TestVersionPin:

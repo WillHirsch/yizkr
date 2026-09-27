@@ -12,6 +12,15 @@ ADR-0005 in every stage. The operational rules are in
 CLAUDE.md carries the short form. Small changes amend this ADR in place
 with a dated "Amended by #n" line; reversing a ruling takes a new ADR.
 
+Superseded in part by
+[ADR-0032](0032-output-reuse-at-the-engine-boundary.md) (#225,
+2026-09-27): reuse moves from §2's stage store and stage-version registry
+to a cache of model responses at the engine boundary, keyed on what each
+call sends. §2's goals stand: reuse of unchanged work, visible
+equivalences, and nothing completed lost on abort. Where this ADR speaks
+of the stage store, stage keys, stage or method versions and reused stage
+outputs, ADR-0032 rules.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a

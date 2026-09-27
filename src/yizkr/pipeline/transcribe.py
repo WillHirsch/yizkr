@@ -19,14 +19,20 @@ Every engine's `transcribe()` runs the transcription check
 (`yizkr.pipeline.transcription_check`) on its output and raises
 `TranscriptionCheckFailed` instead of returning an output that fails it:
 a tool-failure message or a refusal is never handed on as a
-transcription. `transcribe_unchecked()` is the transcription step alone,
-for a caller that runs the check as a step of its own.
+transcription. The check runs on every output, whether the engine made
+it in this call or the LLM cache kept it from an earlier one (ADR-0032),
+so a stricter check applies to every transcription; the vision
+transcriber rejects a failing output through its client, so the engine
+is asked again rather than served it. `transcribe_unchecked()` is the
+transcription step alone, for a caller that runs the check as a step of
+its own.
 
 Vision transcription of a PDF needs poppler-utils on the ingestion host:
 the claude-code engine's Read tool renders the pages with ``pdftoppm``,
-and the check counts them with ``pdfinfo``. `require_pdf_renderer` fails
-fast, before any engine call, when either is missing, and
-`preflight_vision_transcription` asks once for a whole set of media.
+and the check counts them with ``pdfinfo``. A caller checks the host
+once, before it transcribes anything: `preflight_vision_transcription`
+for a whole run's media, which fails fast with the install command
+(`require_pdf_renderer`).
 """
 
 from __future__ import annotations
@@ -39,7 +45,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from yizkr.pipeline.language import LanguageResolution, resolve_language
-from yizkr.pipeline.llm import LlmClient
+from yizkr.pipeline.llm import LlmClient, reject_response
 from yizkr.pipeline.transcription_check import (
     TranscriptionCheck,
     TranscriptionCheckFailed,
@@ -132,8 +138,13 @@ class _CheckedTranscriber:
             transcription.text, pages=media_page_count(media_path)
         )
         if not self.last_check.passed:
-            raise TranscriptionCheckFailed(self.last_check)
+            failed = TranscriptionCheckFailed(self.last_check)
+            self._reject(failed)
+            raise failed
         return transcription
+
+    def _reject(self, failed: TranscriptionCheckFailed) -> None:
+        """Nothing to reject: no engine answered for this output."""
 
 
 class LlmVisionTranscriber(_CheckedTranscriber):
@@ -148,13 +159,14 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         self.fallback_language = fallback_language
         # the resolution behind the last transcribe(), for callers to log
         self.last_resolution: LanguageResolution | None = None
+        # the engine's answer behind the last transcription
+        self._response: str | None = None
 
     def transcribe_unchecked(
         self, media_path: Path, artifact_qid: str | None = None
     ) -> Transcription:
-        if media_path.suffix.lower() == ".pdf":
-            require_pdf_renderer()
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
+        self._response = text
         self.last_resolution = resolve_language(
             text, self.language, fallback=self.fallback_language
         )
@@ -164,6 +176,12 @@ class LlmVisionTranscriber(_CheckedTranscriber):
             language=self.last_resolution.code,
             engine=f"llm-vision:{self.client.model_identifier}",
         )
+
+    def _reject(self, failed: TranscriptionCheckFailed) -> None:
+        """Reject the engine's answer through the client, so that a client
+        that keeps answers asks the engine again next time."""
+        if self._response is not None:
+            reject_response(self.client, self._response, str(failed))
 
 
 class TextFileTranscriber(_CheckedTranscriber):

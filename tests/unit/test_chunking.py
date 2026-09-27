@@ -1,16 +1,16 @@
 """Offline tests for chunked extraction (ADR-0006/0007).
 
-No instance, no LLM. The extractor's phases are stages in the stage store
-(#87), so state is inspected through the store's records.
+No instance, no LLM and no LLM cache: the extractor calls a scripted
+client directly, and its state is read from its attributes and the side
+outputs in its state directory. tests/unit/test_llmcache.py takes the
+extractor through the cache (#225).
 """
 
-import hashlib
 import json
 
 import pytest
 
 from yizkr.claims import EntityRecord
-from yizkr.pipeline import chunking
 from yizkr.pipeline.chunking import (
     ChunkedClaimExtractor,
     ChunkIncomplete,
@@ -24,7 +24,6 @@ from yizkr.pipeline.chunking import (
     prefix_local_ids,
     unit_text,
 )
-from yizkr.pipeline.stages import StageFailed, StageStore, doc_scope
 from yizkr.pipeline.transcribe import Transcription
 
 # a two-person document: one claimable line per person, one logistics line
@@ -181,21 +180,48 @@ def transcription() -> Transcription:
     return Transcription(text=DOC, engine="test", artifact_qid="Q23")
 
 
-def store_scope(tmp_path, text: str = DOC):
-    """The store a standalone extractor keeps in tmp_path/state, and the
-    scope it names the document by (its transcription's SHA-1)."""
-    scope = doc_scope(hashlib.sha1(text.encode()).hexdigest())
-    return StageStore(tmp_path / "state"), scope
+def side_output(tmp_path, name: str):
+    """A side output the extractor wrote to its state directory, parsed,
+    or None when there is none."""
+    path = tmp_path / "state" / name
+    if not path.exists():
+        return None
+    if name.endswith(".ndjson"):
+        return [json.loads(line) for line in path.read_text().splitlines()]
+    return json.loads(path.read_text())
 
 
-def stored(tmp_path, stage: str):
-    store, scope = store_scope(tmp_path)
-    return store.records(scope, stage)
+class Rejecting:
+    """A client that takes rejections (as the LLM cache's does), around a
+    scripted one: it records each rejected response with its reason, and
+    each conversation closed."""
+
+    def __init__(self, client) -> None:
+        self.client = client
+        self.rejected: list[tuple[str, str]] = []
+        self.closed: list[str] = []
+        self.model_identifier = client.model_identifier
+
+    def complete(self, prompt, image_paths=()):
+        return self.client.complete(prompt, image_paths)
+
+    def open_conversation(self, prompt):
+        return self.client.open_conversation(prompt)
+
+    def fork(self, handle, prompt):
+        return self.client.fork(handle, prompt)
+
+    def reject(self, response, reason):
+        self.rejected.append((response, reason))
+
+    def close_conversation(self, handle):
+        self.closed.append(handle)
 
 
-def failures(tmp_path, stage: str):
-    store, scope = store_scope(tmp_path)
-    return store.failures(scope, stage)
+def placeholder_claims(*ids: str) -> str:
+    """A complete chunk response with one claim per manifest id, labelled
+    by the id itself: the merge takes each label from the manifest."""
+    return ndjson([claim(local_id, local_id, 1917) for local_id in ids])
 
 
 class TestSegmentationModel:
@@ -475,24 +501,11 @@ class TestEntityFirstExtractor:
         assert "Full transcription" not in llm.calls[1][1]
         assert "e1 = Anna Example" in llm.calls[1][1]  # roster in every chunk
         assert extractor.context_mode == "fork"
-        (manifest,) = stored(tmp_path, "entity_manifest")
-        assert manifest.output()["strategy"] == "entity"
-        assert manifest.meta["session_id"] == "session-abc"
-        chunks = stored(tmp_path, "chunk")
-        assert {chunk.meta["context_mode"] for chunk in chunks} == {"fork"}
-        (merged,) = stored(tmp_path, "batch")
-        coverage = json.loads(merged.extra("coverage.json"))
+        assert extractor.attention == []
+        coverage = side_output(tmp_path, "coverage.json")
+        assert coverage["strategy"] == "entity"
         assert coverage["entities_without_claims"] == []
-        # the raw output of every call is stored beside the parsed output
-        assert manifest.raw() == [entity_manifest_json()]
-        assert sorted(
-            raw for chunk in chunks for raw in chunk.raw()
-        ) == sorted(
-            [
-                ndjson([claim("e1", "Anna", 1900)]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
-            ]
-        )
+        assert side_output(tmp_path, "rejects.json") is None
 
     def test_prompts_carry_manifest_descriptions(self, tmp_path):
         """The manifest already authors what each kind and property
@@ -600,8 +613,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
         assert {c.subject.local_id for c in batch.claims} == {"e1", "e2"}
-        (merged,) = stored(tmp_path, "batch")
-        rejects = json.loads(merged.extra("rejects.json"))
+        rejects = side_output(tmp_path, "rejects.json")
         assert len(rejects) == 1
         assert "entity manifest" in rejects[0]["problems"][0]
 
@@ -625,6 +637,30 @@ class TestEntityFirstExtractor:
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
         assert extractor.failed_chunks == []
+
+    def test_a_truncated_response_is_rejected_before_the_retry(self, tmp_path):
+        """A client that keeps responses (the LLM cache's) is told which
+        one was cut off, so the retry, and a later run, ask the engine
+        again instead of being answered with it."""
+        cut = json.dumps(claim("e1", "e1", 1917))  # no sentinel
+        llm = Rejecting(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    cut,  # c001 attempt 1 (fork)
+                    placeholder_claims("e1"),  # c001 attempt 2
+                    placeholder_claims("e2"),  # c002
+                ]
+            )
+        )
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=1
+        )
+        batch = extractor.extract(transcription(), "Q23")
+        assert len(batch.claims) == 2
+        ((response, reason),) = llm.rejected
+        assert response == cut
+        assert reason.startswith("chunk: no terminal sentinel")
 
     def test_count_mismatch_chunk_accepted_without_retry(self, tmp_path):
         # the c007/c019 case: a complete response whose sentinel
@@ -668,249 +704,79 @@ class TestEntityFirstExtractor:
         batch = extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c001"]
         assert [c.subject.label for c in batch.claims] == ["Bern Example"]
-        (failure,) = failures(tmp_path, "chunk")
-        assert failure["item"] == "c001"
-        assert "engine down" in failure["reason"]
-        # the good chunk is stored; the partial batch is not
-        assert len(stored(tmp_path, "chunk")) == 1
-        assert stored(tmp_path, "batch") == []
+        assert "engine down" in extractor.failure_reasons["c001"]
+        # a partial extraction writes no side outputs
+        assert side_output(tmp_path, "coverage.json") is None
 
-    def test_failed_chunk_log_survives_recovery(self, tmp_path):
-        """The reason a chunk first failed lives in an append-only log
-        that a later successful re-run does not rewrite; the re-run
-        recomputes only the failed chunk."""
-        llm = ScriptedLlm(
-            [
-                entity_manifest_json(),
-                RuntimeError("engine down"),  # c001 attempt 1 (fork)
-                RuntimeError(
-                    "engine down"
-                ),  # c001 attempt 1 (inline fallback)
-                RuntimeError("engine down"),  # c001 attempt 2 (inline)
-                ndjson([claim("e2", "Bern Example", 1902)]),  # c002
-            ]
-        )
-        extractor = self.extractor(
-            llm, tmp_path, budget=LINE_LENGTH, retries=1
-        )
-        extractor.extract(transcription(), "Q23")
-        (record,) = failures(tmp_path, "chunk")
-        assert record["item"] == "c001"
-        assert record["attempts"] == 2
-        assert "engine down" in record["reason"]
-        assert "raw" not in record  # a call failure left no response
-
-        # the re-run reuses the manifest and c002, and calls only for c001
-        # (inline: a reused manifest has no live session to fork)
-        second = ScriptedLlm([ndjson([claim("e1", "Anna Example", 1900)])])
-        extractor = self.extractor(
-            second, tmp_path, budget=LINE_LENGTH, resume=True
-        )
-        batch = extractor.extract(transcription(), "Q23")
-        assert [call[0] for call in second.calls] == ["complete"]
-        assert extractor.failed_chunks == []
-        assert len(batch.claims) == 2
-        assert len(stored(tmp_path, "batch")) == 1
-        assert failures(tmp_path, "chunk") == [record]  # ...record survives
-
-    def test_truncated_chunk_failure_keeps_raw(self, tmp_path):
-        """A truncation (no terminal sentinel) logs the unparseable
-        response with the failure, so a re-run cannot lose it."""
-        cut = json.dumps(claim("e1", "Anna Example", 1900))  # no sentinel
-        llm = ScriptedLlm(
-            [
-                entity_manifest_json(),
-                cut,  # c001 attempt 1 (fork)
-                cut,  # c001 attempt 2 (fork)
-                ndjson([claim("e2", "Bern Example", 1902)]),  # c002
-            ]
-        )
-        extractor = self.extractor(
-            llm, tmp_path, budget=LINE_LENGTH, retries=1
-        )
-        extractor.extract(transcription(), "Q23")
-        (record,) = failures(tmp_path, "chunk")
-        assert "truncated" in record["reason"]
-        assert record["raw"] == cut
-
-    def test_parser_fix_recovers_a_logged_failure(self, tmp_path, monkeypatch):
-        """A response that failed to parse is kept with its failure, and a
-        re-run re-parses it before calling the model — a parser fix never
-        costs a second model run (ADR-0006)."""
-        unfinished = json.dumps(claim("e2", "Bern Example", 1902))
-        first = ScriptedLlm(
-            [
-                entity_manifest_json(),
-                ndjson([claim("e1", "Anna Example", 1900)]),  # c001 ok
-                unfinished,  # c002 attempt 1: no sentinel
-                unfinished,  # c002 attempt 2
-            ]
-        )
-        extractor = self.extractor(
-            first, tmp_path, budget=LINE_LENGTH, retries=1
-        )
-        extractor.extract(transcription(), "Q23")
-        assert extractor.failed_chunks == ["c002"]
-
-        # a parser fix: a response without the sentinel is now accepted
-        strict = chunking.parse_chunk_response
-
-        def lenient(response, warn=None):
-            try:
-                return strict(response, warn=warn)
-            except ChunkIncomplete:
-                return strict(
-                    response + '\n{"done": true, "claims_emitted": 1}'
-                )
-
-        monkeypatch.setattr(chunking, "parse_chunk_response", lenient)
-        second = ScriptedLlm([])  # NO responses: no model call allowed
-        extractor = self.extractor(
-            second, tmp_path, budget=LINE_LENGTH, resume=True
-        )
-        batch = extractor.extract(transcription(), "Q23")
-        assert second.calls == []
-        assert len(batch.claims) == 2
-        assert [entity.id for entity in batch.entities] == ["e1", "e2"]
-        assert extractor.failed_chunks == []
-        recovered = [
-            record
-            for record in stored(tmp_path, "chunk")
-            if record.meta.get("recovered")
-        ]
-        assert [record.raw() for record in recovered] == [[unfinished]]
-
-    def test_parse_version_bump_reparses_without_a_call(
-        self, tmp_path, monkeypatch
-    ):
-        """A stored chunk whose parser version is out of date is re-parsed
-        from its raw response; the call is never repeated, and an
-        unchanged parse leaves the batch's key, and the batch, alone."""
-        import dataclasses
-
-        from yizkr.pipeline import stageversions
-
-        first = ScriptedLlm(
-            [
-                entity_manifest_json(),
-                ndjson([claim("e1", "Anna Example", 1900)]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
-            ]
-        )
-        self.extractor(first, tmp_path, budget=LINE_LENGTH).extract(
-            transcription(), "Q23"
-        )
-        stages = dict(stageversions.STAGES)
-        stages["chunk_parse"] = dataclasses.replace(
-            stages["chunk_parse"], version=2
-        )
-        monkeypatch.setattr(stageversions, "STAGES", stages)
-        second = ScriptedLlm([])
-        extractor = self.extractor(
-            second, tmp_path, budget=LINE_LENGTH, resume=True
-        )
-        batch = extractor.extract(transcription(), "Q23")
-        assert second.calls == []
-        assert len(batch.claims) == 2
-        assert len(stored(tmp_path, "batch")) == 1
-
-    def test_resume_with_changed_transcription_starts_fresh(self, tmp_path):
-        both = ndjson(
-            [
-                claim("e1", "Anna Example", 1900),
-                claim("e2", "Bern Example", 1902),
-            ]
-        )
-        first = ScriptedLlm([entity_manifest_json(), both])
-        self.extractor(first, tmp_path, budget=10_000).extract(
-            transcription(), "Q23"
-        )
-        changed = Transcription(
-            text=DOC.replace("Dinner is at 7pm.", "Dinner is at 8pm."),
-            engine="test",
-            artifact_qid="Q23",
-        )
-        second = ScriptedLlm([entity_manifest_json(), both])
-        extractor = self.extractor(
-            second, tmp_path, budget=10_000, resume=True
-        )
-        batch = extractor.extract(changed, "Q23")
-        assert len(batch.claims) == 2
-        assert second.calls[0][0] == "open"  # phase 1 re-ran
-
-    def test_resume_reuses_everything_unchanged(self, tmp_path):
-        llm = ScriptedLlm(
-            [
-                entity_manifest_json(),
-                ndjson([claim("e1", "Anna Example", 1900)]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
-            ]
-        )
-        first = self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
-            transcription(), "Q23"
-        )
-        again = ScriptedLlm([])
-        extractor = self.extractor(
-            again, tmp_path, budget=LINE_LENGTH, resume=True
-        )
-        second = extractor.extract(transcription(), "Q23")
-        assert again.calls == []
-        assert second == first
-        assert extractor.used_fallback_manifest is False
-
-    def test_without_resume_every_stage_is_recomputed(self, tmp_path):
-        def script():
-            return ScriptedLlm(
+    def test_side_outputs_follow_the_latest_extraction(self, tmp_path):
+        """A side output the latest complete extraction has nothing for is
+        removed, so a reader never takes an older run's rejects for this
+        one's."""
+        bad = dict(claim("e1", "e1", 1917), property="shoe_size")
+        self.extractor(
+            ScriptedLlm(
                 [
                     entity_manifest_json(),
-                    ndjson([claim("e1", "Anna Example", 1900)]),
-                    ndjson([claim("e2", "Bern Example", 1902)]),
+                    ndjson([claim("e1", "e1", 1917), bad]),
+                    placeholder_claims("e2"),
                 ]
-            )
+            ),
+            tmp_path,
+            budget=LINE_LENGTH,
+        ).extract(transcription(), "Q23")
+        assert len(side_output(tmp_path, "rejects.json")) == 1
+        self.extractor(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    placeholder_claims("e1"),
+                    placeholder_claims("e2"),
+                ]
+            ),
+            tmp_path,
+            budget=LINE_LENGTH,
+        ).extract(transcription(), "Q23")
+        assert side_output(tmp_path, "rejects.json") is None
+        assert side_output(tmp_path, "coverage.json")["entities_total"] == 2
 
-        self.extractor(script(), tmp_path, budget=LINE_LENGTH).extract(
-            transcription(), "Q23"
-        )
-        llm = script()
-        self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
-            transcription(), "Q23"
-        )
-        assert [call[0] for call in llm.calls] == ["open", "fork", "fork"]
-        # recomputed in place: one record per key
-        assert len(stored(tmp_path, "chunk")) == 2
-
-    def test_reuse_rebinds_the_artifact_qid(self, tmp_path):
-        """The artifact QID is a binding, not a key component: after a
-        reset gives the artifact a new QID, every output is reused and
-        rebound to it."""
+    def test_without_a_state_directory_nothing_is_written(self, tmp_path):
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([claim("e1", "Anna Example", 1900)]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                placeholder_claims("e1"),
+                placeholder_claims("e2"),
             ]
+        )
+        ChunkedClaimExtractor(llm, budget=LINE_LENGTH).extract(
+            transcription(), "Q23"
+        )
+        assert list(tmp_path.iterdir()) == []
+
+    def test_the_conversation_is_released_after_the_chunks(self, tmp_path):
+        llm = Rejecting(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    placeholder_claims("e1"),
+                    placeholder_claims("e2"),
+                ]
+            )
         )
         self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
             transcription(), "Q23"
         )
-        again = ScriptedLlm([])
-        batch = self.extractor(
-            again, tmp_path, budget=LINE_LENGTH, resume=True
-        ).extract(transcription(), "Q57")
-        assert again.calls == []
-        assert {claim.source.artifact.qid for claim in batch.claims} == {"Q57"}
-        assert len(stored(tmp_path, "batch")) == 1
+        assert llm.closed == ["session-abc"]
+        assert llm.rejected == []
 
-    def test_engine_outage_fails_the_manifest_stage(self, tmp_path):
+    def test_engine_outage_fails_the_extraction(self, tmp_path):
         """A manifest the engine never answered is a failure to retry,
-        not a fallback to store and reuse."""
+        not a fallback to extract by."""
         llm = ScriptedLlm([RuntimeError("down"), RuntimeError("down")])
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        with pytest.raises(StageFailed, match="no engine response"):
+        with pytest.raises(RuntimeError, match="no engine response"):
             extractor.extract(transcription(), "Q23")
-        assert stored(tmp_path, "entity_manifest") == []
-        (failure,) = failures(tmp_path, "entity_manifest")
-        assert "down" in failure["reason"]
+        assert [call[0] for call in llm.calls] == ["open", "open"]
+        assert side_output(tmp_path, "coverage.json") is None
 
     def test_duplicate_claims_collapse(self, tmp_path):
         """Focus drift: two chunks emitting the same claim (identical
@@ -943,8 +809,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
-        (merged,) = stored(tmp_path, "batch")
-        rejects = json.loads(merged.extra("rejects.json"))
+        rejects = side_output(tmp_path, "rejects.json")
         assert len(rejects) == 1
         assert "shoe_size" in rejects[0]["problems"][0]
 
@@ -964,9 +829,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
-        (merged,) = stored(tmp_path, "batch")
-        rejects = json.loads(merged.extra("rejects.json"))
-        assert len(rejects) == 1
+        assert len(side_output(tmp_path, "rejects.json")) == 1
 
 
 class KeyedLlm:
@@ -1032,8 +895,6 @@ class TestParallelChunks:
         # claims arrive in chunk order regardless of completion order
         assert [c.subject.local_id for c in batch.claims] == ["e1", "e2"]
         assert llm.concurrent_peak == 2  # the calls genuinely overlapped
-        assert len(stored(tmp_path, "chunk")) == 2
-        assert failures(tmp_path, "chunk") == []
 
     def test_concurrent_failure_isolates_to_its_chunk(self, tmp_path):
         llm = KeyedLlm(
@@ -1089,14 +950,43 @@ class TestFallbackLadder:
             "c001:p1",
             "c001:p2",
         }
-        (manifest,) = stored(tmp_path, "entity_manifest")
-        assert manifest.output()["strategy"] == "line-range"
-        # a fallback is stored, flagged for attention
-        assert any(
-            "fell back to line-range" in reason
-            for reason in manifest.attention
+        # the fallback is recorded, and flagged for attention
+        (reason,) = extractor.attention
+        assert reason.startswith(
+            "entity manifest fell back to line-range segmentation"
         )
-        assert len(manifest.raw()) == 3  # two manifest turns, segmentation
+        coverage = side_output(tmp_path, "coverage.json")
+        assert set(coverage["fallback"]) == {"manifest"}
+
+    def test_rejected_tiers_are_rejected_through_the_client(self, tmp_path):
+        """Each manifest and segmentation the extractor refuses is
+        rejected, and its conversation released, before the next try."""
+        llm = Rejecting(
+            ScriptedLlm(
+                [
+                    "no manifest here",
+                    "still no manifest",
+                    "no segmentation here",
+                    "still no segmentation",
+                    placeholder_claims("w0001"),
+                ]
+            )
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000)
+        extractor.extract(transcription(), "Q23")
+        assert [response for response, _ in llm.rejected] == [
+            "no manifest here",
+            "still no manifest",
+            "no segmentation here",
+            "still no segmentation",
+        ]
+        assert [reason.split(":")[0] for _, reason in llm.rejected] == [
+            "entity manifest",
+            "entity manifest",
+            "segmentation",
+            "segmentation",
+        ]
+        assert llm.closed == ["session-abc"] * 4
 
     def test_fallback_tier_offers_the_same_kinds_as_the_manifest(
         self, tmp_path
@@ -1144,8 +1034,14 @@ class TestFallbackLadder:
         assert len(batch.claims) == 2
         assert llm.calls[-1][0] == "complete"
         assert "Full transcription" in llm.calls[-1][1]
-        (manifest,) = stored(tmp_path, "entity_manifest")
         assert any(
             "fell back to line windows" in reason
-            for reason in manifest.attention
+            for reason in extractor.attention
         )
+
+    def test_a_batch_without_claims_needs_attention(self, tmp_path):
+        llm = ScriptedLlm([entity_manifest_json(), ndjson([]), ndjson([])])
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
+        batch = extractor.extract(transcription(), "Q23")
+        assert batch.claims == []
+        assert extractor.attention == ["no claims extracted"]

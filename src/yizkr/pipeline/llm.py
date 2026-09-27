@@ -22,6 +22,13 @@ Two Anthropic-backed engines, differing in how usage is billed:
   ``ClaudeCodeClient``).
 
 Pick the model for either engine with $YIZKR_LLM_MODEL.
+
+This module is also the client factory, and the only code that imports
+the LLM cache (yizkr.pipeline.llmcache, ADR-0032): `open_cache` opens
+one, and `cached_client` wraps an engine's client so that a call made
+before with the same key is answered from it. The pipeline is written
+against the client protocols below and never against the cache, so
+without the wrapper it runs unchanged, calling the engine directly.
 """
 
 from __future__ import annotations
@@ -40,7 +47,7 @@ import threading
 import time
 import uuid
 import weakref
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -76,8 +83,45 @@ class ConversationalLlmClient(Protocol):
     def fork(self, handle: Any, prompt: str) -> str: ...
 
 
+@runtime_checkable
+class RejectingLlmClient(Protocol):
+    """Optional capability: a caller rejects a response it cannot use.
+
+    A transcription that fails the transcription check, a chunk cut off
+    before its sentinel, or an entity manifest the extractor refuses is
+    rejected, so that the next identical call asks the engine again
+    rather than being answered with the same text. Only a client that
+    keeps responses has anything to reject; see `reject_response`.
+    """
+
+    def reject(self, response: str, reason: str) -> None: ...
+
+
+def reject_response(client: Any, response: str, reason: str) -> None:
+    """Reject `response`, which `client` returned, when the client can
+    take a rejection (the LLM cache's client can); an engine's own client
+    keeps nothing, so there is nothing to do."""
+    if isinstance(client, RejectingLlmClient):
+        client.reject(response, reason)
+
+
+def _config_hash(config: dict[str, Any]) -> str:
+    """SHA-256 of an engine's effective configuration in canonical JSON."""
+    canonical = json.dumps(
+        config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 class AnthropicClient:
     """Anthropic API client (vision-capable). Explicit opt-in only."""
+
+    engine = "anthropic"
+    # the output budget every request asks for
+    MAX_TOKENS = 4096
+    # the API calls carry no system prompt and take no effort setting
+    system_prompt: str | None = None
+    effort: str | None = None
 
     def __init__(self, model: str | None = None) -> None:
         try:
@@ -98,6 +142,37 @@ class AnthropicClient:
         self.model_identifier = model or os.environ.get(
             "YIZKR_LLM_MODEL", "claude-sonnet-5"
         )
+        # what the API reported about the calling thread's last request
+        self._reports = threading.local()
+
+    @property
+    def model(self) -> str:
+        """The model every request names."""
+        return self.model_identifier
+
+    @property
+    def effective_config(self) -> dict[str, Any]:
+        """What this client sets for its requests besides the prompt."""
+        return {
+            "engine": self.engine,
+            "model": self.model_identifier,
+            "max_tokens": self.MAX_TOKENS,
+        }
+
+    @property
+    def config_hash(self) -> str:
+        """SHA-256 of ``effective_config`` in canonical JSON."""
+        return _config_hash(self.effective_config)
+
+    def call_text(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
+        """The text a one-shot call sends: the prompt itself, since the
+        images travel as blocks of their own."""
+        return prompt
+
+    def last_report(self) -> dict[str, Any]:
+        """What the API reported about the calling thread's last
+        successful request: the model that answered it."""
+        return dict(getattr(self._reports, "value", {}))
 
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
         content: list[dict] = []
@@ -119,9 +194,10 @@ class AnthropicClient:
     def _create(self, messages: list[dict]) -> str:
         response = self._client.messages.create(
             model=self.model_identifier,
-            max_tokens=4096,
+            max_tokens=self.MAX_TOKENS,
             messages=messages,
         )
+        self._reports.value = {"model": getattr(response, "model", None)}
         return "".join(
             block.text for block in response.content if block.type == "text"
         )
@@ -616,7 +692,9 @@ class ClaudeCodeClient:
     the system-prompt text, the default model and the auto-compact
     windows. ``effective_config`` lists what the engine sets for a call
     besides the prompt, and ``config_hash`` fingerprints it for the run
-    record.
+    record and for the LLM cache's keys (ADR-0032), beside the text a call
+    sends (``call_text``, ``system_prompt``). ``last_report`` gives what a
+    call's stream reported: the model that answered and the CLI version.
 
     **Transcripts.** The CLI stores every session under its projects
     directory, and forks resume from there, so sessions stay persistent
@@ -627,11 +705,22 @@ class ClaudeCodeClient:
     the client is garbage-collected or the process exits.
     """
 
+    engine = "claude-code"
     # Only file reading is permitted — the engine must never execute
     # commands or write files on behalf of model output. It is the only
     # tool the model is offered (--tools) and the only one approved
     # (--allowedTools).
     ALLOWED_TOOLS = "Read"
+    # Appended to the CLI's own system prompt for every call. Denied tool
+    # calls still consume turns in -p mode, and a planning tool grabbed
+    # mid-extraction can burn the whole cap, so everything is forbidden
+    # except reading the files a prompt names.
+    SYSTEM_PROMPT = (
+        "You are running non-interactively inside a data pipeline. "
+        "Do not use any tools except Read, and only on files named in "
+        "the prompt. No TodoWrite, no task tracking, no searching. "
+        "Produce the requested output directly in a single response."
+    )
     # The directory calls run in, under the system temporary directory:
     # it holds nothing, and the CLI files these sessions under a project
     # of their own.
@@ -703,6 +792,8 @@ class ClaudeCodeClient:
         self.model_identifier = f"claude-code/{self.cli_version}" + (
             f":{self.model}" if self.model else ""
         )
+        # what the stream reported about the calling thread's last call
+        self._reports = threading.local()
         # open conversations: sessions that forks resume, so their
         # transcripts stay in place until the conversation is closed
         self._conversations: set[str] = set()
@@ -748,14 +839,8 @@ class ClaudeCodeClient:
             json.dumps(
                 _PINNED_SETTINGS, sort_keys=True, separators=(",", ":")
             ),
-            # Denied tool calls still consume turns in -p mode; a planning
-            # tool grabbed mid-extraction can burn the whole cap. Forbid
-            # everything except reading the files we point at.
             "--append-system-prompt",
-            "You are running non-interactively inside a data pipeline. "
-            "Do not use any tools except Read, and only on files named in "
-            "the prompt. No TodoWrite, no task tracking, no searching. "
-            "Produce the requested output directly in a single response.",
+            self.SYSTEM_PROMPT,
         ]
         if self.model:
             command += ["--model", self.model]
@@ -804,26 +889,38 @@ class ClaudeCodeClient:
     def config_hash(self) -> str:
         """SHA-256 of ``effective_config`` in canonical JSON: one value
         that changes whenever anything in it does."""
-        canonical = json.dumps(
-            self.effective_config,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
+        return _config_hash(self.effective_config)
+
+    @property
+    def system_prompt(self) -> str:
+        """What every call appends to the CLI's own system prompt."""
+        return self.SYSTEM_PROMPT
+
+    def call_text(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
+        """The text a one-shot call sends the CLI: the prompt, after a line
+        that points the Read tool at each image by its absolute path."""
+        if not image_paths:
+            return prompt
+        listing = "\n".join(str(Path(p).resolve()) for p in image_paths)
+        return (
+            "First use the Read tool to examine these image files:\n"
+            f"{listing}\n\n{prompt}"
         )
-        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def last_report(self) -> dict[str, Any]:
+        """What the stream reported about the calling thread's last
+        successful call: the model that answered it, the CLI version and
+        the session."""
+        return dict(getattr(self._reports, "value", {}))
 
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
-        full_prompt = prompt
-        if image_paths:
-            listing = "\n".join(str(Path(p).resolve()) for p in image_paths)
-            full_prompt = (
-                "First use the Read tool to examine these image files:\n"
-                f"{listing}\n\n{prompt}"
-            )
         # An explicit fresh session id names the call's transcript, so it
         # is released even when the call fails before its stream reports
         # the id.
-        return self._run(["--session-id", str(uuid.uuid4())], full_prompt)
+        return self._run(
+            ["--session-id", str(uuid.uuid4())],
+            self.call_text(prompt, image_paths),
+        )
 
     def open_conversation(self, prompt: str) -> tuple[str, Any]:
         """First turn of a forkable session; the handle is its session id.
@@ -895,6 +992,7 @@ class ClaudeCodeClient:
                     f"{detail or 'no output'}"
                     " (not logged in? run `claude` interactively once)"
                 )
+            report: dict[str, Any] = {"cli_version": self.cli_version}
             for event in _stream_events(stdout):
                 if (
                     event.get("type") == "system"
@@ -906,9 +1004,16 @@ class ClaudeCodeClient:
                     self._pin.check_tools(
                         event.get("tools"), self.ALLOWED_TOOLS
                     )
+                    report = {
+                        "model": event.get("model"),
+                        "cli_version": event.get("claude_code_version")
+                        or self.cli_version,
+                        "session_id": event.get("session_id"),
+                    }
             text = self._assemble_stream(stdout)
             if not text.strip():
                 raise RuntimeError("claude CLI returned no output")
+            self._reports.value = report
             held = hold
             return text
         finally:
@@ -993,3 +1098,41 @@ def make_client(
         f"token billing), claude-code (CLI login, subscription billing) — "
         f"self-hosted adapters welcome: implement LlmClient"
     )
+
+
+def open_cache(
+    root: str | os.PathLike[str],
+    *,
+    refresh: Iterable[str] = (),
+    epochs: Mapping[str, int] | None = None,
+) -> Any:
+    """The LLM cache under ``root``, for one run (ADR-0032).
+
+    ``refresh`` names roles whose calls go to the engine once per key in
+    this run even where the cache holds an answer, which then replaces
+    it; ``epochs`` gives a role an epoch other than 0, so that its calls
+    are keyed, and answered, afresh. Nothing is written until a call is
+    answered."""
+    from yizkr.pipeline.llmcache import EngineCache
+
+    return EngineCache(root, refresh=refresh, epochs=epochs)
+
+
+def cached_client(
+    client: LlmClient,
+    cache: Any,
+    *,
+    role: str,
+    events: Callable[..., Any] | None = None,
+) -> LlmClient:
+    """``client`` with every call answered from ``cache`` (an `open_cache`
+    result) when the same call was answered before, and otherwise made
+    and kept. ``role`` names the pipeline step whose calls these are
+    (transcribe, extract, critique): its epoch and refresh setting apply.
+    ``events``, when given, receives an event for every hit, miss,
+    rejection and adoption. The wrapper presents the conversational
+    capability exactly when ``client`` has it, and adds `reject`
+    (RejectingLlmClient)."""
+    from yizkr.pipeline.llmcache import wrap
+
+    return wrap(client, cache, role=role, events=events)

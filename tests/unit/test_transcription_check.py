@@ -711,14 +711,22 @@ class TestPreflight:
                 [tmp_path / "a.jpg", tmp_path / "b.PDF"], which
             )
 
-    def test_vision_pdf_fails_before_the_engine_is_called(
+    def test_the_transcriber_leaves_the_host_check_to_the_run(
         self, tmp_path, monkeypatch
     ):
-        monkeypatch.setattr(transcribe.shutil, "which", no_tools)
-        llm = FakeLlm("never used")
-        with pytest.raises(MissingPrerequisite):
-            LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.pdf")
-        assert llm.calls == 0
+        """A run checks the host once, before any document, with
+        preflight_vision_transcription (tests/unit/test_orchestrate.py,
+        #225); the transcriber does not ask again for each document."""
+        asked = []
+        monkeypatch.setattr(transcribe.shutil, "which", asked.append)
+        monkeypatch.setattr(
+            transcription_check.subprocess, "run", FakeRun("Pages: 1\n")
+        )
+        result = LlmVisionTranscriber(FakeLlm(STAMP)).transcribe(
+            tmp_path / "scan.pdf"
+        )
+        assert result.text == STAMP
+        assert asked == []
 
     def test_images_need_no_renderer(self, tmp_path, monkeypatch):
         monkeypatch.setattr(transcribe.shutil, "which", no_tools)

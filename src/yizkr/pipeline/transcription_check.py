@@ -52,13 +52,14 @@ transcribers raise `TranscriptionCheckFailed`, whose message is the
 recorded reason, and nothing is returned for a caller to keep.
 
 This module is the single definition of a failed transcription: code that
-judges a transcription, whether freshly made, stored or imported, calls
+judges a transcription, whether freshly made, kept or imported, calls
 `check_transcription` rather than keeping patterns of its own. The step
-has its own name and version (`CHECK_STAGE`, `CHECK_VERSION`), apart
-from the transcription's: a change to a signature, the floor or the page
-count bumps `CHECK_VERSION`, which each verdict records. No stage key
-holds it, and the transcribers check only what they compute, so a bump
-re-checks nothing the stage store already holds (docs/STAGE_STORE.md).
+has its own name and version (`CHECK_STAGE`, `CHECK_VERSION`), which
+each verdict records: a change to a signature, the floor or the page
+count bumps `CHECK_VERSION`. No key needs it. The transcribers check
+every output they return, whether the engine made it in this call or the
+LLM cache kept it from an earlier one (ADR-0032), so a stricter check
+applies to every transcription in the next run (docs/LLM_CACHE.md).
 """
 
 from __future__ import annotations
