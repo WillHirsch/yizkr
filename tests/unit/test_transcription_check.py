@@ -940,7 +940,8 @@ class TestToolErrors:
     def test_the_transcriber_fails_on_the_engines_tool_error(self, tmp_path):
         """The engine answered this call and nothing kept its answer, so
         nothing is rejected and it is not asked for again: the document
-        fails, and the next run asks the engine."""
+        fails, and the next run asks the engine, unless the call was a
+        refresh (test_a_refresh_that_raises_replaces_nothing)."""
         llm = ScriptedLlm(tool_error("corrupt"), a_page(), kept=0)
         transcriber = LlmVisionTranscriber(llm)
         with pytest.raises(TranscriptionCheckFailed) as caught:
@@ -989,7 +990,10 @@ class TestToolErrors:
 class TestToolErrorsWithTheCache:
     """An answer whose engine reported a tool failing on the input is an
     error, so the LLM cache keeps nothing for it (ADR-0032): no later call
-    is answered with it, and the next asks the engine again."""
+    is answered with it, and the next asks the engine again, unless the
+    call was a refresh: then the answer the cache kept stays and is served
+    (TestOrchestratorContract.test_a_refresh_that_raises_replaces_nothing).
+    """
 
     @pytest.fixture
     def rig(self, tmp_path, monkeypatch):
@@ -1089,7 +1093,8 @@ RUN = {
 class TestOrchestratorContract:
     """With the folder orchestrator, a failed check fails the document,
     records the reason, keeps no transcription, and the next run
-    transcribes again."""
+    transcribes again. A refresh that fails is the exception: the view it
+    was to replace stays, and the next run reuses it."""
 
     @staticmethod
     def orchestrator(tmp_path, monkeypatch, engine, state="state", **options):
@@ -1168,6 +1173,61 @@ class TestOrchestratorContract:
         assert orch.advance(doc, stop_after_extract=True) == BATCHED
         assert engine.calls == 2
         assert doc.state.error is None
+
+    def test_a_refresh_that_raises_replaces_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        """The exception the transcriber's and the engine's docstrings make
+        to 'the next run asks again' (#213, #244). A transcription whose
+        Read succeeded is refreshed, and the refreshed call's Read fails:
+        the call raises and stores nothing, so the answer the cache kept and
+        the view stay. The next run in the same state directory reuses the
+        view, and one in a fresh state directory is served the kept answer;
+        neither asks the engine."""
+        cli = install_fake_cli(monkeypatch, tmp_path)
+        engine = ClaudeCodeClient()
+        cache = tmp_path / "cache"
+        scan = (tmp_path / "docs" / "scan.png").resolve()
+
+        def run(state, **options):
+            orch, source = self.orchestrator(
+                tmp_path,
+                monkeypatch,
+                engine,
+                state=state,
+                cache_dir=cache,
+                **options,
+            )
+            doc = DocumentRun(source, tmp_path / state)
+            status = orch.advance(doc, stop_after_extract=True)
+            events = [
+                (event["event"], event.get("reason"))
+                for event in orch.rundir.events()
+            ]
+            return status, doc, events
+
+        cli.answer = a_page()
+        cli.tool_events = read_events(scan)
+        status, doc, _ = run("state")
+        assert status == BATCHED
+        kept = role_entries(cache, "transcribe")
+        assert [entry["response"] for entry in kept.values()] == [a_page()]
+
+        cli.tool_events = read_events(scan, error=NOT_AN_IMAGE)
+        status, doc, _ = run("state", refresh=("transcribe",))
+        assert status == FAILED
+        assert "Read (corrupt)" in doc.state.error
+        assert len(cli.calls) == 2
+        assert doc.transcription.exists()
+        assert role_entries(cache, "transcribe") == kept
+
+        status, doc, events = run("state")
+        assert status == BATCHED
+        assert ("reused", None) in events
+        status, doc, events = run("fresh")
+        assert status == BATCHED
+        assert ("cache-hit", "key match") in events
+        assert len(cli.calls) == 2
 
     def test_only_a_fresh_start_reaches_a_transcription_made_before(
         self, tmp_path, monkeypatch

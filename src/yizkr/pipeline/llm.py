@@ -973,7 +973,10 @@ class ClaudeCodeClient:
     whatever its answer says: the call raises ``EngineToolError``, naming
     the tool and the class of its error, and returns nothing. It is an
     error like any other, so the LLM cache keeps nothing for it and the
-    next call asks again (ADR-0032).
+    next call asks again (ADR-0032), unless the call was a refresh
+    (``--refresh transcribe``): a refreshed call that raises replaces
+    nothing, so the answer the cache kept and the transcription view stay,
+    and the next run reuses them (yizkr.pipeline.transcription_check).
 
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit only the environment variables

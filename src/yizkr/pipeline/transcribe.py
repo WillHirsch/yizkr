@@ -30,10 +30,14 @@ says its Read tool failed on the input raises `EngineToolError` instead of
 answering (yizkr.pipeline.llm); the transcriber checks that as a tool
 error, which fails the output whatever it says. Nothing kept that answer,
 so it is not asked for again: the document fails, and the next run asks
-the engine again. `transcribe_unchecked()` is the transcription step
-alone, for a caller that runs the check as a step of its own; an engine
-error, the tool error among them, still raises from it. A caller that
-keeps transcriptions checks the ones it reuses again
+the engine again, unless the failed call was a refresh
+(`--refresh transcribe`). A refreshed call that raises replaces nothing,
+so the answer the cache kept and the transcription view stay, and the
+next run reuses them without asking the engine
+(yizkr.pipeline.transcription_check). `transcribe_unchecked()` is the
+transcription step alone, for a caller that runs the check as a step of
+its own; an engine error, the tool error among them, still raises from
+it. A caller that keeps transcriptions checks the ones it reuses again
 (yizkr.pipeline.orchestrate), so a stricter check applies to every
 transcription, apart from its reading of tool errors, which only a call
 records (yizkr.pipeline.transcription_check).
