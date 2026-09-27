@@ -127,6 +127,13 @@ convention — so explicit instance_of claims become redundant rather
 than required. Alias accumulation is append-only and idempotent; every
 ingested document improves the next one's matching.
 
+Amended by #88 (2026-09-27): the `instance of` and `type hint` the
+writer writes when it mints an item carry, beside `stated in` → the
+artifact that mentions the entity, `inferred from extraction run` → the
+batch's run item (ADR-0003 §2). The kind is the extraction's proposal, a
+machine write, so it takes both references rather than the registrar's
+single one.
+
 Coverage report: in place of ADR-0006's line audit, `coverage.json`
 flags transcription lines that mention no manifest entity (heuristic:
 capitalized-token match against labels/aliases) plus manifest entities
