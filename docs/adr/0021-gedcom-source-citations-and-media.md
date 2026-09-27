@@ -16,24 +16,24 @@ common tag families it did **not** map are `SOUR` (source citations) and
 `OBJE` (multimedia objects). They were once "counted" only where they sat
 one level under an `INDI`/`FAM` record, which under-reported them badly;
 the preceding change's census named the top-most unmapped tag in every
-branch, making their true prevalence visible. In the real Ancestry export
-that prompted this (`Hirsch Family Tree.ged`): **134 `SOUR`** and **8
-`OBJE`**, against 72 individuals.
+branch, making their true prevalence visible. Both are common in
+family-tree exports: a well-sourced tree carries a `SOUR` citation behind
+most of its facts, and an `OBJE` for each attached photo, scan or clipping.
 
 That prevalence forces a principled question rather than a parser one,
 because of what these tags *are*:
 
 - A **`SOUR` citation** is the upstream source the export's own assertion
-  rests on — a General Register Office birth index (`Volume 6a, Page 735`),
-  a civil registration marriage index, a Find a Grave entry — carried as a
-  pointer to a level-0 `SOUR` record plus a `PAGE` locator and an Ancestry
+  rests on — a birth index (`Volume N, Page M`), a civil registration
+  marriage index, a Find a Grave entry — carried as a pointer to a
+  level-0 `SOUR` record plus a `PAGE` locator and an Ancestry
   `_APID`. This archive's founding principle (ADR-0002, CLAUDE.md) is that
   it *records what sources assert*. Ingesting the assertions while dropping
   the citations those assertions themselves cite is a standing tension with
-  that principle: we keep "Donald was born Oct 1958" but discard "…per the
-  GRO index, Vol 6a p 735, as cited by the tree".
+  that principle: we keep "Gustav was born 7 Jan 1919" but discard "…per
+  the birth index, Vol N p M, as cited by the tree".
 - An **`OBJE` object** is a photograph, scan, or clipping — e.g. an
-  *"Obituary notice in Chicago Tribune"*, dated and placed, with a
+  *"Obituary notice in <newspaper>"*, dated and placed, with a
   `newspapers.com` URL. In an Ancestry export the **bytes are remote**: the
   file references media the archive does not hold. Registering media
   (ADR-0004/0010) keys on the SHA-1 of bytes we *have*, and the privacy
@@ -59,13 +59,13 @@ adapter's `source()` helper folds it into the claim's existing reference:
 the `PAGE` becomes the reference's `page_number` locator (ADR-0003), and
 the cited level-0 `SOUR` record's title is resolved from its opaque
 `@S..@` pointer and appended to the transcription excerpt (`… | cited:
-England & Wales, Civil Registration Marriage Index`), so the reviewer
+Adressbuch der Stadt Flörburg 1912`), so the reviewer
 reads the source's name, not a pointer. The verbatim `SOUR`/`PAGE` lines
 remain in the excerpt. No new entities are minted, so nothing is
 auto-confirmed. The upstream source is **resolved, never fetched**.
 
 **Step B (deferred).** Promoting each level-0 `SOUR` record to its own
-artifact / artifact-fragment item (a *cited source*, e.g. the GRO index),
+artifact / artifact-fragment item (a *cited source*, e.g. the birth index),
 referenced `stated in →` from every claim that cites it and de-duplicated
 like places, is real modeling work — citation identity, dedup, a review
 step (never auto-merge). It gets its own ADR + review flow when

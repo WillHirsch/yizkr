@@ -8,10 +8,10 @@ the model applies to a clean re-ingest, not a migration of existing rows
 ## Context
 
 Ingestion routes relational references to a person — "our great
-grandmother", "meine Oma", "Tante Rosa", "my husband", "the deceased" —
+grandmother", "meine Oma", "Nana Maisie", "my husband", "the deceased" —
 into that person's **alias bag**. The entity-manifest extraction prompt
-instructs it directly; its worked example unifies `"Rosa Genserowski"`,
-`"Rosa"`, and `"our great grandmother"` into one entry whose aliases list
+instructs it directly; its worked example unifies `"Cäcilie Löbig"`,
+`"Cäcilie"`, and `"our great grandmother"` into one entry whose aliases list
 "every other form, verbatim".
 
 That is the wrong home, on three axes at once. ADR-0011 defines aliases as
@@ -19,7 +19,7 @@ That is the wrong home, on three axes at once. ADR-0011 defines aliases as
 reference, qualifier, or rank". A relational reference is:
 
 - **not a name** — "great grandmother" is a *description*, and the alias
-  bag asserts it as an appellation *of* Rosa without saying so;
+  bag asserts it as an appellation *of* Cäcilie without saying so;
 - **perspectival** — "our" / "meine" is relative to a speaker; the term is
   meaningless without the viewpoint the alias bag discards;
 - **unreferenced** — no record of *who* used it or *which source*.
@@ -44,9 +44,9 @@ things, and the extractor routes it accordingly:
 
 ### (A) A derivable kinship description → `relative` + `kinship_type`
 
-"our great grandmother", "meine Oma", "mein Onkel", "cousin Sara" assert a
-**kinship relation** to an ego. These reuse the existing ADR-0014
-machinery with no new vocabulary: `Rosa —relative→ <ego> ; kinship_type =
+"our great grandmother", "meine Oma", "mein Onkel", "Dad's cousin Leopold"
+assert a **kinship relation** to an ego. These reuse the existing ADR-0014
+machinery with no new vocabulary: `Cäcilie —relative→ <ego> ; kinship_type =
 "great grandmother"`, referenced to the artifact. The ego (the "our") is
 the *object* of the statement, so the viewpoint is captured structurally,
 and the frontend re-renders the term from the derivation calculus
@@ -54,7 +54,7 @@ and the frontend re-renders the term from the derivation calculus
 
 ### (B) A non-derivable appellation → a new perspectival property
 
-"Tante Rosa" where Rosa is no aunt (a courtesy title), "Bubele" (a pet
+"Nana Maisie" where Maisie is no relation (a courtesy title), "Bubele" (a pet
 name), a family-specific term of address — these are genuine appellations
 but not literal kinship. They get a **new, first-class, referenced
 statement on the referent**:
@@ -63,7 +63,7 @@ statement on the referent**:
   the source's wording. Mirrors the spirit of Wikidata **P1810 "subject
   named as"** (the term a specific context uses for a subject); it is
   deliberately *not* `nickname` (P1449), which is an *absolute* informal
-  personal name ("Fred", "Bubi") and would re-import the perspective
+  personal name ("Peppi", "Cilli") and would re-import the perspective
   problem.
 - **`perspective`** (wikibase-item, qualifier, **optional**) — the person
   or `family` (ADR-0014) from whose viewpoint the appellation applies (the
@@ -77,7 +77,7 @@ referenced to the artifact that records it.
 
 A `family` item enters the graph exactly like any other entity — the
 entity-manifest pass mints one **only when a source names a collective**
-("the Wulffs", "the Rothholz family", "the Schimpf couple"), after which
+("the Löbigs", "the Lobig family", "the Lobig couple"), after which
 it flows through reconcile → review → write and its members attach via
 kinship or `member of`. A bare possessive — "*our* great grandmother",
 "*meine* Oma" — is a pronoun, not a named collective, and must **never**
@@ -93,7 +93,7 @@ person's. Where no named collective exists, `perspective` falls back to a
 specific person (the author/informant, when identifiable) or is left
 empty — leaning on the source reference for viewpoint. (Family membership
 rides `member of`, whose scope is widened here to include a `family`, not
-only an organization, so "who is *in* the Rothholz family" is recordable.)
+only an organization, so "who is *in* the Lobig family" is recordable.)
 
 ### The routing rule (conservative by default)
 

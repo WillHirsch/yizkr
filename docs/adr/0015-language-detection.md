@@ -8,9 +8,9 @@ offline statistical identifier, with a confidence floor and a
 ## Context
 
 `yizkr ingest run` walks a whole folder, but a real family archive is
-multilingual: German scans sit beside English memoirs beside a Spanish
-émigré letter. The pipeline took a single run-wide `--language` (default
-`en`) and applied it to every file in the batch.
+multilingual: German certificates sit beside an English oral history and
+naturalisation papers. The pipeline took a single run-wide `--language`
+(default `en`) and applied it to every file in the batch.
 
 That language is not cosmetic. It is the BCP-47 tag on the
 `transcription_excerpt` monolingual values written as references
@@ -52,7 +52,7 @@ from its full transcription text**, per file, at the point the
 4. **Excerpt language stays per-excerpt.** The document-level tag is the
    *default hint* the extraction model gets, not a ceiling: the extractor
    still tags each excerpt in its own language, so a German quote inside
-   an English memoir keeps its `de` excerpt. Detection fixes the default;
+   an English interview keeps its `de` excerpt. Detection fixes the default;
    it does not flatten genuinely multilingual documents.
 
 ## Consequences

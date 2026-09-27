@@ -9,8 +9,8 @@ name to a referenced statement deferred, see "Later")
 A person carries many names, and *which kind* each is matters to
 identity: a name registered at birth, a maiden name, a name taken on
 marriage, a formally/legally changed name, an informal nickname. That
-typing is exactly the evidence that resolves alias questions — "Rosa
-Genserowski" (birth) and "Rosa Rothholz" (married) are one person; a
+typing is exactly the evidence that resolves alias questions — "Ida
+Sörne" (birth) and "Ida Löbig" (married) are one person; a
 matching *birth* name is stronger evidence of identity than a matching
 married name, and a differing birth name is evidence of distinctness.
 
@@ -69,7 +69,7 @@ Deterministically, never guessing:
 - **NICK** subtag and the non-standard **_MARNM** tag → nickname /
   married name.
 - **Inline convention** — a quoted or single-word parenthetical token in
-  a name ("Frederick (Fred) George", "Gerhard 'Bubi' Weissrock") is the
+  a name ("Ida (Peppi) Sörne", "Cäcilie 'Cilli' Tarle") is the
   near-universal way genealogy data writes a nickname, and is the *only*
   way the real Ancestry export expresses them. Extracted conservatively
   (≤ two words, no digits, so "(born 1900)" is never mistaken for a
