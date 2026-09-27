@@ -18,6 +18,8 @@ pytestmark = pytest.mark.live
 
 ARTIFACT_TITLE = "Integration-test certificate"
 PERSON_LABEL = "Integration Test Person"
+# the example universe's family firm, under this file's label prefix
+FIRM_LABEL = "Integration Test Hutmacherei zum Blauen Hut"
 
 
 def png_bytes(fill: bytes = b"\x32\x32\xc8") -> bytes:
@@ -356,9 +358,11 @@ def test_detected_language_tags_excerpt_reference(client, artifact):
     reference snak — proving Wikibase accepts a detected tag end to end."""
     from yizkr.pipeline.language import AUTO, resolve_language
 
+    # Eugen Löbig's life in the example universe, spelled out and
+    # transliterated as a typed transcript might give it
     german = (
-        "Geboren am dritten Maerz neunzehnhundertneunundzwanzig in Berlin, "
-        "gestorben im Jahr neunzehnhundertfuenfundvierzig in Theresienstadt."
+        "Geboren im Jahr achtzehnhundertsechsunddreissig in Floerburg, "
+        "gestorben am sechzehnten Maerz neunzehnhundertneun in Floerburg."
     )
     resolution = resolve_language(german, AUTO)
     assert resolution.code == "de"  # the pipeline picks the language itself
@@ -379,7 +383,7 @@ def test_detected_language_tags_excerpt_reference(client, artifact):
                         "instance_of": "human",
                     },
                     "property": "date_of_birth",
-                    "value": {"type": "time", "year": 1929},
+                    "value": {"type": "time", "year": 1836},
                     "source": {
                         "artifact": {
                             "kind": "qid",
@@ -416,7 +420,7 @@ def test_detected_language_tags_excerpt_reference(client, artifact):
         for ref in claim.get("references", [])
         for snak in ref["snaks"].get(excerpt_pid, [])
     ]
-    german_excerpts = [e for e in excerpts if e["text"].startswith("Geboren")]
+    german_excerpts = [e for e in excerpts if e["text"] == german[:60]]
     assert german_excerpts, "the German excerpt was not written"
     assert all(e["language"] == "de" for e in german_excerpts)
 
@@ -632,7 +636,7 @@ def harness_batch(artifact_qid: str) -> ClaimBatch:
         "artifact": {"kind": "qid", "qid": artifact_qid},
         "page_number": "1",
         "transcription_excerpt": {
-            "text": "worked at the mill",
+            "text": "worked at the hat shop, the Blue Hat",
             "language": "en",
         },
     }
@@ -657,7 +661,7 @@ def harness_batch(artifact_qid: str) -> ClaimBatch:
                         "value": {
                             "kind": "local",
                             "local_id": "org-1",
-                            "label": "Integration Test Mill AG",
+                            "label": FIRM_LABEL,
                             "instance_of": "organization",
                         },
                     },  # fmt: skip
@@ -679,7 +683,7 @@ def harness_batch(artifact_qid: str) -> ClaimBatch:
                 {"id": "person-1", "label": PERSON_LABEL, "kind": "human"},
                 {
                     "id": "org-1",
-                    "label": "Integration Test Mill AG",
+                    "label": FIRM_LABEL,
                     "kind": "organization",
                 },  # fmt: skip
                 {

@@ -88,9 +88,7 @@ def build_deck(path, reorder=False):
         )
         archive.writestr(
             "ppt/slides/slide1.xml",
-            slide_xml(
-                ["The Beispiel family", " in Springfield"], ["Married 1901"]
-            ),
+            slide_xml(["The Löbig family", " in Flörburg"], ["Married 1905"]),
         )
         archive.writestr(
             "ppt/slides/_rels/slide1.xml.rels",
@@ -102,7 +100,7 @@ def build_deck(path, reorder=False):
             ),
         )
         archive.writestr(
-            "ppt/slides/slide2.xml", slide_xml(["Anna's certificate"])
+            "ppt/slides/slide2.xml", slide_xml(["Gustav's certificate"])
         )
         archive.writestr(
             "ppt/slides/_rels/slide2.xml.rels",
@@ -128,18 +126,18 @@ class TestUnpack:
         assert [slide.number for slide in content.slides] == [1, 2]
         assert (
             content.slides[0].text
-            == "The Beispiel family in Springfield\nMarried 1901"
+            == "The Löbig family in Flörburg\nMarried 1905"
         )
         assert content.slides[0].notes == "Scanned from the family album"
-        assert content.slides[1].text == "Anna's certificate"
+        assert content.slides[1].text == "Gustav's certificate"
         assert content.slides[1].notes == ""
 
     def test_slide_order_follows_presentation_not_filenames(self, tmp_path):
         content = unpack_pptx(build_deck(tmp_path / "deck.pptx", reorder=True))
         # sldIdLst puts file 2 first: it becomes slide NUMBER 1
-        assert content.slides[0].text == "Anna's certificate"
+        assert content.slides[0].text == "Gustav's certificate"
         assert content.slides[0].number == 1
-        assert "Married 1901" in content.slides[1].text
+        assert "Married 1905" in content.slides[1].text
 
     def test_media_mapped_to_slides_and_deduplicated(self, tmp_path):
         content = unpack_pptx(build_deck(tmp_path / "deck.pptx"))
@@ -164,13 +162,13 @@ class TestTranscript:
     def test_slide_markers_scope_the_text(self, tmp_path):
         content = unpack_pptx(build_deck(tmp_path / "deck.pptx"))
         transcript = slide_transcript(content)
-        assert transcript.index("[Slide 1]") < transcript.index("Married 1901")
+        assert transcript.index("[Slide 1]") < transcript.index("Married 1905")
         assert (
-            transcript.index("Married 1901")
+            transcript.index("Married 1905")
             < transcript.index("[Slide 1 notes]")
             < transcript.index("Scanned from the family album")
             < transcript.index("[Slide 2]")
-            < transcript.index("Anna's certificate")
+            < transcript.index("Gustav's certificate")
         )
 
 
