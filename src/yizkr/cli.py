@@ -6,6 +6,7 @@
     yizkr claims           claim-contract utilities (JSON schema, validate)
     yizkr ingest <step>    pipeline steps; every step reads/writes plain
                            files so runs pause for review and resume
+    yizkr stages <action>  the stage store: version registry, run state
 
 Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 --env-file); see deploy/README.md.
@@ -22,6 +23,9 @@ from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline.stageversions import STAGES
+
+STAGE_NAMES = sorted(name for name, stage in STAGES.items() if stage.stored)
 
 
 def _client(args) -> WikiClient:
@@ -301,7 +305,7 @@ def cmd_extract(args) -> int:
         if chunked:
             extractor = ChunkedClaimExtractor(
                 make_client(args.llm),
-                state_dir=args.out.with_name(args.out.name + ".chunks"),
+                state_dir=args.out.with_name(args.out.name + ".stages"),
                 budget=args.chunk_budget,
                 retries=args.chunk_retries,
                 resume=args.resume,
@@ -563,7 +567,79 @@ def cmd_run(args) -> int:
         extract_concurrency=args.extract_concurrency,
         env_file=args.env_file,
         exclusions=exclusions,
+        store_dir=args.store,
+        recompute=args.recompute or (),
+        rederive_unrecorded=args.rederive_unrecorded,
     ).run()
+
+
+def cmd_stages_check(args) -> int:
+    from yizkr.pipeline.stageversions import check_versions
+
+    problems = check_versions()
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if not problems:
+        print("every stage and method matches its recorded version")
+    return 1 if problems else 0
+
+
+def cmd_stages_lock(args) -> int:
+    from yizkr.pipeline.stageversions import (
+        entries,
+        load_lock,
+        lock_versions,
+        save_lock,
+    )
+
+    lock = load_lock()
+    names = args.names or sorted(set(entries()) | set(lock))
+    try:
+        lock = lock_versions(names, neutral=args.neutral, lock=lock)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    save_lock(lock)
+    print(f"recorded {', '.join(names)}")
+    return 0
+
+
+def cmd_stages_state(args) -> int:
+    from yizkr.pipeline.rundir import REUSED, RunDir, run_state
+    from yizkr.pipeline.stages import StageStore
+
+    run = RunDir(args.run)
+    store_root = args.store or run.manifest().get("store")
+    if not store_root:
+        sys.exit(f"{args.run}: no run.json naming a store; pass --store")
+    states = run_state(run, StageStore(Path(store_root)))
+    ordered = sorted(states.items(), key=lambda pair: str(pair[0]))
+    if args.json:
+        rows = [
+            {
+                "subject": subject,
+                "stage": stage,
+                "item": item,
+                "status": state.status,
+                "reason": state.reason,
+                "key": state.key,
+            }
+            for (subject, stage, item), state in ordered
+        ]
+        print(json.dumps(rows, indent=2))
+        return 0
+    summary: dict[str, dict[str, int]] = {}
+    for (_subject, stage, _item), state in ordered:
+        label = state.status
+        if state.status == REUSED and state.reason:
+            label += f" ({state.reason})"
+        counts = summary.setdefault(stage, {})
+        counts[label] = counts.get(label, 0) + 1
+    for stage, counts in summary.items():
+        rendered = ", ".join(
+            f"{count} {label}" for label, count in sorted(counts.items())
+        )
+        print(f"{stage:16} {rendered}")
+    return 0
 
 
 def cmd_detect_faces(args) -> int:
@@ -840,7 +916,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "single", "chunked"],
         default="auto",
         help="chunked extraction (ADR-0006): auto picks chunked for "
-        "large transcriptions; state lives in <out>.chunks/",
+        "large transcriptions; its stage store lives in <out>.stages/",
     )
     p.add_argument("--chunk-budget", type=int, default=2000, metavar="CHARS")
     p.add_argument("--chunk-retries", type=int, default=2, metavar="N")
@@ -855,9 +931,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--resume",
         action="store_true",
-        help="reuse chunk state from a previous run; only missing/"
-        "failed chunks are re-run (persisted raw responses are "
-        "re-parsed before re-invoking the model)",
+        help="reuse stage outputs from a previous run whose keys still "
+        "match; only missing or failed chunks are re-run (a failed "
+        "chunk's logged response is re-parsed before re-invoking the "
+        "model). Without it every extraction stage is recomputed",
     )
     p.set_defaults(func=cmd_extract)
 
@@ -1037,6 +1114,40 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile-graph pass (ADR-0019). Advance by re-running after each "
         "review; ~2 re-runs per artifact",
     )
+    p.add_argument(
+        "--store",
+        type=Path,
+        default=Path("var/stages"),
+        help="stage store shared across runs (default var/stages): every "
+        "stage output before the review gates, keyed by what it was "
+        "computed from, so a re-run recomputes only what changed",
+    )
+    p.add_argument(
+        "--recompute",
+        action="append",
+        choices=STAGE_NAMES,
+        metavar="STAGE",
+        help="recompute this stage even where its key matches (repeatable; "
+        f"one of {', '.join(STAGE_NAMES)})",
+    )
+    p.add_argument(
+        "--rederive-unrecorded",
+        action="store_true",
+        help="adopt a document directory that has files but no "
+        "derivations.json, and derive its stages again. A copy of each "
+        "stage output (transcription.json, batch.json, critique.json) is "
+        "kept first, as batch.superseded-<n>.json and so on; stages the "
+        "store does not hold under their current keys are then computed, "
+        "calling the engine for all but a GEDCOM file, and the views are "
+        "replaced. Unless the new batch has the same content as "
+        "batch.json, the reviewed CSVs are moved aside. Without it such a "
+        "document is held, whatever the store holds, and nothing in its "
+        "directory changes but the state.json that records the hold. A "
+        "document whose source bytes changed since its state.json was "
+        "saved is not held: its directory is moved aside whole, as "
+        ".<name>.superseded-<n> beside it, and the new bytes are ingested "
+        "in a fresh one",
+    )
     p.set_defaults(func=cmd_run)
 
     p = isub.add_parser(
@@ -1093,6 +1204,52 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--qid", help="person item QID, if it exists")
     p.add_argument("--gallery", type=Path, default=Path("gallery.json"))
     p.set_defaults(func=cmd_enroll_face)
+
+    stages = sub.add_parser(
+        "stages",
+        help="the stage store: version registry and derived run state",
+    )
+    ssub = stages.add_subparsers(dest="action", required=True)
+
+    p = ssub.add_parser(
+        "check",
+        help="compare every stage's sources with its recorded version",
+    )
+    p.set_defaults(func=cmd_stages_check)
+
+    p = ssub.add_parser(
+        "lock",
+        help="record the current sources of stages after a version bump, "
+        "or as functionally neutral with --neutral",
+    )
+    p.add_argument(
+        "names",
+        nargs="*",
+        metavar="STAGE[:METHOD]",
+        help="stages or methods to record (default: all)",
+    )
+    p.add_argument(
+        "--neutral",
+        metavar="WHY",
+        help="record the change as functionally neutral for the current "
+        "version, with this reason",
+    )
+    p.set_defaults(func=cmd_stages_lock)
+
+    p = ssub.add_parser(
+        "state",
+        help="per-stage run state derived from a run directory and the store",
+    )
+    p.add_argument("run", type=Path, help="run directory (with run.json)")
+    p.add_argument(
+        "--store", type=Path, help="stage store (default: from run.json)"
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="every document and stage, with reason and key",
+    )
+    p.set_defaults(func=cmd_stages_state)
 
     return parser
 

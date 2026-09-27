@@ -31,15 +31,15 @@ NICK / `_MARNM` / inline parentheticals → typed names + a clean label). The **
 entity-manifest path has no equivalent**, so it emits three pathologies, all seen
 in real extracted data:
 
-1. **Composed permutations** — "Frida Hollfeld/Falk/Gellerowski" with aliases
-   `Frida Hollfeld | Frida Falk | Frida Gellerowski`: one given name and three
-   alternative surnames held non-concurrently, flattened into opaque full-name
-   alias strings.
-2. **Derivable short-forms** — `Sigmund | Siggi | S. Gellerowski`: a bare given
+1. **Composed permutations** — "Hildegard Laudler/Löbig" with aliases
+   `Hildegard Laudler | Hildegard Löbig`: one given name and two alternative
+   surnames held non-concurrently, flattened into opaque full-name alias
+   strings.
+2. **Derivable short-forms** — `Gustav | Gustl | G. Löbig`: a bare given
    name and an initialism stored as if they were distinct names.
-3. **Label-embedded metadata** — `Lazar Gellerowski (later Leon Gell)`, `Rieke
-   Sadelman-Rauholz (b. Gellerowski)`: typed-name assertions left inside the
-   label parenthetical instead of parsed out to a clean label + typed statements.
+3. **Label-embedded metadata** — `Gustav Löbig (later Gustave Lobig)`, `Agnes
+   Löbig (geb. Nertler)`: typed-name assertions left inside the label
+   parenthetical instead of parsed out to a clean label + typed statements.
 
 Three adversarial design passes (recorded in the run's workflow transcripts)
 established the shape of the fix and, crucially, separated concerns the first
@@ -49,12 +49,12 @@ analyses had conflated:
   independent rulers with opposite priors (YAGNI-minimalist and structure-honest)
   both ruled against it, at high confidence. The given/family *kind* is
   undecidable without name-order convention (a source-first-forbidden guess that
-  inverts on surname-first cultures — "Nagy/Kovács Erzsébet" — and shatters
+  inverts on surname-first cultures — "Sörne/Löbig Ida" — and shatters
   particle surnames — "van der Berg"); where it *is* cleanly decidable (GEDCOM
   `SURN`/`GIVN`) it is the component ADR-0011 already deferred and yields a
   type-unknown surname the adjudication prompt itself classes as *weak* evidence;
   it adds zero blocking recall (blocking already tokenises); the "all the
-  Genserowskis" query needs either the fuzzy matching the alias bag already
+  Löbigs" query needs either the fuzzy matching the alias bag already
   supports or a shared item node that would create an ADR-0020 re-identification
   surface; and ADR-0009's world-knowledge-via-run-provenance precedent does not
   transfer, because place containment is checkable against external geography
@@ -62,15 +62,15 @@ analyses had conflated:
   would launder a guess rather than record verifiable world-knowledge.
 - **But composition ≠ kind.** There are *three* axes, not two, and they differ in
   decidability: **composition role** (which token is the fixed part vs. the
-  alternating part) is prescribed by the notation — the `/` fixes "Frida" and
-  alternates the surname, so `Frida Falk` is a *licensed* composition, not a
-  fabrication; **kind** (given vs. family) needs name-order convention and is
+  alternating part) is prescribed by the notation — the `/` fixes "Hildegard"
+  and alternates the surname, so `Hildegard Löbig` is a *licensed* composition,
+  not a fabrication; **kind** (given vs. family) needs name-order convention and is
   never asserted; **type** (birth vs. married vs. official) needs a marker and is
   recorded only where marked. The earlier "never compose permutations" ban folded
   composition into kind and over-reached.
 - **The LLM is the right primary normalizer.** The semantic work — stripping
   "born / née / geb. / z domu / urodzona / …" across languages and scripts,
-  reading licensed compositions, inferring `Siggi`~`Sigmund` from context, and
+  reading licensed compositions, inferring `Gustl`~`Gustav` from context, and
   emitting a typed name *with a located source excerpt* (which a label-parser
   cannot produce) — is the LLM's comparative advantage; it already reads the whole
   document. A hand-coded multilingual marker lexicon in Python is exactly the
@@ -107,7 +107,7 @@ The primary normalization moves into the entity-manifest / chunk extraction
 prompt as explicit standards:
 
 - Compose only the forms the source's notation and context **license** — never a
-  blind cross-product (a multi-axis name like "Frida/Franziska Hollfeld/Falk"
+  blind cross-product (a multi-axis name like "Klara/Clara Löbig/Lobig"
   is capped, not exploded), and never a contiguous surface form the source never
   used.
 - Produce one **clean canonical label** (the fullest attested form, annotations
@@ -125,9 +125,9 @@ mechanical invariants, it does no multilingual semantics:
 - Drop an alias whose stripped ≥3-char token set is a strict subset of the
   label's tokens (bare givens, initialisms) — recall-safe by the semantics of
   `_name_tokens` / `_tokens_overlap`; keep genuinely non-derivable forms
-  (`Siggi`).
+  (`Gustl`).
 - Keep hyphenated **and** space-separated compound / nobiliary-particle surnames
-  whole as single alias units (`Sadelman-Rauholz`, `de la Cruz`, `van der Berg`,
+  whole as single alias units (`A-B`, `de la Cruz`, `van der Berg`,
   `ben Yosef`) — never shatter them into particle tokens.
 - Guard a composed alias against introducing a token absent from the attested
   forms (a hallucination check).
@@ -139,7 +139,7 @@ brittle layer §3 avoids.
 ### 5. Frontend factors, never fabricates
 
 Composed forms stored as aliases are **factored** for compact display
-(longest-common-prefix → "Frida (Hollfeld / Falk / Gellerowski)"), and
+(longest-common-prefix → "Hildegard (Laudler / Löbig)"), and
 short-forms and succession are derived at render — the same derive-at-frontend
 posture as kinship, co-residence, and possibly-living status. Factoring stored
 compositions is pure string work; it never invents a permutation the source did
@@ -247,7 +247,7 @@ representative cases rather than on toy examples that may not generalise.
   reviews matched proposals only) — eventually warrant their own lightweight
   review view, beyond the `critique_notes` flag.
 - The frontend factoring/derivation layer is a separate build with its own
-  design (search must resolve "Frida Falk" when the label is "Frida Hollfeld"
-  and the atoms/compositions are aliases).
+  design (search must resolve "Hildegard Löbig" when the label is
+  "Hildegard Laudler" and the atoms/compositions are aliases).
 - If a concrete position-typed-surname query need or a space-compound blocking
   defect ever materialises, reopen a *targeted* feature — not a per-person tier.

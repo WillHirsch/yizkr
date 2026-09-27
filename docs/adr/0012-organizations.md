@@ -6,14 +6,14 @@ Status: accepted
 
 The model had `human`, `place`, `event`, `artifact`, `occupation` — but
 no way to represent an **organization acting as an agent**. In the third
-trial (real German business/emigration documents) this surfaced
-concretely: the Hermannmühlen-Aktiengesellschaft that *employed* Hermann
-Rothholz and 29 mill workers was classified as a **place**, because
+trial this surfaced concretely: the Hutmacherei zum Blauen Hut that
+*employed* Sebastian Löbig was classified as a **place**, because
 `place` was the nearest available kind. Companies, banks, committees,
 government departments, schools, and congregations recur throughout this
-corpus (the Jewish Support Committee that relocated Charlotte, the
-Persian Department of Industry that hired Erwin, the European bookshop he
-ran), and none could be typed correctly.
+corpus (the Wiedergutmachungsamt Peiltal that handled Leopold's claim,
+the Landgericht Rekau that divorced him, the Städtische Realschule
+Flörburg that taught his brother Rudolf), and none could be typed
+correctly.
 
 An organization is not a place (it has a location; it is not one) and not
 a person (it acts, but is not human). It is a distinct kind of agent.
@@ -30,23 +30,23 @@ Fork decisions (from the reviewed spec) are recorded inline.
   when a query demands it.)*
 
 - **`employer`** (Wikidata `P108`, wikibase-item) — person → organization.
-  This is the load-bearing relation for the corpus: the mill staff,
-  Hermann's post, Erwin's government appointment and bookshop.
+  This is the load-bearing relation for the corpus: Sebastian Löbig at
+  the family firm, and any staff, post or appointment a document records.
   *(Fork B: class + `employer`; `member of`/`owner`/`founder` deferred.)*
 
-- **`occupation` stays orthogonal to `employer`** *(Fork D)*. A mill
-  worker asserts two independent, separately-referenced things: what they
-  do (`occupation → "miller"`, an occupation_class item) and who they
-  work for (`employer → Hermannmühlen AG`, an organization item). Neither
-  subsumes the other; either can be queried alone.
+- **`occupation` stays orthogonal to `employer`** *(Fork D)*. A hatter's
+  record asserts two independent, separately-referenced things: what they
+  do (`occupation → "Hatter"`, an occupation_class item) and who they
+  work for (`employer → Hutmacherei zum Blauen Hut`, an organization
+  item). Neither subsumes the other; either can be queried alone.
 
 - **Single kind, by primary role** *(Fork C)*. `EntityRecord.kind` stays
   a single manifest key. Extraction picks `organization` when the source
   treats the entity as an **agent** (employs, is deregistered, pays tax,
   helps, hires) and `place` when it treats it as a **location** (born at,
-  died at, lives in, located at). So Hermannmühlen AG (deregistered,
-  employs) is an organization; "Jewish Hospital, Auguststrasse" (a
-  birthplace) stays a place. Dual-nature entities pick their dominant use
+  died at, lives in, located at). So the Hutmacherei zum Blauen Hut
+  (employs) is an organization; "Friedhof Flörburg" (a burial place)
+  stays a place. Dual-nature entities pick their dominant use
   in the document. True dual `instance of` (org *and* place) would need a
   multi-kind pipeline and is out of scope.
 
@@ -56,7 +56,7 @@ Fork decisions (from the reviewed spec) are recorded inline.
   separate place item only when the source clearly distinguishes them.
 
 - **Verbatim labels** *(Fork G)*. Organization labels keep the source's
-  wording (`Hermannmühlen=Aktiengesellschaft`, OCR artifact and all);
+  wording (`Hut=macherei zum Blauen Hut`, OCR artifact and all);
   normalisation is a curator edit in the review CSV, never an extraction
   guess — the same rule as occupation/cause-of-death labels.
 
@@ -69,9 +69,9 @@ Fork decisions (from the reviewed spec) are recorded inline.
 ## Consequences
 
 - Companies, agencies, committees, and institutions become first-class
-  agents; "who employed whom", "which businesses the family ran", and
-  "which agency deported them" become answerable.
-- The staff-list and biographical documents can record employment
+  agents; "who employed whom", "which businesses the Löbigs ran", and
+  "which agency deported Ida Löbig" become answerable.
+- Address-book and biographical documents can record employment
   (`occupation` + `employer`) instead of collapsing it into a mistyped
   place.
 - Registrar, writer, and reconciler need no structural change:

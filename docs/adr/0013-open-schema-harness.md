@@ -86,7 +86,7 @@ sees them at the existing gate. Each `Finding` also carries a derived
 `axis` — `subject`/`predicate`/`value` from its target grammar — the
 general statement-part decomposition ADR-0023 surfaces per concern. This
 is the reconciliation adjudicator's pattern applied to extraction, and it
-is what would have caught both MOTHER and the mill without a human
+is what would have caught both MOTHER and the hat shop without a human
 eyeballing raw output.
 
 ### Prompt hardening

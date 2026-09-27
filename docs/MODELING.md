@@ -151,10 +151,10 @@ artifact item by QID instead is valid only on that instance.
 - Use Wikibase time precision (year / month / day / decade / century).
 - Ranges and vagueness: earliest date / latest date qualifiers.
 - "circa": sourcing circumstances qualifier.
-- Redundant-but-asserted values (e.g. "age: 62" alongside a death date)
-  are kept verbatim as qualifiers (`age at death`), never derived or
+- Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
+  date) are kept verbatim as qualifiers (`age at death`), never derived or
   dropped: sources assert them, so the archive records them.
-- Ambiguous date formats (03-05-1950: 3 May or March 5?) must not be
+- Ambiguous date formats (07-01-1919: 7 January or July 1?) must not be
   silently disambiguated; extraction should downgrade to the precision
   actually supported or leave the claim to a curator.
 - Named periods: statements may point to time-period items rather than
@@ -165,14 +165,14 @@ artifact item by QID instead is valid only on that instance.
 
 - **occupation** (P106 semantics) is item-valued: occupations recur
   across people and documents, so they reconcile like places do. The
-  occupation item's label keeps the source's exact wording ("Cigar
-  maker", "Journeyman Baker"); cross-document variants unify through
+  occupation item's label keeps the source's exact wording ("Hatter",
+  "Master hatter"); cross-document variants unify through
   aliases and the ordinary equivalence review, never by normalizing
   the label.
 - **cause of death** (P509 semantics) is monolingual text, kept
   verbatim in the source's language. Wikidata models causes as items;
-  certificates and registers assert prose ("1. Chronic nephritis
-  2. Cardiac failure"), and the archive records exactly that.
+  certificates and registers assert prose ("Wassersucht"), and the
+  archive records exactly that.
 - **sibling** (P3373) is written only when a source asserts
   siblinghood. It is never derived from shared parents — a source
   asserting two parent relations has asserted parentage, nothing more.
@@ -309,7 +309,7 @@ Names are modelled in **two layers**:
 
 **Name normalization (ADR-0022).** Three axes are kept distinct:
 *composition* (which token is the fixed part vs. an alternating one — the
-`/` in "Frida Hollfeld/Falk/Gellerowski" prescribes it, so those
+`/` in "Hildegard Laudler/Löbig" prescribes it, so those
 surnames are alternative family names for one person), *kind* (given vs.
 family — undecidable without name-order convention, so **never asserted**
 and never a stored property), and *type* (birth/married/nickname/official —
@@ -324,7 +324,7 @@ shattering `de la Cruz` / `van der Berg`), asserting no kind. Composition
 and short-form display are the frontend's to *derive*, never stored.
 
 **Relational and perspectival appellations are NOT names** (ADR-0018).
-"our great grandmother", "meine Oma", "Tante Rosa", "my husband" describe
+"our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
 a relationship or viewpoint, so they never enter the alias bag. A literal
 kinship term is a `relative` + `kinship_type` claim with the ego as
 object (§Kinship); a courtesy title or family/pet name is a
@@ -390,8 +390,8 @@ subject; there is no household statement enumerating occupants.
 Forced removal, detention, and freeing are **events**, not relations:
 `deportation`, `imprisonment`, and `release` are event subclasses that
 reuse the event machinery (`participant` → person, `location` →
-destination, `point_in_time`/`start_time`/`end_time`). "Deported to Riga
-in 1942" is a deportation event, never a `deported to` property — the
+destination, `point_in_time`/`start_time`/`end_time`). "Deported to
+Klurnau" is a deportation event, never a `deported to` property — the
 same shape as the reconciled deportation events already in the graph.
 
 These relations are therefore **not** open-schema gaps (ADR-0013): a

@@ -12,12 +12,11 @@ token** (ADR-0007), then an LLM adjudicates each. Blocking never consults
 the graph, so it proposes — and the model spends a call rejecting, and the
 reviewer skims — pairs a structural fact already rules out:
 
-- `Samuel Wolff` vs `Alexander Samuel Genserowsky`, blocked on the middle
-  name "Samuel" though the surnames are disjoint and Genserowsky died in
-  1938 while Wolff was a Theresienstadt returnee in 1945.
-- `Poland` (the country) vs a Chełmno extermination camp whose label ends
-  "…, Poland", blocked on "Poland" — but a camp *inside* Poland is not
-  Poland.
+- `Ursula Löbig` vs `Löbig, Ursula, Wwe.`, blocked on the shared name
+  though the first was born in 1911 and the second is listed as a widow
+  in 1912: a one-year-old cannot be that widow.
+- `Klurnau` (the locality) vs the camp `Lager Klurnau`, blocked on
+  "Klurnau" — but a camp *inside* Klurnau is not Klurnau.
 
 Both are noise: high adjudication cost and review burden, zero signal. The
 generalisable observation is that **an asserted, irreflexive relation
@@ -46,8 +45,8 @@ statements contradict, never on pairs that are merely dissimilar:
    SPARQL and is unit-tested with a lambda. A not-yet-written batch place
    (no QID) is matched by label against the candidate's container labels —
    but never when the two share a label, since eponymous nesting is real
-   ("New York" the city inside "New York" the state) and an equal label may
-   be the *same* place, not its container.
+   ("Rekau" the town inside "Rekau" the urban district) and an equal
+   label may be the *same* place, not its container.
 
 Unknowns are never impossible: a missing kind or relation leaves the pair a
 live candidate for the human (rules 5 & 6 forbid silently narrowing). The

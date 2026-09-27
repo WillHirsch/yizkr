@@ -9,9 +9,11 @@ supports it) but emits claims for its assigned units only; a
 deterministic merge namespaces local ids and leaves same-label
 unification to the existing label-keyed resolve/write machinery.
 
-Per-chunk state under <out>.chunks/ makes every stage inspectable and
+The entity manifest, every chunk and the merged batch are stages in the
+stage store (yizkr.pipeline.stages), each stored with the raw response of
+every call beside its parsed output. So every stage is inspectable and
 resumable: a failed chunk costs seconds, not the document, and a parser
-fix re-parses persisted raw responses without re-invoking the model.
+fix re-parses stored raw responses without re-invoking the model.
 """
 
 from __future__ import annotations
@@ -19,10 +21,10 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +37,20 @@ from yizkr.pipeline.extract import (
     vocabulary_prompt_lines,
 )
 from yizkr.pipeline.llm import ConversationalLlmClient, LlmClient
+from yizkr.pipeline.stages import (
+    DispatchStopped,
+    StageFailed,
+    StageKey,
+    StageRecord,
+    StageResult,
+    StageScope,
+    StageStore,
+    content_hash,
+    doc_scope,
+    manifest_hash,
+    rebind_artifact,
+    stage_key,
+)
 from yizkr.pipeline.transcribe import Transcription
 
 # Transcriptions above this size use chunked extraction under
@@ -569,28 +585,51 @@ def prefix_local_ids(claim: dict, prefix: str) -> dict:
     )
 
 
-class ChunkedClaimExtractor:
-    """Segmentation -> packed chunks -> per-chunk calls -> merge.
+# the stages the extractor stores, in order
+EXTRACTION_STAGES = ("entity_manifest", "chunk", "batch")
 
-    Matches LlmClaimExtractor's extract() signature so the CLI treats
-    the strategies interchangeably. After extract(), `failed_chunks`
-    lists chunks that produced nothing despite retries — the batch is
-    still returned (partial progress is the point), and the caller
-    decides how loudly to fail.
+
+class ChunkedClaimExtractor:
+    """Entity manifest -> packed chunks -> per-chunk calls -> merge.
+
+    Each phase is a stage in the stage store (yizkr.pipeline.stages): the
+    entity manifest, every chunk and the merged batch are stored under
+    keys built from the transcription's content, the prompt templates, the
+    model manifest and the model, with the raw response of every call
+    beside the parsed output. A re-run reuses whatever is unchanged, so a
+    failed chunk costs one chunk, not the document.
+
+    Pass `stages` (a StageScope for the document) to share a store with
+    the rest of a run; otherwise the store lives in `state_dir`, the
+    document is named by its transcription's SHA-1, and `resume` decides
+    whether earlier outputs there are reused or recomputed.
+
+    Matches LlmClaimExtractor's extract() signature so the CLI treats the
+    strategies interchangeably. After extract(), `failed_chunks` lists
+    chunks that produced nothing despite retries — the batch is still
+    returned (partial progress is the point) but not stored, and the
+    caller decides how loudly to fail.
     """
 
     def __init__(
         self,
         client: LlmClient,
-        state_dir: Path,
+        state_dir: Path | None = None,
         budget: int = DEFAULT_CHUNK_BUDGET,
         retries: int = 2,
         resume: bool = False,
         concurrency: int = 1,
         log: Callable[[str], None] | None = None,
+        *,
+        stages: StageScope | None = None,
+        model: Mapping[str, Any] | None = None,
     ) -> None:
+        if stages is None and state_dir is None:
+            raise ValueError("pass a stage scope or a state directory")
         self.client = client
         self.state_dir = state_dir
+        self.stages = stages
+        self.model = model
         self.budget = budget
         self.retries = retries
         self.resume = resume
@@ -604,6 +643,7 @@ class ChunkedClaimExtractor:
         self._log = log if log is not None else (lambda _message: None)
         self._chunks_done = 0
         self._state_lock = threading.Lock()
+        self._handle: Any = None
         self.failed_chunks: list[str] = []
         # open-schema gaps (ADR-0013): relations no property expresses,
         # collected per run for review; never written to the graph
@@ -612,26 +652,38 @@ class ChunkedClaimExtractor:
         self.used_fallback_manifest = False
         # line-range segmentation also unusable -> offset windows
         self.used_fallback_segmentation = False
+        # how chunk calls saw the document: fork, inline or compressed
+        self.context_mode: str | None = None
+        # the stored batch, when every chunk succeeded
+        self.batch_record: StageRecord | None = None
+        self._rejects: list[dict] = []
 
-    # -- state helpers ---------------------------------------------------
+    # -- helpers ---------------------------------------------------------
 
-    def _write(self, name: str, content: str) -> None:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        (self.state_dir / name).write_text(content)
+    def _scope(self, transcription: Transcription) -> StageScope:
+        if self.stages is not None:
+            return self.stages
+        sha1 = hashlib.sha1(transcription.text.encode()).hexdigest()
+        return StageScope(
+            StageStore(self.state_dir),
+            doc_scope(sha1),
+            recompute=() if self.resume else EXTRACTION_STAGES,
+        )
 
-    def _read(self, name: str) -> str | None:
-        path = self.state_dir / name
-        return path.read_text() if path.exists() else None
+    def _model_component(self) -> dict:
+        if self.model is not None:
+            return dict(self.model)
+        return {"engine": "client", "model": self.client.model_identifier}
 
-    def _append(self, name: str, line: str) -> None:
-        """Append one line to a sidecar; never truncates. A later
-        successful re-run overwrites manifest.json/raw.txt/ndjson, so the
-        reason a chunk first failed is lost everywhere it is recorded by
-        _write. Failure sidecars are append-only and never rewritten on
-        success, so that reason survives the recovery that hides it."""
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        with (self.state_dir / name).open("a") as handle:
-            handle.write(line + "\n")
+    def _engine_meta(self, responses: list[str], handle: Any = None) -> dict:
+        """Provenance for a record whose calls answered: the engine's own
+        model identifier and, for a forkable session, its id."""
+        meta: dict[str, Any] = {}
+        if responses:
+            meta["model_identifier"] = self.client.model_identifier
+        if handle is not None and not isinstance(handle, list | dict):
+            meta["session_id"] = str(handle)
+        return meta
 
     def _note_chunk_done(
         self, total: int, *, ok: bool, claims: int = 0, resumed: bool = False
@@ -652,11 +704,14 @@ class ChunkedClaimExtractor:
     # -- phase 1a: entity manifest (ADR-0007, the default) ----------------
 
     def _entity_manifest(
-        self, transcription: Transcription, artifact_qid: str
-    ) -> tuple[list[EntityRecord] | None, Any]:
-        """Returns (entities, conversation handle) or (None, None).
+        self,
+        transcription: Transcription,
+        artifact_qid: str,
+        responses: list[str],
+    ) -> tuple[list[EntityRecord] | None, Any, str, bool]:
+        """(entities, conversation handle, last error, any call answered).
 
-        (None, None) means the manifest was unusable after a retry; the
+        No entities means the manifest was unusable after a retry; the
         caller falls back to line-range segmentation. As with
         segmentation fallback, no handle survives a rejected manifest —
         forking would plant known-bad output in every chunk's context.
@@ -671,6 +726,7 @@ class ChunkedClaimExtractor:
             numbered_text=number_lines(transcription.text),
         )
         handle = None
+        answered = False
         last_error = "engine has no conversation support"
         for _attempt in range(2):
             try:
@@ -679,21 +735,17 @@ class ChunkedClaimExtractor:
                 else:
                     response = self.client.complete(prompt)
             except Exception as exc:
-                last_error, handle = str(exc), None
+                last_error, handle = f"{type(exc).__name__}: {exc}", None
                 continue
+            answered = True
+            responses.append(response)
             entities, problems = self._parse_entity_manifest(
                 response, line_count
             )
             if entities is not None and not problems:
-                return entities, handle
+                return entities, handle, "", answered
             last_error, handle = "; ".join(problems or ["unparseable"]), None
-        self.used_fallback_manifest = True
-        self._write(
-            "manifest-fallback.txt",
-            f"entity manifest fell back to line-range segmentation: "
-            f"{last_error}\n",
-        )
-        return None, None
+        return None, None, last_error, answered
 
     @staticmethod
     def _parse_entity_manifest(
@@ -735,14 +787,17 @@ class ChunkedClaimExtractor:
     # -- phase 1b: line-range segmentation (fallback tier) -----------------
 
     def _segment(
-        self, transcription: Transcription, artifact_qid: str
-    ) -> tuple[DocumentSegmentation, Any]:
-        """Returns (segmentation, conversation handle or None).
+        self,
+        transcription: Transcription,
+        artifact_qid: str,
+        responses: list[str],
+    ) -> tuple[DocumentSegmentation, Any, str, bool]:
+        """(segmentation, handle or None, fallback reason, any call answered).
 
         A None handle means chunk calls cannot fork (context mode 2/3).
-        On segmentation fallback the handle is always None: forking a
-        conversation whose segmentation turn was rejected would plant
-        known-bad output in every chunk's context.
+        On segmentation fallback the handle is always None and the reason
+        is set: forking a conversation whose segmentation turn was
+        rejected would plant known-bad output in every chunk's context.
         """
         line_count = len(transcription.text.splitlines())
         prompt = SEGMENTATION_PROMPT.format(
@@ -751,6 +806,7 @@ class ChunkedClaimExtractor:
             numbered_text=number_lines(transcription.text),
         )
         handle = None
+        answered = False
         last_error = "engine has no conversation support"
         for _attempt in range(2):
             try:
@@ -759,16 +815,22 @@ class ChunkedClaimExtractor:
                 else:
                     response = self.client.complete(prompt)
             except Exception as exc:
-                last_error, handle = str(exc), None
+                last_error, handle = f"{type(exc).__name__}: {exc}", None
                 continue
+            answered = True
+            responses.append(response)
             segmentation, problems = self._parse_segmentation(
                 response, line_count
             )
             if segmentation is not None and not problems:
-                return segmentation, handle
+                return segmentation, handle, "", answered
             last_error, handle = "; ".join(problems or ["unparseable"]), None
-        self.used_fallback_segmentation = True
-        return self._fallback_segmentation(line_count, last_error), None
+        return (
+            self._fallback_segmentation(line_count),
+            None,
+            last_error,
+            answered,
+        )
 
     @staticmethod
     def _parse_segmentation(
@@ -784,9 +846,7 @@ class ChunkedClaimExtractor:
             return segmentation, segmentation.problems(line_count)
         return None, ["no JSON object with a 'units' array"]
 
-    def _fallback_segmentation(
-        self, line_count: int, reason: str
-    ) -> DocumentSegmentation:
+    def _fallback_segmentation(self, line_count: int) -> DocumentSegmentation:
         """Degraded offset chunking: fixed line windows, empty context."""
         window = max(1, self.budget // 40)  # ~40 chars/line heuristic
         units = [
@@ -800,11 +860,66 @@ class ChunkedClaimExtractor:
             )
             for start in range(1, line_count + 1, window)
         ]
-        self._write(
-            "segmentation-fallback.txt",
-            f"segmentation fell back to line windows: {reason}\n",
-        )
         return DocumentSegmentation(units=units)
+
+    def _phase_one(
+        self, transcription: Transcription, artifact_qid: str
+    ) -> StageResult:
+        """The entity_manifest stage: a manifest, or the recorded fallback.
+
+        A fallback is stored only when the engine answered. When every
+        call of a tier raised (an engine outage), the stage fails instead,
+        so the next run retries it rather than reusing a degraded result.
+        """
+        self._log("  scanning document for entities...")
+        responses: list[str] = []
+        entities, handle, manifest_error, answered = self._entity_manifest(
+            transcription, artifact_qid, responses
+        )
+        if entities is not None:
+            self._handle = handle
+            return StageResult(
+                {
+                    "strategy": "entity",
+                    "entities": [
+                        record.model_dump(mode="json") for record in entities
+                    ],
+                },
+                raw=responses,
+                meta=self._engine_meta(responses, handle),
+            )
+        if not answered:
+            raise StageFailed(
+                f"entity manifest: no engine response ({manifest_error})"
+            )
+        segmentation, handle, segmentation_error, answered = self._segment(
+            transcription, artifact_qid, responses
+        )
+        if not answered:
+            raise StageFailed(
+                f"segmentation: no engine response ({segmentation_error})"
+            )
+        self._handle = handle
+        fallback = {"manifest": manifest_error}
+        attention = [
+            "entity manifest fell back to line-range segmentation: "
+            f"{manifest_error}"
+        ]
+        if segmentation_error:
+            fallback["segmentation"] = segmentation_error
+            attention.append(
+                f"segmentation fell back to line windows: {segmentation_error}"
+            )
+        return StageResult(
+            {
+                "strategy": "line-range",
+                "segmentation": segmentation.model_dump(mode="json"),
+                "fallback": fallback,
+            },
+            raw=responses,
+            attention=attention,
+            meta=self._engine_meta(responses, handle),
+        )
 
     # -- chunk calls -----------------------------------------------------
 
@@ -905,9 +1020,15 @@ class ChunkedClaimExtractor:
         )
 
     def _run_chunk(
-        self, chunk_id: str, prompt: str, handle: Any, fallback_prompt: str
+        self,
+        chunk_id: str,
+        prompt: str,
+        handle: Any,
+        fallback_prompt: str,
+        responses: list[str],
     ) -> list[dict]:
-        """Call (fork if possible), persist raw, parse; retries inside."""
+        """Call (fork if possible), keep every response, parse; retries
+        inside. `responses` receives each answer, parseable or not."""
         last_error: Exception = ChunkIncomplete("not attempted")
         for _attempt in range(1 + self.retries):
             try:
@@ -924,89 +1045,150 @@ class ChunkedClaimExtractor:
             except Exception as exc:
                 last_error = exc
                 continue
-            self._write(f"{chunk_id}.raw.txt", response)
+            responses.append(response)
             try:
                 return parse_chunk_response(response, warn=self._log)
             except ChunkIncomplete as exc:
                 last_error = exc
         raise last_error
 
+    def _compute_chunk(
+        self,
+        stages: StageScope,
+        key: StageKey,
+        chunk_id: str,
+        prompt: str,
+        fallback_prompt: str,
+        handle: Any,
+    ) -> StageResult:
+        """The chunk stage: one assignment's claims and gaps.
+
+        The latest logged failure's response is re-parsed first: a parser
+        fix recovers a chunk that failed to parse without a second model
+        call (ADR-0006)."""
+        meta = {"parse_version": _parse_version(), "context_mode": None}
+        for failure in reversed(stages.failures("chunk", key)):
+            raw = failure.get("raw")
+            if not raw:
+                break
+            try:
+                claims = parse_chunk_response(raw, warn=self._log)
+            except ChunkIncomplete:
+                break
+            return StageResult(
+                {"claims": claims, "gaps": parse_chunk_gaps(raw)},
+                raw=[raw],
+                meta=meta | {"recovered": "re-parsed a logged failure"},
+            )
+        responses: list[str] = []
+        try:
+            claims = self._run_chunk(
+                chunk_id, prompt, handle, fallback_prompt, responses
+            )
+        except Exception as exc:
+            truncated = (
+                responses[-1]
+                if isinstance(exc, ChunkIncomplete) and responses
+                else None
+            )
+            raise StageFailed(
+                f"{type(exc).__name__}: {exc}",
+                attempts=self.retries + 1,
+                raw=truncated,
+            ) from exc
+        meta["context_mode"] = self.context_mode
+        return StageResult(
+            {"claims": claims, "gaps": parse_chunk_gaps(responses[-1])},
+            raw=responses,
+            meta=meta | self._engine_meta(responses),
+        )
+
+    def _chunk_output(
+        self, record: StageRecord, artifact_qid: str
+    ) -> tuple[list[dict], list[dict]] | None:
+        """A stored chunk's (claims, gaps), re-parsed from its raw response
+        when the parser has changed since it was stored; None when the
+        current parser rejects it."""
+        if record.meta.get("parse_version") == _parse_version():
+            output = record.output()
+            claims, gaps = output["claims"], output["gaps"]
+        else:
+            raw = record.raw()[-1]
+            try:
+                claims = parse_chunk_response(raw, warn=self._log)
+            except ChunkIncomplete:
+                return None
+            gaps = parse_chunk_gaps(raw)
+        previous = record.meta.get("artifact_qid")
+        return rebind_artifact(claims, previous, artifact_qid), gaps
+
     # -- orchestration ---------------------------------------------------
 
     def extract(
         self, transcription: Transcription, artifact_qid: str
     ) -> ClaimBatch:
+        stages = self._scope(transcription)
         text_lines = transcription.text.splitlines()
-        fingerprint = hashlib.sha256(transcription.text.encode()).hexdigest()
+        text_hash = content_hash(
+            {"text": transcription.text, "language": transcription.language}
+        )
+        model = self._model_component()
+        vocabulary = manifest_hash()
 
-        manifest: dict = {"transcription_sha256": fingerprint, "chunks": {}}
+        self._handle = None
+        manifest_key = stage_key(
+            "entity_manifest",
+            inputs={"transcription": text_hash},
+            prompts={
+                "entity_manifest": ENTITY_MANIFEST_PROMPT,
+                "segmentation": SEGMENTATION_PROMPT,
+            },
+            manifest=vocabulary,
+            model=model,
+        )
+        phase_one = stages.run(
+            "entity_manifest",
+            manifest_key,
+            lambda: self._phase_one(transcription, artifact_qid),
+        )
+        found = phase_one.record.output()
         entities: list[EntityRecord] | None = None
         segmentation: DocumentSegmentation | None = None
-        handle: Any = None
-        if self.resume:
-            previous_raw = self._read("manifest.json")
-            previous = json.loads(previous_raw) if previous_raw else None
-            if (
-                previous
-                and previous.get("transcription_sha256") == fingerprint
-            ):
-                entity_raw = self._read("entity-manifest.json")
-                segmentation_raw = self._read("segmentation.json")
-                if entity_raw:
-                    entities = [
-                        EntityRecord.model_validate(record)
-                        for record in json.loads(entity_raw)
-                    ]
-                    manifest = previous
-                elif segmentation_raw:
-                    segmentation = DocumentSegmentation.model_validate_json(
-                        segmentation_raw
-                    )
-                    manifest = previous
-                # the recorded session may be gone; resumption drops to
-                # inline context rather than re-running phase 1
-                handle = None
-        if entities is None and segmentation is None:
-            self._log("  scanning document for entities...")
-            entities, handle = self._entity_manifest(
-                transcription, artifact_qid
+        if found["strategy"] == "entity":
+            entities = [
+                EntityRecord.model_validate(record)
+                for record in found["entities"]
+            ]
+        else:
+            segmentation = DocumentSegmentation.model_validate(
+                found["segmentation"]
             )
-            if entities is not None:
-                self._write(
-                    "entity-manifest.json",
-                    json.dumps(
-                        [record.model_dump() for record in entities], indent=2
-                    ),
-                )
-            else:
-                segmentation, handle = self._segment(
-                    transcription, artifact_qid
-                )
-                self._write(
-                    "segmentation.json", segmentation.model_dump_json(indent=2)
-                )
+        fallback = found.get("fallback") or {}
+        self.used_fallback_manifest = entities is None
+        self.used_fallback_segmentation = bool(fallback.get("segmentation"))
+        # a reused manifest has no live session: its conversation may be
+        # gone, so resumption drops to inline context rather than
+        # re-running phase 1
+        handle = None if phase_one.reused else self._handle
 
         inline_document = (
             handle is None and len(transcription.text) <= INLINE_DOCUMENT_LIMIT
         )
-        manifest["strategy"] = (
-            "entity" if entities is not None else "line-range"
-        )
-        manifest["context_mode"] = (
+        self.context_mode = (
             "fork"
             if handle is not None
             else "inline"
             if inline_document
             else "compressed"
         )
-        if handle is not None and not isinstance(handle, list | dict):
-            manifest["session_id"] = str(handle)
 
+        schema = json.dumps(ClaimBatch.model_json_schema(), indent=2)
         if entities is not None:
             records = {record.id: record for record in entities}
             chunk_groups: list[list] = pack_entities(
                 entities, text_lines, self.budget
             )
+            assignment_template = ENTITY_ASSIGNMENT_BLOCK
 
             def build_prompt(group: list, inline: bool) -> str:
                 return self._entity_chunk_prompt(
@@ -1024,19 +1206,11 @@ class ChunkedClaimExtractor:
             def transform(claim: dict, chunk_id: str) -> dict:
                 return normalize_to_manifest(claim, records)
 
-            # ADR-0022 §4: hygiene the alias bag (drop derivable short-forms,
-            # keep compounds whole) — the deterministic safety net over the
-            # LLM manifest; typing/composition stay the LLM's job.
-            from yizkr.pipeline.names import normalize_entity_dict
-
-            entities_payload = [
-                normalize_entity_dict(record.model_dump())
-                for record in entities
-            ]
         else:
             chunk_groups = pack_units(
                 segmentation.units, text_lines, self.budget
             )
+            assignment_template = LINE_ASSIGNMENT_BLOCK
 
             def build_prompt(group: list, inline: bool) -> str:
                 return self._chunk_prompt(
@@ -1049,17 +1223,15 @@ class ChunkedClaimExtractor:
             def transform(claim: dict, chunk_id: str) -> dict:
                 return prefix_local_ids(claim, chunk_id)
 
-            entities_payload = []
-
+        chunk_prompts = {
+            "chunk": CHUNK_PROMPT,
+            "assignment": assignment_template,
+            "schema": schema,
+        }
         self.failed_chunks = []
         chunk_ids = [
             f"c{index:03d}" for index in range(1, len(chunk_groups) + 1)
         ]
-        for chunk_id, group in zip(chunk_ids, chunk_groups, strict=True):
-            manifest["chunks"].setdefault(
-                chunk_id, {"members": member_ids(group)}
-            )
-
         total = len(chunk_ids)
         self._chunks_done = 0
         if entities is not None:
@@ -1067,156 +1239,238 @@ class ChunkedClaimExtractor:
         else:
             self._log(f"  extract: {total} chunk(s) (line-range fallback)")
 
-        def run_one(chunk_id: str, group: list) -> list[dict] | None:
-            """One chunk end to end; returns parsed claims or None on
-            failure. Thread-safe: per-chunk files are exclusive to this
-            call, shared manifest state goes through the lock."""
-            parsed = self._reusable_claims(chunk_id)
-            resumed = parsed is not None
-            if parsed is None:
-                prompt = build_prompt(group, False)
-                fallback_prompt = build_prompt(group, inline_document)
-                try:
-                    parsed = self._run_chunk(
-                        chunk_id, prompt, handle, fallback_prompt
-                    )
-                except Exception as exc:
-                    reason = f"{type(exc).__name__}: {exc}"
-                    # a truncation leaves its unparseable response in
-                    # raw.txt; a call failure left nothing this run
-                    truncated = (
-                        self._read(f"{chunk_id}.raw.txt")
-                        if isinstance(exc, ChunkIncomplete)
-                        else None
-                    )
-                    with self._state_lock:
-                        manifest["chunks"][chunk_id]["status"] = (
-                            f"failed: {reason[:200]}"
-                        )
-                        self.failed_chunks.append(chunk_id)
-                        self._write(
-                            "manifest.json", json.dumps(manifest, indent=2)
-                        )
-                        # durable record: outlives the successful re-run
-                        # that overwrites manifest.json and raw.txt
-                        self._append(
-                            f"{chunk_id}.fail.ndjson",
-                            json.dumps(
-                                {
-                                    "chunk": chunk_id,
-                                    "attempts": self.retries + 1,
-                                    "error": reason,
-                                    "raw": truncated,
-                                }
-                            ),
-                        )
-                    self._note_chunk_done(total, ok=False)
-                    return None
-                self._write(
-                    f"{chunk_id}.ndjson", "\n".join(map(json.dumps, parsed))
-                )
-            with self._state_lock:
-                manifest["chunks"][chunk_id]["status"] = "ok"
-                manifest["chunks"][chunk_id]["claims"] = len(parsed)
-                self._write("manifest.json", json.dumps(manifest, indent=2))
-            self._note_chunk_done(
-                total, ok=True, claims=len(parsed), resumed=resumed
+        def run_one(chunk_id: str, group: list) -> _Chunk | None:
+            """One chunk end to end, or None on failure. Thread-safe:
+            records are per key, shared state goes through the lock."""
+            key = stage_key(
+                "chunk",
+                inputs={
+                    "transcription": text_hash,
+                    "entity_manifest": phase_one.record.output_hash,
+                },
+                prompts=chunk_prompts,
+                manifest=vocabulary,
+                model=model,
+                params={"members": member_ids(group)},
             )
-            return parsed
+
+            def compute() -> StageResult:
+                return self._compute_chunk(
+                    stages,
+                    key,
+                    chunk_id,
+                    build_prompt(group, False),
+                    build_prompt(group, inline_document),
+                    handle,
+                )
+
+            try:
+                outcome = stages.run(
+                    "chunk",
+                    key,
+                    compute,
+                    item=chunk_id,
+                    artifact_qid=artifact_qid,
+                )
+                parsed = self._chunk_output(outcome.record, artifact_qid)
+                if parsed is None:  # the current parser rejects it: redo
+                    outcome = stages.run(
+                        "chunk",
+                        key,
+                        compute,
+                        item=chunk_id,
+                        artifact_qid=artifact_qid,
+                        force=True,
+                    )
+                    parsed = self._chunk_output(outcome.record, artifact_qid)
+                if parsed is None:
+                    raise ChunkIncomplete("stored response does not parse")
+            except DispatchStopped:
+                raise
+            except Exception:
+                with self._state_lock:
+                    self.failed_chunks.append(chunk_id)
+                self._note_chunk_done(total, ok=False)
+                return None
+            claims, gaps = parsed
+            self._note_chunk_done(
+                total, ok=True, claims=len(claims), resumed=outcome.reused
+            )
+            return _Chunk(
+                claims,
+                gaps,
+                content_hash(
+                    {"claims": claims, "gaps": gaps},
+                    artifact_qid=artifact_qid,
+                ),
+                outcome.record.meta.get("model_identifier"),
+            )
 
         with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
             outcomes = list(pool.map(run_one, chunk_ids, chunk_groups))
         self.failed_chunks.sort()
 
+        def merge() -> tuple[ClaimBatch, dict[str, str], list[str]]:
+            return self._merge(
+                chunk_ids,
+                outcomes,
+                transform,
+                entities,
+                segmentation,
+                text_lines,
+                phase_one.record,
+            )
+
+        if self.failed_chunks:
+            batch, _extras, _attention = merge()
+            stages.emit(
+                "failed",
+                "batch",
+                None,
+                reason=f"{len(self.failed_chunks)} chunk(s) failed; the "
+                "partial batch is not stored",
+            )
+            self._refuse_empty(batch, rejected=len(self._rejects))
+            return batch
+
+        batch_key = stage_key(
+            "batch",
+            inputs={
+                "transcription": text_hash,
+                "entity_manifest": phase_one.record.output_hash,
+                "chunks": [chunk.digest for chunk in outcomes],
+            },
+            manifest=vocabulary,
+        )
+
+        def compute_batch() -> StageResult:
+            batch, extras, attention = merge()
+            self._refuse_empty(batch, rejected=len(self._rejects))
+            return StageResult(
+                batch.model_dump(mode="json"),
+                extras=extras,
+                attention=attention,
+            )
+
+        stored = stages.run(
+            "batch", batch_key, compute_batch, artifact_qid=artifact_qid
+        )
+        self.batch_record = stored.record
+        gaps_text = stored.record.extra("gaps.ndjson") or ""
+        self.gaps = [
+            json.loads(line) for line in gaps_text.splitlines() if line.strip()
+        ]
+        return ClaimBatch.model_validate(
+            stored.record.bound_output(artifact_qid)
+        )
+
+    def _refuse_empty(self, batch: ClaimBatch, *, rejected: int) -> None:
+        if not batch.claims and (self.failed_chunks or rejected):
+            raise ValueError(
+                f"chunked extraction produced no valid claims "
+                f"({len(self.failed_chunks)} failed chunks, "
+                f"{rejected} rejected claims)"
+            )
+
+    def _merge(
+        self,
+        chunk_ids: list[str],
+        outcomes: list[_Chunk | None],
+        transform: Callable[[dict, str], dict],
+        entities: list[EntityRecord] | None,
+        segmentation: DocumentSegmentation | None,
+        text_lines: list[str],
+        manifest_record: StageRecord,
+    ) -> tuple[ClaimBatch, dict[str, str], list[str]]:
+        """The batch stage: merge chunk claims into one validated batch,
+        with rejects, gaps and the coverage report as extras."""
         raw_claims: list[dict] = []
         transform_rejects: list[dict] = []
         gaps: list[dict] = []
-        for chunk_id, parsed in zip(chunk_ids, outcomes, strict=True):
-            if parsed is not None:
-                for claim in parsed:
-                    # one malformed claim (a double-nested local_id, say)
-                    # must never sink the whole document's merge — degrade
-                    # it to a reject, the way salvage_valid_claims does
-                    # downstream
-                    try:
-                        raw_claims.append(transform(claim, chunk_id))
-                    except Exception as exc:  # keep the other claims
-                        transform_rejects.append(
-                            {
-                                "claim": claim,
-                                "problems": [f"transform failed: {exc}"],
-                            }
-                        )
-                # gaps come from the persisted raw response, so they cost
-                # no extra model call and survive resume (ADR-0013)
-                raw = self._read(f"{chunk_id}.raw.txt")
-                if raw:
-                    gaps.extend(parse_chunk_gaps(raw))
+        for chunk_id, chunk in zip(chunk_ids, outcomes, strict=True):
+            if chunk is None:
+                continue
+            for claim in chunk.claims:
+                # one malformed claim (a double-nested local_id, say)
+                # must never sink the whole document's merge — degrade
+                # it to a reject, the way salvage_valid_claims does
+                # downstream
+                try:
+                    raw_claims.append(transform(claim, chunk_id))
+                except Exception as exc:  # keep the other claims
+                    transform_rejects.append(
+                        {
+                            "claim": claim,
+                            "problems": [f"transform failed: {exc}"],
+                        }
+                    )
+            gaps.extend(chunk.gaps)
         self.gaps = gaps
-        if gaps:
-            self._write("gaps.ndjson", "\n".join(map(json.dumps, gaps)))
 
         deduped: list[dict] = []
         for claim in raw_claims:
             if claim not in deduped:
                 deduped.append(claim)
 
+        if entities is not None:
+            # ADR-0022 §4: hygiene the alias bag (drop derivable
+            # short-forms, keep compounds whole) — the deterministic safety
+            # net over the LLM manifest; typing/composition stay the LLM's
+            # job.
+            from yizkr.pipeline.names import normalize_entity_dict
+
+            entities_payload = [
+                normalize_entity_dict(record.model_dump())
+                for record in entities
+            ]
+        else:
+            entities_payload = []
+        # the engines that answered, as their records name them: a batch
+        # merged from reused chunks names the models that made them
+        identifiers = sorted(
+            {
+                identifier
+                for identifier in [
+                    manifest_record.meta.get("model_identifier"),
+                    *(chunk.model_identifier for chunk in outcomes if chunk),
+                ]
+                if identifier
+            }
+        )
         batch, rejects = salvage_valid_claims(
             deduped,
-            run_metadata(self.client.model_identifier).model_dump(mode="json"),
+            run_metadata(", ".join(identifiers) or "unknown").model_dump(
+                mode="json"
+            ),
             entities=entities_payload,
         )
         rejects = transform_rejects + rejects
+        self._rejects = rejects
+        extras: dict[str, str] = {}
         if rejects:
-            self._write("rejects.json", json.dumps(rejects, indent=2))
+            extras["rejects.json"] = json.dumps(rejects, indent=2)
+        if gaps:
+            extras["gaps.ndjson"] = "\n".join(map(json.dumps, gaps))
         if entities is not None:
-            self._write_entity_coverage(entities, batch, text_lines)
+            coverage = self._entity_coverage(entities, batch, text_lines)
         else:
-            self._write_coverage(segmentation, batch, len(text_lines))
-        if not batch.claims and (self.failed_chunks or rejects):
-            raise ValueError(
-                f"chunked extraction produced no valid claims "
-                f"({len(self.failed_chunks)} failed chunks, "
-                f"{len(rejects)} rejected claims; see {self.state_dir})"
-            )
-        return batch
+            coverage = self._coverage(segmentation, batch, len(text_lines))
+        extras["coverage.json"] = json.dumps(coverage, indent=2)
+        attention = [] if batch.claims else ["no claims extracted"]
+        return batch, extras, attention
 
-    def _reusable_claims(self, chunk_id: str) -> list[dict] | None:
-        """On resume: parsed output verbatim, else re-parse persisted raw
-        (a parser fix must never cost a second model run)."""
-        if not self.resume:
-            return None
-        parsed = self._read(f"{chunk_id}.ndjson")
-        if parsed is not None:
-            return [
-                json.loads(line)
-                for line in parsed.splitlines()
-                if line.strip()
-            ]
-        raw = self._read(f"{chunk_id}.raw.txt")
-        if raw is not None:
-            try:
-                claims = parse_chunk_response(raw, warn=self._log)
-            except ChunkIncomplete:
-                return None
-            self._write(
-                f"{chunk_id}.ndjson", "\n".join(map(json.dumps, claims))
-            )
-            return claims
-        return None
-
-    def _write_entity_coverage(
+    def _entity_coverage(
         self,
         entities: list[EntityRecord],
         batch: ClaimBatch,
         text_lines: list[str],
-    ) -> None:
+    ) -> dict:
         """Advisory completeness report, entity flavour (ADR-0007).
 
-        Used in place of the line-range path's unit audit
-        (`_write_coverage`): flags manifest entities with zero claims,
-        and lines that carry name-shaped tokens matching no manifest
-        label/alias (a possibly-missed entity)."""
+        Used in place of the line-range path's unit audit (`_coverage`):
+        flags manifest entities with zero claims, and lines that carry
+        name-shaped tokens matching no manifest label/alias (a
+        possibly-missed entity)."""
         subject_ids = {
             claim.subject.local_id
             for claim in batch.claims
@@ -1240,34 +1494,28 @@ class ChunkedClaimExtractor:
                 token.lower() in name_tokens for token in capitalized
             ):
                 unmatched_lines.append(number)
-        self._write(
-            "coverage.json",
-            json.dumps(
-                {
-                    "strategy": "entity",
-                    "entities_total": len(entities),
-                    "entities_not_extracted": [
-                        entity.id for entity in entities if not entity.extract
-                    ],
-                    "entities_without_claims": [
-                        entity.id
-                        for entity in entities
-                        if entity.extract and entity.id not in subject_ids
-                    ],
-                    "lines_matching_no_entity": unmatched_lines,
-                    "distinct_subject_ids": sorted(subject_ids),
-                    "failed_chunks": self.failed_chunks,
-                },
-                indent=2,
-            ),
-        )
+        return {
+            "strategy": "entity",
+            "entities_total": len(entities),
+            "entities_not_extracted": [
+                entity.id for entity in entities if not entity.extract
+            ],
+            "entities_without_claims": [
+                entity.id
+                for entity in entities
+                if entity.extract and entity.id not in subject_ids
+            ],
+            "lines_matching_no_entity": unmatched_lines,
+            "distinct_subject_ids": sorted(subject_ids),
+            "failed_chunks": self.failed_chunks,
+        }
 
-    def _write_coverage(
+    def _coverage(
         self,
         segmentation: DocumentSegmentation,
         batch: ClaimBatch,
         line_count: int,
-    ) -> None:
+    ) -> dict:
         """Advisory completeness report for the curator (no auto-retry)."""
         subject_labels = {
             claim.subject.label
@@ -1282,21 +1530,30 @@ class ChunkedClaimExtractor:
             if unit.extract
             and not any(label in unit.label for label in subject_labels)
         ]
-        self._write(
-            "coverage.json",
-            json.dumps(
-                {
-                    "units_total": len(segmentation.units),
-                    "units_extractable": sum(
-                        1 for unit in segmentation.units if unit.extract
-                    ),
-                    "units_without_matching_subject": silent_units,
-                    "unsegmented_line_ranges": segmentation.unsegmented_lines(
-                        line_count
-                    ),
-                    "distinct_subject_labels": sorted(subject_labels),
-                    "failed_chunks": self.failed_chunks,
-                },
-                indent=2,
+        return {
+            "units_total": len(segmentation.units),
+            "units_extractable": sum(
+                1 for unit in segmentation.units if unit.extract
             ),
-        )
+            "units_without_matching_subject": silent_units,
+            "unsegmented_line_ranges": segmentation.unsegmented_lines(
+                line_count
+            ),
+            "distinct_subject_labels": sorted(subject_labels),
+            "failed_chunks": self.failed_chunks,
+        }
+
+
+class _Chunk(NamedTuple):
+    """One chunk's parsed output, its content hash and its engine."""
+
+    claims: list[dict]
+    gaps: list[dict]
+    digest: str
+    model_identifier: str | None
+
+
+def _parse_version() -> int:
+    from yizkr.pipeline.stageversions import STAGES
+
+    return STAGES["chunk_parse"].version

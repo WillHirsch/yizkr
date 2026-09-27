@@ -88,9 +88,10 @@ class TestCritique:
         )
         findings = run_critique(llm, batch())
         assert [f.target for f in findings] == ["e04", "e01 alias: MOTHER"]
-        # the critic sees the kinds and aliases it must judge
+        # the critic sees the kinds and aliases it must judge; the template
+        # itself names MOTHER, so match e01's whole rendered entity row
         assert "Hutmacherei zum Blauen Hut" in llm.prompts[0]
-        assert "MOTHER" in llm.prompts[0]
+        assert "e01 | human | Sebastian Löbig | MOTHER" in llm.prompts[0]
 
     def test_sound_extraction_yields_no_findings(self):
         findings = run_critique(ScriptedLlm(response([])), batch())
