@@ -333,8 +333,9 @@ referenced — qualified by `perspective` (the person/family ego) when the
 ego is a modelled entity, and unqualified otherwise. Both are
 multi-valued and coexist (ADR-0002): many people may call one person many
 things. Because each appellation is a statement whose *subject* is the
-referent and whose `perspective` is the other party, reciprocal naming (a
-grandmother "Oma" to a grandchild who is "Bubele" to her) is just two
+referent and whose ego (the `relative` object or the `perspective`
+qualifier) is the other party, reciprocal naming
+(a grandmother "Oma" to a grandchild who is "Bubele" to her) is just two
 independent statements — no dyad object, and the kinship inverse is
 derived, not stored. With the ego anchored, a later bare reference
 resolves: compositional terms by kinship derivation, idiosyncratic ones
