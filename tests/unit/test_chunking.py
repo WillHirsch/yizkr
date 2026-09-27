@@ -400,6 +400,20 @@ class TestLocalRefRewrites:
         # unknown id untouched: validation rejects it later
         assert fixed["qualifiers"][0]["value"]["value"]["label"] == "X"
 
+    def test_nested_local_id_is_not_hashed(self):
+        # a model once double-wrapped an id ({"local_id": "e1"} where a
+        # bare string belongs); normalize must not use that dict as a
+        # records key (TypeError: unhashable type: 'dict') — it leaves the
+        # malformed ref intact for validation to reject downstream
+        raw = self.raw_claim()
+        raw["subject"]["local_id"] = {"local_id": "e1"}
+        records = {
+            "e1": EntityRecord(id="e1", label="Alma Example", kind="human")
+        }
+        fixed = normalize_to_manifest(raw, records)  # must not raise
+        assert fixed["subject"]["local_id"] == {"local_id": "e1"}
+        assert "instance_of" not in fixed["subject"]
+
 
 class TestEntityFirstExtractor:
     def extractor(self, llm, tmp_path, **kwargs):
@@ -775,6 +789,25 @@ class TestEntityFirstExtractor:
         rejects = json.loads((tmp_path / "state" / "rejects.json").read_text())
         assert len(rejects) == 1
         assert "shoe_size" in rejects[0]["problems"][0]
+
+    def test_nested_local_id_rejected_not_fatal(self, tmp_path):
+        # regression: a double-nested local_id once crashed the whole
+        # merge (unhashable dict, TypeError); it must degrade to a single
+        # reject while the document's other claims survive
+        bad = claim("e1", "Alma Example", 1900)
+        bad["subject"]["local_id"] = {"local_id": "e1"}
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Anna Example", 1900), bad]),
+                ndjson([claim("e2", "Bern Example", 1902)]),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
+        batch = extractor.extract(transcription(), "Q23")
+        assert len(batch.claims) == 2
+        rejects = json.loads((tmp_path / "state" / "rejects.json").read_text())
+        assert len(rejects) == 1
 
 
 class KeyedLlm:
