@@ -306,8 +306,12 @@ Two Anthropic-backed providers, differing in how usage is billed:
   without any `ANTHROPIC_*` or `CLAUDE*` variable except
   `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN` (so a stray API key
   cannot switch billing, and a Claude Code session that launches the
-  pass leaks nothing into it), with auto-memory, error reporting and
-  telemetry off. Calls run in `<tmp>/yizkr-claude-code`. The client's
+  pass leaks nothing into it), and without the variables the CLI reads
+  outside those prefixes that change a call: `MAX_THINKING_TOKENS` and
+  `DISABLE_INTERLEAVED_THINKING` (the model's output) and
+  `DISABLE_PROMPT_CACHING*` (caching, and so the cost forked extraction
+  relies on), with auto-memory, error reporting and telemetry off.
+  Calls run in `<tmp>/yizkr-claude-code`. The client's
   `effective_config` lists all of this and `config_hash` fingerprints it
   for the run record.
 

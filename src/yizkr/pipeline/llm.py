@@ -255,9 +255,18 @@ def pinned_cli_version() -> str | None:
 # effort, entrypoint and messaging socket to the commands it runs, which
 # would leak into calls made from inside it, and a stray API key would
 # silently switch this engine to per-token billing, which is exactly what
-# choosing it opts out of. Two are kept: the directory that holds the
-# CLI's login, and a subscription token used in place of that login.
-_CLEARED_PREFIXES = ("ANTHROPIC_", "CLAUDE")
+# choosing it opts out of. The CLI also reads a few variables outside
+# those prefixes that change a call: MAX_THINKING_TOKENS and
+# DISABLE_INTERLEAVED_THINKING change the model's output, and
+# DISABLE_PROMPT_CACHING and its per-model variants
+# (DISABLE_PROMPT_CACHING_OPUS and the like) change caching, and so the
+# cost that forked extraction relies on (ADR-0006). Two are kept: the
+# directory that holds the CLI's login, and a subscription token used in
+# place of that login.
+_CLEARED_PREFIXES = ("ANTHROPIC_", "CLAUDE", "DISABLE_PROMPT_CACHING")
+_CLEARED_VARIABLES = frozenset(
+    {"MAX_THINKING_TOKENS", "DISABLE_INTERLEAVED_THINKING"}
+)
 _KEPT_VARIABLES = frozenset({"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"})
 # Set for every call. The version is pinned for the pass, so the CLI must
 # not update itself. Auto-memory would carry content from one call into
@@ -411,7 +420,8 @@ class ClaudeCodeClient:
 
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit none of the Anthropic or Claude
-    Code environment variables, and run in a dedicated directory, so
+    Code environment variables (the thinking and prompt-caching ones
+    included), and run in a dedicated directory, so
     neither the owner's configuration nor a Claude Code session that
     launched the pass shapes a call. ``effective_config`` lists
     everything besides the prompt that does, and ``config_hash``
@@ -540,7 +550,10 @@ class ClaudeCodeClient:
         env = {
             key: value
             for key, value in os.environ.items()
-            if key in _KEPT_VARIABLES or not key.startswith(_CLEARED_PREFIXES)
+            if key in _KEPT_VARIABLES
+            or not (
+                key in _CLEARED_VARIABLES or key.startswith(_CLEARED_PREFIXES)
+            )
         }
         env.update(_PINNED_ENVIRONMENT)
         return env
@@ -560,6 +573,7 @@ class ClaudeCodeClient:
             "environment": {
                 "set": dict(sorted(_PINNED_ENVIRONMENT.items())),
                 "cleared_prefixes": list(_CLEARED_PREFIXES),
+                "cleared": sorted(_CLEARED_VARIABLES),
                 "kept": sorted(_KEPT_VARIABLES),
             },
         }
