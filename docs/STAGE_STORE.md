@@ -286,17 +286,31 @@ them. Their dependencies are recorded by content hash in
 `equivalences.reviewed.csv` reviews `equivalences.csv`, and
 `review.reviewed.csv` reviews `review.csv`.
 
+**A changed source.** Different bytes are a different artifact
+(ADR-0010). When a document's source no longer has the SHA-1 its
+`state.json` recorded, `ingest run` moves the document's directory aside
+whole, recorded or not, as `.<slug>.superseded-<n>` in the state
+directory, and ingests the new bytes in a fresh directory. No document
+slug starts with a dot, so none can take that name. Nothing in the old
+directory is deleted: its stage outputs, reviews, derived files and
+write result stay there, and the log names it. The bytes it recorded are
+no longer its document's, so it seeds no content dedup, in the run that
+sets it aside or in any later one.
+
 **Directories from before these records.** Every document directory
 `ingest run` makes has its `derivations.json` from its first run, written
-before any other file. A directory with files (a `state.json`, a stage
-output, a derived file or a reviewed CSV) but no `derivations.json` was
-made under the old modification-time rule, or has lost its record.
-Nothing then says what its files were derived from, and the stage store
-cannot say either: every run directory shares it (`--store`, default
-`var/stages`), so a record there may come from another directory's run
-of the same document, and it says nothing about this directory's files.
-The stage outputs are `transcription.json`, `batch.json` and
-`critique.json` (`batch.json` alone for a GEDCOM file).
+before any other file, and no state is saved into a new directory before
+it: a run stopped at that point leaves nothing that would be held. A
+directory with files (a `state.json`, a stage output, a derived file or
+a reviewed CSV) but no `derivations.json` was made under the old
+modification-time rule, or has lost its record. Nothing then says what
+its files were derived from, and the stage store cannot say either:
+every run directory shares it (`--store`, default `var/stages`), so a
+record there may come from another directory's run of the same
+document, and it says nothing about this directory's files. The stage
+outputs are `transcription.json`, `batch.json` and `critique.json`
+(`batch.json` alone for a GEDCOM file). Such a directory whose source
+has changed is set aside, as above, rather than held.
 
 `ingest run` **holds such a document**, whatever the store holds. An
 output is reused only on an exact key match or a recorded equivalence

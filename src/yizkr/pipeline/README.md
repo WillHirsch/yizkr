@@ -81,16 +81,20 @@ there. `var/runs/<folder>/` is also the run directory, with an event for
 every stage reuse, store and failure. Every document directory the run
 makes has a `derivations.json` from its first run. One from before the
 stage store (a `state.json` or stage outputs such as `batch.json`, but no
-`derivations.json`) is **held**, with every file left as it is, whatever
-the shared store holds: deriving its stages again would call the engine
-and, if the batch came out different, move its reviewed CSVs aside. The
-run says so in the document's `state.json`, an event and an alert, and
-exits `2`. Pass `--rederive-unrecorded` to derive such documents again: it
-first keeps a copy of each stage output (`batch.superseded-<n>.json` and
-so on). See
+`derivations.json`) is **held**, whatever the shared store holds: deriving
+its stages again would call the engine and, if the batch came out
+different, move its reviewed CSVs aside. Nothing in it changes but its
+`state.json`, which records the hold; the run also says so in an event and
+an alert, and exits `2`. Pass `--rederive-unrecorded` to derive such
+documents again: it first keeps a copy of each stage output
+(`batch.superseded-<n>.json` and so on). A document whose source bytes
+changed is a different artifact (ADR-0010), so it is not held: its
+directory, recorded or not, is moved aside whole as
+`.<doc>.superseded-<n>`, with nothing in it deleted, and the new bytes are
+ingested in a fresh one. See
 [docs/STAGE_STORE.md](../../../docs/STAGE_STORE.md) for keys, reuse, the
-stage-version registry (`yizkr stages check`), the run directory and these
-held directories.
+stage-version registry (`yizkr stages check`), the run directory, these
+held directories and changed sources.
 GEDCOM (`.ged`) files take a deterministic adapter in place of
 transcribe/extract; the gates, resolve, and write are identical.
 

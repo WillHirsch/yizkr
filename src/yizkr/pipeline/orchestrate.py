@@ -37,22 +37,31 @@ moves its reviewed file aside too; and a reviewed file is consent only
 for the CSV it was first seen with, so editing the reviewed CSV
 re-writes and editing the CSV it reviews re-arms the gate.
 
-Every directory made here has its `derivations.json` from its first run.
-A directory with files (its state, a stage output, a derived file or a
-review) but no `derivations.json` holds files that no content hash
-records, and the shared stage store cannot vouch for them: its records
-may come from another directory's run of the same document. Deriving
-the stages would compute every one the store does not hold under its
-current key, calling the engine for those that use one, and a batch that
-came out different would move the directory's reviews aside. So the
-document is held before any stage runs, with every file left as it is,
-and its status, the run's events and its alerts say why, until a run
-opts in (`rederive_unrecorded`). That run keeps a copy of each stage
-output as `<stem>.superseded-<n><suffix>`, records the directory once
-from its files' modification times, the only dependency information it
-holds (a file older than an input is derived again, and a reviewed file
-older than its CSV is moved aside; Derivations.adopt), and then derives
-the stages again. Modification times are read nowhere else.
+Every directory made here has its `derivations.json` from its first run:
+it is written before any other file, and no state is saved into a new
+directory before it. A directory with files (its state, a stage output,
+a derived file or a review) but no `derivations.json` holds files that
+no content hash records, and the shared stage store cannot vouch for
+them: its records may come from another directory's run of the same
+document. Deriving the stages would compute every one the store does not
+hold under its current key, calling the engine for those that use one,
+and a batch that came out different would move the directory's reviews
+aside. So the document is held before any stage runs: nothing in its
+directory changes but `state.json`, which records the hold, and its
+status, the run's events and its alerts say why, until a run opts in
+(`rederive_unrecorded`). That run keeps a copy of each stage output as
+`<stem>.superseded-<n><suffix>`, records the directory once from its
+files' modification times, the only dependency information it holds (a
+file older than an input is derived again, and a reviewed file older
+than its CSV is moved aside; Derivations.adopt), and then derives the
+stages again. Modification times are read nowhere else.
+
+A document whose source bytes changed is a different artifact
+(ADR-0010), recorded or not: its directory is moved aside whole, as
+`.<slug>.superseded-<n>` in the state directory, a name no document
+slug can take, and the new bytes are ingested in a fresh directory.
+Nothing in the old directory is deleted, and it no longer counts for
+content dedup.
 
 A reviewed file's PRESENCE is the gate: the orchestrator never
 interprets a half-filled CSV as consent. Documents whose reconcile
@@ -133,7 +142,8 @@ DUPLICATE = "duplicate"
 # the run's control file held the document's next stage
 PAUSED = "paused"
 # the document's directory has files but no derivations.json, so nothing
-# records what they were derived from; the run left it untouched
+# records what they were derived from; the run changed nothing in it but
+# the state that records the hold
 UNRECORDED = "held: unrecorded outputs"
 # the alert a held document raises
 UNRECORDED_CHECK = "unrecorded outputs"
@@ -454,6 +464,13 @@ class DocumentRun:
         return any(path.exists() for path in files)
 
     def save(self) -> None:
+        """Save the document's state, except into a directory that has no
+        record and nothing a run writes (DocumentRun.unrecorded): state
+        alone, without a record, would make it unrecorded, and the next
+        run would hold it. A run that stops before a new directory's
+        record is written leaves no state in it."""
+        if not self.derivations.path.exists() and not self.unrecorded:
+            return
         self.state.save(self.state_path)
 
 
@@ -1118,9 +1135,9 @@ class Orchestrator:
 
     def _hold_unrecorded(self, doc: DocumentRun) -> str:
         """Hold a document whose directory has files but no
-        derivations.json (DocumentRun.unrecorded), with every file in it as
-        it is, and say why: in state.json, in a `held` event for its first
-        stage, in an alert and on stderr.
+        derivations.json (DocumentRun.unrecorded), changing nothing in it
+        but its state, and say why: in state.json, in a `held` event for
+        its first stage, in an alert and on stderr.
 
         An output is reused only on an exact key match or a recorded
         equivalence (ADR-0025), and the directory's own files have
@@ -1141,7 +1158,8 @@ class Orchestrator:
         )
         reason = (
             f"no derivations.json records what the files in this directory "
-            f"were derived from{outputs}. Nothing was changed. A run with "
+            f"were derived from{outputs}. Nothing in it was changed but "
+            f"state.json, which records this hold. A run with "
             f"--rederive-unrecorded keeps a copy of each stage output (as "
             f"batch.superseded-<n>.json, and so on), adopts the directory "
             f"and derives every stage again{engine}; unless the new batch "
@@ -1301,15 +1319,20 @@ class Orchestrator:
 
         # source bytes changed since this document was last processed: the
         # old artifact, claims, and reviews describe DIFFERENT content
-        # (ADR-0010 — different bytes are a different artifact), so start
-        # the document over rather than trusting stale derived state.
+        # (ADR-0010 — different bytes are a different artifact), so the
+        # document starts over in a fresh directory rather than trusting
+        # stale derived state. The old directory is moved aside whole,
+        # reviews included, and nothing in it is deleted (_set_aside).
         if doc.state.content_sha1 and doc.state.content_sha1 != content_sha1:
-            shutil.rmtree(doc.dir, ignore_errors=True)
+            kept = _set_aside(doc.dir)
             doc.dir.mkdir(parents=True, exist_ok=True)
             doc.state = DocumentState(
                 file=str(doc.source), title=doc.source.stem
             )
-            self.log(f"  {doc.source.name}: content changed; re-ingesting")
+            self.log(
+                f"  {doc.source.name}: content changed; the old directory is "
+                f"kept as {kept.name}; re-ingesting"
+            )
         doc.state.content_sha1 = content_sha1
 
         # a directory made here is recorded from its first run, before any
@@ -1494,7 +1517,9 @@ class Orchestrator:
         doc.state.status = WRITTEN
         return doc.state.status
 
-    def _prior_written_hashes(self) -> dict[str, str]:
+    def _prior_written_hashes(
+        self, docs: Sequence[DocumentRun] = ()
+    ) -> dict[str, str]:
         """content SHA-1 -> filename of a document already ingested to
         completion in a prior run (ADR-0010).
 
@@ -1507,17 +1532,33 @@ class Orchestrator:
         (WRITTEN ones, and ones held for unrecorded outputs after they were
         written) — an unfinished prior run must not block a fresh attempt
         from completing.
+
+        A directory set aside for a changed source (a dot-prefixed name,
+        _set_aside) seeds nothing: the bytes it recorded are no longer its
+        document's. Nor does a directory whose document is in this run
+        (`docs`) with other bytes, which is set aside when that document
+        is advanced.
         """
         seen: dict[str, str] = {}
         if not self.state_dir.exists():
             return seen
+        current: dict[str, set[str]] = {}
+        for doc in docs:
+            current.setdefault(doc.dir.name, set()).add(doc.sha1)
         for sub in sorted(self.state_dir.iterdir()):
+            if sub.name.startswith("."):  # set aside, or the default store
+                continue
             state_file = sub / "state.json"
             if not state_file.exists():
                 continue
             try:
                 state = DocumentState.load(state_file)
             except (TypeError, ValueError):  # malformed/foreign state: skip
+                continue
+            if (
+                sub.name in current
+                and state.content_sha1 not in current[sub.name]
+            ):  # its source changed: it is set aside in this run
                 continue
             if _was_written(state) and state.content_sha1:
                 seen.setdefault(state.content_sha1, Path(state.file).name)
@@ -1562,7 +1603,7 @@ class Orchestrator:
         self._held = set()
         # seed with content already fully ingested in prior runs, so a
         # renamed copy skips the pipeline (cross-run dedup, ADR-0010)
-        self._seen_hashes = self._prior_written_hashes()
+        self._seen_hashes = self._prior_written_hashes(docs)
         self._start_run(docs)
 
         try:
@@ -1697,6 +1738,20 @@ def _no_input_newer(output: Path, *inputs: Path) -> bool:
     return all(
         not path.exists() or path.stat().st_mtime_ns <= made for path in inputs
     )
+
+
+def _set_aside(directory: Path) -> Path:
+    """Move a document directory aside whole, never deleting anything in
+    it: `letter` becomes `.letter.superseded-<n>` beside it (first free
+    n). A document slug never starts with a dot, so no document directory
+    can take that name, and the run's scans of its state skip it."""
+    n = 1
+    while (
+        target := directory.with_name(f".{directory.name}.superseded-{n}")
+    ).exists():
+        n += 1
+    directory.rename(target)
+    return target
 
 
 def _supersede(path: Path, *, keep: bool = False) -> Path | None:

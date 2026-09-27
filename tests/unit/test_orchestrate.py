@@ -297,17 +297,17 @@ def stale_claim_review(tmp_path):
     return orchestrator
 
 
-def snapshot(directory) -> dict:
-    """Every file in a document directory but its state.json, with its
-    bytes and modification time: a run that touches none of them leaves
-    this unchanged."""
+def snapshot(directory, *, skip=("state.json",)) -> dict:
+    """Every file under `directory` but those named in `skip` (its
+    state.json, by default), with its bytes and modification time: a run
+    that touches none of them leaves this unchanged."""
     return {
         path.relative_to(directory): (
             path.read_bytes(),
             path.stat().st_mtime_ns,
         )
         for path in sorted(directory.rglob("*"))
-        if path.is_file() and path.name != "state.json"
+        if path.is_file() and path.name not in skip
     }
 
 
@@ -615,10 +615,89 @@ class TestContentDedup:
         again = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         again.run()
         (doc,) = again.documents()
-        # the stale WRITTEN state was discarded and the document re-worked
+        # the stale WRITTEN state was set aside and the document re-worked
         assert "register:record.txt" in again.calls
         assert "manifest:record.txt" in again.calls
         assert doc.state.status != DUPLICATE
+
+    @pytest.mark.parametrize(
+        "recorded", [True, False], ids=["recorded", "from-before-the-records"]
+    )
+    def test_a_changed_source_sets_the_old_directory_aside(
+        self, tmp_path, recorded
+    ):
+        """Different bytes are a different artifact, so the document starts
+        over in a fresh directory. The old one, recorded or from before the
+        records, is moved aside whole, reviews and state included, under a
+        name no document slug can take; nothing in it is deleted."""
+        orchestrator = completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        if not recorded:
+            (doc.dir / "derivations.json").unlink()
+            shutil.rmtree(orchestrator.store.root)
+        before = snapshot(doc.dir, skip=())
+        doc.source.write_text("Anna was born in 1902.")
+        lines: list[str] = []
+        orchestrator.log = collect(lines)
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        kept = doc.dir.with_name(".letter.superseded-1")
+        assert snapshot(kept, skip=()) == before
+        assert [c.split(":")[0] for c in orchestrator.calls[calls:]] == [
+            "register",
+            "manifest",
+            "chunk",
+            "critique",
+            "reconcile",
+        ]
+        assert any(
+            "content changed; the old directory is kept as "
+            ".letter.superseded-1" in line
+            for line in lines
+        )
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+        assert (doc.dir / "derivations.json").exists()
+        assert not doc.equivalences_reviewed.exists()
+        # a second change keeps the first set-aside directory too
+        doc.source.write_text("Anna was born in 1903.")
+        orchestrator.run()
+        assert snapshot(kept, skip=()) == before
+        assert doc.dir.with_name(".letter.superseded-2").is_dir()
+
+    def test_a_set_aside_directory_claims_no_bytes(self, tmp_path):
+        """A set-aside directory's state recorded bytes that are no longer
+        its document's, so it seeds no content dedup in a later run: a
+        copy of the old source is ingested, not called a duplicate."""
+        orchestrator = completed_run(tmp_path)
+        folder = orchestrator.folder
+        old = (folder / "letter.txt").read_bytes()
+        (folder / "letter.txt").write_text("Anna was born in 1902.")
+        assert orchestrator.run() == 2
+        (folder / "old-copy.txt").write_bytes(old)
+        again = ScriptedOrchestrator(folder, orchestrator.state_dir, log=quiet)
+        assert again.run() == 2
+        assert "register:old-copy.txt" in again.calls
+        statuses = {d.source.name: d.state.status for d in again.documents()}
+        assert statuses["old-copy.txt"] == AWAITING_EQUIVALENCES
+
+    def test_a_changed_source_claims_no_bytes_in_its_run(self, tmp_path):
+        """In the run that sets a directory aside, the bytes it recorded
+        seed no content dedup either: a copy of the old source added in
+        the same run is ingested."""
+        orchestrator = completed_run(tmp_path)
+        folder = orchestrator.folder
+        old = (folder / "letter.txt").read_bytes()
+        (folder / "letter.txt").write_text("Anna was born in 1902.")
+        (folder / "old-copy.txt").write_bytes(old)
+        again = ScriptedOrchestrator(folder, orchestrator.state_dir, log=quiet)
+        assert again.run() == 2
+        assert "register:old-copy.txt" in again.calls
+        statuses = {d.source.name: d.state.status for d in again.documents()}
+        assert statuses == {
+            "letter.txt": AWAITING_EQUIVALENCES,
+            "old-copy.txt": AWAITING_EQUIVALENCES,
+        }
 
 
 class TestFreshness:
@@ -1221,6 +1300,63 @@ class TestUnrecordedDirectory:
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES
+
+    @pytest.mark.parametrize(
+        "error",
+        [OSError("the disk refused"), KeyboardInterrupt()],
+        ids=["failure", "interrupt"],
+    )
+    def test_a_stop_before_the_first_record_leaves_nothing_to_hold(
+        self, tmp_path, monkeypatch, error
+    ):
+        """A run that stops while a new directory's record is being written
+        saves no state there, so the directory does not look unrecorded
+        and the next run starts it afresh instead of holding it."""
+        import yizkr.pipeline.orchestrate as orchestrate
+
+        def refuse(self):
+            raise error
+
+        orchestrator = make_run(tmp_path)
+        monkeypatch.setattr(orchestrate.Derivations, "begin", refuse)
+        if isinstance(error, KeyboardInterrupt):
+            with pytest.raises(KeyboardInterrupt):
+                orchestrator.run()
+        else:
+            assert orchestrator.run() == 1
+        (doc,) = orchestrator.documents()
+        assert not doc.state_path.exists()
+        assert not doc.unrecorded
+        monkeypatch.undo()
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_EQUIVALENCES
+
+    def test_a_directory_with_only_its_state_is_held(self, tmp_path):
+        """A directory whose only file is state.json (a document whose
+        registration failed before the records, say) is unrecorded too: it
+        is held before it is registered, with no stage outputs to name."""
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "letter.txt").write_text("Anna was born in 1901.")
+        (doc,) = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        ).documents()
+        doc.state.status = FAILED
+        doc.state.error = "RuntimeError: wiki down"
+        doc.state.content_sha1 = doc.sha1
+        doc.state.save(doc.state_path)
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
+        assert orchestrator.run() == 2
+        assert orchestrator.calls == []
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == UNRECORDED
+        held = doc.state.detail["held"]
+        assert held["outputs"] == []
+        assert "stage outputs" not in held["reason"]
+        assert held["previous_status"] == FAILED
 
     def test_a_duplicate_is_recorded_from_its_first_run(self, tmp_path):
         """A duplicate's directory gets its record too, so when the file

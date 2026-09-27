@@ -1141,8 +1141,12 @@ def build_parser() -> argparse.ArgumentParser:
         "calling the engine for all but a GEDCOM file, and the views are "
         "replaced. Unless the new batch has the same content as "
         "batch.json, the reviewed CSVs are moved aside. Without it such a "
-        "document is held, with its directory untouched, whatever the "
-        "store holds",
+        "document is held, whatever the store holds, and nothing in its "
+        "directory changes but the state.json that records the hold. A "
+        "document whose source bytes changed since its state.json was "
+        "saved is not held: its directory is moved aside whole, as "
+        ".<name>.superseded-<n> beside it, and the new bytes are ingested "
+        "in a fresh one",
     )
     p.set_defaults(func=cmd_run)
 

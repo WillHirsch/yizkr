@@ -199,11 +199,13 @@ fails the stage, to be retried. Sidecar state and batches made before the
 store are never read as stage outputs: they carry no key, and archived
 outputs enter the store only through the import in #104, under keys of
 their own (ADR-0025). `yizkr ingest run` holds a document whose directory
-has files but no `derivations.json`, with its files and reviews
-untouched, whatever the shared store holds, until a run opts in with
-`--rederive-unrecorded`; that run keeps a copy of each stage output
-before deriving the stages again (docs/STAGE_STORE.md). The layout this
-section first described:
+has files but no `derivations.json`, whatever the shared store holds,
+changing nothing in it but the `state.json` that records the hold, until
+a run opts in with `--rederive-unrecorded`; that run keeps a copy of each
+stage output before deriving the stages again. A document whose source
+bytes changed is a different artifact (ADR-0010): its directory is moved
+aside whole, with nothing in it deleted, and the new bytes are ingested
+afresh (docs/STAGE_STORE.md). The layout this section first described:
 
 All intermediate state lives beside the output (runtime state, so under
 `var/` or wherever `--out` points):
