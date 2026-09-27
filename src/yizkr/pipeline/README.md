@@ -154,11 +154,15 @@ re-running one step in isolation — but for a normal ingest you only ever run
   the PDF", "I can't transcribe this", "unable to comply with your
   request") counts only in the engine's own voice: opening the output, a
   page section (after a "Page 2" or "[Page 2]" heading) or a line
-  labelled "Note:", or naming the page it skipped, and not about the
-  correspondents' own attachment, writing or request ("the attachment you
-  sent", "the old handwriting on the back of the photograph", "your
-  request for copies of the register"). The reason is recorded and the
-  failed output is never passed on.
+  labelled "Note:", "NB:", "Error:" or "Warning:", or naming the page it
+  skipped, and not about the correspondents' own attachment, writing or
+  request ("the attachment you sent", "the old handwriting on the back of
+  the photograph", "your request for copies of the register"). A page
+  named by number or place as the subject or object of a failed read
+  ("Page 2 could not be read", "I couldn't read the remaining pages")
+  fails wherever it stands; other wordings count only where a note
+  opens. The reason is recorded and the failed output is never passed
+  on.
 - **extract** — engines: `llm` (prompts with the claim JSON Schema and
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
