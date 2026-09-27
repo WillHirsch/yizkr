@@ -28,10 +28,11 @@ PERSECUTION_KINDS = ("event", "imprisonment", "release", "deportation")
 # inside an appellation (ADR-0018).
 KINSHIP_WORDS = {
     "aunt", "brother", "cousin", "dad", "daughter", "father", "grandfather",
-    "grandma", "grandmother", "grandpa", "husband", "mother", "mum", "nana",
-    "nephew", "niece", "sister", "son", "uncle", "wife",
-    "bruder", "mutter", "neffe", "nichte", "oma", "onkel", "opa",
-    "schwester", "sohn", "tante", "tochter", "vater", "vetter",
+    "grandma", "grandmother", "grandpa", "husband", "mama", "mother", "mum",
+    "nana", "nephew", "niece", "papa", "sister", "son", "uncle", "wife",
+    "bruder", "großmutter", "großvater", "mutter", "mutti", "neffe",
+    "nichte", "oma", "onkel", "opa", "schwester", "sohn", "tante",
+    "tochter", "vater", "vati", "vetter",
 }  # fmt: skip
 
 
@@ -305,6 +306,16 @@ class TestFamily:
             assert assertion.subject in derived[term](assertion.value), (
                 assertion
             )
+        # a cousin is a cousin both ways, so pin who each term names: the
+        # subject is the referent ("Aunt Pünktchen" is Klara, "Dad's cousin
+        # Leopold" is Leopold) and the object is the ego
+        assert {
+            (a.subject, a.value, dict(a.qualifiers)["kinship_type"])
+            for a in kinship
+        } == {
+            ("klara-loebig", "nicholas-lobig", "aunt"),
+            ("leopold-loebig", "gustav-loebig", "cousin"),
+        }
 
     def test_spouses_in_three_generations(self):
         couples = {
