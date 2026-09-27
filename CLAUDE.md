@@ -72,6 +72,14 @@ values and N source-attributed values, and everything still works.*
   commits, issues and PRs comes only from the fictional universe
   (`docs/EXAMPLES.md`, `tests/fixtures/example_universe.py`). Never
   real family data, not even partially anonymised.
+- Code comments: comments and docstrings in `src/yizkr/` (prompt
+  templates included) describe how the code works now and why, never
+  its development history: no issue or PR numbers, ROADMAP items,
+  "previously"/"was"/"no longer" notes, or accounts of how a bug was
+  found or which run it broke. That history belongs in commit messages,
+  PRs, issues and ADRs. ADR references are fine, as they give the
+  current design's rationale. Tests and development docs (READMEs,
+  `docs/`, ADRs) may cite issues.
 
 ## Agent execution & data boundary
 
