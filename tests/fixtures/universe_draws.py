@@ -5,9 +5,9 @@ author never saw the project's real records.  Instead of recalling
 names, dates and places (recall is how real data leaks into examples),
 every specific was drawn here from broad tables with fixed seeds and
 then read over for plausibility: rounds one to four continue one
-stream (``SEED``), the fifth and sixth each start their own (``SEED_5``,
-``SEED_6``), and where two rounds drew the same slot the later one
-holds.  Run it to see the raw draws::
+stream (``SEED``), the fifth, sixth and seventh each start their own
+(``SEED_5``, ``SEED_6``, ``SEED_7``), and where two rounds drew the same
+slot the later one holds.  Run it to see the raw draws::
 
     uv run python tests/fixtures/universe_draws.py
 
@@ -22,6 +22,7 @@ This script is documentation, not a test: nothing imports it.
 
 from __future__ import annotations
 
+import datetime
 import random
 
 SEED = 58213
@@ -545,6 +546,7 @@ def main() -> None:
     second_round(rng, show, date)
     fifth_round()
     sixth_round()
+    seventh_round()
 
 
 def second_round(rng: random.Random, show, date) -> None:
@@ -1170,6 +1172,267 @@ USED_BY_SIXTH = (
     "Iris",
 )
 USED_SHORT_6 = ("Cilli", "Wastl", "Emmi")
+
+
+# --- seventh round: its own seed ----------------------------------------
+
+# Drawn with ``secrets.randbelow`` when the round was written, like
+# SEED_5 and SEED_6, so rounds one to six replay exactly as before.
+SEED_7 = 559179
+
+# A place in the universe that is also a given name: no person may take
+# it, nor a variant of it.
+PLACE_GIVEN = ("Victoria",)
+# Given names the universe keeps after the seventh round.  A new name
+# starts with none of their first two letters, so no two in the cast
+# are easily confused (Irene beside Iris).
+CAST = (
+    "Eugen",
+    "Cäcilie",
+    "Sebastian",
+    "Rahel",
+    "Felix",
+    "Gustav",
+    "Leopold",
+    "Rudolf",
+    "Iris",
+    "Nicholas",
+)
+
+# Days of 1938 that history already marks, as (month, first day, last
+# day): the spring and autumn crises over Czechoslovakia, the Evian
+# conference, the decrees against Jews, the expulsions to Poland, the
+# November pogrom and the decrees after it, the first children's
+# transports, and the Jewish and Christian holidays.  A departure or a
+# postmark drawn in 1938 keeps at least a day clear of every one.
+MARKED_1938 = (
+    (5, 1, 1),
+    (5, 19, 23),
+    (6, 5, 6),
+    (6, 13, 18),
+    (7, 6, 15),
+    (7, 23, 25),
+    (8, 6, 6),
+    (8, 10, 10),
+    (8, 17, 17),
+    (9, 12, 30),
+    (10, 1, 18),
+    (10, 27, 29),
+    (11, 7, 15),
+    (11, 21, 21),
+    (12, 1, 3),
+    (12, 17, 31),
+)
+
+
+def _shares(first: str, second: str) -> bool:
+    """Whether two names, umlauts folded, share four letters in a row
+    (Auguste and Gustav share "gust")."""
+    a, b = _fold(first), _fold(second)
+    return any(a[i : i + 4] in b for i in range(len(a) - 3))
+
+
+def _marked(day: datetime.date) -> bool:
+    return any(
+        day.month == month and first - 1 <= day.day <= last + 1
+        for month, first, last in MARKED_1938
+    )
+
+
+def seventh_round() -> None:
+    """Re-draw after the third clean-room review (#40).
+
+    New given names for the elder son's wife (with a diminutive), the
+    younger son's wife, the emigrant daughter (with an English form) and
+    the two women who share a name.  New birth years for Cäcilie, for
+    Sebastian and Felix, for both their wives, for the emigrant son and
+    daughter and for the infant; new death years for Sebastian and
+    Felix; a new death date for Eugen; new days for the emigrant son's
+    and both wives' births; a new departure and postmark for the
+    emigrant daughter; and a new marriage year and son for the emigrant
+    son.  Every re-drawn year lies at least three years from the one it
+    replaces.  Everything else stays: the surname, the places, the 1859
+    and 1905 marriages, Eugen's and Rahel's births, both wives' deaths,
+    the other grandchildren's dates and the emigrant son's wife.  Draws
+    repeat until they meet the constraint beside them.
+    """
+    rng = random.Random(SEED_7)
+
+    def show(label: str, value: object) -> None:
+        print(f"{label:28} {value}")
+
+    female = {**FEMALE, **MORE_FEMALE}
+    male = {**MALE, **MORE_MALE}
+
+    def forms(name: str) -> list[str]:
+        english, short = male.get(name) or female.get(name) or (name, None)
+        return [
+            form
+            for form in (name, english, short, EN_DIMINUTIVES.get(english))
+            if form
+        ]
+
+    used = (*USED_GIVEN, *USED_BY_FIFTH, *USED_BY_SIXTH, *PLACE_GIVEN)
+    taken = [form for name in used for form in forms(name)] + [
+        *USED_SHORT_5,
+        *USED_SHORT_6,
+        *USED_PET_NAMES_5,
+    ]
+
+    cast = list(CAST)
+
+    def pick(pool, need=lambda name: True):
+        for name in pool:
+            clash = any(
+                _variant(f, t) or _shares(f, t)
+                for f in forms(name)
+                for t in taken
+            ) or any(_fold(name)[:2] == _fold(c)[:2] for c in cast)
+            if not clash and need(name):
+                taken.extend(forms(name))
+                cast.append(name)
+                return name
+        raise LookupError("pool exhausted")
+
+    women = sorted(female)
+    rng.shuffle(women)
+    roles = {
+        "G2 elder son's wife (+dim.)": pick(
+            women, lambda n: bool(female[n][1])
+        ),
+        "G2 younger son's wife": pick(women),
+        "G3 emigrant daughter (+Eng.)": pick(
+            women, lambda n: _fold(female[n][0]) != _fold(n)
+        ),
+        "G3 daughter and the widow": pick(women),
+    }
+    for role, name in roles.items():
+        show(role, (name, *female[name]))
+
+    def far(year: int, old: int) -> bool:
+        return abs(year - old) >= 3
+
+    def spaced(*years: int) -> bool:
+        """Siblings one to six years apart."""
+        ordered = sorted(years)
+        pairs = zip(ordered, ordered[1:], strict=False)
+        return all(1 <= b - a <= 6 for a, b in pairs)
+
+    def day_month(*old: tuple[int, int]) -> tuple[int, int]:
+        while True:
+            drawn = (rng.randint(1, 12), rng.randint(1, 28))
+            if drawn not in old:
+                return drawn
+
+    # --- the first generation --------------------------------------------
+    # Cäcilie marries in 1859 at 22 to 29 (so not near her old c. 1840)
+    cilli = rng.randint(1830, 1837)
+    show("G1 wife born", cilli)
+    # Eugen dies after the 1905 certificate names him living and before
+    # the 1912 directory names his son owner, not in 1911 as before
+    show(
+        "G1 husband dies (y, m, d)",
+        (rng.randint(1906, 1910), rng.randint(1, 12), rng.randint(1, 28)),
+    )
+    show("G1 husband buried +days", rng.randint(2, 5))
+
+    # --- the second generation -------------------------------------------
+    # Sebastian within six years of the 1859 marriage; Felix after him;
+    # spaced with Rahel (1871), all to a mother no older than 44.  Each
+    # wife 0 to 15 years younger than her husband: the elder son's wife
+    # 20 or older at the 1905 marriage, the younger son's 18 to 34 at
+    # Leopold's birth (1914).
+    tries = 0
+    while True:
+        tries += 1
+        sebastian = rng.randint(1860, 1865)
+        felix = rng.randint(sebastian + 1, cilli + 44)
+        elder_wife = rng.randint(1875, 1885)
+        younger_wife = rng.randint(1880, 1896)
+        if (
+            far(sebastian, 1868)
+            and far(felix, 1873)
+            and far(elder_wife, 1884)
+            and far(younger_wife, 1893)
+            and spaced(sebastian, 1871, felix)
+            and 0 <= elder_wife - sebastian <= 15
+            and 0 <= younger_wife - felix <= 15
+        ):
+            break
+    show("G2 born (son, son)", (sebastian, felix, tries))
+    show("G2 wives born (elder, younger)", (elder_wife, younger_wife))
+    show("elder son's wife (m, d)", day_month((4, 23)))
+    show("younger son's wife (m, d)", day_month((6, 1)))
+    # neither brother dies in a year another of the family dies (the
+    # stayers' and the emigrants' death years that stay)
+    other_deaths = (1902, 1941, 1946, 1960, 1963, 1968, 1996, 2001)
+    # Sebastian writes the 1938 postcard, and dies by 92
+    while True:
+        died = rng.randint(1939, sebastian + 92)
+        if far(died, 1953) and died not in other_deaths:
+            break
+    show("G2 elder son dies", died)
+    # Felix heads the household in the 1930 school report and is dead
+    # before his wife's deportation in 1942
+    while True:
+        felix_died = rng.randint(1931, 1941)
+        if felix_died not in other_deaths:
+            break
+    show("G2 younger son dies", felix_died)
+    # to a mother of 18 to 44, by Felix's death, spaced with Leopold
+    # (1914) and Rudolf (1916)
+    while True:
+        infant = rng.randint(
+            younger_wife + 18, min(younger_wife + 44, felix_died)
+        )
+        if far(infant, 1925) and spaced(1914, 1916, infant):
+            break
+    show("infant born and died", infant)
+
+    # --- the third generation --------------------------------------------
+    # after the December 1905 marriage, 18 or older when leaving, to a
+    # mother no older than 44, spaced with their sister (1911), and
+    # neither emigrant near either emigrant's old year (1907, 1910)
+    old_years = (1907, 1910)
+    while True:
+        gustav = rng.randint(1906, 1921)
+        daughter = rng.randint(1906, 1920)
+        if (
+            all(far(y, old) for y in (gustav, daughter) for old in old_years)
+            and spaced(gustav, daughter, 1911)
+            and max(gustav, daughter) <= elder_wife + 44
+        ):
+            break
+    show("G3 emigrant son, daughter", (gustav, daughter))
+    # a day that is also a month, so the day-month transposition gives a
+    # real date, and September on neither side
+    while True:
+        month, day = rng.randint(1, 12), rng.randint(1, 12)
+        if month != day and 9 not in (month, day):
+            break
+    show("emigrant son born (m, d)", (month, day))
+    # leaves from May, arrives, and the postmark follows five to ten
+    # weeks later, still in 1938; neither on a marked day
+    while True:
+        left = datetime.date(1938, rng.randint(5, 10), rng.randint(1, 28))
+        posted = left + datetime.timedelta(days=rng.randint(35, 70))
+        if posted.year == 1938 and not (_marked(left) or _marked(posted)):
+            break
+    show("daughter leaves, postmark", (left.isoformat(), posted.isoformat()))
+    # marries in Australia after arriving in 1939; the son follows the
+    # marriage while his mother (born 1914) is no older than 44
+    while True:
+        wed = rng.randint(1940, 1956)
+        son = rng.randint(wed + 1, 1958)
+        if far(wed, 1945) and far(son, 1947):
+            break
+    show("emigrant son weds, son born", (wed, son))
+
+
+# Given and short names the seventh round drew (its output), for a later
+# round to exclude, variants included, with the lists above.
+USED_BY_SEVENTH = ("Hildegard", "Ida", "Klara", "Ursula")
+USED_SHORT_7 = ("Hilde",)
 
 
 if __name__ == "__main__":
