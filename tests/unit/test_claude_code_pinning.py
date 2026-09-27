@@ -145,6 +145,15 @@ class TestIsolation:
             "ANTHROPIC_API_KEY": "sk-should-not-leak",
             "ANTHROPIC_MODEL": "some-other-model",
             "DISABLE_AUTOUPDATER": "0",
+            # read by the CLI outside the Anthropic and Claude prefixes
+            "MAX_THINKING_TOKENS": "32000",
+            "DISABLE_INTERLEAVED_THINKING": "1",
+            "DISABLE_PROMPT_CACHING": "1",
+            "DISABLE_PROMPT_CACHING_HAIKU": "1",
+            "DISABLE_PROMPT_CACHING_SONNET": "1",
+            "DISABLE_PROMPT_CACHING_OPUS": "1",
+            "DISABLE_PROMPT_CACHING_FABLE": "1",
+            "DISABLE_PROMPT_CACHING_MYTHOS": "1",
         }
         for name, value in inherited.items():
             monkeypatch.setenv(name, value)
@@ -180,7 +189,13 @@ class TestEffectiveConfig:
         assert arguments[arguments.index("--effort") + 1] == "low"
         assert "--session-id" not in arguments
         assert config["working_directory"] == str(client.workdir)
-        assert config["environment"]["set"]["DISABLE_AUTOUPDATER"] == "1"
+        environment = config["environment"]
+        assert environment["set"]["DISABLE_AUTOUPDATER"] == "1"
+        assert "DISABLE_PROMPT_CACHING" in environment["cleared_prefixes"]
+        assert environment["cleared"] == [
+            "DISABLE_INTERLEAVED_THINKING",
+            "MAX_THINKING_TOKENS",
+        ]
         # names of kept variables only, never their values
         assert "subscription-token" not in json.dumps(config)
 
