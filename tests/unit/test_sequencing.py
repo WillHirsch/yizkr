@@ -8,9 +8,9 @@ class TestSequenceDocuments:
         # 'tree' shares an entity with each of the two sparse docs; it is the
         # most connective, so it seeds the graph first.
         items = [
-            ("letter", {"donald", "rosa"}),
-            ("tree", {"donald", "rosa", "anne", "salomon"}),
-            ("photo", {"anne", "gaby"}),
+            ("letter", {"sebastian", "klara"}),
+            ("tree", {"sebastian", "klara", "felix", "gustav"}),
+            ("photo", {"felix", "rahel"}),
         ]
         assert sequence_documents(items)[0] == "tree"
 

@@ -9,6 +9,7 @@ that is the case it is reliable in, and the case ingestion actually hits.
 from __future__ import annotations
 
 import yizkr.pipeline.language as lang
+from tests.fixtures import example_universe as u
 from yizkr.pipeline.language import (
     AUTO,
     LanguageResolution,
@@ -16,16 +17,9 @@ from yizkr.pipeline.language import (
     resolve_language,
 )
 
-DE = (
-    "Berlin, den 8. Dezember 1937. Sehr geehrter Herr Direktor, hiermit "
-    "bestaetige ich den Empfang Ihres Schreibens. Die Steuerangelegenheit "
-    "des Herrn Berthold ist nunmehr geklaert und der Betrag beglichen."
-)
-EN = (
-    "I was born in Berlin in 1929, the youngest of three children. My "
-    "father ran a small flour mill on the outskirts of the city, and my "
-    "earliest memories are of the smell of grain and the turning wheels."
-)
+SOURCES = {source.key: source for source in u.SOURCES}
+DE = SOURCES["marriage-cert-1905"].text  # a civil register entry
+EN = SOURCES["interview-2002"].text  # an oral-history transcript
 
 
 class TestResolutionPolicy:
@@ -90,7 +84,7 @@ class TestRealDetector:
         assert confidence > 0.9
 
     def test_too_short_is_not_guessed(self):
-        assert detect_language("Berthold") == (None, 0.0)
+        assert detect_language("Sebastian") == (None, 0.0)
         assert detect_language("") == (None, 0.0)
         assert detect_language("   ") == (None, 0.0)
 
