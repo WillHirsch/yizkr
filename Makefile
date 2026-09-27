@@ -14,7 +14,8 @@ install:            ## create/update the uv-managed venv (with dev tools)
 
 # Hooks live in the common git dir, so one run covers every worktree.
 # The pre-push hook is a plain script, not a pre-commit stage: pre-commit
-# shows its hooks only the first ref being pushed, and none for a delete.
+# shows its hooks only the first pushed ref with new commits, and none for
+# a delete.
 PRE_PUSH_HOOK = scripts/git-hooks/pre-push
 
 hooks:              ## install git hooks: pre-commit (ruff), pre-push (no pushes to main)

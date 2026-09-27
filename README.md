@@ -37,6 +37,7 @@ Python tooling is one [uv]-managed package with a single CLI:
 
 ```sh
 uv sync --dev            # or: make install
+make hooks               # once per clone: ruff on commit, no pushes to main
 uv run yizkr --help      # bootstrap / smoke-test / publish-queries / ingest
 make test                # offline tests
 make up bootstrap smoke  # start the stack, apply the model, verify
