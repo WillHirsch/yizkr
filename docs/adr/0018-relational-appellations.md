@@ -4,6 +4,9 @@ Status: **accepted** — implemented (manifest `referred_to_as` +
 `perspective`, extraction-prompt routing, critic update). No retro-fit:
 the model applies to a clean re-ingest, not a migration of existing rows
 (see Rulings).
+Amended by #222 (2026-09-27): the reciprocal-naming example records the
+literal "Oma" as (A), `relative` + `kinship_type`, as Ruling 2 routes it
+("Reciprocal / dyadic naming").
 
 ## Context
 
@@ -114,8 +117,8 @@ design because **every appellation is a statement whose SUBJECT is the
 referent and whose perspective is the other party**:
 
 - The two directions are **two independent statements on two different
-  subjects** — `grandmother —referred_to_as→ "Oma" ; perspective =
-  grandchild` and `grandchild —referred_to_as→ "Bubele" ; perspective =
+  subjects** — `grandmother —relative→ grandchild ; kinship_type =
+  "Oma"` and `grandchild —referred_to_as→ "Bubele" ; perspective =
   grandmother`. There is no dyad object to build and nothing to keep in
   sync; the subject/perspective pair distinguishes them.
 - A **symmetric term** ("Schwesterchen" both ways) is still two statements,
