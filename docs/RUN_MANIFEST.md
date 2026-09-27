@@ -89,12 +89,21 @@ The manifest describes the run **as its latest invocation ran it**.
   invoke the run again with its settings, or start a new run in a new
   run directory (the LLM cache answers every call the change leaves the
   same). The recorded clients and CLI version are kept across
-  invocations; a claude-code client must run the recorded CLI version
-  (the engine's own pin refuses another, `CliVersionMismatch`), and a
-  client that applies another model, effort or configuration hash than
-  the one recorded for its role is refused when it starts, before its
-  first call. `RunSettingsConflict`, like a paused pass, is no document's
-  failure: it stops the invocation.
+  invocations. A client that runs another claude CLI version than the
+  one recorded, or applies another model, effort or configuration hash
+  than the one recorded for its role, is refused the same way when it
+  starts, before its first call. The likeliest such refusal is a CLI
+  that updated itself between invocations, as the claude CLI does while
+  other Claude Code sessions share the machine. The refusal then lists
+  `engine.cli_version` first (a client's configuration hash covers the
+  CLI version, so a role's recorded hash differs too) and says what to
+  do: install the recorded version, keep auto-update off
+  (`DISABLE_AUTOUPDATER=1`) and invoke the run again, or start a new run
+  on the new version, none of whose calls the LLM cache answers from
+  this run's, since its keys name the CLI version. A CLI that changes
+  while an invocation runs is the engine's own pin's to catch: it pauses
+  the pass (`CliVersionMismatch`, a `PassPaused`). `RunSettingsConflict`,
+  like a paused pass, is no document's failure: it stops the invocation.
 
 The settings a run that keeps its settings must keep are `mode`,
 `project_stage`, `engine`, `roles`, `corpus`, `code` and `config`, with
@@ -193,8 +202,8 @@ and `dirty` are `null`. The code version is measured once per process.
 |---|---|
 | `invocation` | The invocation's id, which every event it emits carries |
 | `started_at`, `ended_at` | Its start and end; `ended_at` stays `null` while it runs, or if it was killed |
-| `outcome` | `finished` (it went through its documents, whatever their statuses), `stopped` (a control request stopped it), `interrupted` (Ctrl-C), `paused` (the pass paused, `PassPaused`: a CLI change, say), `refused` (`RunSettingsConflict`) or `failed` (another error escaped it); `null` while it runs |
-| `reason` | When it did not finish: the control request that stopped it (`run aborted`), or the name of the exception, never its message, which may quote a document |
+| `outcome` | `finished` (it went through its documents, whatever their statuses, and no request for the whole run held any of them), `stopped` (a control request for the whole run stopped it: before a document, or by holding a stage of one, the last document's included; a request for one stage or kind holds documents at it, and the invocation still finishes), `interrupted` (Ctrl-C), `paused` (the pass paused, `PassPaused`: the claude CLI changed while the invocation ran, say), `refused` (`RunSettingsConflict`: other settings than the run recorded, a claude CLI updated since it recorded its version included) or `failed` (another error escaped it); `null` while it runs |
+| `reason` | When it did not finish: the control request that stopped it (`run aborted`, `run paused`), or the name of the exception, never its message, which may quote a document |
 
 ## An example
 
