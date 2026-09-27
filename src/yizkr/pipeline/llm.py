@@ -184,6 +184,11 @@ class CliToolsMismatch(PassPaused):
     allows."""
 
 
+class CliHomeRelative(PassPaused):
+    """HOME is a relative path, which the CLI and the engine would resolve
+    against different directories."""
+
+
 def _version_mismatch(
     found: str, pinned: str, where: str
 ) -> CliVersionMismatch:
@@ -334,9 +339,10 @@ _PASSED_VARIABLES = frozenset(
 # global config, where the owner's own sessions refresh it too. That data
 # can change the system-prompt text, the output-token budget, the default
 # model and the auto-compact windows, and no variable keeps it out.
-# CLAUDE_CODE_MAX_OUTPUT_TOKENS takes the budget's default out of its
-# reach: every call asks for 64000 tokens, the Claude 5 default, capped at
-# the model's own ceiling, which account data can still lower.
+# CLAUDE_CODE_MAX_OUTPUT_TOKENS takes the budget out of its reach: every
+# call asks for 64000 tokens, the Claude 5 default, capped at the model's
+# ceiling in the CLI's built-in model catalog, so the budget follows the
+# CLI version and the model alone.
 # Auto-memory would carry content from one call into the next. Error
 # reports and telemetry go to third parties and can describe the calls,
 # such as the paths of the files read (CLAUDE.md rule 7).
@@ -372,31 +378,44 @@ def _home() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
-def claude_projects_dir() -> Path:
-    """Where the CLI stores its sessions: ``projects/`` under
-    $CLAUDE_CONFIG_DIR, or under ~/.claude when that is unset or empty."""
-    configured = os.environ.get("CLAUDE_CONFIG_DIR")
-    if configured:
-        return Path(configured).expanduser() / "projects"
-    return _home() / ".claude" / "projects"
+def claude_config_dir() -> Path | None:
+    """The CLI's config directory from $CLAUDE_CONFIG_DIR, as an absolute
+    path, or None when that is unset or empty.
+
+    The CLI reads the raw value: it does not expand ``~``, and it resolves
+    a relative value against its own working directory. A client therefore
+    normalises the value once, here, and passes the result to the CLI: a
+    leading ``~`` is the home directory, and a relative value is taken from
+    the current directory.
+    """
+    value = os.environ.get("CLAUDE_CONFIG_DIR")
+    if not value:
+        return None
+    if value == "~" or value.startswith("~/"):
+        return Path(os.path.abspath(_home() / value[2:]))
+    return Path(os.path.abspath(value))
 
 
-def claude_global_config_path() -> Path:
+def claude_projects_dir(config_dir: Path | None) -> Path:
+    """Where the CLI stores its sessions: ``projects/`` in its config
+    directory, or in ~/.claude when it has none."""
+    return (config_dir or _home() / ".claude") / "projects"
+
+
+def claude_global_config_path(config_dir: Path | None) -> Path:
     """The CLI's global config file: ``.config.json`` in its config
-    directory ($CLAUDE_CONFIG_DIR, or ~/.claude when that is unset or
-    empty) if that file exists, else ``.claude.json`` in $CLAUDE_CONFIG_DIR,
-    or in the home directory."""
-    configured = os.environ.get("CLAUDE_CONFIG_DIR")
-    base = Path(configured).expanduser() if configured else None
-    preferred = (base or _home() / ".claude") / ".config.json"
+    directory (~/.claude when it has none) if that file exists, else
+    ``.claude.json`` in the config directory, or in the home directory when
+    it has none."""
+    preferred = (config_dir or _home() / ".claude") / ".config.json"
     if preferred.exists():
         return preferred
-    return (base or _home()) / ".claude.json"
+    return (config_dir or _home()) / ".claude.json"
 
 
-def check_global_config() -> None:
-    """Refuse to go on while the CLI's global config sets environment
-    variables.
+def check_global_config(config_dir: Path | None) -> None:
+    """Refuse to go on while the CLI's global config, found from the
+    config directory ``config_dir``, sets environment variables.
 
     At every start the CLI copies the ``env`` map of its global config into
     its own environment, past both ``--setting-sources`` and the allowlist,
@@ -406,7 +425,7 @@ def check_global_config() -> None:
     when the file cannot be read as JSON. A file caught mid-write is read
     once more.
     """
-    path = claude_global_config_path()
+    path = claude_global_config_path(config_dir)
     config: Any = None
     for attempt in (1, 2):
         try:
@@ -465,10 +484,13 @@ def transcript_destination(
 
 
 def release_transcripts(
-    session_ids: Iterable[str], destination: Path | None
+    session_ids: Iterable[str],
+    destination: Path | None,
+    config_dir: Path | None,
 ) -> list[Path]:
     """Move each session's stored transcript out of the CLI's projects
-    directory into ``destination``, or delete it when that is None.
+    directory, found from the config directory ``config_dir``, into
+    ``destination``, or delete it when that is None.
 
     A session is its ``<id>.jsonl`` file plus the ``<id>/`` directory
     beside it when there is one (tool results and the like), in whichever
@@ -477,7 +499,7 @@ def release_transcripts(
     paths released; a path that cannot be released is logged and left in
     place.
     """
-    projects = claude_projects_dir()
+    projects = claude_projects_dir(config_dir)
     released: list[Path] = []
     for session_id in session_ids:
         try:
@@ -508,12 +530,15 @@ def release_transcripts(
 
 
 def _release_held(
-    held: set[str], lock: threading.Lock, destination: Path | None
+    held: set[str],
+    lock: threading.Lock,
+    destination: Path | None,
+    config_dir: Path | None,
 ) -> None:
     with lock:
         session_ids = sorted(held)
         held.clear()
-    release_transcripts(session_ids, destination)
+    release_transcripts(session_ids, destination, config_dir)
 
 
 def _stream_events(stdout: str) -> list[dict]:
@@ -576,18 +601,22 @@ class ClaudeCodeClient:
     files, MCP servers or skills, inherit only the environment variables
     on an allowlist (``_PASSED_VARIABLES``: what runs the CLI, locates its
     config directory and reaches the API), pin compaction on, and run in a
-    dedicated directory. A client neither starts nor calls while the CLI's
-    global config sets environment variables of its own
-    (``check_global_config``). So no local configuration of the owner's,
-    and nothing a Claude Code session that launched the pass exports,
-    shapes a call without showing in ``config_hash``. Three things the
-    engine does not control still shape calls: the login, which decides
-    the account; machine-managed settings, which are machine policy; and
-    the account data the server sends, which the CLI caches in its global
-    config and which can change the system-prompt text, the output-token
-    ceiling, the default model and the auto-compact windows.
-    ``effective_config`` lists what the engine sets for a call besides the
-    prompt, and ``config_hash`` fingerprints it for the run record.
+    dedicated directory. The CLI's config directory is normalised once,
+    when a client starts, and that absolute path is passed to the CLI, so
+    the CLI and the engine read the same one (``claude_config_dir``); a
+    relative HOME is refused (``CliHomeRelative``). A client neither
+    starts nor calls while the CLI's global config sets environment
+    variables of its own (``check_global_config``). So no local
+    configuration of the owner's, and nothing a Claude Code session that
+    launched the pass exports, shapes a call without showing in
+    ``config_hash``. Three things the engine does not control still shape
+    calls: the login, which decides the account; machine-managed
+    settings, which are machine policy; and the account data the server
+    sends, which the CLI caches in its global config and which can change
+    the system-prompt text, the default model and the auto-compact
+    windows. ``effective_config`` lists what the engine sets for a call
+    besides the prompt, and ``config_hash`` fingerprints it for the run
+    record.
 
     **Transcripts.** The CLI stores every session under its projects
     directory, and forks resume from there, so sessions stay persistent
@@ -638,7 +667,21 @@ class ClaudeCodeClient:
         self.transcripts = transcript_destination(transcripts)
         self._pin = _PIN
         self._pin.raise_if_paused()
-        check_global_config()
+        home = os.environ.get("HOME")
+        if home and not os.path.isabs(home):
+            raise CliHomeRelative(
+                f"HOME is {home!r}, a relative path: the claude CLI would "
+                "take it from its own working directory and the engine from "
+                "the pipeline's, so they would look for the login, the "
+                "global config and the sessions in different places. The "
+                "pass is paused and makes no further calls; its completed "
+                "outputs are kept. Set HOME to an absolute path, or unset "
+                "it, then run the pass again."
+            )
+        # normalised once and passed to the CLI, so that the CLI and the
+        # engine read the same config directory
+        self.config_dir = claude_config_dir()
+        check_global_config(self.config_dir)
         try:
             installed = subprocess.run(
                 [self.executable, "--version"],
@@ -670,6 +713,7 @@ class ClaudeCodeClient:
             self._conversations,
             self._conversations_lock,
             self.transcripts,
+            self.config_dir,
         )
 
     def _command(self) -> list[str]:
@@ -719,18 +763,19 @@ class ClaudeCodeClient:
             command += ["--effort", self.effort]
         return command
 
-    @staticmethod
-    def _child_env() -> dict[str, str]:
+    def _child_env(self) -> dict[str, str]:
         """The allowlisted variables of this process's environment, with
-        the pinned settings on top. An empty one is left out, so the CLI
-        treats it as unset, as the helpers here do: the CLI would read an
-        empty CLAUDE_CONFIG_DIR as a directory relative to its working
-        directory."""
+        CLAUDE_CONFIG_DIR as normalised when the client started and the
+        pinned settings on top. An empty variable is left out, so the CLI
+        treats it as unset, as the helpers here do."""
         env = {
             key: value
             for key, value in os.environ.items()
             if key in _PASSED_VARIABLES and value
         }
+        env.pop("CLAUDE_CONFIG_DIR", None)
+        if self.config_dir is not None:
+            env["CLAUDE_CONFIG_DIR"] = str(self.config_dir)
         env.update(_PINNED_ENVIRONMENT)
         return env
 
@@ -800,12 +845,15 @@ class ClaudeCodeClient:
         again."""
         with self._conversations_lock:
             self._conversations.discard(str(handle))
-        release_transcripts([str(handle)], self.transcripts)
+        release_transcripts([str(handle)], self.transcripts, self.config_dir)
 
     def close(self) -> None:
         """Release the transcripts of every conversation still open."""
         _release_held(
-            self._conversations, self._conversations_lock, self.transcripts
+            self._conversations,
+            self._conversations_lock,
+            self.transcripts,
+            self.config_dir,
         )
 
     def __enter__(self) -> ClaudeCodeClient:
@@ -821,7 +869,7 @@ class ClaudeCodeClient:
         it ends, unless ``hold`` keeps a successful call's session open
         for forking."""
         self._pin.raise_if_paused()
-        check_global_config()
+        check_global_config(self.config_dir)
         self.workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
         stdout = ""
         held = False
@@ -872,7 +920,9 @@ class ClaudeCodeClient:
                 else:
                     # a fork never releases the conversation it resumed
                     sessions -= self._conversations
-            release_transcripts(sorted(sessions), self.transcripts)
+            release_transcripts(
+                sorted(sessions), self.transcripts, self.config_dir
+            )
 
     @staticmethod
     def _assemble_stream(stdout: str) -> str:

@@ -326,6 +326,12 @@ Two Anthropic-backed providers, differing in how usage is billed:
   version adds. `SHELL` and the locale stay behind too: the CLI names
   the shell in the model's context and formats some numbers there with
   its runtime's default locale. Empty variables are left out, as unset.
+  The CLI would take `CLAUDE_CONFIG_DIR` raw, without expanding `~` and
+  reading a relative value against its own working directory, so a
+  client normalises it once when it starts (`~` is your home directory,
+  and a relative value is taken from the pipeline's working directory)
+  and passes the absolute path on. A relative `HOME` is refused
+  (`CliHomeRelative`).
   On top, the engine sets `DISABLE_AUTOUPDATER`, `DISABLE_GROWTHBOOK`
   (no server-side feature flags), `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000`
   (see below), `CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
@@ -351,11 +357,11 @@ Two Anthropic-backed providers, differing in how usage is billed:
   can change the system-prompt text, the output-token budget, the
   default model and the auto-compact windows, and no local setting keeps
   it out. The engine pins what it can: `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
-  takes the budget's default out of its reach (64000, the Claude 5
-  default), although the model's own ceiling, which the data can lower,
-  still caps it; `--tools Read` keeps out the tools it can add; and an
-  explicit `--model` wins over its default model. The rest is outside
-  the pipeline's control.
+  takes the budget out of its reach (64000, the Claude 5 default, capped
+  at the model's ceiling in the CLI's built-in model catalog, so the
+  budget follows the CLI version and the model alone); `--tools Read`
+  keeps out the tools it can add; and an explicit `--model` wins over
+  its default model. The rest is outside the pipeline's control.
 
   Machine-managed settings under `/etc/claude-code` always apply to the
   CLI: they are machine policy, outside the pipeline's control.

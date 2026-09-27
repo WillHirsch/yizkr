@@ -26,9 +26,11 @@ from yizkr.pipeline import llm
 from yizkr.pipeline.llm import (
     ClaudeCodeClient,
     CliConfigEnvironment,
+    CliHomeRelative,
     CliToolsMismatch,
     CliVersionMismatch,
     PassPaused,
+    claude_config_dir,
     claude_global_config_path,
     make_client,
     pinned_cli_version,
@@ -52,7 +54,7 @@ class FakeCli:
     """Stands in for the claude executable (subprocess.run)."""
 
     def __init__(self, projects: Path) -> None:
-        self.projects = projects
+        self.projects = projects  # where the fixture's config files them
         self.installed = PINNED  # what `claude --version` prints
         self.reports: str | None = None  # init event version, if not that
         # the tools the init event reports offering the model (None: no
@@ -62,18 +64,30 @@ class FakeCli:
         self.timeout = False
         self.probes: list[dict] = []  # kwargs of each --version probe
         self.calls: list[tuple[list[str], dict]] = []
+        self.written: list[Path] = []  # every transcript file it wrote
 
     def transcripts(self) -> set[str]:
-        return {path.name for path in self.projects.glob("*/*.jsonl")}
+        """The transcripts it wrote that are still where it wrote them."""
+        return {path.name for path in self.written if path.exists()}
+
+    @staticmethod
+    def projects_of(env: dict) -> Path:
+        """Where the real CLI files sessions: its config directory, taken
+        as given, or ~/.claude."""
+        if env.get("CLAUDE_CONFIG_DIR"):
+            return Path(env["CLAUDE_CONFIG_DIR"]) / "projects"
+        home = env.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir
+        return Path(home) / ".claude" / "projects"
 
     def __call__(self, command, **kwargs):
         if command[1:] == ["--version"]:
             self.probes.append(kwargs)
             return Completed(stdout=f"{self.installed} (Claude Code)\n")
         self.calls.append((command, kwargs))
+        projects = self.projects_of(kwargs["env"])
         if "--resume" in command:
             parent = command[command.index("--resume") + 1]
-            if not list(self.projects.glob(f"*/{parent}.jsonl")):
+            if not list(projects.glob(f"*/{parent}.jsonl")):
                 return Completed(
                     stderr=f"No conversation found with session ID: {parent}",
                     returncode=1,
@@ -81,9 +95,10 @@ class FakeCli:
             session = str(uuid.uuid4())
         else:
             session = command[command.index("--session-id") + 1]
-        project = self.projects / PROJECT
+        project = projects / PROJECT
         (project / session / "tool-results").mkdir(parents=True)
         (project / f"{session}.jsonl").write_text('{"type": "user"}\n')
+        self.written.append(project / f"{session}.jsonl")
         version = self.reports or self.installed
         init = {
             "type": "system",
@@ -283,7 +298,7 @@ class TestGlobalConfig:
         path = write_config(
             base / name, {"env": {"DISABLE_PROMPT_CACHING": "1"}}
         )
-        assert claude_global_config_path() == path
+        assert claude_global_config_path(llm.claude_config_dir()) == path
         with pytest.raises(CliConfigEnvironment) as refused:
             make_client("claude-code")
         assert "DISABLE_PROMPT_CACHING" in str(refused.value)
@@ -368,9 +383,80 @@ class TestGlobalConfig:
         path = write_config(
             home / ".claude.json", {"env": {"DISABLE_COMPACT": "1"}}
         )
-        assert claude_global_config_path() == path
+        assert claude_global_config_path(llm.claude_config_dir()) == path
         with pytest.raises(CliConfigEnvironment, match="DISABLE_COMPACT"):
             ClaudeCodeClient()
+
+
+class TestConfigDir:
+    """The CLI takes CLAUDE_CONFIG_DIR raw: it does not expand ~, and it
+    reads a relative value against its own working directory (#206
+    review). A client normalises the value once and passes the absolute
+    path on, so the CLI and the engine use the same directory."""
+
+    def test_tilde_value_is_the_home_directory(
+        self, cli, monkeypatch, tmp_path
+    ):
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/cfgtilde")
+        config = home / "cfgtilde"
+        # the global config checked is the one there
+        write_config(
+            config / ".claude.json", {"env": {"DISABLE_COMPACT": "1"}}
+        )
+        with pytest.raises(CliConfigEnvironment) as refused:
+            ClaudeCodeClient()
+        assert str(config / ".claude.json") in str(refused.value)
+        (config / ".claude.json").unlink()
+        ClaudeCodeClient().complete("transcribe")
+        # the CLI is given that directory, and its transcript is released
+        assert cli.calls[0][1]["env"]["CLAUDE_CONFIG_DIR"] == str(config)
+        assert cli.written[0].is_relative_to(config)
+        assert cli.transcripts() == set()
+
+    def test_relative_value_is_taken_from_the_current_directory(
+        self, cli, monkeypatch, tmp_path
+    ):
+        pipeline = tmp_path / "pipeline"
+        pipeline.mkdir()
+        monkeypatch.chdir(pipeline)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relcfg")
+        config = pipeline / "relcfg"
+        client = ClaudeCodeClient()
+        assert client.config_dir == config
+        # normalised once: a later change of directory does not move it
+        monkeypatch.chdir(tmp_path)
+        _, handle = client.open_conversation("list the entities")
+        client.fork(handle, "chunk 1")
+        assert all(
+            call[1]["env"]["CLAUDE_CONFIG_DIR"] == str(config)
+            for call in cli.calls
+        )
+        assert all(path.is_relative_to(config) for path in cli.written)
+        client.close_conversation(handle)
+        assert cli.transcripts() == set()
+
+    def test_normal_forms(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.chdir(tmp_path)
+        for value, expected in [
+            ("~", tmp_path / "home"),
+            ("~/a/../b", tmp_path / "home" / "b"),
+            ("rel", tmp_path / "rel"),
+            (str(tmp_path / "abs"), tmp_path / "abs"),
+        ]:
+            monkeypatch.setenv("CLAUDE_CONFIG_DIR", value)
+            assert claude_config_dir() == expected
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")
+        assert claude_config_dir() is None
+
+    def test_relative_home_is_refused(self, cli, monkeypatch):
+        monkeypatch.setenv("HOME", "relhome")
+        with pytest.raises(CliHomeRelative, match="relhome"):
+            ClaudeCodeClient()
+        assert issubclass(CliHomeRelative, PassPaused)
+        assert cli.probes == [] and cli.calls == []
 
 
 class TestEffectiveConfig:
@@ -651,6 +737,24 @@ class TestToolCheck:
         cli.tools = None
         assert ClaudeCodeClient().complete("transcribe") == "answer"
 
+    def test_mismatch_opening_a_conversation_holds_nothing(self, cli):
+        client = ClaudeCodeClient()
+        cli.tools = ["Read", "Bash"]
+        with pytest.raises(CliToolsMismatch):
+            client.open_conversation("list the entities")
+        # released, not kept for forks
+        assert cli.transcripts() == set()
+        assert client._conversations == set()
+
+    def test_mismatch_in_a_fork_pauses_the_pass(self, cli):
+        client = ClaudeCodeClient()
+        _, handle = client.open_conversation("list the entities")
+        cli.tools = ["Read", "Bash"]
+        with pytest.raises(CliToolsMismatch):
+            client.fork(handle, "chunk 1")
+        # the fork's own transcript is released; the conversation is kept
+        assert cli.transcripts() == {f"{handle}.jsonl"}
+
 
 class TestReleaseTranscripts:
     def test_only_uuids_select_files(self, cli):
@@ -658,7 +762,11 @@ class TestReleaseTranscripts:
         project.mkdir(parents=True)
         keep = project / "notes.jsonl"
         keep.write_text("{}\n")
-        assert release_transcripts(["*", "../notes", "notes"], None) == []
+        config_dir = llm.claude_config_dir()
+        assert (
+            release_transcripts(["*", "../notes", "notes"], None, config_dir)
+            == []
+        )
         assert keep.exists()
 
     def test_empty_home_means_the_password_database_home(
@@ -673,12 +781,12 @@ class TestReleaseTranscripts:
         monkeypatch.setenv("HOME", "")
         monkeypatch.delenv("CLAUDE_CONFIG_DIR")
         projects = home / ".claude" / "projects"
-        assert llm.claude_projects_dir() == projects
+        assert llm.claude_projects_dir(llm.claude_config_dir()) == projects
         session = str(uuid.uuid4())
         (projects / PROJECT).mkdir(parents=True)
         transcript = projects / PROJECT / f"{session}.jsonl"
         transcript.write_text("{}\n")
-        assert release_transcripts([session], None) == [transcript]
+        assert release_transcripts([session], None, None) == [transcript]
         assert not transcript.exists()
 
     def test_destination_setting(self, monkeypatch, tmp_path):
