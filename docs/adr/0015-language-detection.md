@@ -70,4 +70,5 @@ from its full transcription text**, per file, at the point the
   half German and half English gets one document-level default (the
   dominant language) with the extractor free to vary individual excerpts.
   True per-excerpt detection at extraction time is a possible future
-  refinement over the same design.
+  refinement over the same design (the deferred-on-trigger register,
+  #171).

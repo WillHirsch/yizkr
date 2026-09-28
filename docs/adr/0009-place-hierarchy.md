@@ -97,7 +97,7 @@ web services require a registered username, so this half activates
 when the curator provides `GEONAMES_USERNAME`; the LLM then only
 handles the residue: historical places, address-level fragments, and
 ambiguous names. Imported facts are machine claims referenced to a
-GeoNames dataset item plus the run.
+GeoNames dataset item plus the run. Tracked in #164.
 
 ## Consequences
 

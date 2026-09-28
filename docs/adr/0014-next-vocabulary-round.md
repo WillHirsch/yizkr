@@ -7,7 +7,7 @@ monument/dynasty classes deferred). Implemented: manifest vocabulary,
 extractor guidance, GEDCOM `SEX`→`sex_or_gender`, and the
 `queries/kinship.rq` derivation starter. The full pairwise kinship
 calculus (degrees: great-, once-removed, half-) remains a frontend
-build over the same primitives.
+build over the same primitives (#165).
 
 ## Context
 
@@ -139,6 +139,10 @@ corpus)*; OR model sheltering as a "taking-in" event; OR defer to the
 gap log.
 
 ## 6. Deferred / not this round
+
+The bank-account relation and divorce-as-event below, and the singleton
+classes §3 defers, wait in the deferred-on-trigger register (#171); the
+next vocabulary round is #156.
 
 - **"bankkonto bei"** (×2) — a bank-account relation; niche, and it
   pairs an account (not yet an entity) with a bank. Defer.

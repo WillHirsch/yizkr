@@ -27,12 +27,13 @@ Fork decisions (from the reviewed spec) are recorded inline.
   `Q43229`), a sibling of `place` and `human`, subclass of nothing.
   *(Fork A: flat class, no subtype taxonomy yet — a `company` /
   `government body` / `institution` subclass is one manifest entry away
-  when a query demands it.)*
+  when a query demands it. Deferred-on-trigger register: #171.)*
 
 - **`employer`** (Wikidata `P108`, wikibase-item) — person → organization.
   This is the load-bearing relation for the corpus: Sebastian Löbig at
   the family firm, and any staff, post or appointment a document records.
-  *(Fork B: class + `employer`; `member of`/`owner`/`founder` deferred.)*
+  *(Fork B: class + `employer`; `member of`/`owner`/`founder` deferred.
+  See ADR-0014 §4 and #171.)*
 
 - **`occupation` stays orthogonal to `employer`** *(Fork D)*. A hatter's
   record asserts two independent, separately-referenced things: what they
@@ -48,7 +49,7 @@ Fork decisions (from the reviewed spec) are recorded inline.
   (employs) is an organization; "Friedhof Flörburg" (a burial place)
   stays a place. Dual-nature entities pick their dominant use
   in the document. True dual `instance of` (org *and* place) would need a
-  multi-kind pipeline and is out of scope.
+  multi-kind pipeline and is out of scope (see #47).
 
 - **Location, not containment** *(Fork F)*. An organization may carry
   `location` (P276) → a place, keeping it mappable without dragging it

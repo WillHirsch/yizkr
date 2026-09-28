@@ -44,7 +44,7 @@ def vocabulary() -> tuple[dict, dict]:
 
 
 class TestLibrary:
-    def test_roadmap_queries_present(self, templates):
+    def test_expected_queries_present(self, templates):
         assert set(templates) >= EXPECTED_QUERIES
 
     def test_every_template_has_description(self, templates):

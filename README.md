@@ -10,7 +10,10 @@ sources contradict each other.
 claim schema, ingestion pipeline (chunked extraction, GEDCOM adapter,
 reconciliation, review with corrections, folder orchestration via
 `yizkr ingest run`), face proposals, query library, and backup/export
-done; second ingestion trial (photos/HTR/German) next.
+done. The second ingestion trial found LLM vision sufficient for
+handwriting, so the HTR adapter is dropped; its photograph leg waits
+for #160, and German-language documents run with the whole corpus
+(#145).
 
 Start here:
 - `CLAUDE.md` – standing instructions for AI-assisted development
@@ -30,7 +33,8 @@ Start here:
   comes from
 - `src/yizkr/pipeline/README.md` – **how ingestion works end to end**: the
   `yizkr ingest run` loop and its two human review gates
-- `ROADMAP.md` – phased build plan
+- `ROADMAP.md` – retired: the plan lives in GitHub issues and the Project
+  (ADR-0024), and the stub maps the old item numbers to issues
 - `deploy/` – Wikibase Suite deployment (Docker Compose + runbook)
 - `src/yizkr/` – the tooling package: model manifest + bootstrap
   (`model/`), the claim JSON contract (`claims.py`), the ingestion

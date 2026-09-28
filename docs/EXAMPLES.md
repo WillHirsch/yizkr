@@ -157,7 +157,10 @@ document that resembles a real one by kind and date.
 
 ## Status
 
-- Other tests, prompts, source comments and ADRs still use earlier
-  examples; replacing them is #31, #32 and #33.
+- Earlier examples are gone from the ADRs, MODELING.md and the READMEs
+  (#31), the prompts and source comments (#32) and the tests (#33). The
+  last two, in `claims.TimeValue`'s docstring, are replaced with #231's
+  extraction-prompt change, since the extraction prompt embeds that
+  docstring.
 - CLAUDE.md and docs/AGENT_PROTOCOL.md state the rule (ADR-0024). The
   token denylist once used to check additions is retired (ADR-0024 §5).
