@@ -116,13 +116,28 @@ own in the state directory, named after its stem (`letter`) when no
 other source in the folder has a stem of the same name, ignoring case.
 Sources that share a stem (`letter.pdf` and `letter.jpg`) are named after
 their whole file names (`letter.pdf`, `letter.jpg`), and where that name
-is taken too, after it with a hash of the file name. A source keeps the
-directory whose `state.json` names its file, so a source that joins or
-leaves the folder moves no other source's directory: `letter.pdf` keeps
-`letter` when `letter.jpg` joins it, and `letter.jpg` keeps `letter.jpg`
-when `letter.pdf` leaves. A directory that no source keeps any more
-stays as it is. No directory takes the name of a run file (`run.json`,
-`events.jsonl`, `alerts.jsonl`, `control.jsonl`).
+is taken too, after its first 200 characters with a hash of the file
+name. A source keeps the directory whose `state.json` names its file,
+and a document's state names its file as the file is named now, so a
+source that joins or leaves the folder moves no other source's
+directory: `letter.pdf` keeps `letter` when `letter.jpg` joins it,
+`letter.jpg` keeps `letter.jpg` when `letter.pdf` leaves, and a source
+renamed with its bytes unchanged keeps its directory. A source that
+keeps no directory takes one whose `state.json` cannot be read among
+the names it may have, so that damage is reported (below) whether or not
+another source shares the stem. The naming moves nothing aside: a
+directory whose source has left stays until a source is given its name,
+and when that source's bytes differ, it sets the directory aside as a
+changed source's (above). No directory takes the name of a run file
+(`run.json`, `events.jsonl`, `alerts.jsonl`, `control.jsonl`) or of the
+live monitor's page (`status.html`).
+
+A state directory an earlier `ingest run` made may hold one directory
+that two same-stem sources shared: it stays with the source its
+`state.json` names, but its views may have been made from the other
+source. Resume such a state directory with `--refresh` for each role
+(`transcribe`, `extract`, `critique`), or start a fresh one, as every
+scratch run does.
 
 **A document that cannot be read** fails alone, and the run goes on with
 the others. That is a document whose source cannot be read (its
@@ -130,14 +145,20 @@ permissions, say), whose bytes the never-ingest list's hashes cannot be
 checked against, or whose `state.json` cannot be read (cut short,
 foreign, or its permissions). It is not planned or dispatched: a
 `document-failed` event names it, with the reason. Where it has a
-directory with its record, its `state.json` records the failure and the
-reason. A `state.json` the run cannot read is left as it is, never saved
-over, since it may hold the registration: repair it, or remove it and the
-next run starts the document afresh, its directory set aside as above. A
-source removed after discovery fails its document when a later step
-reads it; a document whose views all stand may not read it again in the
-run. `state.json` is replaced in one step, as the views are (written
-beside it, then renamed), so a kill never leaves it cut short.
+directory with its record, and its `state.json` names its file, its
+`state.json` records the failure and the reason; a state that names
+another file, a departed source's, is left as it is. A `state.json` the
+run cannot read is left as it is too, never saved over, since it may hold
+the registration: repair it, or remove it and the next run starts the
+document afresh. A source removed after discovery fails its document
+when a later step reads it; a document whose views all stand may not
+read it again in the run.
+
+`state.json` is replaced in one step, as the views are (written beside
+it, then renamed), so a kill never leaves it cut short; a state that has
+not changed is not written. So a document whose views all stand is
+advanced in a directory the run cannot write to. One whose state must
+change there, and cannot be saved, fails alone, and the reason says so.
 
 **One-off invalidation.** A state directory made before ADR-0032 has no
 record for its views, and its files derived from the batch were recorded
@@ -480,6 +501,12 @@ included. So a reader of the events alone tells an invocation that ended
 from one still running. Only a killed one ends with neither, and its
 `ended_at` in `run.json` stays `null`.
 
+A document has one `document-failed` event each time it fails. Serial
+mode advances a document twice in one invocation (the extraction of
+every document first, then its turn in the sequence), so a document
+that fails both times has two; the later one stands. Count documents,
+not events.
+
 ### `alerts.jsonl`
 
 One alert per line: `at`, `stage`, `check`, `subject` (a SHA-1 prefix),
@@ -513,9 +540,11 @@ file (`rundir.run_state`, `yizkr stages state <run dir>`):
   **running** once started; **done**, or **needs attention** with its
   reasons, once completed or reused; **failed** with its reason; or
   **pending** with the reason the control file held it. A stage that
-  started with no later event was interrupted when the event that
-  closes its invocation (`run-end`, `run-interrupted`) follows it, or
-  when its invocation was killed; otherwise it is running. The next run
+  started with no later event is **running**. Run state does not look
+  at how the invocation ended, so this includes a stage whose
+  invocation's closing event (`run-end`, `run-interrupted`) follows it,
+  or whose invocation was killed: that stage was cut off. A reader that
+  needs to tell them apart looks for the closing event. The next run
   starts it again.
 
 `yizkr stages state` also counts what the cache did for each role

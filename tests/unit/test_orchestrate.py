@@ -344,6 +344,21 @@ def unreadable(path: Path):
         path.chmod(mode)
 
 
+@contextlib.contextmanager
+def read_only(directory: Path):
+    """`directory` without write permission while the block runs, restored
+    after it. Where permissions do not stop this user's writes (as root),
+    the test is skipped."""
+    mode = directory.stat().st_mode
+    directory.chmod(0o500)
+    try:
+        if os.access(directory, os.W_OK):
+            pytest.skip("permissions do not stop this user's writes")
+        yield directory
+    finally:
+        directory.chmod(mode)
+
+
 class TestGates:
     def test_pauses_at_equivalence_gate(self, tmp_path):
         orchestrator = make_run(tmp_path)
@@ -768,6 +783,161 @@ class TestUnreadableDocuments:
         assert [p.name for p in path.parent.iterdir()] == ["state.json"]
         assert DocumentState.load(path).status == WRITTEN
 
+    def test_a_save_replaces_a_state_that_is_not_text(self, tmp_path):
+        """A save compares the state with the one saved, to leave an
+        unchanged one untouched; bytes that are not text are replaced."""
+        path = tmp_path / "letter" / "state.json"
+        path.parent.mkdir()
+        path.write_bytes(b"\xff\xfe\x00 not text")
+        DocumentState(file="letter.txt", title="letter", status=WRITTEN).save(
+            path
+        )
+        assert DocumentState.load(path).status == WRITTEN
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("file", 5),
+            ("title", None),
+            ("status", 5),
+            ("artifact_qid", 5),
+            ("error", ["a reason"]),
+            ("detail", []),
+            ("content_sha1", 5),
+        ],
+    )
+    def test_a_state_with_a_field_of_another_type_is_refused(
+        self, tmp_path, field, value
+    ):
+        state = {
+            "file": "/docs/letter.txt",
+            "title": "letter",
+            "status": WRITTEN,
+            "artifact_qid": "Q23",
+            "error": None,
+            "detail": {},
+            "content_sha1": "0" * 40,
+        }
+        path = tmp_path / "state.json"
+        path.write_text(json.dumps(state))
+        assert DocumentState.load(path).status == WRITTEN
+        path.write_text(json.dumps(state | {field: value}))
+        with pytest.raises(ValueError, match="a field of another type"):
+            DocumentState.load(path)
+
+    @pytest.mark.parametrize("text", ["null", '"letter"', "5", "[]"])
+    def test_a_state_that_holds_no_object_is_refused(self, tmp_path, text):
+        path = tmp_path / "state.json"
+        path.write_text(text)
+        with pytest.raises(ValueError, match="holds no object"):
+            DocumentState.load(path)
+        # the oldest, smallest state a document has still loads
+        path.write_text(json.dumps({"file": "/docs/a.txt", "title": "a"}))
+        assert DocumentState.load(path).status == "pending"
+
+    def test_an_unreadable_source_whose_directory_cannot_be_written(
+        self, tmp_path
+    ):
+        """Its failure cannot be saved into its state.json: the reason in
+        the event says so too, and the run goes on with the others."""
+        folder = letters(tmp_path)
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
+        assert orchestrator.run() == 2
+        doc = by_name(orchestrator)["b-letter.txt"]
+        before = snapshot(doc.dir, skip=())
+        with read_only(doc.dir), unreadable(doc.source):
+            assert orchestrator.run() == 1
+        assert snapshot(doc.dir, skip=()) == before
+        (event,) = this_run(orchestrator, "document-failed")
+        assert event["file"] == "b-letter.txt"
+        assert event["reason"].startswith(
+            "its source cannot be read (PermissionError"
+        )
+        assert (
+            "; its state could not be saved (PermissionError"
+            in (event["reason"])
+        )
+        reused = {e["subject"] for e in this_run(orchestrator, "reused")}
+        assert reused == {
+            sha1_of(LETTERS["a-letter.txt"]),
+            sha1_of(LETTERS["c-letter.txt"]),
+        }
+        assert this_run(orchestrator, "run-end")[0]["outcome"] == "finished"
+
+    def test_a_failed_check_against_the_list_is_never_ingested(
+        self, tmp_path, monkeypatch
+    ):
+        """The never-ingest check fails closed: a source whose check fails
+        (a read error while the list's hashes are compared) fails, and is
+        never ingested, even though it can be read afterwards."""
+        import yizkr.pipeline.orchestrate as orchestrate
+
+        folder = letters(tmp_path)
+        check = orchestrate.is_excluded
+
+        def failing(exclusions, path=None, **kwargs):
+            if path is not None and path.name == "b-letter.txt":
+                raise OSError("a read error")
+            return check(exclusions, path, **kwargs)
+
+        monkeypatch.setattr(orchestrate, "is_excluded", failing)
+        listed = ExclusionList.parse(sha1_of("Ida was born in 1881.") + "\n")
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet, exclusions=listed
+        )
+        assert orchestrator.run() == 1
+        assert not any(c.endswith("b-letter.txt") for c in orchestrator.calls)
+        assert not (tmp_path / "state" / "b-letter").exists()
+        (event,) = this_run(orchestrator, "document-failed")
+        assert (event["file"], event["reason"]) == (
+            "b-letter.txt",
+            "its source cannot be read (OSError: a read error)",
+        )
+        assert "subject" not in event
+        manifest = orchestrator.rundir.manifest()
+        assert "b-letter.txt" not in [d["file"] for d in manifest["documents"]]
+
+    def test_a_directory_that_cannot_be_written_whose_views_stand(
+        self, tmp_path
+    ):
+        """A document whose views all stand has no state to save, so a
+        directory it cannot write to changes nothing: it is advanced as
+        before. One whose state must change there, and cannot be saved,
+        fails alone, and the run goes on."""
+        folder = letters(tmp_path)
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
+        assert orchestrator.run() == 2
+        doc = by_name(orchestrator)["b-letter.txt"]
+        before = snapshot(doc.dir, skip=())
+        with read_only(doc.dir):
+            assert orchestrator.run() == 2
+        assert snapshot(doc.dir, skip=()) == before
+        assert this_run(orchestrator, "document-failed") == []
+        reused = Counter(
+            e["subject"] for e in this_run(orchestrator, "reused")
+        )
+        assert reused[doc.sha1] == 3
+        # a status that must change, in a directory that cannot take it
+        state = json.loads(doc.state_path.read_text())
+        doc.state_path.write_text(json.dumps(state | {"status": BATCHED}))
+        before = snapshot(doc.dir, skip=())
+        with read_only(doc.dir):
+            assert orchestrator.run() == 1
+        assert snapshot(doc.dir, skip=()) == before
+        (event,) = this_run(orchestrator, "document-failed")
+        assert event["file"] == "b-letter.txt"
+        assert event["reason"].startswith(
+            "its state could not be saved (PermissionError"
+        )
+        assert this_run(orchestrator, "run-end")[0]["statuses"] == {
+            AWAITING_EQUIVALENCES: 2,
+            FAILED: 1,
+        }
+
     def test_a_first_record_failure_is_an_event(self, tmp_path, monkeypatch):
         import yizkr.pipeline.orchestrate as orchestrate
 
@@ -1119,6 +1289,7 @@ class TestStateDirectories:
                     "!!!.txt",
                     "---.txt",
                     "run.json.txt",
+                    "status.html.txt",
                     "note.txt",
                 ]
             )
@@ -1131,13 +1302,125 @@ class TestStateDirectories:
             "events.jsonl",
             "alerts.jsonl",
             "control.jsonl",
+            "status.html",  # the live monitor's page (#195)
         }
         assert not any(name.startswith(".") for name in names.values())
         assert names[Path("note.txt")] == "note"
         assert names[Path("run.json.txt")] == "run.json.txt"
+        assert names[Path("status.html.txt")] == "status.html.txt"
         assert names[Path("letter.md")] == "letter.md"
         # the same sources are named the same in every run
         assert directory_names(sources, tmp_path / "state") == names
+
+    def test_long_names_stay_within_the_filesystems_limit(self, tmp_path):
+        """Two sources whose stems and whole names clash, both at the
+        filesystem's 255-byte limit for a name: the hashed name keeps the
+        start of the whole name, so each directory can be made, and the run
+        goes through every document."""
+        stem = "x" * 245
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / f"{stem} y.txt").write_text("Rahel was born in 1871.")
+        (folder / f"{stem}-y.txt").write_text("Felix was born in 1867.")
+        (folder / "zz-note.txt").write_text("Klara was born in 1917.")
+        orchestrator = ScriptedOrchestrator(
+            folder, tmp_path / "state", log=quiet
+        )
+        assert orchestrator.run() == 2
+        dirs = self.dirs(orchestrator)
+        assert sorted(len(name.encode()) for name in dirs.values()) == [
+            len("zz-note"),
+            200 + 1 + 8,  # the start of the whole name, and a hash
+            251,  # the whole name
+        ]
+        assert this_run(orchestrator, "document-failed") == []
+        assert {
+            doc.state.status for doc in by_name(orchestrator).values()
+        } == {AWAITING_EQUIVALENCES}
+
+    def test_a_damaged_state_json_is_reported_where_stems_are_shared(
+        self, tmp_path
+    ):
+        """A state.json cut short in a stem directory whose stem another
+        source shares still fails its document, with the reason: its
+        source is not given a fresh directory that hides the damage
+        (#237). Repaired, the directory is the source's again."""
+        orchestrator = make_run(tmp_path)
+        assert orchestrator.run() == 2
+        (orchestrator.folder / "letter.md").write_text(
+            "Felix was born in 1867."
+        )
+        assert orchestrator.run() == 2
+        assert self.dirs(orchestrator) == {
+            "letter.md": "letter.md",
+            "letter.txt": "letter",
+        }
+        state = orchestrator.state_dir / "letter" / "state.json"
+        good = state.read_text()
+        state.write_text(good[: len(good) // 2])
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 1
+        (event,) = this_run(orchestrator, "document-failed")
+        assert event["file"] == "letter.txt"
+        assert event["reason"].startswith("its state.json cannot be read (")
+        assert "repair it, or remove it" in event["reason"]
+        assert orchestrator.calls[calls:] == []
+        assert state.read_text() == good[: len(good) // 2]
+        assert not (orchestrator.state_dir / "letter.txt").exists()
+        state.write_text(good)
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert self.dirs(orchestrator)["letter.txt"] == "letter"
+        assert orchestrator.calls[calls:] == []
+
+    def test_a_renamed_source_keeps_its_directory_when_its_name_returns(
+        self, tmp_path
+    ):
+        """A source renamed with its bytes unchanged carries on in its
+        directory, whose state then names it; a new source under the old
+        name, with other bytes, gets a directory of its own and moves
+        nothing."""
+        orchestrator = make_run(tmp_path)
+        assert orchestrator.run() == 2
+        folder = orchestrator.folder
+        (folder / "letter.txt").rename(folder / "letter.md")
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert self.dirs(orchestrator) == {"letter.md": "letter"}
+        assert orchestrator.calls[calls:] == []
+        record = orchestrator.state_dir / "letter" / "state.json"
+        assert Path(json.loads(record.read_text())["file"]).name == "letter.md"
+        (folder / "letter.txt").write_text("Felix was born in 1867.")
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert self.dirs(orchestrator) == {
+            "letter.md": "letter",
+            "letter.txt": "letter.txt",
+        }
+        assert {c.split(":")[1] for c in orchestrator.calls[calls:]} == {
+            "letter.txt"
+        }
+        assert this_run(orchestrator, "set-aside") == []
+
+    def test_a_newcomer_never_fails_into_a_departed_sources_state(
+        self, tmp_path
+    ):
+        """A new source given the stem directory of a source that left,
+        whose state it loads, fails when it cannot be read without writing
+        into that state: the departed document's stays as it was, its
+        `written` included."""
+        orchestrator = completed_run(tmp_path)
+        folder = orchestrator.folder
+        record = orchestrator.state_dir / "letter" / "state.json"
+        before = record.read_bytes()
+        assert json.loads(before)["status"] == WRITTEN
+        (folder / "letter.txt").unlink()
+        (folder / "letter.md").write_text("Felix was born in 1867.")
+        with unreadable(folder / "letter.md"):
+            assert orchestrator.run() == 1
+        (event,) = this_run(orchestrator, "document-failed")
+        assert event["file"] == "letter.md"
+        assert record.read_bytes() == before
 
 
 class TestFreshness:
@@ -1435,6 +1718,18 @@ class TestViews:
         assert steps(orchestrator.calls[asked:]) == ["critique"]
         reused = [event["stage"] for event in this_run(orchestrator, "reused")]
         assert reused == ["transcription", "extraction"]
+
+    def test_a_view_that_is_not_text_is_made_again(self, tmp_path):
+        """A view whose bytes are not text is made again and replaced,
+        rather than failing its document in every run."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        doc.critique.write_bytes(b"\xff\xfe\x00 not text")
+        asked = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert steps(orchestrator.calls[asked:]) == ["critique"]
+        assert json.loads(doc.critique.read_text()) == []
 
     def test_refresh_makes_a_role_view_again_in_place(self, tmp_path):
         orchestrator = self.sampled(tmp_path)
@@ -1952,6 +2247,36 @@ class TestInvocationEnd:
                 "started",
                 sha1_of(LETTERS[last]),
             )
+
+    @pytest.mark.parametrize("raised", [KeyboardInterrupt, BrokenPipeError])
+    def test_the_statuses_print_after_the_invocation_ends(
+        self, tmp_path, raised
+    ):
+        """Ctrl-C, or a closed pipe, while the documents' statuses print
+        finds the invocation ended: its closing event is written, and
+        run.json records its end and outcome."""
+
+        def log(*args, **kwargs):
+            if args == ("",):  # the blank line the statuses start with
+                raise raised()
+
+        orchestrator = ScriptedOrchestrator(
+            letters(tmp_path), tmp_path / "state", log=log
+        )
+        with pytest.raises(raised):
+            orchestrator.run()
+        events = [
+            event
+            for event in orchestrator.rundir.events()
+            if event["invocation"] == orchestrator.rundir.invocation
+        ]
+        assert (events[-1]["event"], events[-1]["outcome"]) == (
+            "run-end",
+            "finished",
+        )
+        invocation = orchestrator.rundir.manifest()["invocations"][-1]
+        assert invocation["outcome"] == "finished"
+        assert invocation["ended_at"] is not None
 
 
 class TestEngines:

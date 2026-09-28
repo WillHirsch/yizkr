@@ -71,7 +71,9 @@ after its whole file name where another source in the folder shares the
 stem; a source keeps the directory that records it (directory_names).
 A document whose source or state.json cannot be read fails alone, and
 the run goes on with the others; a state.json it cannot read is left as
-it is. state.json is replaced in one step, as the views are.
+it is. state.json is replaced in one step, as the views are, and only
+when it changes; a document whose changed state cannot be saved fails
+alone too.
 
 A reviewed file's PRESENCE is the gate: the orchestrator never
 interprets a half-filled CSV as consent. Documents whose reconcile
@@ -266,9 +268,11 @@ class DocumentState:
 
     def save(self, path: Path) -> None:
         """Replace the state saved at `path` in one step, as the views are
-        (atomic_write_text): a save cut short, by a kill say, leaves the
-        state it was replacing whole."""
-        atomic_write_text(path, json.dumps(self.__dict__, indent=2))
+        (_write_view), and leave an identical one untouched. A save cut
+        short, by a kill say, leaves the state it was replacing whole; and
+        a state that has not changed is not written, so a document whose
+        views all stand is advanced in a directory it cannot write to."""
+        _write_view(path, json.dumps(self.__dict__, indent=2))
 
 
 class Derivations:
@@ -389,16 +393,20 @@ def slugify(name: str) -> str:
 
 
 # the files a run directory holds beside its documents' directories
-# (yizkr.pipeline.rundir), whose names no document directory may take
-_RUN_FILES = frozenset({MANIFEST, EVENTS, ALERTS, CONTROL})
+# (yizkr.pipeline.rundir), and the live status page the run monitor
+# writes there: no document directory may take their names
+_RUN_FILES = frozenset({MANIFEST, EVENTS, ALERTS, CONTROL, "status.html"})
+# how much of a whole file name's slug a hashed directory name keeps, so
+# that with its hash it stays well inside a filesystem's 255-byte limit
+_HASHED_PREFIX = 200
 
 
 def _directory_candidates(source: Path) -> tuple[str, str, str]:
     """The names a source's directory may have, in the order they are
     tried: its stem's slug (`letter`), its whole file name's (`letter.pdf`),
-    and that with a hash of the file name."""
+    and the start of that with a hash of the file name."""
     whole = slugify(source.name)
-    hashed = f"{whole}-{sha256_text(source.name)[:8]}"
+    hashed = f"{whole[:_HASHED_PREFIX]}-{sha256_text(source.name)[:8]}"
     return slugify(source.stem), whole, hashed
 
 
@@ -412,6 +420,18 @@ def _records(directory: Path, source: Path) -> bool:
     return Path(state.file).name == source.name
 
 
+def _damaged(directory: Path) -> bool:
+    """Does `directory` hold a state.json that cannot be read: one cut
+    short, a foreign one, or one without permission?"""
+    try:
+        DocumentState.load(directory / "state.json")
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except (OSError, TypeError, ValueError):
+        return True
+    return False
+
+
 def directory_names(
     sources: Sequence[Path], state_dir: Path
 ) -> dict[Path, str]:
@@ -419,19 +439,34 @@ def directory_names(
     per source file.
 
     A source keeps the directory that records it (its state.json names the
-    source's file), under any of its candidate names. Any other source,
-    in name order, takes its stem's slug, unless another source in the
-    folder has a stem with the same slug, ignoring case, or the name is
+    source's file), under any of its candidate names. A source that keeps
+    none takes the first of its candidate directories whose state.json
+    cannot be read, unless another source took it first: the run fails
+    that document with the reason (DocumentRun), so a damaged state.json is
+    reported even where sources share the stem it is named after. Any other
+    source, in name order, takes its stem's slug, unless another source in
+    the folder has a stem with the same slug, ignoring case, or the name is
     taken or is a run file's; then its whole file name's slug, and failing
-    that one with a hash of the file name. So sources that differ only in
-    extension, or in case, never share a directory; a source whose stem no
-    other source shares keeps its stem's name; and a source that joins or
-    leaves the folder moves no other source's recorded directory. A
-    directory no source keeps any more stays as it is, not set aside."""
+    that the start of that slug with a hash of the file name. So sources
+    that differ only in extension, or in case, never share a directory; a
+    source whose stem no other source shares keeps its stem's name; and a
+    source that joins or leaves the folder moves no other source's
+    recorded directory. Naming sets nothing aside: a directory whose source
+    has left stays until a source is given its name, and that source, when
+    its bytes differ, sets it aside as a changed source's when it is
+    advanced."""
     names: dict[Path, str] = {}
     for source in sources:
         for name in _directory_candidates(source):
             if _records(state_dir / name, source):
+                names[source] = name
+                break
+    for source in sources:
+        if source in names:
+            continue
+        claimed = {name.casefold() for name in names.values()}
+        for name in _directory_candidates(source):
+            if name.casefold() not in claimed and _damaged(state_dir / name):
                 names[source] = name
                 break
     stems = Counter(slugify(source.stem).casefold() for source in sources)
@@ -589,18 +624,25 @@ class DocumentRun:
         record: state without one would make the directory unrecorded, and
         a run stopped before a new directory's record is written leaves no
         state in it. A state.json that could not be read is left as it
-        is."""
-        if not self._state_unread and self.derivations.path.exists():
+        is, and so is one that names another source's file, as a directory
+        whose source has left does: the state the document is advanced with
+        names its own file (Orchestrator._advance)."""
+        if (
+            not self._state_unread
+            and Path(self.state.file).name == self.source.name
+            and self.derivations.path.exists()
+        ):
             self.state.save(self.state_path)
 
 
 def _write_view(path: Path, text: str) -> bool:
     """Refresh a plain-file view, leaving an identical one untouched;
-    returns whether the file changed."""
+    returns whether the file changed. A file that cannot be read, or is
+    not text, is replaced."""
     try:
         if path.read_text() == text:
             return False
-    except OSError:
+    except (OSError, ValueError):
         pass
     atomic_write_text(path, text)
     return True
@@ -1577,31 +1619,59 @@ class Orchestrator:
 
         ``stop_after_extract`` returns once the batch (entity manifest)
         exists, before reconcile — the serial sequencer needs every
-        document's manifest before it can order them."""
+        document's manifest before it can order them. The document's state
+        is saved on the way out, however it went; a state that must be
+        saved and cannot be fails the document, and only it."""
         try:
-            return self._advance(doc, stop_after_extract=stop_after_extract)
+            status = self._advance(doc, stop_after_extract=stop_after_extract)
         except DispatchStopped as exc:
             # held by the control file: nothing failed, nothing is lost
             doc.state.status = PAUSED
             self.log(f"  {doc.source.name}: {exc}")
-            return PAUSED
+            status = PAUSED
         except Exception as exc:  # per-document isolation: others continue
             self._fail(doc, _why(exc))
             return FAILED
-        finally:
-            doc.save()
+        except BaseException:
+            # a paused pass or Ctrl-C goes on through, with the state the
+            # document reached kept where it can be
+            unsaved = self._save(doc)
+            if unsaved is not None:
+                self.log(f"  {doc.source.name}: {unsaved}", file=sys.stderr)
+            raise
+        unsaved = self._save(doc)
+        if unsaved is not None:
+            self._fail(doc, unsaved, save=False)
+            return FAILED
+        return status
 
-    def _fail(self, doc: DocumentRun, reason: str) -> None:
+    def _save(self, doc: DocumentRun) -> str | None:
+        """Save the document's state (DocumentRun.save): None when it was
+        saved or needed no save, else why it could not be saved."""
+        try:
+            doc.save()
+        except OSError as exc:
+            return f"its state could not be saved ({_why(exc)})"
+        return None
+
+    def _fail(
+        self, doc: DocumentRun, reason: str, *, save: bool = True
+    ) -> None:
         """Fail the document, and only it, for `reason`: in its state
-        (saved where its directory has its record, DocumentRun.save), in
-        the log, and in a `document-failed` event that names it by its file
-        and, once its source has been read, its SHA-1. It is the event of
-        every document that fails, whether a stage failed (which has its
-        own `failed` event too) or something outside its stages did: its
-        source, its state.json or its first record, say."""
+        (saved where its directory has its record, DocumentRun.save; a
+        save that cannot be made adds why to the reason, and the run goes
+        on), in the log, and in a `document-failed` event that names it by
+        its file and, once its source has been read, its SHA-1. It is the
+        event of every document that fails, whether a stage failed (which
+        has its own `failed` event too) or something outside its stages
+        did: its source, its state.json, its first record or the save of
+        its state, say. `save` is False for a state that could not be saved
+        just now."""
         doc.state.status = FAILED
         doc.state.error = reason
-        doc.save()
+        unsaved = self._save(doc) if save else None
+        if unsaved is not None:
+            reason = f"{reason}; {unsaved}"
         self.rundir.emit(
             DOCUMENT_FAILED,
             file=doc.source.name,
@@ -1662,6 +1732,10 @@ class Orchestrator:
         doc.dir.mkdir(parents=True, exist_ok=True)
         doc.derivations.begin()
         doc.state.content_sha1 = content_sha1
+        # the state names the file it is kept for as the file is named now,
+        # so a source renamed with its bytes unchanged keeps its directory
+        # when another source takes its old name or its stem
+        doc.state.file = str(doc.source)
 
         # content-identity dedup (ADR-0010): claim this file's bytes; if an
         # earlier document in this run — or one already ingested to
@@ -1980,15 +2054,17 @@ class Orchestrator:
         finally:
             self._close_engines()
 
-        self.log("")
-        for doc in [*unread, *docs]:
-            self.log(f"{doc.state.status:32} {doc.source.name}")
         # a run-scope request stopped the run even when it held a stage of
         # the last document, with no document left to dispatch after it
         stopped = stopped or self._run_held
+        # the invocation ends before the statuses are printed, so that Ctrl-C
+        # or a closed pipe while they print leaves it ended
         self._end_invocation(
             found, "stopped" if stopped else "finished", reason=stopped
         )
+        self.log("")
+        for doc in [*unread, *docs]:
+            self.log(f"{doc.state.status:32} {doc.source.name}")
         if any(doc.state.status == FAILED for doc in found):
             return 1
         if any(
