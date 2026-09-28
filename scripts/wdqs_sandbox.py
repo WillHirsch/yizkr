@@ -38,14 +38,20 @@ unless --vocab names another) and prepends PREFIX lines for the map's
 concept URI; --raw sends a finished query as it is. It prints the rows as
 tab-separated values on stdout (IRIs shortened to wd:, wds:, wdref: and
 wdv:, language tags as value@lang) and the engine's wall time on stderr;
---max-rows 0 prints the header only. query stops at --timeout (100 s by
-default) and load at its own (90 s), so that a command ends within two
-minutes. Ctrl-C or SIGTERM during a query cancels that query in the
-engine and kills its curl in the container. During a load (or the empty
-of --replace) it kills only the curl and gives the engine up to 20 s to
-finish or abort the write itself: cancelling a write leaves the engine's
-writer unable to take another one until the sandbox restarts. The engine
-commits a load whole or not at all.
+--max-rows 0 prints the header only.
+
+The engine stops each run of a query at --timeout (100 s by default), and
+load stops each request it sends (the empty of --replace, then one per
+file) at its own (90 s), so that each request ends within two minutes. A
+command that sends several (load --replace, a load of several files,
+query --repeat N) can take longer, and so can a stopped load, which waits
+for the engine as below. Ctrl-C or SIGTERM during a query cancels that
+query in the engine and kills its curl in the container. During a load
+(or the empty of --replace) it kills only the curl and gives the engine
+up to 20 s to finish or abort the write itself, and says so while it
+waits: cancelling a write leaves the engine's writer unable to take
+another one until the sandbox restarts. A second Ctrl-C or SIGTERM
+meanwhile is ignored. The engine commits a load whole or not at all.
 
 Timings are indicative. One CPU makes them noisy, since garbage
 collection and CPU throttling land inside a query's wall time: compare
@@ -195,9 +201,19 @@ def default_state() -> Path:
 
 
 def docker(*args: str, stdin: bytes | None = None, check=True):
+    """Run the docker CLI in a session of its own. A terminal's Ctrl-C and
+    a signal to the process group then reach only this script, which kills
+    the CLI when it stops a command. Sharing the group, the CLI would take
+    the signal even while a clean-up holds signals off (docker's CLI
+    handles SIGINT and SIGTERM whatever it inherits), and a `docker exec`
+    it stops exits 0 with no output while its command runs on in the
+    container."""
     try:
         done = subprocess.run(
-            ["docker", *args], input=stdin, capture_output=True
+            ["docker", *args],
+            input=stdin,
+            capture_output=True,
+            start_new_session=True,
         )
     except FileNotFoundError:
         raise SandboxError("docker is not installed or not on PATH") from None
@@ -564,17 +580,25 @@ class Work:
         write is never cancelled: a cancelled write leaves the engine's
         writer unable to take another until the sandbox restarts, while a
         write that loses its client is finished or aborted by the engine
-        itself. Waits up to SETTLE seconds for the engine to run nothing;
-        returns whether it did."""
+        itself. Waits up to SETTLE seconds for the engine to run nothing,
+        saying so when it has to wait; returns whether it did."""
         self.kill()
         self.clean()
         deadline = time.monotonic() + SETTLE
-        while True:
-            if engine_tasks(self.box) == []:
-                return True
+        waiting = False
+        while engine_tasks(self.box) != []:
             if time.monotonic() >= deadline:
                 return False
+            if not waiting:
+                waiting = True
+                print(
+                    f"waiting up to {SETTLE:.0f} s for the engine to finish "
+                    f"or abort the write",
+                    file=sys.stderr,
+                    flush=True,
+                )
             time.sleep(0.5)
+        return True
 
     def clean(self) -> None:
         docker(
@@ -587,13 +611,14 @@ class Work:
 
 def engine_tasks(box: Sandbox) -> list[tuple[str, str]] | None:
     """(id, text) of each task the engine is running, from its status
-    page; None when the page cannot be read."""
+    page; None when the page cannot be read or did not arrive whole (an
+    empty page is not an idle engine)."""
     done = docker(
         "exec", box.name,
         "curl", "-sS", "-m", "10", f"{STATUS}?showQueries",
         check=False,
     )  # fmt: skip
-    if done.returncode != 0:
+    if done.returncode != 0 or b"</html" not in done.stdout:
         return None
     page = done.stdout.decode(errors="replace")
     return [
@@ -1005,7 +1030,10 @@ def parser() -> argparse.ArgumentParser:
         type=float,
         default=90,
         metavar="SECONDS",
-        help="when to stop a load (90)",
+        help=(
+            "when to stop each request: the empty of --replace, and each "
+            "file's load (90)"
+        ),
     )
     load.set_defaults(handler=cmd_load)
 
@@ -1047,7 +1075,7 @@ def parser() -> argparse.ArgumentParser:
         type=float,
         default=100,
         metavar="SECONDS",
-        help="when the engine stops the query (100)",
+        help="when the engine stops each run of the query (100)",
     )
     query.add_argument(
         "--max-rows",

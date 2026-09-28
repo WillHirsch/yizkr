@@ -7,8 +7,10 @@ its writer when a write is cancelled, as the real one does (#265 review),
 and aborts a write whose curl is killed. The tests check that the sandbox
 acts only on containers it made, that an interrupted or failed `up`
 leaves no container (even one the daemon makes late), and that an
-interrupted load or query leaves nothing running and the engine writable.
-The pid guard of the curl kill runs against real local processes.
+interrupted load or query leaves nothing running and the engine writable,
+even when a second signal reaches the whole process group while it
+cleans up. The pid guard of the curl kill runs against real local
+processes.
 """
 
 from __future__ import annotations
@@ -39,12 +41,26 @@ FAKE_DOCKER = r'''
 and every call is logged. It never talks to a daemon. Its engine behaves as
 the real one does where the sandbox depends on it: a write task that is
 cancelled wedges the writer, so that every later write fails, while a write
-whose curl is killed is aborted by the engine itself a moment later."""
-import html, io, json, os, subprocess, sys, tarfile, time, uuid
+whose curl is killed is aborted by the engine itself a moment later. Like
+docker's CLI, it takes SIGINT and SIGTERM even when it starts with them
+ignored, and then exits 0 with nothing on stdout."""
+import html, io, json, os, signal, subprocess, sys, tarfile, time, uuid
 
 WORLD = os.environ["FAKE_DOCKER_WORLD"]
 INSERT = "InsertWithBodyTask{namespace=wdq,timestamp=0, isGRSRequired=false}"
 args = sys.argv[1:]
+
+
+def stopped(signum, frame):
+    """What a `docker exec` does when a signal reaches the CLI: it exits 0
+    with no output, and its command runs on in the container."""
+    with open(f"{WORLD}.signalled", "a") as handle:
+        handle.write(json.dumps([signum, *args]) + "\n")
+    os._exit(0)
+
+
+signal.signal(signal.SIGINT, stopped)
+signal.signal(signal.SIGTERM, stopped)
 with open(os.environ["FAKE_DOCKER_LOG"], "a") as log:
     log.write(json.dumps(args) + "\n")
 with open(WORLD) as handle:
@@ -80,21 +96,28 @@ def busy():
     sys.exit(0)
 
 
-def task(kind, text, pidfile, until=None):
+def task(kind, text, pidfile, until=None, then=None):
     world["running"].append({
         "id": str(uuid.uuid4()), "kind": kind, "text": text,
-        "pidfile": pidfile, "until": until,
+        "pidfile": pidfile, "until": until, "then": then,
     })
     save()
+
+
+def end_tasks():
+    """Tasks past their end leave the engine, and a write that ends leaves
+    its effect (a drop empties the store)."""
+    now = time.time()
+    for t in list(world["running"]):
+        if t["until"] is not None and t["until"] <= now:
+            world["running"].remove(t)
+            world.update(t.get("then") or {})
 
 
 def status_page():
     """The real page's shape: per task, its id in a cancel form, then its
     text (a query as sent, or a write task's name)."""
-    now = time.time()
-    world["running"] = [
-        t for t in world["running"] if t["until"] is None or t["until"] > now
-    ]
+    end_tasks()
     world["status_seen"].append(len(world["running"]))
     save()
     parts = []
@@ -119,6 +142,11 @@ def curl(argv, pidfile=None):
     if "query=ASK" in url:
         print("<boolean>true</boolean>")
     elif url.endswith("status?showQueries"):
+        if world["blank_status"]:
+            # a status call cut short: exit 0 with nothing on stdout
+            world["blank_status"] -= 1
+            save()
+            sys.exit(0)
         print(status_page())
     elif "cancelQuery" in url:
         task_id = url.rsplit("queryId=", 1)[1]
@@ -146,6 +174,10 @@ def curl(argv, pidfile=None):
         save()
         print('<?xml version="1.0"?><data modified="12" milliseconds="3"/>')
     elif "update=DROP ALL" in argv:
+        if world["hang"] == "drop":
+            # the engine goes on with the drop after its curl is killed
+            task("write", "DROP ALL", pidfile, then={"triples": 0})
+            busy()
         world["triples"] = 0
         save()
         print('<?xml version="1.0"?><data modified="0" milliseconds="1"/>')
@@ -156,6 +188,8 @@ def curl(argv, pidfile=None):
         else:
             text = source[6:]
         if "COUNT(*)" in text:
+            end_tasks()
+            save()
             rows = [{"n": {"type": "literal", "value": str(world["triples"])}}]
         else:
             if world["hang"] == "query":
@@ -259,12 +293,18 @@ elif command == "exec":
         sys.exit(1)
     program = rest[1:]
     if program[:2] == ["sh", "-c"] and "kill" in program[2]:
+        if world["slow_kill"]:
+            # a kill that takes a while, so that a test can signal meanwhile
+            with open(world["kill_marker"], "w") as handle:
+                handle.write("killing")
+            time.sleep(world["slow_kill"])
         pidfile = program[3]
         world["killed"].append(pidfile)
         for t in world["running"]:
             if t["pidfile"] == pidfile and t["kind"] == "write":
-                # the engine aborts a write that has lost its client
-                t["until"] = time.time() + 0.5
+                # the engine ends a write that has lost its client: it
+                # aborts a load, and runs a drop to its end
+                t["until"] = time.time() + world["write_ends_after"]
         save()
     elif program[:2] == ["sh", "-c"]:
         world["pidfiles"].append(program[3])
@@ -370,7 +410,11 @@ class FakeDocker:
             "cp_garbage": False,
             "wedged": False,
             "status_seen": [],
+            "blank_status": 0,
+            "write_ends_after": 0.5,
+            "slow_kill": 0,
             "marker": str(self.marker),
+            "kill_marker": str(self.root / "killing"),
         }
         world.update(settings)
         self.world_path.write_text(json.dumps(world))
@@ -381,6 +425,13 @@ class FakeDocker:
     def calls(self) -> list[list[str]]:
         text = self.log_path.read_text()
         return [json.loads(line) for line in text.splitlines()]
+
+    def signalled(self) -> list[list]:
+        """The docker calls a signal stopped: [signum, *args] each."""
+        path = self.world_path.with_name(self.world_path.name + ".signalled")
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines()]
 
     def record(self, container: str, **extra):
         self.state.write_text(json.dumps({"container": container, **extra}))
@@ -419,15 +470,44 @@ class FakeDocker:
             stderr=subprocess.PIPE,
             text=True,
         )
-        deadline = time.monotonic() + 30
-        while not self.marker.exists():
-            assert process.poll() is None, process.communicate()
-            assert time.monotonic() < deadline, "the fake never got busy"
-            time.sleep(0.05)
+        self.wait_for(self.marker, process)
         seen = during() if during else None
         process.send_signal(signum)
         out, err = process.communicate(timeout=60)
         return process.returncode, out, err, seen
+
+    def interrupt_group(self, *args: str, signum, then: Path):
+        """As a terminal's Ctrl-C reaches a command: start it in a process
+        group of its own, send `signum` to the whole group once the fake
+        is busy, and again once the file `then` appears; wait for it by
+        its pid."""
+        process = subprocess.Popen(
+            self.command(*args),
+            env=self.env,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            for marker in (self.marker, then):
+                self.wait_for(marker, process)
+                os.killpg(process.pid, signum)
+            out, err = process.communicate(timeout=60)
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+        return process.returncode, out, err
+
+    @staticmethod
+    def wait_for(path: Path, process: subprocess.Popen) -> None:
+        deadline = time.monotonic() + 30
+        while not path.exists():
+            assert process.poll() is None, process.communicate()
+            assert time.monotonic() < deadline, f"no {path.name} in time"
+            time.sleep(0.05)
 
 
 @pytest.fixture
@@ -613,6 +693,10 @@ class TestInterruptedWorkStops:
         )
         assert loaded_during == []
         assert code == 130
+        assert (
+            "waiting up to 20 s for the engine to finish or abort the write"
+            in err.splitlines()
+        )
         message = one_line_error(err)
         assert f"interrupted while loading {fake.graph}" in message
         assert "the engine finished or aborted the write" in message
@@ -651,6 +735,65 @@ class TestInterruptedWorkStops:
         assert max(world["status_seen"]) >= 1
         assert world["status_seen"][-1] == 0
         assert json.loads(fake.state.read_text())["loaded"] == []
+
+    def test_a_status_page_that_did_not_arrive_whole(self, fake):
+        """A status call that a signal stops early exits 0 with nothing on
+        stdout (#265 review). The settle wait takes that as an unreadable
+        page, not as an idle engine: it waits for a whole page that shows
+        no task, so it never reports a drop the engine is still running as
+        finished, nor the store's count from before the drop."""
+        fake.set_world(
+            [SANDBOX],
+            hang="drop",
+            triples=99,
+            blank_status=1,
+            write_ends_after=3.0,
+        )
+        fake.record(SANDBOX["name"], loaded=["/elsewhere/old.ttl"])
+        code, _, err, _ = fake.interrupt("load", "--replace", str(fake.graph))
+        assert code == 130
+        assert (
+            "waiting up to 20 s for the engine to finish or abort the write"
+            in err.splitlines()
+        )
+        message = one_line_error(err)
+        assert "the engine finished or aborted the write" in message
+        assert "the store holds 0 triples" in message
+        world = fake.world()
+        assert world["blank_status"] == 0  # the blank page was served
+        # it waited on, saw the drop still running, then saw it end
+        assert world["status_seen"][0] == 1
+        assert world["status_seen"][-1] == 0
+        assert world["running"] == []
+        assert world["cancelled"] == []
+
+    @pytest.mark.parametrize(
+        "signum", [signal.SIGINT, signal.SIGTERM], ids=["INT", "TERM"]
+    )
+    def test_a_second_signal_to_the_group_reaches_no_docker_call(
+        self, fake, signum
+    ):
+        """A terminal's Ctrl-C goes to the whole process group, and docker's
+        CLI takes it even while the load holds signals off for its
+        clean-up: a stopped `docker exec` exits 0 while its command runs on
+        (#265 review). Every docker call runs in a session of its own, so
+        neither signal reaches one: a second signal while the load kills
+        its curl leaves the kill to finish, and the engine aborts the
+        write."""
+        fake.set_world([SANDBOX], hang="load", slow_kill=1.5)
+        fake.record(SANDBOX["name"], loaded=[])
+        code, _, err = fake.interrupt_group(
+            "load", str(fake.graph), signum=signum, then=fake.root / "killing"
+        )
+        assert code == 128 + signum
+        message = one_line_error(err)
+        assert "the engine finished or aborted the write" in message
+        assert fake.signalled() == []
+        world = fake.world()
+        assert world["killed"] == world["pidfiles"][:1]
+        assert world["running"] == []
+        assert world["cancelled"] == []
+        assert not world["wedged"]
 
 
 class TestWork:
