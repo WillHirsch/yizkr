@@ -663,6 +663,40 @@ class TestCounts:
         assert per_stage(counted, "reused")["critique"] == 4
         assert counted.total().engine_calls == 0
 
+    def test_a_batch_made_again_otherwise_makes_its_critique_again(
+        self, tmp_path, engine
+    ):
+        """A batch view gone, and the chunk the cache kept for it answered
+        otherwise since: the batch made again differs, and its critique,
+        asked of the engine, does not stand."""
+        corpus = small(tmp_path)
+        run(tmp_path, corpus, engine)
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        (run_dir / "c-marriage-cert-1905" / "batch.json").unlink()
+        letter = corpus.sha1(LETTER)
+        for path in entries(tmp_path / "cache", role="extract", call="fork"):
+            entry = json.loads(path.read_text())
+            if letter in entry["response"]:
+                answer_with(path, re.sub(r'"year": \d+', '"year": 1837',
+                                         entry["response"]))  # fmt: skip
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        critique = counted.stages["critique"]
+        assert (critique.made, critique.reused, critique.known) == (1, 3, 1)
+        assert run(tmp_path, corpus, engine, resume=LATEST) == {"critique": 1}
+
+    def test_a_letter_s_length_counts_its_chunks(self, tmp_path, engine):
+        """No run to measure it: a letter of some 3000 characters is
+        counted two chunks, as its eighteen people make two."""
+        engine.people = len(u.PEOPLE)
+        corpus = Corpus(tmp_path / "corpus")
+        long = "\n".join(source.text for source in u.SOURCES)[:3000]
+        (corpus.folder / TEXT).write_text(long)
+        corpus.texts[TEXT] = long
+        counted = estimate_of(tmp_path, corpus, engine)
+        extraction = counted.stages["extraction"]
+        assert (extraction.known, extraction.estimated) == (1, 2)
+        assert run(tmp_path, corpus, engine)["extraction"] == 3
+
     def test_a_changed_source_is_made_afresh(self, tmp_path, engine):
         """A source whose bytes changed has its directory set aside by the
         run, and so has one whose records are gone, so none of their
