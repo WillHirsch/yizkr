@@ -129,9 +129,10 @@ def hold_for_session(pytest_config: pytest.Config) -> Iterator[None]:
     capture. If the lock cannot be taken in time, or a setting is refused
     (a relative $YIZKR_LIVE_LOCK, or a $YIZKR_LIVE_LOCK_TIMEOUT that is not
     a number of seconds), that test and every later one that uses the
-    stack error at setup, with the message alone, shown once. pytest keeps
-    a session fixture's error for the whole session, so the session waits
-    only once."""
+    stack error at setup, each with the message alone and no traceback, so
+    the message appears once per such test. pytest keeps a session
+    fixture's error for the whole session, so the session waits only
+    once."""
     # imported here, so that processes that only hold the lock need not
     # load pytest
     import pytest

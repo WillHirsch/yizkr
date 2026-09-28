@@ -15,7 +15,12 @@ identical treatment.
 
 Every batch records extraction-run metadata (ADR-0003). Subjects the
 model proposes are `local` refs; resolution to existing items happens
-in the resolve step, never inside extraction.
+in the resolve step, never inside extraction. The model-driven
+extractors, this module's and yizkr.pipeline.chunking's, set every
+claim's source artifact themselves, to the content key of the document
+they read, whatever the model wrote there, and keep no review state the
+model wrote (`cite_artifact`); a prepared claims file's claims cite
+their artifacts themselves.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -30,6 +36,7 @@ from typing import Any
 
 import yizkr
 from yizkr.claims import (
+    ArtifactRef,
     ClaimBatch,
     ExtractionRunMetadata,
     load_vocabulary,
@@ -188,6 +195,47 @@ def _parse_response(response: str) -> dict:
         if claim not in deduped:
             deduped.append(claim)
     return {"claims": deduped}
+
+
+# The claim fields that record a curator's review, never the machine's
+# extraction: `curated` (a person stated the claim, so it carries no
+# extraction-run reference) and `row_approval` (a curator approved the
+# claim on its own review-sheet row). The JSON Schema the prompts carry
+# shows `curated` with the rest of a claim.
+REVIEW_STATE = ("curated", "row_approval")
+
+
+def cite_artifact(claims: Iterable, artifact: ArtifactRef) -> list:
+    """The claims read from one document, as the machine extracted them:
+    every claim's `source.artifact` becomes `artifact`, the document's
+    content key, whatever the model wrote there; the review-state fields
+    (REVIEW_STATE) are dropped, so every claim is a machine claim, which
+    the writer references to its extraction run (ADR-0003); and claims
+    that are then the same are kept once, in the order first given.
+
+    An extractor reads one document's transcription, so every claim it
+    gives is an assertion of that document, and the extractor, handed the
+    document's key, names the source itself: no claim cites another
+    artifact through a key the model copied wrongly, or through a form of
+    reference the claim contract does not have. A claim whose source is
+    not an object keeps it, for validation to reject, as a claim without
+    its source is."""
+    cited: list = []
+    for claim in claims:
+        if isinstance(claim, dict):
+            claim = {
+                key: value
+                for key, value in claim.items()
+                if key not in REVIEW_STATE
+            }
+            if isinstance(claim.get("source"), dict):
+                claim["source"] = {
+                    **claim["source"],
+                    "artifact": artifact.model_dump(mode="json"),
+                }
+        if claim not in cited:
+            cited.append(claim)
+    return cited
 
 
 def _normalize_claim_shape(claim: dict) -> dict:
@@ -388,8 +436,15 @@ class LlmClaimExtractor:
         self.rejects_dump = rejects_dump
 
     def extract(
-        self, transcription: Transcription, artifact_qid: str
+        self,
+        transcription: Transcription,
+        artifact: ArtifactRef,
+        *,
+        artifact_qid: str,
     ) -> ClaimBatch:
+        """The batch the transcription's document asserts. Every claim
+        cites `artifact`, the document's content key (cite_artifact);
+        `artifact_qid` is the artifact's item, which the prompt names."""
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
             schema=claim_schema_prompt_text(),
@@ -401,14 +456,17 @@ class LlmClaimExtractor:
             text=transcription.text,
         )
         try:
-            return self._extract(prompt)
+            return self._extract(prompt, artifact)
         except _KeptAnswerRejected:
-            return self._extract(prompt, again=True)
+            return self._extract(prompt, artifact, again=True)
 
-    def _extract(self, prompt: str, again: bool = False) -> ClaimBatch:
-        """The batch one answer gives. A rejected answer the client kept
-        from an earlier call raises _KeptAnswerRejected, unless this is
-        the call made `again` after one."""
+    def _extract(
+        self, prompt: str, artifact: ArtifactRef, again: bool = False
+    ) -> ClaimBatch:
+        """The batch one answer gives, each claim citing `artifact`. A
+        rejected answer the client kept from an earlier call raises
+        _KeptAnswerRejected, unless this is the call made `again` after
+        one."""
 
         def reject_answer(response: str, reason: str) -> None:
             if reject_response(self.client, response, reason) and not again:
@@ -430,7 +488,7 @@ class LlmClaimExtractor:
             obj.get("done") is True for obj in scan_json_objects(response)
         )
         batch, rejects = salvage_valid_claims(
-            payload.get("claims", []),
+            cite_artifact(payload.get("claims", []), artifact),
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
         )
         if self.rejects_dump is not None:
@@ -464,7 +522,10 @@ class ClaimFileExtractor:
     """Validate a prepared claims file into a batch (manual/offline flows).
 
     The file holds either a full ClaimBatch or a bare {"claims": [...]}
-    object; in the latter case run metadata is generated here.
+    object; in the latter case run metadata is generated here. Its claims
+    cite their artifacts themselves, by content key, and are validated as
+    they are: `extract` takes the same arguments as the other extractors
+    and uses none of them.
     """
 
     def __init__(
@@ -474,7 +535,11 @@ class ClaimFileExtractor:
         self.model_identifier = model_identifier
 
     def extract(
-        self, transcription: Transcription, artifact_qid: str
+        self,
+        transcription: Transcription,
+        artifact: ArtifactRef,
+        *,
+        artifact_qid: str,
     ) -> ClaimBatch:
         payload = json.loads(self.claims_file.read_text())
         if "extraction_run" not in payload:
