@@ -62,9 +62,11 @@ def client(config: Config) -> WikiClient:
 
 
 def run_sparql(config: Config, query: str) -> list[dict]:
-    response = requests.get(
+    # in the request body, as the site sends it: the query service refuses
+    # a request line longer than about 8 KB
+    response = requests.post(
         config.sparql_url,
-        params={"query": query},
+        data={"query": query},
         headers={
             "Accept": "application/sparql-results+json",
             "User-Agent": USER_AGENT,
