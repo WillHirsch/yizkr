@@ -38,6 +38,8 @@ session that runs it ends by clearing the recorded instance-contents key
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -200,12 +202,56 @@ def between(start: dict, end: dict) -> tuple:
     return (("earliest_date", start), ("latest_date", end))
 
 
+def write_fixture(
+    client, artifacts: dict[str, str], batches: tuple[list[dict], ...]
+) -> list:
+    """Write the fixture's claim batches in order, under item labels that
+    carry a marker: six hex digits of a hash over the fixture's cases and
+    values (every claim, each artifact named by its letter in
+    `artifacts`). The writer finds a local item by its label, so a version
+    of the fixture with other values would otherwise write onto an
+    earlier version's items and see its old values beside the new ones.
+    With the marker it writes items of its own, and a re-run of one
+    version finds its own items again. Returns each batch's result."""
+    content = [
+        [
+            {
+                **claim,
+                "source": {
+                    **claim["source"],
+                    "artifact": artifacts[claim["source"]["artifact"]["qid"]],
+                },
+            }
+            for claim in claims
+        ]
+        for claims in batches
+    ]
+    marker = hashlib.sha256(
+        json.dumps(content, sort_keys=True).encode()
+    ).hexdigest()[:6]
+
+    def marked(value):
+        """`value` with the marker on the label of every local item."""
+        if isinstance(value, dict):
+            value = {key: marked(item) for key, item in value.items()}
+            if value.get("kind") == "local":
+                value["label"] = f"{value['label']} ({marker})"
+        elif isinstance(value, list):
+            value = [marked(item) for item in value]
+        return value
+
+    return [
+        BatchWriter(client).write_batch(batch(marked(claims)))
+        for claims in batches
+    ]
+
+
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture (idempotent: re-runs reuse and skip everything),
-    apply the curator ranks, and wait until the query service holds the
-    subjects' latest revisions. Returns (QIDs by role, source QIDs by
-    letter)."""
+    """Write the fixture under its marked labels (write_fixture;
+    idempotent: re-runs reuse and skip everything), apply the curator
+    ranks, and wait until the query service holds the subjects' latest
+    revisions. Returns (QIDs by role, source QIDs by letter)."""
     registered = {
         letter: register_artifact(
             client,
@@ -219,8 +265,10 @@ def fixture_graph(client, config):
     }
     a, b, c = (registered[letter].artifact_qid for letter in "ABC")
     page_one_of_a = registered["A"].fragment_qids[1]
-    machine = BatchWriter(client).write_batch(
-        batch(
+    machine, _ = write_fixture(
+        client,
+        {a: "A", b: "B", c: "C", page_one_of_a: "A, page 1"},
+        (
             [
                 # the universe's contradiction: day and month transposed
                 # (7 January per the register, 1 July per the
@@ -383,16 +431,12 @@ def fixture_graph(client, config):
                     a,
                 ),
                 claim(SECOND_EMIGRATION, "start_time", date(1863), b),
-            ]
-        )
-    )
-    BatchWriter(client).write_batch(
-        batch(
+            ],
             [
                 # a curator's correction of artifact A's reading
                 claim(PERSON, "date_of_death", date(1931), a, curated=True),
-            ]
-        )
+            ],
+        ),
     )
     qids = {
         role: machine.created_items[local_id]
