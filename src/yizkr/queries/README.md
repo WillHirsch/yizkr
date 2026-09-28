@@ -56,8 +56,12 @@ uv run yizkr publish-queries             # or: make publish-queries
   carries the range its source states for that date: a start's earliest
   date and latest start date, an end's earliest end date and latest date,
   a date value's or a point in time's earliest and latest date
-  (`tests/integration/test_live_period_dates.py`). Rendered and
-  URL-encoded, it is about 8.5 KB, more than the query service accepts in
+  (`tests/integration/test_live_period_dates.py`). It also names the two
+  qualifiers that bound the date (`?low` for `?earliest`, `?high` for
+  `?latest`), stated or not, and the static site's timeline page and feed
+  show each stated bound beside the date under its qualifier's label
+  ("1946 (earliest date: 1946; latest start date: 1947)"). Rendered and
+  URL-encoded, it is about 8.7 KB, more than the query service accepts in
   a GET request line, so a client sends it by POST, as the site and the
   live tests do.
 - **kinship** — how each person is related to a subject, derived from

@@ -6,8 +6,10 @@ without an instance; fixtures are fictional.
 
 from __future__ import annotations
 
+import html
 import io
 import json
+import re
 import urllib.error
 import urllib.parse
 
@@ -16,17 +18,27 @@ import yaml
 
 from tests.fixtures import example_universe as u
 from tests.unit.test_disagreement import (
+    INTERVIEW,
+    POSTCARD,
+    PROPERTIES,
     QIDS,
+    REGISTER,
+    TREE,
     at,
     containment_rows,
     iri,
+    label,
     rows_of,
     said,
+    stamp,
+    stated,
     text,
 )
+from yizkr import disagreement
 from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.model.schema import read_manifest_data
+from yizkr.queries.publish import load_templates
 from yizkr.staticsite import SiteBuilder, format_time
 
 
@@ -368,6 +380,20 @@ def build(tmp_path, vocabulary, responses):
     return tmp_path / "site", summary
 
 
+@pytest.fixture
+def hostile_label(monkeypatch) -> str:
+    """The earliest date's label, holding characters HTML must escape, as
+    both pages read a bound's label (disagreement.property_labels); returns
+    it escaped."""
+    labels = disagreement.property_labels()
+    monkeypatch.setattr(
+        disagreement,
+        "property_labels",
+        lambda: {**labels, "earliest_date": "earliest <date> & co"},
+    )
+    return "earliest &lt;date&gt; &amp; co"
+
+
 RESPONSES = {
     "GROUP_CONCAT(DISTINCT ?alias": PEOPLE,
     "GROUP_CONCAT(DISTINCT ?qualifierText": STATEMENTS,
@@ -556,6 +582,15 @@ class TestInconsistencies:
         assert "<td>Cäcilie Tarle</td>" in text
         assert "<td>Cäcilie Löbig</td>" in text
 
+    def test_a_stated_range_is_escaped(
+        self, tmp_path, vocabulary, hostile_label
+    ):
+        text = self.page(tmp_path, vocabulary)
+        assert (
+            f'<td>1938 <span class="qualifiers">({hostile_label}: 1938; '
+            "latest date: 1939)</span></td>"
+        ) in text
+
     def test_a_marriage_row_shows_the_range_of_the_end_it_compares(
         self, tmp_path, vocabulary
     ):
@@ -606,6 +641,343 @@ class TestInconsistencies:
             '<td>1958 <span class="qualifiers">(earliest end date: 1958; '
             "latest date: 1959)</span></td>"
         ) in text
+
+
+# The person timeline's rows as person-timeline.rq returns them (#309):
+# each date a source gives, the range it states for that date (?earliest,
+# ?latest), and the two qualifiers that bound the date (?low, ?high).
+DATE_BOUNDS = ("earliest_date", "latest_date")
+START_BOUNDS = ("earliest_date", "latest_start_date")
+END_BOUNDS = ("earliest_end_date", "latest_date")
+
+
+def on_timeline(
+    person: str,
+    what: str,
+    date: u.Date,
+    source: str,
+    *,
+    bounds: tuple[str, str] = DATE_BOUNDS,
+    earliest: u.Date | None = None,
+    latest: u.Date | None = None,
+) -> dict:
+    """A person-timeline row: `source` dates `person`'s `what` as `date`
+    (universe keys, but for `what`), and the qualifiers `bounds` names
+    bound it. Its range is the one the date's own qualifier gives
+    ("between", "after", "before"), as the GEDCOM adapter writes it, or
+    `earliest` and `latest` when given."""
+    _, precision, ranges = stated(date)
+    row = {
+        "person": uri(QIDS[person]),
+        "personLabel": literal(label(person)),
+        "what": literal(what),
+        "date": time_literal(stamp(date)),
+        "precision": literal(str(precision)),
+        "low": uri(PROPERTIES[bounds[0]]),
+        "high": uri(PROPERTIES[bounds[1]]),
+        "source": uri(QIDS[source]),
+        "sourceLabel": literal(label(source)),
+    }
+    for name, given in (("earliest", earliest), ("latest", latest)):
+        bound = at(given) if given else min(ranges.get(name, ()), default=None)
+        if bound is not None:
+            row[name] = time_literal(bound.value)
+            row[f"{name}Precision"] = literal(str(bound.precision))
+    return row
+
+
+# Eugen's death, dated to the day by the burial register; Klara's
+# emigration as two sources date it, 22 June 1938 per the postcard and
+# "between 1938 and 1939" per the interview; Rahel's death "after 1945"
+# per the tree and (here) "before 1945" per the interview; (here) the tree
+# has Leopold and Agnes married "between 1946 and 1947" and divorced
+# "after 1956"; and (here) the interview dates Leopold's imprisonment to
+# September 1939, between his arrest on 3 September and his release on 1
+# October 1939, the days the registration card gives.
+EUGEN_DIED = on_timeline(
+    "eugen-loebig", "date of death", u.Date(1909, 3, 16), REGISTER
+)
+KLARA_LEFT = on_timeline(
+    "klara-loebig", "migration", u.Date(1938, 6, 22), POSTCARD
+)
+KLARA_LEFT_IN_38_OR_39 = on_timeline(
+    "klara-loebig",
+    "migration",
+    u.Date(1938, qualifier="between", until=u.Date(1939)),
+    INTERVIEW,
+)
+RAHEL_DIED_AFTER = on_timeline(
+    "rahel-loebig", "date of death", u.Date(1945, qualifier="after"), TREE
+)
+RAHEL_DIED_BEFORE = on_timeline(
+    "rahel-loebig",
+    "date of death",
+    u.Date(1945, qualifier="before"),
+    INTERVIEW,
+)
+MARRIED = on_timeline(
+    "leopold-loebig",
+    f"spouse: {label('agnes-loebig')} (start time)",
+    u.Date(1946, qualifier="between", until=u.Date(1947)),
+    TREE,
+    bounds=START_BOUNDS,
+)
+DIVORCED = on_timeline(
+    "leopold-loebig",
+    f"spouse: {label('agnes-loebig')} (end time)",
+    u.Date(1956, qualifier="after"),
+    TREE,
+    bounds=END_BOUNDS,
+)
+HELD = on_timeline(
+    "leopold-loebig",
+    "imprisonment",
+    u.Date(1939, 9),
+    INTERVIEW,
+    earliest=u.Date(1939, 9, 3),
+    latest=u.Date(1939, 10, 1),
+)
+DATED = [
+    EUGEN_DIED,
+    KLARA_LEFT,
+    KLARA_LEFT_IN_38_OR_39,
+    RAHEL_DIED_AFTER,
+    RAHEL_DIED_BEFORE,
+    MARRIED,
+    DIVORCED,
+    HELD,
+]
+
+
+def qid(row: dict, name: str) -> str:
+    return row[name]["value"].rsplit("/", 1)[-1]
+
+
+class TestTimeline:
+    """The timeline page and its feed show beside each date the range its
+    source states, as person-timeline.rq returns it: each bound under the
+    name of the qualifier that states it and at its own precision, and
+    each value with its source's label (CLAUDE.md rules 5 and 6)."""
+
+    @pytest.fixture
+    def site(self, tmp_path, vocabulary):
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': DATED}
+        )
+        return site
+
+    @staticmethod
+    def dated(site, row: dict) -> str:
+        """What the timeline page shows for `row` before its person: the
+        date, and the range beside it."""
+        page = (site / "timeline.html").read_text()
+        (entry,) = [
+            found
+            for found in re.findall(r'<div class="entry">(.*?)</div>', page)
+            if f'<a href="people/{qid(row, "person")}.html">' in found
+            and f", {html.escape(row['what']['value'])}<" in found
+            and f'<a href="artifacts/{qid(row, "source")}.html">' in found
+        ]
+        return entry.split(" — ", 1)[0]
+
+    def test_a_date_its_source_gives_as_a_range_shows_the_range(self, site):
+        # one emigration, two sources, each under its own label: the
+        # postcard's day as it is, and the interview's range beside its year
+        assert self.dated(site, KLARA_LEFT) == "1938-06-22"
+        assert self.dated(site, KLARA_LEFT_IN_38_OR_39) == (
+            '1938 <span class="qualifiers">'
+            "(earliest date: 1938; latest date: 1939)</span>"
+        )
+
+    def test_a_range_open_at_one_end_names_only_its_bound(self, site):
+        # "after 1945" and "before 1945" are both stored as 1945: each
+        # reads as open, never as a closed range or as the bare date
+        assert self.dated(site, RAHEL_DIED_AFTER) == (
+            '1945 <span class="qualifiers">(earliest date: 1945)</span>'
+        )
+        assert self.dated(site, RAHEL_DIED_BEFORE) == (
+            '1945 <span class="qualifiers">(latest date: 1945)</span>'
+        )
+
+    def test_each_end_of_a_period_shows_its_own_bounds(self, site):
+        # a start runs from its earliest date to its latest start date, and
+        # an end from its earliest end date to its latest date (MODELING.md,
+        # "Marriages, residences and other periods")
+        assert self.dated(site, MARRIED) == (
+            '1946 <span class="qualifiers">'
+            "(earliest date: 1946; latest start date: 1947)</span>"
+        )
+        assert self.dated(site, DIVORCED) == (
+            '1956 <span class="qualifiers">(earliest end date: 1956)</span>'
+        )
+
+    def test_each_bound_shows_at_its_own_precision(self, site):
+        # a month bounded by two days: the date keeps its month and the
+        # bounds their days, none cut or padded to another's precision
+        assert self.dated(site, HELD) == (
+            '1939-09 <span class="qualifiers">'
+            "(earliest date: 1939-09-03; latest date: 1939-10-01)</span>"
+        )
+
+    def test_a_date_with_no_stated_range_shows_as_the_date_alone(self, site):
+        page = (site / "timeline.html").read_text()
+        assert (
+            '<div class="entry">1909-03-16 — '
+            f'<a href="people/{QIDS["eugen-loebig"]}.html">Eugen Löbig</a>, '
+            "date of death"
+            f'<span class="source"><a href="artifacts/{QIDS[REGISTER]}.html">'
+            "Burial register of Friedhof Flörburg: Eugen Löbig</a></span>"
+            "</div>"
+        ) in page
+
+    def test_the_feed_gives_each_range_beside_its_date(self, site):
+        # TimelineJS places an event by its year, month and day, and shows
+        # a date's display_date in place of the date
+        events = json.loads((site / "timeline.json").read_text())["events"]
+        starts = {
+            (event["text"]["headline"], event["text"]["text"]): event[
+                "start_date"
+            ]
+            for event in events
+        }
+        assert len(starts) == len(events) == len(DATED)
+
+        def start(row: dict) -> dict:
+            person, what = row["personLabel"], row["what"]
+            source = row["sourceLabel"]["value"]
+            return starts[
+                (f"{person['value']}: {what['value']}", f"per {source}")
+            ]
+
+        # a date with no stated range, which TimelineJS shows by default
+        assert start(EUGEN_DIED) == {
+            "year": "1909",
+            "month": "03",
+            "day": "16",
+        }
+        assert start(KLARA_LEFT) == {
+            "year": "1938",
+            "month": "06",
+            "day": "22",
+        }
+        assert start(KLARA_LEFT_IN_38_OR_39) == {
+            "year": "1938",
+            "display_date": "1938 (earliest date: 1938; latest date: 1939)",
+        }
+        assert start(RAHEL_DIED_AFTER) == {
+            "year": "1945",
+            "display_date": "1945 (earliest date: 1945)",
+        }
+        assert start(RAHEL_DIED_BEFORE) == {
+            "year": "1945",
+            "display_date": "1945 (latest date: 1945)",
+        }
+        assert start(MARRIED) == {
+            "year": "1946",
+            "display_date": (
+                "1946 (earliest date: 1946; latest start date: 1947)"
+            ),
+        }
+        assert start(DIVORCED) == {
+            "year": "1956",
+            "display_date": "1956 (earliest end date: 1956)",
+        }
+        # a ranged date finer than a year keeps its month in start_date,
+        # and its display_date shows it at its own precision
+        assert start(HELD) == {
+            "year": "1939",
+            "month": "09",
+            "display_date": (
+                "1939-09 (earliest date: 1939-09-03; latest date: 1939-10-01)"
+            ),
+        }
+
+    def test_the_feed_escapes_what_timelinejs_shows_as_html(
+        self, tmp_path, vocabulary
+    ):
+        row = {
+            **EUGEN_DIED,
+            "personLabel": literal('Eugen "Muckel" & Co <Löbig>'),
+            "sourceLabel": literal("burial register <p. 1>"),
+        }
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': [row]}
+        )
+        (event,) = json.loads((site / "timeline.json").read_text())["events"]
+        assert event["text"] == {
+            "headline": (
+                "Eugen &quot;Muckel&quot; &amp; Co &lt;Löbig&gt;: "
+                "date of death"
+            ),
+            "text": "per burial register &lt;p. 1&gt;",
+        }
+
+    def test_a_range_is_escaped_on_the_page(
+        self, tmp_path, vocabulary, hostile_label
+    ):
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': DATED}
+        )
+        assert self.dated(site, KLARA_LEFT_IN_38_OR_39) == (
+            f'1938 <span class="qualifiers">({hostile_label}: 1938; '
+            "latest date: 1939)</span>"
+        )
+
+    def test_a_range_is_escaped_in_the_feed(
+        self, tmp_path, vocabulary, hostile_label
+    ):
+        # TimelineJS writes a display_date into its page as HTML
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': DATED}
+        )
+        events = json.loads((site / "timeline.json").read_text())["events"]
+        (shown,) = [
+            event["start_date"]["display_date"]
+            for event in events
+            if event["text"]["text"] == f"per {label(INTERVIEW)}"
+            and event["text"]["headline"].endswith(": migration")
+        ]
+        assert shown == f"1938 ({hostile_label}: 1938; latest date: 1939)"
+
+    def test_a_bound_the_query_does_not_name_stops_the_build(
+        self, tmp_path, vocabulary
+    ):
+        # shown unnamed, "1945" beside a date of death could be its earliest
+        # or its latest date: the build stops and names what is missing
+        row = {k: v for k, v in RAHEL_DIED_AFTER.items() if k != "low"}
+        with pytest.raises(
+            RuntimeError,
+            match=re.escape(
+                "the person-timeline query gave a row's ?earliest without "
+                "the qualifier that states it (?low is missing); it must "
+                "project ?low and ?high"
+            ),
+        ):
+            build(
+                tmp_path,
+                vocabulary,
+                {**RESPONSES, 'date of birth"@en': [row]},
+            )
+
+    def test_the_query_returns_every_column_the_timeline_reads(self):
+        # each bound is named by the qualifier the query read it from
+        query = load_templates()["person-timeline"]
+        (select,) = re.findall(r"^SELECT(.*?)^WHERE", query, flags=re.S | re.M)
+        assert {
+            "person",
+            "personLabel",
+            "what",
+            "date",
+            "precision",
+            "low",
+            "earliest",
+            "earliestPrecision",
+            "high",
+            "latest",
+            "latestPrecision",
+            "source",
+            "sourceLabel",
+        } <= set(re.findall(r"\?(\w+)", select))
 
 
 class TestTimeFormatting:

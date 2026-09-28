@@ -169,7 +169,12 @@ artifact a new QID, changes neither.
 - Use Wikibase time precision (year / month / day / decade / century).
 - Ranges and vagueness: earliest date / latest date qualifiers. On a
   statement dated as a period (a marriage, a residence), each end has its
-  own pair: see "Marriages, residences and other periods".
+  own pair: see "Marriages, residences and other periods". The static
+  site's timeline and inconsistencies pages show a stated range beside
+  its date, each bound under its qualifier's label and at its own
+  precision, so a range open at one end names its one bound: Rahel's
+  death "after 1945" per the family tree shows as "1945 (earliest date:
+  1945)".
 - "circa": sourcing circumstances qualifier.
 - Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
   date) are kept verbatim as qualifiers (`age at death`), never derived or
@@ -464,8 +469,10 @@ spouse (P26):
 The disagreement report compares a residence's or a spouse's start and
 end times, each through its own range ("Contradictions" below); the
 person timeline (`queries/person-timeline.rq`) lists each start, end and
-point in time with the range stated for it; and the extraction prompt
-gives the extractor this convention.
+point in time with the range stated for it, which the static site's
+timeline page and feed show beside the date, each bound under its
+qualifier's label ("1946 (earliest date: 1946; latest start date:
+1947)"); and the extraction prompt gives the extractor this convention.
 
 ## Persecution and displacement as events (see ADR-0014)
 

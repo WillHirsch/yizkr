@@ -11,7 +11,7 @@ through the stack:
 * the person timeline lists each start and end with its own range, the
   point in time beside them with none, and the residence's point in time
   with the earliest and latest dates of its statement, which has no start
-  or end;
+  or end, and names the two qualifiers that bound each date (#309);
 * the disagreement report compares each end through its own range: a
   start "between 1946 and 1947" and one in 1948 disagree, while 8 February
   1947 lies inside it, and an end "between 1956 and 1957" and one in 1955
@@ -275,6 +275,7 @@ def test_the_timeline_dates_each_end_with_its_own_range(
         1,
     )
     letter = {qid: name for name, qid in source.items()}
+    found = run_sparql(config, query)
     rows = {
         (
             row["what"]["value"],
@@ -284,7 +285,7 @@ def test_the_timeline_dates_each_end_with_its_own_range(
             day(row["latest"]["value"]) if "latest" in row else None,
             letter[row["source"]["value"].rsplit("/", 1)[-1]],
         )
-        for row in run_sparql(config, query)
+        for row in found
     }
     start = f"spouse: {labels['spouse']} (start time)"
     end = f"spouse: {labels['spouse']} (end time)"
@@ -305,6 +306,28 @@ def test_the_timeline_dates_each_end_with_its_own_range(
             "1938-01-01",
             "1939-01-01",
             "A",
+        ),
+    }
+
+    # each date names the pair of qualifiers that bounds it, stated or not,
+    # by which the static site names each bound (#309)
+    key_of = {pid: key for key, pid in properties.items()}
+    bounds = {
+        (
+            row["what"]["value"],
+            key_of[row["low"]["value"].rsplit("/", 1)[-1]],
+            key_of[row["high"]["value"].rsplit("/", 1)[-1]],
+        )
+        for row in found
+    }
+    assert bounds == {
+        (start, "earliest_date", "latest_start_date"),
+        (end, "earliest_end_date", "latest_date"),
+        (observed, "earliest_date", "latest_date"),
+        (
+            f"residence: {labels['town']} (point in time)",
+            "earliest_date",
+            "latest_date",
         ),
     }
 
