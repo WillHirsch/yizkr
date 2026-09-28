@@ -296,23 +296,44 @@ def record_derived_media(
 
 def read_derived_media(directory: Path) -> DerivedMediaRecord | None:
     """The record of a deck's derived media kept in `directory`
-    (record_derived_media), when it is there whole and every file of
-    bytes it names is too; None otherwise."""
+    (record_derived_media), when it is there whole and so is the file of
+    every medium it names: a regular file, not a symlink, named for the
+    medium's SHA-1 and holding the bytes that SHA-1 names. None
+    otherwise, so a record whose files were lost, damaged, swapped or
+    replaced by a link is made again."""
     try:
         record = DerivedMediaRecord.model_validate_json(
             (directory / DERIVED_MEDIA).read_bytes()
         )
     except (OSError, ValueError):
         return None
-    if not all((directory / m.file).is_file() for m in record.media.values()):
-        return None
+    for key, medium in record.media.items():
+        data = _read_regular(directory / medium.file)
+        if (
+            PurePosixPath(medium.file).stem != key
+            or data is None
+            or hashlib.sha1(data).hexdigest() != key
+        ):
+            return None
     return record
 
 
+def _read_regular(path: Path) -> bytes | None:
+    """The bytes of the regular file at `path`, never read through a
+    symlink; None when there is no such file or it cannot be read."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
 def _keep(path: Path, data: bytes) -> None:
-    """Keep `data` at `path`, written in one step, unless the file there
-    holds those bytes already."""
-    if path.is_file() and path.read_bytes() == data:
+    """Keep `data` at `path`, written in one step, unless the regular file
+    there holds those bytes already. A symlink there is replaced, never
+    written through."""
+    if _read_regular(path) == data:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     staging = staging_path(path)

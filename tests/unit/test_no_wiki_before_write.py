@@ -35,6 +35,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import shutil
 import socket
 import threading
@@ -615,8 +616,10 @@ def test_a_deck_changed_between_two_runs_is_unpacked_again(tmp_path, refusals):
 
 class TestTheRecordIsCurrentWhileItIsWhole:
     """A deck's derived media are recorded again exactly when the record
-    in its directory is missing, damaged, or has lost the bytes of a
-    medium it names; never because of what state.json says."""
+    in its directory is missing or damaged, was made for other bytes
+    than the deck's, or lacks the file of a medium it names: a regular
+    file, named for the medium's SHA-1 and holding the bytes that SHA-1
+    names. Never because of what state.json says."""
 
     def run_twice(self, tmp_path, refusals, between=None, **layout):
         folder = deck_alone(tmp_path, **layout)
@@ -631,6 +634,21 @@ class TestTheRecordIsCurrentWhileItIsWhole:
         second.run()
         assert refusals.asked == []
         return recorded, second, deck
+
+    @staticmethod
+    def portrait(deck) -> Path:
+        return deck.dir / DERIVED_MEDIA_DIR / f"{sha1(PORTRAIT)}.png"
+
+    @staticmethod
+    def assert_made_again(recorded, second, deck) -> None:
+        """The second run recorded the media again, and each medium's
+        file is a regular file holding its bytes."""
+        assert second.recordings == [(DECK, False)]
+        assert read_derived_media(deck.dir) == recorded
+        for key, medium in recorded.media.items():
+            path = deck.dir / medium.file
+            assert not path.is_symlink()
+            assert sha1(path.read_bytes()) == key
 
     def test_a_whole_record_stands(self, tmp_path, refusals):
         recorded, second, deck = self.run_twice(tmp_path, refusals)
@@ -653,6 +671,77 @@ class TestTheRecordIsCurrentWhileItIsWhole:
         assert second.recordings == [(DECK, False)]
         assert read_derived_media(deck.dir) == recorded
 
+    def test_a_truncated_medium_is_made_again(self, tmp_path, refusals):
+        def truncate(deck):
+            self.portrait(deck).write_bytes(b"")
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, truncate)
+        self.assert_made_again(recorded, second, deck)
+
+    def test_an_overwritten_medium_is_made_again(self, tmp_path, refusals):
+        def overwrite(deck):
+            self.portrait(deck).write_bytes(b"\x89PNG synthetic: retouched")
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, overwrite)
+        self.assert_made_again(recorded, second, deck)
+
+    def test_a_medium_linked_from_outside_is_made_again(
+        self, tmp_path, refusals
+    ):
+        # a link to a file outside the folder, even one holding the
+        # medium's own bytes, is not the medium's file: the write must
+        # never upload through it
+        elsewhere = tmp_path / "elsewhere.png"
+        elsewhere.write_bytes(PORTRAIT)
+
+        def link(deck):
+            self.portrait(deck).unlink()
+            self.portrait(deck).symlink_to(elsewhere)
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, link)
+        self.assert_made_again(recorded, second, deck)
+        assert elsewhere.read_bytes() == PORTRAIT  # replaced, not written
+
+    @pytest.mark.skipif(
+        not hasattr(os, "geteuid") or os.geteuid() == 0,
+        reason="root reads a file whatever its mode",
+    )
+    def test_an_unreadable_medium_is_made_again(self, tmp_path, refusals):
+        def unreadable(deck):
+            self.portrait(deck).chmod(0)
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, unreadable)
+        self.assert_made_again(recorded, second, deck)
+
+    def test_a_record_whose_media_name_each_others_files_is_made_again(
+        self, tmp_path, refusals
+    ):
+        def swap(deck):
+            path = deck.dir / DERIVED_MEDIA
+            data = json.loads(path.read_text())
+            one, other = data["media"].values()
+            one["file"], other["file"] = other["file"], one["file"]
+            path.write_text(json.dumps(data))
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, swap)
+        self.assert_made_again(recorded, second, deck)
+
+    def test_a_medium_whose_file_is_named_for_other_bytes_is_made_again(
+        self, tmp_path, refusals
+    ):
+        # the portrait's bytes, kept under a name that is not their SHA-1
+        misnamed = f"{DERIVED_MEDIA_DIR}/{'0' * 40}.png"
+
+        def rename(deck):
+            self.portrait(deck).rename(deck.dir / misnamed)
+            path = deck.dir / DERIVED_MEDIA
+            data = json.loads(path.read_text())
+            data["media"][sha1(PORTRAIT)]["file"] = misnamed
+            path.write_text(json.dumps(data))
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, rename)
+        self.assert_made_again(recorded, second, deck)
+
     def test_a_record_naming_another_file_is_made_again(
         self, tmp_path, refusals
     ):
@@ -674,6 +763,23 @@ class TestTheRecordIsCurrentWhileItIsWhole:
             (deck.dir / DERIVED_MEDIA).write_text('{"source_sha1": ')
 
         recorded, second, deck = self.run_twice(tmp_path, refusals, damage)
+        assert second.recordings == [(DECK, False)]
+        assert read_derived_media(deck.dir) == recorded
+
+    def test_a_record_for_other_deck_bytes_is_made_again(
+        self, tmp_path, refusals
+    ):
+        # whole, with every medium's file, but made for another source's
+        # bytes, as in a directory two sources have shared
+        def another_deck(deck):
+            path = deck.dir / DERIVED_MEDIA
+            data = json.loads(path.read_text())
+            data["source_sha1"] = sha1(b"another deck")
+            path.write_text(json.dumps(data))
+
+        recorded, second, deck = self.run_twice(
+            tmp_path, refusals, another_deck
+        )
         assert second.recordings == [(DECK, False)]
         assert read_derived_media(deck.dir) == recorded
 

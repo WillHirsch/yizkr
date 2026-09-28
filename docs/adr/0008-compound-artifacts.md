@@ -123,8 +123,11 @@ before the write reads nothing from the wiki and writes nothing to it
 `derived-media.json`: each distinct image keyed by the SHA-1 of its bytes
 (ADR-0010), with its names in the archive and the slides it is on, and
 the SHA-1 and title of the deck itself, which the item's label begins
-with. `derived-media/` beside it keeps the bytes. The record stands while
-it is there whole, with the bytes of every image it names, and is made
-again otherwise. Write-time registration (#103) registers and uploads
-them, by the rules of the #50 amendment above; until it lands, `ingest
-run` registers no derived media.
+with. `derived-media/` beside it keeps the bytes, each image in a file
+named for its SHA-1. The record stands while it is there whole, made for
+the deck's bytes as they are now, and each image it names has its file:
+a regular file, not a symlink, named for the image's SHA-1 and holding
+the bytes that SHA-1 names. Otherwise it is made again, and only a file
+that is not what it should be is written. Write-time registration (#103)
+registers and uploads them, by the rules of the #50 amendment above;
+until it lands, `ingest run` registers no derived media.

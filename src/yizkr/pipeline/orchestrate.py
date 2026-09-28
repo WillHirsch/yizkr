@@ -1131,11 +1131,11 @@ class Orchestrator:
 
     def _derived_media_current(self, doc: DocumentRun) -> bool:
         """Does the document's directory hold the record of its deck's
-        derived media, whole and for the deck's bytes as they are now,
-        with the bytes of every medium it names
-        (presentation.read_derived_media)? The directory is kept for one
-        source's bytes, so a record made there stays current; a missing
-        or damaged one is made again."""
+        derived media, whole and with the file of every medium it names
+        (presentation.read_derived_media), made for the deck's bytes as
+        they are now? A record made for other bytes, as in a directory
+        two sources have shared, is made again, and so is a missing or
+        damaged one."""
         from yizkr.pipeline.presentation import read_derived_media
 
         record = read_derived_media(doc.dir)

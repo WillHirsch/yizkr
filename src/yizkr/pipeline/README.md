@@ -197,11 +197,14 @@ re-running one step in isolation — but for a normal ingest you only ever run
   deck's state directory, not on the wiki: `derived-media.json` keys each
   distinct image by the SHA-1 of its bytes (ADR-0010), with its names in
   the deck, the slides it is on, and the deck's own SHA-1 and title, and
-  `derived-media/` keeps its bytes. The record stands while it is there
-  whole, with the bytes of every image it names; one that is missing or
-  damaged is made again. Registering and uploading the images (ADR-0008)
-  is left to write-time registration (#103). Media other than images are
-  counted and reported, not recorded.
+  `derived-media/` keeps its bytes, in a file named for that SHA-1. The
+  record stands while it is there whole, made for the deck's bytes as
+  they are now, and each image's file is a regular file (not a symlink)
+  named for the image's SHA-1 and holding those bytes; otherwise it is
+  made again, and only the files that are not what they should be are
+  written. Registering and uploading the images (ADR-0008) is left to
+  write-time registration (#103). Media other than images are counted
+  and reported, not recorded.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (Transkribus-style platform adapter, stub for now).
