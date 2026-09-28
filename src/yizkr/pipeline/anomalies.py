@@ -57,16 +57,16 @@ stored output without recomputing a stage.
 
 A rate check marked fail-fast asks for a pause of its slice when it
 fires: the stage, or the document kind (RunDir.request, with `by` BY),
-and the other slices go on. When the pause has stood for the configured
-timeout and nobody has resumed the slice, the checks append an abort of
-it, so an unattended run never waits on it indefinitely: a timer started
-with the pause does it even while no stage runs, and every later check
-looks too. A driver that invokes the run again asks again for the pauses
-still standing, as they stood; such a pause is timed from that request,
-and the timer goes on watching it in the new invocation. A pause of the
-same slice that someone else asked for is theirs, and is never aborted
-here. An abort, like a pause, only stops
-dispatch: nothing is deleted, and every completed output stays.
+and the other slices go on. When a pause of the checks alone has stood
+on the slice for the configured timeout since the latest start marker,
+the checks append an abort of it, so an unattended run never waits on
+it indefinitely. A slice they paused stays watched for the rest of the
+process, by a timer that looks even while no stage runs and by every
+later check: a driver that invokes the run again may ask again for a
+pause of theirs as it stood, and such a pause is timed out from that
+request (_SliceWatch). A pause of the same slice that someone else asked
+for is theirs, and is never aborted here. An abort, like a pause, only
+stops dispatch: nothing is deleted, and every completed output stays.
 
 Alerts are signals. The checks never change, move or drop an output or a
 claim (ADR-0002), and a check that fails is an `anomaly-error` event and
@@ -78,6 +78,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -89,7 +90,7 @@ import uuid
 from collections import Counter, deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -267,7 +268,15 @@ class AnomalyConfig(_Settings):
     """The thresholds of every check (anomalies.yaml)."""
 
     version: Literal[1]
-    pause_timeout_s: Annotated[float, Field(ge=0)] | None
+    # a timer waits at most threading.TIMEOUT_MAX; infinity would stop
+    # the timer's thread, and null holds a pause instead
+    pause_timeout_s: (
+        Annotated[
+            float,
+            Field(ge=0, le=threading.TIMEOUT_MAX, allow_inf_nan=False),
+        ]
+        | None
+    )
     chars_per_page: int = Field(ge=1)
     checks: Checks
 
@@ -809,7 +818,10 @@ def _utc_now() -> datetime:
 
 
 def _start_timer(seconds: float, callback: Callable[[], None]) -> Any:
-    timer = threading.Timer(seconds, callback)
+    """A daemon timer, started, that calls `callback` after `seconds`, or
+    after the longest wait a thread can make (threading.TIMEOUT_MAX); it
+    is returned, to be cancelled."""
+    timer = threading.Timer(min(seconds, threading.TIMEOUT_MAX), callback)
     timer.daemon = True
     timer.start()
     return timer
@@ -875,6 +887,198 @@ def _pause_stretches(
     return stretches
 
 
+def _requests(data: bytes) -> list[dict]:
+    """The requests in a control file's bytes, read as stages.read_jsonl
+    reads a log: split at newlines only, with a torn or blank line
+    skipped."""
+    requests = []
+    for line in data.split(b"\n"):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line.decode("utf-8"))
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            requests.append(entry)
+    return requests
+
+
+@contextlib.contextmanager
+def _locked_control(path: Path) -> Iterator[list[dict]]:
+    """The requests of the control file at `path`, read under the lock its
+    appenders take (rundir's _append_line, fcntl.lockf), which is held to
+    the end of the block: a request the block appends follows every
+    request it read, and another process's request waits for the block.
+
+    The lock is POSIX's, and so the process's: a request another thread
+    of this process appends does not wait for it, and closing any
+    descriptor on the file in this process (a reader's, or the appender's
+    the block calls) releases it. A control file that cannot be opened for
+    writing is read without the lock, and a missing one holds no
+    request."""
+    try:
+        descriptor = os.open(path, os.O_RDWR)
+    except OSError:
+        yield read_jsonl(path)
+        return
+    try:
+        with contextlib.suppress(OSError):
+            fcntl.lockf(descriptor, fcntl.LOCK_EX)
+        chunks = []
+        while chunk := os.read(descriptor, 1 << 16):
+            chunks.append(chunk)
+        yield _requests(b"".join(chunks))
+    finally:
+        os.close(descriptor)
+
+
+# -- the pauses' timeouts -----------------------------------------------------
+
+
+@dataclass
+class _Watched:
+    """A slice the checks paused: the check that paused it last, and that
+    check's timeout, clock and timer; and the pending timer that looks at
+    the slice next, by the token it calls back with, and when it is due
+    on that clock."""
+
+    check: str
+    timeout: float
+    now: Callable[[], datetime]
+    timer: Callable[[float, Callable[[], None]], Any]
+    pending: Any = None
+    token: object | None = None
+    due: datetime | None = None
+
+
+def _cancel(handle: Any) -> None:
+    cancel = getattr(handle, "cancel", None)
+    if callable(cancel):
+        cancel()
+
+
+class _SliceWatch:
+    """The slices of one run directory that the anomaly checks paused,
+    watched for the rest of the process, so that their pauses time out.
+
+    A slice stays watched from the checks' pause on, whatever becomes of
+    the pause. A driver that invokes the run again asks again, after the
+    new start marker, for the pauses that stood when it looked (a carry),
+    with the `by` they had: a pause it looked at before the checks aborted
+    it, or before the start marker cleared it, stands again, and no
+    invocation's checks asked for it. So each look reads the control file
+    as the driver folds it, under the lock its appenders take, and aborts
+    the slice when a pause of the checks alone has stood on it for the
+    timeout since the latest start marker, counted from the first request
+    of that pause. A look that finds such a pause short of its timeout
+    looks again when it is due; any other look, the one that aborts
+    included, looks again a timeout later, for a carry still to come.
+    One pending timer per slice makes the looks, and so does every check
+    the orchestrator calls."""
+
+    def __init__(self, path: Path) -> None:
+        self.run = RunDir(path)
+        self._lock = threading.Lock()
+        self._slices: dict[str, _Watched] = {}
+
+    def watch(
+        self,
+        scope: str,
+        check: str,
+        timeout: float | None,
+        now: Callable[[], datetime],
+        timer: Callable[[float, Callable[[], None]], Any],
+    ) -> None:
+        """Watch a slice the checks have just paused, with their timeout,
+        clock and timer. With no timeout the slice is not watched: its
+        pauses hold until someone resumes it."""
+        with self._lock:
+            watched = self._slices.pop(scope, None)
+            if watched is not None:
+                _cancel(watched.pending)
+            if timeout is not None:
+                watched = _Watched(check, timeout, now, timer)
+                self._slices[scope] = watched
+                self._look(scope, watched)
+
+    def look(self) -> None:
+        """Look at every watched slice now."""
+        with self._lock:
+            for scope, watched in list(self._slices.items()):
+                self._look(scope, watched)
+
+    def _fire(self, scope: str, token: object) -> None:
+        """A pending timer's end: its slice is looked at, unless a later
+        look has put another timer in its place."""
+        try:
+            with self._lock:
+                watched = self._slices.get(scope)
+                if watched is None or watched.token is not token:
+                    return
+                watched.pending = watched.token = watched.due = None
+                self._look(scope, watched)
+        except Exception as exc:
+            _report(self.run, "timer", exc)
+
+    def _look(self, scope: str, watched: _Watched) -> None:
+        """Look at a slice, and see that its next look is pending: a timer
+        is started when none is, or when this look wants one sooner than
+        the pending one is due, which is then cancelled."""
+        due = self._judge(scope, watched)
+        if watched.pending is not None and (
+            watched.due is not None and watched.due <= due
+        ):
+            return
+        _cancel(watched.pending)
+        token = object()
+        watched.token, watched.due = token, due
+        wait = max(0.0, (due - watched.now()).total_seconds())
+        watched.pending = watched.timer(wait, lambda: self._fire(scope, token))
+
+    def _judge(self, scope: str, watched: _Watched) -> datetime:
+        """Abort the slice when a pause of the checks alone has stood on it
+        for the timeout; when the slice is to be looked at again: when a
+        pause standing short of the timeout reaches it, or else a timeout
+        from now, and a second more, since the control file stamps its
+        requests in whole seconds."""
+        margin = timedelta(seconds=watched.timeout + 1)
+        now = watched.now()
+        with _locked_control(self.run.path / CONTROL) as requests:
+            state, stretches = _fold_scopes(requests)
+            since, ours = stretches.get(scope, (None, False))
+            if state.get(scope) == "paused" and ours and since is not None:
+                if (now - since).total_seconds() < watched.timeout:
+                    return since + margin
+                what, name = scope.split(":", 1)
+                self.run.request(
+                    ABORT,
+                    by=BY,
+                    reason=f"{watched.check}: not resumed within "
+                    f"{watched.timeout:g} s",
+                    check=watched.check,
+                    **{what: name},
+                )
+        return now + margin
+
+
+# each run directory's watch, made when the checks first pause one of its
+# slices
+_WATCHES: dict[str, _SliceWatch] = {}
+_WATCHES_LOCK = threading.Lock()
+
+
+def _watch_of(path: Path, *, make: bool = True) -> _SliceWatch | None:
+    """The watch of the run directory at `path`: made when there is none
+    and `make` asks for one; None otherwise."""
+    where = os.path.abspath(path)
+    with _WATCHES_LOCK:
+        watch = _WATCHES.get(where)
+        if watch is None and make:
+            watch = _WATCHES[where] = _SliceWatch(Path(where))
+        return watch
+
+
 # -- the checks of one invocation ---------------------------------------------
 
 
@@ -923,12 +1127,10 @@ class AnomalyChecks:
         self._first: dict[tuple[str, str], _FirstOf] = {}
         self._planned: Counter | None = None
         self._raised: set[tuple] = set()
-        # the slices these checks paused and still watch: scope -> (the
-        # check, what to start afresh once the slice is resumed); the
-        # pending timer of each, by the token it was started with; and the
-        # slices they aborted, or saw aborted
-        self._paused: dict[str, tuple[str, Callable[[], None]]] = {}
-        self._armed: dict[str, object] = {}
+        # the slices these checks paused in their invocation, each with
+        # what starts afresh once it is resumed, and the slices they saw
+        # aborted; the run directory's watch times the pauses out
+        self._paused: dict[str, Callable[[], None]] = {}
         self._aborted: set[str] = set()
 
     # -- what the orchestrator calls ------------------------------------------
@@ -959,9 +1161,9 @@ class AnomalyChecks:
             self._poll()
 
     def poll(self) -> None:
-        """Read the invocation's new events, and look after the slices
-        these checks paused: one resumed starts its check afresh, and one
-        paused past the timeout is aborted."""
+        """Read the invocation's new events, and look at the slices: one
+        these checks paused that has been resumed starts its check
+        afresh, and one paused past its timeout is aborted."""
         with self._lock:
             self._poll()
 
@@ -1127,11 +1329,18 @@ class AnomalyChecks:
     # -- the run's events ----------------------------------------------------
 
     def _poll(self) -> None:
+        """Read the invocation's new events once the slices these checks
+        paused have been looked at, so that a slice resumed since is
+        counted afresh from its new events on; then look at every watched
+        slice of the run directory."""
+        if self._paused:
+            self._note_slices()
         for event in self._tail.read():
             if event.get("invocation") == self.run.invocation:
                 self._fold(event)
-        if self._paused:
-            self._watch_slices()
+        watch = _watch_of(self.run.path, make=False)
+        if watch is not None:
+            watch.look()
 
     def _fold(self, event: dict) -> None:
         name = event.get("event")
@@ -1414,10 +1623,9 @@ class AnomalyChecks:
         reset: Callable[[], None],
     ) -> str | None:
         """Ask for a pause of the slice (a stage or a kind) for a fail-fast
-        check, and watch it: the slice's scope, or None when the check is
-        not fail-fast or the slice is stopped already. The pause is asked
-        for while the run's events are read, and the look at the slices
-        that follows starts the timer that aborts it (_watch_slices)."""
+        check, and have the run directory's watch time it out: the slice's
+        scope, or None when the check is not fail-fast or the slice is
+        stopped already."""
         if not settings.fail_fast:
             return None
         what, name = slice_
@@ -1429,77 +1637,31 @@ class AnomalyChecks:
         self.run.request(
             PAUSE, by=BY, reason=reason, check=check, **{what: name}
         )
-        self._paused[scope] = (check, reset)
+        self._paused[scope] = reset
+        watch = _watch_of(self.run.path)
+        watch.watch(
+            scope, check, self.config.pause_timeout_s, self._now, self._timer
+        )
         return scope
 
     def _control(self) -> list[dict]:
         return read_jsonl(self.run.path / CONTROL)
 
-    def _arm(self, scope: str, seconds: float) -> None:
-        """Start the timer that looks at a paused slice once its pause has
-        stood `seconds` more, and a second more, since the control file
-        stamps its requests in whole seconds. A slice has one timer
-        pending at a time."""
-        token = object()
-        self._armed[scope] = token
-        self._timer(seconds + 1, lambda: self._expire(scope, token))
-
-    def _expire(self, scope: str, token: object) -> None:
-        """A pause timer's end: the slices are looked at again, so that one
-        paused past the timeout is aborted, and a timer is started again
-        for one whose pause still stands short of it."""
-        try:
-            with self._lock:
-                if self._armed.get(scope) is token:
-                    del self._armed[scope]
-                self._watch_slices()
-        except Exception as exc:
-            _report(self.run, "timer", exc)
-
-    def _watch_slices(self) -> None:
+    def _note_slices(self) -> None:
         """Each slice these checks paused, as the control file leaves it:
-        resumed, its check starts afresh on what comes after; aborted, it
-        is never paused again in the invocation; paused by these checks
-        alone past the timeout, it is aborted; and paused by them short of
-        the timeout, a timer looks at it again when the timeout comes.
-
-        The timeout runs from the first pause of the stretch that stands,
-        since the latest start marker. A driver that invokes the run again
-        asks there for the pauses still standing, with who asked for them,
-        so the pause these checks asked for stands on in the next
-        invocation, from that request, and their timer aborts it there."""
-        state, stretches = _fold_scopes(self._control())
-        timeout = self.config.pause_timeout_s
-        now = self._now()
-        for scope, (check, reset) in list(self._paused.items()):
+        resumed, or cleared by a start marker, its check starts afresh on
+        what comes after; aborted, it is never paused again in the
+        invocation."""
+        state, _stretches = _fold_scopes(self._control())
+        for scope, reset in list(self._paused.items()):
             held = state.get(scope)
-            if held != "paused":
-                if held is None:
-                    reset()
-                else:
-                    self._aborted.add(scope)
-                del self._paused[scope]
-                self._armed.pop(scope, None)
+            if held == "paused":
                 continue
-            since, ours = stretches.get(scope, (None, False))
-            if timeout is None or not ours or since is None:
-                continue
-            elapsed = (now - since).total_seconds()
-            if elapsed < timeout:
-                if scope not in self._armed:
-                    self._arm(scope, timeout - elapsed)
-                continue
-            what, name = scope.split(":", 1)
-            self.run.request(
-                ABORT,
-                by=BY,
-                reason=f"{check}: not resumed within {timeout:g} s",
-                check=check,
-                **{what: name},
-            )
-            self._aborted.add(scope)
+            if held is None:
+                reset()
+            else:
+                self._aborted.add(scope)
             del self._paused[scope]
-            self._armed.pop(scope, None)
 
 
 def _excerpt_language(claim: Any) -> Any:
@@ -1567,6 +1729,7 @@ def checks_for(run: RunDir) -> AnomalyChecks:
             subject="",
             value=True,
             carried=False,
+            config=made.digest,
             problem=problem[:500],
         )
     return checks
@@ -1666,6 +1829,46 @@ def _median_without(ordered: Sequence[float], index: int) -> float:
     return (at(middle - 1) + at(middle)) / 2
 
 
+def _recheck_document(checks: AnomalyChecks, doc: _Recorded) -> None:
+    """Check one document's stored outputs again (recheck)."""
+    transcription = _read_json(doc.transcription)
+    if isinstance(transcription, Mapping):
+        text = transcription.get("text")
+        finding = (
+            check_verdict(
+                checks.config,
+                text=text,
+                engine=transcription.get("engine"),
+                page_count=checks._medium_pages(doc),
+            )
+            if isinstance(text, str)
+            else None
+        )
+        if finding is not None:
+            checks._raise(
+                finding,
+                stage=TRANSCRIPTION,
+                subject=doc.sha1,
+                kind=doc.kind,
+                carried=True,
+            )
+        checks._output(
+            doc, TRANSCRIPTION, transcription, carried=True, online=False
+        )
+    batch = _read_json(doc.batch)
+    if isinstance(batch, Mapping):
+        checks._output(
+            doc,
+            GEDCOM if doc.kind == "gedcom" else EXTRACTION,
+            batch,
+            carried=True,
+            online=False,
+        )
+    critique = _read_json(doc.critique)
+    if isinstance(critique, list):
+        checks._output(doc, CRITIQUE, critique, carried=True, online=False)
+
+
 def recheck(
     state_dir: str | os.PathLike[str],
     config: AnomalyConfig | None = None,
@@ -1684,49 +1887,21 @@ def recheck(
     compare each document with every other document of its kind in the
     run, not only the ones before it. The rate checks, which read a run's
     dispatches and calls rather than its outputs, are not checked again.
-    Nothing is written into a document's directory."""
+    A document whose outputs the checks cannot read is an `anomaly-error`
+    event, and the others are checked. Nothing is written into a
+    document's directory."""
     state_dir = Path(state_dir)
     run = RunDir(state_dir, invocation=f"recheck-{uuid.uuid4().hex[:8]}")
     checks = AnomalyChecks(run, config, page_count=page_count)
     documents = list(_recorded(state_dir))
     run.emit(RECHECK_EVENT, config=checks.digest, documents=len(documents))
     for doc in documents:
-        transcription = _read_json(doc.transcription)
-        if isinstance(transcription, Mapping):
-            text = transcription.get("text")
-            finding = (
-                check_verdict(
-                    checks.config,
-                    text=text,
-                    engine=transcription.get("engine"),
-                    page_count=checks._medium_pages(doc),
-                )
-                if isinstance(text, str)
-                else None
-            )
-            if finding is not None:
-                checks._raise(
-                    finding,
-                    stage=TRANSCRIPTION,
-                    subject=doc.sha1,
-                    kind=doc.kind,
-                    carried=True,
-                )
-            checks._output(
-                doc, TRANSCRIPTION, transcription, carried=True, online=False
-            )
-        batch = _read_json(doc.batch)
-        if isinstance(batch, Mapping):
-            checks._output(
-                doc,
-                GEDCOM if doc.kind == "gedcom" else EXTRACTION,
-                batch,
-                carried=True,
-                online=False,
-            )
-        critique = _read_json(doc.critique)
-        if isinstance(critique, list):
-            checks._output(doc, CRITIQUE, critique, carried=True, online=False)
+        try:
+            _recheck_document(checks, doc)
+        except Exception as exc:
+            # one document's outputs that the checks cannot read stop
+            # nothing: the others are checked
+            _report(run, "recheck", exc)
     for stage, names in _MEASURES.items():
         for name in names:
             settings = checks.config.checks.outlier(name)

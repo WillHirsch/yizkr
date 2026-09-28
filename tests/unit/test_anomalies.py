@@ -5,18 +5,24 @@ Every check meets fictional outputs from the example universe
 checks read a run's events as the orchestrator, the LLM cache and the
 engine's call reports write them, so the tests write those events through
 the same RunDir. Then the thresholds, new and carried alerts, the
-fail-fast pauses and their timeout into an abort, the orchestrator's
-hooks (a carried alert on a reused output, a paused kind while another
-goes on, outputs no alert alters), and a recheck of stored outputs under
-new thresholds, which recomputes nothing.
+fail-fast pauses and their timeout into an abort, however a driver's
+carry of a pause falls (#196's review), the orchestrator's hooks (a
+carried alert on a reused output, a paused kind while another goes on,
+outputs no alert alters), a recheck of stored outputs under new
+thresholds, which recomputes nothing, and the unit tests' own default
+for the checks' timers (tests/unit/conftest.py).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import statistics
+import subprocess
+import sys
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,6 +32,7 @@ import pytest
 import yaml
 
 from tests.fixtures import example_universe as u
+from tests.unit.conftest import RecordedTimer
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import anomalies, rundir
@@ -78,11 +85,9 @@ RUN_META = {
 REPO = Path(__file__).resolve().parents[2]
 
 
-@pytest.fixture(autouse=True)
-def no_operator_thresholds(monkeypatch):
-    """The tests' thresholds are the defaults and what each test sets,
-    never an operator's file."""
-    monkeypatch.delenv(anomalies.CONFIG_VARIABLE, raising=False)
+# the checks' real pause timer, taken as the tests are collected: in every
+# test, tests/unit/conftest.py records the timers the checks start instead
+START_TIMER = anomalies._start_timer
 
 
 def sha1_of(name: str) -> str:
@@ -169,21 +174,28 @@ def clock(monkeypatch) -> Clock:
 
 class Timers:
     """The timers the checks start, recorded instead of started: `fire`
-    runs each timer not run yet, as a real one runs once when its time
-    has come."""
+    runs each one neither run nor cancelled yet, as a real timer runs once
+    when its time has come, and `waiting` lists them."""
 
     def __init__(self) -> None:
-        self.started: list[tuple[float, object]] = []
-        self._pending: list = []
+        self.started: list[RecordedTimer] = []
+        self._run: set[int] = set()
 
     def __call__(self, seconds, callback):
-        self.started.append((seconds, callback))
-        self._pending.append(callback)
+        self.started.append(RecordedTimer(seconds, callback))
+        return self.started[-1]
+
+    def waiting(self) -> list[RecordedTimer]:
+        return [
+            timer
+            for timer in self.started
+            if not timer.cancelled and id(timer) not in self._run
+        ]
 
     def fire(self) -> None:
-        due, self._pending = self._pending, []
-        for callback in due:
-            callback()
+        for timer in self.waiting():
+            self._run.add(id(timer))
+            timer.callback()
 
 
 def make_checks(tmp_path, overrides=None, pages=None, clock=None, timers=None):
@@ -348,6 +360,8 @@ class TestThresholds:
             "checks:\n  call-failures:\n    min-count: 20\n",  # > window
             "checks:\n  kind-failures:\n    max-share: 1.5\n",
             "pause-timeout-s: -1\n",
+            "pause-timeout-s: .inf\n",  # would stop the timer's thread
+            "pause-timeout-s: .nan\n",
             "- a list\n",
             "checks: [\n",  # not YAML
         ],
@@ -369,6 +383,8 @@ class TestThresholds:
         assert checks.config == anomalies.default_config()
         alert = only(run, "anomaly-config")
         assert (alert["stage"], alert["status"]) == ("run", "new")
+        # the thresholds in force are named, as on every alert
+        assert alert["config"] == anomalies.default_config().digest()
         assert "min_chars" in alert["problem"]
         # made once per invocation
         assert anomalies.checks_for(run) is checks
@@ -1067,6 +1083,7 @@ class TestRates:
         checks.poll()
         alert = only(run, "kind-failures")
         assert (alert["value"], alert["limit"], alert["of"]) == (6, 5.0, 6)
+        assert alert["status"] == "new"
         assert (alert["kind"], alert["pause"]) == ("media", "kind:media")
         (pause,) = requests(run)
         assert (pause["action"], pause["scope"], pause["by"]) == (
@@ -1118,6 +1135,7 @@ class TestRates:
         checks.poll()
         alert = only(run, "call-failures")
         assert (alert["value"], alert["count"], alert["of"]) == (0.7, 7, 10)
+        assert alert["status"] == "new"
         assert alert["pause"] == "stage:transcription"
         (pause,) = requests(run)
         assert pause["scope"] == "stage:transcription"
@@ -1156,14 +1174,79 @@ def paused_media(tmp_path, **options):
     return run, checks
 
 
+def standing(run: RunDir) -> list[dict]:
+    """The requests that stop a stage or a kind now, as a driver that
+    carries them into its next invocation reads them (the scratch driver's
+    `_stops_in_force`, #194): since the latest start marker, the abort
+    that holds a slice, or the pause that does."""
+    held: dict[str, dict] = {}
+    for request in requests_since_start(run):
+        scope = request.get("scope") or "run"
+        if (held.get(scope) or {}).get("action") == "abort":
+            continue
+        if request["action"] in ("pause", "abort"):
+            held[scope] = request
+        elif request["action"] == "resume":
+            held.pop(scope, None)
+    return [r for s, r in held.items() if s.startswith(("stage:", "kind:"))]
+
+
+def requests_since_start(run: RunDir) -> list[dict]:
+    found: list[dict] = []
+    for request in rundir.read_jsonl(run.path / "control.jsonl"):
+        if request.get("action") == "start":
+            found = []
+        else:
+            found.append(request)
+    return found
+
+
+def carry(run: RunDir, carried: list[dict]) -> None:
+    """Ask again for the stops `carried`, as that driver does after its
+    start marker: with who asked for them and why."""
+    for request in carried:
+        which, _, name = request["scope"].partition(":")
+        run.request(
+            request["action"],
+            stage=name if which == "stage" else None,
+            kind=name if which == "kind" else None,
+            by=request.get("by") or "operator",
+            reason=request.get("reason") or "",
+            carried=True,
+        )
+
+
+def held_elsewhere(path: Path) -> str:
+    """Whether another process can take the lock a control file's
+    appenders take: `held` or `free`."""
+    probe = (
+        "import fcntl, os, sys\n"
+        "fd = os.open(sys.argv[1], os.O_RDWR)\n"
+        "try:\n"
+        "    fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "except OSError:\n"
+        "    print('held')\n"
+        "else:\n"
+        "    print('free')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe, str(path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
 class TestFailFastPauses:
     def test_a_pause_nobody_resumes_times_out_into_an_abort(
         self, tmp_path, clock
     ):
         timers = Timers()
         run, _checks = paused_media(tmp_path, clock=clock, timers=timers)
-        ((seconds, _callback),) = timers.started
-        assert seconds > 1800
+        (timer,) = timers.started
+        assert timer.seconds > 1800
         clock.advance(1802)
         timers.fire()
         pause, abort = requests(run)
@@ -1318,24 +1401,37 @@ class TestFailFastPauses:
     def test_the_timer_runs_on_a_thread_of_its_own(self, tmp_path):
         """With the real timer and clock: an abort that no later check
         makes. The pause stands when the check that asked for it ends, and
-        the timer's thread, of a daemon, aborts it in its own time."""
-        started = []
+        the timer's thread, of a daemon, aborts it in its own time; the
+        slice stays watched, by the next timer."""
+        started: list[threading.Timer] = []
 
         def start(seconds, callback):
-            started.append(anomalies._start_timer(seconds, callback))
+            started.append(START_TIMER(seconds, callback))
+            return started[-1]
 
         run = RunDir(tmp_path / "run")
         checks = AnomalyChecks(
             run, load_config(overrides={"pause-timeout-s": 2}), timer=start
         )
-        outcomes(run, "transcription", "media", "xxxxxx")
-        checks.poll()
-        assert run.control().stopped(kind="media") == "kind:media paused"
-        (timer,) = started
-        assert timer.daemon
+        try:
+            outcomes(run, "transcription", "media", "xxxxxx")
+            checks.poll()
+            assert run.control().stopped(kind="media") == "kind:media paused"
+            first = started[0]
+            assert first.daemon
+            first.join(timeout=30)
+            assert not first.is_alive()
+            assert run.control().stopped(kind="media") == "kind:media aborted"
+            assert len(started) == 2 and started[1].daemon
+        finally:
+            for timer in started:
+                timer.cancel()
+
+    def test_a_timer_waits_at_most_the_longest_wait_a_thread_can(self):
+        timer = START_TIMER(threading.TIMEOUT_MAX + 1, lambda: None)
+        timer.cancel()
         timer.join(timeout=30)
-        assert not timer.is_alive()
-        assert run.control().stopped(kind="media") == "kind:media aborted"
+        assert timer.interval == threading.TIMEOUT_MAX
 
     def test_a_pause_a_driver_carries_on_times_out_from_the_carry(
         self, tmp_path, clock
@@ -1370,6 +1466,109 @@ class TestFailFastPauses:
             "anomaly",
             "kind-failures",
         )
+
+    @pytest.mark.parametrize("delay", [0, 4000])
+    def test_a_pause_carried_after_its_abort_times_out_again(
+        self, tmp_path, clock, delay
+    ):
+        """The driver reads the pauses standing before its next
+        invocation's preflight, and asks for them again after its start
+        marker. When the timeout passes in between, the checks abort the
+        pause, and the carry asks for it again: it stands, from the carry,
+        and times out from there, however long the preflight took."""
+        timers = Timers()
+        paused_media(tmp_path, clock=clock, timers=timers)
+        run = RunDir(tmp_path / "run")
+        carried = standing(run)
+        clock.advance(1802)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+        # a preflight that outlasts the timeout: the slice is looked at
+        # again meanwhile, and stays watched
+        for _ in range(delay // 1801):
+            clock.advance(1801)
+            timers.fire()
+        clock.advance(delay % 1801)
+        run.start()
+        carry(run, carried)
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(1000)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(801)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+        assert [r["action"] for r in requests(run)] == [
+            "pause",
+            "abort",
+            "pause",
+            "abort",
+        ]
+        assert len(timers.waiting()) == 1
+
+    def test_a_pause_carried_after_a_look_between_start_and_carry(
+        self, tmp_path, clock
+    ):
+        """The timer looks just after the driver's start marker has
+        cleared the pause and just before the carry asks for it again: the
+        slice stays watched, and the carried pause times out."""
+        timers = Timers()
+        paused_media(tmp_path, clock=clock, timers=timers)
+        clock.advance(600)
+        run = RunDir(tmp_path / "run")
+        carried = standing(run)
+        run.start()
+        timers.fire()
+        assert run.control().stopped(kind="media") is None
+        carry(run, carried)
+        clock.advance(1799)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(2)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+
+    def test_a_slice_has_one_pending_timer(self, tmp_path, clock):
+        """A look keeps the pending timer when it is due soon enough, and
+        a timer put in its place cancels it."""
+        timers = Timers()
+        run, checks = paused_media(tmp_path, clock=clock, timers=timers)
+        for _ in range(3):
+            clock.advance(10)
+            checks.poll()
+        assert len(timers.started) == 1
+        run.request("resume", kind="media", reason="renderer installed")
+        checks.poll()
+        outcomes(run, "transcription", "media", "xxxxxx", start=6)
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        first, second = timers.started
+        assert first.cancelled and not second.cancelled
+        timers.fire()
+        assert len(timers.waiting()) == 1
+
+    def test_an_abort_is_appended_under_the_control_file_s_lock(
+        self, tmp_path, clock, monkeypatch
+    ):
+        """The look that aborts a slice holds the lock the control file's
+        appenders take from reading it to appending the abort, so that no
+        other process appends a resume between the two."""
+        run, checks = paused_media(tmp_path, clock=clock)
+        watch = anomalies._watch_of(run.path)
+        request = watch.run.request
+        probes = []
+
+        def probed(*args, **kwargs):
+            probes.append(held_elsewhere(run.path / "control.jsonl"))
+            return request(*args, **kwargs)
+
+        monkeypatch.setattr(watch.run, "request", probed)
+        clock.advance(1802)
+        checks.poll()
+        assert probes == ["held"]
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+        # and once the look is over, the lock is free
+        assert held_elsewhere(run.path / "control.jsonl") == "free"
 
 
 # -- new and carried ----------------------------------------------------------
@@ -1827,7 +2026,33 @@ class TestRecheck:
         )
         (alert,) = [a for a in alerts if a["check"] == "claim-yield"]
         assert alert["subject"] == sha1_of("a.txt")[:12]
+        assert alert["status"] == "carried"
         assert (alert["median"], alert["samples"]) == (5.0, 3)
+
+    def test_a_document_the_checks_cannot_read_stops_no_other(self, tmp_path):
+        state = tmp_path / "state"
+        broken = a_recorded_document(
+            state, "a.png", text=MARRIAGE, engine="llm-vision:fake-model"
+        )
+        (broken / "batch.json").write_text('{"claims": 5, "entities": []}')
+        a_recorded_document(
+            state,
+            "b.png",
+            text="I'm unable to assist with this request.",
+            engine="llm-vision:fake-model",
+        )
+        alerts = recheck(state, load_config())
+        assert [
+            (alert["subject"], alert["check"])
+            for alert in alerts
+            if alert["check"] == "transcription-check"
+        ] == [(sha1_of("b.png")[:12], "transcription-check")]
+        errors = [
+            (event["error"], event["hook"])
+            for event in RunDir(state).events()
+            if event["event"] == "anomaly-error"
+        ]
+        assert errors == [("TypeError", "recheck")]
 
     def test_the_module_s_command(self, tmp_path, capsys):
         folder = a_folder(tmp_path, brief_txt=MARRIAGE)
@@ -1844,9 +2069,43 @@ class TestRecheck:
         assert out.startswith("2 alerts appended to ")
         assert re.search(r"language-unexpected\s+1", out)
         assert re.search(r"zero-claims\s+1", out)
+        # the transcription's alert and the batch's, both carried
+        assert {
+            alert["status"]
+            for alert in orchestrator.rundir.alerts()
+            if alert["invocation"].startswith("recheck-")
+        } == {"carried"}
         assert anomalies.main(["recheck", str(tmp_path)]) == 2
         thresholds.write_text("checks:\n  no-such-check: {}\n")
         assert anomalies.main(command) == 2
+
+
+# -- the unit tests' own default ----------------------------------------------
+
+
+class TestTheUnitTestDefaults:
+    """tests/unit/conftest.py records the checks' pause timers in every
+    unit test, and leaves an operator's thresholds out."""
+
+    def test_a_pause_timer_is_recorded_not_started(
+        self, tmp_path, _no_anomaly_timers
+    ):
+        run = RunDir(tmp_path / "run")
+        checks = AnomalyChecks(run, load_config())
+        outcomes(run, "transcription", "media", "xxxxxx")
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        (timer,) = _no_anomaly_timers
+        assert timer.seconds > 1800
+        assert not any(
+            isinstance(thread, threading.Timer)
+            for thread in threading.enumerate()
+        )
+
+    def test_an_operator_s_thresholds_are_left_out(self):
+        """Run with `$YIZKR_ANOMALIES` set, this shows the default at
+        work; the mutation evidence runs it so."""
+        assert anomalies.CONFIG_VARIABLE not in os.environ
 
 
 # -- helpers ------------------------------------------------------------------
