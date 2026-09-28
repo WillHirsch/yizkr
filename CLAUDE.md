@@ -81,9 +81,10 @@ values and N source-attributed values, and everything still works.*
   repo. A document's views persist and are reused while their inputs are
   unchanged; the LLM cache keys each model response by what its call
   sends (prompt text, files by content hash, engine, model, effort and
-  configuration), never by mtimes or timestamps, and a prompt that cites
-  an artifact QID is keyed on it until #127; stages before write never
-  read the wiki (ADR-0025 §2, ADR-0032).
+  configuration), never by mtimes or timestamps, and no prompt names an
+  artifact by its QID, only by the SHA-1 of its media, so a reset changes
+  no key; stages before write never read the wiki (ADR-0025 §2,
+  ADR-0032).
 - Docs move with code: update ADRs/MODELING.md in the same PR as any
   behavior change; new architectural decisions get a new ADR.
 - Examples: every example in code, comments, prompts, tests, docs,

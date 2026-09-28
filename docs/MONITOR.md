@@ -179,9 +179,11 @@ the stage counts, which do not come from it, still agree with
 `run_state`.
 
 **Alerts.** The counts, new and carried, and by check; and the latest
-ten, newest first: time, `new` (on an output the engine answered in this
-run) or `carried` (on one made from cached answers), stage, check,
-document and kind, and the measured value.
+ten, newest first: time, `new` or `carried`, stage, check, document and
+kind, and the measured value. Which checks raise them, how, and when an
+alert is new or carried is in [docs/ANOMALIES.md](ANOMALIES.md) (New and
+carried): new where this view counts the output's stage done, carried
+where it counts it reused.
 
 ## What the views never show
 
