@@ -106,10 +106,12 @@ def task(kind, text, pidfile, until=None, then=None):
 
 def end_tasks():
     """Tasks past their end leave the engine, and a write that ends leaves
-    its effect (a drop empties the store)."""
+    its effect (a drop empties the store). A task ends at its `until`; a
+    killed write ends once the status pages it had left have shown it."""
     now = time.time()
     for t in list(world["running"]):
-        if t["until"] is not None and t["until"] <= now:
+        timed_out = t["until"] is not None and t["until"] <= now
+        if timed_out or t.get("pages_left") == 0:
             world["running"].remove(t)
             world.update(t.get("then") or {})
 
@@ -119,6 +121,9 @@ def status_page():
     text (a query as sent, or a write task's name)."""
     end_tasks()
     world["status_seen"].append(len(world["running"]))
+    for t in world["running"]:
+        if t.get("pages_left"):
+            t["pages_left"] -= 1
     save()
     parts = []
     for t in world["running"]:
@@ -303,8 +308,12 @@ elif command == "exec":
         for t in world["running"]:
             if t["pidfile"] == pidfile and t["kind"] == "write":
                 # the engine ends a write that has lost its client: it
-                # aborts a load, and runs a drop to its end
-                t["until"] = time.time() + world["write_ends_after"]
+                # aborts a load, and runs a drop to its end. The write
+                # stays on the next `killed_write_pages` whole status
+                # pages, however long the calls in between take, so a
+                # test sees the command wait for it (#306)
+                t["until"] = None
+                t["pages_left"] = world["killed_write_pages"]
         save()
     elif program[:2] == ["sh", "-c"]:
         world["pidfiles"].append(program[3])
@@ -427,7 +436,7 @@ class FakeDocker:
             "wedged": False,
             "status_seen": [],
             "blank_status": 0,
-            "write_ends_after": 0.5,
+            "killed_write_pages": 1,
             "slow_kill": 0,
             "marker": str(self.marker),
             "kill_marker": str(self.root / "killing"),
@@ -761,7 +770,6 @@ class TestInterruptedWorkStops:
             hang="drop",
             triples=99,
             blank_status=1,
-            write_ends_after=3.0,
         )
         fake.record(SANDBOX["name"], loaded=["/elsewhere/old.ttl"])
         code, _, err, _ = fake.interrupt("load", "--replace", str(fake.graph))
