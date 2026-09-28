@@ -424,7 +424,13 @@ spouse (P26):
   the judgment, is a spouse statement with that start time and end time.
   Each partner's spouse statement carries the dates its source gives, and
   the GEDCOM adapter writes a family's `MARR` date as the start time of
-  both partners' statements and its `DIV` date as their end time. A move
+  both partners' statements and its `DIV` date as their end time. A
+  family that repeats a `MARR` or a `DIV`, as GEDCOM states an
+  alternative, gets a pair of statements of its own for each alternative
+  date or place it gives, with its own circa, beside the pair that its
+  first marriage and first divorce date: an export that dates Leopold and
+  Agnes's marriage both 8 February 1947 and 1947 gives one pair that
+  starts on 8 February 1947 and one that starts in 1947. A move
   in and a move out date a residence the same way, and the adapter reads
   a residence's or an occupation's date period (`FROM 1939 TO 1952`) as
   its start and end time, each with the range its own date gives, and
