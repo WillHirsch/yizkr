@@ -1203,19 +1203,22 @@ class TestRefusals:
 
     def test_a_runs_directory_the_run_refuses(self, tmp_path, engine):
         """A runs directory open to other users, a file, a path under
-        one, and a folder that cannot be written: the run refuses each
-        (scratch.hold), and so does the estimate, making and changing
-        nothing."""
+        one, a link to nothing, and a folder that cannot be written: the
+        run refuses each (scratch.hold), and so does the estimate, making
+        and changing nothing."""
         corpus = small(tmp_path)
         shared = tmp_path / "shared"
         shared.mkdir()
         shared.chmod(0o755)
         a_file = tmp_path / "a-file"
         a_file.write_text("")
+        dangling = tmp_path / "dangling"
+        dangling.symlink_to(tmp_path / "nowhere", target_is_directory=True)
         for runs, reason in (
             (shared, "open to other users"),
             (a_file, "not a directory"),
             (a_file / "runs", "not a directory"),
+            (dangling, "not a directory"),
         ):
             with pytest.raises(ScratchRefused, match=reason):
                 estimate.scratch_estimate(
