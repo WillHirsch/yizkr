@@ -222,11 +222,11 @@ entries, and is never opened. One that cannot be read, by that reader
 either (the file is there, but its mode forbids reading it, say),
 leaves nothing read from it standing, since the driver has no last good
 read of it: what the monitor read of it is forgotten, and what would
-come from it is unknown (A log that cannot be read, above).
-Every refresh tries it again, and the one that can read it reads it from
-its start, so no record appended meanwhile is skipped and none read
-before counts twice. The refresh at which a log cannot be read, and the
-one at which it can again, count as changes: the view is drawn again.
+come from it is unknown (A log that cannot be read, above). Every
+refresh tries it again, and the one that can read it reads it from its
+start, so no record appended meanwhile is skipped and none read before
+counts twice. The refresh at which a log cannot be read, and the one at
+which it can again, count as changes: the view is drawn again.
 
 `run.json` is read after the logs, since an invocation records itself
 there before its first event, and parsed again only when its inode, size
