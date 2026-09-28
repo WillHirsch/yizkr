@@ -2172,7 +2172,9 @@ class TestUndatedDeath:
             ("i1-death", "i1", "1 DEAT | 2 DATE SOMEDAY MAYBE")
         ]
 
-    @pytest.mark.parametrize("value", ["N", "16 MAR 1909"])
+    @pytest.mark.parametrize(
+        "value", ["N", "16 MAR 1909"], ids=["N", "date-on-the-line"]
+    )
     def test_a_value_neither_y_nor_empty_states_no_death(self, value):
         # a DEAT's N denies the death, which GEDCOM does not allow but a
         # tool may still write, and a date on the DEAT's own line is no
