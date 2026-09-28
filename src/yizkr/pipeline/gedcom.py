@@ -47,16 +47,16 @@ claims, as a family's only MARR and DIV do, and every other marriage or
 divorce dates a pair of its own. What gives nothing to claim
 (`1 BIRT Y`, `1 MARR Y`, a date the grammar cannot parse) never hides
 what does: it adds no claim beside one that does, while an undated MARR
-that gives a place keeps it on a pair of its own, and a DEAT that gives
-no date, place or cause still states the death, as a `death` event
-(below), beside what another DEAT gives. An event that restates
-another line for line, its citation included, gives the same claim,
-which the batch holds once; the same value under another citation is a
-claim of its own, save a family's spouse claims: they cite the family
-record, so a MARR or DIV that restates another's date and place gives no
-pair of its own, whatever its citation. Some tags are still read once: a
-family's HUSB and WIFE (a further one is counted, below), and, within
-the SOUR citations and OBJE objects that the adapter incorporates
+that gives a place keeps it on a pair of its own, and a DEAT that states
+the death with no date, place or cause (`1 DEAT Y`) still gives a
+`death` event (below), beside what another DEAT gives. An event that
+restates another line for line, its citation included, gives the same
+claim, which the batch holds once; the same value under another citation
+is a claim of its own, save a family's spouse claims: they cite the
+family record, so a MARR or DIV that restates another's date and place
+gives no pair of its own, whatever its citation. Some tags are still read
+once: a family's HUSB and WIFE (a further one is counted, below), and,
+within the SOUR citations and OBJE objects that the adapter incorporates
 wholesale, a citation's PAGE, a source record's TITL, and an object's
 FILE and TITL.
 
@@ -68,9 +68,9 @@ _MARNM tag, and the universal inline convention where a quoted or
 parenthetical token is a nickname — "Ida (Peppi) Sörne", "Cäcilie
 'Cilli' Tarle"; docs/MODELING.md "Names"; a nickname that several NAMEs
 give is a claim of each, citing its own NAME), birth/death dates and
-places, a death the export states with no date, place or cause
-(`1 DEAT Y`), which is a `death` event with the person as participant
-(ADR-0020),
+places, a death the export states with no date, place or cause (by a Y
+alone, or by a DATE the grammar cannot parse), which is a `death` event
+with the person as participant (ADR-0020),
 cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
 the record is), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
@@ -104,7 +104,13 @@ and DIV date the spouse claims between its HUSB and its WIFE, so in a
 family with one partner or none (its HUSB or its WIFE is missing, or
 names no person the adapter maps) they are counted as MARR and DIV: no
 claim names the other partner, and a claim has no unknown value to name
-them with. A person none of whose NAMEs gives a name is skipped, with a
+them with. A DEAT states the death only as GEDCOM 5.5.1 has an event
+asserted, by a DATE or PLAC with a value (a DATE the grammar cannot
+parse, only when the DEAT's own line has none), or else by a Y on that
+line: one that states none (a bare DEAT, or one with only a SOUR, NOTE,
+AGE or CAUS) gives no claim, since a death event or a cause of death
+would mark the person as not possibly living (ADR-0020), and is counted
+as DEAT. A person none of whose NAMEs gives a name is skipped, with a
 warning, and the family links that name them give no claim.
 """
 
@@ -369,23 +375,34 @@ def _clean_name(name: str) -> str:
 
 
 # A NAME's parts in the order GEDCOM writes a name: prefix, given name,
-# surname prefix, surname and suffix ("Lt. Cmndr. Joseph /Allen/ jr.").
+# surname prefix, surname and suffix ("Fräulein Klara /Löbig/", "Ursula
+# /Löbig/ Wwe.").
 _NAME_PARTS = ("NPFX", "GIVN", "SPFX", "SURN", "NSFX")
 
 
 def _name_text(name: Record) -> str:
     """A NAME's display form: its value, cleaned ('Eugen /Löbig/' ->
-    'Eugen Löbig'), or, when the value gives none (it is empty, or '//'),
-    its parts in the order GEDCOM writes a name, each part's
-    comma-separated pieces in turn (a GIVN 'Eugen' and a SURN 'Löbig'
-    give 'Eugen Löbig'). Empty when neither gives a name."""
-    return _clean_name(name.value) or _clean_name(
-        " ".join(
-            piece
-            for tag in _NAME_PARTS
+    'Eugen Löbig'), which its parts are taken to restate. When the value
+    gives none (it is empty, or '//'), the parts give it, in the order
+    GEDCOM writes a name, each part's comma-separated pieces in turn (a
+    GIVN 'Eugen' and a SURN 'Löbig' give 'Eugen Löbig'), provided a given
+    name or a surname is among them: a prefix or a suffix alone ('Wwe.')
+    names no one, and the writer, which finds an item by its label, would
+    make everyone it stood for one item. Empty when neither gives a
+    name."""
+    pieces = {
+        tag: [
+            text
             for part in name.all(tag)
             for piece in part.value.split(",")
-        )
+            if (text := _clean_name(piece))
+        ]
+        for tag in _NAME_PARTS
+    }
+    if not (pieces["GIVN"] or pieces["SURN"]):
+        return _clean_name(name.value)
+    return _clean_name(name.value) or " ".join(
+        text for tag in _NAME_PARTS for text in pieces[tag]
     )
 
 
@@ -528,8 +545,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     reads = {
         "INDI": HANDLED_INDI,
         "FAM": HANDLED_FAM,
-        # a NAME's parts give its name when it has no value, and are
-        # restated by the value that is read when it has one
+        # a NAME's parts give its name when it has no value, and are taken
+        # as restated by the value that is read when it has one
         "NAME": {"TYPE", "NICK", "GIVN", "SURN", "NPFX", "NSFX", "SPFX"},
         "BIRT": {"DATE", "PLAC"},
         "DEAT": {"DATE", "PLAC", "CAUS"},
@@ -559,6 +576,29 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         other."""
         return fam.text("HUSB") in people and fam.text("WIFE") in people
 
+    def states_death(death: Record) -> bool:
+        """Whether a DEAT states that the person died. GEDCOM 5.5.1 has an
+        event asserted by a DATE or a PLAC with a value, or else by a Y
+        on the event's own line, and lets a SOUR or a NOTE be attached to
+        a DEAT without asserting the death. A DATE the grammar parses, or
+        a PLAC, states it whatever that line says, as each gives a claim
+        of its own; a DATE the grammar cannot parse states it only when
+        the line has no value, so that a date the adapter cannot read
+        never overrules another value, such as an N denying the death.
+        What else a DEAT holds (a CAUS, an AGE, a SOUR, a NOTE) states
+        nothing: a death event or a cause of death is death evidence,
+        which marks the person as not possibly living (ADR-0020)."""
+        value = death.value.strip()
+        dates = [
+            date.value for date in death.all("DATE") if date.value.strip()
+        ]
+        return (
+            value.upper() == "Y"
+            or any(place.value for place in death.all("PLAC"))
+            or any(parse_gedcom_date(date)[0] is not None for date in dates)
+            or (not value and bool(dates))
+        )
+
     def unread(parent: Record, child: Record) -> bool:
         """Whether `child`, of a tag the adapter reads beneath `parent`'s,
         goes unread for what it says there."""
@@ -567,6 +607,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             # one says it ended at an unknown time, and a claim has no
             # unknown value to state that with
             return True
+        if child.tag == "DEAT":
+            # a DEAT that states no death gives no claim
+            return not states_death(child)
         # a family's MARR and DIV date the spouse claims between its two
         # partners: with one or none, no claim names the other, and a claim
         # has no unknown value to name them with
@@ -867,23 +910,12 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         return death_ids[xref]
 
     def died(xref: str, label: str, death: Record) -> None:
-        """A DEAT that gives no date, place or cause states that the
-        person died, and nothing else: a `death` event with the person
-        as participant (ADR-0020 §2, docs/MODELING.md "Living persons and
-        privacy"), which the participant claim states, citing this DEAT.
-
-        A death event is death evidence, which marks the person as not
-        possibly living (ADR-0020), so only a DEAT whose own line states
-        the death, with a Y or with no value, gives one. Any other value,
-        such as an N denying the death or a date written on the DEAT's own
-        line, is warned of and gives no event."""
-        value = death.value.strip()
-        if value.upper() not in ("", "Y"):
-            warnings.append(
-                f"line {death.line_number}: DEAT {value!r} is neither Y "
-                "nor empty — no death event emitted"
-            )
-            return
+        """A DEAT that states the death (`states_death`) but gives no
+        date, place or cause, by its Y alone or by a DATE the grammar
+        cannot parse, says that the person died and nothing else: a
+        `death` event with the person as participant (ADR-0020 §2,
+        docs/MODELING.md "Living persons and privacy"), which the
+        participant claim states, citing this DEAT."""
         claim(
             death_event(xref, label, death),
             "participant",
@@ -1035,6 +1067,10 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         for birth in record.all("BIRT"):
             event_claims(xref, birth, "date_of_birth", "place_of_birth")
         for death in record.all("DEAT"):
+            # a DEAT that states no death gives no claim, not even its
+            # cause, and the census counts it
+            if not states_death(death):
+                continue
             gave = event_claims(xref, death, "date_of_death", "place_of_death")
             # cause of death stays verbatim prose (docs/MODELING.md);
             # "en" matches the export's language, like the excerpts
@@ -1047,8 +1083,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         monolingual(cause.value),
                         death,
                     )
-            # each DEAT that states the death alone gives the death event,
-            # beside what any other DEAT gives
+            # a DEAT that states the death and gives no claim gives the
+            # death event, beside what any other DEAT gives
             if not gave:
                 died(xref, names[0], death)
         for burial in record.all("BURI"):

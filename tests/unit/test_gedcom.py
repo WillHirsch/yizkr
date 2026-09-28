@@ -2020,30 +2020,32 @@ def participations(batch) -> list[tuple[str, str, str]]:
 
 
 class TestUndatedDeath:
-    """A DEAT that gives no date, place or cause states that the person
-    died, and nothing else: a `death` event with the person as its
-    participant (ADR-0020 §2, docs/MODELING.md "Living persons and
-    privacy"; #323). That is the shape the possibly-living check reads as
-    death evidence: an item that is an instance of `death`, with the
-    person as its `participant`."""
+    """A DEAT states the death only as GEDCOM 5.5.1 has an event asserted:
+    by a DATE or a PLAC with a value, or else by a Y on its own line. One
+    that states it with no date, place or cause, by its Y alone or by a
+    DATE the grammar cannot parse, says that the person died and nothing
+    else: a `death` event with the person as its participant (ADR-0020 §2,
+    docs/MODELING.md "Living persons and privacy"; #323). That is the
+    shape the possibly-living check reads as death evidence: an item that
+    is an instance of `death`, with the person as its `participant`. A
+    DEAT that states no death gives no claim, and the census counts it."""
 
     @pytest.mark.parametrize(
         ("lines", "excerpt", "counted"),
         [
             (["1 DEAT Y"], "1 DEAT Y", {}),
             (["1 DEAT y"], "1 DEAT y", {}),
-            (["1 DEAT"], "1 DEAT", {}),
             # Eugen died aged 73 per the burial register: (here) the export
-            # gives that age and nothing else, and the census counts it
-            (["1 DEAT", "2 AGE 73"], "1 DEAT | 2 AGE 73", {"AGE": 1}),
-            # (here) the export cites the burial register, and nothing else
+            # gives that age beside the Y, and the census counts it
+            (["1 DEAT Y", "2 AGE 73"], "1 DEAT Y | 2 AGE 73", {"AGE": 1}),
+            # (here) the export cites the burial register beside the Y
             (
-                ["1 DEAT", "2 SOUR @S1@"],
-                f"1 DEAT | 2 SOUR @S1@ | cited: {BURIAL_REGISTER}",
+                ["1 DEAT Y", "2 SOUR @S1@"],
+                f"1 DEAT Y | 2 SOUR @S1@ | cited: {BURIAL_REGISTER}",
                 {},
             ),
         ],
-        ids=["Y", "lowercase-y", "bare", "AGE", "SOUR"],
+        ids=["Y", "lowercase-y", "Y-and-AGE", "Y-and-SOUR"],
     )
     def test_an_undated_death_is_a_death_event(self, lines, excerpt, counted):
         # (here) the export says that Eugen died, but not when, where or
@@ -2064,14 +2066,14 @@ class TestUndatedDeath:
         # (here) the export cites the burial register, at its page, for
         # Eugen's death, and gives no date, place or cause
         text = cited(BURIAL_REGISTER) + eugen(
-            "1 DEAT", "2 SOUR @S1@", "3 PAGE Beerdigungsbuch 1909"
+            "1 DEAT Y", "2 SOUR @S1@", "3 PAGE Beerdigungsbuch 1909"
         )
         batch = adapt_gedcom(text, artifact=EXPORT).batch
         (participant,) = claims_for(batch, "i1-death", "participant")
         assert participant.source.artifact == EXPORT
         assert participant.source.page_number == "Beerdigungsbuch 1909"
         assert participant.source.transcription_excerpt.text == (
-            "1 DEAT | 2 SOUR @S1@ | 3 PAGE Beerdigungsbuch 1909"
+            "1 DEAT Y | 2 SOUR @S1@ | 3 PAGE Beerdigungsbuch 1909"
             f" | cited: {BURIAL_REGISTER}"
         )
 
@@ -2113,11 +2115,15 @@ class TestUndatedDeath:
         ]
 
     def test_each_person_has_a_death_event_of_their_own(self):
-        # (here) the export says only that Eugen and Cäcilie died
+        # (here) the export says only that Eugen and Cäcilie died, and
+        # gives Eugen a second NAME, his nickname Muckel: each event takes
+        # its person's label, from the first NAME
         text = "\n".join(
             [
                 "0 @I1@ INDI",
                 "1 NAME Eugen /Löbig/",
+                "1 NAME Muckel",
+                "2 TYPE aka",
                 "1 DEAT Y",
                 "0 @I2@ INDI",
                 "1 NAME Cäcilie /Tarle/",
@@ -2137,19 +2143,52 @@ class TestUndatedDeath:
         ]
 
     @pytest.mark.parametrize(
-        "lines",
+        ("lines", "prop", "expected"),
         [
-            ["1 DEAT", "2 DATE 16 MAR 1909"],
-            ["1 DEAT", f"2 PLAC {FLOERBURG}"],
-            ["1 DEAT", "2 CAUS Wassersucht"],
-            ["1 DEAT Y", "2 CAUS Wassersucht"],
-            ["1 DEAT", "2 DATE SOMEDAY MAYBE", "2 DATE 1909"],
+            (
+                ["1 DEAT", "2 DATE 16 MAR 1909"],
+                "date_of_death",
+                [(day(1909, 3, 16), [])],
+            ),
+            (
+                ["1 DEAT", f"2 PLAC {FLOERBURG}"],
+                "place_of_death",
+                [(FLOERBURG, [])],
+            ),
+            (
+                ["1 DEAT Y", "2 CAUS Wassersucht"],
+                "cause_of_death",
+                [("Wassersucht", [])],
+            ),
+            (
+                ["1 DEAT", f"2 PLAC {FLOERBURG}", "2 CAUS Wassersucht"],
+                "cause_of_death",
+                [("Wassersucht", [])],
+            ),
+            (
+                ["1 DEAT", "2 DATE SOMEDAY MAYBE", "2 DATE 1909"],
+                "date_of_death",
+                [(year(1909), [])],
+            ),
+            # an N does not deny what a DATE states (GEDCOM 5.5.1)
+            (["1 DEAT N", "2 DATE 1909"], "date_of_death", [(year(1909), [])]),
         ],
-        ids=["date", "place", "cause", "Y-and-cause", "unparsed-and-date"],
+        ids=[
+            "date",
+            "place",
+            "Y-and-cause",
+            "place-and-cause",
+            "unparsed-and-date",
+            "N-and-date",
+        ],
     )
-    def test_a_death_that_gives_a_claim_gives_no_event(self, lines):
+    def test_a_death_that_gives_a_claim_gives_no_event(
+        self, lines, prop, expected
+    ):
         # a date, a place or a cause of death is death evidence of its own
-        batch = adapt_gedcom(eugen(*lines), artifact=EXPORT).batch
+        text = eugen(*lines)
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        assert stated(text, "i1", prop) == expected
         assert death_events(batch) == []
         assert participations(batch) == []
 
@@ -2173,21 +2212,59 @@ class TestUndatedDeath:
         ]
 
     @pytest.mark.parametrize(
-        "value", ["N", "16 MAR 1909"], ids=["N", "date-on-the-line"]
+        "lines",
+        [
+            ["1 DEAT"],
+            ["1 DEAT", "2 SOUR @S1@", "3 PAGE Beerdigungsbuch 1909"],
+            ["1 DEAT", "2 NOTE See the burial register"],
+            ["1 DEAT", "2 AGE 73"],
+            ["1 DEAT", "2 OBJE @O1@"],
+            ["1 DEAT", "2 TYPE Todesfall"],
+            ["1 DEAT", "2 RESN privacy"],
+            ["1 DEAT", "2 DATE"],
+            ["1 DEAT", "2 PLAC"],
+            ["1 DEAT", "2 CAUS"],
+            ["1 DEAT", "2 CAUS Wassersucht"],
+            ["1 DEAT N"],
+            ["1 DEAT N", "2 DATE SOMEDAY MAYBE"],
+            ["1 DEAT N", "2 CAUS Wassersucht"],
+            ["1 DEAT 16 MAR 1909"],
+        ],
+        ids=[
+            "bare",
+            "SOUR",
+            "NOTE",
+            "AGE",
+            "OBJE",
+            "TYPE",
+            "RESN",
+            "empty-DATE",
+            "empty-PLAC",
+            "empty-CAUS",
+            "CAUS",
+            "N",
+            "N-and-unparsed-date",
+            "N-and-CAUS",
+            "date-on-the-line",
+        ],
     )
-    def test_a_value_neither_y_nor_empty_states_no_death(self, value):
-        # a DEAT's N denies the death, which GEDCOM does not allow but a
-        # tool may still write, and a date on the DEAT's own line is no
-        # DATE: (here) the export gives one of them, and nothing else.
-        # Neither is taken as the death, which would mark Eugen as not
-        # possibly living
-        result = adapt_gedcom(eugen(f"1 DEAT {value}"), artifact=EXPORT)
-        assert result.warnings == [
-            f"line 3: DEAT {value!r} is neither Y nor empty — no death "
-            "event emitted"
-        ]
+    def test_a_deat_that_states_no_death_gives_no_claim(self, lines):
+        # (here) the export's DEAT for Eugen has no Y, and no DATE or PLAC
+        # with a value: GEDCOM 5.5.1 lets a SOUR, a NOTE and the rest be
+        # attached to it without asserting the death, and an N or a date
+        # written on its own line asserts nothing. Neither a death event
+        # nor a cause of death is claimed, since either would mark Eugen
+        # as not possibly living; the census counts the DEAT, which
+        # stands for all beneath it
+        result = adapt_gedcom(
+            cited(BURIAL_REGISTER) + eugen(*lines), artifact=EXPORT
+        )
+        assert result.unsupported_tags == {"DEAT": 1}
+        assert result.warnings == []
         assert death_events(result.batch) == []
         assert participations(result.batch) == []
+        for prop in ("date_of_death", "place_of_death", "cause_of_death"):
+            assert not claims_for(result.batch, "i1", prop)
 
 
 def leopold_and_agnes(*family_lines: str) -> str:
@@ -2293,6 +2370,38 @@ class TestOnePartnerFamily:
         assert stated(text, "i11", "father") == []
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
 
+    def test_a_parent_the_batch_does_not_hold_is_no_parent(self):
+        # (here) the export gives Felix no name: his and Ida's family
+        # record still makes Ida Rudolf's mother, and names no father
+        text = "\n".join(
+            [
+                "0 @I6@ INDI",
+                "1 SEX M",
+                "0 @I7@ INDI",
+                "1 NAME Ida /Löbig/",
+                "0 @I12@ INDI",
+                "1 NAME Rudolf /Löbig/",
+                "0 @F3@ FAM",
+                "1 HUSB @I6@",
+                "1 WIFE @I7@",
+                "1 CHIL @I12@",
+                "0 TRLR",
+                "",
+            ]
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.warnings == [
+            "@I6@: no NAME gives a name; skipped entirely, with the family "
+            "links that name it"
+        ]
+        assert result.unsupported_tags == {}
+        # Rudolf's mother is the one claim: none names Felix
+        assert [
+            (claim.subject.local_id, claim.property)
+            for claim in result.batch.claims
+        ] == [("i12", "mother")]
+        assert stated(text, "i12", "mother") == [("Ida Löbig", [])]
+
 
 def rudolf(*lines: str) -> str:
     """Rudolf's record, (here) of the given lines alone."""
@@ -2327,10 +2436,12 @@ def leopold_in_his_families(*leopold: str) -> str:
 
 class TestNameParts:
     """A NAME without a value is read from its parts, in the order GEDCOM
-    writes a name, as the census takes them as read; a NAME whose value
-    and parts give no name gives none, and a person none of whose NAMEs
-    gives one is skipped, with a warning, and so are the family links
-    that name them (#323)."""
+    writes a name, as the census takes them as read, provided a given name
+    or a surname is among them; a NAME with a value is read from the value,
+    which the parts are taken to restate. A NAME whose value and parts give
+    no name gives none, and a person none of whose NAMEs gives one is
+    skipped, with a warning, and so are the family links that name them
+    (#323)."""
 
     @pytest.mark.parametrize(
         ("lines", "label"),
@@ -2363,6 +2474,65 @@ class TestNameParts:
         assert [e.label for e in result.batch.entities] == [label]
         assert result.warnings == []
         assert result.unsupported_tags == {}
+
+    @pytest.mark.parametrize(
+        ("lines", "label"),
+        [
+            # (here) Rudolf's NAME gives his given name as Rudi in its GIVN
+            (
+                [
+                    "0 @I12@ INDI",
+                    "1 NAME Rudolf /Löbig/",
+                    "2 GIVN Rudi",
+                    "2 SURN Löbig",
+                ],
+                "Rudolf Löbig",
+            ),
+            # Fräulein Klara Löbig, as the postcard addresses her: (here)
+            # her NAME gives the Fräulein as its prefix
+            (
+                [
+                    "0 @I9@ INDI",
+                    "1 NAME Klara /Löbig/",
+                    "2 NPFX Fräulein",
+                    "2 GIVN Klara",
+                    "2 SURN Löbig",
+                ],
+                "Klara Löbig",
+            ),
+        ],
+        ids=["GIVN", "NPFX"],
+    )
+    def test_the_value_wins_over_the_parts(self, lines, label):
+        # a NAME's parts are taken as restating its value, which is read
+        result = adapt_gedcom(
+            "\n".join([*lines, "0 TRLR", ""]), artifact=EXPORT
+        )
+        assert [e.label for e in result.batch.entities] == [label]
+        assert result.unsupported_tags == {}
+
+    @pytest.mark.parametrize(
+        ("xref", "parts"),
+        [
+            ("I16", ["2 NSFX Wwe."]),
+            ("I9", ["2 NPFX Fräulein"]),
+            ("I9", ["2 NPFX Fräulein", "2 GIVN ,"]),
+        ],
+        ids=["suffix", "prefix", "prefix-and-commas"],
+    )
+    def test_a_prefix_or_a_suffix_alone_gives_no_name(self, xref, parts):
+        # the directory's widow, Löbig, Ursula, Wwe., and the postcard's
+        # Fräulein Klara Löbig: (here) the export's one NAME for either
+        # gives its suffix or its prefix, and no given name or surname.
+        # That names no one, and as a label it would make everyone so
+        # named one item, so the person is skipped, with the warning
+        text = "\n".join([f"0 @{xref}@ INDI", "1 NAME", *parts, "0 TRLR", ""])
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.batch.entities == []
+        assert result.warnings == [
+            f"@{xref}@: no NAME gives a name; skipped entirely, with the "
+            "family links that name it"
+        ]
 
     def test_a_name_read_from_its_parts_is_typed_and_nicknamed(self):
         # Gustav, naturalised as Gustave Lobig and called Gus: (here) the

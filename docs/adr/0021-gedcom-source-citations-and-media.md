@@ -13,11 +13,13 @@ Amended by #322 (2026-09-28): the adapter reads every occurrence of an
 event, of a DATE, PLAC or CAUS beneath one where it reads that tag, of a
 NAME's TYPE or NICK, and of a SEX or NCHI, so a repeated event or detail gives claims of its own,
 and a further HUSB or WIFE is counted: see Amendments.
-Amended by #323 (2026-09-28): a DEAT that gives no date, place or cause
-is a `death` event with the person as participant, a family with one
-partner or none has its MARR and DIV counted, a NAME without a value is
-read from its parts, and a nickname that several NAMEs give is a claim
-of each: see Amendments.
+Amended by #323 (2026-09-28): a DEAT that states the death with no date,
+place or cause is a `death` event with the person as participant, while
+one that states no death (no Y, and no DATE or PLAC with a value) gives
+no claim, not even its cause, and is counted; a family with one partner
+or none has its MARR and DIV counted; a NAME without a value is read from
+its parts; and a nickname that several NAMEs give is a claim of each: see
+Amendments.
 
 ## Context
 
@@ -217,33 +219,45 @@ not look inside SOUR or OBJE, so a second one of these goes uncounted;
 
 Amended by #323 (2026-09-28): **an undated death, a family with one
 partner, a NAME without a value and a repeated nickname are mapped or
-counted.** Each was dropped silently:
+counted.** Each was dropped silently, and a DEAT that asserts no death
+gave its cause of death all the same:
 
-- **An undated death is a `death` event.** A DEAT that gives no date,
-  place or cause (`1 DEAT Y`, a bare `1 DEAT`, or one whose only lines
-  are a SOUR, an AGE or a NOTE) gave no claim. It now gives a `death`
+- **A DEAT states the death only as GEDCOM 5.5.1 has an event
+  asserted, and one that states it and nothing else is a `death`
+  event.** GEDCOM 5.5.1's notes on INDIVIDUAL_EVENT_STRUCTURE have an
+  event asserted by a DATE or a PLAC with a value, or else by a Y on the
+  event's own line, and let a note or a source be attached to it
+  "without implying that the event occurred". A DEAT that states the
+  death with no date, place or cause, by its Y alone (`1 DEAT Y`) or by
+  a DATE the grammar cannot parse, gave no claim. It now gives a `death`
   event with the person as `participant`, the form in which ADR-0020 §2
   and docs/MODELING.md ("Living persons and privacy") state "died,
   nothing else known". The person has one death event, labelled "Death
   of" and the person's label, and each such DEAT gives a participant
   claim on it that cites that DEAT, with its SOUR and PAGE. It does so
   beside what any other DEAT gives, so `1 DEAT Y` beside a dated DEAT
-  keeps both the event and the date. A DEAT whose only DATE is one the
-  grammar cannot parse gives the event too: its DATE still states the
-  death, and the date is warned of as before.
+  keeps both the event and the date. A DATE the grammar cannot parse
+  states the death only when the DEAT's own line has no value, so that a
+  date the adapter cannot read never overrules another value, such as an
+  N denying the death. A DATE it parses, or a PLAC, still gives its
+  claim whatever that line says, as GEDCOM does not let an N deny what
+  they state.
 
-  A death event is death evidence (ADR-0020 §2), so the person is no
-  longer taken as possibly living: the public export includes them, and
-  the private site shows no badge. So the DEAT's own line must state the
-  death: one whose value is neither Y nor empty is warned of and gives
-  no event. That value may be an N, which GEDCOM 5.5.1 does not allow as
-  a denial but a tool may write as one, or a date written on the DEAT's
-  own line. GEDCOM 5.5.1 reads less into a DEAT than the adapter does:
-  it asserts an event only by a DATE, a PLAC or a Y, and lets a SOUR or
-  NOTE be attached to a DEAT "without implying that the event occurred".
-  The adapter also takes a bare DEAT, and a DEAT with only a SOUR, as the
-  export's statement of the death, as #323 asks, since a tool may drop
-  the Y once it attaches a citation.
+  A death event, like a cause of death, is death evidence (ADR-0020 §2):
+  with either, the person is no longer taken as possibly living, so the
+  public export includes them and the private site shows no badge. So a
+  DEAT that states no death gives no claim at all, and is counted as
+  `DEAT`, which stands for its branch. That is a bare DEAT; one whose
+  only lines are a SOUR, a NOTE, an AGE, an OBJE, a TYPE, a RESN, a CAUS,
+  or an empty DATE, PLAC or CAUS; and one whose own line gives another
+  value (an N, or a date written there) with no DATE the grammar parses
+  and no PLAC. Its CAUS goes unclaimed too, though the adapter claimed a
+  DEAT's CAUS whatever the DEAT held: a cause of death releases the
+  person as surely as the event does, and the possibly-living check,
+  which reads it as death evidence, is not the adapter's to change. This
+  fails closed. A tool may drop the Y once it attaches a citation to a
+  death, and such a death then stays unstated, until evidence (a scratch
+  run's census, say) shows real deaths lost that way.
 - **A family with one partner or none has its MARR and DIV counted.** A
   family whose HUSB or WIFE is missing, or names no person the adapter
   maps (no INDI record, or a person without a name, below), gives no
@@ -270,10 +284,17 @@ counted.** Each was dropped silently:
   named an entity the batch lacked. A NAME or `_MARNM` of `//` failed it
   too. Such a NAME is now read from its parts: NPFX, GIVN, SPFX, SURN
   and NSFX in the order GEDCOM writes a name, each part's pieces in turn
-  (GEDCOM 5.5.1 separates a part's pieces with commas). A GIVN Rudolf
-  and a SURN Löbig give "Rudolf Löbig", a label or alias like any NAME's
-  value, which the NAME's TYPE types. A NAME whose value and parts give
-  no name gives none, though its NICKs still give nicknames. A person
+  (GEDCOM 5.5.1 separates a part's pieces with commas), provided a given
+  name or a surname is among them. A GIVN Rudolf and a SURN Löbig give
+  "Rudolf Löbig", a label or alias like any NAME's value, which the
+  NAME's TYPE types. A prefix or a suffix alone (`Wwe.`) names no one,
+  and as a label it would make everyone so named one item, since the
+  writer finds an item by its label, so it gives no name. A NAME with a
+  value is read from the value, as before, which its parts are taken to
+  restate. A person whose first NAME has no value now takes their label
+  from that NAME's parts, rather than from a later NAME, which changes
+  the label the writer finds their item by. A NAME whose value and parts
+  give no name gives none, though its NICKs still give nicknames. A person
   none of whose NAMEs gives a name is skipped, with a warning, as before,
   and so are the family links that name them, where they made the
   adapter fail. A family that names such a person as a partner has one
