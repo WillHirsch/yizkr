@@ -376,7 +376,7 @@ def export_dump(vocabulary) -> Dump:
     dump.says("Q401", "spouse", entity("Q405"))
     dump.says("Q401", "father", "_:genid1")  # an unknown value
     typed("Q402", "human", rank="Deprecated")
-    dump.says("Q402", "nickname", '"Nicky"@en')
+    dump.says("Q402", "nickname", '"Wastl"@de')
     typed("Q403", "human", best=False)
     typed("Q403", "organization", rank="Preferred")
     dump.says("Q404", "date_of_birth", dated(1990))
