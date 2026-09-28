@@ -833,10 +833,16 @@ class TestExtraction:
         checks.poll()
         assert "truncations" not in checks_raised(run)
 
-    def test_a_gedcom_batch_is_no_extraction(self, tmp_path):
+    def test_a_batch_whose_transcription_is_unknown_is_not_weighed(
+        self, tmp_path
+    ):
+        """The zero checks weigh a batch against its transcription's
+        length: with its view unreadable, nothing says how long it was,
+        and they say nothing."""
         run, checks = make_checks(tmp_path)
-        doc = a_doc(tmp_path, "family.ged", kind="gedcom")
-        checks.stored(doc, "gedcom", a_batch(entities=0))
+        doc = a_doc(tmp_path, "brief.txt")
+        doc.transcription.write_text('{"text": "Standesamt Flörb')
+        checks.stored(doc, "extraction", a_batch(entities=0))
         assert run.alerts() == []
 
 
@@ -1123,6 +1129,17 @@ class TestRates:
 # -- fail-fast pauses ---------------------------------------------------------
 
 
+def checks_of(run: RunDir, clock, timers=None) -> AnomalyChecks:
+    """The checks of `run`'s invocation, on the test's clock."""
+    return AnomalyChecks(
+        run,
+        load_config(),
+        now=clock,
+        timer=timers if timers is not None else Timers(),
+        page_count=lambda source: None,
+    )
+
+
 def paused_media(tmp_path, **options):
     """Checks that have paused the media kind: six of its first
     documents failed their transcription."""
@@ -1250,6 +1267,47 @@ class TestFailFastPauses:
         run, _checks = paused_media(tmp_path)
         RunDir(run.path).start()
         assert run.control().stopped(kind="media") is None
+
+    def test_a_later_invocation_s_pause_is_timed_from_its_own_request(
+        self, tmp_path, clock
+    ):
+        """A pause an earlier invocation left standing is no part of the
+        next one's: the start marker clears it, and the next pause stands
+        for a timeout of its own."""
+        paused_media(tmp_path, clock=clock)
+        clock.advance(1000)
+        run = RunDir(tmp_path / "run")
+        run.start()
+        checks = checks_of(run, clock)
+        outcomes(run, "transcription", "media", "xxxxxx")
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(1000)
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(802)
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+
+    def test_a_later_invocation_s_pause_times_out_after_an_earlier_abort(
+        self, tmp_path, clock
+    ):
+        """An abort holds for the invocation it stopped; the same slice
+        paused in the next one times out into an abort of its own."""
+        timers = Timers()
+        paused_media(tmp_path, clock=clock, timers=timers)
+        clock.advance(1802)
+        timers.fire()
+        run = RunDir(tmp_path / "run")
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+        run.start()
+        checks = checks_of(run, clock)
+        outcomes(run, "transcription", "media", "xxxxxx")
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(1802)
+        checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
 
     def test_the_timer_runs_on_a_thread_of_its_own(self, tmp_path):
         """With the real timer: an abort without any later check."""
@@ -1531,13 +1589,7 @@ class TestTheOrchestrator:
         everything = tmp_path / "everything.yaml"
         everything.write_text(
             yaml.safe_dump(
-                {
-                    "checks": {
-                        "zero-claims": {"min-chars": 0},
-                        "zero-entities": {"min-chars": 0},
-                        "language-unexpected": {"expected": ["en"]},
-                    }
-                }
+                {"checks": {"language-unexpected": {"expected": ["en"]}}}
             )
         )
         nothing = tmp_path / "nothing.yaml"
@@ -1555,8 +1607,12 @@ class TestTheOrchestrator:
         for label, thresholds in (("all", everything), ("none", nothing)):
             monkeypatch.setenv(anomalies.CONFIG_VARIABLE, str(thresholds))
             folder = a_folder(tmp_path / label, brief_txt=MARRIAGE)
+            # claims whose excerpts are tagged with another language than
+            # the German transcription's, so that the batch has an alert
             run = Run(
-                folder, tmp_path / label / "state", batch=a_batch(entities=0)
+                folder,
+                tmp_path / label / "state",
+                batch=a_batch("en", "en", "en", "en"),
             )
             run.run()
             (doc,) = run.documents()
@@ -1569,9 +1625,8 @@ class TestTheOrchestrator:
             } | {"state": (doc.state.status, doc.state.detail)}
             views[label + " alerts"] = sorted(checks_raised(run.rundir))
         assert views["all alerts"] == [
+            "language-mismatch",
             "language-unexpected",
-            "zero-claims",
-            "zero-entities",
         ]
         assert views["none alerts"] == []
         assert views["all"] == views["none"]
