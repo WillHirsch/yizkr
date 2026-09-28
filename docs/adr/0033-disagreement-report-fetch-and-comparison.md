@@ -138,10 +138,12 @@ comparison follows the documentation:
   October 1939 beside an end in October 1939 (both stored as 1939-10-01)
   is now listed when either statement carries such dates, as an end on 2
   October 1939 would have been. Without them the day still refines the
-  month.
+  month. A time stored alike at a precision coarser than a century, which
+  names no span, is listed beside a finer one with or without such dates,
+  as two such dates of a single-valued property are.
 - **Letter case.** The query lowercased names. "Differ only in letter
   case" is Unicode case folding, which also makes a sharp s and SS one
-  value.
+  value, and a long s (ſ) and s.
 - **A statement that carries two earliest (or latest) dates.** Such a
   statement puts up one reading of its value per date. The query never
   paired a statement with itself, so when another statement shared one of
