@@ -1510,8 +1510,44 @@ class TestRepeatedEvents:
         assert len(claims_for(batch, "i1", "place_of_birth")) == 1
         assert len({claim_id(c) for c in batch.claims}) == len(batch.claims)
 
+    def test_a_restated_value_under_another_citation_is_its_own_claim(self):
+        # Gustav was born on 7 January 1919 per his birth register extract:
+        # (here) the export gives that date twice, citing the extract once
+        # and the tree once, with no PAGE, so only the citation tells the
+        # two apart. Each stays a claim of its own, with its own excerpt,
+        # so that neither source's reference is lost (rule 1, #322)
+        text = (
+            "0 @S1@ SOUR\n1 TITL Birth register extract for Gustav Löbig\n"
+            "0 @S2@ SOUR\n1 TITL Family tree drawn by Clara Lobig\n"
+        ) + person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 BIRT",
+            "2 DATE 7 JAN 1919",
+            "2 SOUR @S1@",
+            "1 BIRT",
+            "2 DATE 7 JAN 1919",
+            "2 SOUR @S2@",
+        )
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        births = claims_for(batch, "i8", "date_of_birth")
+        assert [shown(claim.value) for claim in births] == [
+            day(1919, 1, 7),
+            day(1919, 1, 7),
+        ]
+        assert [
+            claim.source.transcription_excerpt.text for claim in births
+        ] == [
+            "1 BIRT | 2 DATE 7 JAN 1919 | 2 SOUR @S1@"
+            " | cited: Birth register extract for Gustav Löbig",
+            "1 BIRT | 2 DATE 7 JAN 1919 | 2 SOUR @S2@"
+            " | cited: Family tree drawn by Clara Lobig",
+        ]
+        assert [claim.source.page_number for claim in births] == [None, None]
+
     def test_the_summary_gives_every_birth_and_death_date(self):
-        # the undated BIRT hides neither date
+        # the undated BIRT hides neither birth date, and (here) the export
+        # dates Gustav's death twice
         batch = adapt_gedcom(
             person(
                 "I8",
@@ -1523,11 +1559,15 @@ class TestRepeatedEvents:
                 "2 DATE 1 JUL 1919",
                 "1 DEAT",
                 "2 DATE 1996",
+                "1 DEAT",
+                "2 DATE ABT 1996",
             ),
             artifact=EXPORT,
         ).batch
         (gustav,) = [e for e in batch.entities if e.id == "i8"]
-        assert gustav.summary == "b. 7 JAN 1919 or 1 JUL 1919; d. 1996"
+        assert gustav.summary == (
+            "b. 7 JAN 1919 or 1 JUL 1919; d. 1996 or ABT 1996"
+        )
 
 
 class TestRepeatedDetails:
@@ -1697,6 +1737,25 @@ class TestRepeatedDetails:
             ),
         ]
 
+    @pytest.mark.parametrize(
+        ("tag", "date", "prop", "expected"),
+        [
+            ("BIRT", "1836", "date_of_birth", year(1836)),
+            ("DEAT", "1909", "date_of_death", year(1909)),
+        ],
+    )
+    def test_an_unparsed_date_hides_no_parsed_one(
+        self, tag, date, prop, expected
+    ):
+        # (here) Eugen's birth, or his death, gives a date the grammar
+        # cannot parse before one it can: the one it cannot is warned of,
+        # and the one it can is still claimed
+        text = eugen(f"1 {tag}", "2 DATE SOMEDAY MAYBE", f"2 DATE {date}")
+        assert adapt_gedcom(text, artifact=EXPORT).warnings == [
+            f"line 4: unparsed date 'SOMEDAY MAYBE' — no {prop} claim emitted"
+        ]
+        assert stated(text, "i1", prop) == [(expected, [])]
+
 
 class TestRepeatedMarriages:
     """A family that repeats a MARR or a DIV states alternatives: its first
@@ -1773,6 +1832,37 @@ class TestRepeatedMarriages:
         text = family(*lines)
         assert spouse_pairs(text) == expected
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == counted
+
+    @pytest.mark.parametrize(
+        ("tag", "date", "warning", "expected"),
+        [
+            (
+                "MARR",
+                "8 FEB 1947",
+                "line 9: unparsed marriage date 'SOMEDAY MAYBE' — "
+                "start_time omitted",
+                [[("start_time", day(1947, 2, 8))]],
+            ),
+            (
+                "DIV",
+                "2 JAN 1957",
+                "line 9: unparsed divorce date 'SOMEDAY MAYBE' — "
+                "end_time omitted",
+                [[("end_time", day(1957, 1, 2))]],
+            ),
+        ],
+    )
+    def test_an_unparsed_date_hides_no_parsed_one_of_the_same_event(
+        self, tag, date, warning, expected
+    ):
+        # (here) one MARR, or one DIV, gives a date the grammar cannot parse
+        # before one it can: the one it cannot is warned of, and the one it
+        # can still dates the pair
+        text = family(f"1 {tag}", "2 DATE SOMEDAY MAYBE", f"2 DATE {date}")
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.warnings == [warning]
+        assert result.unsupported_tags == {}
+        assert spouse_pairs(text) == expected
 
     def test_an_undated_marriage_keeps_its_place_beside_a_dated_one(self):
         # (here) one MARR places the wedding in Flörburg and another dates it
@@ -1854,8 +1944,9 @@ class TestRepeatedMarriages:
 class TestRepeatedAttributes:
     """A SEX or an NCHI given twice, and a second TYPE or NICK beneath a
     NAME, are read as claims of their own too: two that differ coexist
-    (ADR-0002), and one that restates another is the same claim, which the
-    batch holds once (#322)."""
+    (ADR-0002). One that restates another line for line, its citation
+    included, is the same claim, which the batch holds once; the same value
+    under another citation is a claim of its own (#322)."""
 
     def test_each_sex_is_a_claim_of_its_own(self):
         # no source gives the sex of the unnamed infant of 1922: (here) the
