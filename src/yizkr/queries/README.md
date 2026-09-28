@@ -22,27 +22,28 @@ uv run yizkr publish-queries             # or: make publish-queries
 
 ## Queries
 
-- **disagreement-report** — the flagship R2 view: values that different
-  artifacts attribute to the same entity and property, side by side,
-  each with every source that states it. Rows here are a healthy resting
-  state (ADR-0002), not errors. Two readings of one artifact are not two
-  sources (ADR-0023 §4), and a page fragment counts as its artifact; a
-  deprecated statement is left out, and nothing needs a preferred rank.
-  It compares the single-valued properties (dates and places of birth and
-  death, parents, birth name, an event's own point in time, start and end
-  time, a place's identity properties), and the start and end times of
-  one residence place or one spouse that sources date differently (a
-  point in time on those statements is not compared). A date whose span
-  lies inside another's and a place recorded inside the other are
-  differences of resolution, and are not listed: a date's span is the
-  period its precision names or the range its source states with
-  earliest and latest dates, which the report shows beside the value.
-  Two dates stored alike are compared through those stated ranges. When
-  either residence or spouse statement carries earliest or latest dates,
-  their start and end times are compared as stated, with no difference
-  of resolution suppressed. Spellings of a name that differ only in case
-  or language are one value. See MODELING.md "Contradictions" for the
-  full rules.
+- **disagreement-report** — the flagship R2 view, as the values it
+  compares: every statement of the compared properties, one row per
+  stated-in source, so the values that different sources attribute to one
+  entity and property are listed side by side. Rows here are a healthy
+  resting state (ADR-0002), not errors. Each row carries the statement's
+  rank, its value with its precision, the earliest and latest dates its
+  source gives, its start time, end time and point in time, and the
+  artifact each source belongs to (a page fragment belongs to its
+  artifact). The compared properties are the single-valued ones (dates
+  and places of birth and death, parents, birth name, an entity's own
+  point in time, start and end time, a place's identity properties), and
+  residence and spouse, whose dates are compared. The query pairs and
+  filters nothing (ADR-0033): `yizkr.disagreement` pairs the values
+  that different artifacts attribute and sets aside differences of
+  resolution, and the static site's inconsistencies page shows its rows.
+  See MODELING.md "Contradictions" for the rules; the offline tests are
+  `tests/unit/test_disagreement.py`.
+- **place-containment** — the recorded hierarchy the disagreement report
+  reads: every location and part-of edge (best rank only, as truthy
+  triples hold them) and every merge redirect, flat. A place value inside
+  another, or the same item through a redirect, differs from it only in
+  resolution (ADR-0009).
 - **person-timeline** — every dated assertion about each person
   (statements, dated qualifiers such as a marriage's point in time, and
   events participated in), plural-by-default with sources (R6).

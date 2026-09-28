@@ -148,6 +148,10 @@ as a contradiction; it also leaves out deprecated statements. The ruling stands:
 a second statement from one source still fabricates an assertion the source never
 made (rule 5), so the "two coexisting candidates" fallback stays rejected.
 
+Amended by #266 (2026-09-28): the report now fetches attributed values with a flat
+query and compares them in Python, where this rule is `from_different_artifacts`
+(ADR-0033). The ruling stands.
+
 ### 5. Reappraisal is a structural SPARQL query, honestly labelled
 
 Ship `queries/under-witnessed-statements.rq` (rendered by `publish.py`) —
