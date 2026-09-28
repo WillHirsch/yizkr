@@ -2,9 +2,10 @@
 (#334; ADR-0020; docs/MODELING.md, "Living persons and privacy").
 
 A fictional fixture writes people whose births take each shape the check
-reads, with a curator's rank on three of the birth statements, and reads
-the export's exclusions back through the stack, with the cutoff pinned
-at 1903:
+reads, with a curator's rank on three of the birth statements and a
+curator's birth of unknown value beside an 1850 one, and reads the
+export's exclusions back through the stack, with the cutoff pinned at
+1903:
 
 * a birth releases a person only at the latest year it allows: a birth
   in the 20th century not before 2000, in the decade 1900-1909 not before
@@ -12,10 +13,11 @@ at 1903:
   not the year after;
 * every birth statement counts, never one sampled from the truthy
   values: births in 1850 and 1990 keep a person possibly living, even
-  when a curator prefers the 1850 one;
-* a statement a curator deprecated counts for nothing, either way: a
-  deprecated 1850 birth releases no one, and a deprecated 1990 one keeps
-  no one;
+  when a curator prefers the 1850 one, and so does a birth of unknown
+  value beside an 1850 one;
+* a statement a curator deprecated counts for nothing, either way, its
+  latest date included: a deprecated birth "before 1850" releases no one,
+  and a deprecated 1990 birth keeps no one;
 * a range its source states bounds the birth: "before 1850" releases, a
   20th-century birth no later than 1902 releases, "after 1850" is open at
   its late end and releases no one, and "between 1850 and 1990" not
@@ -77,6 +79,7 @@ EXCLUDED = {
     "preferred early": True,
     "deprecated early": True,
     "deprecated late": False,
+    "unknown beside": True,
     "bounded century": False,
     "before": False,
     "after": True,
@@ -187,12 +190,43 @@ def set_rank(client, subject: str, year: int, rank: WikibaseRank) -> None:
         entity.write(summary="integration test: curator rank on a fixture")
 
 
+def add_unknown_birth(client, subject: str, artifact_qid: str) -> None:
+    """A curator's birth of unknown value, stated in the artifact
+    `artifact_qid`: the writer writes no unknown value, so it is added
+    here, with its reference (rule 1). Idempotent."""
+    from wikibaseintegrator.datatypes import Item, Time
+    from wikibaseintegrator.models import Reference, References
+    from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseSnakType
+
+    properties, _ = client.vocabulary()
+    entity = client.wbi.item.get(subject)
+    unknown = WikibaseSnakType.UNKNOWN_VALUE
+    if any(
+        statement.mainsnak.snaktype == unknown
+        for statement in entity.claims.get(properties["date_of_birth"])
+    ):
+        return
+    reference = Reference()
+    reference.add(Item(prop_nr=properties["stated_in"], value=artifact_qid))
+    references = References()
+    references.add(reference)
+    entity.claims.add(
+        Time(
+            prop_nr=properties["date_of_birth"],
+            snaktype=unknown,
+            references=references,
+        ),
+        action_if_exists=ActionIfExists.FORCE_APPEND,
+    )
+    entity.write(summary="integration test: a birth of unknown value")
+
+
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
     """Write the fixture under its marked labels (write_fixture;
     idempotent: re-runs reuse and skip everything), set the curator ranks,
-    and wait until the query service holds every fixture person's latest
-    revision. Returns the QIDs by role."""
+    add the birth of unknown value, and wait until the query service holds
+    every fixture person's latest revision. Returns the QIDs by role."""
     registered = {
         letter: register_fictional(
             client, f"Privacy fixture source {letter}", "certificate"
@@ -214,11 +248,18 @@ def fixture_graph(client, config):
             # the curator prefers the 1850 birth, below
             born("preferred early", date(1850), a),
             born("preferred early", date(1990), b),
-            # deprecated below: the only birth
-            born("deprecated early", date(1850), a),
+            # deprecated below: the only birth, "before 1850"
+            born(
+                "deprecated early",
+                date(1850),
+                a,
+                ("latest_date", date(1850)),
+            ),
             # the 1990 birth is deprecated below
             born("deprecated late", date(1850), a),
             born("deprecated late", date(1990), b),
+            # a curator adds a birth of unknown value beside it, below
+            born("unknown beside", date(1850), a),
             born(
                 "bounded century",
                 date(1901, "century"),
@@ -255,6 +296,7 @@ def fixture_graph(client, config):
     set_rank(client, qids["preferred early"], 1850, WikibaseRank.PREFERRED)
     set_rank(client, qids["deprecated early"], 1850, WikibaseRank.DEPRECATED)
     set_rank(client, qids["deprecated late"], 1990, WikibaseRank.DEPRECATED)
+    add_unknown_birth(client, qids["unknown beside"], registered["B"].qid)
     wait_for_query_service(config, client, list(qids.values()))
     return qids
 

@@ -648,8 +648,9 @@ not a signal to grow the schema on.
   that as an ordinary death assertion, not a flag.
 - The public export (`yizkr backup`) is **conservative**: a person
   enters it only on positive evidence they are not living — any death
-  evidence above, or births beyond a 100-year cutoff (default,
-  `--cutoff-years`). **Unknown means excluded.** Exclusion removes every
+  evidence above, or births beyond the cutoff (`--cutoff-years`, by
+  default `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown
+  means excluded.** Exclusion removes every
   mention (other people's claims about them, orphaned provenance nodes),
   and transcription excerpts — raw source quotations, which can name
   anyone — never enter the public tier.
@@ -664,11 +665,14 @@ not a signal to grow the schema on.
   2000 for the 20th century, with centuries and millennia counted as
   Wikibase counts them, except that a round hundred is read as the
   century it opens, so 1900 at century precision allows 1999. A
-  statement whose value lies wholly after its own latest date is read
-  without it. A statement with an unknown value and no latest date, a
-  time that cannot be read (one before the common era included), or a
-  precision coarser than a millennium allows no latest year, and keeps
-  its person possibly living.
+  statement whose value or an earliest date lies wholly after its own
+  latest date is read without that latest date, which fails closed. A
+  statement allows no latest year, and keeps its person possibly living,
+  when a latest date in it cannot be read, or, where no latest date
+  bounds it, when its value is unknown, unreadable (one before the common
+  era included) or coarser than a millennium, or it states only an
+  earliest date. A readable latest date bounds even a birth whose value
+  is unknown, unreadable or coarser than a millennium.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never in
   public exports"), using the same runtime call.

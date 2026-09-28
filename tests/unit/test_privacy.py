@@ -160,6 +160,14 @@ CASES = {
         False,
         False,
     ),
+    # a curator's preferred 1990 birth, listed before a normal 1850 one: the
+    # query gives no order, so neither the first nor the last birth decides
+    "Q315": (
+        "two births either side of the cutoff, the later one first",
+        [(at(1990), [], []), (at(1850), [], [])],
+        False,
+        True,
+    ),
 }
 BIRTHS = [
     row for qid, case in CASES.items() for row in birth_rows(qid, case[1])
@@ -312,6 +320,7 @@ class TestLatestBirths:
         assert found["Q306"] == [1850]
         assert found["Q308"] == [1990]
         assert found["Q314"] == [1850]
+        assert found["Q315"] == [1990, 1850]
 
     def test_a_statement_of_unknown_date_is_kept(self):
         assert latest_births(BIRTHS)["Q310"] == [None]
@@ -381,3 +390,31 @@ class TestTheBirthsQuery:
     def test_each_row_names_the_part_of_the_statement_it_reads(self):
         for bound in ("value", "earliest", "latest"):
             assert f'BIND("{bound}" AS ?bound)' in BIRTHS_QUERY
+
+    def test_a_statement_with_no_readable_value_still_gives_a_row(self):
+        # the value's time is optional: a birth of unknown value, or with no
+        # value, still gives its statement a row, which keeps its person
+        # possibly living beside any other birth
+        assert 'BIND("value" AS ?bound)\n    OPTIONAL {{' in BIRTHS_QUERY
+
+    def test_each_branch_reads_its_own_qualifier(self):
+        for key, bound in (
+            ("earliest_date", "earliest"),
+            ("latest_date", "latest"),
+        ):
+            assert (
+                f"?statement pq:{{{key}}} ?time .\n"
+                f'    BIND("{bound}" AS ?bound)\n'
+                "    OPTIONAL {{\n"
+                f"      wd:{{{key}}} wikibase:qualifierValue"
+            ) in BIRTHS_QUERY
+
+    def test_the_rank_filter_holds_for_every_row(self):
+        # after the union, so a deprecated statement gives no row at all:
+        # neither its value nor its earliest or latest dates
+        assert BIRTHS_QUERY.endswith(
+            "  }}\n"
+            "  FILTER NOT EXISTS {{ ?statement wikibase:rank "
+            "wikibase:DeprecatedRank . }}\n"
+            "}}\n"
+        )
