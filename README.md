@@ -30,7 +30,8 @@ Start here:
   comes from
 - `src/yizkr/pipeline/README.md` – **how ingestion works end to end**: the
   `yizkr ingest run` loop and its two human review gates
-- `ROADMAP.md` – phased build plan
+- `ROADMAP.md` – retired: the plan lives in GitHub issues and the Project
+  (ADR-0024), and the stub maps the old item numbers to issues
 - `deploy/` – Wikibase Suite deployment (Docker Compose + runbook)
 - `src/yizkr/` – the tooling package: model manifest + bootstrap
   (`model/`), the claim JSON contract (`claims.py`), the ingestion
