@@ -1362,6 +1362,41 @@ class TestWatch:
         # the waits in which nothing happened
         assert output.count("yizkr run 20260927T100000Z-4f2a9c") == 2
 
+    def test_the_page_is_written_as_the_run_changes_and_now_and_then(
+        self, run, summary, monkeypatch
+    ):
+        clock = [1000.0]
+        writes = []
+
+        def write(path, summary_):
+            writes.append(clock[0])
+            return path / STATUS_PAGE
+
+        monkeypatch.setattr(monitor, "write_status_page", write)
+        page = monitor._StatusPage(run, clock=lambda: clock[0])
+        steps = [
+            (0, 1),  # the first refresh: written
+            (1, 2),  # the run changed, too soon after the last write
+            (monitor.PAGE_MIN_INTERVAL, 2),  # changed, and due: written
+            (1, 2),  # nothing changed
+            (monitor.PAGE_MAX_AGE, 2),  # nothing changed, but stale: written
+        ]
+        for seconds, version in steps:
+            clock[0] += seconds
+            page.update(summary, version)
+        assert writes == [
+            1000.0,
+            1001.0 + monitor.PAGE_MIN_INTERVAL,
+            1002.0 + monitor.PAGE_MIN_INTERVAL + monitor.PAGE_MAX_AGE,
+        ]
+        assert page.note.startswith("status page: ")
+
+    def test_no_page_before_a_run(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(monitor, "write_status_page", pytest.fail)
+        page = monitor._StatusPage(tmp_path)
+        page.update(summarise_run(tmp_path, NOW), 1)
+        assert page.note == ""
+
     def test_a_page_that_cannot_be_written_is_reported(self, run, monkeypatch):
         def refuse(*args, **kwargs):
             raise PermissionError("read-only")

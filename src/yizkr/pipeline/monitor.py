@@ -1867,6 +1867,68 @@ def _default_keys(out: TextIO) -> Keys:
     return NoKeys()
 
 
+class _StatusPage:
+    """When `watch` writes the status page: at the first refresh, then
+    once the run has changed and PAGE_MIN_INTERVAL has passed since the
+    last write, or once PAGE_MAX_AGE has, whatever changed. `note` says
+    how the latest write went."""
+
+    def __init__(
+        self, path: Path, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self.path = path
+        self.note = ""
+        self._clock = clock
+        self._version: int | None = None
+        self._written = 0.0
+
+    def update(self, summary: Summary, version: int) -> None:
+        if not summary.found:
+            return
+        elapsed = self._clock() - self._written
+        if (
+            self._version is not None
+            and elapsed < PAGE_MAX_AGE
+            and (version == self._version or elapsed < PAGE_MIN_INTERVAL)
+        ):
+            return
+        try:
+            written = write_status_page(self.path, summary)
+        except OSError as exc:
+            self.note = f"status page not written: {exc}"
+        else:
+            if written is not None:
+                self.note = (
+                    f"status page: {written} (written "
+                    f"{_stamp(summary.now, '%H:%M:%S')})"
+                )
+        self._version, self._written = version, self._clock()
+
+
+def _frame(lines: list[str], first: bool) -> str:
+    """A view drawn over the last one: from the top left, each line
+    cleared to its end, and the screen cleared below the last."""
+    start = (HIDE_CURSOR + CLEAR_SCREEN if first else "") + HOME
+    body = "".join(line + CLEAR_LINE + "\n" for line in lines)
+    return start + body + CLEAR_BELOW
+
+
+def _typed_command(
+    keys: Keys, path: Path, summary: Summary
+) -> CommandResult | None:
+    """The command typed at the prompt, carried out (handle_command, with
+    an abort confirmed at a second prompt); None when nothing was typed."""
+    line = keys.prompt("command> ")
+    if line is None:
+        return None
+
+    def confirm(question: str) -> bool:
+        answer = keys.prompt(question) or ""
+        return answer.strip().lower() in ("y", "yes")
+
+    return handle_command(path, line, confirm=confirm, summary=summary)
+
+
 def watch(
     path: Path | str,
     *,
@@ -1881,9 +1943,8 @@ def watch(
 ) -> int:
     """Follow a run directory until the operator quits (`q`, or Ctrl-C):
     refresh every `interval` seconds, draw the terminal view in place, and
-    write the status page into the run directory (`page`), at most every
-    PAGE_MIN_INTERVAL seconds while events arrive and at least every
-    PAGE_MAX_AGE seconds. The run goes on whatever the monitor does.
+    write the status page into the run directory (`page`; _StatusPage says
+    when). The run goes on whatever the monitor does.
 
     ':' or Enter opens a command line (handle_command): pause, resume or
     abort the run or a slice. On an output that is not a terminal the view
@@ -1897,23 +1958,9 @@ def watch(
     terminal = _is_tty(out) if terminal is None else terminal
     color = (
         terminal
-        and "NO_COLOR" not in os.environ
-        and (os.environ.get("TERM") != "dumb")
+        and not os.environ.get("NO_COLOR")
+        and os.environ.get("TERM") != "dumb"
     )
-
-    def dimensions() -> tuple[int, int]:
-        if size is not None:
-            return size()
-        columns, rows = shutil.get_terminal_size((100, 40))
-        return columns, rows
-
-    monitor = RunMonitor(path)
-    page_version = None
-    page_written = 0.0
-    page_note = ""
-    message = ""
-    shown_version = None
-    first = True
     if keys is None:
         keys = NoKeys() if once else _default_keys(out)
     hint = (
@@ -1922,97 +1969,61 @@ def watch(
         else "':' or Enter: pause|resume|abort [run|stage NAME|kind NAME] "
         "[reason]   q: quit"
     )
+    monitor = RunMonitor(path)
+    status_page = _StatusPage(path) if page else None
+    message = ""
+    shown = None
+    first = True
     try:
         with keys:
             while True:
                 monitor.refresh()
                 summary = monitor.summary(clock())
-                elapsed = time.monotonic() - page_written
-                if (
-                    page
-                    and summary.found
-                    and (
-                        page_version is None
-                        or (
-                            monitor.version != page_version
-                            and elapsed >= PAGE_MIN_INTERVAL
-                        )
-                        or elapsed >= PAGE_MAX_AGE
-                    )
-                ):
-                    try:
-                        written = write_status_page(path, summary)
-                    except OSError as exc:
-                        page_note = f"status page not written: {exc}"
-                    else:
-                        if written is not None:
-                            page_note = (
-                                f"status page: {written} (written "
-                                f"{_stamp(summary.now, '%H:%M:%S')})"
-                            )
-                    page_version = monitor.version
-                    page_written = time.monotonic()
-                footer = [line for line in (page_note, message) if line]
+                if status_page is not None:
+                    status_page.update(summary, monitor.version)
+                notes = (status_page.note if status_page else "", message)
+                footer = [note for note in notes if note]
+                columns, rows = (
+                    size() if size else shutil.get_terminal_size((100, 40))
+                )
                 if once:
-                    columns, _ = dimensions()
-                    out.write(
-                        render_terminal(summary, width=columns, footer=footer)
-                        + "\n"
+                    view = render_terminal(
+                        summary, width=columns, footer=footer
                     )
+                    out.write(view + "\n")
                     out.flush()
                     return 0
                 if terminal:
-                    columns, rows = dimensions()
-                    footer.append(hint)
                     lines = render_lines(
                         summary,
                         width=columns,
                         height=max(1, rows - 1),
                         color=color,
-                        footer=footer,
+                        footer=[*footer, hint],
                     )
-                    frame = (
-                        HIDE_CURSOR + CLEAR_SCREEN if first else ""
-                    ) + HOME
-                    frame += "".join(
-                        line + CLEAR_LINE + "\n" for line in lines
-                    )
-                    out.write(frame + CLEAR_BELOW)
-                    out.flush()
+                    out.write(_frame(lines, first))
                     first = False
-                elif monitor.version != shown_version:
-                    columns, _ = dimensions()
-                    out.write(
-                        render_terminal(summary, width=columns, footer=footer)
-                        + "\n\n"
+                elif monitor.version != shown:
+                    view = render_terminal(
+                        summary, width=columns, footer=footer
                     )
-                    out.flush()
-                shown_version = monitor.version
+                    out.write(view + "\n\n")
+                out.flush()
+                shown = monitor.version
                 key = keys.wait(interval)
-                if key is None:
-                    continue
                 if key in ("q", "Q"):
                     return 0
                 if key in (":", "\r", "\n"):
-                    line = keys.prompt("command> ")
-                    if line is None:
+                    result = _typed_command(keys, path, summary)
+                    if result is None:
                         continue
-
-                    def confirm(question: str) -> bool:
-                        answer = keys.prompt(question) or ""
-                        return answer.strip().lower() in ("y", "yes")
-
-                    result = handle_command(
-                        path, line, confirm=confirm, summary=summary
-                    )
                     if result.quit:
                         return 0
-                    message = result.message
                     # the request shows at once, not after the interval
-                    shown_version = None
+                    message, shown = result.message, None
                 elif key in ("?", "h"):
                     message = " | ".join(line.strip() for line in HELP)
-                    shown_version = None
+                    shown = None
     except KeyboardInterrupt:
         return 0
     finally:
