@@ -80,8 +80,9 @@ stack validates upload config and provenance shape.
   slide-accurate provenance, without the curator manually splitting
   decks.
 - The same shape (container artifact + derived artifacts + fragment
-  locators) is ready for scrapbook PDFs and photo albums later;
-  IIIF (W2) refines locators without changing the items.
+  locators) is ready for scrapbook PDFs and photo albums later (the
+  deferred-on-trigger register, #171); IIIF (W2, #166) refines locators
+  without changing the items.
 - One more deterministic adapter to maintain; PPTX only in v1 (PPT
   binary format and Google Slides exports arrive as PPTX in
   practice).

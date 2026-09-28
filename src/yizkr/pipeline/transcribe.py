@@ -263,5 +263,5 @@ class HtrPlatformAdapter:
     ) -> Transcription:
         raise NotImplementedError(
             f"HTR adapter for {self.platform!r} is a stub and not "
-            f"implemented. Use the llm or textfile engines meanwhile."
+            f"implemented. Use the llm or textfile engine instead."
         )

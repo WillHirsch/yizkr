@@ -1,4 +1,4 @@
-"""Offline tests for backup/export logic (W1 task 7). No stack, no docker."""
+"""Offline tests for backup/export logic. No stack, no docker."""
 
 import gzip
 from pathlib import Path

@@ -600,7 +600,7 @@ class TestCritiqueNotes:
 
 
 class TestCorrections:
-    """ROADMAP item 11: the correction column produces curator claims."""
+    """Review corrections: the correction column produces curator claims."""
 
     @pytest.mark.parametrize(
         ("correction", "expected"),

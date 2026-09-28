@@ -156,7 +156,7 @@ not a within-artifact one.)
 
 1. **Opt-in.** `--serial` is a flag; the existing advance-all run stays the
    default and behaves exactly as today. (Whether serial later becomes the
-   default is deferred — ship it opt-in and revisit with usage.)
+   default is deferred — ship it opt-in and revisit with usage. See #119.)
 2. **Two gates per artifact, unchanged; not batched, not combined.** Claim
    review must land on the resolved, minimal set (identity-first keeps it
    lean), and each artifact must be fully written for the next to see rich

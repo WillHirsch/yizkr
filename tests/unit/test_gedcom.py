@@ -1,4 +1,4 @@
-"""Offline tests for the GEDCOM adapter (item 13).
+"""Offline tests for the GEDCOM adapter.
 
 The fixture is the example universe's GEDCOM rendering and every inline
 snippet uses the same universe or bare placeholders (docs/EXAMPLES.md).
