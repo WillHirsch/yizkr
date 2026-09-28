@@ -146,8 +146,8 @@ start marker no longer apply. While the file itself cannot be read (its
 mode forbids it, say), the driver cannot read it either, and every
 slice's state is `unknown`, with no since, who or why. The terminal view
 says so in one line, "state unknown: the control file cannot be read",
-and its header adds "run state unknown"; the page lists every slice as
-unknown, under a line that says why.
+and the page lists every slice as unknown, under a line that says why;
+the header of each adds "run state unknown".
 
 **Alerts.** The counts, new and carried, and by check; and the latest
 ten, newest first: time, `new` (on an output the engine answered in this

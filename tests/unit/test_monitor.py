@@ -477,8 +477,9 @@ UNREADABLE_BY = ["its mode", "its directory"]
 @contextlib.contextmanager
 def unreadable_control(run: Path, by: str):
     """The run's control file, unreadable for the block (UNREADABLE_BY),
-    then readable again, with its own mode or its directory's put back.
-    Skipped where this process reads a file whatever its mode."""
+    then readable again, with its own mode or its directory's put back,
+    unless the block removed it. Skipped where this process reads a file
+    whatever its mode."""
     skip_unless_modes_hold(run.parent)
     control = run / "control.jsonl"
     target = control
@@ -492,7 +493,8 @@ def unreadable_control(run: Path, by: str):
     try:
         yield
     finally:
-        target.chmod(mode)
+        with contextlib.suppress(FileNotFoundError):
+            target.chmod(mode)
 
 
 # -- the summary --------------------------------------------------------------
@@ -1365,6 +1367,7 @@ class TestSlices:
         assert "all active" not in view
         assert "unreadable log lines" not in view
         page = page_of(run).read_text(encoding="utf-8")
+        assert "running; run state unknown | invocation 2" in page
         assert page.count('<span class="warn">unknown</span>') == 8
         assert (
             '<p class="warn">State unknown: the control file cannot be '
@@ -1374,13 +1377,22 @@ class TestSlices:
 
     @pytest.mark.parametrize("by", UNREADABLE_BY)
     def test_a_followed_control_file_is_read_again_at_every_refresh(
-        self, run, by
+        self, run, by, monkeypatch
     ):
         """A monitor following the run shows every slice unknown from the
         refresh at which the file cannot be read, a change the view is
         drawn again for, though the file's size and modification time are
         as they were; and the slices' states again from the refresh at
-        which it can be read."""
+        which it can be read. Every refresh reads the file, whether or not
+        anything about it changed: no size, time or mode of it tells every
+        change of who may read it (an owner's, say)."""
+        reads = []
+        read = monitor.read_jsonl
+        monkeypatch.setattr(
+            monitor,
+            "read_jsonl",
+            lambda path: reads.append(path.name) or read(path),
+        )
         watcher = RunMonitor(run)
         watcher.refresh()
         known = watcher.summary(NOW).slices
@@ -1393,6 +1405,48 @@ class TestSlices:
             assert not watcher.refresh()
         assert watcher.refresh()
         assert watcher.summary(NOW).slices == known
+        # nothing changed since: read all the same
+        assert not watcher.refresh()
+        assert reads.count("control.jsonl") == 5
+
+    @pytest.mark.parametrize("by", UNREADABLE_BY)
+    def test_no_line_of_a_control_file_that_cannot_be_read_is_skipped(
+        self, run, by
+    ):
+        """A line skipped while the file can be read is not counted while
+        it cannot be: its lines are as unknown as its requests. It counts
+        again once the file can be read."""
+        # a request whose scope is no name: skipped (_foldable)
+        pause = {"at": at(600), "action": "pause", "scope": ["x"]}
+        append(run, [("control.jsonl", pause)])
+        watcher = RunMonitor(run)
+        watcher.refresh()
+        assert watcher.summary(NOW).skipped_lines == 1
+        with unreadable_control(run, by):
+            watcher.refresh()
+            summary = watcher.summary(NOW)
+            assert summary.control_unreadable
+            assert summary.skipped_lines == 0
+        watcher.refresh()
+        assert watcher.summary(NOW).skipped_lines == 1
+
+    @pytest.mark.parametrize("by", UNREADABLE_BY)
+    def test_a_control_file_gone_while_it_cannot_be_read_stops_nothing(
+        self, run, by
+    ):
+        """Once the file is gone, the driver has no request, and the view
+        shows every slice active: a change it is drawn again for."""
+        watcher = RunMonitor(run)
+        watcher.refresh()
+        with unreadable_control(run, by):
+            watcher.refresh()
+            assert watcher.summary(NOW).control_unreadable
+            (run / "control.jsonl").unlink()
+            assert RunDir(run).control().scopes == {}
+            assert watcher.refresh()
+            summary = watcher.summary(NOW)
+        assert not summary.control_unreadable
+        assert {item.state for item in summary.slices} == {ACTIVE}
 
 
 # -- reading as the run grows -------------------------------------------------
@@ -2104,6 +2158,8 @@ class TestStatusPage:
         assert '<span class="warn">paused</span>' in page
         assert "still checking" in page
         assert "<td>(text)</td>" in page
+        # the control file can be read: nothing says the state is unknown
+        assert "State unknown" not in page
 
     def test_text_is_escaped(self, run):
         append(run, [control(600, "pause", reason="<b>&")])
