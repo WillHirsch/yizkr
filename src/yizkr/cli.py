@@ -8,6 +8,10 @@
                            files so runs pause for review and resume
     yizkr stages state     what a run did, from its run directory
     yizkr stages manifest  what shapes a run, from its run.json
+    yizkr scratch run      the whole corpus through every stage, unattended;
+                           run it again to resume
+    yizkr scratch watch    follow a scratch run; pause|resume|abort ask its
+                           driver to stop or go on
 
 Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 --env-file); see deploy/README.md.
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -611,6 +616,19 @@ def cmd_run(args) -> int:
         sys.exit(str(exc))
 
 
+def _gibibytes(value: str) -> float:
+    """A size in GiB for --min-free: a finite number, 0 or more."""
+    try:
+        size = float(value)
+    except ValueError:
+        size = math.nan
+    if not (math.isfinite(size) and size >= 0):
+        raise argparse.ArgumentTypeError(
+            f"a size in GiB, finite and 0 or more, not {value!r}"
+        )
+    return size
+
+
 def _role_epoch(value: str) -> tuple[str, int]:
     """`ROLE=N` -> (role, N), for --epoch."""
     role, _, epoch = value.partition("=")
@@ -668,6 +686,146 @@ def cmd_stages_manifest(args) -> int:
         sys.exit(f"{args.run}: no run.json; is it a run directory?")
     for line in describe_manifest(manifest):
         print(line)
+    return 0
+
+
+def cmd_scratch_run(args) -> int:
+    from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
+    from yizkr.pipeline import scratch
+    from yizkr.pipeline.llm import PassPaused
+    from yizkr.pipeline.rundir import RunSettingsConflict
+
+    # fail closed: no never-ingest list, no run, before any file is read
+    exclusions = load_exclusions(required=True, env_file=args.env_file)
+    folder = args.corpus or corpus_dir(args.env_file)
+    if folder is None:
+        sys.exit(
+            f"no corpus given and {CORPUS_DIR_VAR} is not set; name it with "
+            f"--corpus, or set {CORPUS_DIR_VAR} (see deploy/README.md)"
+        )
+    if not folder.is_dir():
+        sys.exit(f"{folder} is not a directory")
+    try:
+        return scratch.scratch_run(
+            folder,
+            runs=args.runs,
+            resume=args.resume,
+            new=args.new,
+            until=args.until,
+            refresh=args.refresh or (),
+            cache_dir=args.cache,
+            env_file=args.env_file,
+            exclusions=exclusions,
+            language=args.language,
+            fallback_language=args.fallback_language,
+            chunk_concurrency=args.chunk_concurrency,
+            extract_effort=args.extract_effort,
+            review_effort=args.review_effort,
+            extract_model=(
+                None
+                if args.extract_model in ("", "inherit")
+                else args.extract_model
+            ),
+            min_free=int(args.min_free * 1024**3),
+        )
+    except RunSettingsConflict as exc:
+        print(
+            f"{exc}\nA new scratch run: yizkr scratch run --new",
+            file=sys.stderr,
+        )
+        return scratch.EXIT_FAILED
+    except PassPaused as exc:
+        # the engine's own account of the pause, and what to do
+        print(str(exc), file=sys.stderr)
+        return scratch.EXIT_STOPPED
+    except scratch.ScratchRefused as exc:
+        print(str(exc), file=sys.stderr)
+        return scratch.EXIT_FAILED
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return scratch.EXIT_INTERRUPTED
+
+
+def _scratch_run_dir(args) -> Path:
+    """The run a `scratch` command names (a run directory, or a run id in
+    --runs), or the latest; exits when there is none."""
+    from yizkr.pipeline import scratch
+
+    try:
+        return scratch.resolve_run(args.runs, args.run)
+    except scratch.ScratchRefused as exc:
+        sys.exit(str(exc))
+
+
+def cmd_scratch_watch(args) -> int:
+    from yizkr.pipeline import monitor
+
+    if args.interval <= 0:
+        sys.exit("--interval must be positive")
+    if args.serve is not None:
+        if args.no_page:
+            sys.exit("--serve needs the page: drop --no-page")
+        try:
+            monitor.parse_address(args.serve)
+        except ValueError as exc:
+            sys.exit(str(exc))
+    run = _scratch_run_dir(args)
+    try:
+        return monitor.watch(
+            run,
+            interval=args.interval,
+            once=args.once,
+            page=not args.no_page,
+            serve=args.serve,
+        )
+    except OSError as exc:
+        sys.exit(str(exc))
+
+
+def cmd_scratch_control(args) -> int:
+    from yizkr.pipeline import monitor
+    from yizkr.pipeline.rundir import ABORT, RESUME, RunDir
+
+    run = _scratch_run_dir(args)
+    again = f"yizkr scratch run --runs {run.parent} --resume {run.name}"
+    scope = (
+        f"stage:{args.stage.strip()}"
+        if args.stage
+        else f"kind:{args.kind.strip()}"
+        if args.kind
+        else "run"
+    )
+    if args.action == RESUME:
+        try:
+            aborted = RunDir(run).control().scopes.get(scope) == "aborted"
+        except (OSError, TypeError, ValueError):
+            aborted = False
+        if aborted:
+            print(
+                f"{scope} of run {run.name} is aborted for the rest of this "
+                "invocation, and a resume does not lift an abort: run "
+                f"`{again}` to invoke the run again"
+            )
+            return 1
+    try:
+        entry = monitor.request(
+            run,
+            args.action,
+            stage=args.stage,
+            kind=args.kind,
+            reason=args.reason,
+            by="operator",
+        )
+    except (OSError, ValueError) as exc:
+        sys.exit(str(exc))
+    written = entry["scope"]
+    note = monitor.unknown_slice_note(written, monitor.summarise_run(run))
+    print(
+        f"{args.action} requested for {written} of run {run.name}: "
+        f"{monitor.state_now(run, written)}{note}"
+    )
+    if args.action == ABORT:
+        print(f"completed work is kept; `{again}` invokes the run again")
     return 0
 
 
@@ -1310,7 +1468,171 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("run", type=Path, help="run directory (with run.json)")
     p.set_defaults(func=cmd_stages_manifest)
 
+    _scratch_parsers(sub, effort_choices)
     return parser
+
+
+def _scratch_parsers(sub, effort_choices) -> None:
+    """`yizkr scratch`: the scratch driver (docs/runbooks/scratch-run.md)
+    and the run monitor's commands (docs/MONITOR.md)."""
+    from yizkr.pipeline import scratch
+    from yizkr.pipeline.rundir import CONTROL_ACTIONS
+
+    group = sub.add_parser(
+        "scratch",
+        help="whole-corpus scratch runs: run one, follow it, pause, resume "
+        "or abort it (docs/runbooks/scratch-run.md)",
+    )
+    ssub = group.add_subparsers(dest="action", required=True)
+    runs_help = (
+        f"the runs directory (default {scratch.DEFAULT_RUNS}); a run is "
+        "named by its id there, or by its directory's path"
+    )
+
+    p = ssub.add_parser(
+        "run",
+        help="take the whole corpus through every stage, unattended: the "
+        "per-document stages, the barrier, then the corpus stages. Runs the "
+        "latest run again when it did not go to the end, so the same "
+        "command resumes it; a new run otherwise",
+    )
+    p.add_argument(
+        "--corpus",
+        type=Path,
+        help="the corpus folder (default $YIZKR_CORPUS_DIR). Refuses to "
+        "run unless $YIZKR_EXCLUDE_FILE names a never-ingest list",
+    )
+    p.add_argument(
+        "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
+    )
+    which = p.add_mutually_exclusive_group()
+    which.add_argument(
+        "--new",
+        action="store_true",
+        help="start a new run, with fresh state directories",
+    )
+    which.add_argument(
+        "--resume",
+        nargs="?",
+        const=scratch.LATEST,
+        metavar="RUN",
+        help="invoke this run again (a run id, or a run directory, which "
+        "must be in --runs; the latest when none is named), even one "
+        "taken to the end: to go past the barrier to a corpus stage "
+        "registered since, say",
+    )
+    p.add_argument(
+        "--until",
+        metavar="STAGE",
+        choices=[*scratch.PHASES, *(s.name for s in scratch.CORPUS_STAGES)],
+        help="stop after this stage: "
+        + ", ".join(
+            [*scratch.PHASES, *(s.name for s in scratch.CORPUS_STAGES)]
+        )
+        + " (gedcom stops with extraction)",
+    )
+    p.add_argument(
+        "--refresh",
+        action="append",
+        choices=MODEL_ROLES,
+        metavar="ROLE",
+        help="make this role's views again once in the run, asking the "
+        "engine afresh for each call even where the cache holds an answer; "
+        "a later invocation with the same refresh reuses those already made "
+        f"(repeatable; one of {', '.join(MODEL_ROLES)})",
+    )
+    p.add_argument(
+        "--cache",
+        type=Path,
+        default=DEFAULT_CACHE,
+        metavar="DIR",
+        help="the LLM cache every model call goes through (default "
+        "var/llm-cache; ADR-0032)",
+    )
+    p.add_argument("--language", default="auto", help="as for `ingest run`")
+    p.add_argument(
+        "--fallback-language", default="en", help="as for `ingest run`"
+    )
+    p.add_argument(
+        "--chunk-concurrency",
+        type=int,
+        default=3,
+        metavar="N",
+        help="extraction chunks in parallel per document (default 3)",
+    )
+    p.add_argument(
+        "--extract-effort",
+        choices=effort_choices,
+        default="low",
+        help="reasoning effort for transcription and extraction (default low)",
+    )
+    p.add_argument(
+        "--review-effort",
+        choices=effort_choices,
+        default="high",
+        help="reasoning effort for the critique (default high)",
+    )
+    p.add_argument(
+        "--extract-model",
+        default="claude-sonnet-5",
+        metavar="MODEL",
+        help="model for extraction (default claude-sonnet-5; 'inherit' for "
+        "$YIZKR_LLM_MODEL, which every other role runs); a full model id",
+    )
+    p.add_argument(
+        "--min-free",
+        type=_gibibytes,
+        default=scratch.MIN_FREE_BYTES / 1024**3,
+        metavar="GIB",
+        help="the free space, in GiB, the run directory's and the cache's "
+        "filesystems must have (default 2)",
+    )
+    p.set_defaults(func=cmd_scratch_run)
+
+    p = ssub.add_parser(
+        "watch",
+        help="follow a scratch run (the latest by default) in the live "
+        "monitor (docs/MONITOR.md); quitting it never stops the run",
+    )
+    p.add_argument("run", nargs="?", help="a run id or directory")
+    p.add_argument(
+        "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
+    )
+    p.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="seconds between refreshes (default 2)",
+    )
+    p.add_argument("--once", action="store_true", help="print one view")
+    p.add_argument(
+        "--no-page",
+        action="store_true",
+        help="do not write the status page into the run directory",
+    )
+    p.add_argument(
+        "--serve",
+        metavar="ADDRESS:PORT",
+        help="serve the status page, and nothing else, while the monitor "
+        "runs (off by default)",
+    )
+    p.set_defaults(func=cmd_scratch_watch)
+
+    for action in CONTROL_ACTIONS:
+        p = ssub.add_parser(
+            action,
+            help=f"ask a scratch run's driver to {action} the run, or one "
+            "stage or document kind of it, through its control file",
+        )
+        p.add_argument("run", nargs="?", help="a run id or directory")
+        p.add_argument(
+            "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
+        )
+        slice_ = p.add_mutually_exclusive_group()
+        slice_.add_argument("--stage", help="only this stage")
+        slice_.add_argument("--kind", help="only this document kind")
+        p.add_argument("--reason", default="", help="why, for the log")
+        p.set_defaults(func=cmd_scratch_control)
 
 
 def main() -> int:

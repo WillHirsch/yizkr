@@ -401,10 +401,12 @@ def slugify(name: str) -> str:
 
 
 # the files a run directory holds beside its documents' directories
-# (yizkr.pipeline.rundir), and the directory the run monitor writes its
-# live status page into (yizkr.pipeline.monitor.STATUS_DIR): no document
-# directory may take their names
-_RUN_FILES = frozenset({MANIFEST, EVENTS, ALERTS, CONTROL, "status"})
+# (yizkr.pipeline.rundir), the directory the run monitor writes its live
+# status page into (yizkr.pipeline.monitor.STATUS_DIR), and the one a
+# scratch run's corpus stages keep their outputs in
+# (yizkr.pipeline.scratch.CORPUS_DIR): no document directory may take
+# their names
+_RUN_FILES = frozenset({MANIFEST, EVENTS, ALERTS, CONTROL, "status", "corpus"})
 # how much of a whole file name's slug a hashed directory name keeps, so
 # that with its hash it stays well inside a filesystem's 255-byte limit
 _HASHED_PREFIX = 200

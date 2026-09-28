@@ -19,8 +19,9 @@ Development runs the whole corpus through the pipeline again and again
   (below) is asked for once more in the same run, as the engine would
   have been asked without the cache.
 
-The run directory beside them records what each run did, for the driver
-(#194), the live monitor (#195), the anomaly checks (#196), the call
+The run directory beside them records what each run did, for the scratch
+driver (docs/runbooks/scratch-run.md), the live monitor
+([docs/MONITOR.md](MONITOR.md)), the anomaly checks (#196), the call
 estimate (#101) and the run report (#124). How the claude-code engine
 meets the subscription's limits, and paces its calls to leave headroom
 for development sessions, is under Subscription limits, below.
@@ -135,9 +136,10 @@ it), and failing that the first by name. The naming moves nothing aside: a
 directory whose source has left stays until a source is given its name,
 and when that source's bytes differ, it sets the directory aside as a
 changed source's (above). No directory takes the name of a run file
-(`run.json`, `events.jsonl`, `alerts.jsonl`, `control.jsonl`) or of the
+(`run.json`, `events.jsonl`, `alerts.jsonl`, `control.jsonl`), of the
 directory the live monitor writes its page into (`status`,
-docs/MONITOR.md).
+docs/MONITOR.md), or of the one a scratch run's corpus stages keep their
+outputs in (`corpus`, docs/runbooks/scratch-run.md).
 
 A state directory an earlier `ingest run` made may hold one directory
 that two same-stem sources shared: it stays with the source its
@@ -429,6 +431,10 @@ changed, or its replay failed) is no miss.
 - `yizkr ingest extract --cache DIR`: the single step answers from, and
   keeps its answers in, that cache; without it every call goes to the
   engine.
+- `yizkr scratch run --cache DIR` and `--refresh ROLE`, as for `ingest
+  run`. Every call of a scratch run goes through the cache: it has no
+  `--no-cache`, and its fresh state directories make every view again,
+  the cache answering the calls a change leaves the same.
 
 ## Seeding: visible equivalences
 
@@ -448,16 +454,20 @@ those calls miss as `absent` until they are adopted again.
 ## The run directory
 
 `yizkr ingest run` uses its state directory (`var/runs/<folder>/`) as its
-run directory; the scratch driver gives each run its own. Every file but
-`run.json` is append-only JSON lines. Readers need no lock and skip a
-torn last line, so an interrupted writer never corrupts a log.
+run directory. The scratch driver (`yizkr scratch run`,
+docs/runbooks/scratch-run.md) gives each run its own,
+`var/scratch/<run id>/`, which is also the run's state directory, fresh
+for each new run; a run's id starts with the UTC time it started, so the
+runs sort as they started. Every file but `run.json` is append-only JSON
+lines. Readers need no lock and skip a torn last line, so an interrupted
+writer never corrupts a log.
 
 | File | Written by | Read by |
 |---|---|---|
 | `run.json` | the driver at start (merged, replaced atomically) | everything |
 | `events.jsonl` | the stage runner, the driver, the LLM cache, the engine's call reports, the anomaly checks | the monitor, the report, run state, the call estimate |
 | `alerts.jsonl` | the anomaly checks | the monitor, the report |
-| `control.jsonl` | the monitor, the anomaly checks, `yizkr scratch abort`; the driver's start marker | the driver |
+| `control.jsonl` | the monitor, the anomaly checks, `yizkr scratch pause\|resume\|abort`; the driver's start marker, and the requests it carries into an invocation | the driver |
 
 ### `run.json`
 
@@ -479,7 +489,9 @@ run`). Events about a document add `subject` (its media SHA-1) and `kind`;
 `document-failed` and a directory's `set-aside` also add `file`, the
 source's file name, which names a document whose source could not be
 read and so has no `subject`; stage events add `stage` (`transcription`,
-`extraction`, `critique` or `gedcom`); cache events add `role` and `key`,
+`extraction`, `critique` or `gedcom`; in a scratch run, a corpus stage's
+`started`, `done`, `failed` and `held` name the corpus stage, and no
+document); cache events add `role` and `key`,
 and all of them but `cache-reject` and `cache-adopt` the kind of call
 (`call`); call events add `role`, the `stage` the role's calls are made
 in, and the kind of call:
@@ -492,6 +504,8 @@ in, and the kind of call:
 | `reused` | a stage's view was current and stands | `attention`: the reasons noted when it was made |
 | `failed` | a stage failed | `reason` |
 | `held` | the control file stopped a stage's dispatch | `reason` |
+| `barrier` | a scratch run went past the barrier: every document's stages had ended, and its corpus stages come next | `documents` (whose stages all completed), `failed` (with a failed stage) |
+| `refreshed` | in a scratch run, a stage's view made under a refresh of its role (`--refresh`) was saved: the run's later invocations that refresh the role reuse it | `role` |
 | `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `file` (a directory's), `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
 | `document-failed` | a document failed, and only it: a stage failed (with its own `failed` event too), or something outside its stages, such as its source or `state.json` that could not be read, its first record, or a step between the stages | `file`, `reason` |
 | `cache-hit` | the cache answered a call | `reason`: `key match`, or an adoption's reason |
@@ -538,6 +552,20 @@ honours run and kind requests between documents: a document it does not
 dispatch keeps its status. It honours stage requests before every stage:
 a document whose stage is held is `paused`. Either resumes on the next
 run.
+
+The scratch driver (docs/runbooks/scratch-run.md) honours every request
+before each stage of each document and before each corpus stage, with a
+`held` event for each stage a stage's or a kind's request holds. Of the
+requests that cover a stage (the run's, its stage's, its kind's), an
+abort outranks a pause, since no resume can let the stage through. Other
+slices go on, and when nothing else can, it waits for a paused slice's
+resume; an aborted slice waits for the next invocation, and so does the
+barrier while a document's stage is held; once an abort holds every
+stage left, the invocation ends. When it invokes a run again by itself
+after a subscription limit, it writes the requests in force just before
+the new start marker (the whole run's included) again after it, with
+who asked and why and `carried: true`, so what was stopped stays
+stopped, a request made while the driver got ready again included.
 
 ## Run state
 
@@ -624,9 +652,12 @@ it is only a wait on a chunk pool's worker threads that neither Ctrl-C
 nor the control file reaches until it ends, since a pool's threads are
 not the one Python delivers a signal to. So a window that reopens later
 than the longest wait pauses the pass rather than hold a pool's threads
-for hours: the driver (#194) is to invoke the run again after
-`resumes_at`. Set `$YIZKR_CLAUDE_MAX_WAIT` to 21600 to wait through a
-five-hour window inside the call instead.
+for hours: the scratch driver waits until a minute past `resumes_at`,
+and a minute at least when that time has passed already (a pause can
+hold past the time it reports), reading the control file as it waits,
+and then invokes the run again by itself
+(docs/runbooks/scratch-run.md). Set `$YIZKR_CLAUDE_MAX_WAIT` to 21600 to
+wait through a five-hour window inside the call instead.
 
 **The reserve** (`$YIZKR_CLAUDE_RESERVE`, a share of each window, 0.25 by
 default; 0 keeps none). The engine estimates a window's use from its last
@@ -684,8 +715,8 @@ its kind, else typical: a vision call per scan and none for a text file
 or slide text, the entity manifest and a chunk per 2000 characters for
 extraction, and a critique each. These are the pipeline's calls: the
 cache answers those whose keys it holds, which only the run can tell.
-`yizkr scratch estimate` prints them once the scratch command group
-(#194) wires it.
+`yizkr scratch estimate`, which #101 adds to the scratch command group,
+is to print them.
 
 ## Checks once per run
 
@@ -698,4 +729,4 @@ cache, or is a view the run reuses and checks again.
 The per-document path goes when the scratch driver has run the corpus
 end to end (#119). Until #103 lands, it still registers the
 artifact in the wiki before the stages run; the stages themselves read
-and write no wiki.
+and write no wiki. A scratch run registers no artifact.
