@@ -4,6 +4,10 @@ These tests need the deploy/ stack running and deploy/.env present;
 they skip with an explanation otherwise. They write to the instance
 using the same deterministic labels on every run, so re-runs reuse
 their entities — that reuse IS part of what they verify.
+
+A session that uses the stack holds the live-stack lock (live_lock.py)
+from its first stack test to its end, so live sessions take turns on
+the one instance.
 """
 
 from __future__ import annotations
@@ -16,13 +20,27 @@ import requests
 from yizkr.core.config import USER_AGENT, Config
 from yizkr.core.wiki import WikiClient
 
+from .live_lock import hold_for_session
+
 
 @pytest.fixture(scope="session")
-def config() -> Config:
+def live_stack_lock(request):
+    """The live-stack lock, held to the end of the session. The config
+    fixture takes it, so every test that uses the stack waits its turn;
+    tests that need only the claude CLI (test_live_chunked) do not."""
+    with hold_for_session(request.config):
+        yield
+
+
+@pytest.fixture(scope="session")
+def config(request) -> Config:
     try:
         config = Config.load()
     except SystemExit as exc:
         pytest.skip(f"no connection configuration: {exc}")
+    # taken once the session knows which stack it uses, before it first
+    # contacts it
+    request.getfixturevalue("live_stack_lock")
     try:
         requests.get(
             f"{config.wikibase_url}/w/api.php",
