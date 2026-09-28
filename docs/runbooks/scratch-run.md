@@ -239,9 +239,10 @@ Nothing from them goes into the repository, GitHub or a cloud session.
   register, write and site stages (#200, with #199 and #103), and
   place-hierarchy reconciliation (#201) register themselves as they land.
   Until then a run finishes at the barrier, and needs no stack.
-- Until #102's second half and #127 land, the GEDCOM adapter and the
-  extraction prompts cite the artifact by a QID, and a scratch run
-  registers none: its GEDCOM files fail, and its extraction prompts name
-  no artifact. Scratch run 1 (#145) waits for them.
+- Until #127 lands, the extraction prompts still name the artifact's
+  item by a QID, and a scratch run registers none, so its prompts name
+  no artifact. Every claim cites its document by the SHA-1 of its bytes
+  all the same (#102), a GEDCOM export's included. Scratch run 1 (#145)
+  waits for #127.
 - `yizkr scratch estimate`, the calls a run is expected to make (#101),
   comes next.

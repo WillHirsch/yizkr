@@ -5,12 +5,9 @@ The engine is a fake that `yizkr.pipeline.llm.make_client` returns, behind
 the real LLM cache, so each run's calls go through the cache as a scratch
 run's do. The claude CLI and its login are faked where the preflight
 looks for them; nothing here runs the CLI or calls a model. Documents are
-the fictional universe's (docs/EXAMPLES.md).
-
-The GEDCOM adapter still cites its artifact by QID (#102's second half
-moves it to the SHA-1), and a scratch run registers no artifact, so the
-driver here makes a GEDCOM file's batch with a stand-in that cites the
-file's SHA-1, through the same stage and its events.
+the fictional universe's (docs/EXAMPLES.md). A scratch run registers no
+artifact: extraction and the GEDCOM adapter cite each document by the
+SHA-1 of its bytes (#102).
 """
 
 from __future__ import annotations
@@ -234,31 +231,6 @@ def fakes(monkeypatch, tmp_path) -> Fakes:
     return fake
 
 
-def gedcom_batch(source_sha1: str) -> ClaimBatch:
-    return ClaimBatch.model_validate(
-        {
-            "extraction_run": {
-                "model_identifier": "gedcom-adapter",
-                "pipeline_version": "0.1.0",
-                "started_at": "2026-09-28T09:00:00Z",
-            },
-            "claims": [
-                {
-                    "subject": {"kind": "local", "local_id": "I1"},
-                    "property": "date_of_birth",
-                    "value": {"type": "time", "year": 1836},
-                    "source": {
-                        "artifact": {"kind": "artifact", "sha1": source_sha1}
-                    },
-                }
-            ],
-            "entities": [
-                {"id": "I1", "label": "Eugen Löbig", "kind": "human"}
-            ],
-        }
-    )
-
-
 class Waits:
     """The driver's sleep and clock: each wait moves the clock on by its
     length and runs the next scripted step (None for none). A wait with no
@@ -297,9 +269,6 @@ class Driver(ScratchDriver):
         kw.setdefault("sleep", waits.sleep)
         kw.setdefault("poll", 1.0)
         super().__init__(folder, run_dir, **kw)
-
-    def _step_gedcom(self, doc):
-        return self._run_stage(doc, "gedcom", lambda: gedcom_batch(doc.sha1))
 
 
 def runs_dir(tmp_path: Path) -> Path:
@@ -444,9 +413,14 @@ class TestOrder:
         }
         assert planned == DOCUMENT_STAGES
         for doc in driver.documents():
-            # no artifact was registered
+            # no artifact was registered, and every claim cites its
+            # document by the SHA-1 of its bytes
             assert doc.state.artifact_qid is None
             assert doc.state.status == "batched"
+            batch = ClaimBatch.model_validate_json(doc.batch.read_text())
+            assert batch.claims
+            cited = {claim.source.artifact.sha1 for claim in batch.claims}
+            assert cited == {doc.sha1}
         (deck,) = [
             doc for doc in driver.documents() if doc.kind == "presentation"
         ]
