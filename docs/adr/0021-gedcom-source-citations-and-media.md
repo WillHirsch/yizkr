@@ -142,10 +142,11 @@ every PLAC or TYPE went unread. A DIV without a DATE is counted as
 `DIV`, which stands for its PLAC too. Each is counted rather than mapped,
 since the model has no property that fits it:
 
-- a divorce's place is not the spouse statement's `location`, which holds
-  the wedding's place and, beside an end time, would read as the
-  divorce's (docs/MODELING.md, "Marriages, residences and other periods");
-  which property carries a wedding's place is #311's question;
+- a divorce's place is not the spouse statement's `location`: the adapter
+  writes a MARR's PLAC there as the wedding's place (`pipeline/gedcom.py`),
+  and a second `location` could not say which place was the wedding's and
+  which the divorce's. Which property a wedding's place takes is #311's
+  question;
 - an undated divorce says that the marriage ended at an unknown time,
   which Wikidata states as an end time of unknown value; the claim schema
   and the writer have no unknown value;

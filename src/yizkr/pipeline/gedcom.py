@@ -293,7 +293,9 @@ def split_gedcom_period(text: str) -> tuple[str | None, str | None] | None:
     A period says when a state began and when it ended, where a range
     (BET x AND y, BEF x, AFT x) bounds a single date. Each phrase is a
     date of its own, which may itself be approximate or a range; it is
-    empty when the period names an end but gives it no date.
+    empty when the period names an end but gives it no date. A "to"
+    inside a parenthesised date phrase ("(Aug to Sep)") is the phrase's
+    own word, not the period's TO.
     """
     words = text.split()
     keys = [word.upper() for word in words]
@@ -301,9 +303,11 @@ def split_gedcom_period(text: str) -> tuple[str | None, str | None] | None:
         return None
     if keys[0] == "TO":
         return None, " ".join(words[1:])
-    if "TO" in keys:
-        cut = keys.index("TO")
-        return " ".join(words[1:cut]), " ".join(words[cut + 1 :])
+    depth = 0  # how deep the word stands in parentheses
+    for cut, key in enumerate(keys[1:], start=1):
+        if key == "TO" and depth <= 0:
+            return " ".join(words[1:cut]), " ".join(words[cut + 1 :])
+        depth += key.count("(") - key.count(")")
     return " ".join(words[1:]), None
 
 

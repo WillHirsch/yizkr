@@ -14,6 +14,7 @@ the export by the SHA-1 of its bytes (#102)."""
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 
@@ -25,13 +26,7 @@ from yizkr.pipeline.writer import BatchWriter
 pytestmark = pytest.mark.live
 
 # The export's text, with {marker} in each label it gives an item: the
-# person's, the media object's and the place's. The marker is six hex
-# digits of a hash over the text, as test_live_period_dates.py's
-# write_fixture marks its labels. The writer finds an item by its label,
-# so a version of the fixture with other statements would otherwise write
-# onto the items an earlier version wrote, and see their statements beside
-# its own. With the marker each version writes items of its own, and a
-# re-run of one version finds its own items again.
+# person's, the media object's and the place's (_marker).
 TEMPLATE = """\
 0 HEAD
 1 CHAR UTF-8
@@ -54,9 +49,27 @@ TEMPLATE = """\
 2 PLAC Integration Town {marker}
 0 TRLR
 """
-GEDCOM = TEMPLATE.replace(
-    "{marker}", hashlib.sha256(TEMPLATE.encode()).hexdigest()[:6]
-)
+
+
+def _marker() -> str:
+    """Six hex digits of a hash over the export's text and the batch the
+    adapter makes of it, as test_live_period_dates.py's write_fixture
+    marks its labels. The writer finds an item by its label, so a version
+    of the fixture, or of the adapter, that gives other statements for
+    the export would otherwise write onto the items an earlier version
+    wrote, and see their statements beside its own. With the marker each
+    version writes items of its own, and a re-run of one version finds
+    its own items again. The batch is made under a fixed artifact key,
+    since the export's own key is a hash of the marked text, and is
+    hashed without its run details, which differ from run to run."""
+    made = adapt_gedcom(TEMPLATE, artifact=ArtifactRef.from_bytes(b"")).batch
+    content = made.model_dump(mode="json", exclude={"extraction_run"})
+    return hashlib.sha256(
+        (TEMPLATE + json.dumps(content, sort_keys=True)).encode()
+    ).hexdigest()[:6]
+
+
+GEDCOM = TEMPLATE.replace("{marker}", _marker())
 
 
 @pytest.fixture(scope="module")

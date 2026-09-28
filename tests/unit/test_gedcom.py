@@ -554,16 +554,39 @@ class TestUnsupportedCensus:
             ),
             # an AGE is read nowhere, so it is named by its tag alone
             (["1 DEAT", "2 DATE 16 MAR 1909", "2 AGE 73"], {"AGE": 1}),
+            # a NAME's parts are restated by its value, so they are read
+            (["2 NPFX x", "2 SPFX y", "2 NSFX z"], {}),
         ],
     )
-    def test_a_tag_is_counted_where_it_goes_unread(self, lines, expected):
-        # Eugen's record, with (here) a line the adapter does not read
-        # where it stands; a tag it reads beneath other tags is named with
-        # its parent's tag (#308)
+    def test_a_tag_is_counted_only_where_it_goes_unread(self, lines, expected):
+        # Eugen's record, with (here) lines beneath it or its NAME; a tag
+        # the adapter reads beneath other tags is named with its parent's
+        # tag where it goes unread (#308)
         text = "\n".join(
             ["0 @I1@ INDI", "1 NAME Eugen /Löbig/", *lines, "0 TRLR", ""]
         )
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == expected
+
+    def test_a_familys_child_count_is_counted(self):
+        # (here) Eugen and Cäcilie's family record counts their three
+        # children: an NCHI is read beneath an INDI, not beneath a FAM
+        text = "\n".join(
+            [
+                "0 @I1@ INDI",
+                "1 NAME Eugen /Löbig/",
+                "0 @I2@ INDI",
+                "1 NAME Cäcilie /Tarle/",
+                "0 @F1@ FAM",
+                "1 HUSB @I1@",
+                "1 WIFE @I2@",
+                "1 NCHI 3",
+                "0 TRLR",
+                "",
+            ]
+        )
+        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {
+            "FAM.NCHI": 1
+        }
 
 
 class TestSourceCitations:
@@ -667,6 +690,13 @@ def family(*lines: str) -> str:
             "0 TRLR",
             "",
         ]
+    )
+
+
+def eugen(*lines: str) -> str:
+    """Eugen's record, ending (here) with `lines`."""
+    return "\n".join(
+        ["0 @I1@ INDI", "1 NAME Eugen /Löbig/", *lines, "0 TRLR", ""]
     )
 
 
@@ -836,6 +866,9 @@ class TestMarriageDates:
             artifact=EXPORT,
         )
         assert result.warnings == []
+        # the undated DIV is counted, its PLAC with it; the MARR's PLAC is
+        # read, dated or not
+        assert result.unsupported_tags == {"DIV": 1}
         labels = {e.id: e.label for e in result.batch.entities}
         for subject in ("i11", "i17"):
             (spouse,) = claims_for(result.batch, subject, "spouse")
@@ -956,6 +989,25 @@ class TestMarriageAndDivorceTags:
                 "location",
                 "start_time",
             ]
+
+    def test_a_partners_age_at_the_wedding_is_counted_with_its_partner(
+        self,
+    ):
+        # (here) the MARR gives Leopold's age as 32 and Agnes's as 34: a
+        # HUSB or WIFE beneath a MARR goes unread, and it stands for the
+        # AGE beneath it
+        result = adapt_gedcom(
+            family(
+                "1 MARR",
+                "2 DATE 8 FEB 1947",
+                "2 HUSB",
+                "3 AGE 32",
+                "2 WIFE",
+                "3 AGE 34",
+            ),
+            artifact=EXPORT,
+        )
+        assert result.unsupported_tags == {"MARR.HUSB": 1, "MARR.WIFE": 1}
 
 
 def gustav(tag: str, date: str) -> str:
@@ -1154,6 +1206,29 @@ class TestPeriods:
     def test_any_other_date_is_a_point_in_time(self, tag, date, expected):
         assert held_qualifiers(tag, date) == expected
 
+    def test_a_placed_period_leaves_nothing_uncounted(self, tag):
+        # (here) Gustav at 8 Hawthorn Road, or a hatter in Stupfield, from
+        # 1939 to 1952: the census takes the DATE and the PLAC as read
+        event, place = {
+            "RESI": (
+                "1 RESI",
+                "8 Hawthorn Road, Stupfield, Victoria, Australia",
+            ),
+            "OCCU": ("1 OCCU Hatter", "Stupfield, Victoria, Australia"),
+        }[tag]
+        text = "\n".join(
+            [
+                "0 @I8@ INDI",
+                "1 NAME Gustav /Löbig/",
+                event,
+                "2 DATE FROM 1939 TO 1952",
+                f"2 PLAC {place}",
+                "0 TRLR",
+                "",
+            ]
+        )
+        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
+
     @pytest.mark.parametrize(
         ("date", "omitted", "expected"),
         [
@@ -1170,6 +1245,13 @@ class TestPeriods:
             # a period within a period is no date
             ("TO FROM 1950 TO 1952", ["end_time"], []),
             ("FROM FROM 1939 AND 1940", ["start_time"], []),
+            # the grammar reads no INT date, but the "to" inside its
+            # parenthesised phrase ends no FROM phrase, so the TO stands
+            (
+                "FROM INT 1939 (Aug to Sep) TO 1952",
+                ["start_time"],
+                [("end_time", year(1952))],
+            ),
         ],
     )
     def test_an_unparsed_end_warns_and_is_omitted(
@@ -1181,6 +1263,85 @@ class TestPeriods:
             for end in omitted
         ]
         assert held_qualifiers(tag, date) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "subject", "prop", "expected"),
+    [
+        # (here) Eugen born "from 1836 to 1837"
+        pytest.param(
+            eugen("1 BIRT", "2 DATE FROM 1836 TO 1837"),
+            "i1",
+            "date_of_birth",
+            [("earliest_date", year(1836)), ("latest_date", year(1837))],
+            id="BIRT",
+        ),
+        # (here) buried "from 1909 to 1910"
+        pytest.param(
+            eugen(
+                "1 BURI",
+                "2 DATE FROM 1909 TO 1910",
+                "2 PLAC Friedhof Flörburg, Hesse, Germany",
+            ),
+            "i1",
+            "burial_place",
+            [
+                ("earliest_date", year(1909)),
+                ("latest_date", year(1910)),
+                ("point_in_time", year(1909)),
+            ],
+            id="BURI",
+        ),
+        # (here) the studio portrait dated "from 1890 to 1899"
+        pytest.param(
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            "1 DATE FROM 1890 TO 1899\n" + eugen("1 OBJE @O1@"),
+            "i1",
+            "image",
+            [
+                ("earliest_date", year(1890)),
+                ("latest_date", year(1899)),
+                ("point_in_time", year(1890)),
+            ],
+            id="OBJE",
+        ),
+        pytest.param(
+            couple(marriage="FROM 1946 TO 1947"),
+            "i11",
+            "spouse",
+            [
+                ("earliest_date", year(1946)),
+                ("latest_start_date", year(1947)),
+                ("start_time", year(1946)),
+            ],
+            id="MARR",
+        ),
+        pytest.param(
+            couple(divorce="FROM 1956 TO 1957"),
+            "i11",
+            "spouse",
+            [
+                ("earliest_end_date", year(1956)),
+                ("end_time", year(1956)),
+                ("latest_date", year(1957)),
+            ],
+            id="DIV",
+        ),
+    ],
+)
+def test_a_period_on_another_event_is_one_dates_range(
+    text, subject, prop, expected
+):
+    """FROM x TO y on any other event keeps the reading parse_gedcom_date
+    gives it, the range of one date: only a residence's or an occupation's
+    period is a start and an end (#308)."""
+    result = adapt_gedcom(text, artifact=EXPORT)
+    assert result.warnings == []
+    (claim,) = claims_for(result.batch, subject, prop)
+    assert (
+        sorted((q.property, shown(q.value)) for q in claim.qualifiers)
+        == expected
+    )
 
 
 class TestIngestGedcom:
