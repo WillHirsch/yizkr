@@ -171,9 +171,11 @@ now, cloud sessions later. Four things had to change together.
 - **The cloud-dispatch gate (#34)** is one explicit switch. The owner closes
   it once this ADR and the protocol are merged, every inventoried real
   example is replaced (#31, #32, #33) and a final semantic sweep of the tree
-  finds none, issues and PRs are scrubbed, and the plan is loaded. Every
-  `exec:cloud-agent-ok` issue reaches #34 through blocked-by links, directly
-  or transitively, so no cloud agent is dispatched before it closes.
+  finds none, and the plan is loaded. (Scrubbing residual real data from
+  existing issues and PRs was dropped as a requirement on 2026-09-28; see
+  §5.) Every `exec:cloud-agent-ok` issue reaches #34 through blocked-by
+  links, directly or transitively, so no cloud agent is dispatched before it
+  closes.
 - **Never-ingest fails closed.** A document on the exclusion list is never
   ingested. Every ingestion entry point uses one shared exclusion check,
   and production and extract-all modes refuse to run when no exclusion list
@@ -208,6 +210,13 @@ now, cloud sessions later. Four things had to change together.
   there as for GitHub's own hosting of the private repository (2026-09-28).
   Cloud agents stay code-only, and no local-only data is copied into a
   cloud session.
+- **Existing GitHub text is not scrubbed further.** Some issue and PR
+  text, comments and their edit history, written before and around the
+  fictional-only rule, still contain real data. The repository is
+  private, and the owner accepts this residual as for pushed history
+  (2026-09-28, #355); it reaches cloud sessions too. New text still
+  follows the rules above: it is pseudonymous, its examples come from the
+  fictional universe, and it passes the outgoing-text self-review.
 
 **The token denylist was tried and retired.** On 2026-09-27 a categorised
 denylist of real names, places, organisations and dates was built (#35),
