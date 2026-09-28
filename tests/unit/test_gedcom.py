@@ -1252,6 +1252,13 @@ class TestPeriods:
                 ["start_time"],
                 [("end_time", year(1952))],
             ),
+            # a stray ")" closes nothing: the "to" of the phrase opened
+            # after it still ends no FROM phrase
+            (
+                "FROM 1939) (Aug to Sep) TO 1952",
+                ["start_time"],
+                [("end_time", year(1952))],
+            ),
         ],
     )
     def test_an_unparsed_end_warns_and_is_omitted(

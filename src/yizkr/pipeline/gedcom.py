@@ -305,9 +305,11 @@ def split_gedcom_period(text: str) -> tuple[str | None, str | None] | None:
         return None, " ".join(words[1:])
     depth = 0  # how deep the word stands in parentheses
     for cut, key in enumerate(keys[1:], start=1):
-        if key == "TO" and depth <= 0:
+        if key == "TO" and depth == 0:
             return " ".join(words[1:cut]), " ".join(words[cut + 1 :])
-        depth += key.count("(") - key.count(")")
+        # a stray ")" closes nothing, so a phrase opened after it still
+        # holds its own "to"
+        depth = max(depth + key.count("(") - key.count(")"), 0)
     return " ".join(words[1:]), None
 
 
