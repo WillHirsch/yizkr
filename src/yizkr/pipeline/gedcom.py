@@ -9,9 +9,11 @@ human review, and the writer. Nothing here bypasses review.
 
 Source-first conventions carry over unchanged:
 
-* every claim's reference is the GEDCOM artifact item, with the
-  record's verbatim GEDCOM lines as the transcription excerpt — the
-  human reviewer sees exactly the lines that assert the claim;
+* every claim's reference is the GEDCOM export itself, cited by the
+  SHA-1 of its bytes (ADR-0010; the writer resolves it to the artifact
+  item), with the record's verbatim GEDCOM lines as the transcription
+  excerpt — the human reviewer sees exactly the lines that assert the
+  claim;
 * GEDCOM's own uncertainty vocabulary maps to the archive's structural
   uncertainty (docs/MODELING.md): ABT/EST/CAL -> `circa` sourcing
   circumstances; BEF -> `latest date`; AFT -> `earliest date`;
@@ -53,7 +55,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from yizkr.claims import ClaimBatch, validate_against_manifest
+from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
 from yizkr.pipeline.extract import run_metadata
 
 MONTHS = {
@@ -341,8 +343,10 @@ def format_unsupported_tags(unsupported: dict[str, int]) -> str:
     )
 
 
-def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
-    """The whole file -> one ClaimBatch with entity manifest."""
+def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
+    """The whole file -> one ClaimBatch with entity manifest, every claim
+    citing `artifact`, the export's content key: the SHA-1 of the file's
+    bytes, of which `text` is the decoded form."""
     roots = parse_gedcom(text)
     individuals = {r.xref: r for r in roots if r.tag == "INDI" and r.xref}
     families = {r.xref: r for r in roots if r.tag == "FAM" and r.xref}
@@ -434,7 +438,7 @@ def adapt_gedcom(text: str, artifact_qid: str) -> AdapterResult:
         if len(excerpt) > 400:
             excerpt = excerpt[:397].rsplit(" | ", 1)[0] + " | …"
         reference: dict = {
-            "artifact": {"kind": "qid", "qid": artifact_qid},
+            "artifact": artifact.model_dump(mode="json"),
             "transcription_excerpt": {"text": excerpt, "language": "en"},
         }
         if pages:

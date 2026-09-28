@@ -80,7 +80,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from yizkr.claims import ClaimBatch, ItemValue, LocalRef, TimeValue
+from yizkr.claims import (
+    ArtifactRef,
+    ClaimBatch,
+    ItemValue,
+    LocalRef,
+    TimeValue,
+)
 from yizkr.pipeline.reconcile import (
     ADJUDICATION_BATCH_PAIRS,
     ADJUDICATION_PROMPT,
@@ -354,8 +360,9 @@ def load_gedcom(path: Path) -> Manifest:
     from yizkr.pipeline.gedcom import adapt_gedcom
 
     raw = path.read_bytes()
-    result = adapt_gedcom(raw.decode("utf-8", errors="replace"), "Q1")
-    return Manifest(hashlib.sha1(raw).hexdigest(), result.batch, "gedcom")
+    artifact = ArtifactRef.from_bytes(raw)
+    result = adapt_gedcom(raw.decode("utf-8", errors="replace"), artifact)
+    return Manifest(artifact.sha1, result.batch, "gedcom")
 
 
 # -- keys ---------------------------------------------------------------------

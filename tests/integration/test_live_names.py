@@ -15,7 +15,8 @@ ingest paths just before the writer. This proves what lands in the graph:
 * GEDCOM path — the adapter's aliases are hygiened the same way, while its
   structured NAME TYPE / NICK / _MARNM tags become typed name statements.
 
-Every name here is fictional.
+Every document is registered with media of its own, which its claims cite
+by SHA-1 (#102). Every name here is fictional.
 """
 
 from __future__ import annotations
@@ -24,11 +25,14 @@ import json
 
 import pytest
 
+from yizkr.claims import ArtifactRef
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.gedcom import adapt_gedcom
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import BatchWriter
+
+from .conftest import Registered, register_fictional
 
 pytestmark = pytest.mark.live
 
@@ -126,25 +130,23 @@ def name(text: str) -> dict:
     return {"type": "monolingual", "value": {"text": text, "language": "en"}}
 
 
-def fixture_artifact(client, title: str) -> str:
-    return register_artifact(
-        client,
-        media_path=None,
-        artifact_type="letter",
-        title=title,
-        description="written by tests/integration; safe to delete",
-    ).artifact_qid
+def fixture_artifact(client, title: str) -> Registered:
+    return register_fictional(client, title, "letter")
 
 
-def extract(tmp_path, artifact_qid, document, manifest, claims):
-    engine = ScriptedEngine([manifest, chunk_response(artifact_qid, claims)])
+def extract(tmp_path, artifact: Registered, document, manifest, claims):
+    # the scripted answers cite the artifact's item, as the prompt asks;
+    # the extractor makes every claim cite the document's key
+    engine = ScriptedEngine([manifest, chunk_response(artifact.qid, claims)])
     extractor = ChunkedClaimExtractor(
         engine, state_dir=tmp_path, budget=10_000
     )
     batch = extractor.extract(
-        Transcription(text=document, engine="test", artifact_qid=artifact_qid),
-        artifact_qid=artifact_qid,
+        Transcription(text=document, engine="test", artifact_qid=artifact.qid),
+        artifact.ref,
+        artifact_qid=artifact.qid,
     )
+    assert all(claim.source.artifact == artifact.ref for claim in batch.claims)
     assert not extractor.used_fallback_manifest  # the entity-first path ran
     assert extractor.failed_chunks == []
     return batch
@@ -183,7 +185,7 @@ def typed_names(client, qid: str, prop_key: str) -> dict[str, set[str]]:
 @pytest.fixture(scope="module")
 def llm_path_person(client, tmp_path_factory):
     """Two fictional documents about one person, written through the real
-    extractor wiring and writer. Returns (item QID, doc 1 QID, doc 2 QID)."""
+    extractor wiring and writer. Returns (item QID, doc 1, doc 2)."""
     first_doc = fixture_artifact(client, "Integration names register")
     second_doc = fixture_artifact(client, "Integration names letter")
 
@@ -233,11 +235,11 @@ def test_llm_path_typed_names_are_referenced_statements(
 ):
     qid, first_doc, second_doc = llm_path_person
     assert typed_names(client, qid, "birth_name") == {
-        "Ida Probewald": {first_doc}
+        "Ida Probewald": {first_doc.qid}
     }
-    assert typed_names(client, qid, "nickname") == {"Peppi": {first_doc}}
+    assert typed_names(client, qid, "nickname") == {"Peppi": {first_doc.qid}}
     assert typed_names(client, qid, "married_name") == {
-        "Ida Testerhof": {second_doc}
+        "Ida Testerhof": {second_doc.qid}
     }
 
 
@@ -279,13 +281,16 @@ GEDCOM = """\
 """
 
 
-def test_gedcom_path_alias_bag_and_typed_names(client):
+def test_gedcom_path_alias_bag_and_typed_names(client, tmp_path):
     """The adapter's names are hygiened like the LLM path's: the derivable
     'Hildegard Namecheck' is dropped, the compound forms land whole, and the
     structured tags become typed, referenced name statements."""
+    export = tmp_path / "integration-names-tree.ged"
+    export.write_text(GEDCOM)
+    exported = ArtifactRef.from_path(export)
     artifact_qid = register_artifact(
         client,
-        media_path=None,
+        media_path=export,
         artifact_type="genealogical_report",
         title="Integration names GEDCOM tree",
         description="written by tests/integration; safe to delete",
@@ -294,7 +299,7 @@ def test_gedcom_path_alias_bag_and_typed_names(client):
         "Hildegard Probewald-Namecheck",
         "Hildegard van der Probewald",
     }
-    result = adapt_gedcom(GEDCOM, artifact_qid=artifact_qid)
+    result = adapt_gedcom(GEDCOM, artifact=exported)
     # checked BEFORE writing: aliases are append-only, so a validator
     # regression must fail here rather than leave the fixture item dirty
     (person,) = [e for e in result.batch.entities if e.id == "i1"]
@@ -314,6 +319,6 @@ def test_gedcom_path_alias_bag_and_typed_names(client):
     }
 
     rerun = BatchWriter(client).write_batch(
-        adapt_gedcom(GEDCOM, artifact_qid=artifact_qid).batch
+        adapt_gedcom(GEDCOM, artifact=exported).batch
     )
     assert rerun.written == 0
