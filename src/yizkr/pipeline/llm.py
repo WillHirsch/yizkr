@@ -360,8 +360,10 @@ class UsageLimitReached(PassPaused):
     the longest wait the engine allows (see "Subscription limits" below):
     a usage window is used up, or used up to the reserve left for
     development sessions, the CLI kept refusing calls for a rate limit, or
-    a call is reported to have run on usage credits, which the pass never
-    runs on.
+    a call is reported to have run on usage credits. This stops dispatch
+    only once that report arrives: the reported call, and any others
+    already in flight when it lands, may already have used credits —
+    only turning extra usage off on the account guarantees none does.
 
     `reason` names the hold (``USAGE_LIMIT``, ``RESERVE``, ``THROTTLE``,
     ``RATE_LIMIT``, ``OVERLOADED``, ``OVERAGE`` or ``CLOSED``), `window`
@@ -1019,19 +1021,17 @@ def tool_failures(
 # CLI (as the pinned 2.1.237 prints it) reports them in its stream-json
 # output:
 #
-# * a rate_limit_event whenever its view of the limits changes, which in
-#   a new process means with the first response of every call. Its
-#   rate_limit_info gives the status (allowed, allowed_warning or
-#   rejected), the window that binds (rateLimitType: five_hour,
-#   seven_day, seven_day_opus, ...), when that window reopens (resetsAt,
-#   Unix seconds), whether the call ran on usage credits beyond the
-#   subscription (isUsingOverage), and the fraction of the window used
-#   (utilization, with surpassedThreshold) — but only once that
-#   fraction passes one of the CLI's own warning thresholds: for the
-#   five-hour window, 90%, and only while at most 72% of it has
-#   elapsed; for the weekly window, 75%, 50% or 25%, early in the week.
-#   Short of that threshold, or past its elapsed-time gate, no
-#   utilization is reported at all;
+# * a rate_limit_event whenever its view of the limits changes, which in a new
+#   process means with the first response of every call. Its rate_limit_info
+#   gives the status (allowed, allowed_warning or rejected), the window that
+#   binds (rateLimitType: five_hour, seven_day, seven_day_opus, ...), when that
+#   window reopens (resetsAt, Unix seconds), whether the call ran on usage
+#   credits beyond the subscription (isUsingOverage), and the fraction of the
+#   window used (utilization) — but only once that fraction passes one of the
+#   CLI's own warning thresholds: for the five-hour window, 90%, and only while
+#   at most 72% of it has elapsed; for the weekly window, 75%, 50% or 25%,
+#   early in the week. Short of that threshold, or past its elapsed-time gate,
+#   no utilization is reported at all;
 # * a call the API refuses for a limit ends its turn on an API error: an
 #   assistant event whose error is rate_limit (overloaded, for an
 #   overload) and whose text is the CLI's notice ("You've hit your
@@ -1074,11 +1074,13 @@ def tool_failures(
 #   headroom below the first warning; the pass keeps none. The use per
 #   call includes what other sessions used in the same time, which makes
 #   the pacing stricter, never looser;
-# * never runs on usage credits: a report that a call ran on them pauses
-#   the pass at once, process-wide, whatever the reserve, whatever
-#   window the report names or fails to, and whatever else it says or
-#   leaves out. Nothing local says when that clears, so only a fresh
-#   process resumes.
+# * pauses dispatch process-wide the moment a report says a call ran on usage
+#   credits, whatever the reserve, whatever window it names or fails to, and
+#   whatever else it says or leaves out. This only stops dispatch once that
+#   report arrives: the reported call, and any others already in flight when it
+#   lands, may already have used credits — only turning extra usage off on the
+#   account guarantees none does. Nothing local says when that clears, so only
+#   a fresh process resumes.
 #
 # The reserve and the longest wait decide only when calls are made, never
 # what a call sends: they are no part of effective_config, so no cache key
@@ -1604,8 +1606,8 @@ class _Pacer:
         if hold.reason == OVERAGE:
             logger.warning(
                 "the claude subscription reports a call ran on usage "
-                "credits, which the pass never runs on: calls wait until "
-                "it says otherwise"
+                "credits: dispatch stops now, though that call and any "
+                "already in flight may already have used them"
             )
             return
         window = f"the claude subscription's {_describe_window(hold.window)}"
@@ -1650,11 +1652,14 @@ def _paused(
     narrative below still names."""
     if hold.reason == OVERAGE:
         return UsageLimitReached(
-            "the claude subscription reports a call ran on usage credits, "
-            "which the pass never runs on. It does not say when that "
-            "clears, so the pass is paused and makes no further calls; "
-            "its completed outputs are kept. Run it again once the "
-            "subscription is off usage credits.",
+            "the claude subscription reports a call ran on usage "
+            "credits. Dispatch stops now, though that call and any "
+            "already in flight may already have used them; only turning "
+            "extra usage off on the account guarantees none does. The "
+            "subscription does not say when that clears, so the pass is "
+            "paused and makes no further calls; its completed outputs "
+            "are kept. Run it again once extra usage is off on the "
+            "account.",
             reason=OVERAGE,
             resumes_at=None,
         )

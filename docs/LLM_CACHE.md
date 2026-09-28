@@ -578,13 +578,12 @@ stream-json output:
   or `rejected`), the window that binds (`rateLimitType`: `five_hour`,
   `seven_day`, `seven_day_opus`, ...), when it reopens (`resetsAt`, Unix
   seconds), whether the call ran on usage credits (`isUsingOverage`),
-  and the share of it used (`utilization`, with `surpassedThreshold`),
-  but only once that share passes one of the CLI's own warning
-  thresholds: for the five-hour window, 90%, and only while at most 72%
-  of the window has elapsed; for the weekly window, 75%, 50% or 25%,
-  early in the week (as CLI 2.1.237's `-p` mode reports them). Short of
-  that threshold, or past its elapsed-time gate, no `utilization` is
-  reported at all;
+  and the share of it used (`utilization`), but only once that share
+  passes one of the CLI's own warning thresholds: for the five-hour
+  window, 90%, and only while at most 72% of the window has elapsed;
+  for the weekly window, 75%, 50% or 25%, early in the week (as CLI
+  2.1.237's `-p` mode reports them). Short of that threshold, or past
+  its elapsed-time gate, no `utilization` is reported at all;
 - a call the API refuses ends on an API error: an assistant event whose
   `error` is `rate_limit` (`overloaded` for an overload), with the CLI's
   notice as its text ("You've hit your session limit · resets 3pm"), and
@@ -660,9 +659,13 @@ the CLI's own reports, not a guarantee of headroom. Two more limits:
 - a report that a call ran on usage credits (`isUsingOverage`) pauses
   the pass at once, process-wide, whatever the reserve, whatever window
   the report names or fails to, and whatever else it says or leaves
-  out: the run never runs on usage credits. Nothing local says when
-  that clears, so only a new process resumes; the operator confirms
-  extra usage is off on the account first (docs/RUN_MANIFEST.md).
+  out. This stops dispatch only once a call is *reported* to have run
+  on credits: that call, and any others already in flight when the
+  report arrives, may already have used credits; only turning extra
+  usage off on the account guarantees none does. Nothing local says
+  when the pause clears, so only a new process resumes; the operator
+  confirms extra usage is off on the account first
+  (docs/RUN_MANIFEST.md).
 
 The reserve and the longest wait decide only when calls are made, never
 what a call sends: they are no part of the engine's `effective_config`,

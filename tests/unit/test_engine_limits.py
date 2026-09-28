@@ -16,6 +16,7 @@ moves on. Documents and names come from the fictional universe
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import shutil
@@ -84,6 +85,7 @@ from yizkr.pipeline.review import export_review_csv
 from yizkr.pipeline.rundir import DOCUMENT_FAILED, RUNNING, run_state
 
 PINNED = "2.1.237"
+ROOT = Path(__file__).resolve().parents[2]
 # a Unix time in September 2026, where every fake clock starts
 START = 1_790_000_000.0
 HOUR = 3600.0
@@ -922,16 +924,18 @@ class TestReserve:
 
 
 class TestOverage:
-    """The pass never runs on usage credits: an isUsingOverage report
-    pauses every call at once, process-wide, whatever else it says or
-    leaves out of the window it names — an allowed status
-    (test_usage_credits_are_never_run_on), no rateLimitType, no
-    resetsAt, or one the clock has already passed. Each is a way a
-    per-window hold alone would have let the report through: _take
-    returns early with no rateLimitType; a window with no resetsAt never
-    gets a hold in _hold; and a window whose resetsAt has passed is
-    deleted there, its use forgotten. The overage latch is checked
-    ahead of all of that (_Pacer._hold)."""
+    """An isUsingOverage report stops dispatch at once, process-wide,
+    whatever else it says or leaves out of the window it names — an
+    allowed status (test_usage_credits_are_never_run_on), no
+    rateLimitType, no resetsAt, or one the clock has already passed.
+    Each is a way a per-window hold alone would have let the report
+    through: _take returns early with no rateLimitType; a window with
+    no resetsAt never gets a hold in _hold; and a window whose resetsAt
+    has passed is deleted there, its use forgotten. The overage latch is
+    checked ahead of all of that (_Pacer._hold). This only ever stops
+    dispatch once a report says a call already ran on credits: the
+    reported call, and any others already in flight when the report
+    lands, may already have used credits."""
 
     @pytest.fixture
     def pacer(self, clock):
@@ -966,6 +970,94 @@ class TestOverage:
             admit(pacer, max_wait=0)
         assert paused.value.reason == OVERAGE
         assert paused.value.resumes_at is None
+
+
+class TestOverageDocs:
+    """The overage guarantee, wherever it is written down, admits what
+    it cannot guarantee: dispatch stops only once a call is *reported*
+    to have run on usage credits, so that call, and any others already
+    in flight when the report lands, may already have used them. Only
+    turning extra usage off on the account guarantees none does
+    (`_Pacer._take` latches the pause from the report; nothing local
+    aborts a call already dispatched)."""
+
+    CAVEAT = "already in flight"
+    OVERCLAIM = "never runs on usage credits"
+
+    @pytest.fixture
+    def pacer(self, clock):
+        return llm._Pacer(clock=clock, sleep=clock.sleep)
+
+    def test_the_module_comment_states_the_caveat_and_not_the_overclaim(
+        self,
+    ):
+        source = inspect.getsource(llm)
+        bullet = source.split(
+            "# * pauses dispatch process-wide the moment a report", 1
+        )[1]
+        bullet = bullet.split("\n#\n", 1)[0]
+        assert self.CAVEAT in bullet
+        assert self.OVERCLAIM not in bullet
+
+    def test_the_docstring_states_the_caveat_and_not_the_overclaim(self):
+        doc = UsageLimitReached.__doc__
+        assert doc is not None
+        assert self.CAVEAT in doc
+        assert self.OVERCLAIM not in doc
+
+    def test_the_pause_message_states_the_caveat_and_not_the_overclaim(
+        self, pacer
+    ):
+        pacer.done([report(resets_at=START + HOUR, overage=True)])
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        message = str(paused.value)
+        assert self.CAVEAT in message
+        assert self.OVERCLAIM not in message
+
+    def test_the_log_warning_states_the_caveat_and_not_the_overclaim(
+        self, pacer, caplog
+    ):
+        # An overage hold's own `until` is math.inf, so `admit` always
+        # raises it as a pause rather than waiting for it (any finite
+        # max_wait is exceeded at once): `_announce` is exercised
+        # directly, as the only way this hold reaches it.
+        with caplog.at_level("WARNING"):
+            pacer._announce(llm._Hold(math.inf, OVERAGE), reserve=0.25)
+        [message] = [r.getMessage() for r in caplog.records]
+        assert self.CAVEAT in message
+        assert self.OVERCLAIM not in message
+
+    def test_llm_cache_doc_states_the_caveat_and_not_the_overclaim(self):
+        text = (ROOT / "docs" / "LLM_CACHE.md").read_text()
+        bullet = text.split(
+            "a report that a call ran on usage credits (`isUsingOverage`)",
+            1,
+        )[1]
+        bullet = bullet.split("\n\n", 1)[0]
+        assert self.CAVEAT in bullet
+        assert f"the run {self.OVERCLAIM}" not in text
+
+    def test_run_manifest_doc_states_the_caveat(self):
+        text = (ROOT / "docs" / "RUN_MANIFEST.md").read_text()
+        bullet = text.split(
+            "except a report that a call ran on usage credits", 1
+        )[1]
+        assert self.CAVEAT in bullet[:400]
+
+
+class TestUtilizationDocs:
+    """`surpassedThreshold` is not part of the CLI's own client-side
+    warning thresholds (the 90/75/50/25 table), so nothing here
+    attributes it to that table; the field is not read by any code, so
+    it is not described here at all."""
+
+    def test_llm_py_does_not_mention_surpassed_threshold(self):
+        assert "surpassedThreshold" not in inspect.getsource(llm)
+
+    def test_llm_cache_doc_does_not_mention_surpassed_threshold(self):
+        text = (ROOT / "docs" / "LLM_CACHE.md").read_text()
+        assert "surpassedThreshold" not in text
 
 
 # -- engine calls as events ---------------------------------------------------

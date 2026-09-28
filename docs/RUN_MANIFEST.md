@@ -273,7 +273,10 @@ otherwise.
   manifest does not record them yet. A pause they cause is the
   invocation's `paused` outcome, and its call event says why and when
   the run can go on — except a report that a call ran on usage credits,
-  whose call event gives no `resumes_at` at all: the subscription does
-  not say when that clears, so the operator confirms that extra usage is
-  off on the account before invoking the run again, rather than waiting
-  for a time nothing will report.
+  which stops dispatch only once that report arrives: the reported
+  call, and any others already in flight when it lands, may already
+  have used credits, and only turning extra usage off on the account
+  guarantees none does. Its call event gives no `resumes_at` at all: the
+  subscription does not say when the pause clears, so the operator
+  confirms that extra usage is off on the account before invoking the
+  run again, rather than waiting for a time nothing will report.
