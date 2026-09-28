@@ -240,13 +240,19 @@ class TestValidators:
 
 
 class TestLoading:
-    """load_manifest parses each distinct text once and hands every
-    caller a manifest of its own (#254)."""
+    """load_manifest reuses the parse of a text it loaded recently, and
+    hands every caller a manifest of its own (#254)."""
 
     def test_one_text_is_parsed_once_whatever_path_it_comes_from(
         self, tmp_path, monkeypatch
     ):
-        # a comment no other load carries, so this text is new to the cache
+        # The parse cache outlives the test, and a text it holds is
+        # served without a parse, which would leave the count below at 0.
+        # Another test may have loaded minimal_raw()'s text as it is, and
+        # an earlier run of this test in the process (under a rerun
+        # plugin, say) this test's own. A comment with a fresh uuid makes
+        # the text new to the cache every time, without reaching into the
+        # cache to clear it.
         text = yaml.safe_dump(minimal_raw()) + f"# {uuid.uuid4().hex}\n"
         first, second = tmp_path / "first.yaml", tmp_path / "second.yaml"
         first.write_text(text)

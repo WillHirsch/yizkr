@@ -15,7 +15,10 @@ and Sebastian a human, and the writer finds both by label.
 
 The marker keeps the slice apart from every other test's items, and the
 fixed run metadata keeps each batch's fingerprint, so a re-run reuses the
-items and run items and writes nothing.
+items and run items and writes nothing. Each source is registered with
+media of its own, which its claims cite by SHA-1 (#102); the marker is
+not the one the slice had when its claims cited their sources by QID,
+whose batches, and so run items, were others.
 """
 
 from __future__ import annotations
@@ -25,15 +28,16 @@ from dataclasses import dataclass
 import pytest
 
 from tests.fixtures import example_universe as u
-from yizkr.claims import ClaimBatch, QidRef
-from yizkr.pipeline.registrar import register_artifact
+from yizkr.claims import ArtifactRef, ClaimBatch, QidRef
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import BatchWriter
+
+from .conftest import register_fictional
 
 pytestmark = pytest.mark.live
 
 UNIVERSE = u.by_key()
-MARK = "(found-item test)"
+MARK = "(found-item test, content-keyed)"
 MARRIAGE = "marriage-cert-1905"
 DIRECTORY = "directory-1912"
 TREE = "family-tree-1984"
@@ -81,9 +85,10 @@ def year(value: int, month: int | None = None, day: int | None = None):
     return date
 
 
-def batches(sources: dict[str, str]) -> dict[str, ClaimBatch]:
+def batches(sources: dict[str, ArtifactRef]) -> dict[str, ClaimBatch]:
     """Each source's batch, by universe source key, as extraction gives
-    it (the tree's before the resolve step)."""
+    it (the tree's before the resolve step), each claim citing its
+    source's key in `sources`."""
 
     def claim(subject, prop, value, source, excerpt, qualifiers=()):
         return {
@@ -92,7 +97,7 @@ def batches(sources: dict[str, str]) -> dict[str, ClaimBatch]:
             "value": value,
             "qualifiers": list(qualifiers),
             "source": {
-                "artifact": {"kind": "qid", "qid": sources[source]},
+                "artifact": sources[source].model_dump(mode="json"),
                 "transcription_excerpt": {
                     "text": excerpt,
                     "language": UNIVERSE[source].lang,
@@ -214,17 +219,18 @@ def found(client) -> FoundSlice:
         (DIRECTORY, "gegr. 1863, Inh. Sebastian Löbig"),
     ):
         assert quoted in UNIVERSE[key].text  # quoted, never paraphrased
-    sources = {
-        key: register_artifact(
+    registered = {
+        key: register_fictional(
             client,
-            media_path=None,
-            artifact_type=UNIVERSE[key].artifact_class or "artifact",
-            title=marked(UNIVERSE[key].title),
-            description="written by tests/integration; safe to delete",
-        ).artifact_qid
+            marked(UNIVERSE[key].title),
+            UNIVERSE[key].artifact_class or "artifact",
+        )
         for key in SOURCES
     }
-    written = batches(sources)
+    sources = {key: artifact.qid for key, artifact in registered.items()}
+    written = batches(
+        {key: artifact.ref for key, artifact in registered.items()}
+    )
     results = {}
     for key in SOURCES:
         if key == TREE:

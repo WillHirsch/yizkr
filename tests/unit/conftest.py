@@ -4,44 +4,96 @@ Two defaults keep the unit tests fast without changing what they check:
 
 - **One BLAS thread.** Language detection (py3langid) runs on numpy,
   whose threaded OpenBLAS build starts a worker thread per CPU, and the
-  workers spin after every call. `OPENBLAS_NUM_THREADS` defaults to 1
-  here, before anything imports numpy; a value already set in the
-  environment is kept.
+  workers spin after every call. `OPENBLAS_NUM_THREADS` is set to 1
+  here, before anything imports numpy, unless `OPENBLAS_NUM_THREADS`,
+  `OMP_NUM_THREADS` or `MKL_NUM_THREADS` is set and not empty: a thread
+  count given in the environment is kept. OpenBLAS reads the variable
+  once, as numpy loads, so when numpy is loaded before this file is
+  imported (by a plugin, say), the default comes too late, and a
+  warning says so.
 - **No fsync.** `os.fsync`, `os.fdatasync` and `os.sync` are no-ops in
   every unit test (the `_no_fsync` fixture). The pipeline's atomic
   writes (yizkr.pipeline.stages) fsync every file they stage, at
   several milliseconds a call, and the unit tests stage thousands of
   files. Files are still written, read and replaced as before; only
   the flush to the disk is skipped, and that matters only if the
-  machine crashes, which no unit test can observe. A test that needs
-  the real calls is marked `real_fsync`, as the durability tests in
-  test_stages.py are. The live tests under tests/integration always
-  make the real calls.
+  machine crashes, which no unit test can observe. The stand-ins for
+  `os.fsync` and `os.fdatasync` still check their descriptor with
+  `os.fstat`, so a call on one that is not open fails, as the real call
+  does. A test that needs the real calls is marked `real_fsync` (the
+  marker is registered in pyproject.toml), as the durability tests in
+  test_stages.py and test_llmcache.py are. The live tests under
+  tests/integration always make the real calls.
+
+test_conftest.py tests both.
 """
 
 from __future__ import annotations
 
 import os
-
-# OpenBLAS reads this once, when numpy first loads it, so it is set
-# before anything here or in a test module can import numpy.
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+import sys
+import warnings
+from collections.abc import Container, MutableMapping
 
 import pytest
 
-_SYNC_CALLS = ("fsync", "fdatasync", "sync")
+# Each names a thread count that numpy's BLAS library can take from the
+# environment: OpenBLAS reads its own variable and OpenMP's, and MKL, which
+# some numpy builds use instead, reads its own and OpenMP's.
+BLAS_THREAD_VARIABLES = (
+    "OPENBLAS_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+)
 
 
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "real_fsync: keep the real os.fsync, os.fdatasync and os.sync, "
-        "which the unit tests otherwise skip (tests/unit/conftest.py)",
-    )
+def default_blas_threads(
+    environ: MutableMapping[str, str], modules: Container[str]
+) -> None:
+    """Set `OPENBLAS_NUM_THREADS` to 1 in `environ`, unless one of
+    BLAS_THREAD_VARIABLES is set there and not empty. Warn when numpy is
+    among the loaded `modules` already, since the default then comes too
+    late for this process."""
+    if any(environ.get(name) for name in BLAS_THREAD_VARIABLES):
+        return
+    environ["OPENBLAS_NUM_THREADS"] = "1"
+    if "numpy" in modules:
+        warnings.warn(
+            "numpy was loaded before tests/unit/conftest.py set "
+            "OPENBLAS_NUM_THREADS=1, too late for this process, whose "
+            "OpenBLAS keeps a thread per CPU; set OPENBLAS_NUM_THREADS=1 "
+            "in the environment to run the unit tests with one BLAS thread",
+            stacklevel=2,
+        )
 
 
-def _skip_sync(*args, **kwargs) -> None:
-    """Stands in for the sync calls: flushes nothing."""
+# OpenBLAS reads the variable once, as numpy loads it, so this runs as the
+# file is imported, before any test module can import numpy.
+default_blas_threads(os.environ, sys.modules)
+
+# The real os.fstat, kept so that a test that patches os.fstat does not
+# change what the stand-ins check.
+_fstat = os.fstat
+
+
+def _skip_fsync(fd) -> None:
+    """Stands in for os.fsync and os.fdatasync: flushes nothing, but checks
+    the descriptor as the real calls do, so one that is not open still
+    fails. Like them, it takes an int or an object with a fileno()
+    method."""
+    _fstat(fd if isinstance(fd, int) else fd.fileno())
+
+
+def _skip_sync() -> None:
+    """Stands in for os.sync: flushes nothing."""
+
+
+# each sync call, and what stands in for it
+_STAND_INS = {
+    "fsync": _skip_fsync,
+    "fdatasync": _skip_fsync,
+    "sync": _skip_sync,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -49,12 +101,13 @@ def _no_fsync(request, monkeypatch):
     """Make the sync calls no-ops for the test, unless it is marked
     `real_fsync`. The test's own `monkeypatch` holds the patch, so it
     unwinds in order with any patch the test makes; a test that calls
-    `monkeypatch.undo()` makes the real calls from then on."""
+    `monkeypatch.undo()` makes the real calls from then on, so a test
+    scopes its own patches with `monkeypatch.context()` instead."""
     if request.node.get_closest_marker("real_fsync") is not None:
         return
-    for name in _SYNC_CALLS:
+    for name, stand_in in _STAND_INS.items():
         if hasattr(os, name):
-            monkeypatch.setattr(os, name, _skip_sync)
+            monkeypatch.setattr(os, name, stand_in)
 
 
 @pytest.fixture(autouse=True)

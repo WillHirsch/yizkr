@@ -10,7 +10,6 @@ from yizkr.claims import (
     ArtifactRef,
     Claim,
     ClaimBatch,
-    QidRef,
     RegionPercent,
     TimeValue,
     load_vocabulary,
@@ -202,21 +201,20 @@ class TestArtifactRef:
     )
     def test_entity_refs_cannot_name_the_source(self, ref):
         # an artifact is never proposed by extraction or named by a
-        # vocabulary key: only its content (or its registered item) is
+        # vocabulary key: only its content is
         with pytest.raises(ValidationError):
             batch(spouse_claim(source=source(artifact=ref)))
 
-    def test_qid_names_an_item_on_the_target_instance(self):
-        cited = (
+    def test_an_item_qid_cannot_name_the_source(self):
+        """No dual format (#102): a claim that cites its artifact item by
+        QID, as batches made before content addressing did, is refused,
+        whatever instance the item is on."""
+        with pytest.raises(ValidationError):
             batch(
                 spouse_claim(
                     source=source(artifact={"kind": "qid", "qid": "Q23"})
                 )
             )
-            .claims[0]
-            .source.artifact
-        )
-        assert cited == QidRef(qid="Q23")
 
     def test_display_form_is_the_prefixed_digest(self):
         # the review CSV shows a source artifact through str()
@@ -518,9 +516,11 @@ class TestJsonSchemaExport:
         claim_schema = schema["$defs"]["Claim"]
         assert "source" in claim_schema["required"]
 
-    def test_source_artifact_offers_only_artifact_and_qid(self):
+    def test_source_artifact_offers_only_the_content_key(self):
+        """The schema the extraction prompts carry offers one form of
+        source: the artifact's SHA-1 (#102)."""
         schema = ClaimBatch.model_json_schema()
         artifact = schema["$defs"]["SourceReference"]["properties"]["artifact"]
-        assert set(artifact["discriminator"]["mapping"]) == {"artifact", "qid"}
+        assert artifact == {"$ref": "#/$defs/ArtifactRef"}
         sha1 = schema["$defs"]["ArtifactRef"]["properties"]["sha1"]
         assert sha1["pattern"] == "^[0-9a-f]{40}$"

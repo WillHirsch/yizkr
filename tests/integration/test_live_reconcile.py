@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.reconcile import (
     _roster_pair_facts,
     fetch_place_containment,
@@ -41,15 +41,15 @@ def _local(local_id: str, label: str, kind: str) -> dict:
     }
 
 
-def _source(artifact_qid: str, excerpt: str) -> dict:
+def _source(artifact: ArtifactRef, excerpt: str) -> dict:
     return {
-        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "artifact": artifact.model_dump(mode="json"),
         "page_number": "1",
         "transcription_excerpt": {"text": excerpt, "language": "en"},
     }
 
 
-def _relations_batch(artifact_qid: str) -> ClaimBatch:
+def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
     return ClaimBatch.model_validate(
         {
             "extraction_run": {
@@ -71,7 +71,7 @@ def _relations_batch(artifact_qid: str) -> ClaimBatch:
                         "type": "item",
                         "value": _local("e_elder", ELDER, "human"),
                     },
-                    "source": _source(artifact_qid, "son of the elder"),
+                    "source": _source(artifact, "son of the elder"),
                 },
                 {
                     "subject": _local("e_town", TOWN, "place"),
@@ -80,7 +80,7 @@ def _relations_batch(artifact_qid: str) -> ClaimBatch:
                         "type": "item",
                         "value": _local("e_country", COUNTRY, "place"),
                     },
-                    "source": _source(artifact_qid, "a town in the country"),
+                    "source": _source(artifact, "a town in the country"),
                 },
             ],
         }
@@ -102,7 +102,10 @@ def written(client, tmp_path_factory):
         description="written by tests/integration; safe to delete",
         pages=1,
     )
-    BatchWriter(client).write_batch(_relations_batch(artifact.artifact_qid))
+    # the claims cite the source by the SHA-1 of its media (#102)
+    BatchWriter(client).write_batch(
+        _relations_batch(ArtifactRef.from_path(media))
+    )
     return artifact.artifact_qid
 
 

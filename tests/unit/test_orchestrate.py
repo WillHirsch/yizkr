@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline import monitor, transcribe
 from yizkr.pipeline.orchestrate import (
@@ -58,6 +58,11 @@ RUN = {
 }
 
 
+# the letter `make_run` writes, by the SHA-1 of its bytes: the key its
+# claims cite (#102)
+LETTER_REF = ArtifactRef.from_bytes(b"Rahel was born in 1871.")
+
+
 def make_batch(entities=True) -> ClaimBatch:
     return ClaimBatch.model_validate(
         {
@@ -71,7 +76,7 @@ def make_batch(entities=True) -> ClaimBatch:
                     },
                     "property": "date_of_birth",
                     "value": {"type": "time", "year": 1871},
-                    "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+                    "source": {"artifact": LETTER_REF.model_dump()},
                 }
             ],
             "entities": [{"id": "e1", "label": "Rahel", "kind": "human"}]
@@ -541,6 +546,24 @@ class TestIsolationAndDiscovery:
         saved = ClaimBatch.model_validate_json(doc.batch.read_text())
         assert saved.extraction_run.model_identifier == "gedcom-adapter"
         assert saved.entities[0].label == "Rahel Löbig"
+        # every claim cites the export by the SHA-1 of its bytes (#102)
+        cited = ArtifactRef.from_path(folder / "family.ged")
+        assert saved.claims
+        assert all(claim.source.artifact == cited for claim in saved.claims)
+
+    def test_an_extracted_batch_cites_its_document(self, tmp_path):
+        """The scripted model cites the artifact item by the QID the
+        prompt names; the batch cites the document by the SHA-1 of its
+        bytes, the same after any instance reset (#102)."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        assert ArtifactRef.from_path(doc.source) == LETTER_REF
+        saved = ClaimBatch.model_validate_json(doc.batch.read_text())
+        assert saved.claims
+        assert all(
+            claim.source.artifact == LETTER_REF for claim in saved.claims
+        )
 
     def test_slugify_keeps_paths_safe(self):
         assert slugify("Lobig Family Tree") == "Lobig-Family-Tree"
@@ -2021,16 +2044,16 @@ class TestUnrecordedDirectory:
             raise error
 
         orchestrator = make_run(tmp_path)
-        monkeypatch.setattr(orchestrate.Derivations, "begin", refuse)
-        if isinstance(error, KeyboardInterrupt):
-            with pytest.raises(KeyboardInterrupt):
-                orchestrator.run()
-        else:
-            assert orchestrator.run() == 1
-        (doc,) = orchestrator.documents()
-        assert not doc.state_path.exists()
-        assert not doc.unrecorded
-        monkeypatch.undo()
+        with monkeypatch.context() as patch:
+            patch.setattr(orchestrate.Derivations, "begin", refuse)
+            if isinstance(error, KeyboardInterrupt):
+                with pytest.raises(KeyboardInterrupt):
+                    orchestrator.run()
+            else:
+                assert orchestrator.run() == 1
+            (doc,) = orchestrator.documents()
+            assert not doc.state_path.exists()
+            assert not doc.unrecorded
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES

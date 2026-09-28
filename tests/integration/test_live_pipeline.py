@@ -3,7 +3,9 @@ regression (two values on one property must COEXIST — the second write
 must never replace the first; ADR-0002), the provenance of a minted
 item's type statements, which the reappraisal queue and the unreferenced
 report must count correctly (#88), and a later source's kind for an item
-that already exists, which the queue must reflect (#233)."""
+that already exists, which the queue must reflect (#233). Every claim
+cites its artifact by the SHA-1 of the artifact's media (#102), which the
+writer resolves to the registered item."""
 
 from __future__ import annotations
 
@@ -15,14 +17,14 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.fixtures import example_universe as u
-from yizkr.claims import ClaimBatch, QidRef
+from yizkr.claims import ArtifactRef, ClaimBatch, QidRef
 from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
-from .conftest import run_sparql, wait_for_query_service
+from .conftest import register_fictional, run_sparql, wait_for_query_service
 
 pytestmark = pytest.mark.live
 
@@ -59,7 +61,12 @@ def tiny_png(tmp_path):
     return path
 
 
-def birth_batch(artifact_qid: str, year: int) -> ClaimBatch:
+# the certificate the `artifact` fixture registers, by the SHA-1 of its
+# media: the key its claims cite
+CERTIFICATE = ArtifactRef.from_bytes(png_bytes())
+
+
+def birth_batch(artifact: ArtifactRef, year: int) -> ClaimBatch:
     return ClaimBatch.model_validate(
         {
             "extraction_run": {
@@ -78,7 +85,7 @@ def birth_batch(artifact_qid: str, year: int) -> ClaimBatch:
                     "property": "date_of_birth",
                     "value": {"type": "time", "year": year},
                     "source": {
-                        "artifact": {"kind": "qid", "qid": artifact_qid},
+                        "artifact": artifact.model_dump(mode="json"),
                         "page_number": "1",
                         "transcription_excerpt": {
                             "text": f"born {year}",
@@ -225,11 +232,11 @@ def test_conflicting_values_coexist(client, artifact):
     silently overwrote a source-attributed statement.
     """
     writer = BatchWriter(client)
-    first = writer.write_batch(birth_batch(artifact.artifact_qid, 1901))
+    first = writer.write_batch(birth_batch(CERTIFICATE, 1901))
     person_qid = first.created_items["person-1"]
 
     writer = BatchWriter(client)  # fresh entity cache
-    writer.write_batch(birth_batch(artifact.artifact_qid, 1902))
+    writer.write_batch(birth_batch(CERTIFICATE, 1902))
 
     years = birth_years_on(client, person_qid)
     assert "+1901-00-00T00:00:00Z" in years
@@ -238,7 +245,7 @@ def test_conflicting_values_coexist(client, artifact):
 
 def test_write_is_idempotent_and_dual_referenced(client, artifact):
     writer = BatchWriter(client)
-    result = writer.write_batch(birth_batch(artifact.artifact_qid, 1901))
+    result = writer.write_batch(birth_batch(CERTIFICATE, 1901))
     assert result.written == 0
     assert result.skipped == 1
 
@@ -296,15 +303,11 @@ def test_agreeing_second_source_appends_reference(client, artifact):
     """A second source asserting the SAME value must not vanish: the
     existing statement gains that source's reference block (R2 — who
     asserts a fact is knowledge), and stays one statement."""
-    second = register_artifact(
-        client,
-        media_path=None,
-        artifact_type="certificate",
-        title=f"{ARTIFACT_TITLE} (second source)",
-        description="written by tests/integration; safe to delete",
+    second = register_fictional(
+        client, f"{ARTIFACT_TITLE} (second source)", "certificate"
     )
     writer = BatchWriter(client)
-    result = writer.write_batch(birth_batch(second.artifact_qid, 1901))
+    result = writer.write_batch(birth_batch(second.ref, 1901))
     assert result.written == 0
     # first suite run appends the reference; later runs find it present
     assert (result.referenced, result.skipped) in ((1, 0), (0, 1))
@@ -314,12 +317,10 @@ def test_agreeing_second_source_appends_reference(client, artifact):
         client, person_qid, "+1901-00-00T00:00:00Z"
     )
     assert count == 1  # still one statement, not a duplicate
-    assert {artifact.artifact_qid, second.artifact_qid} <= sources
+    assert {artifact.artifact_qid, second.qid} <= sources
 
     # re-running the same batch is a no-op (reference already present)
-    rerun = BatchWriter(client).write_batch(
-        birth_batch(second.artifact_qid, 1901)
-    )
+    rerun = BatchWriter(client).write_batch(birth_batch(second.ref, 1901))
     assert rerun.written == 0
     assert rerun.referenced == 0
     assert rerun.skipped == 1
@@ -329,7 +330,7 @@ def test_curated_claim_carries_no_run_reference(client, artifact):
     """A curator-attributed claim (a value correction) is a human
     write: artifact reference only, no extraction-run reference
     (ADR-0003 — process provenance is for machine writes)."""
-    batch = birth_batch(artifact.artifact_qid, 1990)
+    batch = birth_batch(CERTIFICATE, 1990)
     death = batch.claims[0].model_copy(
         update={"property": "date_of_death", "curated": True}
     )
@@ -395,10 +396,7 @@ def test_detected_language_tags_excerpt_reference(client, artifact):
                     "property": "date_of_birth",
                     "value": {"type": "time", "year": 1836},
                     "source": {
-                        "artifact": {
-                            "kind": "qid",
-                            "qid": artifact.artifact_qid,
-                        },
+                        "artifact": CERTIFICATE.model_dump(mode="json"),
                         "page_number": "1",
                         "transcription_excerpt": {
                             "text": german[:60],
@@ -435,7 +433,7 @@ def test_detected_language_tags_excerpt_reference(client, artifact):
     assert all(e["language"] == "de" for e in german_excerpts)
 
 
-def vocabulary_batch(artifact_qid: str) -> ClaimBatch:
+def vocabulary_batch(artifact: ArtifactRef) -> ClaimBatch:
     """One claim per item-10 vocabulary addition (quantity, monolingual
     cause, occupation item, burial place)."""
     subject = {
@@ -445,7 +443,7 @@ def vocabulary_batch(artifact_qid: str) -> ClaimBatch:
         "instance_of": "human",
     }
     source = {
-        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "artifact": artifact.model_dump(mode="json"),
         "page_number": "1",
         "transcription_excerpt": {
             "text": "occupation, burial, cause of death, children",
@@ -517,13 +515,11 @@ def test_item10_vocabulary_writes_and_is_idempotent(client, artifact):
     verbatim monolingual cause round-trip, the occupation item is an
     instance of the occupation class, and a re-run writes nothing."""
     writer = BatchWriter(client)
-    first = writer.write_batch(vocabulary_batch(artifact.artifact_qid))
+    first = writer.write_batch(vocabulary_batch(CERTIFICATE))
     person_qid = first.created_items["person-1"]
     occupation_qid = first.created_items["occ-1"]
 
-    rerun = BatchWriter(client).write_batch(
-        vocabulary_batch(artifact.artifact_qid)
-    )
+    rerun = BatchWriter(client).write_batch(vocabulary_batch(CERTIFICATE))
     assert rerun.written == 0
     assert rerun.skipped == 4
 
@@ -557,7 +553,7 @@ def test_item10_vocabulary_writes_and_is_idempotent(client, artifact):
     assert items["occupation_class"] in occupation_classes
 
 
-def names_batch(artifact_qid: str) -> ClaimBatch:
+def names_batch(artifact: ArtifactRef) -> ClaimBatch:
     """A person carrying typed name claims (ADR-0011)."""
     subject = {
         "kind": "local",
@@ -566,7 +562,7 @@ def names_batch(artifact_qid: str) -> ClaimBatch:
         "instance_of": "human",
     }
     source = {
-        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "artifact": artifact.model_dump(mode="json"),
         "page_number": "1",
         "transcription_excerpt": {
             "text": "née, later, known as",
@@ -605,10 +601,10 @@ def test_typed_names_write_and_round_trip(client, artifact):
     """ADR-0011: typed name claims write end to end as referenced
     monolingual statements, keep the source's wording, and re-run clean."""
     writer = BatchWriter(client)
-    first = writer.write_batch(names_batch(artifact.artifact_qid))
+    first = writer.write_batch(names_batch(CERTIFICATE))
     person_qid = first.created_items["person-1"]
 
-    rerun = BatchWriter(client).write_batch(names_batch(artifact.artifact_qid))
+    rerun = BatchWriter(client).write_batch(names_batch(CERTIFICATE))
     assert rerun.written == 0
     assert rerun.skipped == 3
 
@@ -639,11 +635,11 @@ def test_typed_names_write_and_round_trip(client, artifact):
     assert one("nickname") == {"text": "Iggy", "language": "en"}
 
 
-def harness_batch(artifact_qid: str) -> ClaimBatch:
+def harness_batch(artifact: ArtifactRef) -> ClaimBatch:
     """An organization + employer relation, and an unclassified entity
     carrying a type hint (ADR-0012 / ADR-0013)."""
     source = {
-        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "artifact": artifact.model_dump(mode="json"),
         "page_number": "1",
         "transcription_excerpt": {
             "text": "worked at the hat shop, the Blue Hat",
@@ -712,7 +708,7 @@ def test_organization_employer_and_type_hint_write(client, artifact):
     an unclassified entity is written under the holding class with its
     type hint — never mistyped as a person or place."""
     writer = BatchWriter(client)
-    result = writer.write_batch(harness_batch(artifact.artifact_qid))
+    result = writer.write_batch(harness_batch(CERTIFICATE))
     person_qid = result.created_items["person-1"]
     org_qid = result.created_items["org-1"]
     ship_qid = result.created_items["ship-1"]
@@ -744,12 +740,12 @@ def test_organization_employer_and_type_hint_write(client, artifact):
     assert "ocean liner" in claim_values(ship_qid, "type_hint")
 
 
-def kinship_batch(artifact_qid: str) -> ClaimBatch:
+def kinship_batch(artifact: ArtifactRef) -> ClaimBatch:
     """ADR-0014: sex_or_gender (vocab), the `relative` + kinship_type
     fallback, and a deportation event. The named relative is the
     `relative` statement's subject and the ego its object (ADR-0018)."""
     source = {
-        "artifact": {"kind": "qid", "qid": artifact_qid},
+        "artifact": artifact.model_dump(mode="json"),
         "page_number": "1",
         "transcription_excerpt": {"text": "aunt; deported", "language": "en"},
     }
@@ -824,7 +820,7 @@ def test_adr0014_vocabulary_writes(client, artifact):
     """ADR-0014: sex_or_gender vocab item, the relative+kinship_type
     fallback qualifier, and a deportation event all write and round-trip."""
     writer = BatchWriter(client)
-    result = writer.write_batch(kinship_batch(artifact.artifact_qid))
+    result = writer.write_batch(kinship_batch(CERTIFICATE))
     person_qid = result.created_items["person-1"]
     properties, items = client.vocabulary()
 
@@ -874,12 +870,14 @@ def test_adr0014_vocabulary_writes(client, artifact):
 # batch mints the item, so the writer writes its kind and type hint.
 #
 # Every label carries a marker, so the fixture never reuses an item that
-# another test or run wrote, and a re-run reuses and skips everything.
+# another test or run wrote, and a re-run reuses and skips everything. It
+# is not the marker the slice had when its claims cited their sources by
+# QID (#102): those batches, and so their run items, were others.
 
 UNIVERSE = u.by_key()
 INTERVIEW = "interview-2002"
 DIRECTORY = "directory-1912"
-TYPE_MARK = "(type-statement test)"
+TYPE_MARK = "(type-statement test, content-keyed)"
 TYPE_HINT = "hat shop"  # the interview's own word for the firm
 # the directory's entry: a firm, its founding year and its owner
 FIRM_ENTRY = "Hutmacherei zum Blauen Hut, gegr. 1863, Inh. Sebastian Löbig"
@@ -910,9 +908,9 @@ def firm_says(source: str, prop: str) -> u.Assertion:
     return assertion
 
 
-def firm_batches(sources: dict[str, str]) -> dict[str, ClaimBatch]:
+def firm_batches(sources: dict[str, ArtifactRef]) -> dict[str, ClaimBatch]:
     """Each source's batch about the firm, by universe source key;
-    `sources` maps those keys to artifact QIDs."""
+    `sources` maps those keys to the keys the artifacts are cited by."""
 
     def batch(source, kind, claims, type_hint=None) -> ClaimBatch:
         firm = {
@@ -933,10 +931,9 @@ def firm_batches(sources: dict[str, str]) -> dict[str, ClaimBatch]:
                         "property": prop,
                         "value": value,
                         "source": {
-                            "artifact": {
-                                "kind": "qid",
-                                "qid": sources[source],
-                            },
+                            "artifact": sources[source].model_dump(
+                                mode="json"
+                            ),
                             "transcription_excerpt": {
                                 "text": excerpt,
                                 "language": UNIVERSE[source].lang,
@@ -994,17 +991,18 @@ def typed_firm(client, config) -> TypedFirm:
     # quoted, never paraphrased
     assert TYPE_HINT in UNIVERSE[INTERVIEW].text
     assert FIRM_ENTRY in UNIVERSE[DIRECTORY].text
-    sources = {
-        key: register_artifact(
+    registered = {
+        key: register_fictional(
             client,
-            media_path=None,
-            artifact_type=UNIVERSE[key].artifact_class or "artifact",
-            title=type_marked(key),
-            description="written by tests/integration; safe to delete",
-        ).artifact_qid
+            type_marked(key),
+            UNIVERSE[key].artifact_class or "artifact",
+        )
         for key in (INTERVIEW, DIRECTORY)
     }
-    batches = firm_batches(sources)
+    sources = {key: artifact.qid for key, artifact in registered.items()}
+    batches = firm_batches(
+        {key: artifact.ref for key, artifact in registered.items()}
+    )
     results = {
         key: BatchWriter(client).write_batch(batches[key])
         for key in (INTERVIEW, DIRECTORY)
@@ -1161,9 +1159,10 @@ def test_rewriting_the_slice_writes_nothing(client, typed_firm):
 #
 # The marker keeps this slice apart from every other test's items, and the
 # fixed run metadata keeps each batch's fingerprint, so a re-run reuses
-# the items and run items and writes nothing.
+# the items and run items and writes nothing. It is not the marker the
+# slice had when its claims cited their sources by QID (#102).
 
-WITNESS_MARK = "(kind-witness test)"
+WITNESS_MARK = "(kind-witness test, content-keyed)"
 MARRIAGE = "marriage-cert-1905"
 WITNESS_RUN = {
     "model_identifier": "integration-test",
@@ -1194,10 +1193,13 @@ def entity_ref(entity: dict) -> dict:
 
 
 def witness_batch(
-    source: str, sources: dict[str, str], entities: list, claims: list
+    source: str,
+    sources: dict[str, ArtifactRef],
+    entities: list,
+    claims: list,
 ) -> ClaimBatch:
     """`source`'s batch: its manifest, and its claims as (subject entity,
-    property, value, excerpt, qualifiers)."""
+    property, value, excerpt, qualifiers), each citing `sources[source]`."""
     return ClaimBatch.model_validate(
         {
             "extraction_run": WITNESS_RUN,
@@ -1208,7 +1210,7 @@ def witness_batch(
                     "value": value,
                     "qualifiers": qualifiers,
                     "source": {
-                        "artifact": {"kind": "qid", "qid": sources[source]},
+                        "artifact": sources[source].model_dump(mode="json"),
                         "transcription_excerpt": {
                             "text": excerpt,
                             "language": UNIVERSE[source].lang,
@@ -1222,7 +1224,9 @@ def witness_batch(
     )
 
 
-def witness_batches(sources: dict[str, str]) -> dict[str, ClaimBatch]:
+def witness_batches(
+    sources: dict[str, ArtifactRef],
+) -> dict[str, ClaimBatch]:
     """Each source's batch, by universe source key, as extraction gives
     it (the directory's before resolution)."""
     occupation = says("sebastian-loebig", MARRIAGE, "occupation")
@@ -1322,17 +1326,18 @@ def witnessed(client, config) -> WitnessedSlice:
         (DIRECTORY, "Inh. Sebastian Löbig"),
     ):
         assert quoted in UNIVERSE[key].text  # quoted, never paraphrased
-    sources = {
-        key: register_artifact(
+    registered = {
+        key: register_fictional(
             client,
-            media_path=None,
-            artifact_type=UNIVERSE[key].artifact_class or "artifact",
-            title=witness_marked(UNIVERSE[key].title),
-            description="written by tests/integration; safe to delete",
-        ).artifact_qid
+            witness_marked(UNIVERSE[key].title),
+            UNIVERSE[key].artifact_class or "artifact",
+        )
         for key in (MARRIAGE, INTERVIEW, DIRECTORY)
     }
-    batches = witness_batches(sources)
+    sources = {key: artifact.qid for key, artifact in registered.items()}
+    batches = witness_batches(
+        {key: artifact.ref for key, artifact in registered.items()}
+    )
     results = {
         key: BatchWriter(client).write_batch(batches[key])
         for key in (MARRIAGE, INTERVIEW)
