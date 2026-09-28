@@ -475,7 +475,8 @@ start and end.
 ### `events.jsonl`
 
 Every line has `at` (UTC), `event` and `invocation` (one per run of `ingest
-run`). Events about a document add `subject` (its media SHA-1) and `kind`;
+run`, and one per recheck of the anomaly checks, `recheck-<hex>`,
+docs/ANOMALIES.md). Events about a document add `subject` (its media SHA-1) and `kind`;
 `document-failed` and a directory's `set-aside` also add `file`, the
 source's file name, which names a document whose source could not be
 read and so has no `subject`; stage events add `stage` (`transcription`,

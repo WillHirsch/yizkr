@@ -24,12 +24,14 @@ comment on each. The run directory's files are described in
   and finds its view current (the `reused` event). So a defect in an
   output made by an earlier run, or under other thresholds, is never
   silent.
-- **On the run's own events**, read as they are appended: every stage's
-  end (`done`, `failed`), a transcription view the transcription check
-  sets aside on reuse (`set-aside`), the LLM cache's events, and the
-  engine's `call` events. The orchestrator also calls the checks when a
-  stage fails, so a run in which every document fails is watched as
-  closely as one in which none does.
+- **On the run's own events**, read each time the orchestrator calls the
+  checks, from where the last call left off: every stage's end (`done`,
+  `failed`), a transcription view the transcription check sets aside on
+  reuse (`set-aside`), the LLM cache's events, and the engine's `call`
+  events. The orchestrator calls the checks when a stage fails too, so a
+  run in which every document fails is watched as closely as one in
+  which none does. (A pause's timer, below, reads the control file, not
+  the events.)
 
 An output made from answers the LLM cache adopted (an archived
 transcription, say) is an output the run stored whose calls the cache
@@ -230,13 +232,17 @@ fail-fast by default. Value: the share; `count`, `of`, `pause`.
 
 **`anomaly-config`**: the thresholds file `$YIZKR_ANOMALIES` names cannot
 be used (below). The run goes on under the defaults, and this alert, with
-a logged warning, says why (`problem`).
+a logged warning, says why (`problem`); its `config` is the defaults'
+digest.
 
 ## Thresholds
 
 `anomalies.yaml` holds every threshold and its default, with a comment
-on each; `pause-timeout-s` and `chars-per-page` sit beside the checks. To
-change some, write a YAML file with just those keys, nested as in
+on each; `pause-timeout-s` and `chars-per-page` sit beside the checks,
+and `version`, the file's layout, which is 1. `pause-timeout-s` is a
+number of seconds up to the longest wait a thread can make
+(`threading.TIMEOUT_MAX`, about 292 years), or `null`; infinity is
+refused. To change some, write a YAML file with just those keys, nested as in
 `anomalies.yaml`, and name it in `$YIZKR_ANOMALIES`; the scratch driver
 may pass one of its own (`anomalies.load_config`, `anomalies.attach`).
 Its values replace the defaults, a list replacing the whole list. A key
@@ -276,24 +282,45 @@ and nobody has resumed the slice, the checks append an abort of it:
 
 ```json
 {"at": "...", "action": "abort", "scope": "kind:media", "by": "anomaly",
- "reason": "kind-failures: not resumed within 1800 s", "check": "kind-failures"}
+ "reason": "kind-failures: not resumed within 1800 s",
+ "check": "kind-failures"}
 ```
 
-A timer started with the pause does it on a thread of its own in the
-run's process, so the abort comes even while no stage runs, and every
-later check looks too. Only a pause the checks alone asked for is
+The timeout runs from the first pause of the stretch that stands since
+the latest start marker. Only a pause the checks alone asked for is
 aborted: once someone else asks for a pause of the same slice, it is
 theirs. `pause-timeout-s: null` holds a pause until someone resumes it.
 
-The timeout runs from the first pause of the stretch that stands since
-the invocation's start marker. A driver that invokes the run again in
-the same process, as the scratch driver (#194) is to after a wait for a
-subscription limit, asks again for the pauses still standing, with the
-`by` they had. Such a pause stands from that request: the timer of the
-checks that first asked for it finds it short of the timeout, starts
-again for the time left, and aborts it then, whether or not any check
-runs in the new invocation. A pause the timer found past the timeout
-during the wait is aborted there, and such a driver carries the abort.
+**The slice stays watched.** From the checks' first pause of a slice to
+the end of the run's process, one watch per run directory looks at the
+slice: a timer on a thread of its own, so a look comes even while no
+stage runs, and every later check the orchestrator calls. Each look
+reads the control file as a driver folds it and, when a pause of the
+checks alone has stood on the slice for the timeout, appends the abort;
+when such a pause stands short of it, the next look comes when it is
+due, and otherwise a timeout later. A slice has one pending timer at a
+time, cancelled when a look needs a sooner one. The look holds the lock
+the control file's appenders take (rundir's `_append_line`) from its
+read to its abort, so no other process appends a request in between:
+an operator's resume lands before the look, and is seen, or after the
+abort. The lock is POSIX's, so it does not hold against this process's
+own threads, nor after any descriptor on the file in this process is
+closed.
+
+The slice stays watched after its pause is aborted, resumed or cleared,
+because a driver that invokes the run again in the same process, as the
+scratch driver (#194) is to after a wait for a subscription limit, asks
+again, after its new start marker, for the pauses that stood when it
+looked, with the `by` they had (a carry). It may have looked before the
+checks aborted a pause, during its wait or the next invocation's
+preflight, or the timer may look between its start marker and its
+carry; either way the carried pause stands again, and no invocation's
+checks asked for it. The watch finds it at its next look and times it
+out from the carried request. So a carried pause of the checks is
+aborted a timeout after the carry at the latest, as long as the process
+runs, whenever the carry comes and whether or not any check runs in the
+new invocation; a pause found past its timeout during the wait is
+aborted there, and such a driver carries the abort instead.
 
 **How a driver sees it.** A driver folds `control.jsonl` with
 `rundir.fold_control`, as it folds every request, the monitor's
@@ -303,17 +330,19 @@ ingest run` honours a kind's pause or abort between documents, and a
 stage's or a kind's before every stage: a document it does not dispatch
 keeps its status, and one whose stage is held is `paused`. A driver that
 waits on a paused slice, as the scratch driver (#194) is to, finds the
-abort in the same fold and stops waiting: the checks end the wait
-without any help from it. A new invocation's start marker clears every
-pause and abort, apart from those a driver asks for again (above).
+abort in the same fold and stops waiting: the checks end the wait,
+carried pauses included, without any code of the driver's beyond
+folding the control file and running in the same process. A new
+invocation's start marker clears every pause and abort, apart from
+those a driver asks for again (above).
 
 The checks run wherever the orchestrator stores, reuses or fails a
 stage: in `Orchestrator._transcription`, `_derive`, `_critique`,
 `_reused_view` and `_run_stage`. `yizkr ingest run` reaches them through
 `_advance`, and a driver that takes each stage of each document through
-those methods reaches them the same way. A pause or an abort only stops dispatch: in-flight
-calls finish, every completed output stays stored, and the next
-invocation takes the slice up where it stopped.
+those methods reaches them the same way. A pause or an abort only stops
+dispatch: in-flight calls finish, every completed output stays stored,
+and the next invocation takes the slice up where it stopped.
 
 ## Recheck
 
@@ -332,8 +361,11 @@ checks, which read a run's dispatches and calls rather than its outputs,
 are not checked again. Its alerts, all carried, are appended to the
 run's alerts under an invocation of their own, `recheck-<hex>`, which an
 `anomaly-recheck` event opens with the thresholds' digest and the number
-of documents. Nothing is written into a document's directory. It prints
-how many alerts it appended, by check.
+of documents. A document whose stored outputs the checks cannot read (a
+`batch.json` that does not hold a batch's shape, say) is an
+`anomaly-error` event, and the others are checked. Nothing is written
+into a document's directory. It prints how many alerts it appended, by
+check.
 
 ## What the checks never do
 
