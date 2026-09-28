@@ -490,12 +490,35 @@ def parse_chunk_gaps(response: str) -> list[dict]:
 def _holds(value: Any) -> bool:
     """Whether a JSON value holds something at any depth: an object when
     one of its values does, a list when one of its items does, anything
-    else when it is not empty (null, false, 0 or "")."""
-    if isinstance(value, dict):
-        return any(_holds(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_holds(item) for item in value)
-    return bool(value)
+    else when it is not empty (null, false, 0 or "").
+
+    It walks the value with a stack of its own rather than by recursion,
+    so a nest as deep as json decodes never raises RecursionError."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif item:
+            return True
+    return False
+
+
+_GAP_FIELDS = frozenset({"subject", "predicate", "object", "evidence"})
+
+
+def _merged_gap_line(gap: Any) -> bool:
+    """Whether the value under the terminal sentinel's `gap` key is a gap
+    line merged into it: a gap line (_gap_line) that carries nothing else
+    that holds something, no list or object that holds something under a
+    key other than the four that parse_chunk_gaps reads."""
+    return _gap_line(gap) and not any(
+        isinstance(value, (list, dict)) and _holds(value)
+        for key, value in gap.items()
+        if key not in _GAP_FIELDS
+    )
 
 
 def parse_chunk_unread(response: str) -> list[dict]:
@@ -507,13 +530,15 @@ def parse_chunk_unread(response: str) -> list[dict]:
     claim and a gap line (well formed or not) are read. The terminal
     sentinel is read too, unless one of its keys holds a list or object
     that holds something, such as claims carried inside it. A note in a
-    string on it is harmless, and so is a gap line merged into it, a `gap`
-    that parse_chunk_gaps reads (_gap_line). Anything else under `gap`,
-    such as claims or a list of gap lines, is unread like a list of notes
-    or of line numbers under any other key, since a failure that shows,
-    which `--refresh extract` asks the model again for, is preferred to
-    claims lost in silence. Any other object is unread unless it holds
-    nothing at any depth, as in `{}`, `{"claims": []}` or
+    string on it is harmless, and so is a gap line merged into it
+    (_merged_gap_line), which parse_chunk_gaps reads: a `gap` that has a
+    subject and a predicate and carries nothing else that holds something
+    in a list or object. Anything else under `gap`, such as claims, a gap
+    line that carries them or a list of gap lines, is unread like a list
+    of notes or of line numbers under any other key, since a failure that
+    shows, which `--refresh extract` asks the model again for, is
+    preferred to claims lost in silence. Any other object is unread unless
+    it holds nothing at any depth, as in `{}`, `{"claims": []}` or
     `{"result": {"claims": [{}]}}`, which say there is nothing.
 
     They are counted, never guessed at. A chunk whose answer held such
@@ -527,7 +552,7 @@ def parse_chunk_unread(response: str) -> list[dict]:
             carried = [
                 value
                 for key, value in obj.items()
-                if not (key == "gap" and _gap_line(value))
+                if not (key == "gap" and _merged_gap_line(value))
                 and isinstance(value, (list, dict))
                 and _holds(value)
             ]

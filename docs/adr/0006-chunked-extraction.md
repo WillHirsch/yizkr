@@ -221,20 +221,21 @@ claim. What an object holds decides, at any depth, not its shape: an
 object that holds nothing, such as `{}`, `{"claims": []}` or
 `{"result": {"claims": [{}]}}`, says there is nothing, and so does a
 sentinel whose lists and objects hold nothing. A note in a string on the
-sentinel is harmless, and a gap line merged into it (a `gap` object with
-a subject and a predicate, the shape the gap parser reads) is read as a
-gap. A note in an object of its own beside the sentinel is unread, and
-so is any other list or object on the sentinel that holds something,
-under `gap` as under any other key: claims, a list of gap lines, even a
-list of notes or of line numbers. A failure that shows, which
-`--refresh extract` asks the model again for, is preferred to claims
-lost in silence. The failed extraction's error leads with that outcome
-and names every cause, then any fallback tier taken, with the reason
-each attempt at the refused turn gave, each cut short so that the whole
-stays within a `failed` event. A failure keeps no view, so each run
-makes the extraction again, from the cache at no engine cost, and a
-parser fix reaches it; the same answers fail the same way until
-`--refresh extract` or a new epoch asks afresh.
+sentinel is harmless, and a gap line merged into it is read as a gap
+when it has a subject and a predicate, the shape the gap parser reads,
+and carries nothing else that holds something in a list or object. A
+note in an object of its own beside the sentinel is unread, and so is
+any other list or object on the sentinel that holds something, under
+`gap` as under any other key: claims, a gap line that carries them, a
+list of gap lines, even a list of notes or of line numbers. A failure
+that shows, which `--refresh extract` asks the model again for, is
+preferred to claims lost in silence. The failed extraction's error leads
+with that outcome and names every cause, then any fallback tier taken,
+with the reason each attempt at the refused turn gave, each cut short so
+that the whole stays within a `failed` event. A failure keeps no view,
+so each run makes the extraction again, from the cache at no engine
+cost, and a parser fix reaches it; the same answers fail the same way
+until `--refresh extract` or a new epoch asks afresh.
 Otherwise the empty batch is claim-free, on the word of the answers the
 extractor accepted, on either tier: a refused manifest falls back rather
 than failing the document (ADR-0032 §5), and when the line-range tier

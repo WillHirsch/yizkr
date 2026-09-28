@@ -497,12 +497,14 @@ class TestChunkResponseContract:
         `predicate` or is written flat under another key, any other object
         that holds something (a number, or a note beside the sentinel), and
         a sentinel that carries a list or object that holds something under
-        any key, `gap` included unless it holds a gap line that
-        parse_chunk_gaps reads (claims under `gap` would otherwise be lost
-        without a trace). Read: claims, gap lines, well formed or not, the
-        sentinel, a sentinel with a note in a string, an empty list or
-        object, or a gap line merged into it, and objects that hold nothing
-        at any depth, which say there is nothing."""
+        any key, a gap line under another key than `gap` included, and
+        under `gap` unless it holds a gap line that parse_chunk_gaps reads
+        and that carries nothing else that holds something in a list or
+        object (claims under `gap`, or in a gap line there, would otherwise
+        be lost without a trace). Read: claims, gap lines, well formed or
+        not, the sentinel, a sentinel with a note in a string, an empty
+        list or object, or a gap line merged into it, and objects that hold
+        nothing at any depth, which say there is nothing."""
         born = claim("e1", "Hildegard Löbig", 1876)
         renamed = json.loads(with_predicate([born]).splitlines()[0])
         godparent = {"subject": "e1", "predicate": "godparent of"}
@@ -541,19 +543,28 @@ class TestChunkResponseContract:
             {"done": True, "claims_emitted": 1, "gap": [born]},
             {"done": True, "claims_emitted": 1, "gap": {"claims": [born]}},
             {"done": True, "claims_emitted": 1, "gap": born},
+            {
+                "done": True,
+                "claims_emitted": 1,
+                "gaps_emitted": 1,
+                "gap": {**godparent, "object": "e2", "claims": [born]},
+            },
+            {"done": True, "claims_emitted": 1, "result": renamed},
             # kept on purpose: a failure that shows, which --refresh extract
             # asks again, rather than claims lost in silence
             {"done": True, "claims_emitted": 0, "notes": ["nothing else"]},
             {"done": True, "claims_emitted": 0, "lines": [1, 4]},
             {"done": True, "claims_emitted": 0, "gaps": [godparent]},
+            {"done": True, "claims_emitted": 0, "gaps": godparent},
             {"done": True, "claims_emitted": 0, "gap": [godparent] * 2},
         ]
         response = "\n".join(json.dumps(obj) for obj in (*read, *unread))
         assert parse_chunk_unread(response) == unread
-        assert (
-            parse_chunk_gaps(response)
-            == [{**godparent, "object": "", "evidence": ""}] * 2
-        )
+        assert parse_chunk_gaps(response) == [
+            {**godparent, "object": "", "evidence": ""},
+            {**godparent, "object": "", "evidence": ""},
+            {**godparent, "object": "e2", "evidence": ""},
+        ]
 
 
 class TestGapChannel:
@@ -1671,6 +1682,27 @@ class TestExtractionsWithoutClaims:
         batch = extractor.extract(transcription(), "Q23")
         assert len(batch.claims) == 2
         assert extractor.attention == []
+        assert side_output(tmp_path, "coverage.json")["unread_objects"] == 1
+
+    def test_a_deep_nest_beside_claims_is_counted_not_raised(self, tmp_path):
+        """An object nested 900 levels deep, about as deep as json decodes,
+        beside a claim: what it holds is judged without recursion, so the
+        extraction neither raises RecursionError nor loses the claim, and
+        the nest is counted as unread (#45)."""
+        nest = '{"notes": ' + "[" * 899 + '"see page 2"' + "]" * 899 + "}"
+        answer = "\n".join(
+            [
+                json.dumps(claim("e1", "e1", 1917)),
+                nest,
+                json.dumps({"done": True, "claims_emitted": 1}),
+            ]
+        )
+        llm = ScriptedLlm(
+            [entity_manifest_json(), answer, placeholder_claims("e2")]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
+        batch = extractor.extract(transcription(), "Q23")
+        assert len(batch.claims) == 2
         assert side_output(tmp_path, "coverage.json")["unread_objects"] == 1
 
     @pytest.mark.parametrize(

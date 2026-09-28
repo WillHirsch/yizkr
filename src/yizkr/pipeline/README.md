@@ -91,17 +91,17 @@ as claims (claims wrapped in one object or carried in the sentinel, say,
 or written with other keys; an object that holds nothing at any depth,
 such as `{}` or `{"claims": [{}]}`, counts for nothing), or validation
 rejected every claim. The `error` leads with that outcome and names
-every cause, then any fallback tier taken, with each attempt's reason. A chunk that failed because its engine call
-failed, or its answer was cut off, is asked again on the next run. A
-failure the model's answers caused is not cured by re-running: the LLM
-cache replays the same answers, at no engine cost, and they fail the
-same way (so a parser fix does reach them). To ask the model again, run
-with `--epoch extract=N` (a new epoch), which re-asks only the documents
-without a current batch, such as a failed one, or with `--refresh
-extract`, which extracts every document again. An extraction whose
-accepted answers say the document holds no claims, on either tier, is no
-failure: its batch is kept, and its `extraction` stage needs attention,
-with the reason.
+every cause, then any fallback tier taken, with each attempt's reason. A
+chunk that failed because its engine call failed, or its answer was cut
+off, is asked again on the next run. A failure the model's answers
+caused is not cured by re-running: the LLM cache replays the same
+answers, at no engine cost, and they fail the same way (so a parser fix
+does reach them). To ask the model again, run with `--epoch extract=N`
+(a new epoch), which re-asks only the documents without a current batch,
+such as a failed one, or with `--refresh extract`, which extracts every
+document again. An extraction whose accepted answers say the document
+holds no claims, on either tier, is no failure: its batch is kept, and
+its `extraction` stage needs attention, with the reason.
 
 State for each document lives in `var/runs/<folder>/<doc>/`: its views
 (`transcription.json`, `batch.json`, `critique.json`, and the extractor's
