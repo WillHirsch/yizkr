@@ -939,9 +939,9 @@ class TestCannotLink:
         assert set(review["conflict"]["mentions"]) == set(gustavs[1:])
         # every pair the closure holds is confident, and still none merges
         assert {p["link"] for p in review["pairs"]} == {CONFIDENT}
-        assert {
-            identity["mentions"][gustav]["method"] for gustav in gustavs
-        } == {CONFLICTING}
+        entries = [identity["mentions"][gustav] for gustav in gustavs]
+        assert {entry["method"] for entry in entries} == {CONFLICTING}
+        assert len({entry["cluster"] for entry in entries}) == 3
         assert identity["summary"]["within_manifest_pairs"] == 1
         assert identity["summary"]["confident_links_only"]["conflicting"] == 1
 
