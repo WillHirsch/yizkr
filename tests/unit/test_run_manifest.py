@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import rundir
 from yizkr.pipeline.orchestrate import (
@@ -38,6 +38,9 @@ from yizkr.pipeline.rundir import (
 )
 
 LETTER = "Klara Löbig was born in 1917 in Flörburg."
+# the bytes of a fictional scan, which the claims below cite by
+# their SHA-1 (#102)
+SCAN = ArtifactRef.from_bytes(b"fictional scan: a Loebig family document")
 CLI = "9.9.9"
 FULL_MODEL = "claude-opus-5-5"
 
@@ -63,7 +66,7 @@ def a_batch() -> ClaimBatch:
                     },
                     "property": "date_of_birth",
                     "value": {"type": "time", "year": 1917},
-                    "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+                    "source": {"artifact": SCAN.model_dump()},
                 }
             ],
             "entities": [],

@@ -1,19 +1,20 @@
 """Artifact registrar: media upload + artifact/fragment items (ADR-0003 §4).
 
-Runs BEFORE extraction so that claims can reference artifact items by
-QID. Writes, per artifact:
+Runs before the write, whose claims cite each artifact by the SHA-1 of
+its media: the writer resolves that key to the item whose `media SHA-1`
+statement the registrar writes (ADR-0010). Writes, per artifact:
 
 * the media file, uploaded to the wiki (W1: artifacts as wiki media,
   ADR-0004);
-* an artifact item: label, description, ``instance of -> <type>`` and
-  ``media file -> File:...``;
+* an artifact item: label, description, ``instance of -> <type>``,
+  ``media file -> File:...`` and ``media SHA-1 -> <hex digest>``;
 * optional page-fragment items: ``instance of -> artifact fragment``,
   ``part of -> <artifact>`` with a ``page number`` qualifier.
 
 Provenance of registrar statements: an artifact asserts its own kind
 and its own composition by existing, so `instance of`, `media file`,
-and fragment `part of` statements are referenced ``stated in -> the
-artifact item itself`` (see docs/MODELING.md, "Artifacts and
+`media SHA-1` and fragment `part of` statements are referenced ``stated
+in -> the artifact item itself`` (see docs/MODELING.md, "Artifacts and
 registration"). No statement is written unreferenced (ADR-0003).
 
 Idempotent, keyed on content (ADR-0010): when media is present the

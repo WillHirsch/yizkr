@@ -7,8 +7,9 @@ its sitters, enrolled in a gallery by label only. The raw detect-faces
 batch is refused whole, through the writer and through `yizkr ingest
 write`, before anything is written. The same batch decided row by row on
 a review sheet is written as depicts statements carrying the face's
-region and both references. Labels are deterministic, so re-runs reuse
-the items, and the reviewed write then adds nothing.
+region and both references, the photograph cited by the SHA-1 of its
+bytes (#102). Labels are deterministic, so re-runs reuse the items, and
+the reviewed write then adds nothing.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from tests.integration.test_live_pipeline import png_bytes
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.cli import build_parser
 from yizkr.pipeline.faces import (
     DetectedFace,
@@ -78,6 +79,7 @@ def raw_faces(portrait) -> ClaimBatch:
         gallery.enroll(label=label, embedding=embedding)
     detection = DetectionResult(
         photo_file="integration-test-portrait.png",
+        photo_sha1=ArtifactRef.from_bytes(png_bytes(fill=PORTRAIT_FILL)).sha1,
         artifact_qid=portrait.artifact_qid,
         image_width=1000,
         image_height=500,
