@@ -432,6 +432,25 @@ class TestTheCheck:
         assert "(refusal)" in found.detail
         assert live(tmp_path) == []
 
+    def test_a_reading_too_short_for_its_pages_is_rejected(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """The check is given the scan's page count, as the run's is: a
+        reading of three pages that holds only editorial marks fails its
+        length floor."""
+        corpus = small(tmp_path)
+        archive = an_archive(
+            tmp_path, corpus, **{PHOTO: "[illegible]\n[illegible]"}
+        )
+        monkeypatch.setattr(
+            transcription_check, "media_page_count", lambda path: 3
+        )
+        report = import_(tmp_path, archive, corpus)
+        (found,) = report.outcomes
+        assert found.outcome == REJECTED
+        assert "(too-short)" in found.detail
+        assert live(tmp_path) == []
+
     def test_a_stricter_check_reaches_an_adoption_in_the_run(
         self, tmp_path, engine, monkeypatch
     ):
