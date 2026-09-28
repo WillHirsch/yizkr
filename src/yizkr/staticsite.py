@@ -302,10 +302,10 @@ def format_time(value: str, precision: str) -> str:
 def range_text(bounds: Iterable[tuple[str, str, str]]) -> str:
     """The range a source states for a date, as text to show beside it.
     Each bound is (the label of the qualifier that states it, its
-    xsd:dateTime, its precision) and shows under that label at its own
-    precision, as the person page shows every qualifier: "earliest date:
-    1938; latest date: 1939". The caller passes only the bounds the source
-    gives, so a range open at one end names the one bound it has
+    xsd:dateTime, its precision) and shows at its own precision, in the
+    `label: value` form the person page uses for qualifiers: "earliest
+    date: 1938; latest date: 1939". The caller passes only the bounds the
+    source gives, so a range open at one end names the one bound it has
     ("earliest date: 1945"), never a closed range or a bare date."""
     return "; ".join(
         f"{label}: {format_time(value, precision)}"
@@ -378,16 +378,26 @@ class SiteBuilder:
         qualifier the query read it from (?low for ?earliest, ?high for
         ?latest). So a start's upper bound reads as its latest start date
         and an end's lower bound as its earliest end date (MODELING.md,
-        "Marriages, residences and other periods")."""
-        return range_text(
-            (
-                self._property_labels_by_id[qid_of(row, qualifier)],
-                cell(row, bound),
-                cell(row, f"{bound}Precision"),
+        "Marriages, residences and other periods"). A bound the row gives
+        without a qualifier the site can name stops the build: shown
+        unnamed, it could not say which end it bounds."""
+        bounds = []
+        for qualifier, bound in (("low", "earliest"), ("high", "latest")):
+            if not cell(row, bound):
+                continue
+            pid = qid_of(row, qualifier)
+            label = self._property_labels_by_id.get(pid)
+            if label is None:
+                raise RuntimeError(
+                    f"the person-timeline query gave a row's ?{bound} "
+                    f"without the qualifier that states it (?{qualifier} "
+                    f"is {repr(pid) if pid else 'missing'}); it must "
+                    "project ?low and ?high"
+                )
+            bounds.append(
+                (label, cell(row, bound), cell(row, f"{bound}Precision"))
             )
-            for qualifier, bound in (("low", "earliest"), ("high", "latest"))
-            if cell(row, bound)
-        )
+        return range_text(bounds)
 
     # -- sections -----------------------------------------------------------
 

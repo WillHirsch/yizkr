@@ -34,6 +34,7 @@ from tests.unit.test_disagreement import (
     stated,
     text,
 )
+from yizkr import disagreement
 from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.model.schema import read_manifest_data
@@ -379,6 +380,20 @@ def build(tmp_path, vocabulary, responses):
     return tmp_path / "site", summary
 
 
+@pytest.fixture
+def hostile_label(monkeypatch) -> str:
+    """The earliest date's label, holding characters HTML must escape, as
+    both pages read a bound's label (disagreement.property_labels); returns
+    it escaped."""
+    labels = disagreement.property_labels()
+    monkeypatch.setattr(
+        disagreement,
+        "property_labels",
+        lambda: {**labels, "earliest_date": "earliest <date> & co"},
+    )
+    return "earliest &lt;date&gt; &amp; co"
+
+
 RESPONSES = {
     "GROUP_CONCAT(DISTINCT ?alias": PEOPLE,
     "GROUP_CONCAT(DISTINCT ?qualifierText": STATEMENTS,
@@ -567,6 +582,15 @@ class TestInconsistencies:
         assert "<td>Cäcilie Tarle</td>" in text
         assert "<td>Cäcilie Löbig</td>" in text
 
+    def test_a_stated_range_is_escaped(
+        self, tmp_path, vocabulary, hostile_label
+    ):
+        text = self.page(tmp_path, vocabulary)
+        assert (
+            f'<td>1938 <span class="qualifiers">({hostile_label}: 1938; '
+            "latest date: 1939)</span></td>"
+        ) in text
+
     def test_a_marriage_row_shows_the_range_of_the_end_it_compares(
         self, tmp_path, vocabulary
     ):
@@ -668,7 +692,8 @@ def on_timeline(
 # per the tree and (here) "before 1945" per the interview; (here) the tree
 # has Leopold and Agnes married "between 1946 and 1947" and divorced
 # "after 1956"; and (here) the interview dates Leopold's imprisonment to
-# 1939, "between September 1939 and 1 October 1939".
+# September 1939, between his arrest on 3 September and his release on 1
+# October 1939, the days the registration card gives.
 EUGEN_DIED = on_timeline(
     "eugen-loebig", "date of death", u.Date(1909, 3, 16), REGISTER
 )
@@ -707,9 +732,9 @@ DIVORCED = on_timeline(
 HELD = on_timeline(
     "leopold-loebig",
     "imprisonment",
-    u.Date(1939),
+    u.Date(1939, 9),
     INTERVIEW,
-    earliest=u.Date(1939, 9),
+    earliest=u.Date(1939, 9, 3),
     latest=u.Date(1939, 10, 1),
 )
 DATED = [
@@ -787,11 +812,11 @@ class TestTimeline:
         )
 
     def test_each_bound_shows_at_its_own_precision(self, site):
-        # the bounds are finer than the year they bound, and are never cut
-        # to it
+        # a month bounded by two days: the date keeps its month and the
+        # bounds their days, none cut or padded to another's precision
         assert self.dated(site, HELD) == (
-            '1939 <span class="qualifiers">'
-            "(earliest date: 1939-09; latest date: 1939-10-01)</span>"
+            '1939-09 <span class="qualifiers">'
+            "(earliest date: 1939-09-03; latest date: 1939-10-01)</span>"
         )
 
     def test_a_date_with_no_stated_range_shows_as_the_date_alone(self, site):
@@ -857,10 +882,13 @@ class TestTimeline:
             "year": "1956",
             "display_date": "1956 (earliest end date: 1956)",
         }
+        # a ranged date finer than a year keeps its month in start_date,
+        # and its display_date shows it at its own precision
         assert start(HELD) == {
             "year": "1939",
+            "month": "09",
             "display_date": (
-                "1939 (earliest date: 1939-09; latest date: 1939-10-01)"
+                "1939-09 (earliest date: 1939-09-03; latest date: 1939-10-01)"
             ),
         }
 
@@ -883,6 +911,53 @@ class TestTimeline:
             ),
             "text": "per burial register &lt;p. 1&gt;",
         }
+
+    def test_a_range_is_escaped_on_the_page(
+        self, tmp_path, vocabulary, hostile_label
+    ):
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': DATED}
+        )
+        assert self.dated(site, KLARA_LEFT_IN_38_OR_39) == (
+            f'1938 <span class="qualifiers">({hostile_label}: 1938; '
+            "latest date: 1939)</span>"
+        )
+
+    def test_a_range_is_escaped_in_the_feed(
+        self, tmp_path, vocabulary, hostile_label
+    ):
+        # TimelineJS writes a display_date into its page as HTML
+        site, _ = build(
+            tmp_path, vocabulary, {**RESPONSES, 'date of birth"@en': DATED}
+        )
+        events = json.loads((site / "timeline.json").read_text())["events"]
+        (shown,) = [
+            event["start_date"]["display_date"]
+            for event in events
+            if event["text"]["text"] == f"per {label(INTERVIEW)}"
+            and event["text"]["headline"].endswith(": migration")
+        ]
+        assert shown == f"1938 ({hostile_label}: 1938; latest date: 1939)"
+
+    def test_a_bound_the_query_does_not_name_stops_the_build(
+        self, tmp_path, vocabulary
+    ):
+        # shown unnamed, "1945" beside a date of death could be its earliest
+        # or its latest date: the build stops and names what is missing
+        row = {k: v for k, v in RAHEL_DIED_AFTER.items() if k != "low"}
+        with pytest.raises(
+            RuntimeError,
+            match=re.escape(
+                "the person-timeline query gave a row's ?earliest without "
+                "the qualifier that states it (?low is missing); it must "
+                "project ?low and ?high"
+            ),
+        ):
+            build(
+                tmp_path,
+                vocabulary,
+                {**RESPONSES, 'date of birth"@en': [row]},
+            )
 
     def test_the_query_returns_every_column_the_timeline_reads(self):
         # each bound is named by the qualifier the query read it from

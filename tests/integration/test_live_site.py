@@ -20,6 +20,8 @@ the timeline a date with a range its source states, open at one end
 
 Every label carries a marker, so the fixture never reuses an item that
 another test or run wrote, and a re-run reuses and skips everything.
+Rahel's label also carries a hash of her claim, so a later version of the
+claim writes a Rahel of its own (RAHEL).
 Pages that list the whole instance are read only for the fixture's own
 entries, so other data on the instance neither breaks an assertion nor
 appears in a failure report, and the generated site is deleted after the
@@ -28,6 +30,7 @@ module.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import re
@@ -79,7 +82,6 @@ PERSON = marked("gustav-loebig")
 ADDRESS = marked("brunnenring-35")
 STREET = marked("brunnenring")
 TOWN = marked("floerburg")
-RAHEL = marked("rahel-loebig")
 
 
 def said(
@@ -158,6 +160,32 @@ def time_value(date: u.Date) -> dict:
     return {"type": "time", **{k: v for k, v in parts.items() if v}}
 
 
+# Rahel's death as the tree gives it, "after 1945", written as the GEDCOM
+# adapter writes it: 1945, with 1945 as its earliest date and no latest
+# date.
+RAHEL_DEATH = {
+    "property": "date_of_death",
+    "value": time_value(RAHEL_DIED.value),
+    "qualifiers": [
+        {"property": "earliest_date", "value": time_value(RAHEL_DIED.value)}
+    ],
+    "source": TREE,
+    "excerpt": RAHEL_DIED.excerpt,
+}
+# Her label carries six hex digits of a hash over that claim, as
+# write_fixture marks its items in test_live_disagreement.py. The writer
+# finds her by her label, and keeps a claim with her value but other
+# qualifiers as a statement of its own: under the module's fixed marker
+# alone, a later version of the claim would add a second death beside this
+# one, where with the hash it writes a Rahel of its own.
+RAHEL = "{} ({})".format(
+    marked("rahel-loebig"),
+    hashlib.sha256(
+        json.dumps(RAHEL_DEATH, sort_keys=True).encode()
+    ).hexdigest()[:6],
+)
+
+
 def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     """The two sources' claims about the birth, the extract's placing of
     the address in the town, and the tree's claim about Rahel's death,
@@ -173,9 +201,7 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
             "subject": subject,
             "property": prop,
             "value": value,
-            "qualifiers": [
-                {"property": key, "value": bound} for key, bound in qualifiers
-            ],
+            "qualifiers": list(qualifiers),
             "source": {
                 "artifact": sources[source].model_dump(mode="json"),
                 "page_number": "1",
@@ -213,15 +239,13 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
             NATURALISATION,
             NATURALISED_PLACE.excerpt,
         ),
-        # "after 1945" as the GEDCOM adapter writes it: 1945, with 1945 as
-        # its earliest date and no latest date
         claim(
             rahel,
-            "date_of_death",
-            time_value(RAHEL_DIED.value),
-            TREE,
-            RAHEL_DIED.excerpt,
-            qualifiers=[("earliest_date", time_value(RAHEL_DIED.value))],
+            RAHEL_DEATH["property"],
+            RAHEL_DEATH["value"],
+            RAHEL_DEATH["source"],
+            RAHEL_DEATH["excerpt"],
+            RAHEL_DEATH["qualifiers"],
         ),
     ]
     return ClaimBatch.model_validate({"extraction_run": RUN, "claims": claims})
@@ -347,8 +371,12 @@ def test_gallery_and_timeline_render(site):
     )
     assert '<img src="' in figure and image in figure
 
-    # each dated assertion is its own entry, under its own source; a date
-    # its source states no range for shows alone
+    # each dated assertion is its own entry, under its own source, and a
+    # date its source states no range for shows alone. The fixed marker
+    # makes this safe only because no version of this module has given a
+    # birth of Gustav's a range: one that does must mark his labels by
+    # content, as Rahel's are, or it will find this version's births
+    # beside its own.
     person = f'href="people/{site.person}.html"'
     timeline = re.findall(
         r'<div class="entry">(.*?)</div>', site.read("timeline.html")
@@ -391,7 +419,7 @@ def test_the_timeline_shows_a_stated_range_beside_its_date(site):
     (event,) = [
         event
         for event in feed["events"]
-        if event["text"]["headline"].startswith(f"{RAHEL}: ")
+        if event["text"]["headline"].startswith(f"{html.escape(RAHEL)}: ")
     ]
     assert event["start_date"] == {
         "year": "1945",
