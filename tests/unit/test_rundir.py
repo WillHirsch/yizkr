@@ -5,9 +5,11 @@ events (#87, #225)."""
 from __future__ import annotations
 
 import hashlib
+import os
 
 import pytest
 
+from yizkr.pipeline import rundir
 from yizkr.pipeline.rundir import (
     DONE,
     FAILED,
@@ -64,6 +66,170 @@ class TestRunDir:
         (alert,) = run.alerts()
         assert alert["status"] == "carried"
         assert run.events()[-1]["event"] == "alert"
+
+
+# the first bytes of a record whose writer died mid-write
+TORN = b'{"event": "sta'
+
+
+def tear(log, fragment=TORN):
+    """End `log` in a torn line, as a writer that died mid-write leaves it."""
+    with open(log, "ab") as handle:
+        handle.write(fragment)
+
+
+def names(path):
+    """The names of the events a reader finds in the run directory."""
+    return [event["event"] for event in RunDir(path).events()]
+
+
+class _OsWrites:
+    """The os module as rundir sees it, with every write recorded and cut
+    to at most `most` bytes, and `before` called ahead of the first."""
+
+    def __init__(self, *, most=None, before=None):
+        self.writes = []
+        self.most = most
+        self.before = before
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    def write(self, descriptor, data):
+        if self.before and not self.writes:
+            self.writes.append(None)
+            self.before()
+        data = bytes(data)[: self.most]
+        self.writes.append(data)
+        return os.write(descriptor, data)
+
+
+class TestAppendAfterATornLine:
+    """An append after a torn last line starts a new line: the fragment is
+    skipped and the new record kept (#271)."""
+
+    def test_an_event_after_a_torn_line_is_kept(self, tmp_path):
+        run = RunDir(tmp_path)
+        run.emit("done", stage="transcription")
+        tear(tmp_path / "events.jsonl")
+        run.emit("started", stage="extraction")
+        assert names(tmp_path) == ["done", "started"]
+        lines = (tmp_path / "events.jsonl").read_bytes().split(b"\n")
+        assert lines[1] == TORN
+
+    def test_the_next_start_marker_clears_the_requests_before_it(
+        self, tmp_path
+    ):
+        RunDir(tmp_path).request("pause", reason="the Flörburg postcard")
+        tear(tmp_path / "control.jsonl", b'{"action": "abo')
+        run = RunDir(tmp_path)
+        run.start()
+        assert run.control().scopes == {}
+        assert run.events()[-1]["event"] == "run-start"
+
+    @pytest.mark.parametrize(
+        ("action", "state"), [("pause", "paused"), ("abort", "aborted")]
+    )
+    def test_a_request_after_a_torn_line_stops_the_run(
+        self, tmp_path, action, state
+    ):
+        tear(tmp_path / "control.jsonl", b'{"action": "resu')
+        RunDir(tmp_path).request(action, reason="Klara Löbig's letters")
+        assert RunDir(tmp_path).control().scopes == {"run": state}
+
+    def test_an_alert_after_a_torn_line_is_kept(self, tmp_path):
+        tear(tmp_path / "alerts.jsonl", b'{"stage": "transcri')
+        RunDir(tmp_path).alert(
+            stage="transcription",
+            check="tool-failure text",
+            subject=DOC_A[:10],
+            value=1,
+            carried=False,
+        )
+        (alert,) = RunDir(tmp_path).alerts()
+        assert alert["status"] == "new"
+
+    def test_a_line_torn_inside_a_character_is_skipped(self, tmp_path):
+        run = RunDir(tmp_path)
+        run.emit("done", note="Klara Löbig")
+        whole = (tmp_path / "events.jsonl").read_bytes()
+        tear(tmp_path / "events.jsonl", whole[: whole.index(b"\xc3\xb6") + 1])
+        run.emit("started", stage="extraction")
+        assert names(tmp_path) == ["done", "started"]
+
+    @pytest.mark.parametrize("ending", [b"", b"\r"], ids=["bare", "cr"])
+    def test_a_last_record_without_its_newline_is_kept(self, tmp_path, ending):
+        """A last line that is a whole record without its newline, or with
+        only the carriage return of a CRLF: only a newline ends a line,
+        so the record is ended and read, and so is the next."""
+        (tmp_path / "events.jsonl").write_bytes(b'{"event": "done"}' + ending)
+        RunDir(tmp_path).emit("started", stage="extraction")
+        assert names(tmp_path) == ["done", "started"]
+
+    def test_a_log_holding_only_a_fragment(self, tmp_path):
+        tear(tmp_path / "events.jsonl")
+        RunDir(tmp_path).emit("run-start")
+        data = (tmp_path / "events.jsonl").read_bytes()
+        assert data.startswith(TORN + b"\n{")
+        assert names(tmp_path) == ["run-start"]
+
+    @pytest.mark.parametrize("exists", [False, True], ids=["missing", "empty"])
+    def test_the_first_record_starts_the_log(self, tmp_path, exists):
+        log = tmp_path / "run" / "events.jsonl"
+        if exists:
+            log.parent.mkdir()
+            log.touch()
+        RunDir(tmp_path / "run").emit("run-start")
+        data = log.read_bytes()
+        assert data.startswith(b"{") and data.count(b"\n") == 1
+        assert not os.stat(log).st_mode & 0o111
+
+    def test_a_whole_last_line_gets_no_blank_line(self, tmp_path):
+        run = RunDir(tmp_path)
+        run.emit("started", stage="transcription")
+        run.emit("done", stage="transcription")
+        data = (tmp_path / "events.jsonl").read_bytes()
+        assert data.count(b"\n") == 2 and b"\n\n" not in data
+
+    def test_the_newline_and_the_record_are_one_write(
+        self, tmp_path, monkeypatch
+    ):
+        """Another process's append can land between two writes but never
+        inside one, so the newline that ends a torn line is written with
+        the record."""
+        tear(tmp_path / "events.jsonl")
+        recorder = _OsWrites()
+        monkeypatch.setattr(rundir, "os", recorder)
+        RunDir(tmp_path).emit("run-start")
+        (write,) = recorder.writes
+        assert write.startswith(b"\n{") and write.endswith(b"}\n")
+
+    def test_a_short_write_is_finished(self, tmp_path, monkeypatch):
+        recorder = _OsWrites(most=7)
+        monkeypatch.setattr(rundir, "os", recorder)
+        RunDir(tmp_path).emit("run-start", note="Klara Löbig")
+        monkeypatch.undo()
+        (event,) = RunDir(tmp_path).events()
+        assert event["note"] == "Klara Löbig"
+        assert len(recorder.writes) > 1
+
+    def test_two_appenders_that_find_one_torn_line_keep_both_records(
+        self, tmp_path, monkeypatch
+    ):
+        """Two appenders (two processes, or two RunDirs with a lock each)
+        both find the last line torn and both end it: that leaves a blank
+        line, which readers skip."""
+        tear(tmp_path / "events.jsonl")
+        first, second = RunDir(tmp_path), RunDir(tmp_path)
+        # the second appends after the first has found the line torn and
+        # before it writes
+        recorder = _OsWrites(before=lambda: second.emit("run-start"))
+        monkeypatch.setattr(rundir, "os", recorder)
+        first.emit("done", stage="transcription")
+        monkeypatch.undo()
+        data = (tmp_path / "events.jsonl").read_bytes()
+        assert data.startswith(TORN + b"\n{") and data.count(b"\n\n") == 1
+        assert names(tmp_path) == ["run-start", "done"]
 
 
 class TestControl:
