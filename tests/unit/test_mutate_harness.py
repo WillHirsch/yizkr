@@ -469,8 +469,9 @@ def default_run(template, tmp_path_factory):
       assertion holds, so the mutant's run leaves the job to the harness
       to kill, though pytest exits by itself.
 
-    The spec has no live mutation, and the lock that the harness would
-    take for one is in a folder that does not exist yet."""
+    The spec has no live mutation. A stack is configured, and the lock
+    that the harness would take for a live one is in a folder that does
+    not exist yet."""
     scratch = tmp_path_factory.mktemp("default-run")
     repo = copy(template, scratch)
     calc = repo / "calc.py"
@@ -487,7 +488,7 @@ def default_run(template, tmp_path_factory):
         PY_COLORS="1",
         PYTEST_ADDOPTS="--collect-only",
         HELPER_PIDS=str(helper_pids),
-        **{LOCK_ENV: str(lock)},
+        **{LOCK_ENV: str(lock), ENV_FILE: str(stack_settings(scratch))},
     )
     result = harness(repo, spec, "--json", str(report), env=env)
     yield SimpleNamespace(
@@ -1375,8 +1376,10 @@ def test_a_variable_that_names_no_descriptor_of_the_lock_is_ignored(
     tmp_path, monkeypatch, named
 ):
     """hold() then takes the lock itself: it records itself, and empties
-    the record as it releases the lock."""
+    the record as it releases the lock. The lock file exists, as it does
+    once any session has held the lock."""
     lock = tmp_path / "live-stack.lock"
+    lock.write_text("")
     other = os.open(tmp_path / "other", os.O_RDWR | os.O_CREAT)
     try:
         if named == "another file":
