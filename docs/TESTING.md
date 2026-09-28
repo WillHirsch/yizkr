@@ -13,15 +13,28 @@ itself in its own `--help`.
   model. They are the default run, `uv run pytest -q` or `make test`,
   because `pyproject.toml` deselects the `live` marker unless `-m live`
   asks for it. CI runs them, with ruff, on every push.
-  `tests/unit/conftest.py` sets their defaults:
+  `tests/unit/conftest.py` sets their defaults, and
+  `tests/unit/test_conftest.py` tests them:
   - `CLAUDE_CONFIG_DIR` points at a directory that does not exist, so no
     unit test reads your Claude Code login.
-  - `OPENBLAS_NUM_THREADS` defaults to 1; a value already set in the
-    environment is kept.
-  - `os.fsync`, `os.fdatasync` and `os.sync` are no-ops. A unit test
-    that needs the real sync calls is marked `@pytest.mark.real_fsync`,
-    as the durability tests in `tests/unit/test_stages.py` are; the live
-    tests under `tests/integration` always make them.
+  - `OPENBLAS_NUM_THREADS` is set to 1, unless `OPENBLAS_NUM_THREADS`,
+    `OMP_NUM_THREADS` or `MKL_NUM_THREADS` is already set and not empty:
+    a thread count given in the environment is kept. OpenBLAS reads the
+    variable as numpy loads, so when numpy is loaded before the conftest
+    is imported (by a plugin, say), pytest warns that the default came
+    too late; set the variable in the environment then.
+  - `os.fsync`, `os.fdatasync` and `os.sync` are no-ops, though the
+    first two still check the descriptor they are given, so a call on
+    one that is not open fails as the real call does. A unit test that
+    needs the real sync calls is marked `@pytest.mark.real_fsync`
+    (registered in `pyproject.toml`), as the durability tests in
+    `tests/unit/test_stages.py` and `tests/unit/test_llmcache.py` are;
+    the live tests under `tests/integration` always make them.
+  - The config directory and the no-op sync calls are patches held by
+    the test's own `monkeypatch`, so a test that calls
+    `monkeypatch.undo()` loses them for the rest of its run. A test that
+    needs a patch for part of its run scopes it with
+    `with monkeypatch.context() as patch:` instead.
 - **Live tests** (`tests/integration`, every module marked `live`) run
   against the deployed stack (`make up` or `make up-local`) through
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.
