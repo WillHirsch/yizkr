@@ -687,6 +687,14 @@ class TestMediaPageCount:
         assert media_page_count(pdf) == 2
 
 
+def scan_file(tmp_path, name: str = "scan.png"):
+    """A fictional scan's media file, which a transcriber hashes to name
+    the artifact it transcribes (#127)."""
+    path = tmp_path / name
+    path.write_bytes(b"fictional scan: " + name.encode())
+    return path
+
+
 class FakeLlm:
     model_identifier = "fake-model"
 
@@ -764,7 +772,7 @@ class TestPreflight:
             transcription_check.subprocess, "run", FakeRun("Pages: 1\n")
         )
         result = LlmVisionTranscriber(FakeLlm(STAMP)).transcribe(
-            tmp_path / "scan.pdf"
+            scan_file(tmp_path, "scan.pdf")
         )
         assert result.text == STAMP
         assert asked == []
@@ -772,7 +780,7 @@ class TestPreflight:
     def test_images_need_no_renderer(self, tmp_path, monkeypatch):
         monkeypatch.setattr(transcribe.shutil, "which", no_tools)
         llm = FakeLlm(STAMP)
-        result = LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+        result = LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert result.text == STAMP
 
 
@@ -780,7 +788,7 @@ class TestTranscribers:
     def test_vision_failure_raises_and_returns_nothing(self, tmp_path):
         transcriber = LlmVisionTranscriber(FakeLlm(FAILURES[0][1]))
         with pytest.raises(TranscriptionCheckFailed) as caught:
-            transcriber.transcribe(tmp_path / "scan.png", artifact_qid="Q23")
+            transcriber.transcribe(scan_file(tmp_path))
         assert caught.value.check.signature == "pdf-renderer"
         assert transcriber.last_check == caught.value.check
 
@@ -791,7 +799,7 @@ class TestTranscribers:
         )
         transcriber = LlmVisionTranscriber(FakeLlm("[illegible]"))
         with pytest.raises(TranscriptionCheckFailed) as caught:
-            transcriber.transcribe(tmp_path / "scan.pdf")
+            transcriber.transcribe(scan_file(tmp_path, "scan.pdf"))
         assert caught.value.check.failure == TOO_SHORT
         assert caught.value.check.pages == 5
 
@@ -799,10 +807,10 @@ class TestTranscribers:
         # the check adds a verdict and changes nothing in the transcription
         text = a_page()
         checked = LlmVisionTranscriber(FakeLlm(text)).transcribe(
-            tmp_path / "scan.png", artifact_qid="Q23"
+            scan_file(tmp_path)
         )
         unchecked = LlmVisionTranscriber(FakeLlm(text)).transcribe_unchecked(
-            tmp_path / "scan.png", artifact_qid="Q23"
+            scan_file(tmp_path)
         )
         assert checked == unchecked
 
@@ -810,7 +818,7 @@ class TestTranscribers:
         # for a caller that runs the check as a step of its own
         result = LlmVisionTranscriber(
             FakeLlm(FAILURES[0][1])
-        ).transcribe_unchecked(tmp_path / "scan.png")
+        ).transcribe_unchecked(scan_file(tmp_path))
         assert "pdftoppm" in result.text
 
     def test_a_kept_answer_that_fails_is_asked_for_once_more(self, tmp_path):
@@ -819,7 +827,7 @@ class TestTranscribers:
         without the cache; its answer is checked in its place (#230)."""
         failing = FAILURES[0][1]
         llm = KeepingLlm(failing, a_page())
-        result = LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+        result = LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert result.text == a_page()
         assert llm.calls == 2
         assert llm.rejected == [(failing, True)]
@@ -827,7 +835,7 @@ class TestTranscribers:
     def test_the_engines_failing_answer_is_not_asked_for_again(self, tmp_path):
         llm = KeepingLlm(FAILURES[0][1], a_page(), kept=0)
         with pytest.raises(TranscriptionCheckFailed):
-            LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+            LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert llm.calls == 1
         assert llm.rejected == [(FAILURES[0][1], False)]
 
@@ -835,7 +843,7 @@ class TestTranscribers:
         failing = FAILURES[0][1]
         llm = KeepingLlm(failing, failing, a_page(), kept=2)
         with pytest.raises(TranscriptionCheckFailed):
-            LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+            LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert llm.calls == 2
 
     def test_text_file_with_a_refusal_raises(self, tmp_path):
@@ -945,7 +953,7 @@ class TestToolErrors:
         llm = ScriptedLlm(tool_error("corrupt"), a_page(), kept=0)
         transcriber = LlmVisionTranscriber(llm)
         with pytest.raises(TranscriptionCheckFailed) as caught:
-            transcriber.transcribe(tmp_path / "scan.png")
+            transcriber.transcribe(scan_file(tmp_path))
         check = caught.value.check
         assert (check.failure, check.tool_error) == (TOOL_ERROR, "corrupt")
         assert "(tool-error)" in str(caught.value)
@@ -961,7 +969,7 @@ class TestToolErrors:
         failing = FAILURES[0][1]
         llm = ScriptedLlm(failing, tool_error("pdf-renderer-missing"), kept=1)
         with pytest.raises(TranscriptionCheckFailed) as caught:
-            LlmVisionTranscriber(llm).transcribe(tmp_path / "scan.png")
+            LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert caught.value.check.failure == TOOL_ERROR
         assert llm.calls == 2
         assert llm.rejected == [(failing, True)]

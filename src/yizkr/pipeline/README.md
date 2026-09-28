@@ -193,7 +193,8 @@ The corpus lives outside the repository, in the private folder named by
   artifact, no transcription and no state. The single-file steps
   (`register`, `transcribe`, `extract`, `gedcom`, `detect-faces`) run
   without a list, but refuse a listed file once one is configured (for
-  `extract`, the media file `--media` names). New entry points must
+  `extract`, the media its transcription names, by the SHA-1 of its
+  bytes, which only the list's hashes can match). New entry points must
   call it too: write-time registration (#103), transcription import
   (#104), the run driver (#118) and faces (#160).
 
@@ -231,7 +232,11 @@ re-running one step in isolation — but for a normal ingest you only ever run
   and reported, not recorded.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
-  local), `htr` (Transkribus-style platform adapter, stub for now).
+  local), `htr` (Transkribus-style platform adapter, stub for now). The
+  transcription names the artifact by the SHA-1 of the media file it is
+  of (`--file`; for `textfile`, the file the text was made from, not
+  the text file), never by QID, so it is the same on any instance and
+  after a reset.
 - **transcription check** — runs on the output of the `llm` and
   `textfile` engines (in `ingest run`, the vision and text-file methods)
   before anything uses it, in `ingest run` and `ingest transcribe`
@@ -266,12 +271,11 @@ re-running one step in isolation — but for a normal ingest you only ever run
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
   same validation). The `llm` engine sets every claim's source artifact
-  itself, to the SHA-1 of the document it read (`ingest extract
-  --media`; in `ingest run`, the source file's bytes), whatever the
-  model wrote there; the prompt still names the artifact's item by QID
-  (`--artifact`) until #127 takes QIDs out of the prompts. A prepared
-  file's claims cite their artifacts themselves. The GEDCOM adapter
-  (`ingest gedcom`) cites the export's own bytes.
+  itself, to the key its transcription names (the SHA-1 of the source
+  file's bytes), whatever the model wrote there; the prompts name the
+  artifact by that key, never by QID, and ask each claim to cite it. A
+  prepared file's claims cite their artifacts themselves. The GEDCOM
+  adapter (`ingest gedcom`) cites the export's own bytes.
 - **reconcile** — in `ingest run`, proposes nothing. A proposal matches
   one of the document's entities to an entity of a roster, and a stage
   before the write reads nothing from the wiki (ADR-0025 §2), so no roster

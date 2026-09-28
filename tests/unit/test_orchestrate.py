@@ -35,6 +35,7 @@ from yizkr.pipeline.orchestrate import (
     DUPLICATE,
     FAILED,
     PAUSED,
+    TRANSCRIPTION_VOLATILE,
     WRITTEN,
     DocumentRun,
     DocumentState,
@@ -49,6 +50,7 @@ from yizkr.pipeline.rundir import (
     RunSettingsConflict,
     run_state,
 )
+from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.transcribe import MissingPrerequisite
 
 RUN = {
@@ -134,12 +136,13 @@ class ScriptedModel:
             )
         if role == "critique":
             return '{"done": true, "findings_emitted": 0}'
-        artifact = re.search(r"artifact QID (Q\d+)", prompt).group(1)
+        # the artifact as the prompt names it, by the SHA-1 of its media
+        sha1 = re.search(r'"sha1": "([0-9a-f]{40})"', prompt).group(1)
         claim = {
             "subject": {"kind": "local", "local_id": "e1", "label": person},
             "property": "date_of_birth",
             "value": {"type": "time", "year": year},
-            "source": {"artifact": {"kind": "qid", "qid": artifact}},
+            "source": {"artifact": {"kind": "artifact", "sha1": sha1}},
         }
         return "\n".join(
             [json.dumps(claim), '{"done": true, "claims_emitted": 1}']
@@ -546,9 +549,10 @@ class TestIsolationAndDiscovery:
         assert all(claim.source.artifact == cited for claim in saved.claims)
 
     def test_an_extracted_batch_cites_its_document(self, tmp_path):
-        """The scripted model cites the artifact item by the QID the
-        prompt names; the batch cites the document by the SHA-1 of its
-        bytes, the same after any instance reset (#102)."""
+        """The prompt names the document by the SHA-1 of its bytes, and
+        the scripted model cites what it names; the batch cites the
+        document by that key, the same after any instance reset (#102,
+        #127)."""
         orchestrator = make_run(tmp_path)
         orchestrator.run()
         (doc,) = orchestrator.documents()
@@ -1821,6 +1825,37 @@ class TestViews:
         assert orchestrator.run() == 2
         assert steps(orchestrator.calls[asked:]) == ["critique"]
         assert json.loads(doc.critique.read_text()) == []
+
+    def test_a_transcription_that_names_a_qid_is_made_again(self, tmp_path):
+        """A transcription view made before #127 names its artifact by
+        the QID registration gave it, and so does the content hash the
+        batch was recorded against. The pipeline does not read it: it is
+        made again, naming the artifact by the SHA-1 of its media, and the
+        batch with it, since its content changed. The batch comes out the
+        same, so the critique stands."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        view = json.loads(doc.transcription.read_text())
+        assert view["artifact"] == LETTER_REF.model_dump()
+        del view["artifact"]
+        by_qid = view | {"artifact_qid": "Q100"}
+        doc.transcription.write_text(json.dumps(by_qid))
+        doc.derivations.set_content(
+            doc.transcription.name,
+            content_hash(by_qid, volatile=TRANSCRIPTION_VOLATILE),
+        )
+        doc.derivations.record(doc.batch)
+        asked = len(orchestrator.calls)
+        assert orchestrator.run() == 2
+        assert steps(orchestrator.calls[asked:]) == ["manifest", "chunk"]
+        view = json.loads(doc.transcription.read_text())
+        assert "artifact_qid" not in view
+        assert view["artifact"] == LETTER_REF.model_dump()
+        done = [event["stage"] for event in this_run(orchestrator, "done")]
+        assert done == ["transcription", "extraction"]
+        reused = [event["stage"] for event in this_run(orchestrator, "reused")]
+        assert reused == ["critique"]
 
     def test_refresh_makes_a_role_view_again_in_place(self, tmp_path):
         orchestrator = self.sampled(tmp_path)

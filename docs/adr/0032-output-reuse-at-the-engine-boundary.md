@@ -22,6 +22,10 @@ reaches the engine is reported as a `call` event, by a wrapper beneath
 the cache, so the record of a run's engine calls does not depend on the
 cache (§7, §8).
 
+Amended by #127 (2026-09-28): no prompt cites an artifact QID; the
+extraction prompts and the transcription view name the artifact by the
+SHA-1 of its media, so a reset changes no key (§2).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -161,10 +165,10 @@ details of its own into its system prompt when it runs, such as the date.
 A key names a model only when configuration names one; when the engine
 picks its own default, a change to that default is not seen, and the
 cache warns once per role. Every entry records the model the engine
-reported, so a reuse across such a change can be found. Artifact QIDs are
-keyed where a prompt cites one: until #127 takes them out of the
-extraction prompts, a reset that gives an artifact a new QID asks the
-engine again for its extraction. Transcription prompts cite none.
+reported, so a reuse across such a change can be found. No prompt cites
+an artifact QID: the extraction prompts name the artifact by the SHA-1 of
+its media, and the transcription prompt names none, so a reset that gives
+an artifact a new QID changes no key.
 
 ### 3. What is stored, and where
 

@@ -44,7 +44,7 @@ up to date once per run, each after the view it is made from:
 | View | Made by (stage, role) | Made from |
 |---|---|---|
 | `transcription.json` | `transcription`, `transcribe` | the correction `transcription.corrected.txt`, when there is one; otherwise the source, routed (vision, text file, slide text) |
-| `batch.json` | `extraction`, `extract` (a GEDCOM file: `gedcom`) | `transcription.json`, by its canonical content (text, language, artifact); a GEDCOM file: the source alone |
+| `batch.json` | `extraction`, `extract` (a GEDCOM file: `gedcom`) | `transcription.json`, by its canonical content (text, language, and the artifact's key, the SHA-1 of its media); a GEDCOM file: the source alone |
 | `critique.json` | `critique`, `critique` | `batch.json`, by its canonical content (without its run stamps) |
 
 The source is not recorded: the directory is kept for one source's bytes,
@@ -172,7 +172,11 @@ record for its views, and its files derived from the batch were recorded
 by the batch view's bytes: its first run makes every view again (the old
 stage store is not read, so the calls go to the engine), and everything
 after the batch with them. The pre-ADR-0032 stage store under
-`var/stages` may be deleted.
+`var/stages` may be deleted. A transcription view made before #127 names
+its artifact by QID, and does not load: its first run makes it again
+(the transcription prompt is unchanged, so the cache answers its call),
+and the batch after it, whose prompts name the artifact by its key now,
+so its calls go to the engine.
 
 ## Keys
 
@@ -209,11 +213,15 @@ any run whose answers are to be reused. The engine's system prompt tells
 the model to read only the files a prompt names, but its Read tool does
 not enforce that.
 
-**QIDs.** A prompt that cites an artifact QID is keyed on it, since the
-QID is part of what the call sends. Until #127 takes QIDs out of the
-extraction prompts, a reset that gives an artifact a new QID asks the
-engine again for that artifact's extraction calls. The transcription
-prompt cites no QID.
+**No QIDs.** No prompt names what an instance gives an artifact: the
+extraction prompts (the entity manifest, the segmentation, each chunk and
+the single call) name it by the SHA-1 of its media, which its
+transcription records and its claims cite (#127), and the transcription
+prompt names no artifact. So a reset, after which each artifact is
+registered again under another QID, changes no prompt and no key: the
+run after it is answered from the cache wherever nothing else changed.
+The transcription view holds the same key, so its content hash, which
+the batch is recorded as made from, does not change either.
 
 ## Layout
 

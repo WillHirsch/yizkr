@@ -259,7 +259,13 @@ class TestCli:
         postcard = corpus / "postcard-1938.txt"
         args = ("--file", str(postcard), "--text-file", str(postcard))
         assert run_cli("ingest", "transcribe", *args, "--out", str(out)) == 0
-        assert json.loads(out.read_text())["text"] == POSTCARD
+        transcription = json.loads(out.read_text())
+        assert transcription["text"] == POSTCARD
+        # it names the postcard by the SHA-1 of its bytes (#127)
+        assert transcription["artifact"] == {
+            "kind": "artifact",
+            "sha1": sha1(POSTCARD),
+        }
 
     def test_a_single_step_refuses_a_listed_file(
         self, env, corpus, tmp_path, monkeypatch

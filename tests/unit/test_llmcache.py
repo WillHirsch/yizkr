@@ -15,6 +15,7 @@ import contextlib
 import copy
 import functools
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -1781,9 +1782,9 @@ class TestFactory:
 # -- the pipeline through the cache -----------------------------------------
 
 LETTER = "Ursula was born in 1911."
-# the key of the document the extractor tests read, which each of its
-# claims cites (#102); the scripted answers cite its item by QID, as
-# the prompt asks
+# the key of the document the extractor tests read, which the prompts
+# name and each of its claims cites (#102, #127); the scripted answers
+# cite it, as the prompts ask
 LETTER_REF = ArtifactRef.from_bytes(b"fictional scan: a Loebig letter")
 
 
@@ -1811,12 +1812,13 @@ def pipeline_answers(kind, prompt, opening):
     if prompt.startswith("You review a genealogical extraction"):
         return '{"done": true, "findings_emitted": 0}'
     name, year = person(opening or prompt)
-    artifact = re.search(r"artifact QID (Q\d+)", prompt).group(1)
+    # the artifact as the prompt names it, by the SHA-1 of its media
+    sha1 = re.search(r'"sha1": "([0-9a-f]{40})"', prompt).group(1)
     claim = {
         "subject": {"kind": "local", "local_id": "e1", "label": name},
         "property": "date_of_birth",
         "value": {"type": "time", "year": year},
-        "source": {"artifact": {"kind": "qid", "qid": artifact}},
+        "source": {"artifact": {"kind": "artifact", "sha1": sha1}},
     }
     return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
 
@@ -1875,6 +1877,32 @@ class CachedRun(ScriptedOrchestrator):
 
     def _engine(self, role):
         return self.engine
+
+
+class Registered(CachedRun):
+    """A cached run on an instance of its own, which registers each
+    artifact under a new QID numbered from `qids` on."""
+
+    def __init__(self, *args, qids: int, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.qids = itertools.count(qids)
+
+    def _step_register(self, doc):
+        super()._step_register(doc)
+        return f"Q{next(self.qids)}"
+
+
+def derivations(state_dir: Path) -> dict:
+    """Each document's record of what its views were made from: the
+    content hashes of its transcription and batch, which the views after
+    them are made from, and the input hashes of each view."""
+    return {
+        directory.name: json.loads(
+            (directory / "derivations.json").read_text()
+        )
+        for directory in sorted(state_dir.iterdir())
+        if (directory / "derivations.json").is_file()
+    }
 
 
 def folder_of_three(tmp_path) -> Path:
@@ -1958,6 +1986,63 @@ class TestThePipeline:
         engine = Engine(pipeline_answers)
         CachedRun(folder, tmp_path / "second", engine=engine, log=quiet).run()
         assert sorted(engine.calls) == sorted(first.engine.calls)
+
+    def test_a_reset_changes_no_prompt_and_no_key(self, tmp_path):
+        """A reset empties the instance, and the run after it registers
+        each artifact again, under another QID (#127). No stage before the
+        write reads the QID: the prompts and the transcriptions name each
+        artifact by the SHA-1 of its media. So a run after the reset, in a
+        fresh state directory as a scratch run's is, sends the engine the
+        same prompts word for word, under the same keys, all of which the
+        cache answers, and its views hash as the first run's did."""
+        folder = folder_of_three(tmp_path)
+        cache = tmp_path / "cache"
+
+        def run(name, engine, qids, cache_dir):
+            orchestrator = Registered(
+                folder,
+                tmp_path / name,
+                engine=engine,
+                qids=qids,
+                cache_dir=cache_dir,
+                log=quiet,
+            )
+            assert orchestrator.run() == 2
+            return orchestrator
+
+        before = run("before", Engine(pipeline_answers), 100, cache)
+        # after the reset, the engine is asked again without the cache,
+        after = run("after", Engine(pipeline_answers), 200, None)
+        # and through it, every call is answered and the engine never asked
+        replay = run("replay", Refusing(pipeline_answers), 300, cache)
+
+        registered = [
+            {doc.state.artifact_qid for doc in orchestrator.documents()}
+            for orchestrator in (before, after, replay)
+        ]
+        assert len(set().union(*registered)) == 9, registered
+        # the scan's reading, then each document's manifest, chunk and
+        # critique
+        prompts = sorted(before.engine.calls)
+        assert len(prompts) == 10
+        assert sorted(after.engine.calls) == prompts
+
+        def keys(orchestrator, event):
+            return sorted(
+                e["key"]
+                for e in orchestrator.rundir.events()
+                if e["event"] == event
+            )
+
+        assert len(keys(before, "cache-miss")) == 10
+        assert keys(replay, "cache-hit") == keys(before, "cache-miss")
+        assert keys(replay, "cache-miss") == []
+        records = [
+            derivations(tmp_path / name)
+            for name in ("before", "after", "replay")
+        ]
+        assert len(records[0]) == 3
+        assert records[0] == records[1] == records[2]
 
     def test_abort_and_resume_lose_no_completed_call(self, tmp_path):
         """A run interrupted mid-extraction keeps every call that
@@ -2362,7 +2447,7 @@ def extractor_answers(truncate: set[str] = frozenset()):
                 "type": "time",
                 "year": 1917 if entity == "e1" else 1919,
             },
-            "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+            "source": {"artifact": LETTER_REF.model_dump()},
         }
         if entity in truncate:
             return json.dumps(claim)
@@ -2410,7 +2495,7 @@ class SessionModel(Engine):
                         "label": label},
             "property": "date_of_birth",
             "value": {"type": "time", "year": YEARS[label]},
-            "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+            "source": {"artifact": LETTER_REF.model_dump()},
         }  # fmt: skip
         if label in self.truncate:
             return json.dumps(claim)
@@ -2446,7 +2531,7 @@ def segmenting(manifest_usable: bool, units: dict = UNITS):
             "subject": {"kind": "local", "local_id": "p1", "label": name},
             "property": "date_of_birth",
             "value": {"type": "time", "year": year},
-            "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+            "source": {"artifact": LETTER_REF.model_dump()},
         }
         return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
 
@@ -2457,13 +2542,11 @@ def extract(tmp_path, engine, **options):
     caching = client(tmp_path, engine, **options)
     extractor = ChunkedClaimExtractor(caching, budget=10, retries=1)
     transcription = Transcription(
+        artifact=LETTER_REF,
         text="Klara Löbig b. 1917\nGustav Löbig b. 1919",
         engine="test",
-        artifact_qid="Q23",
     )
-    return extractor, extractor.extract(
-        transcription, LETTER_REF, artifact_qid="Q23"
-    )
+    return extractor, extractor.extract(transcription, LETTER_REF)
 
 
 class TestTheExtractor:
@@ -2692,7 +2775,7 @@ KLARA = {
     "subject": {"kind": "local", "local_id": "e1", "label": "Klara Löbig"},
     "property": "date_of_birth",
     "value": {"type": "time", "year": 1917},
-    "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+    "source": {"artifact": LETTER_REF.model_dump()},
 }
 WHOLE = json.dumps(KLARA) + '\n{"done": true, "claims_emitted": 1}'
 
@@ -2708,10 +2791,10 @@ class TestTheSingleCallExtractor:
 
     def extract(self, tmp_path, engine):
         transcription = Transcription(
-            text="Klara Löbig b. 1917", engine="test", artifact_qid="Q23"
+            artifact=LETTER_REF, text="Klara Löbig b. 1917", engine="test"
         )
         return LlmClaimExtractor(client(tmp_path, engine)).extract(
-            transcription, LETTER_REF, artifact_qid="Q23"
+            transcription, LETTER_REF
         )
 
     def rejected(self, tmp_path) -> list[str]:
@@ -2764,15 +2847,13 @@ class TestTheSingleCallExtractor:
         after a stricter parser), is asked for once more in the same run,
         and the engine's answer is used in its place (#230)."""
         transcription = Transcription(
-            text="Klara Löbig b. 1917", engine="test", artifact_qid="Q23"
+            artifact=LETTER_REF, text="Klara Löbig b. 1917", engine="test"
         )
         # an earlier extractor kept the answer: it rejected nothing
         lenient = client(tmp_path, Engine(answering(answer)))
         lenient.reject = lambda response, why: False
         with contextlib.suppress(ValueError):
-            LlmClaimExtractor(lenient).extract(
-                transcription, LETTER_REF, artifact_qid="Q23"
-            )
+            LlmClaimExtractor(lenient).extract(transcription, LETTER_REF)
         assert self.rejected(tmp_path) == []
         engine = Engine(answering(WHOLE))
         batch = self.extract(tmp_path, engine)
@@ -2798,12 +2879,10 @@ class TestTheSingleCallExtractor:
 
         engine = AlwaysKept()
         transcription = Transcription(
-            text="Klara Löbig b. 1917", engine="test", artifact_qid="Q23"
+            artifact=LETTER_REF, text="Klara Löbig b. 1917", engine="test"
         )
         with pytest.raises(ValueError, match="no claim JSON"):
-            LlmClaimExtractor(engine).extract(
-                transcription, LETTER_REF, artifact_qid="Q23"
-            )
+            LlmClaimExtractor(engine).extract(transcription, LETTER_REF)
         assert engine.asked == 2
 
     def test_a_whole_answer_is_served_again(self, tmp_path):
@@ -2821,11 +2900,11 @@ class TestTheSingleCallExtractor:
         transcription = tmp_path / "transcription.json"
         transcription.write_text(
             Transcription(
-                text="Klara Löbig b. 1917", engine="test", artifact_qid="Q23"
+                artifact=LETTER_REF,
+                text="Klara Löbig b. 1917",
+                engine="test",
             ).model_dump_json()
         )
-        scan = tmp_path / "letter.png"
-        scan.write_bytes(b"fictional scan: a Loebig letter")
         engines = iter([Engine(answering(WHOLE)), Refusing()])
         monkeypatch.setattr(llm, "make_client", lambda *a, **k: next(engines))
         batches = []
@@ -2837,10 +2916,6 @@ class TestTheSingleCallExtractor:
                     "extract",
                     "--transcription",
                     str(transcription),
-                    "--media",
-                    str(scan),
-                    "--artifact",
-                    "Q23",
                     "--engine",
                     "llm",
                     "--strategy",

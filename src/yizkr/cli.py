@@ -38,19 +38,25 @@ def _load_batch(path: Path) -> ClaimBatch:
     return ClaimBatch.model_validate_json(path.read_text())
 
 
-def _refuse_if_excluded(args, path: Path | None) -> None:
+def _refuse_if_excluded(
+    args, path: Path | None = None, *, sha1: str | None = None
+) -> None:
     """Honour the never-ingest list in a single-file step.
 
     The single steps are debugging tools and run without a list; when one
-    is configured, a file on it is refused before anything reads it. The
-    extract-all command, `ingest run`, requires the list (cmd_run)."""
+    is configured, a file on it is refused before anything reads it. A
+    step that reads no source file, as `ingest extract` reads a
+    transcription, gives the content SHA-1 its input records, which the
+    list's SHA-1 entries are checked against. The extract-all command,
+    `ingest run`, requires the list (cmd_run)."""
     from yizkr.core.corpus import is_excluded, load_exclusions
 
-    if path is None:
+    if path is None and sha1 is None:
         return
     exclusions = load_exclusions(required=False, env_file=args.env_file)
-    if exclusions is not None and is_excluded(exclusions, path):
-        sys.exit(f"{path.name} is on the never-ingest list; refusing")
+    if exclusions is not None and is_excluded(exclusions, path, sha1=sha1):
+        what = path.name if path is not None else f"SHA-1 {sha1[:12]}"
+        sys.exit(f"{what} is on the never-ingest list; refusing")
 
 
 # -- top-level commands -------------------------------------------------
@@ -276,9 +282,7 @@ def cmd_transcribe(args) -> int:
         from yizkr.pipeline.transcribe import HtrPlatformAdapter
 
         transcriber = HtrPlatformAdapter()
-    transcription = transcriber.transcribe(
-        args.file, artifact_qid=args.artifact
-    )
+    transcription = transcriber.transcribe(args.file)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(transcription.model_dump_json(indent=2))
     print(
@@ -289,14 +293,14 @@ def cmd_transcribe(args) -> int:
 
 
 def cmd_extract(args) -> int:
-    from yizkr.claims import ArtifactRef
     from yizkr.pipeline.transcribe import Transcription
 
-    _refuse_if_excluded(args, args.media)
-    artifact = ArtifactRef.from_path(args.media)
     transcription = Transcription.model_validate_json(
         args.transcription.read_text()
     )
+    # the transcription names the artifact it transcribes by the SHA-1 of
+    # its media: the key its claims cite, and the one the list is asked
+    _refuse_if_excluded(args, sha1=transcription.artifact.sha1)
     if args.engine == "file":
         if not args.claims_file:
             sys.exit("--engine file requires --claims-file")
@@ -336,9 +340,7 @@ def cmd_extract(args) -> int:
                 raw_dump=raw_dump,
                 rejects_dump=rejects_dump,
             )
-    batch = extractor.extract(
-        transcription, artifact, artifact_qid=args.artifact
-    )
+    batch = extractor.extract(transcription, transcription.artifact)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(batch.model_dump_json(indent=2))
     print(f"wrote {args.out} ({len(batch.claims)} claims)")
@@ -900,8 +902,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_register)
 
     p = isub.add_parser("transcribe", help="media -> transcription JSON")
-    p.add_argument("--file", type=Path, required=True)
-    p.add_argument("--artifact", help="artifact QID")
+    p.add_argument(
+        "--file",
+        type=Path,
+        required=True,
+        help="the artifact's media file; the transcription names it by the "
+        "SHA-1 of its bytes, which its claims cite",
+    )
     p.add_argument(
         "--engine", choices=["llm", "textfile", "htr"], default="textfile"
     )
@@ -933,21 +940,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_transcribe)
 
     p = isub.add_parser("extract", help="transcription -> claim batch JSON")
-    p.add_argument("--transcription", type=Path, required=True)
     p.add_argument(
-        "--media",
+        "--transcription",
         type=Path,
         required=True,
-        help="the transcribed artifact's media file: the llm engine's claims "
-        "cite it by the SHA-1 of its bytes, which the write resolves to the "
-        "item `ingest register` made for it. The file engine, whose claims "
-        "cite their artifacts themselves, uses it only for the never-ingest "
-        "check",
-    )
-    p.add_argument(
-        "--artifact",
-        required=True,
-        help="the artifact item's QID, which the extraction prompt names",
+        help="an `ingest transcribe` output: the llm engine's claims cite "
+        "the artifact it names by the SHA-1 of its media, which the write "
+        "resolves to the item `ingest register` made for it (a claims "
+        "file's claims cite their artifacts themselves)",
     )
     p.add_argument("--engine", choices=["llm", "file"], default="file")
     p.add_argument(

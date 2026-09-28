@@ -163,7 +163,7 @@ Rules:
 - Mark non-assertive regions extract=false rather than skipping them.
 - Line numbers refer to the numbering below (1-based, inclusive).
 
-Transcription of artifact {artifact_qid} (language: {language}):
+Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 
 {numbered_text}
 """
@@ -180,8 +180,9 @@ Rules — these mirror the archive's non-negotiable conventions:
   sourcing_circumstances qualifier with the "circa" vocabulary item for
   approximate values. Never silently disambiguate an ambiguous date
   format — downgrade to the precision actually supported.
-- Every claim MUST include the source reference: artifact QID {artifact_qid},
-  plus page number and a short verbatim transcription excerpt supporting it.
+- Every claim MUST include the source reference: the artifact
+  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
+  short verbatim transcription excerpt supporting it.
 - Use ONLY these property keys (property key: datatype — what it means),
   for claims and qualifiers alike — a claim naming any other key is
   discarded. The description is authoritative: it says what the VALUE
@@ -398,7 +399,7 @@ Entity kinds — pick the one whose meaning actually fits, not the
 nearest-sounding one:
 {kind_descriptions}
 
-Transcription of artifact {artifact_qid} (language: {language}):
+Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 
 {numbered_text}
 """
@@ -830,7 +831,7 @@ class ChunkedClaimExtractor:
         return None, None, reasons, answered
 
     def _entity_manifest(
-        self, transcription: Transcription, artifact_qid: str
+        self, transcription: Transcription, artifact: ArtifactRef
     ) -> tuple[list[EntityRecord] | None, Any, list[str], bool]:
         """(entities, conversation handle, why each attempt failed, any
         call answered).
@@ -842,7 +843,7 @@ class ChunkedClaimExtractor:
         prompt = ENTITY_MANIFEST_PROMPT.format(
             kinds=kinds,
             kind_descriptions=kind_descriptions,
-            artifact_qid=artifact_qid,
+            artifact_sha1=artifact.sha1,
             language=transcription.language,
             numbered_text=number_lines(transcription.text),
         )
@@ -901,7 +902,7 @@ class ChunkedClaimExtractor:
     # -- phase 1b: line-range segmentation (fallback tier) -----------------
 
     def _segment(
-        self, transcription: Transcription, artifact_qid: str
+        self, transcription: Transcription, artifact: ArtifactRef
     ) -> tuple[DocumentSegmentation, Any, list[str], bool]:
         """(segmentation, handle or None, why each attempt failed when it
         fell back, any call answered).
@@ -913,7 +914,7 @@ class ChunkedClaimExtractor:
         """
         line_count = len(transcription.text.splitlines())
         prompt = SEGMENTATION_PROMPT.format(
-            artifact_qid=artifact_qid,
+            artifact_sha1=artifact.sha1,
             language=transcription.language,
             numbered_text=number_lines(transcription.text),
         )
@@ -961,7 +962,7 @@ class ChunkedClaimExtractor:
         return DocumentSegmentation(units=units)
 
     def _phase_one(
-        self, transcription: Transcription, artifact_qid: str
+        self, transcription: Transcription, artifact: ArtifactRef
     ) -> tuple[list[EntityRecord] | None, DocumentSegmentation | None, Any]:
         """(entities, segmentation, conversation handle): the entity
         manifest, or the line-range fallback when the manifest was
@@ -974,7 +975,7 @@ class ChunkedClaimExtractor:
         """
         self._log("  scanning document for entities...")
         entities, handle, reasons, answered = self._entity_manifest(
-            transcription, artifact_qid
+            transcription, artifact
         )
         if entities is not None:
             return entities, None, handle
@@ -986,7 +987,7 @@ class ChunkedClaimExtractor:
         self.fallback["manifest"] = reasons[-1]
         self._refusals["manifest"] = reasons
         segmentation, handle, reasons, answered = self._segment(
-            transcription, artifact_qid
+            transcription, artifact
         )
         if not answered:
             raise RuntimeError(
@@ -1001,12 +1002,12 @@ class ChunkedClaimExtractor:
     # -- chunk calls -----------------------------------------------------
 
     def _document_block(
-        self, transcription: Transcription, artifact_qid: str, inline: bool
+        self, transcription: Transcription, artifact: ArtifactRef, inline: bool
     ) -> str:
         if not inline:
             return ""
         return (
-            f"\nFull transcription of artifact {artifact_qid} for "
+            f"\nFull transcription of artifact sha1:{artifact.sha1} for "
             f"context (extract ONLY for your assignment):\n\n"
             f"{number_lines(transcription.text)}\n"
         )
@@ -1015,18 +1016,18 @@ class ChunkedClaimExtractor:
         self,
         assignment_block: str,
         transcription: Transcription,
-        artifact_qid: str,
+        artifact: ArtifactRef,
         inline_document: bool,
     ) -> str:
         property_keys, item_keys = vocabulary_prompt_lines()
         return CHUNK_PROMPT.format(
-            artifact_qid=artifact_qid,
+            artifact_sha1=artifact.sha1,
             property_keys=property_keys,
             item_keys=item_keys,
             assignment_block=assignment_block,
             schema=claim_schema_prompt_text(),
             document_block=self._document_block(
-                transcription, artifact_qid, inline_document
+                transcription, artifact, inline_document
             ),
         )
 
@@ -1035,7 +1036,7 @@ class ChunkedClaimExtractor:
         chunk_units: list[SegmentationUnit],
         text_lines: list[str],
         transcription: Transcription,
-        artifact_qid: str,
+        artifact: ArtifactRef,
         inline_document: bool,
     ) -> str:
         units_block = "\n\n".join(
@@ -1051,7 +1052,7 @@ class ChunkedClaimExtractor:
                 units_block=units_block,
             ),
             transcription,
-            artifact_qid,
+            artifact,
             inline_document,
         )
 
@@ -1061,7 +1062,7 @@ class ChunkedClaimExtractor:
         all_entities: list[EntityRecord],
         text_lines: list[str],
         transcription: Transcription,
-        artifact_qid: str,
+        artifact: ArtifactRef,
         inline_document: bool,
     ) -> str:
         roster_block = "\n".join(
@@ -1092,7 +1093,7 @@ class ChunkedClaimExtractor:
                 roster_block=roster_block, entities_block=entities_block
             ),
             transcription,
-            artifact_qid,
+            artifact,
             inline_document,
         )
 
@@ -1142,30 +1143,22 @@ class ChunkedClaimExtractor:
     # -- orchestration ---------------------------------------------------
 
     def extract(
-        self,
-        transcription: Transcription,
-        artifact: ArtifactRef,
-        *,
-        artifact_qid: str,
+        self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
         """The document's batch, every claim citing `artifact`, the
-        document's content key (cite_artifact); `artifact_qid` is the
-        artifact's item, which the prompts name. When its conversation has
-        to be opened again and answers differently (ConversationChanged),
-        the pass is void and the extraction starts over from the new
-        answer, at most twice."""
+        document's content key, by which the prompts name the document too
+        (cite_artifact). When its conversation has to be opened again and
+        answers differently (ConversationChanged), the pass is void and the
+        extraction starts over from the new answer, at most twice."""
         for _pass in range(2):
             try:
-                return self._extract(transcription, artifact, artifact_qid)
+                return self._extract(transcription, artifact)
             except ConversationChanged as exc:
                 self._log(f"  {exc}: extracting again from the new answer")
-        return self._extract(transcription, artifact, artifact_qid)
+        return self._extract(transcription, artifact)
 
     def _extract(
-        self,
-        transcription: Transcription,
-        artifact: ArtifactRef,
-        artifact_qid: str,
+        self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
         text_lines = transcription.text.splitlines()
         self.failed_chunks = []
@@ -1180,7 +1173,7 @@ class ChunkedClaimExtractor:
         self._unread = {}
 
         entities, segmentation, handle = self._phase_one(
-            transcription, artifact_qid
+            transcription, artifact
         )
         inline_document = (
             handle is None and len(transcription.text) <= INLINE_DOCUMENT_LIMIT
@@ -1205,7 +1198,7 @@ class ChunkedClaimExtractor:
                     entities,
                     text_lines,
                     transcription,
-                    artifact_qid,
+                    artifact,
                     inline,
                 )
 
@@ -1219,7 +1212,7 @@ class ChunkedClaimExtractor:
 
             def build_prompt(group: list, inline: bool) -> str:
                 return self._chunk_prompt(
-                    group, text_lines, transcription, artifact_qid, inline
+                    group, text_lines, transcription, artifact, inline
                 )
 
             def transform(claim: dict, chunk_id: str) -> dict:

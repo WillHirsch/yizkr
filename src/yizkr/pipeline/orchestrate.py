@@ -1309,9 +1309,7 @@ class Orchestrator:
             language=self.language,
             fallback_language=self.fallback_language,
         )
-        transcription = transcriber.transcribe(
-            doc.source, artifact_qid=doc.state.artifact_qid
-        )
+        transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
 
     def _transcribe_text_file(self, doc: DocumentRun):
@@ -1322,9 +1320,7 @@ class Orchestrator:
             language=self.language,
             fallback_language=self.fallback_language,
         )
-        transcription = transcriber.transcribe(
-            doc.source, artifact_qid=doc.state.artifact_qid
-        )
+        transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
 
     def _transcribe_slides(self, doc: DocumentRun):
@@ -1339,7 +1335,7 @@ class Orchestrator:
             text, self.language, fallback=self.fallback_language
         )
         transcription = Transcription(
-            artifact_qid=doc.state.artifact_qid,
+            artifact=ArtifactRef(sha1=doc.sha1),
             text=text,
             language=resolution.code,
             engine="pptx-adapter",
@@ -1355,7 +1351,7 @@ class Orchestrator:
             text, self.language, fallback=self.fallback_language
         )
         transcription = Transcription(
-            artifact_qid=doc.state.artifact_qid,
+            artifact=ArtifactRef(sha1=doc.sha1),
             text=text,
             language=resolution.code,
             engine="correction",
@@ -1385,9 +1381,7 @@ class Orchestrator:
             )
             extractors.append(extractor)
             batch = extractor.extract(
-                transcription,
-                ArtifactRef(sha1=doc.sha1),
-                artifact_qid=doc.state.artifact_qid,
+                transcription, ArtifactRef(sha1=doc.sha1)
             )
             failed = extractor.failed_chunks
             if failed:

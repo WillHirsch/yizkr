@@ -99,7 +99,11 @@ artifact and a `page number` locator, and an un-held GEDCOM media item
 itself: an extractor sets each claim's source to the key of the document
 it read, whatever the model wrote there; the GEDCOM adapter cites the
 export's bytes; and a face proposal cites the photograph's bytes, while
-its subject stays the photograph's item.
+its subject stays the photograph's item. Nothing before the write names
+an artifact by QID: a transcription names its artifact by the same key,
+and the extraction prompts name it by that key and ask the model to cite
+it (#127), so a reset, which gives each artifact a new QID, changes
+neither.
 
 ## Artifacts and registration
 

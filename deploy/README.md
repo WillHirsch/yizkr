@@ -150,7 +150,8 @@ The list is a UTF-8 text file, one entry per line:
 - The single-file steps (`ingest register`, `transcribe`, `extract`,
   `gedcom`, `detect-faces`) are debugging tools and run without a list, but
   once one is configured they refuse a listed file (for `extract`, the
-  media file `--media` names).
+  media its transcription names, by the SHA-1 of its bytes, which only
+  the list's hashes can match).
 
 In the containerised CLI (`docker-compose.localhost.yml`), a set path that
 does not exist stops the container from starting; nothing is created in

@@ -11,9 +11,12 @@ Engines implement `Transcriber`. Provided:
   not implemented, it raises with a pointer.
 
 Output is a `Transcription` JSON document consumed by the extraction
-step. The transcription itself is NOT written to the graph — only the
-claims extracted from it are, each carrying its fragment locator and
-excerpt (ADR-0003).
+step. It names the artifact it transcribes by content: the SHA-1 of the
+media's bytes, which the transcriber hashes from the file it is given
+(ADR-0010), so a transcription is the same whatever instance the
+artifact is registered on. The transcription itself is NOT written to
+the graph — only the claims extracted from it are, each carrying its
+fragment locator and excerpt (ADR-0003).
 
 Every engine's `transcribe()` runs the transcription check
 (`yizkr.pipeline.transcription_check`) on its output and raises
@@ -59,6 +62,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from yizkr.claims import ArtifactRef
 from yizkr.pipeline.language import LanguageResolution, resolve_language
 from yizkr.pipeline.llm import EngineToolError, LlmClient, reject_response
 from yizkr.pipeline.transcription_check import (
@@ -119,18 +123,21 @@ def preflight_vision_transcription(
 
 
 class Transcription(BaseModel):
+    """A transcription of one artifact's media. `artifact` names the
+    artifact by the SHA-1 of the media's bytes: the key its claims cite,
+    and part of the transcription's content, which depends on no
+    instance."""
+
     model_config = ConfigDict(extra="forbid")
 
-    artifact_qid: str | None = Field(default=None, pattern=r"^Q[1-9]\d*$")
+    artifact: ArtifactRef
     text: str = Field(min_length=1)
     language: str = Field(default="en", pattern=r"^[a-z]{2,3}(-[a-z0-9-]+)?$")
     engine: str = Field(min_length=1)
 
 
 class Transcriber(Protocol):
-    def transcribe(
-        self, media_path: Path, artifact_qid: str | None = None
-    ) -> Transcription: ...
+    def transcribe(self, media_path: Path) -> Transcription: ...
 
 
 class _CheckedTranscriber:
@@ -140,14 +147,10 @@ class _CheckedTranscriber:
     # the check behind the last transcribe(), for callers to record
     last_check: TranscriptionCheck | None = None
 
-    def transcribe_unchecked(
-        self, media_path: Path, artifact_qid: str | None = None
-    ) -> Transcription:
+    def transcribe_unchecked(self, media_path: Path) -> Transcription:
         raise NotImplementedError
 
-    def transcribe(
-        self, media_path: Path, artifact_qid: str | None = None
-    ) -> Transcription:
+    def transcribe(self, media_path: Path) -> Transcription:
         """The checked transcription of `media_path`. An output that fails
         the check is rejected; one its client kept from an earlier call,
         rather than the engine's answer now, is asked for once more, and
@@ -158,9 +161,7 @@ class _CheckedTranscriber:
         pages = media_page_count(media_path)
         for _ask in range(2):
             try:
-                transcription = self.transcribe_unchecked(
-                    media_path, artifact_qid
-                )
+                transcription = self.transcribe_unchecked(media_path)
             except EngineToolError as exc:
                 self.last_check = check_transcription(
                     exc.response, pages=pages, tool_failures=exc.failures
@@ -197,17 +198,18 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         # the engine's answer behind the last transcription
         self._response: str | None = None
 
-    def transcribe_unchecked(
-        self, media_path: Path, artifact_qid: str | None = None
-    ) -> Transcription:
+    def transcribe_unchecked(self, media_path: Path) -> Transcription:
+        """The engine's reading of the media at `media_path`, named by the
+        SHA-1 of its bytes, which are hashed before the engine is asked."""
         self._response = None
+        artifact = ArtifactRef.from_path(media_path)
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
         self._response = text
         self.last_resolution = resolve_language(
             text, self.language, fallback=self.fallback_language
         )
         return Transcription(
-            artifact_qid=artifact_qid,
+            artifact=artifact,
             text=text,
             language=self.last_resolution.code,
             engine=f"llm-vision:{self.client.model_identifier}",
@@ -224,7 +226,9 @@ class LlmVisionTranscriber(_CheckedTranscriber):
 
 
 class TextFileTranscriber(_CheckedTranscriber):
-    """Wrap an existing transcription file (manual or external tool)."""
+    """Wrap an existing transcription file (manual or external tool): the
+    text is the file's, and the transcription names the media it is of,
+    the `media_path` given to transcribe(), by the SHA-1 of its bytes."""
 
     def __init__(
         self,
@@ -237,15 +241,14 @@ class TextFileTranscriber(_CheckedTranscriber):
         self.fallback_language = fallback_language
         self.last_resolution: LanguageResolution | None = None
 
-    def transcribe_unchecked(
-        self, media_path: Path, artifact_qid: str | None = None
-    ) -> Transcription:
+    def transcribe_unchecked(self, media_path: Path) -> Transcription:
+        artifact = ArtifactRef.from_path(media_path)
         text = self.text_file.read_text()
         self.last_resolution = resolve_language(
             text, self.language, fallback=self.fallback_language
         )
         return Transcription(
-            artifact_qid=artifact_qid,
+            artifact=artifact,
             text=text,
             language=self.last_resolution.code,
             engine=f"text-file:{self.text_file.name}",
@@ -258,9 +261,7 @@ class HtrPlatformAdapter:
     def __init__(self, platform: str = "transkribus") -> None:
         self.platform = platform
 
-    def transcribe(
-        self, media_path: Path, artifact_qid: str | None = None
-    ) -> Transcription:
+    def transcribe(self, media_path: Path) -> Transcription:
         raise NotImplementedError(
             f"HTR adapter for {self.platform!r} is a stub and not "
             f"implemented. Use the llm or textfile engines meanwhile."
