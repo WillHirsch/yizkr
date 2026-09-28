@@ -12,10 +12,11 @@
 # statement's rank, its value as the source states it (a time with its
 # precision; an item with the label of the item a merge redirect resolves
 # to), the earliest and latest dates the source gives it, the start time,
-# end time and point in time it carries as qualifiers, and each stated-in
-# source with the artifact it belongs to (a page fragment belongs to the
-# artifact it is part of). A statement with no stated-in source shows no
-# source.
+# end time and point in time it carries as qualifiers, the latest start
+# date and earliest end date that bound a residence's or a marriage's
+# start and end, and each stated-in source with the artifact it belongs to
+# (a page fragment belongs to the artifact it is part of). A statement
+# with no stated-in source shows no source.
 #
 # The comparison runs in Python, in yizkr.disagreement (ADR-0033): it
 # pairs the values that different artifacts attribute and sets aside
@@ -25,6 +26,7 @@
 SELECT ?entity ?entityLabel ?property ?propertyLabel ?statement ?rank
        ?value ?valueLabel ?precision
        ?earliest ?earliestPrecision ?latest ?latestPrecision
+       ?latestStart ?latestStartPrecision ?earliestEnd ?earliestEndPrecision
        ?start ?startPrecision ?end ?endPrecision
        ?pointInTime ?pointInTimePrecision
        ?source ?sourceLabel ?artifact
@@ -48,6 +50,8 @@ WHERE {
   # below joins on the statement alone
   wd:{P:earliest_date} wikibase:qualifierValue ?earliestLink .
   wd:{P:latest_date} wikibase:qualifierValue ?latestLink .
+  wd:{P:latest_start_date} wikibase:qualifierValue ?latestStartLink .
+  wd:{P:earliest_end_date} wikibase:qualifierValue ?earliestEndLink .
   wd:{P:start_time} wikibase:qualifierValue ?startLink .
   wd:{P:end_time} wikibase:qualifierValue ?endLink .
   wd:{P:point_in_time} wikibase:qualifierValue ?pointInTimeLink .
@@ -60,13 +64,21 @@ WHERE {
   OPTIONAL { ?statement ?psv ?valueNode .
              ?valueNode wikibase:timePrecision ?precision . }
   # the range its source states, and the dates it carries: a residence's or
-  # a marriage's start and end, an observation's point in time
+  # a marriage's start and end, each with the bounds of its own (from the
+  # earliest date to the latest start date, from the earliest end date to
+  # the latest date), and an observation's point in time
   OPTIONAL { ?statement ?earliestLink ?earliestNode .
              ?earliestNode wikibase:timeValue ?earliest ;
                            wikibase:timePrecision ?earliestPrecision . }
   OPTIONAL { ?statement ?latestLink ?latestNode .
              ?latestNode wikibase:timeValue ?latest ;
                          wikibase:timePrecision ?latestPrecision . }
+  OPTIONAL { ?statement ?latestStartLink ?latestStartNode .
+             ?latestStartNode wikibase:timeValue ?latestStart ;
+                              wikibase:timePrecision ?latestStartPrecision . }
+  OPTIONAL { ?statement ?earliestEndLink ?earliestEndNode .
+             ?earliestEndNode wikibase:timeValue ?earliestEnd ;
+                              wikibase:timePrecision ?earliestEndPrecision . }
   OPTIONAL { ?statement ?startLink ?startNode .
              ?startNode wikibase:timeValue ?start ;
                         wikibase:timePrecision ?startPrecision . }

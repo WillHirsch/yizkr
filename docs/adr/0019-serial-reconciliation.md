@@ -137,9 +137,9 @@ surgery. The re-run frequency is a *surface* concern, and
 the right place to remove it is a thin stateful layer **on top** — the
 planned human frontend, or a future optional `--watch`/`--loop` mode that
 re-invokes when a reviewed CSV appears — driving the stateless core rather
-than replacing it. That layer is out of scope here; this ADR only requires
-that the docs state plainly that advancing the process currently means
-re-running `ingest run`.
+than replacing it. That layer is out of scope here (#171); this ADR only
+requires that the docs state plainly that advancing the process currently
+means re-running `ingest run`.
 
 ### 5. `reconcile-graph` retained, demoted
 
@@ -156,7 +156,7 @@ not a within-artifact one.)
 
 1. **Opt-in.** `--serial` is a flag; the existing advance-all run stays the
    default and behaves exactly as today. (Whether serial later becomes the
-   default is deferred — ship it opt-in and revisit with usage.)
+   default is deferred — ship it opt-in and revisit with usage. See #119.)
 2. **Two gates per artifact, unchanged; not batched, not combined.** Claim
    review must land on the resolved, minimal set (identity-first keeps it
    lean), and each artifact must be fully written for the next to see rich

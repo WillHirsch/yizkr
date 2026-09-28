@@ -128,4 +128,4 @@ curation the rest of the system already assumes.
 Auto-minting vocabulary from gaps (a human decides what to add);
 auto-applying critic findings (flags only); multi-kind entities (an
 entity that is genuinely org *and* place — deferred with ADR-0012's
-Fork C).
+Fork C; see #47).

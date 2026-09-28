@@ -1,4 +1,4 @@
-"""Offline tests for folder orchestration (ROADMAP item 15).
+"""Offline tests for folder orchestration (`yizkr ingest run`).
 
 The wiki steps are replaced with scripted fakes and the engine with a
 scripted model, called directly: these tests run without the LLM cache
@@ -2664,7 +2664,7 @@ class TestTranscribeLanguage:
 
 
 class TestRegisterArtifactType:
-    """Suffix-specific artifact classes at registration (item 10)."""
+    """Suffix-specific artifact classes at registration."""
 
     def test_ged_registers_as_genealogical_report(self, tmp_path, monkeypatch):
         import yizkr.pipeline.registrar as registrar

@@ -5,11 +5,11 @@ Status: **accepted** — implemented in the GEDCOM adapter
 (step A) and OBJE objects become un-held media items linked with the new
 `image` property. Follows the honest census of the preceding change (issue
 #8). Step B (promoting a cited SOUR to its own artifact item) remains
-deferred to a future ADR.
+deferred to a future ADR (#168).
 
 ## Context
 
-The GEDCOM adapter (ROADMAP item 13) maps the genealogical content a
+The GEDCOM adapter (`pipeline/gedcom.py`) maps the genealogical content a
 family-tree export carries — names, dates, places, parentage, marriages,
 occupations, and so on — deterministically into referenced claims. Two
 common tag families it did **not** map are `SOUR` (source citations) and
@@ -69,7 +69,7 @@ artifact / artifact-fragment item (a *cited source*, e.g. the birth index),
 referenced `stated in →` from every claim that cites it and de-duplicated
 like places, is real modeling work — citation identity, dedup, a review
 step (never auto-merge). It gets its own ADR + review flow when
-prioritised; it is not built here.
+prioritised; it is not built here. Tracked in #168.
 
 ### 2. `OBJE` → a lightweight un-held media item, never a fetch
 
@@ -89,8 +89,8 @@ depiction.
 Referencing is not fetching: this records the `FILE` URL/name and the
 metadata the export already holds with **zero bytes held and zero
 third-party fetch**. Acquiring the bytes stays a separate,
-explicitly-instructed step, and only then does the medium join the normal
-SHA-1-keyed artifact path (ADR-0010). This preserves the person↔media
+explicitly-instructed step (#168), and only then does the medium join the
+normal SHA-1-keyed artifact path (ADR-0010). This preserves the person↔media
 linkage the future faces/gallery flows (ADR-0005) will want, without ever
 pulling personal media off Ancestry or newspapers.com on the archive's own
 initiative.
@@ -120,5 +120,5 @@ initiative.
   bootstrap mints it idempotently on the next run.
 - The heavier citation-as-entity modeling (Step B) is named and deferred to
   its own ADR, not smuggled into the adapter.
-- Docs move with code: the adapter docstring, MODELING.md ("Names"/media),
-  and ROADMAP item 13's note are updated in this change.
+- Docs move with code: the adapter docstring and MODELING.md
+  ("Names"/media) are updated in this change.

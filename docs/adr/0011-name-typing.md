@@ -2,7 +2,7 @@
 
 Status: accepted (typed name properties + GEDCOM emission + reconciler
 evidence implemented; given/family components and promoting the primary
-name to a referenced statement deferred, see "Later")
+name to a referenced statement deferred, see "Consequences" and #171)
 
 ## Context
 
@@ -117,9 +117,9 @@ as a claim).
   index remains its home, to avoid doubling every person's claim count
   for no new information. Recording the principal name as a referenced
   statement is a later option if the unreferenced label ever needs
-  provenance.
+  provenance (the deferred-on-trigger register, #171).
 - **Not built:** structured given/family-name components (P735/P734, the
   GEDCOM GIVN/SURN the export carries) as shared name *items* — heavier
-  (mints name items) and lower reconciliation value; deferred. Maiden
+  (mints name items) and lower reconciliation value; deferred (#171). Maiden
   names are only recorded when a source marks them (TYPE maiden); they
   are never *inferred* from gender + marriage, which would be guessing.

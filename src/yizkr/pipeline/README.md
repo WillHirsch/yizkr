@@ -235,7 +235,8 @@ re-running one step in isolation — but for a normal ingest you only ever run
   and reported, not recorded.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
-  local), `htr` (Transkribus-style platform adapter, stub for now).
+  local), `htr` (a Transkribus-style platform adapter, dropped as LLM
+  vision is sufficient for handwriting: a stub that raises; #171).
 - **transcription check** — runs on the output of the `llm` and
   `textfile` engines (in `ingest run`, the vision and text-file methods)
   before anything uses it, in `ingest run` and `ingest transcribe`
