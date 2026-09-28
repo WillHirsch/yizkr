@@ -125,7 +125,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.corpus import (
     MISSING_LIST,
@@ -1187,7 +1187,7 @@ class Orchestrator:
             doc,
             "gedcom",
             lambda: adapt_gedcom(
-                doc.source.read_text(), artifact_qid=doc.state.artifact_qid
+                doc.source.read_text(), artifact=ArtifactRef(sha1=doc.sha1)
             ),
         )
         detail = doc.state.detail or {}
@@ -1387,7 +1387,9 @@ class Orchestrator:
             )
             extractors.append(extractor)
             batch = extractor.extract(
-                transcription, artifact_qid=doc.state.artifact_qid
+                transcription,
+                ArtifactRef(sha1=doc.sha1),
+                artifact_qid=doc.state.artifact_qid,
             )
             failed = extractor.failed_chunks
             if failed:

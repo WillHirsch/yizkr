@@ -58,8 +58,8 @@ A slice may also be written `stage:NAME` or `kind:NAME`; with no slice
 the command is for the whole run. Each command appends one request to
 the run's `control.jsonl` (`rundir.RunDir.request`, `by: "monitor"`), and
 the view says what the slice's state is then, read as the slices are
-(What it reads, below), or that it cannot be told while the file is not
-text the driver can read either. The driver honours the
+(What it reads, below), or that it cannot be told while the file itself
+cannot be read, by the driver either. The driver honours the
 requests: a pause holds dispatch for its slice until a resume; an abort
 holds it for the rest of the invocation, and invoking the run again
 resumes it (docs/LLM_CACHE.md, `control.jsonl`). Neither loses a
@@ -155,7 +155,12 @@ not a new start), and who stopped it and why. The states are the driver's
 own: `control.jsonl` is read with rundir's reader and folded with its
 fold (`read_jsonl`, `fold_control`), so a slice the monitor shows as
 stopped is one the driver stops. Requests before the latest invocation's
-start marker no longer apply.
+start marker no longer apply. While the file itself cannot be read (its
+mode forbids it, say), the driver cannot read it either, and every
+slice's state is `unknown`, with no since, who or why. The terminal view
+says so in one line, "state unknown: the control file cannot be read",
+and the page lists every slice as unknown, under a line that says why;
+the header of each adds "run state unknown".
 
 **Alerts.** The counts, new and carried, and by check; and the latest
 ten, newest first: time, `new` (on an output the engine answered in this
@@ -217,8 +222,13 @@ so are its requests: a scope that is empty, false or zero is the whole
 run, and a start marker clears every slice whatever its scope. Any other
 request whose scope is set but is not a name (a list, say) is left out
 and counted as skipped: the driver's fold fails on one it cannot hash,
-and one it can stops no slice. A command, typed in the view or given on
-the module's command line, reads the file the same way.
+and one it can stops no slice. The file is read whole at every refresh,
+as the driver reads it before each stage it dispatches, so a change of
+its mode, which leaves its size and modification time as they were,
+shows at once. One that cannot be read at all leaves no last good one
+standing, since the driver has none: every slice's state is unknown
+(Slices, above) until a refresh reads it. A command, typed in the view
+or given on the module's command line, reads the file the same way.
 
 From `events.jsonl` it reads the stage events (`started`, `done`,
 `reused`, `failed`, `held`), the LLM cache's events, the engine's call

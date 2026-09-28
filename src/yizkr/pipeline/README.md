@@ -195,8 +195,9 @@ The corpus lives outside the repository, in the private folder named by
   `yizkr.core.corpus.is_excluded()` before it uses a document's content.
   `ingest run` drops a listed document at discovery, so it gets no
   artifact, no transcription and no state. The single-file steps
-  (`register`, `transcribe`, `gedcom`, `detect-faces`) run without a list,
-  but refuse a listed file once one is configured. New entry points must
+  (`register`, `transcribe`, `extract`, `gedcom`, `detect-faces`) run
+  without a list, but refuse a listed file once one is configured (for
+  `extract`, the media file `--media` names). New entry points must
   call it too: write-time registration (#103), transcription import
   (#104), the run driver (#118) and faces (#160).
 
@@ -209,14 +210,17 @@ re-running one step in isolation — but for a normal ingest you only ever run
 
 - **register** — uploads media (idempotent by content; a wiki file is
   never overwritten or stored twice, ADR-0010), ensures the
-  artifact item (`instance of`, `media file`) and optional page
-  fragments (`part of` + page qualifier). Statement provenance:
+  artifact item (`instance of`, `media file`, `media SHA-1`) and optional
+  page fragments (`part of` + page qualifier). Statement provenance:
   `stated in → the artifact itself` (see docs/MODELING.md, "Artifacts
-  and registration"). Runs before extraction so claims can cite QIDs.
-  Registration and resolve (below) are the steps before the write that
-  use the wiki: registration until write-time registration (#103) takes
-  its place, and resolve's label match until the identity-map writer
-  (#109).
+  and registration"). Claims cite an artifact by the SHA-1 of its media,
+  never by QID, and the write resolves that key through the `media
+  SHA-1` statement registration writes, so a batch written to another
+  instance, or after a reset, finds its artifacts there once they are
+  registered. Registration and resolve (below) are the steps before the
+  write that use the wiki: registration until write-time registration
+  (#103) takes its place, and resolve's label match until the
+  identity-map writer (#109).
 - **derived media** (decks) — records the images a deck embeds in the
   deck's state directory, not on the wiki: `derived-media.json` keys each
   distinct image by the SHA-1 of its bytes (ADR-0010), with its names in
@@ -265,7 +269,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
 - **extract** — engines: `llm` (prompts with the claim JSON Schema and
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
-  same validation).
+  same validation). The `llm` engine sets every claim's source artifact
+  itself, to the SHA-1 of the document it read (`ingest extract
+  --media`; in `ingest run`, the source file's bytes), whatever the
+  model wrote there; the prompt still names the artifact's item by QID
+  (`--artifact`) until #127 takes QIDs out of the prompts. A prepared
+  file's claims cite their artifacts themselves. The GEDCOM adapter
+  (`ingest gedcom`) cites the export's own bytes.
 - **reconcile** — in `ingest run`, proposes nothing. A proposal matches
   one of the document's entities to an entity of a roster, and a stage
   before the write reads nothing from the wiki (ADR-0025 §2), so no roster
@@ -383,7 +393,10 @@ A face proposal is an ordinary claim — `depicts` on the photograph,
 person as value, `relative position within image` qualifier, the
 photograph as its own source — so proposals ride the same review flow
 above, and only human-confirmed identifications reach the graph, with
-dual provenance (photograph + region; detection run).
+dual provenance (photograph + region; detection run). The claim's
+subject is the photograph's item (`--artifact`), and its source is the
+photograph's bytes, by SHA-1 (`--file`), which the detections file
+keeps as `photo_sha1`.
 
 The curator loop ("initial manual inputs", R5):
 
@@ -411,6 +424,10 @@ structural in the schema:
 
 - `source` (artifact + fragment locators) is a **required** field —
   a referenceless claim cannot be represented (ADR-0003).
+- The source artifact is named by **content**, the SHA-1 of its media
+  (`{"kind": "artifact", "sha1": ...}`), never by QID: the same batch
+  holds on any instance and after a reset, and the writer resolves the
+  key to the artifact item at write time (ADR-0010).
 - Batches carry `extraction_run` metadata for the second, process
   reference (ADR-0003).
 - There is **no rank field** — pipeline writes are always normal rank;

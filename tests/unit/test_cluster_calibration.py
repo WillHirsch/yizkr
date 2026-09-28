@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.reconcile import impossible_pair
 
 SCRIPT = (
@@ -32,7 +32,8 @@ RUN = {
     "pipeline_version": "0.1.0",
     "started_at": "2026-07-13T09:00:00Z",
 }
-SOURCE = {"artifact": {"kind": "qid", "qid": "Q1"}}
+# every claim cites one fictional scan, by the SHA-1 of its bytes (#102)
+SOURCE = {"artifact": ArtifactRef.from_bytes(b"fictional scan").model_dump()}
 
 GEDCOM = """\
 0 HEAD
