@@ -3,6 +3,8 @@
 import codecs
 import csv
 import json
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +12,7 @@ from tests.fixtures import example_universe as u
 from tests.unit.test_pipeline import PROPERTIES, FakeWiki, _cited
 from yizkr import cli
 from yizkr.claims import (
+    ArtifactRef,
     Claim,
     ClaimBatch,
     EntityRecord,
@@ -30,10 +33,12 @@ from yizkr.pipeline.faces import (
     DetectedFace,
     DetectionResult,
     Gallery,
+    InsightFaceDetector,
     PixelBox,
     best_match,
     cosine_similarity,
     enroll_from_detections,
+    load_detections,
     proposals_to_batch,
     to_region,
 )
@@ -48,6 +53,10 @@ from yizkr.pipeline.review import (
     unapproved_depicts,
 )
 from yizkr.pipeline.writer import BatchWriter, UnapprovedDepictsError
+
+# The bytes of the universe's 1890s studio portrait, fictional: its depicts
+# claims cite it by their SHA-1 (#102), and its item is Q30.
+PORTRAIT_SCAN = ArtifactRef.from_bytes(b"fictional scan: a studio portrait")
 
 # Unit-normed toy embeddings: person A along one axis, person B along
 # another, a third vector between them.
@@ -69,6 +78,7 @@ def face(index: int, embedding, x=100, y=50) -> DetectedFace:
 def detection(*faces) -> DetectionResult:
     return DetectionResult(
         photo_file="photo.jpg",
+        photo_sha1=PORTRAIT_SCAN.sha1,
         artifact_qid="Q30",
         image_width=1000,
         image_height=500,
@@ -158,7 +168,8 @@ class TestProposals:
         assert claim.value.value == QidRef(qid="Q26")
         assert claim.qualifiers[0].property == "relative_position_within_image"
         assert claim.qualifiers[0].value.value == "10%,10%,20%,50%"
-        assert claim.source.artifact == QidRef(qid="Q30")
+        # the photograph is its own source, cited by its bytes
+        assert claim.source.artifact == PORTRAIT_SCAN
         assert claim.source.region.as_wikibase_string() == "10%,10%,20%,50%"
         assert 0 < claim.confidence <= 1
         assert batch.extraction_run.model_identifier == (
@@ -190,6 +201,45 @@ class TestProposals:
         content = csv_path.read_text()
         assert "depicts" in content
         assert "relative_position_within_image=10%,10%,20%,50%" in content
+        assert f"sha1:{PORTRAIT_SCAN.sha1}" in content
+
+
+class TestPhotoKey:
+    """A detection names its photograph by the SHA-1 of its bytes, which
+    the depicts claims cite (#102)."""
+
+    def test_the_detector_keys_the_photo_by_its_bytes(
+        self, tmp_path, monkeypatch
+    ):
+        photo = tmp_path / "portrait.png"
+        photo.write_bytes(b"fictional scan: a studio portrait")
+        # no model or image library: the detector reads a blank image
+        # and finds no face in it
+        monkeypatch.setitem(
+            sys.modules,
+            "cv2",
+            SimpleNamespace(imread=lambda path: SimpleNamespace(shape=(5, 9))),
+        )
+        detector = object.__new__(InsightFaceDetector)
+        detector._app = SimpleNamespace(get=lambda image: [])
+        detector.model_identifier = "insightface-test"
+        result = detector.detect(photo, "Q30")
+        assert (result.photo_sha1, result.artifact_qid) == (
+            PORTRAIT_SCAN.sha1,
+            "Q30",
+        )
+
+    def test_a_detections_file_without_the_photos_key_is_refused(
+        self, tmp_path
+    ):
+        """No dual format: a detections file saved without the photo's
+        key cannot give its depicts claims their source."""
+        saved = json.loads(detection(face(0, A)).model_dump_json())
+        del saved["photo_sha1"]
+        path = tmp_path / "detections.json"
+        path.write_text(json.dumps(saved))
+        with pytest.raises(ValueError, match="photo_sha1"):
+            load_detections(path)
 
 
 # The universe's 1890s studio portrait, under the QID `detection` gives it.
@@ -213,7 +263,7 @@ def on_portrait(prop: str, value) -> Claim:
         subject=PORTRAIT,
         property=prop,
         value=value,
-        source=SourceReference(artifact=PORTRAIT),
+        source=SourceReference(artifact=PORTRAIT_SCAN),
     )
 
 
@@ -289,7 +339,7 @@ def muckel(label: str, **fields) -> Claim:
         value=MonolingualValue(
             value=MonolingualText(text="Muckel", language="de")
         ),
-        source=SourceReference(artifact=PORTRAIT),
+        source=SourceReference(artifact=PORTRAIT_SCAN),
     )
 
 
@@ -334,7 +384,7 @@ def studio_in(place: LocalRef) -> Claim:
         ),
         property="location",
         value=ItemValue(value=place),
-        source=SourceReference(artifact=PORTRAIT),
+        source=SourceReference(artifact=PORTRAIT_SCAN),
     )
 
 
@@ -821,7 +871,7 @@ def wiki_with_portrait() -> FakeWiki:
     """A fake instance holding the portrait's photograph item, and Rahel's
     item under Q28, the QID the portrait's text names her by: so a batch
     retargeted to her would write, were the writer to let it."""
-    wiki = FakeWiki()
+    wiki = FakeWiki({PORTRAIT_SCAN.sha1: PORTRAIT.qid})
     photograph = wiki.wbi.item.new()
     photograph.id = PORTRAIT.qid
     photograph.write()

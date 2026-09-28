@@ -289,8 +289,11 @@ def cmd_transcribe(args) -> int:
 
 
 def cmd_extract(args) -> int:
+    from yizkr.claims import ArtifactRef
     from yizkr.pipeline.transcribe import Transcription
 
+    _refuse_if_excluded(args, args.media)
+    artifact = ArtifactRef.from_path(args.media)
     transcription = Transcription.model_validate_json(
         args.transcription.read_text()
     )
@@ -333,7 +336,9 @@ def cmd_extract(args) -> int:
                 raw_dump=raw_dump,
                 rejects_dump=rejects_dump,
             )
-    batch = extractor.extract(transcription, artifact_qid=args.artifact)
+    batch = extractor.extract(
+        transcription, artifact, artifact_qid=args.artifact
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(batch.model_dump_json(indent=2))
     print(f"wrote {args.out} ({len(batch.claims)} claims)")
@@ -383,10 +388,13 @@ def cmd_resolve(args) -> int:
 
 
 def cmd_gedcom(args) -> int:
+    from yizkr.claims import ArtifactRef
     from yizkr.pipeline.gedcom import adapt_gedcom, format_unsupported_tags
 
     _refuse_if_excluded(args, args.file)
-    result = adapt_gedcom(args.file.read_text(), artifact_qid=args.artifact)
+    result = adapt_gedcom(
+        args.file.read_text(), artifact=ArtifactRef.from_path(args.file)
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(result.batch.model_dump_json(indent=2))
     print(
@@ -920,7 +928,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = isub.add_parser("extract", help="transcription -> claim batch JSON")
     p.add_argument("--transcription", type=Path, required=True)
-    p.add_argument("--artifact", required=True, help="artifact QID")
+    p.add_argument(
+        "--media",
+        type=Path,
+        required=True,
+        help="the transcribed artifact's media file: the llm engine's claims "
+        "cite it by the SHA-1 of its bytes, which the write resolves to the "
+        "item `ingest register` made for it (a claims file's claims cite "
+        "their artifacts themselves)",
+    )
+    p.add_argument(
+        "--artifact",
+        required=True,
+        help="the artifact item's QID, which the extraction prompt names",
+    )
     p.add_argument("--engine", choices=["llm", "file"], default="file")
     p.add_argument(
         "--claims-file", type=Path, help="prepared claims JSON (file engine)"
@@ -964,9 +985,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="deterministic GEDCOM export -> claim batch (no LLM; item 13)",
     )
     p.add_argument(
-        "--file", type=Path, required=True, help="GEDCOM file (.ged)"
+        "--file",
+        type=Path,
+        required=True,
+        help="GEDCOM file (.ged); every claim cites it by the SHA-1 of its "
+        "bytes, which the write resolves to the item `ingest register` "
+        "made for it",
     )
-    p.add_argument("--artifact", required=True, help="registered artifact QID")
     p.add_argument("--out", type=Path, default=Path("batch.json"))
     p.set_defaults(func=cmd_gedcom)
 
@@ -1186,11 +1211,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = isub.add_parser(
         "detect-faces", help="detect faces in a photo -> depicts proposals"
     )
-    p.add_argument("--file", type=Path, required=True, help="photo file")
+    p.add_argument(
+        "--file",
+        type=Path,
+        required=True,
+        help="photo file; the depicts claims cite it by the SHA-1 of its "
+        "bytes",
+    )
     p.add_argument(
         "--artifact",
         required=True,
-        help="QID of the registered photograph item",
+        help="QID of the registered photograph item, the depicts claims' "
+        "subject",
     )
     p.add_argument("--engine", choices=["insightface"], default="insightface")
     p.add_argument("--gallery", type=Path, default=Path("gallery.json"))

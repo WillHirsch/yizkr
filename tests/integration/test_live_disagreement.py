@@ -43,12 +43,11 @@ from datetime import UTC, datetime
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import Disagreement, disagreements
-from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import run_sparql, wait_for_query_service
+from .conftest import register_fictional, run_sparql, wait_for_query_service
 
 pytestmark = pytest.mark.live
 
@@ -131,7 +130,7 @@ def claim(
     subject: dict,
     prop: str,
     value: dict,
-    artifact_qid: str,
+    artifact: ArtifactRef,
     qualifiers: tuple = (),
     curated: bool = False,
 ) -> dict:
@@ -144,7 +143,7 @@ def claim(
             for key, qualifier in qualifiers
         ],
         "source": {
-            "artifact": {"kind": "qid", "qid": artifact_qid},
+            "artifact": artifact.model_dump(mode="json"),
             "page_number": "1",
             "transcription_excerpt": {
                 "text": "fictional disagreement fixture",
@@ -207,19 +206,27 @@ def fixture_graph(client, config):
     subjects' latest revisions. Returns (QIDs by role, source QIDs by
     letter)."""
     registered = {
-        letter: register_artifact(
+        letter: register_fictional(
             client,
-            media_path=None,
-            artifact_type="certificate",
-            title=f"Disagreement fixture source {letter}",
-            description="written by tests/integration; safe to delete",
+            f"Disagreement fixture source {letter}",
+            "certificate",
             pages=1 if letter == "A" else 0,
         )
         for letter in "ABC"
     }
-    a, b, c = (registered[letter].artifact_qid for letter in "ABC")
-    page_one_of_a = registered["A"].fragment_qids[1]
-    machine = BatchWriter(client).write_batch(
+    a, b, c = (registered[letter].ref for letter in "ABC")
+    # A claim cites an artifact by the SHA-1 of its media, which a page
+    # fragment does not have of its own: the writer is handed the page's
+    # item for a key of its own, as a caller hands over an artifact it has
+    # just registered, so that a claim cites the page as it would an
+    # artifact (#102).
+    page_one_of_a = ArtifactRef.from_bytes(
+        b"yizkr live test: Disagreement fixture source A, page 1"
+    )
+    machine = BatchWriter(
+        client,
+        artifact_qids={page_one_of_a.sha1: registered["A"].fragment_qids[1]},
+    ).write_batch(
         batch(
             [
                 # the universe's contradiction: day and month transposed
@@ -413,7 +420,7 @@ def fixture_graph(client, config):
         WikibaseRank.PREFERRED,
     )
     wait_for_query_service(config, client, [qids[role] for role in SUBJECTS])
-    return qids, {"A": a, "B": b, "C": c}
+    return qids, {letter: registered[letter].qid for letter in "ABC"}
 
 
 def report_rows(client, config, qids: dict[str, str]) -> list[dict]:

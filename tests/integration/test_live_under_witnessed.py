@@ -30,12 +30,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from yizkr.claims import ClaimBatch
-from yizkr.pipeline.registrar import register_artifact
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
-from .conftest import run_sparql, wait_for_query_service
+from .conftest import register_fictional, run_sparql, wait_for_query_service
 
 pytestmark = pytest.mark.live
 
@@ -67,7 +66,7 @@ def text(value: str) -> dict:
 def claim(
     prop: str,
     value: dict,
-    artifact_qid: str,
+    artifact: ArtifactRef,
     qualifiers: tuple = (),
     curated: bool = False,
 ) -> dict:
@@ -77,7 +76,7 @@ def claim(
         "value": value,
         "qualifiers": list(qualifiers),
         "source": {
-            "artifact": {"kind": "qid", "qid": artifact_qid},
+            "artifact": artifact.model_dump(mode="json"),
             "page_number": "1",
             "transcription_excerpt": {
                 "text": "fictional under-witnessed fixture",
@@ -106,16 +105,13 @@ def fixture_graph(client, config):
     """Write the fixture (idempotent: re-runs reuse and skip everything)
     and wait until the query service holds the subject's latest revision.
     Returns (subject QID, source A QID, source B QID)."""
-    source_a, source_b = (
-        register_artifact(
-            client,
-            media_path=None,
-            artifact_type="certificate",
-            title=f"Under-witnessed fixture source {letter}",
-            description="written by tests/integration; safe to delete",
-        ).artifact_qid
+    registered_a, registered_b = (
+        register_fictional(
+            client, f"Under-witnessed fixture source {letter}", "certificate"
+        )
         for letter in ("A", "B")
     )
+    source_a, source_b = registered_a.ref, registered_b.ref
     town = {"type": "item", "value": TOWN}
     first = BatchWriter(client).write_batch(
         batch(
@@ -169,7 +165,7 @@ def fixture_graph(client, config):
     )
     subject = first.created_items["queue-person"]
     wait_for_query_service(config, client, [subject])
-    return subject, source_a, source_b
+    return subject, registered_a.qid, registered_b.qid
 
 
 def statement_uri(config, guid: str) -> str:

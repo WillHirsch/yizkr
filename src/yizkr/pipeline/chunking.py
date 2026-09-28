@@ -27,8 +27,9 @@ from typing import Any, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from yizkr.claims import ClaimBatch, EntityRecord, load_vocabulary
+from yizkr.claims import ArtifactRef, ClaimBatch, EntityRecord, load_vocabulary
 from yizkr.pipeline.extract import (
+    cite_artifact,
     entity_kind_prompt_lines,
     run_metadata,
     salvage_valid_claims,
@@ -593,7 +594,10 @@ def pack_units(
 
 
 def _rewrite_local_refs(claim: dict, fix) -> dict:
-    """Deep-copy a claim dict and apply `fix` to every local ref in it."""
+    """Deep-copy a claim dict and apply `fix` to every local ref in it:
+    its subject's, its item value's and its qualifiers' item values'. A
+    source never holds one: the extractor names the source artifact
+    itself (cite_artifact)."""
     fixed = json.loads(json.dumps(claim))  # deep copy, JSON-native
 
     def visit(ref: Any) -> None:
@@ -613,10 +617,6 @@ def _rewrite_local_refs(claim: dict, fix) -> dict:
             qualifier.get("value"), dict
         ):
             visit(qualifier["value"].get("value"))
-    source = fixed.get("source")
-    if isinstance(source, dict):
-        visit(source.get("artifact"))
-        visit(source.get("fragment"))
     return fixed
 
 
@@ -1141,21 +1141,30 @@ class ChunkedClaimExtractor:
     # -- orchestration ---------------------------------------------------
 
     def extract(
-        self, transcription: Transcription, artifact_qid: str
+        self,
+        transcription: Transcription,
+        artifact: ArtifactRef,
+        *,
+        artifact_qid: str,
     ) -> ClaimBatch:
-        """The document's batch. When its conversation has to be opened
-        again and answers differently (ConversationChanged), the pass is
-        void and the extraction starts over from the new answer, at most
-        twice."""
+        """The document's batch, every claim citing `artifact`, the
+        document's content key (cite_artifact); `artifact_qid` is the
+        artifact's item, which the prompts name. When its conversation has
+        to be opened again and answers differently (ConversationChanged),
+        the pass is void and the extraction starts over from the new
+        answer, at most twice."""
         for _pass in range(2):
             try:
-                return self._extract(transcription, artifact_qid)
+                return self._extract(transcription, artifact, artifact_qid)
             except ConversationChanged as exc:
                 self._log(f"  {exc}: extracting again from the new answer")
-        return self._extract(transcription, artifact_qid)
+        return self._extract(transcription, artifact, artifact_qid)
 
     def _extract(
-        self, transcription: Transcription, artifact_qid: str
+        self,
+        transcription: Transcription,
+        artifact: ArtifactRef,
+        artifact_qid: str,
     ) -> ClaimBatch:
         text_lines = transcription.text.splitlines()
         self.failed_chunks = []
@@ -1259,7 +1268,13 @@ class ChunkedClaimExtractor:
         self.failed_chunks.sort()
 
         batch, extras = self._merge(
-            chunk_ids, outcomes, transform, entities, segmentation, text_lines
+            chunk_ids,
+            outcomes,
+            transform,
+            entities,
+            segmentation,
+            text_lines,
+            artifact,
         )
         self._refuse_empty(batch, chunks=total)
         self.attention = self._attention(batch, chunks=total)
@@ -1401,9 +1416,11 @@ class ChunkedClaimExtractor:
         entities: list[EntityRecord] | None,
         segmentation: DocumentSegmentation | None,
         text_lines: list[str],
+        artifact: ArtifactRef,
     ) -> tuple[ClaimBatch, dict[str, str]]:
-        """Merge chunk claims into one validated batch, with rejects, gaps
-        and the coverage report as side outputs."""
+        """Merge chunk claims into one validated batch, each claim citing
+        `artifact` and each once (cite_artifact), with rejects, gaps and
+        the coverage report as side outputs."""
         raw_claims: list[dict] = []
         transform_rejects: list[dict] = []
         gaps: list[dict] = []
@@ -1431,10 +1448,7 @@ class ChunkedClaimExtractor:
         self.gaps = gaps
         self._unread = unread
 
-        deduped: list[dict] = []
-        for claim in raw_claims:
-            if claim not in deduped:
-                deduped.append(claim)
+        deduped = cite_artifact(raw_claims, artifact)
 
         if entities is not None:
             # ADR-0022 §4: hygiene the alias bag (drop derivable

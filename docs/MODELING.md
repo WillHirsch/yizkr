@@ -86,11 +86,18 @@ The pipeline's claim JSON contract implementing this pattern is
 ranks are unrepresentable, and property/item references use manifest
 keys resolved to local ids only at write time. A claim cites its source
 artifact by content: the SHA-1 of the artifact's media (`ArtifactRef`,
-see *Artifact identity* below), which holds across instance resets. The
-writer resolves the hash to the artifact item carrying that
-`media SHA-1` at write time, and refuses a batch that cites media no
-item carries before it writes anything (#102). A claim that cites an
-artifact item by QID instead is valid only on that instance.
+see *Artifact identity* below), which holds across instance resets. It
+is the only form a source takes: a batch whose claim names its artifact
+item by QID does not load (#102). The writer resolves the hash to the
+artifact item carrying that `media SHA-1` at write time, and refuses a
+batch that cites media no item carries before it writes anything. So an
+artifact a claim cites has media: a page fragment is cited through its
+artifact and a `page number` locator, and an un-held GEDCOM media item
+(below) is never a claim's source. Every producer names the source
+itself: an extractor sets each claim's source to the key of the document
+it read, whatever the model wrote there; the GEDCOM adapter cites the
+export's bytes; and a face proposal cites the photograph's bytes, while
+its subject stays the photograph's item.
 
 ## Artifacts and registration
 

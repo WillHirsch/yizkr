@@ -4,7 +4,13 @@ import json
 
 import pytest
 
-from yizkr.claims import ClaimBatch, EntityRecord, LocalRef, QidRef
+from yizkr.claims import (
+    ArtifactRef,
+    ClaimBatch,
+    EntityRecord,
+    LocalRef,
+    QidRef,
+)
 from yizkr.pipeline.reconcile import (
     PlaceContainment,
     Proposal,
@@ -27,6 +33,10 @@ RUN = {
     "pipeline_version": "0.1.0",
     "started_at": "2026-07-13T09:00:00Z",
 }
+
+# the bytes of a fictional scan, which the claims below cite by
+# their SHA-1 (#102)
+SCAN = ArtifactRef.from_bytes(b"fictional scan: a Loebig family document")
 
 
 def entities() -> list[EntityRecord]:
@@ -84,7 +94,7 @@ def spouse_claim() -> dict:
                 "label": "Flörburg",
             },
         },
-        "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+        "source": {"artifact": SCAN.model_dump()},
     }
 
 
@@ -112,7 +122,7 @@ def name_claim(prop: str, text: str, subject: str = "e1") -> dict:
             "type": "monolingual",
             "value": {"text": text, "language": "en"},
         },
-        "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+        "source": {"artifact": SCAN.model_dump()},
     }
 
 
@@ -625,7 +635,7 @@ class TestBlockingWithImpossibility:
                         "type": "item",
                         "value": {"kind": "qid", "qid": "Q84"},
                     },
-                    "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+                    "source": {"artifact": SCAN.model_dump()},
                 }
             ],
             entity_list=[entity],

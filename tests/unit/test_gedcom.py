@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.claims import validate_against_manifest
+from yizkr.claims import ArtifactRef, validate_against_manifest
 from yizkr.pipeline.gedcom import (
     ADAPTER_IDENTIFIER,
     adapt_gedcom,
@@ -18,10 +18,13 @@ from yizkr.pipeline.gedcom import (
 )
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "example-family.ged"
+# the export's content key, which every claim it gives cites (#102); the
+# inline snippets below cite it too, as a stand-in for their own bytes
+EXPORT = ArtifactRef.from_path(FIXTURE)
 
 
 def fixture_result():
-    return adapt_gedcom(FIXTURE.read_text(), artifact_qid="Q23")
+    return adapt_gedcom(FIXTURE.read_text(), artifact=EXPORT)
 
 
 def claims_for(batch, subject_id, prop=None):
@@ -196,7 +199,7 @@ class TestAdapter:
         batch = fixture_result().batch
         for claim in batch.claims:
             excerpt = claim.source.transcription_excerpt
-            assert claim.source.artifact.qid == "Q23"
+            assert claim.source.artifact == EXPORT
             assert excerpt is not None and len(excerpt.text) <= 400
             # monolingual text values forbid newlines
             assert "\n" not in excerpt.text
@@ -207,7 +210,7 @@ class TestAdapter:
         result = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE SOMEDAY MAYBE\n"
             "0 TRLR\n",
-            artifact_qid="Q23",
+            artifact=EXPORT,
         )
         assert any("SOMEDAY MAYBE" in warning for warning in result.warnings)
         assert claims_for(result.batch, "i1", "date_of_birth") == []
@@ -290,7 +293,7 @@ class TestVocabulary:
     def test_burial_without_place_warns_and_skips(self):
         result = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 1900\n0 TRLR\n",
-            artifact_qid="Q23",
+            artifact=EXPORT,
         )
         assert any("BURI without PLAC" in w for w in result.warnings)
         assert not claims_for(result.batch, "i1", "burial_place")
@@ -299,7 +302,7 @@ class TestVocabulary:
         batch = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME Sebastian /Löbig/\n1 OCCU Hatter\n"
             "2 DATE 1919\n2 PLAC Flörburg\n0 TRLR\n",
-            artifact_qid="Q23",
+            artifact=EXPORT,
         ).batch
         (occupation,) = claims_for(batch, "i1", "occupation")
         quals = {q.property: q for q in occupation.qualifiers}
@@ -314,7 +317,7 @@ class TestVocabulary:
     def test_unparseable_child_count_warns_not_guesses(self):
         result = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME A /B/\n1 NCHI several\n0 TRLR\n",
-            artifact_qid="Q23",
+            artifact=EXPORT,
         )
         assert any(
             "NCHI" in w and "not a number" in w for w in result.warnings
@@ -352,7 +355,7 @@ class TestTypedNames:
         batch = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME Gustav /Löbig/\n"
             "1 NAME Gustave /Lobig/\n2 TYPE official\n0 TRLR\n",
-            artifact_qid="Q23",
+            artifact=EXPORT,
         ).batch
         assert self._name(batch, "i1", "official_name") == ["Gustave Lobig"]
 
@@ -369,7 +372,7 @@ class TestTypedNames:
             "official_name",
         ):
             for claim in [c for c in batch.claims if c.property == prop]:
-                assert claim.source.artifact.qid == "Q23"
+                assert claim.source.artifact == EXPORT
                 assert claim.value.type == "monolingual"
 
     def test_plain_name_emits_no_name_claim(self):
@@ -395,7 +398,7 @@ class TestTypedNames:
         batch = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME Hildegard /Laudler/\n2 TYPE maiden\n"
             "1 NAME Hilde /Löbig/\n2 TYPE aka\n0 TRLR\n",
-            artifact_qid="Q23",
+            artifact=EXPORT,
         ).batch
         assert self._name(batch, "i1", "birth_name") == ["Hildegard Laudler"]
         # an 'aka' name is recorded whole as a nickname
@@ -421,7 +424,7 @@ RESI_GEDCOM = """\
 
 class TestResidence:
     def test_dated_residence_carries_point_in_time(self):
-        batch = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23").batch
+        batch = adapt_gedcom(RESI_GEDCOM, artifact=EXPORT).batch
         dated = [
             c
             for c in claims_for(batch, "i1", "residence")
@@ -437,7 +440,7 @@ class TestResidence:
         assert place.kind == "place"
 
     def test_undated_residence_has_no_qualifiers(self):
-        batch = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23").batch
+        batch = adapt_gedcom(RESI_GEDCOM, artifact=EXPORT).batch
         undated = [
             c for c in claims_for(batch, "i1", "residence") if not c.qualifiers
         ]
@@ -445,14 +448,14 @@ class TestResidence:
         assert len(undated) == 2
 
     def test_unparsed_residence_date_warns_and_omits(self):
-        result = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23")
+        result = adapt_gedcom(RESI_GEDCOM, artifact=EXPORT)
         assert any(
             "SOMEDAY MAYBE" in w and "point_in_time omitted" in w
             for w in result.warnings
         )
 
     def test_residence_without_place_warns_and_skips(self):
-        result = adapt_gedcom(RESI_GEDCOM, artifact_qid="Q23")
+        result = adapt_gedcom(RESI_GEDCOM, artifact=EXPORT)
         assert any("RESI without PLAC" in w for w in result.warnings)
         assert len(claims_for(result.batch, "i1", "residence")) == 3
 
@@ -495,7 +498,7 @@ class TestUnsupportedCensus:
     """The census reports the genuine unmapped tail, at every depth."""
 
     def test_census_reports_the_unmapped_tail_only(self):
-        tags = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").unsupported_tags
+        tags = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).unsupported_tags
         # REPO and EDUC are genuinely unmapped, at level 0 and nested — both
         # reported (the old direct-children scan would have missed REPO)
         assert tags["REPO"] == 1
@@ -507,12 +510,12 @@ class TestUnsupportedCensus:
     def test_handled_and_dropped_subtrees_are_not_itemised(self):
         # a handled/dropped tag stands for its whole branch: the citation's
         # PAGE/_APID and the media object's FILE/TITL are never itemised
-        tags = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").unsupported_tags
+        tags = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).unsupported_tags
         assert "PAGE" not in tags and "_APID" not in tags
         assert "TITL" not in tags and "FILE" not in tags
 
     def test_name_parts_and_envelope_are_not_dropped(self):
-        tags = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").unsupported_tags
+        tags = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).unsupported_tags
         # GIVN/SURN restate the NAME value the adapter reads — not dropped
         assert "GIVN" not in tags and "SURN" not in tags
         # HEAD/TRLR envelope (and the header's own CHAR) never counted
@@ -524,14 +527,14 @@ class TestSourceCitations:
     """SOUR citations fold into the claim's reference (ADR-0021 step A)."""
 
     def test_page_becomes_the_reference_page_number(self):
-        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
         (birth,) = claims_for(batch, "i1", "date_of_birth")
         assert birth.source.page_number == "Vol 3 p 1"
 
     def test_cited_source_title_surfaces_in_excerpt(self):
         # the verbatim lines carry only "@S1@"; the resolved upstream source
         # name is appended so the reviewer can read the citation
-        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
         (birth,) = claims_for(batch, "i1", "date_of_birth")
         excerpt = birth.source.transcription_excerpt.text
         assert "cited: Birth register, Standesamt Flörburg" in excerpt
@@ -539,7 +542,7 @@ class TestSourceCitations:
     def test_claim_without_a_citation_has_no_page_number(self):
         batch = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n0 TRLR\n",
-            artifact_qid="Q23",
+            artifact=EXPORT,
         ).batch
         (birth,) = claims_for(batch, "i1", "date_of_birth")
         assert birth.source.page_number is None
@@ -549,7 +552,7 @@ class TestMediaObjects:
     """OBJE becomes a lightweight un-held media item (ADR-0021)."""
 
     def test_person_images_an_unheld_media_item(self):
-        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
         (image,) = claims_for(batch, "i1", "image")
         media = next(
             e for e in batch.entities if e.id == image.value.value.local_id
@@ -559,14 +562,14 @@ class TestMediaObjects:
         assert "never fetched" in media.summary
 
     def test_media_association_carries_the_objects_date(self):
-        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
         (image,) = claims_for(batch, "i1", "image")
         (qualifier,) = image.qualifiers
         assert qualifier.property == "point_in_time"
         assert qualifier.value.year == 1930
 
     def test_batch_stays_manifest_valid(self):
-        batch = adapt_gedcom(CENSUS_GEDCOM, artifact_qid="Q23").batch
+        batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
         assert validate_against_manifest(batch) == []
 
     def test_shared_object_is_one_media_item(self):
@@ -577,7 +580,7 @@ class TestMediaObjects:
             "0 @I2@ INDI\n1 NAME Cäcilie /Tarle/\n1 OBJE @O1@\n"
             "0 TRLR\n"
         )
-        batch = adapt_gedcom(gedcom, artifact_qid="Q23").batch
+        batch = adapt_gedcom(gedcom, artifact=EXPORT).batch
         media = [e for e in batch.entities if e.kind == "artifact"]
         assert len(media) == 1  # deduped by xref across both people
         assert len(claims_for(batch, "i1", "image")) == 1
@@ -586,7 +589,7 @@ class TestMediaObjects:
     def test_dangling_pointer_warns_and_skips(self):
         result = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME A /B/\n1 OBJE @O9@\n0 TRLR\n",
-            artifact_qid="Q23",
+            artifact=EXPORT,
         )
         assert any(
             "OBJE points to unknown object" in w for w in result.warnings
