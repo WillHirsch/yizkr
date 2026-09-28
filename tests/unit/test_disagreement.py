@@ -999,17 +999,17 @@ class TestStoredAlike:
 
     def test_readings_whose_ranges_overlap_are_one_claim(self):
         # Eugen's death in 1909 per the register and (here) the tree, on
-        # one statement that carries (here) earliest dates of 1900 and 1905
-        # and latest dates of 1910 and 1915: its readings from 1900 to
-        # 1910 and from 1905 to 1915 overlap without nesting
+        # one statement that carries (here) earliest dates of 1899 and 1905
+        # and latest dates of 1911 and 1917: its readings from 1899 to
+        # 1911 and from 1905 to 1917 overlap without nesting
         ranged = said(
             "eugen-loebig",
             "date_of_death",
             u.Date(1909),
             REGISTER,
             TREE,
-            earliest=[at(u.Date(1900)), at(u.Date(1905))],
-            latest=[at(u.Date(1910)), at(u.Date(1915))],
+            earliest=[at(u.Date(1899)), at(u.Date(1905))],
+            latest=[at(u.Date(1911)), at(u.Date(1917))],
         )
         assert listed(ranged) == []
         # stated by two statements, the two readings disagree
@@ -1022,7 +1022,7 @@ class TestStoredAlike:
                 earliest=at(u.Date(start)),
                 latest=at(u.Date(end)),
             )
-            for key, start, end in ((REGISTER, 1900, 1910), (TREE, 1905, 1915))
+            for key, start, end in ((REGISTER, 1899, 1911), (TREE, 1905, 1917))
         )
         assert len(listed(first, second)) == 1
 

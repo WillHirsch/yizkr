@@ -613,5 +613,5 @@ class TestTimeFormatting:
         assert format_time("+1909-03-16T00:00:00Z", "11") == "1909-03-16"
         assert format_time("+1909-03-16T00:00:00Z", "10") == "1909-03"
         assert format_time("+1909-00-00T00:00:00Z", "9") == "1909"
-        assert format_time("+1920-00-00T00:00:00Z", "8") == "1920s"
+        assert format_time("+1890-00-00T00:00:00Z", "8") == "1890s"
         assert format_time("+1800-00-00T00:00:00Z", "7") == "19th century"
