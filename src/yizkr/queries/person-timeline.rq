@@ -15,11 +15,13 @@
 # and latest date, a start's earliest date and latest start date, and an
 # end's earliest end date and latest date. A point in time beside a start
 # or end time takes none, since there those dates bound the start and the
-# end.
+# end. Each row also names the two qualifiers that bound its date, ?low
+# for ?earliest and ?high for ?latest, stated or not, so a reader can
+# tell a start's latest start date from a latest date.
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
 #defaultView:Timeline
 SELECT DISTINCT ?person ?personLabel ?what ?date ?precision
-       ?earliest ?earliestPrecision ?latest ?latestPrecision
+       ?low ?earliest ?earliestPrecision ?high ?latest ?latestPrecision
        ?source ?sourceLabel
 WHERE {
   ?person wdt:{P:instance_of} wd:{Q:human} .

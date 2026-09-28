@@ -56,8 +56,9 @@ Rules — these mirror the archive's non-negotiable conventions:
   century), earliest_date/latest_date qualifiers for ranges, and the
   sourcing_circumstances qualifier with the "circa" vocabulary item for
   approximate values.
-- Every claim MUST include the source reference: artifact QID {artifact_qid},
-  plus page number and a short verbatim transcription excerpt supporting it.
+- Every claim MUST include the source reference: the artifact
+  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
+  short verbatim transcription excerpt supporting it.
 - Refer to people, places, and events the document mentions with "local"
   references (stable local_id per entity within this batch, label as
   written, instance_of from: {kinds}).
@@ -95,7 +96,7 @@ where N is the number of claim lines you emitted.
 
 {schema}
 
-Transcription of artifact {artifact_qid} (language: {language}):
+Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 
 {text}
 """
@@ -451,22 +452,18 @@ class LlmClaimExtractor:
         self.rejects_dump = rejects_dump
 
     def extract(
-        self,
-        transcription: Transcription,
-        artifact: ArtifactRef,
-        *,
-        artifact_qid: str,
+        self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
         """The batch the transcription's document asserts. Every claim
-        cites `artifact`, the document's content key (cite_artifact);
-        `artifact_qid` is the artifact's item, which the prompt names."""
+        cites `artifact`, the document's content key, by which the prompt
+        names the document too (cite_artifact)."""
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
             schema=claim_schema_prompt_text(),
             property_keys=property_keys,
             item_keys=item_keys,
             kinds=entity_kind_prompt_lines()[0],
-            artifact_qid=artifact_qid,
+            artifact_sha1=artifact.sha1,
             language=transcription.language,
             text=transcription.text,
         )
@@ -550,11 +547,7 @@ class ClaimFileExtractor:
         self.model_identifier = model_identifier
 
     def extract(
-        self,
-        transcription: Transcription,
-        artifact: ArtifactRef,
-        *,
-        artifact_qid: str,
+        self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
         payload = json.loads(self.claims_file.read_text())
         if "extraction_run" not in payload:

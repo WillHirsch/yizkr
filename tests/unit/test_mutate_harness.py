@@ -1,4 +1,5 @@
-"""The mutation harness, scripts/mutate.py (#250).
+"""The mutation harness, scripts/mutate.py (#250), and its live
+mutations (#283).
 
 The end-to-end tests copy a small git repository holding a tiny module
 and its tests, then run the harness on it the way an agent would: as a
@@ -7,10 +8,16 @@ there. Each of those pytest runs costs a few tenths of a second, so the
 tests share runs where they can, and check the rules that pick results,
 exit statuses and the mutations to run in-process. The module is
 neutral arithmetic, and nothing touches the network or the live stack.
+
+The repository has a live test too, which stands in for one that uses
+the stack, and a copy of the live-stack lock's module
+(tests/integration/live_lock.py). Every harness here uses a scratch
+lock, never the real one.
 """
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
@@ -26,11 +33,16 @@ from types import SimpleNamespace
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "mutate.py"
+from tests.integration import live_lock
+from tests.integration.live_lock import LOCK_ENV, SHARED_ENV, TIMEOUT_ENV
+
+REPO = Path(__file__).resolve().parents[2]
+SCRIPT = REPO / "scripts" / "mutate.py"
 _spec = importlib.util.spec_from_file_location("mutate_harness", SCRIPT)
 mutate = importlib.util.module_from_spec(_spec)
 sys.modules["mutate_harness"] = mutate
 _spec.loader.exec_module(mutate)
+ENV_FILE = mutate.ENV_FILE
 
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull,
@@ -167,6 +179,77 @@ def test_the_registered_handler_adds():
     assert registry.HANDLERS["add"](2, 2) == 4
 """
 
+# as the repository's pyproject.toml has it: live tests run only when
+# -m live asks for them
+PYTEST_INI = """\
+[pytest]
+addopts = -m "not live"
+markers =
+    live: uses the stack
+"""
+
+# The session fixture of tests/integration/conftest.py that holds the
+# live-stack lock.
+LIVE_CONFTEST = """\
+import pytest
+
+from .live_lock import hold_for_session
+
+
+@pytest.fixture(scope="session")
+def live_stack_lock(request):
+    with hold_for_session(request.config):
+        yield
+"""
+
+LIVE_TEST = '''\
+import fcntl
+import json
+import os
+
+import pytest
+
+from calc import add
+
+from .live_lock import lock_path
+
+pytestmark = pytest.mark.live
+
+
+def held_elsewhere(path):
+    """Whether an open file description holds the lock at `path`: a new
+    one cannot take it."""
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+def test_add_on_the_stack(live_stack_lock):
+    """Note who holds the live-stack lock while the test runs, and whether
+    a program the test started would inherit the descriptor it shares, in
+    the file that $LIVE_LOG names, then check add()."""
+    path = lock_path()
+    shared = os.environ.get("YIZKR_LIVE_LOCK_FD")
+    note = {
+        "pid": os.getpid(),
+        "ppid": os.getppid(),
+        "held": held_elsewhere(path),
+        "record": json.loads(path.read_text() or "null"),
+        "mtime_ns": path.stat().st_mtime_ns,
+        "inheritable": os.get_inheritable(int(shared)) if shared else None,
+    }
+    with open(os.environ["LIVE_LOG"], "a") as log:
+        log.write(json.dumps(note) + "\\n")
+    assert add(2, 3) == 5
+'''
+
+LIVE = "tests/integration/test_stack.py"
+
 
 def mutation(name, old, new, tests=("test_calc.py::test_add",), **extra):
     """One [[mutation]] table, of calc.py unless `extra` names a file.
@@ -180,6 +263,7 @@ def mutation(name, old, new, tests=("test_calc.py::test_add",), **extra):
 SUM = mutation("sum becomes difference", "a + b", "a - b")
 DOUBLE = mutation("untested double", "n * 2", "n * 3")
 BROKEN = mutation("broken import", "import subprocess", "import no_such_mod")
+LIVE_SUM = mutation("live sum", "a + b", "a - b", [LIVE], live=True)
 
 
 def environment(**extra):
@@ -197,15 +281,30 @@ def git(root, *args):
     )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def no_live_stack(tmp_path_factory):
+    """Keep every harness here, and every pytest run it starts, off the
+    real live-stack lock and away from any stack: a scratch lock unless a
+    test names its own, and no stack settings unless a test gives some."""
+    scratch = tmp_path_factory.mktemp("no-live-stack")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(LOCK_ENV, str(scratch / "live-stack.lock"))
+        for name in (SHARED_ENV, TIMEOUT_ENV, ENV_FILE):
+            patch.delenv(name, raising=False)
+        yield
+
+
 @pytest.fixture(scope="module")
 def template(tmp_path_factory):
-    """A repository with calc.py and its tests committed."""
+    """A repository with calc.py and its tests committed, a live test
+    among them, and the live-stack lock's module."""
     if shutil.which("git") is None:
         pytest.skip("git not installed")
     root = tmp_path_factory.mktemp("template") / "repo"
     root.mkdir()
+    lock_module = REPO / "tests" / "integration" / "live_lock.py"
     files = {
-        "pytest.ini": "[pytest]\n",
+        "pytest.ini": PYTEST_INI,
         "calc.py": CALC,
         "test_calc.py": TEST_CALC,
         "test_bytecode.py": TEST_BYTECODE,
@@ -213,8 +312,14 @@ def template(tmp_path_factory):
         "registry.py": REGISTRY,
         "test_a.py": TEST_A,
         "test_b.py": TEST_B,
+        "tests/__init__.py": "",
+        "tests/integration/__init__.py": "",
+        "tests/integration/conftest.py": LIVE_CONFTEST,
+        "tests/integration/live_lock.py": lock_module.read_text(),
+        LIVE: LIVE_TEST,
     }
     for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text(text)
     git(root, "init", "-q", "-b", "main")
     # no automatic maintenance: newer git starts it in the background
@@ -365,7 +470,11 @@ def default_run(template, tmp_path_factory):
       pass without running a test, unless the harness drops it;
     * test_helper.py starts a background job and stops it only when its
       assertion holds, so the mutant's run leaves the job to the harness
-      to kill, though pytest exits by itself."""
+      to kill, though pytest exits by itself.
+
+    The spec has no live mutation. A stack is configured, and the lock
+    that the harness would take for a live one is in a folder that does
+    not exist yet."""
     scratch = tmp_path_factory.mktemp("default-run")
     repo = copy(template, scratch)
     calc = repo / "calc.py"
@@ -375,12 +484,14 @@ def default_run(template, tmp_path_factory):
     control = load(calc).add(2, 3)
     report = scratch / "report.json"
     helper_pids = scratch / "helper-pids"
+    lock = scratch / "cache" / "live-stack.lock"
     spec = mutation("sum becomes difference", "a + b", "a - b", DEFAULT_TESTS)
     env = environment(
         PYTHONPYCACHEPREFIX=str(scratch / "prefix"),
         PY_COLORS="1",
         PYTEST_ADDOPTS="--collect-only",
         HELPER_PIDS=str(helper_pids),
+        **{LOCK_ENV: str(lock), ENV_FILE: str(stack_settings(scratch))},
     )
     result = harness(repo, spec, "--json", str(report), env=env)
     yield SimpleNamespace(
@@ -391,6 +502,7 @@ def default_run(template, tmp_path_factory):
         result=result,
         report=report,
         helper_pids=helper_pids,
+        lock=lock,
     )
     kill_leftovers(helper_pids)
 
@@ -451,6 +563,11 @@ def test_bytecode_from_a_mutant_does_not_outlive_the_run(default_run):
 
 def test_pytest_leaves_no_cache_behind(default_run):
     assert not (default_run.repo / ".pytest_cache").exists()
+
+
+def test_a_spec_without_live_mutations_never_takes_the_lock(default_run):
+    assert "live-stack lock" not in default_run.result.stderr
+    assert not default_run.lock.parent.exists()
 
 
 def test_the_json_report(default_run):
@@ -530,7 +647,7 @@ def test_an_internal_error_still_restores_the_file_and_exits_2(
     spec.write_text(SUM)
     during = []
 
-    def broken_run(self, tests):
+    def broken_run(self, tests, live=False):
         during.append(calc.read_bytes())
         raise RuntimeError("the test run broke")
 
@@ -560,7 +677,7 @@ def test_a_file_git_does_not_show_clean_after_its_restore_is_an_error(
     come back, but the harness says git disagrees, and stops the run."""
     calc = repo / "calc.py"
 
-    def staging_run(self, tests):
+    def staging_run(self, tests, live=False):
         git(repo, "add", "calc.py")
         return mutate.Run(
             1,
@@ -623,7 +740,7 @@ def test_a_baseline_in_which_no_test_passes_is_refused(
     """Tests that only skip or xfail pass, yet no mutant could fail them."""
     ran = []
 
-    def skipping_run(self, tests):
+    def skipping_run(self, tests, live=False):
         ran.append(tests)
         counts = "1 skipped, 1 xfailed, 1 xpassed in 0.01s"
         return mutate.Run(0, f"=========== {counts} ===========\n", 0.1)
@@ -922,6 +1039,471 @@ def test_exit_status(found, allow, problems, signum, status):
     )
 
 
+# -- live mutations and the live-stack lock -----------------------------------
+
+# both tests: the unit test of add(), and the live one
+BOTH = ["test_calc.py::test_add", LIVE]
+
+# Holds the live-stack lock at $YIZKR_LIVE_LOCK until a line comes on
+# stdin, as a live session in another worktree would.
+HOLDER = """\
+import sys
+
+from tests.integration import live_lock
+
+with live_lock.hold(timeout=0):
+    print("acquired", flush=True)
+    sys.stdin.readline()
+"""
+
+
+def stack_settings(where):
+    """A file standing in for deploy/.env: only its presence counts."""
+    path = where / "stack.env"
+    path.write_text("")
+    return path
+
+
+def taken(lock):
+    """Whether an open file description holds the lock at `lock`: a new
+    one cannot take it."""
+    fd = os.open(lock, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+def notes(log):
+    """What the live test noted in each of its runs."""
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text().splitlines()]
+
+
+@pytest.fixture
+def holder():
+    """Starts processes that hold the live-stack lock at a given path,
+    until the test ends."""
+    started = []
+
+    def start(lock):
+        process = subprocess.Popen(
+            [sys.executable, "-c", HOLDER],
+            env=environment(PYTHONPATH=str(REPO), **{LOCK_ENV: str(lock)}),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        started.append(process)
+        assert process.stdout.readline() == "acquired\n"
+        return process
+
+    yield start
+    for process in started:
+        process.kill()
+        process.communicate()
+
+
+@pytest.fixture(scope="module")
+def live_run(template, tmp_path_factory):
+    """One run of a spec with a live mutation and a unit one, which name
+    the same tests: the unit test of add() and the live test. The live
+    test notes who holds the lock each time it runs, and its session's
+    live_stack_lock fixture would give up on a lock held elsewhere after
+    5 s."""
+    scratch = tmp_path_factory.mktemp("live-run")
+    repo = copy(template, scratch)
+    calc = repo / "calc.py"
+    before = snapshot(calc)
+    lock = scratch / "cache" / "live-stack.lock"
+    log = scratch / "live-log"
+    report = scratch / "report.json"
+    spec = mutation(
+        "live: sum becomes difference", "a + b", "a - b", BOTH, live=True
+    ) + mutation("unit: sum becomes difference", "a + b", "a - b", BOTH)
+    env = environment(
+        LIVE_LOG=str(log),
+        **{
+            LOCK_ENV: str(lock),
+            TIMEOUT_ENV: "5",
+            ENV_FILE: str(stack_settings(scratch)),
+        },
+    )
+    result = harness(repo, spec, "--json", str(report), env=env)
+    return SimpleNamespace(
+        calc=calc,
+        before=before,
+        lock=lock,
+        notes=notes(log),
+        report=report,
+        result=result,
+    )
+
+
+def test_a_live_mutation_runs_its_tests_with_the_live_marker(live_run):
+    """-m live selects the live test, which the repository's addopts
+    deselect, and deselects the unit test; a unit mutation's runs do the
+    opposite."""
+    result = live_run.result
+    assert result.returncode == 0, result.stdout + result.stderr
+    rows = results(result.stdout)
+    assert [(row["result"], row["detail"]) for row in rows.values()] == [
+        ("killed", "1 failed, 1 deselected"),
+        ("killed", "1 failed, 1 deselected"),
+    ]
+    data = json.loads(live_run.report.read_text())
+    assert [
+        (entry["tests"], entry["live"], entry["result"], entry["detail"])
+        for entry in data["baseline"]
+    ] == [
+        (BOTH, True, "passed", "1 passed, 1 deselected"),
+        (BOTH, False, "passed", "1 passed, 1 deselected"),
+    ]
+    assert [entry["live"] for entry in data["mutations"]] == [True, False]
+    # the live test ran in the live baseline and the live mutant's run only
+    assert len(live_run.notes) == 2
+    assert snapshot(live_run.calc) == live_run.before
+
+
+def test_the_harness_holds_the_lock_through_every_live_run(live_run):
+    """The harness took the lock before the baseline, once: each live run
+    found it held, recorded as the harness's own, with the same record.
+    Each session's live_stack_lock fixture shared that hold rather than
+    taking the lock itself, which would record the session instead, or
+    waiting for it, which would give up. Sharing it, the fixture made the
+    descriptor close-on-exec: a program the test started with exec, such
+    as a shell's background job, would not keep the lock after the run."""
+    assert len(live_run.notes) == 2
+    for note in live_run.notes:
+        assert note["held"]
+        assert note["record"]["pid"] == note["ppid"] != note["pid"]
+        assert "mutate.py" in note["record"]["command"]
+        assert note["inheritable"] is False
+    first, second = live_run.notes
+    assert first["record"] == second["record"]
+    assert first["mtime_ns"] == second["mtime_ns"]
+    assert live_run.result.stderr.count("holding the live-stack lock") == 1
+
+
+def test_the_harness_releases_the_lock_once_the_runs_end(live_run):
+    assert live_run.lock.read_text() == ""
+    assert not taken(live_run.lock)
+
+
+def test_a_live_spec_is_refused_without_a_configured_stack(repo, tmp_path):
+    """No $YIZKR_ENV_FILE, and no deploy/.env or .env: live tests would
+    only skip, so nothing runs, and the lock is never taken."""
+    calc = repo / "calc.py"
+    before = snapshot(calc)
+    lock = tmp_path / "cache" / "live-stack.lock"
+    log = tmp_path / "live-log"
+    env = environment(LIVE_LOG=str(log), **{LOCK_ENV: str(lock)})
+    assert ENV_FILE not in env
+    result = harness(repo, LIVE_SUM, env=env)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "refusing to run; nothing was changed" in result.stderr
+    assert (
+        "no stack is configured for the live tests, which would only skip: "
+        "YIZKR_ENV_FILE is not set, and there is no deploy/.env or .env"
+    ) in result.stderr
+    assert result.stdout == ""
+    assert not lock.parent.exists()
+    assert not log.exists()
+    assert snapshot(calc) == before
+
+
+def test_a_live_spec_needs_the_file_the_stack_settings_come_from(
+    tmp_path, monkeypatch
+):
+    """$YIZKR_ENV_FILE when it is set, relative to the root that pytest
+    runs from, and otherwise deploy/.env or .env there: the file where
+    the live tests' Config.load finds the stack's settings."""
+    root = tmp_path / "repo"
+    (root / "deploy").mkdir(parents=True)
+    unset = "YIZKR_ENV_FILE is not set, and there is no deploy/.env or .env"
+    assert mutate.stack_problem(root) == unset
+    monkeypatch.setenv(ENV_FILE, "")
+    assert mutate.stack_problem(root) == unset
+    for name in ("deploy/.env", ".env"):
+        (root / name).write_text("")
+        assert mutate.stack_problem(root) is None, name
+        (root / name).unlink()
+
+    (root / "deploy" / ".env").write_text("")
+    monkeypatch.setenv(ENV_FILE, "stack.env")
+    assert mutate.stack_problem(root) == (
+        "YIZKR_ENV_FILE names stack.env, which is not a file"
+    )
+    (root / "stack.env").write_text("")
+    assert mutate.stack_problem(root) is None
+    monkeypatch.setenv(ENV_FILE, str(stack_settings(tmp_path)))
+    assert mutate.stack_problem(root) is None
+
+
+def test_a_live_spec_is_refused_when_the_lock_cannot_be_used(
+    repo, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(ENV_FILE, str(stack_settings(tmp_path)))
+    lock, problems = mutate.live_stack(repo)
+    assert problems == []
+    assert lock.SHARED_ENV == SHARED_ENV
+
+    monkeypatch.setenv(LOCK_ENV, "relative/live-stack.lock")
+    lock, problems = mutate.live_stack(repo)
+    assert len(problems) == 1
+    assert "is a relative path" in problems[0]
+
+    monkeypatch.setenv(LOCK_ENV, str(tmp_path / "live-stack.lock"))
+    monkeypatch.setenv(TIMEOUT_ENV, "soon")
+    lock, problems = mutate.live_stack(repo)
+    assert len(problems) == 1
+    assert "is not a number of seconds" in problems[0]
+
+    monkeypatch.delenv(TIMEOUT_ENV)
+    lock, problems = mutate.live_stack(tmp_path)
+    assert lock is None
+    assert problems == [
+        "live tests run under the live-stack lock, and "
+        "tests/integration/live_lock.py is missing"
+    ]
+
+
+def test_a_live_spec_waits_for_the_lock_and_gives_up_naming_the_holder(
+    repo, tmp_path, holder
+):
+    """Nothing runs: not the baseline, nor any mutant. A baseline run
+    without the lock would only error at its fixture's setup, which leaves
+    no trace but the report (#304 review)."""
+    calc = repo / "calc.py"
+    before = snapshot(calc)
+    lock = tmp_path / "live-stack.lock"
+    held = holder(lock)
+    log = tmp_path / "live-log"
+    report = tmp_path / "report.json"
+    env = environment(
+        LIVE_LOG=str(log),
+        **{
+            LOCK_ENV: str(lock),
+            TIMEOUT_ENV: "0.3",
+            ENV_FILE: str(stack_settings(tmp_path)),
+        },
+    )
+    result = harness(repo, LIVE_SUM, "--json", str(report), env=env)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert (
+        "mutate: Gave up after 0.3 s waiting for the live-stack lock "
+        f"{lock}, held by pid {held.pid} " in result.stderr
+    )
+    assert "internal error" not in result.stderr
+    # the holder runs still, so nothing says that it has ended
+    assert "has ended" not in result.stderr
+    assert result.stdout == ""
+    data = json.loads(report.read_text())
+    assert data["baseline"] is None
+    assert [entry["result"] for entry in data["mutations"]] == ["not run"]
+    assert not log.exists()
+    assert snapshot(calc) == before
+    assert json.loads(lock.read_text())["pid"] == held.pid
+
+
+def test_a_signal_ends_the_wait_for_the_lock_at_once(repo, tmp_path, holder):
+    """The wait is announced, naming the holder, even under -q, and SIGINT
+    ends it: nothing runs, and the holder keeps the lock."""
+    calc = repo / "calc.py"
+    before = snapshot(calc)
+    lock = tmp_path / "live-stack.lock"
+    held = holder(lock)
+    log = tmp_path / "live-log"
+    spec = tmp_path / "spec.toml"
+    spec.write_text(LIVE_SUM)
+    errors = tmp_path / "stderr"
+    env = environment(
+        LIVE_LOG=str(log),
+        **{
+            LOCK_ENV: str(lock),
+            TIMEOUT_ENV: "600",
+            ENV_FILE: str(stack_settings(tmp_path)),
+        },
+    )
+    with errors.open("w") as stderr:
+        process = subprocess.Popen(
+            [sys.executable, "-c", LAUNCH, str(SCRIPT), str(spec), "-q"],
+            cwd=repo,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            text=True,
+        )
+    announced = (
+        f"mutate: The live-stack lock {lock} is held by pid {held.pid} "
+    )
+    try:
+        wait_until(
+            lambda: (
+                announced in errors.read_text() or process.poll() is not None
+            )
+        )
+        assert process.poll() is None, errors.read_text()
+        process.send_signal(signal.SIGINT)
+        stdout, _ = process.communicate(timeout=10)
+        assert process.returncode == 128 + signal.SIGINT, errors.read_text()
+        assert "mutate: stopped by SIGINT" in errors.read_text()
+        assert stdout == ""
+        assert not log.exists()
+        assert snapshot(calc) == before
+        assert json.loads(lock.read_text())["pid"] == held.pid
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+
+
+def test_a_process_given_the_holders_descriptor_shares_its_hold(
+    tmp_path, monkeypatch
+):
+    """What each live run of the harness does: hold() finds the harness's
+    descriptor, from which no new one could take the lock, and holds the
+    lock through it, leaving it locked, open and recorded as it was. It
+    makes the descriptor close-on-exec, which pass_fds leaves it not, so
+    that no program the run starts shares the hold (#304 review)."""
+    lock = tmp_path / "live-stack.lock"
+    with live_lock.hold(lock, timeout=0) as fd:
+        record = lock.read_text()
+        # as the run inherits it through pass_fds
+        os.set_inheritable(fd, True)
+        monkeypatch.setenv(SHARED_ENV, str(fd))
+        with live_lock.hold(lock, timeout=0) as shared:
+            assert shared == fd
+        assert not os.get_inheritable(fd)
+        assert taken(lock)
+        os.fstat(fd)
+        assert lock.read_text() == record
+        monkeypatch.delenv(SHARED_ENV)
+    assert not taken(lock)
+    assert lock.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    "named",
+    ["", "soon", "-1", str(2**70), "a closed descriptor", "another file"],
+)
+def test_a_variable_that_names_no_descriptor_of_the_lock_is_ignored(
+    tmp_path, monkeypatch, named
+):
+    """hold() then takes the lock itself: it records itself, and empties
+    the record as it releases the lock. The lock file exists, as it does
+    once any session has held the lock."""
+    lock = tmp_path / "live-stack.lock"
+    lock.write_text("")
+    other = os.open(tmp_path / "other", os.O_RDWR | os.O_CREAT)
+    try:
+        if named == "another file":
+            named = str(other)
+        elif named == "a closed descriptor":
+            closed = os.dup(other)
+            os.close(closed)
+            named = str(closed)
+        monkeypatch.setenv(SHARED_ENV, named)
+        with live_lock.hold(lock, timeout=0):
+            assert json.loads(lock.read_text())["pid"] == os.getpid()
+        assert lock.read_text() == ""
+        assert not taken(lock)
+    finally:
+        os.close(other)
+
+
+@pytest.mark.parametrize("shared", [False, True], ids=["held", "shared"])
+def test_a_descriptor_of_the_lock_that_does_not_hold_it_gets_nobody_in(
+    tmp_path, monkeypatch, shared
+):
+    """While one open file description holds the lock, a process named
+    another one of the lock file waits its turn like any other: here it
+    gives up. So it does after a process has shared the hold, which leaves
+    the lock exclusive: a shared lock would let the stray one share it."""
+    lock = tmp_path / "live-stack.lock"
+    with live_lock.hold(lock, timeout=0) as fd:
+        if shared:
+            monkeypatch.setenv(SHARED_ENV, str(fd))
+            with live_lock.hold(lock, timeout=0) as sharer:
+                assert sharer == fd
+        stray = os.open(lock, os.O_RDWR)
+        try:
+            monkeypatch.setenv(SHARED_ENV, str(stray))
+            with (
+                pytest.raises(live_lock.LiveStackBusy),
+                live_lock.hold(lock, timeout=0.05, announce=lambda _: None),
+            ):
+                pytest.fail("got past a lock that another description held")
+        finally:
+            os.close(stray)
+
+
+def test_a_waiter_names_a_holder_that_ended_while_its_hold_is_shared(
+    tmp_path, monkeypatch
+):
+    """The lock is held, but the process that the record names has ended,
+    as when a killed harness's live run holds it still. A waiting process
+    names the recorded holder, with the working directory it ran in, and
+    says that it has ended, rather than that nothing is recorded."""
+    monkeypatch.setattr(live_lock, "RECORD_INTERVAL", 0)
+    ended = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.getpid())"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    pid = int(ended.stdout)
+    lock = tmp_path / "live-stack.lock"
+    with live_lock.hold(lock, timeout=0) as fd:
+        record = json.loads(lock.read_text())
+        record["pid"] = pid
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, json.dumps(record).encode(), 0)
+        announced = []
+        with (
+            pytest.raises(live_lock.LiveStackBusy) as gave_up,
+            live_lock.hold(lock, timeout=0.05, announce=announced.append),
+        ):
+            pytest.fail("took a lock that another description held")
+    for message in (*announced, str(gave_up.value)):
+        assert f"held by pid {pid} since {record['started']}\n" in message
+        assert f"  cwd: {record['cwd']}\n" in message
+        assert (
+            f"  pid {pid} has ended, and a process that shares its hold "
+            "holds the lock" in message
+        )
+    assert len(announced) == 1
+
+
+def test_a_lock_that_cannot_be_taken_is_a_problem_not_an_internal_error(
+    repo, tmp_path, monkeypatch, capsys
+):
+    """The lock's folder cannot be made, for a file is in its way: the
+    harness says so, and runs nothing."""
+    in_the_way = tmp_path / "not-a-folder"
+    in_the_way.write_text("")
+    monkeypatch.setenv(LOCK_ENV, str(in_the_way / "live-stack.lock"))
+    monkeypatch.setenv(ENV_FILE, str(stack_settings(tmp_path)))
+    ran = []
+
+    def passing_run(self, tests, live=False):
+        ran.append(tests)
+        return mutate.Run(
+            0, "=========== 1 passed in 0.01s ===========\n", 0.1
+        )
+
+    spec = scripted(monkeypatch, repo, LIVE_SUM, passing_run)
+    assert mutate.main([spec]) == 2
+    errors = capsys.readouterr().err
+    assert "mutate: cannot take the live-stack lock: " in errors
+    assert "internal error" not in errors
+    assert ran == []
+
+
 # -- refusals ----------------------------------------------------------------
 
 
@@ -1011,6 +1593,8 @@ def toml(**changes):
         (toml(tests=["@more-args.txt"]), "not pytest options or @argfiles"),
         (toml(count=0), "count must be a positive integer"),
         (toml(count=True), "count must be a positive integer"),
+        (toml(live="yes"), "mutation 1 ('sum'): live must be true or false"),
+        (toml(live=1), "live must be true or false"),
         (toml() + toml(), "mutation 2 ('sum'): the name is used twice"),
     ],
 )
@@ -1026,11 +1610,20 @@ def test_a_spec_may_name_one_test_and_leave_out_the_name(tmp_path):
     path.write_text(toml(name=None, tests="test_calc.py"))
     [parsed], problems = mutate.load_spec(path)
     assert problems == []
-    assert (parsed.name, parsed.tests, parsed.count) == (
+    assert (parsed.name, parsed.tests, parsed.count, parsed.live) == (
         "mutation 1",
         ["test_calc.py"],
         1,
+        False,
     )
+
+
+def test_a_spec_marks_a_mutation_live(tmp_path):
+    path = tmp_path / "spec.toml"
+    path.write_text(toml(live=True) + toml(name="unit", live=False))
+    parsed, problems = mutate.load_spec(path)
+    assert problems == []
+    assert [mutation.live for mutation in parsed] == [True, False]
 
 
 @pytest.mark.parametrize(

@@ -34,7 +34,7 @@ import yaml
 
 from tests.fixtures import example_universe as u
 from tests.unit.conftest import RecordedTimer
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import anomalies, rundir
 from yizkr.pipeline.anomalies import (
@@ -255,9 +255,16 @@ def attempt(
         run.emit("failed", reason=failed[:500], **where)
 
 
+# the scan every transcription the checks are shown is of
+SCAN = ArtifactRef.from_bytes(b"fictional scan: a Loebig letter")
+
+
 def vision(text: str, language: str = "de") -> Transcription:
     return Transcription(
-        text=text, language=language, engine="llm-vision:fake-model"
+        artifact=SCAN,
+        text=text,
+        language=language,
+        engine="llm-vision:fake-model",
     )
 
 
@@ -540,7 +547,9 @@ class TestTranscription:
         checks.stored(
             doc,
             "transcription",
-            Transcription(text=text, language="de", engine=engine),
+            Transcription(
+                artifact=SCAN, text=text, language="de", engine=engine
+            ),
         )
         assert "transcription-sparse" not in checks_raised(run)
 
@@ -766,7 +775,7 @@ class TestExtraction:
             budget=LINE_LENGTH,
         )
         with pytest.raises(ExtractionFailed) as failed:
-            extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
+            extractor.extract(transcription(), DOC_REF)
         run, checks = make_checks(
             tmp_path, {"checks": {"schema-rejects": {"min-count": 2}}}
         )
@@ -2132,7 +2141,10 @@ def a_recorded_document(state_dir, name, *, text, engine, claims=0):
     )
     (directory / "transcription.json").write_text(
         Transcription(
-            text=text, language=resolution.code, engine=engine
+            artifact=ArtifactRef(sha1=sha1_of(name)),
+            text=text,
+            language=resolution.code,
+            engine=engine,
         ).model_dump_json()
     )
     (directory / "batch.json").write_text(

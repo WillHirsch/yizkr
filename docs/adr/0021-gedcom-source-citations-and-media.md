@@ -6,6 +6,9 @@ Status: **accepted** — implemented in the GEDCOM adapter
 `image` property. Follows the honest census of the preceding change (issue
 #8). Step B (promoting a cited SOUR to its own artifact item) remains
 deferred to a future ADR (#168).
+Amended by #308 (2026-09-28): the census reads each tag where it stands,
+so a divorce's PLAC, a MARR's TYPE and an undated DIV are counted: see
+Amendments.
 
 ## Context
 
@@ -122,3 +125,33 @@ initiative.
   its own ADR, not smuggled into the adapter.
 - Docs move with code: the adapter docstring and MODELING.md
   ("Names"/media) are updated in this change.
+
+## Amendments
+
+Amended by #308 (2026-09-28): **the census reads each tag where it
+stands.** The census took a tag as read under every record once the
+adapter read it under one, so three things went uncounted, and so were
+dropped silently: a PLAC under a DIV (a birth's PLAC is read), a TYPE
+under a MARR (a NAME's TYPE is read) and a DIV without a DATE (a dated DIV
+is read). The census now holds what the adapter reads beneath each tag it
+maps. A tag unread where it stands is counted there, and when the adapter
+reads that tag beneath other tags it is named with its parent's tag
+(`DIV.PLAC`, `MARR.TYPE`, and likewise `INDI.NICK` for a NICK beside a
+NAME rather than beneath it), so that the entry never reads as though
+every PLAC or TYPE went unread. A DIV without a DATE is counted as
+`DIV`, which stands for its PLAC too. Each is counted rather than mapped,
+since the model has no property that fits it:
+
+- a divorce's place is not the spouse statement's `location`: the adapter
+  writes a MARR's PLAC there as the wedding's place (`pipeline/gedcom.py`),
+  and a second `location` could not say which place was the wedding's and
+  which the divorce's. Which property a wedding's place takes is #311's
+  question;
+- an undated divorce says that the marriage ended at an unknown time,
+  which Wikidata states as an end time of unknown value; the claim schema
+  and the writer have no unknown value;
+- a MARR's TYPE (civil, religious) names a kind of marriage, and the model
+  has no property for one.
+
+The spouse claims' verbatim excerpt still shows their lines, within its
+400 characters.

@@ -144,6 +144,7 @@ old = 'if not name.strip():'     # exact text, found exactly once
 new = 'if False:'
 tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
 # count = 2   # optional: old is found this many times, all replaced
+# live = true # optional: the tests are live tests (below)
 ```
 
 - **Run it from your own worktree**, with `uv run` there. The harness
@@ -168,12 +169,23 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   run the old code. The harness deletes the module's bytecode before
   each run and runs pytest with `PYTHONDONTWRITEBYTECODE=1`, which is why
   a script of your own is no substitute.
-- **Non-live tests only.** `pyproject.toml`'s `-m 'not live'` deselects
-  even a live test that `tests` names, `tests` takes no pytest options,
-  and pytest runs without `PYTEST_ADDOPTS`, so the harness runs non-live
-  tests only. For a new or changed live test, the PR names under
-  Mutation evidence the regression the test guards, and the central live
-  run (AGENT_PROTOCOL §5) is where the test is shown to fail under it.
+- **Live tests** (#283). A mutation with `live = true` runs its tests with
+  `-m live`, which overrides `pyproject.toml`'s `-m 'not live'` as
+  `make test-live` does, so its `tests` name live tests. Without it,
+  pytest deselects a live test that `tests` names, and a list of live
+  tests only fails its baseline with "no tests ran". With it, pytest
+  deselects a unit test there. A spec with a live mutation is refused up
+  front unless a stack is configured: `$YIZKR_ENV_FILE` names a file or,
+  with it unset, the checkout has `deploy/.env` or `.env`. The harness
+  takes the live-stack lock (below) before the baseline, waiting its turn,
+  and holds it until its last run ends; each live run shares its hold.
+  Live tests run centrally (AGENT_PROTOCOL §5), so for a new or changed
+  live test the PR gives such a spec under Mutation evidence, and the
+  central live run runs it and posts the table. Start the harness for a
+  live spec where it can finish, in the background or with no short tool
+  timeout: a harness killed outright (SIGKILL), as a tool's timeout may
+  kill it, leaves the mutant in place and its run holding the lock
+  (below).
 - **Stop what a test detaches.** Each pytest run has a process group of
   its own, killed when the run ends or outlives `--timeout` (default
   300 s). A process that leaves the group escapes, and can hold a lock or
@@ -279,14 +291,37 @@ path, though a leading `~` is expanded.
   with that message.
 - **Crashes.** The lock is a flock, which the kernel releases when its
   holder ends, however it ends, so a crashed or killed session blocks
-  nothing. The holder records itself in the lock file and empties the
-  record as it releases the lock, so a record in a free lock file was
-  left by a crash.
+  nothing. The exception is a killed mutation harness, whose live run
+  keeps the lock until the run ends (below). The holder records itself in
+  the lock file and empties the record as it releases the lock, so a
+  record in a free lock file was left by a crash.
 - **Never delete the lock file.** A session that found no file would
   create and lock a new one, while the holder of the old one went on:
   two sessions on the stack at once.
-- **Only live test sessions take it.** A scratch run's reset and write,
-  `yizkr bootstrap` and other writers to the stack don't, so the
-  orchestrating session still gives the stack to one agent at a time
-  (AGENT_PROTOCOL §3). Live test sessions need no check by hand for
-  another one: the lock makes them wait their turn.
+- **The mutation harness** takes the lock for a spec with a live mutation,
+  once, before its baseline, and holds it until its last run ends, so no
+  other live session reaches the stack between two of its runs. Its live
+  runs share that hold. Each inherits the harness's locked descriptor,
+  named in `$YIZKR_LIVE_LOCK_FD`, and its `live_stack_lock` fixture holds
+  the lock through that descriptor instead of waiting for the harness. A
+  flock belongs to the open file description, which the harness and its
+  runs share, so the kernel, not the variable, vouches for the hold: the
+  variable counts only when it names a descriptor, open in the process, of
+  the lock file itself, on which flock succeeds at once, as it does only
+  while that descriptor's description holds the lock or nothing does;
+  otherwise the session waits its turn like any other. So even a stray or
+  stale variable never lets two sessions hold the lock at once. A run that
+  shares the hold never releases it or writes the record, which names the
+  harness. Its fixture makes the descriptor close-on-exec, as a session's
+  own descriptor is, so a program started once the fixture has run (by
+  `os.system`, a shell's background job or `close_fds=False`) does not
+  share the hold. If the harness is killed, the run's copy of the
+  descriptor keeps the lock held until the run ends. A session waiting
+  meanwhile names the harness from the record, with its working
+  directory, in the checkout where it left the mutant, and says that it
+  has ended.
+- **Only live test sessions and the harness take it.** A scratch run's
+  reset and write, `yizkr bootstrap` and other writers to the stack
+  don't, so the orchestrating session still gives the stack to one agent
+  at a time (AGENT_PROTOCOL §3). Live test sessions need no check by hand
+  for another one: the lock makes them wait their turn.

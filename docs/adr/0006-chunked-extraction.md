@@ -11,6 +11,10 @@ of ADR-0032, and `--cache` replaces `--resume` (§5, §7).
 Amended by #45 (2026-09-28): an extraction that ends with no claims
 either fails or is claim-free (§5), and `coverage.json` records the
 extraction's health on either tier (§6).
+Amended by #127 (2026-09-28): the prompts name the artifact by the SHA-1
+of its media, the key its claims cite, and never by QID; §3 no longer
+lists the language among what a chunk prompt carries, since it carries
+none (§3).
 
 ## Context
 
@@ -140,8 +144,9 @@ available first:
    `SegmentationUnit.context` exists even though mode 1 does not need
    it — segmentation produces it for free and it keeps mode 3 viable.
 
-Each chunk prompt additionally carries: artifact QID and language, the
-manifest vocabulary (as today), the claim schema, and a hard
+Each chunk prompt additionally carries: the artifact's key (the SHA-1
+of its media, which each claim is to cite), the manifest vocabulary (as
+today), the claim schema, and a hard
 instruction to emit claims **only** for the assigned units — with the
 full document visible, drift into neighbouring units is possible;
 merge dedupe and validation bound the damage.

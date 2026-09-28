@@ -92,10 +92,8 @@ def extract(client, state_dir=None):
         state_dir=state_dir,
         budget=120,  # force at least two chunks for this tiny document
     )
-    transcription = Transcription(text=DOC, engine="test", artifact_qid="Q23")
-    return extractor, extractor.extract(
-        transcription, DOC_REF, artifact_qid="Q23"
-    )
+    transcription = Transcription(artifact=DOC_REF, text=DOC, engine="test")
+    return extractor, extractor.extract(transcription, DOC_REF)
 
 
 def cache_events(run: RunDir) -> dict[str, int]:

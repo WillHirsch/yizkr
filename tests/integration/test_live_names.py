@@ -98,7 +98,8 @@ def entity_manifest(aliases: list[str], mention_line: int) -> str:
     )
 
 
-def chunk_response(artifact_qid: str, claims: list[tuple]) -> str:
+def chunk_response(artifact: ArtifactRef, claims: list[tuple]) -> str:
+    """A chunk's answer, each claim citing `artifact` as the prompt asks."""
     lines = [
         json.dumps(
             {
@@ -111,7 +112,7 @@ def chunk_response(artifact_qid: str, claims: list[tuple]) -> str:
                 "property": prop,
                 "value": value,
                 "source": {
-                    "artifact": {"kind": "qid", "qid": artifact_qid},
+                    "artifact": artifact.model_dump(mode="json"),
                     "transcription_excerpt": {
                         "text": excerpt,
                         "language": "en",
@@ -135,16 +136,13 @@ def fixture_artifact(client, title: str) -> Registered:
 
 
 def extract(tmp_path, artifact: Registered, document, manifest, claims):
-    # the scripted answers cite the artifact's item, as the prompt asks;
-    # the extractor makes every claim cite the document's key
-    engine = ScriptedEngine([manifest, chunk_response(artifact.qid, claims)])
+    engine = ScriptedEngine([manifest, chunk_response(artifact.ref, claims)])
     extractor = ChunkedClaimExtractor(
         engine, state_dir=tmp_path, budget=10_000
     )
     batch = extractor.extract(
-        Transcription(text=document, engine="test", artifact_qid=artifact.qid),
+        Transcription(artifact=artifact.ref, text=document, engine="test"),
         artifact.ref,
-        artifact_qid=artifact.qid,
     )
     assert all(claim.source.artifact == artifact.ref for claim in batch.claims)
     assert not extractor.used_fallback_manifest  # the entity-first path ran

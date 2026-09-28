@@ -401,10 +401,12 @@ def slugify(name: str) -> str:
 
 
 # the files a run directory holds beside its documents' directories
-# (yizkr.pipeline.rundir), and the directory the run monitor writes its
-# live status page into (yizkr.pipeline.monitor.STATUS_DIR): no document
-# directory may take their names
-_RUN_FILES = frozenset({MANIFEST, EVENTS, ALERTS, CONTROL, "status"})
+# (yizkr.pipeline.rundir), the directory the run monitor writes its live
+# status page into (yizkr.pipeline.monitor.STATUS_DIR), and the one a
+# scratch run's corpus stages keep their outputs in
+# (yizkr.pipeline.scratch.CORPUS_DIR): no document directory may take
+# their names
+_RUN_FILES = frozenset({MANIFEST, EVENTS, ALERTS, CONTROL, "status", "corpus"})
 # how much of a whole file name's slug a hashed directory name keeps, so
 # that with its hash it stays well inside a filesystem's 255-byte limit
 _HASHED_PREFIX = 200
@@ -1318,9 +1320,7 @@ class Orchestrator:
             language=self.language,
             fallback_language=self.fallback_language,
         )
-        transcription = transcriber.transcribe(
-            doc.source, artifact_qid=doc.state.artifact_qid
-        )
+        transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
 
     def _transcribe_text_file(self, doc: DocumentRun):
@@ -1331,9 +1331,7 @@ class Orchestrator:
             language=self.language,
             fallback_language=self.fallback_language,
         )
-        transcription = transcriber.transcribe(
-            doc.source, artifact_qid=doc.state.artifact_qid
-        )
+        transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
 
     def _transcribe_slides(self, doc: DocumentRun):
@@ -1348,7 +1346,7 @@ class Orchestrator:
             text, self.language, fallback=self.fallback_language
         )
         transcription = Transcription(
-            artifact_qid=doc.state.artifact_qid,
+            artifact=ArtifactRef(sha1=doc.sha1),
             text=text,
             language=resolution.code,
             engine="pptx-adapter",
@@ -1364,7 +1362,7 @@ class Orchestrator:
             text, self.language, fallback=self.fallback_language
         )
         transcription = Transcription(
-            artifact_qid=doc.state.artifact_qid,
+            artifact=ArtifactRef(sha1=doc.sha1),
             text=text,
             language=resolution.code,
             engine="correction",
@@ -1394,9 +1392,7 @@ class Orchestrator:
             )
             extractors.append(extractor)
             batch = extractor.extract(
-                transcription,
-                ArtifactRef(sha1=doc.sha1),
-                artifact_qid=doc.state.artifact_qid,
+                transcription, ArtifactRef(sha1=doc.sha1)
             )
             failed = extractor.failed_chunks
             if failed:

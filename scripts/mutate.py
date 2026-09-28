@@ -31,6 +31,7 @@ SPEC is a TOML file with one [[mutation]] table per mutation:
     tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
     # count = 2   # optional: old occurs exactly this many times, and
     #             # every occurrence is replaced
+    # live = true # optional: the tests are live tests (Live tests, below)
 
 `tests` holds pytest node ids or paths, relative to the repository
 root; a single string is fine too. Write code in TOML literal strings,
@@ -49,16 +50,18 @@ by git, or has uncommitted changes, staged or not. The same goes for a
 mutation whose old text is missing, occurs a different number of times
 than count, or overlaps itself, and for one that would leave a Python
 file unparseable. `tests` takes test ids and paths only, never pytest
-options or @argfiles. Because every file is clean and tracked,
+options or @argfiles. A spec with a live mutation is refused too when no
+stack is configured, or when the live-stack lock cannot be used (Live
+tests, below). Because every file is clean and tracked,
 `git checkout -- FILE` can always recover it, whatever happens to the
 harness.
 
 Baseline. First, the tests run on the unmutated tree, once for each
-distinct list of tests in the spec, just as the mutants' runs will run
-them. Each run must pass, and at least one of its tests must pass rather
-than skip: a kill proves nothing when the tests fail anyway, and a
-survivor proves nothing when they only skip. The baseline stops at the
-first list that fails. --no-baseline skips these runs.
+distinct list of tests in the spec, live or not, just as the mutants'
+runs will run them. Each run must pass, and at least one of its tests
+must pass rather than skip: a kill proves nothing when the tests fail
+anyway, and a survivor proves nothing when they only skip. The baseline
+stops at the first list that fails. --no-baseline skips these runs.
 
 No stale bytecode. Python loads a module's cached bytecode without
 reading the source when the source's recorded size and timestamp still
@@ -84,16 +87,42 @@ way, such as by SIGKILL, can leave a mutation in place. The progress
 lines name the file being mutated, and `git checkout -- FILE` recovers
 it.
 
+Live tests
+----------
+A mutation with `live = true` runs its tests with `-m live`, as
+`make test-live` does: the last -m given wins, so it overrides the
+`-m 'not live'` in the repository's addopts. Its `tests` name live
+tests. pytest deselects a unit test among them, as it deselects a live
+test named by a mutation without `live`.
+
+Live tests need a stack. A spec with a live mutation is refused up
+front unless $YIZKR_ENV_FILE names a file or, with $YIZKR_ENV_FILE
+unset, the repository root holds deploy/.env or .env: where the tests'
+Config.load finds the stack's settings, as they run from the root.
+
+The harness takes the live-stack lock (tests/integration/live_lock.py,
+at $YIZKR_LIVE_LOCK) before the baseline, and holds it until its last
+run has ended, so no other live session reaches the stack between two
+runs. While another session holds the lock, the harness says who, even
+with -q, and waits for it, up to $YIZKR_LIVE_LOCK_TIMEOUT seconds
+(default 7200); a signal ends the wait at once. Each live run shares the
+harness's hold: it inherits the harness's locked descriptor, named in
+$YIZKR_LIVE_LOCK_FD, and the live_stack_lock fixture of its session
+holds the lock through that descriptor instead of waiting for the
+harness. A run's copy of the descriptor keeps the lock held while the
+run lasts, even if the harness is killed.
+
 Test runs
 ---------
 pytest runs as `python -P -m pytest -p no:cacheprovider -rfE
---color=no TESTS` from the repository root, in a process group of its
-own, and without PYTEST_ADDOPTS. When a run outlives --timeout, or a
-signal stops the harness, the whole group gets SIGINT, so pytest can
-tear its fixtures down. Once pytest has exited, or after --grace
-seconds, the group gets SIGKILL. It gets SIGKILL when pytest exits on
-its own too, so what a test started in the group, such as a shell's
-background job, dies with the run.
+--color=no TESTS`, with `-m live` before TESTS for a live mutation, from
+the repository root, in a process group of its own, and without
+PYTEST_ADDOPTS. When a run outlives --timeout, or a signal stops the
+harness, the whole group gets SIGINT, so pytest can tear its fixtures
+down. Once pytest has exited, or after --grace seconds, the group gets
+SIGKILL. It gets SIGKILL when pytest exits on its own too, so what a
+test started in the group, such as a shell's background job, dies with
+the run.
 
 A process that leaves the group escapes that kill: one started with
 setsid or start_new_session=True, with setpgid or process_group=0, or a
@@ -118,21 +147,23 @@ not run      the run stopped before this mutation
 
 The run stops at the first mutation that fails it: a survivor (unless
 --allow-survivors) or an error. --keep-going runs every mutation.
-Progress goes to stderr (-q silences it). The results table goes to
-stdout as Markdown, ready to paste into a PR, and --json PATH also
-writes a report.
+Progress goes to stderr (-q silences it, but not a wait for the
+live-stack lock). The results table goes to stdout as Markdown, ready to
+paste into a PR, and --json PATH also writes a report.
 
 Exit status: 0 when every mutation that ran was killed, or survived
 under --allow-survivors; 1 when a mutant survived and nothing else went
-wrong; 2 after a refusal, a failing baseline, a mutation's error, a
-failed restore, a file git does not show clean after its restore, or an
-internal error; 128 + N after signal N.
+wrong; 2 after a refusal, a wait for the live-stack lock given up, a
+failing baseline, a mutation's error, a failed restore, a file git does
+not show clean after its restore, or an internal error; 128 + N after
+signal N.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import os
 import re
@@ -149,6 +180,7 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
 from stat import S_IMODE
+from types import ModuleType
 
 DEFAULT_TIMEOUT = 300.0
 DEFAULT_GRACE = 5.0
@@ -170,7 +202,16 @@ STOP_SIGNALS = tuple(
     for name in ("SIGINT", "SIGTERM", "SIGHUP")
     if hasattr(signal, name)
 )
-MUTATION_KEYS = frozenset({"name", "file", "old", "new", "tests", "count"})
+MUTATION_KEYS = frozenset(
+    {"name", "file", "old", "new", "tests", "count", "live"}
+)
+# the live-stack lock's module, in the repository
+LIVE_LOCK = "tests/integration/live_lock.py"
+# The file that the live tests' Config.load reads the stack's settings
+# from: the one $YIZKR_ENV_FILE names or, with it unset, the first of
+# ENV_FILES in the directory the tests run from, the repository root.
+ENV_FILE = "YIZKR_ENV_FILE"
+ENV_FILES = ("deploy/.env", ".env")
 # pytest's closing line of counts, such as "1 failed, 2 passed in 0.05s"
 COUNTS = re.compile(
     r"\b\d+ (?:failed|passed|errors?|skipped|deselected|xfailed|xpassed)\b"
@@ -192,6 +233,7 @@ class Mutation:
     new: str
     tests: list[str]
     count: int = 1
+    live: bool = False
     # set by check(): the file's absolute path, and its path in the repo
     path: Path | None = None
     rel: str = ""
@@ -229,6 +271,7 @@ class Result:
             "new": mutation.new,
             "count": mutation.count,
             "tests": mutation.tests,
+            "live": mutation.live,
             "result": self.result,
             "seconds": _rounded(self.seconds),
             "returncode": self.returncode,
@@ -312,6 +355,9 @@ def _mutation(index: int, table: dict) -> tuple[Mutation | None, list[str]]:
     # bool is a subclass of int, and `count = true` is no count
     if type(count) is not int or count < 1:
         problems.append("count must be a positive integer")
+    live = table.get("live", False)
+    if not isinstance(live, bool):
+        problems.append("live must be true or false")
     if problems:
         return None, [f"{where}: {problem}" for problem in problems]
     mutation = Mutation(
@@ -322,6 +368,7 @@ def _mutation(index: int, table: dict) -> tuple[Mutation | None, list[str]]:
         new=new,
         tests=list(tests),
         count=count,
+        live=live,
     )
     return mutation, []
 
@@ -477,6 +524,61 @@ def check(mutations: list[Mutation], root: Path) -> list[str]:
     return problems
 
 
+# -- live tests -------------------------------------------------------------
+
+
+def stack_problem(root: Path) -> str | None:
+    """Why live tests run from `root` would find no stack settings, or
+    None: no file for Config.load to read them from."""
+    named = os.environ.get(ENV_FILE)
+    if named:
+        # a relative path names a file in the directory pytest runs from
+        if (root / named).is_file():
+            return None
+        return f"{ENV_FILE} names {named}, which is not a file"
+    if any((root / name).is_file() for name in ENV_FILES):
+        return None
+    return f"{ENV_FILE} is not set, and there is no deploy/.env or .env"
+
+
+def live_stack(root: Path) -> tuple[ModuleType | None, list[str]]:
+    """What a spec with a live mutation needs: the repository's live-stack
+    lock module, and the problems that keep the harness from running live
+    tests, if any: no stack configured, no lock module, or a setting of
+    the lock that it refuses."""
+    problems = []
+    problem = stack_problem(root)
+    if problem is not None:
+        problems.append(
+            "no stack is configured for the live tests, which would only "
+            f"skip: {problem}"
+        )
+    path = root / LIVE_LOCK
+    lock = None
+    try:
+        spec = importlib.util.spec_from_file_location("live_lock", path)
+        lock = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lock)
+        # the settings that hold() reads, checked before anything runs
+        lock.lock_path()
+        lock.lock_timeout()
+    except FileNotFoundError:
+        lock = None
+        problems.append(
+            f"live tests run under the live-stack lock, and {LIVE_LOCK} "
+            "is missing"
+        )
+    except ValueError as exc:
+        lock = None
+        problems.append(str(exc))
+    return lock, problems
+
+
+class Stopped(BaseException):
+    """A signal ended the wait for the live-stack lock. Not an Exception,
+    so that nothing on the way treats it as an error of its own."""
+
+
 # -- bytecode and restoration -----------------------------------------------
 
 
@@ -539,8 +641,11 @@ def _contents(path: Path) -> bytes | None:
 # -- test runs --------------------------------------------------------------
 
 
-def pytest_command(tests: list[str]) -> list[str]:
-    # -P: like the pytest script, keep the working directory off sys.path
+def pytest_command(tests: list[str], live: bool = False) -> list[str]:
+    # -P: like the pytest script, keep the working directory off sys.path.
+    # -m live selects the live tests: the last -m given wins over the
+    # -m 'not live' in the repository's addopts.
+    marker = ["-m", "live"] if live else []
     return [
         sys.executable,
         "-P",
@@ -550,6 +655,7 @@ def pytest_command(tests: list[str]) -> list[str]:
         "no:cacheprovider",
         "-rfE",
         "--color=no",
+        *marker,
         *tests,
     ]
 
@@ -672,9 +778,10 @@ def signal_group(child: subprocess.Popen, signum: int) -> None:
             os.killpg(child.pid, signum)
 
 
-def describe(tests: list[str]) -> str:
+def describe(tests: list[str], live: bool = False) -> str:
     shown = ", ".join(tests[:3])
-    return shown + (f" and {len(tests) - 3} more" if len(tests) > 3 else "")
+    shown += f" and {len(tests) - 3} more" if len(tests) > 3 else ""
+    return shown + (" (-m live)" if live else "")
 
 
 def _rounded(seconds: float | None) -> float | None:
@@ -747,12 +854,22 @@ class Harness:
         self.baseline: list[dict] | None = None
         self.problems: list[str] = []
         self.unrestored: list[str] = []
+        # the live-stack lock's module, and the descriptor through which the
+        # harness holds the lock, while it does
+        self.lock: ModuleType | None = None
+        self.lock_fd: int | None = None
+        # whether the harness is waiting for the live-stack lock
+        self.waiting = False
 
     def on_signal(self, signum: int, frame: object) -> None:
         # Only note the signal: raising here could interrupt a restore.
-        # The main loop polls for it and stops the test run.
+        # The main loop polls for it and stops the test run. A wait for
+        # the live-stack lock mutates nothing, so it ends at once.
         if self.signum is None:
             self.signum = signum
+        if self.waiting:
+            self.waiting = False
+            raise Stopped
 
     def run(self) -> int:
         root, problem = repository_root()
@@ -760,8 +877,12 @@ class Harness:
             return self._refuse([problem])
         self.root = root
         mutations, problems = load_spec(self.args.spec)
+        lock = None
         if not problems:
             problems = check(mutations, root)
+            if any(mutation.live for mutation in mutations):
+                lock, found = live_stack(root)
+                problems += found
         if self.signum is not None:
             return self._finish()
         if problems:
@@ -769,8 +890,17 @@ class Harness:
         if os.environ.get("PYTEST_ADDOPTS"):
             self._say("PYTEST_ADDOPTS is set here; pytest runs without it")
         self.results = [Result(mutation) for mutation in mutations]
+        # the lock, if taken, is held until every run has ended
+        with contextlib.ExitStack() as held:
+            if lock is None or self._hold(lock, held):
+                self._runs(mutations)
+        return self._finish()
+
+    def _runs(self, mutations: list[Mutation]) -> None:
+        """The baseline, then each mutation in turn, until one fails the
+        run."""
         if not self.args.no_baseline and not self._baseline(mutations):
-            return self._finish()
+            return
         total = len(self.results)
         for position, result in enumerate(self.results, start=1):
             if self.signum is not None:
@@ -780,7 +910,36 @@ class Harness:
                 break
             if self._fails(result) and not self.args.keep_going:
                 break
-        return self._finish()
+
+    def _hold(self, lock: ModuleType, held: contextlib.ExitStack) -> bool:
+        """Take the live-stack lock, to hold until `held` closes, waiting
+        while another session holds it. False when the harness gave up
+        waiting, or a signal stopped it."""
+        self.lock = lock
+        try:
+            self.waiting = True
+            try:
+                if self.signum is None:
+                    self.lock_fd = held.enter_context(
+                        lock.hold(announce=self._announce)
+                    )
+            finally:
+                self.waiting = False
+        except Stopped:
+            return False
+        except lock.LiveStackBusy as exc:
+            self._problem(str(exc))
+            return False
+        except OSError as exc:
+            self._problem(f"cannot take the live-stack lock: {exc}")
+            return False
+        if self.signum is not None:
+            return False
+        self._say(
+            f"holding the live-stack lock {lock.lock_path()} until the "
+            "last run ends"
+        )
+        return True
 
     def _fails(self, result: Result) -> bool:
         if result.result == SURVIVED:
@@ -788,12 +947,14 @@ class Harness:
         return result.result == ERROR
 
     def _baseline(self, mutations: list[Mutation]) -> bool:
-        """Run each distinct list of tests on the unmutated tree, just as
-        the mutants' runs will: a test may pass after another yet fail
-        alone. True if every list passes; stops at the first that fails."""
+        """Run each distinct list of tests on the unmutated tree, live or
+        not, just as the mutants' runs will: a test may pass after another
+        yet fail alone. True if every list passes; stops at the first that
+        fails."""
         self.baseline = []
         paths = {mutation.path for mutation in mutations}
-        for tests in dict.fromkeys(tuple(m.tests) for m in mutations):
+        lists = dict.fromkeys((tuple(m.tests), m.live) for m in mutations)
+        for tests, live in lists:
             if self.signum is not None:
                 return False
             try:
@@ -802,13 +963,13 @@ class Harness:
             except OSError as exc:
                 self._problem(f"cannot delete stale bytecode: {exc}")
                 return False
-            if not self._baseline_run(list(tests)):
+            if not self._baseline_run(list(tests), live):
                 return False
         return True
 
-    def _baseline_run(self, tests: list[str]) -> bool:
-        self._say(f"baseline: running {describe(tests)} unmutated")
-        run = self.run_tests(tests)
+    def _baseline_run(self, tests: list[str], live: bool) -> bool:
+        self._say(f"baseline: running {describe(tests, live)} unmutated")
+        run = self.run_tests(tests, live)
         result, detail, _ = classify(run, self.args.timeout)
         detail = self._relative(detail)
         # A run whose tests only skip or xfail passes, but proves nothing:
@@ -817,6 +978,7 @@ class Harness:
         self.baseline.append(
             {
                 "tests": tests,
+                "live": live,
                 "result": "passed" if passed else "failed",
                 "seconds": _rounded(run.seconds),
                 "returncode": run.returncode,
@@ -828,14 +990,15 @@ class Harness:
             self._say(f"baseline: {detail} in {run.seconds:.1f} s")
         elif result == SURVIVED:
             self._problem(
-                f"no test in {describe(tests)} passes unmutated ({detail}), "
-                "so every mutant would survive; they only skip or xfail, or "
-                "pytest printed no counts"
+                f"no test in {describe(tests, live)} passes unmutated "
+                f"({detail}), so every mutant would survive; they only skip "
+                "or xfail, or pytest printed no counts"
             )
         elif result != INTERRUPTED:
             self._problem(
-                f"the tests in {describe(tests)} fail unmutated ({detail}), "
-                "so no kill would prove anything; fix them or their ids"
+                f"the tests in {describe(tests, live)} fail unmutated "
+                f"({detail}), so no kill would prove anything; fix them or "
+                "their ids"
             )
             self._tail(run.output)
         return passed
@@ -869,7 +1032,7 @@ class Harness:
         stat, data, mutant = read
         self._say(
             f"{position} {mutation.name}: mutating {mutation.rel}, "
-            f"running {describe(mutation.tests)}"
+            f"running {describe(mutation.tests, mutation.live)}"
         )
         run = None
         failure = None
@@ -881,7 +1044,7 @@ class Harness:
                 failure = f"cannot write the mutant: {exc}"
             else:
                 if self.signum is None:
-                    run = self.run_tests(mutation.tests)
+                    run = self.run_tests(mutation.tests, mutation.live)
         finally:
             problem = restore(path, data, stat)
         result.seconds = time.monotonic() - started
@@ -922,22 +1085,30 @@ class Harness:
         elif result.result == ERROR:
             self._tail(result.output)
 
-    def run_tests(self, tests: list[str]) -> Run:
+    def run_tests(self, tests: list[str], live: bool = False) -> Run:
         """Run pytest on `tests` in a process group of its own. Stop the
         whole group on a timeout or a signal, and kill whatever is left in
-        it once pytest has exited."""
+        it once pytest has exited. A live run shares the harness's hold on
+        the live-stack lock."""
         started = time.monotonic()
+        env = pytest_environment()
+        shared: tuple[int, ...] = ()
+        if live and self.lock_fd is not None:
+            # the locked descriptor, open in pytest under the same number
+            env[self.lock.SHARED_ENV] = str(self.lock_fd)
+            shared = (self.lock_fd,)
         with tempfile.TemporaryFile() as output:
             # Output goes to a file, not a pipe, so that a straggling
             # grandchild holding it open cannot keep the harness waiting.
             child = subprocess.Popen(
-                pytest_command(tests),
+                pytest_command(tests, live),
                 cwd=self.root,
-                env=pytest_environment(),
+                env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=output,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                pass_fds=shared,
             )
             stopped = None
             try:
@@ -989,6 +1160,11 @@ class Harness:
     def _say(self, message: str) -> None:
         if not self.args.quiet:
             _write(sys.stderr, f"mutate: {message}\n")
+
+    def _announce(self, message: str) -> None:
+        # Not silenced by -q: a silent wait for the lock would look like a
+        # hang.
+        _write(sys.stderr, f"mutate: {message}\n")
 
     def _tail(self, output: str) -> None:
         if output and not self.args.quiet:

@@ -9,11 +9,34 @@ once, and waits. It gives up after ``$YIZKR_LIVE_LOCK_TIMEOUT`` seconds
 
 The holder records itself in the lock file: its pid, command line,
 working directory and the time it took the lock. The kernel releases a
-flock when the process holding it ends, however it ends, so a holder that
-crashed or was killed blocks nothing. A holder that releases the lock
-itself empties its record first, so a record in a free lock file was left
-by a holder that crashed or was killed; the next holder writes its own
-over it.
+flock once every descriptor of the open file description that holds it
+is closed, as a process's descriptors are when it ends, however it ends.
+So a holder that crashed or was killed blocks nothing, unless it shared
+its hold (below). A holder that releases the lock itself empties its
+record first, so a record in a free lock file was left by a holder that
+crashed or was killed; the next holder writes its own over it.
+
+A process that a holder starts can share its hold, as the pytest runs of
+scripts/mutate.py share the harness's. The holder passes its locked
+descriptor down, open, and names it in ``$YIZKR_LIVE_LOCK_FD``. A flock
+belongs to the open file description, which the two processes then
+share, so the child holds the lock through that descriptor: it neither
+waits nor records itself, and it never releases the lock, which would
+release the holder's too. The variable counts only when it names a
+descriptor, open in the process, of the lock file itself, and flock on
+that descriptor succeeds at once, as it does only while the descriptor's
+open file description holds the lock or nothing does. Otherwise the
+process takes the lock as any other does. So even a stray or stale
+variable never lets two sessions hold the lock at once.
+
+As the child's hold() finds the descriptor, it makes it close-on-exec,
+as the one that hold() opens is, so that no program the child starts
+from then on shares the hold in turn; a process it forks without exec
+does, as with any holder's descriptor. A holder killed while a child
+shares its hold leaves the lock held until the child ends: a killed
+harness's live run keeps it until the run ends. A waiting process then
+names the holder from its record, and says that it has ended and that a
+process sharing its hold holds the lock.
 
 Never delete the lock file. A session that then found no file would
 create and lock a new one, while the session still holding the old one
@@ -40,6 +63,8 @@ if TYPE_CHECKING:
 
 LOCK_ENV = "YIZKR_LIVE_LOCK"
 TIMEOUT_ENV = "YIZKR_LIVE_LOCK_TIMEOUT"
+# names the descriptor through which a process shares its parent's hold
+SHARED_ENV = "YIZKR_LIVE_LOCK_FD"
 DEFAULT_TIMEOUT = 7200.0
 # seconds between attempts to take the lock while another process holds it
 POLL_INTERVAL = 0.5
@@ -91,8 +116,9 @@ def hold(
     path: Path | None = None,
     timeout: float | None = None,
     announce: Callable[[str], None] | None = None,
-) -> Iterator[None]:
-    """Hold the live-stack lock for the duration of the block.
+) -> Iterator[int]:
+    """Hold the live-stack lock for the duration of the block, and give
+    the block the descriptor that holds it.
 
     `path` and `timeout` default to lock_path() and lock_timeout(). While
     another process holds the lock, `announce` (by default, a print to
@@ -100,10 +126,19 @@ def hold(
     POLL_INTERVAL seconds. After `timeout` seconds LiveStackBusy is
     raised, naming the holder. Once this process has the lock, it writes
     its record over the one in the file, and it empties the record again
-    as it releases the lock."""
+    as it releases the lock.
+
+    A process that shares its parent's hold ($YIZKR_LIVE_LOCK_FD, in the
+    module docstring) gets the shared descriptor at once. It writes no
+    record, and it leaves the descriptor open and locked: releasing it
+    would release the parent's lock too."""
     path = lock_path() if path is None else path
     timeout = lock_timeout() if timeout is None else timeout
     announce = announce or _print_to_stderr
+    shared = _shared(path)
+    if shared is not None:
+        yield shared
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     # opened without truncating: the record in the file is the holder's
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -111,7 +146,7 @@ def hold(
         _take(fd, path, timeout, announce)
         try:
             _record(fd)
-            yield
+            yield fd
         finally:
             with contextlib.suppress(OSError):
                 os.ftruncate(fd, 0)
@@ -179,6 +214,36 @@ def _take(
         time.sleep(min(POLL_INTERVAL, timeout - waited))
 
 
+def _shared(path: Path) -> int | None:
+    """The descriptor that $YIZKR_LIVE_LOCK_FD names, when this process
+    holds the lock through it: the descriptor is open on the lock file at
+    `path`, and flock on it succeeds at once. Otherwise None.
+
+    The descriptor is then made close-on-exec, as the one that hold()
+    opens is, so that a program this process starts (os.system, a shell's
+    background job, a subprocess with close_fds=False) does not share the
+    hold and keep the lock after this process ends."""
+    try:
+        fd = int(os.environ.get(SHARED_ENV, ""))
+        inherited = os.fstat(fd)
+        lock = os.stat(path)
+    except (ValueError, OverflowError, OSError):
+        return None
+    # A descriptor of any other file would lock that file instead.
+    if (inherited.st_dev, inherited.st_ino) != (lock.st_dev, lock.st_ino):
+        return None
+    # On the description that holds the lock this changes nothing, and on
+    # any other it fails while that one holds the lock. A free lock is
+    # taken through this descriptor.
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return None
+    # The holder passed it down open across exec, so it is inheritable.
+    os.set_inheritable(fd, False)
+    return fd
+
+
 def _record(fd: int) -> None:
     """Write this process's record over the one in the lock file."""
     record = {
@@ -192,8 +257,10 @@ def _record(fd: int) -> None:
 
 
 def _holder(fd: int) -> dict[str, Any] | None:
-    """The record of the process that holds the lock file open as `fd`,
-    or None while the file names no running process."""
+    """The record in the lock file open as `fd`: the first one read that
+    names a running process or, when no read finds one, the last record
+    read. None when no read finds a record."""
+    found = None
     for attempt in range(RECORD_READS):
         if attempt:
             time.sleep(RECORD_INTERVAL)
@@ -201,9 +268,12 @@ def _holder(fd: int) -> dict[str, Any] | None:
             record = json.loads(os.pread(fd, 1 << 20, 0))
         except ValueError:
             continue
-        if isinstance(record, dict) and _running(record.get("pid")):
+        if not isinstance(record, dict):
+            continue
+        if _running(record.get("pid")):
             return record
-    return None
+        found = record
+    return found
 
 
 def _running(pid: object) -> bool:
@@ -219,14 +289,25 @@ def _running(pid: object) -> bool:
 
 
 def _describe(record: dict[str, Any] | None) -> str:
-    """Who a record names, for a message."""
+    """Who a record names, for a message about the lock while it is
+    held."""
     if record is None:
         return "a process with no record in the lock file"
-    return (
-        f"pid {record.get('pid')} since {record.get('started')}\n"
+    pid = record.get("pid")
+    described = (
+        f"pid {pid} since {record.get('started')}\n"
         f"  command: {record.get('command')}\n"
         f"  cwd: {record.get('cwd')}"
     )
+    if not _running(pid):
+        # The recorded holder has ended, yet the lock is held: a process
+        # that shared its hold holds it.
+        described += (
+            f"\n  pid {pid} has ended, and a process that shares its hold "
+            "holds the lock: a killed mutation harness's live run, say, "
+            "which keeps it until the run ends"
+        )
+    return described
 
 
 def _terminal(pytest_config: pytest.Config) -> Callable[[str], None]:

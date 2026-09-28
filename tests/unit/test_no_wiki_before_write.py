@@ -465,6 +465,48 @@ def test_rerunning_reuses_and_rechecks_the_views_without_the_wiki(
     assert refusals.asked == []
 
 
+def test_every_transcription_names_its_document_by_its_bytes(
+    tmp_path, refusals
+):
+    """Whichever route makes a transcription view (vision, a text file, a
+    deck's slide text or a curator's correction), it names its artifact
+    by the SHA-1 of the source's bytes, never by the QID registration gave
+    it (#127)."""
+    folder = corpus(tmp_path)
+
+    def views(orchestrator) -> dict[str, tuple[str, dict]]:
+        """Each transcribed document's view: the route that made it, and
+        the artifact it names, by the kind of document."""
+        found = {}
+        for doc in orchestrator.documents():
+            if doc.kind == "gedcom":
+                continue
+            text = doc.transcription.read_text()
+            assert doc.state.artifact_qid == "Q23"
+            assert "Q23" not in text
+            view = json.loads(text)
+            key = {"kind": "artifact", "sha1": sha1(doc.source.read_bytes())}
+            found[doc.kind] = (view["engine"].split(":")[0], view["artifact"])
+            assert view["artifact"] == key, doc.source.name
+        return found
+
+    first = BeforeTheWrite(folder, tmp_path / "state", refusals)
+    assert first.run() == 2
+    assert {kind: route for kind, (route, _) in views(first).items()} == {
+        "media": "llm-vision",
+        "presentation": "pptx-adapter",
+        "text": "text-file",
+    }
+    (postcard,) = [doc for doc in first.documents() if doc.kind == "text"]
+    postcard.correction.write_text(
+        SOURCES["postcard-1938"].text.replace("\n", "\n\n")
+    )
+    corrected = BeforeTheWrite(folder, tmp_path / "state", refusals)
+    assert corrected.run() == 2
+    assert views(corrected)["text"][0] == "correction"
+    assert refusals.asked == []
+
+
 def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     tmp_path, refusals
 ):

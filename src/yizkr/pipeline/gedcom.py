@@ -21,7 +21,11 @@ Source-first conventions carry over unchanged:
   marriage's or a divorce's range bounds the one end of the spouse
   statement it dates: a marriage's BEF is its `latest start date`, a
   divorce's AFT its `earliest end date` (docs/MODELING.md, "Marriages,
-  residences and other periods").
+  residences and other periods"). A residence's or an occupation's
+  date period (FROM x TO y, FROM x, TO y) is its statement's start and
+  end time, each dated by its own phrase, which may be approximate or
+  a range of its own: FROM BET 1938 AND 1939 is a start between 1938
+  and 1939. Any other date on them is a point in time.
   A date the grammar cannot parse yields NO date claim and a warning —
   never a guess.
 
@@ -52,7 +56,13 @@ order when the month is named. Tags the adapter does not map (e.g.
 REPO, SUBM, tool-specific `_` tags) are counted and reported, not
 silently dropped: the census walks every record and nesting level and
 names the top-most unmapped tag in each branch, leaving an already-
-handled or already-dropped subtree unitemised (ADR-0021).
+handled or already-dropped subtree unitemised (ADR-0021). Whether a tag
+is mapped depends on where it stands: a PLAC is read under a marriage
+but not under a divorce, and a TYPE under a NAME but not under a MARR,
+so such a tag is named with its parent's tag where it goes unread
+(DIV.PLAC, MARR.TYPE). A DIV without a DATE is counted as DIV: it says a
+marriage ended at an unknown time, and a claim has no unknown value to
+state that with.
 """
 
 from __future__ import annotations
@@ -259,6 +269,50 @@ PERIOD_BOUNDS = {
 }
 
 
+def period_end(value: dict, date_quals: list[dict], end: str) -> list[dict]:
+    """The qualifiers that date one end of a period (`end`: start_time or
+    end_time) from a parsed date: the date as that end, and the range it
+    states as that end's bounds, never the other end's."""
+    bounds = PERIOD_BOUNDS[end]
+    return [{"property": end, "value": value}] + [
+        {
+            **qualifier,
+            "property": bounds.get(
+                qualifier["property"], qualifier["property"]
+            ),
+        }
+        for qualifier in date_quals
+    ]
+
+
+def split_gedcom_period(text: str) -> tuple[str | None, str | None] | None:
+    """A GEDCOM date period's two date phrases: FROM x TO y -> (x, y),
+    FROM x -> (x, None) and TO y -> (None, y). None when `text` is no
+    period, because it starts with neither FROM nor TO.
+
+    A period says when a state began and when it ended, where a range
+    (BET x AND y, BEF x, AFT x) bounds a single date. Each phrase is a
+    date of its own, which may itself be approximate or a range; it is
+    empty when the period names an end but gives it no date. A "to"
+    inside a parenthesised date phrase ("(Aug to Sep)") is the phrase's
+    own word, not the period's TO.
+    """
+    words = text.split()
+    keys = [word.upper() for word in words]
+    if not keys or keys[0] not in ("FROM", "TO"):
+        return None
+    if keys[0] == "TO":
+        return None, " ".join(words[1:])
+    depth = 0  # how deep the word stands in parentheses
+    for cut, key in enumerate(keys[1:], start=1):
+        if key == "TO" and depth == 0:
+            return " ".join(words[1:cut]), " ".join(words[cut + 1 :])
+        # a stray ")" closes nothing, so a phrase opened after it still
+        # holds its own "to"
+        depth = max(depth + key.count("(") - key.count(")"), 0)
+    return " ".join(words[1:]), None
+
+
 # ---------------------------------------------------------------------------
 # adaptation
 # ---------------------------------------------------------------------------
@@ -381,42 +435,70 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     HANDLED_FAM = {"HUSB", "WIFE", "CHIL", "MARR", "DIV"}
     # Unsupported-tag census (ADR-0021). Name the top-most tag the adapter
     # does not map in EVERY branch of EVERY record — not merely the direct
-    # children of INDI/FAM. `consumed` container tags are descended into, so
-    # an unmapped tag nested under a mapped event still surfaces. `handled`
-    # tags the adapter incorporates wholesale — SOUR (folded into claim
-    # references) and OBJE (minted as un-held media items) — are skipped
-    # subtree and all: neither counted nor descended. The envelope is
-    # structure, not data. Everything else is counted once and its subtree
-    # left untouched, so an already-dropped branch is not itemised down to
-    # its PAGE/_APID leaves. What remains reported is the genuine tail
-    # (REPO, SUBM, tool-specific `_` tags).
-    consumed = (
-        {"INDI", "FAM"}                      # record types the adapter walks
-        | HANDLED_INDI | HANDLED_FAM         # event / attribute containers
-        | {"DATE", "PLAC", "CAUS"}           # values read inside those
-        | {"TYPE", "NICK", "GIVN", "SURN",   # name parts read, or restated
-           "NPFX", "NSFX", "SPFX"}           #   by the NAME value we do read
-    )  # fmt: skip
+    # children of INDI/FAM. `reads` holds what the adapter reads beneath
+    # each tag it maps; a tag it maps with nothing read beneath (SEX, FAMC,
+    # HUSB, DATE, PLAC...) has no entry. A child read where it stands is
+    # descended into, so an unmapped tag nested under a mapped event still
+    # surfaces. `handled` tags the adapter incorporates wholesale — SOUR
+    # (folded into claim references) and OBJE (minted as un-held media
+    # items) — are skipped subtree and all: neither counted nor descended.
+    # The envelope is structure, not data. Everything else is counted once
+    # and its subtree left untouched, so an already-dropped branch is not
+    # itemised down to its PAGE/_APID leaves. What remains reported is the
+    # genuine tail (REPO, SUBM, tool-specific `_` tags), and what a mapped
+    # record carries that the model has no property for (a divorce's PLAC,
+    # a marriage's TYPE).
+    reads = {
+        "INDI": HANDLED_INDI,
+        "FAM": HANDLED_FAM,
+        # name parts are read, or restated by the NAME value that is read
+        "NAME": {"TYPE", "NICK", "GIVN", "SURN", "NPFX", "NSFX", "SPFX"},
+        "BIRT": {"DATE", "PLAC"},
+        "DEAT": {"DATE", "PLAC", "CAUS"},
+        "BURI": {"DATE", "PLAC"},
+        "OCCU": {"DATE", "PLAC"},
+        "RESI": {"DATE", "PLAC"},
+        "MARR": {"DATE", "PLAC"},
+        "DIV": {"DATE"},
+    }
+    # the tags each tag is read beneath
+    read_beneath: dict[str, set[str]] = {}
+    for parent, tags in reads.items():
+        for tag in tags:
+            read_beneath.setdefault(tag, set()).add(parent)
     handled = {"SOUR", "OBJE"}  # incorporated wholesale (ADR-0021)
     envelope = {"HEAD", "TRLR"}  # GEDCOM structure, not genealogy
+
+    def count(tag: str) -> None:
+        unsupported[tag] = unsupported.get(tag, 0) + 1
 
     def census(record: Record) -> None:
         for child in record.children:
             if child.tag in handled or child.tag in envelope:
                 continue
-            if child.tag in consumed:
+            if child.tag in reads.get(record.tag, set()) and not (
+                # a DIV dates the marriage's end only by its DATE: an
+                # undated one says it ended at an unknown time, and a
+                # claim has no unknown value to state that with
+                child.tag == "DIV" and child.first("DATE") is None
+            ):
                 census(child)  # descend: an unmapped tag may sit deeper
-            elif child.tag:
-                unsupported[child.tag] = unsupported.get(child.tag, 0) + 1
-                # the top-most unmapped tag stands for its whole branch
+            # otherwise the top-most unmapped tag stands for its whole
+            # branch, named with its parent's tag (DIV.PLAC) when it is
+            # read beneath other tags: a bare PLAC would read as though
+            # every PLAC went unmapped
+            elif read_beneath.get(child.tag, set()) - {record.tag}:
+                count(f"{record.tag}.{child.tag}")
+            else:
+                count(child.tag)
 
     for root in roots:
         if root.tag in handled or root.tag in envelope:
             continue
-        if root.tag in consumed:
+        if root.tag in ("INDI", "FAM"):
             census(root)
-        elif root.tag:
-            unsupported[root.tag] = unsupported.get(root.tag, 0) + 1
+        else:
+            count(root.tag)
 
     entities: list[dict] = []
     claims: list[dict] = []
@@ -550,10 +632,10 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 quals.extend(date_quals)
         return quals
 
-    def period_end(event: Record, end: str, context: str) -> list[dict]:
-        """The qualifiers that date one end of a period from an event's
-        DATE: the date as `end` (start_time or end_time), and the range it
-        states as that end's bounds, never the other end's."""
+    def dated_end(event: Record, end: str, context: str) -> list[dict]:
+        """The qualifiers that date one end of a period, `end` (start_time
+        or end_time), from an event's DATE: a marriage's date is the
+        spouse statements' start, a divorce's their end."""
         date_record = event.first("DATE")
         if date_record is None:
             return []
@@ -564,16 +646,44 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 f"date {date_record.value!r} — {end} omitted"
             )
             return []
-        bounds = PERIOD_BOUNDS[end]
-        return [{"property": end, "value": value}] + [
-            {
-                **qualifier,
-                "property": bounds.get(
-                    qualifier["property"], qualifier["property"]
-                ),
-            }
-            for qualifier in date_quals
-        ]
+        return period_end(value, date_quals, end)
+
+    def period_qualifiers(event: Record, context: str) -> list[dict]:
+        """The qualifiers that date a statement which holds for a period (a
+        residence, an occupation) from its event's DATE. A date period is
+        the statement's start and end time, each dated by its own phrase
+        with the range that phrase states (docs/MODELING.md, "Marriages,
+        residences and other periods"); any other date is a point in time
+        at which the source observes the statement."""
+        date_record = event.first("DATE")
+        phrases = (
+            split_gedcom_period(date_record.value) if date_record else None
+        )
+        if phrases is None:
+            return dated_qualifiers(event, context)
+        quals: list[dict] = []
+        for end, phrase in zip(
+            ("start_time", "end_time"), phrases, strict=True
+        ):
+            if phrase is None:
+                continue  # the period names no such end
+            # a period within a period is no date
+            value, date_quals = (
+                (None, [])
+                if split_gedcom_period(phrase) is not None
+                else parse_gedcom_date(phrase)
+            )
+            if value is None:
+                warnings.append(
+                    f"line {date_record.line_number}: unparsed {context} "
+                    f"date {date_record.value!r} — {end} omitted"
+                )
+                continue
+            for qualifier in period_end(value, date_quals, end):
+                # one circa stands for both ends, as on a spouse statement
+                if qualifier not in quals:
+                    quals.append(qualifier)
+        return quals
 
     def event_claims(
         indi_xref: str, event: Record, date_prop: str, place_prop: str
@@ -724,7 +834,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     "no occupation claim emitted"
                 )
                 continue
-            quals = dated_qualifiers(occupation, "occupation")
+            quals = period_qualifiers(occupation, "occupation")
             place = occupation.text("PLAC")
             if place:
                 quals.append(
@@ -772,7 +882,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 "residence",
                 {"type": "item", "value": local(place_entity(place))},
                 residence,
-                dated_qualifiers(residence, "residence"),
+                period_qualifiers(residence, "residence"),
             )
         # OBJE -> an un-held media item the person `image`s (ADR-0021).
         # A pointer resolves to its level-0 OBJE record; some tools embed
@@ -817,7 +927,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             quals: list[dict] = []
             marriage = fam.first("MARR")
             if marriage:
-                quals.extend(period_end(marriage, "start_time", "marriage"))
+                quals.extend(dated_end(marriage, "start_time", "marriage"))
                 place = marriage.text("PLAC")
                 if place:
                     quals.append(
@@ -831,7 +941,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     )
             divorce = fam.first("DIV")
             if divorce:
-                for qualifier in period_end(divorce, "end_time", "divorce"):
+                for qualifier in dated_end(divorce, "end_time", "divorce"):
                     # a circa the marriage's date gave the statement
                     # already stands for the divorce's too
                     if qualifier not in quals:

@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from yizkr.claims import (
     ArtifactRef,
@@ -122,38 +123,58 @@ class TestTranscribe:
     def test_text_file_engine(self, tmp_path):
         source = tmp_path / "scan.txt"
         source.write_text("Geboren 1914")
-        result = TextFileTranscriber(source, language="de").transcribe(
-            tmp_path / "scan.png", artifact_qid="Q23"
-        )
+        scan = tmp_path / "scan.png"
+        scan.write_bytes(MEDIA)
+        result = TextFileTranscriber(source, language="de").transcribe(scan)
         assert result.text == "Geboren 1914"
         assert result.language == "de"
-        assert result.artifact_qid == "Q23"
+        # the transcription names the media it is of, never the text file
+        # it was read from, by the SHA-1 of its bytes (#127)
+        assert result.artifact == MEDIA_REF
         assert result.engine.startswith("text-file:")
 
     def test_llm_vision_engine_passes_image(self, tmp_path):
         llm = FakeLlm("The transcribed text")
         image = tmp_path / "scan.png"
-        image.write_bytes(b"png")
-        result = LlmVisionTranscriber(llm).transcribe(
-            image, artifact_qid="Q23"
-        )
+        image.write_bytes(MEDIA)
+        result = LlmVisionTranscriber(llm).transcribe(image)
         assert result.text == "The transcribed text"
         assert result.engine == "llm-vision:fake-model"
+        assert result.artifact == MEDIA_REF
         assert "exactly as written" in llm.prompts[0]
 
     def test_htr_stub_says_so(self, tmp_path):
         with pytest.raises(NotImplementedError, match="stub"):
             HtrPlatformAdapter().transcribe(tmp_path / "x.png")
 
+    def test_a_transcription_names_its_artifact_by_key_alone(self):
+        """A transcription file names its artifact by the SHA-1 of its
+        media, and by nothing an instance gives it (#127): a file that
+        names it by QID, as transcription files did before, is refused,
+        whether or not it has the key besides."""
+        text = {"text": "Geboren 1914", "engine": "test"}
+        keyed = Transcription.model_validate(text | {"artifact": ARTIFACT})
+        assert keyed.artifact == MEDIA_REF
+        assert json.loads(keyed.model_dump_json())["artifact"] == ARTIFACT
+        for named in (
+            {"artifact_qid": "Q23"},
+            {"artifact_qid": "Q23", "artifact": ARTIFACT},
+            {"artifact": {"kind": "qid", "qid": "Q23"}},
+        ):
+            with pytest.raises(ValidationError):
+                Transcription.model_validate(text | named)
+
 
 class TestExtract:
     def transcription(self) -> Transcription:
-        return Transcription(text="married 1947", engine="test")
+        return Transcription(
+            artifact=MEDIA_REF, text="married 1947", engine="test"
+        )
 
     def test_llm_extractor_validates_response(self):
         llm = FakeLlm(json.dumps({"claims": CLAIMS}))
         result = LlmClaimExtractor(llm).extract(
-            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+            self.transcription(), MEDIA_REF
         )
         assert len(result.claims) == 2
         assert result.extraction_run.model_identifier == "fake-model"
@@ -166,9 +187,7 @@ class TestExtract:
         bad = [dict(CLAIMS[1], property="shoe_size")]
         llm = FakeLlm(json.dumps({"claims": bad}))
         with pytest.raises(ValueError, match="shoe_size"):
-            LlmClaimExtractor(llm).extract(
-                self.transcription(), MEDIA_REF, artifact_qid="Q23"
-            )
+            LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
 
     def test_llm_extractor_salvages_valid_claims_around_bad_ones(
         self, tmp_path
@@ -180,7 +199,7 @@ class TestExtract:
         rejects_path = tmp_path / "batch.json.rejected.json"
         llm = FakeLlm(json.dumps({"claims": mixed}))
         batch = LlmClaimExtractor(llm, rejects_dump=rejects_path).extract(
-            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+            self.transcription(), MEDIA_REF
         )
         assert len(batch.claims) == 2
         rejects = json.loads(rejects_path.read_text())
@@ -192,9 +211,7 @@ class TestExtract:
         """The model can only comply with 'use only manifest keys' if the
         prompt actually lists them."""
         llm = FakeLlm(json.dumps({"claims": CLAIMS}))
-        LlmClaimExtractor(llm).extract(
-            self.transcription(), MEDIA_REF, artifact_qid="Q23"
-        )
+        LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
         assert "date_of_birth: time" in llm.prompts[0]
         assert "place_of_birth: wikibase-item" in llm.prompts[0]
         assert "circa" in llm.prompts[0]
@@ -203,9 +220,7 @@ class TestExtract:
         """Direction and value type live in the manifest description;
         a key and datatype alone leave the model to guess them."""
         llm = FakeLlm(json.dumps({"claims": CLAIMS}))
-        LlmClaimExtractor(llm).extract(
-            self.transcription(), MEDIA_REF, artifact_qid="Q23"
-        )
+        LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
         assert (
             "employer: wikibase-item — organization the person works or "
             "worked for" in llm.prompts[0]
@@ -218,9 +233,7 @@ class TestExtract:
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")
         with pytest.raises(ValueError, match="no claim JSON"):
-            LlmClaimExtractor(llm).extract(
-                self.transcription(), MEDIA_REF, artifact_qid="Q23"
-            )
+            LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
 
     def test_parse_response_tolerates_fences_and_prose(self):
         payload = {"claims": []}
@@ -276,9 +289,7 @@ class TestExtract:
             ],
         )
         llm = FakeLlm(json.dumps({"claims": [nested]}))
-        batch = LlmClaimExtractor(llm).extract(
-            self.transcription(), MEDIA_REF, artifact_qid="Q23"
-        )
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
         assert batch.claims[0].value.year == 1914
         assert batch.claims[0].qualifiers[0].value.year == 1915
 
@@ -297,9 +308,7 @@ class TestExtract:
             },
         )
         llm = FakeLlm(json.dumps({"claims": [long_claim]}))
-        batch = LlmClaimExtractor(llm).extract(
-            self.transcription(), MEDIA_REF, artifact_qid="Q23"
-        )
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
         text = batch.claims[0].source.transcription_excerpt.text
         assert len(text) <= 400
         assert text.endswith("…")
@@ -311,7 +320,7 @@ class TestExtract:
         llm = FakeLlm("total garbage, no JSON at all")
         with pytest.raises(ValueError):
             LlmClaimExtractor(llm, raw_dump=raw).extract(
-                self.transcription(), MEDIA_REF, artifact_qid="Q23"
+                self.transcription(), MEDIA_REF
             )
         assert raw.read_text() == "total garbage, no JSON at all"
 
@@ -319,7 +328,7 @@ class TestExtract:
         claims_file = tmp_path / "claims.json"
         claims_file.write_text(json.dumps({"claims": CLAIMS}))
         result = ClaimFileExtractor(claims_file).extract(
-            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+            self.transcription(), MEDIA_REF
         )
         assert len(result.claims) == 2
         assert result.extraction_run.model_identifier == "manual"
@@ -337,23 +346,23 @@ class TestExtract:
         claims_file.write_text(json.dumps({"claims": [by_qid]}))
         with pytest.raises(ValueError, match="artifact"):
             ClaimFileExtractor(claims_file).extract(
-                self.transcription(), MEDIA_REF, artifact_qid="Q23"
+                self.transcription(), MEDIA_REF
             )
         other = ArtifactRef.from_bytes(b"fictional scan: another page")
         cites_other = dict(CLAIMS[1], source={"artifact": other.model_dump()})
         claims_file.write_text(json.dumps({"claims": [cites_other]}))
         result = ClaimFileExtractor(claims_file).extract(
-            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+            self.transcription(), MEDIA_REF
         )
         assert result.claims[0].source.artifact == other
 
 
 # Person One's birth as one page of a document gives it, in May 1914, in a
-# model's answer that cites the artifact's item as the prompt asks
+# model's answer that cites the artifact by its key, as the prompt asks
 BORN = dict(
     CLAIMS[1],
     source={
-        "artifact": {"kind": "qid", "qid": "Q23"},
+        "artifact": MEDIA_REF.model_dump(),
         "page_number": "1",
         "region": {"x": 10, "y": 20, "width": 30, "height": 5},
         "transcription_excerpt": {"text": "b. May 1914", "language": "en"},
@@ -369,8 +378,9 @@ def born_restated(**source) -> dict:
 class TestExtractedClaimsCiteTheirDocument:
     """The extractor names each claim's source artifact itself: the
     document's content key, whatever the model wrote there (#102). The
-    prompt still names the artifact's item, so a model copies that QID
-    into its claims, as these answers do."""
+    prompt names the artifact by that key (#127), and these answers cite
+    it otherwise: by an item's QID, as a model might copy one from the
+    document's text, by another key, or not at all."""
 
     OTHER = ArtifactRef.from_bytes(b"fictional scan: another page")
 
@@ -381,9 +391,10 @@ class TestExtractedClaimsCiteTheirDocument:
             "\n".join(json.dumps(line) for line in (*claims, sentinel))
         )
         return LlmClaimExtractor(llm).extract(
-            Transcription(text="married 1947", engine="test"),
+            Transcription(
+                artifact=MEDIA_REF, text="married 1947", engine="test"
+            ),
             MEDIA_REF,
-            artifact_qid="Q23",
         )
 
     def test_a_copied_qid_becomes_the_documents_key(self):
@@ -516,56 +527,228 @@ class TestExtractedClaimsCiteTheirDocument:
 
 
 class TestIngestExtract:
-    """`yizkr ingest extract`: its claims cite the media file `--media`
-    names, by the SHA-1 of its bytes (#102), and a medium on the
-    never-ingest list is refused before the engine is asked anything."""
+    """`yizkr ingest extract`: its claims cite the artifact its
+    transcription names, by the SHA-1 of its media (#102, #127). A
+    transcription of media on the never-ingest list is refused before the
+    engine is asked anything: by the key the transcription names, and by
+    the name and bytes of the media file `--media` gives. A transcription
+    keeps no file name, so a list that names files by pattern refuses to
+    run without `--media`."""
 
-    def run(self, tmp_path, monkeypatch, excluded: str = ""):
+    # the transcribed media's file name, which a pattern can match
+    NAME = "example-marriage-certificate.png"
+
+    @pytest.fixture(autouse=True)
+    def no_host_settings(self, tmp_path, monkeypatch):
+        """No list from the host: an empty env file of the test's own,
+        and the list's variable cleared from the environment."""
+        env_file = tmp_path / "test.env"
+        env_file.write_text("")
+        monkeypatch.setenv("YIZKR_ENV_FILE", str(env_file))
+        monkeypatch.delenv("YIZKR_EXCLUDE_FILE", raising=False)
+
+    def run(
+        self,
+        tmp_path,
+        monkeypatch,
+        listed: str | None = "",
+        *,
+        media: bytes | None = None,
+        engine: str = "llm",
+        transcription: str | None = None,
+    ):
+        """The step on a transcription of MEDIA (or on `transcription`'s
+        text), with the llm engine or a claims file. `listed` is the
+        never-ingest list's text; with None, no list is configured here.
+        `media`, when given, is written to a file named NAME, and passed
+        as `--media`."""
         from yizkr import cli
         from yizkr.pipeline import llm
 
-        never = tmp_path / "never-ingest.txt"
-        never.write_text(excluded)
-        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
-        transcription = tmp_path / "transcription.json"
-        transcription.write_text(
-            Transcription(text="married 1947", engine="test").model_dump_json()
+        if listed is not None:
+            never = tmp_path / "never-ingest.txt"
+            never.write_text(listed)
+            monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
+        path = tmp_path / "transcription.json"
+        path.write_text(
+            transcription
+            or Transcription(
+                artifact=MEDIA_REF, text="married 1947", engine="test"
+            ).model_dump_json()
         )
-        scan = tmp_path / "scan.png"
-        scan.write_bytes(MEDIA)
-        # the answer cites the item by QID, as the prompt asks
+        # the answer cites an item by QID, which the claims do not keep
         by_qid = dict(
             CLAIMS[1], source={"artifact": {"kind": "qid", "qid": "Q23"}}
         )
-        engine = FakeLlm(
+        self.engine = FakeLlm(
             json.dumps(by_qid) + '\n{"done": true, "claims_emitted": 1}'
         )
-        monkeypatch.setattr(llm, "make_client", lambda *a, **k: engine)
+        monkeypatch.setattr(llm, "make_client", lambda *a, **k: self.engine)
         out = tmp_path / "batch.json"
-        args = cli.build_parser().parse_args(
-            [
-                *("ingest", "extract", "--transcription", str(transcription)),
-                *("--media", str(scan), "--artifact", "Q23"),
-                *("--engine", "llm", "--strategy", "single"),
-                *("--out", str(out)),
-            ]
-        )
-        return args.func(args), out, engine
+        argv = ["ingest", "extract", "--transcription", str(path)]
+        if media is not None:
+            (tmp_path / self.NAME).write_bytes(media)
+            argv += ["--media", str(tmp_path / self.NAME)]
+        if engine == "file":
+            claims = tmp_path / "claims.json"
+            claims.write_text(
+                json.dumps(
+                    {
+                        "claims": [
+                            dict(CLAIMS[1], source={"artifact": ARTIFACT})
+                        ]
+                    }
+                )
+            )
+            argv += ["--engine", "file", "--claims-file", str(claims)]
+        else:
+            argv += ["--engine", "llm", "--strategy", "single"]
+        args = cli.build_parser().parse_args([*argv, "--out", str(out)])
+        return args.func(args), out, self.engine
 
-    def test_the_claims_cite_the_media(self, tmp_path, monkeypatch):
+    def refused(self, tmp_path, match: str, **run) -> None:
+        """The step is refused, saying `match`, before the engine is asked
+        anything: no answer is dumped, and no batch written."""
+        with pytest.raises(SystemExit, match=match):
+            self.run(tmp_path, **run)
+        assert self.engine.prompts == []
+        assert sorted(path.name for path in tmp_path.glob("batch.json*")) == []
+
+    def test_the_claims_cite_the_transcriptions_artifact(
+        self, tmp_path, monkeypatch
+    ):
         status, out, engine = self.run(tmp_path, monkeypatch)
         assert status == 0
         batch = ClaimBatch.model_validate_json(out.read_text())
         assert [claim.source.artifact for claim in batch.claims] == [MEDIA_REF]
         assert len(engine.prompts) == 1
 
-    def test_media_on_the_never_ingest_list_is_refused(
+    @pytest.mark.parametrize(
+        "listed",
+        [None, "", "# nothing listed yet\n", f"{'1' * 40}\n"],
+        ids=["no-list", "empty-list", "comments-only", "other-hash"],
+    )
+    def test_without_media_it_runs_where_hashes_can_decide(
+        self, tmp_path, monkeypatch, listed
+    ):
+        """No list, or a list with no patterns in it: the key the
+        transcription names is all the list can be asked about."""
+        status, out, engine = self.run(tmp_path, monkeypatch, listed)
+        assert status == 0
+        assert out.exists() and len(engine.prompts) == 1
+
+    @pytest.mark.parametrize("engine", ["llm", "file"])
+    @pytest.mark.parametrize("media", [None, MEDIA], ids=["key", "media"])
+    def test_media_listed_by_its_hash_is_refused(
+        self, tmp_path, monkeypatch, engine, media
+    ):
+        self.refused(
+            tmp_path,
+            "on the never-ingest list",
+            monkeypatch=monkeypatch,
+            listed=f"{MEDIA_SHA1}\n",
+            media=media,
+            engine=engine,
+        )
+
+    @pytest.mark.parametrize("engine", ["llm", "file"])
+    def test_a_list_with_patterns_needs_the_media(
+        self, tmp_path, monkeypatch, engine
+    ):
+        """A transcription made before its media was listed by name: its
+        key is on no list, and without the media file the pattern cannot
+        be checked, so the step refuses to run."""
+        self.refused(
+            tmp_path,
+            "names files by pattern",
+            monkeypatch=monkeypatch,
+            listed="*marriage-certificate*\n",
+            engine=engine,
+        )
+
+    def test_media_listed_by_its_name_is_refused(self, tmp_path, monkeypatch):
+        self.refused(
+            tmp_path,
+            f"{self.NAME} is on the never-ingest list",
+            monkeypatch=monkeypatch,
+            listed="*marriage-certificate*\n",
+            media=MEDIA,
+        )
+
+    def test_media_a_pattern_does_not_match_runs(self, tmp_path, monkeypatch):
+        status, out, engine = self.run(
+            tmp_path, monkeypatch, "*divorce-judgment*\n", media=MEDIA
+        )
+        assert status == 0
+        assert out.exists() and len(engine.prompts) == 1
+
+    @pytest.mark.parametrize("listed", [None, "*divorce-judgment*\n"])
+    def test_media_that_is_not_the_transcriptions_is_refused(
+        self, tmp_path, monkeypatch, listed
+    ):
+        """`--media` must be the file the transcription names, or the list
+        would be asked about another document."""
+        self.refused(
+            tmp_path,
+            "is not the media transcription.json transcribes",
+            monkeypatch=monkeypatch,
+            listed=listed,
+            media=b"fictional scan: another page",
+        )
+
+    def test_a_configured_list_that_cannot_be_read_is_refused(
         self, tmp_path, monkeypatch
     ):
-        with pytest.raises(SystemExit, match="never-ingest"):
-            self.run(tmp_path, monkeypatch, excluded=f"{MEDIA_SHA1}\n")
-        # no answer was dumped, and no batch written
-        assert sorted(path.name for path in tmp_path.glob("batch.json*")) == []
+        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(tmp_path / "gone.txt"))
+        self.refused(
+            tmp_path,
+            "cannot read the never-ingest list",
+            monkeypatch=monkeypatch,
+            listed=None,
+        )
+
+    def test_a_transcription_that_names_a_qid_is_refused_with_a_reason(
+        self, tmp_path, monkeypatch
+    ):
+        """A transcription made before #127 names its artifact by QID: the
+        step says in one line that it cannot read it, and to transcribe the
+        media again."""
+        by_qid = {"artifact_qid": "Q23", "text": "married 1947", "engine": "t"}
+        with pytest.raises(SystemExit) as refused:
+            self.run(tmp_path, monkeypatch, transcription=json.dumps(by_qid))
+        reason = str(refused.value.code)
+        assert "\n" not in reason
+        assert reason.startswith(
+            "transcription.json is not a transcription this step reads"
+        )
+        assert "artifact: Field required" in reason
+        assert "artifact_qid: Extra inputs are not permitted" in reason
+        assert reason.endswith(
+            "transcribe the media again with `yizkr ingest transcribe`"
+        )
+        assert self.engine.prompts == []
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ("transcribe", "--file", "scan.png", "--artifact", "Q23"),
+            ("extract", "--transcription", "t.json", "--artifact", "Q23"),
+        ],
+        ids=["transcribe-artifact", "extract-artifact"],
+    )
+    def test_transcribe_and_extract_take_no_qid(self, argv, capsys):
+        """No transcription and no extraction prompt names an artifact by
+        its QID (#127): `ingest transcribe` names it by the SHA-1 of the
+        file it reads, and `ingest extract` reads that key from the
+        transcription."""
+        from yizkr import cli
+
+        with pytest.raises(SystemExit) as refused:
+            cli.build_parser().parse_args(["ingest", *argv])
+        assert refused.value.code == 2
+        assert f"unrecognized arguments: {' '.join(argv[-2:])}" in (
+            capsys.readouterr().err
+        )
 
 
 @pytest.fixture(scope="module")
@@ -1308,8 +1491,6 @@ class TestWriterArtifactResolution:
         artifact item by QID, as batches made before content addressing
         did, does not load, so `ingest write` refuses it before it
         contacts the instance: it reads and writes nothing."""
-        from pydantic import ValidationError
-
         from yizkr import cli
 
         batch_json = tmp_path / "batch.json"

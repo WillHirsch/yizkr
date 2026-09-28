@@ -33,9 +33,9 @@ Commands run and their results, aggregates only:
 For each new or changed test: the regression it guards, and the Markdown
 table from `uv run python scripts/mutate.py SPEC` showing its mutant
 killed, with the TOML spec in a collapsed <details> block so a reviewer
-can re-run it (docs/TESTING.md). Explain any survivor. The harness runs
-non-live tests only: for a new or changed live test, name the regression
-it guards, and the central live run (docs/AGENT_PROTOCOL.md §5) shows it.
+can re-run it (docs/TESTING.md). Explain any survivor. For a new or
+changed live test, give a spec whose mutation has `live = true`: the
+central live run (docs/AGENT_PROTOCOL.md §5) runs it and posts the table.
 Or write "no new or changed tests".
 -->
 
@@ -84,9 +84,8 @@ what its own commits change.
   goes under Owner actions, not into the diff.
 - [ ] **Tests fail under their regressions.** Each new or changed test
   is shown, with `scripts/mutate.py`, to fail under the regression it
-  guards (Mutation evidence above). The harness runs non-live tests
-  only: a new or changed live test's regression is named above, and the
-  central live run shows it.
+  guards (Mutation evidence above). A new or changed live test's spec
+  (`live = true`) is given above, and the central live run runs it.
 - [ ] The edge cases considered are listed above.
 - [ ] **Current with main.** If origin/main had moved on, it is merged
   in: a merge commit, never a rebase.
