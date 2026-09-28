@@ -37,23 +37,23 @@ SOURCE = {"artifact": {"kind": "qid", "qid": "Q1"}}
 GEDCOM = """\
 0 HEAD
 1 CHAR UTF-8
-0 @ADA@ INDI
-1 NAME Ada /Wexley/
+0 @HILDEGARD@ INDI
+1 NAME Hildegard /Löbig/
 1 BIRT
-2 DATE 1901
-0 @BRAM@ INDI
-1 NAME Bram /Marrowby/
-0 @CORA@ INDI
-1 NAME Cora /Ashgrove/
+2 DATE 1876
+0 @LEOPOLD@ INDI
+1 NAME Leopold /Löbig/
+0 @AGNES@ INDI
+1 NAME Agnes /Nertler/
 1 BIRT
-2 PLAC Oakfield, Norland
-0 @DOVA@ INDI
-1 NAME Dov /Tallow/
-0 @DOVB@ INDI
-1 NAME Dov /Tallow/
+2 PLAC Kredfeld, Hesse
+0 @URSULAA@ INDI
+1 NAME Ursula /Löbig/
+0 @URSULAB@ INDI
+1 NAME Ursula /Löbig/
 0 @FAMILY@ FAM
-1 HUSB @BRAM@
-1 WIFE @CORA@
+1 HUSB @LEOPOLD@
+1 WIFE @AGNES@
 0 TRLR
 """
 
@@ -116,25 +116,27 @@ def gedcom_manifest(tmp_path: Path):
 
 
 def test_name_forms_drop_titles_and_split_maiden_names():
-    assert cc.name_forms("Dr. Ada Wexley") == [["ada", "wexley"]]
-    assert cc.name_forms("Frau Ada Wexley geb. Ormond") == [
-        ["ada", "wexley"],
-        ["ada", "ormond"],
+    assert cc.name_forms("Dr. Hildegard Löbig") == [["hildegard", "lobig"]]
+    assert cc.name_forms("Frau Hildegard Löbig geb. Laudler") == [
+        ["hildegard", "lobig"],
+        ["hildegard", "laudler"],
     ]
-    assert cc.name_forms("Zoë Wexley") == [["zoe", "wexley"]]
+    assert cc.name_forms("Cäcilie Löbig") == [["cacilie", "lobig"]]
 
 
 def test_human_key_variants():
     found, _ = mentions(
-        manifest("a" * 40, [person("e1", "Ada Ormond Wexley")])
+        manifest("a" * 40, [person("e1", "Hildegard Laudler Löbig")])
     )
-    ada = found[0]
-    assert cc.human_keys(ada, "final-surname") == {
-        ("ada", "wexley"),
-        ("ormond", "wexley"),
+    hildegard = found[0]
+    assert cc.human_keys(hildegard, "final-surname") == {
+        ("hildegard", "lobig"),
+        ("laudler", "lobig"),
     }
     # a maiden name kept in the middle still keys
-    assert ("ada", "ormond") in cc.human_keys(ada, "any-later-token")
+    assert ("hildegard", "laudler") in cc.human_keys(
+        hildegard, "any-later-token"
+    )
 
 
 def test_kin_surnames_key_a_married_name_the_source_omits():
@@ -142,25 +144,25 @@ def test_kin_surnames_key_a_married_name_the_source_omits():
     # name, but it records the spouse
     doc = manifest(
         "a" * 40,
-        [person("e1", "Cora Marrowby"), person("e2", "Bram Marrowby")],
+        [person("e1", "Agnes Löbig"), person("e2", "Leopold Löbig")],
         [claim("e1", "spouse", item("e2"))],
     )
     tree = manifest(
         "b" * 40,
-        [person("i1", "Cora Ashgrove"), person("i2", "Bram Marrowby")],
+        [person("i1", "Agnes Nertler"), person("i2", "Leopold Löbig")],
         [claim("i1", "spouse", item("i2"))],
         source="gedcom",
     )
     found, _ = mentions(doc, tree)
-    cora_doc = by_label(found, "Cora Marrowby")
-    cora_tree = by_label(found, "Cora Ashgrove")
+    agnes_doc = by_label(found, "Agnes Löbig")
+    agnes_tree = by_label(found, "Agnes Nertler")
     assert not cc.keys_match(
-        cc.human_keys(cora_doc, "final-surname"),
-        cc.human_keys(cora_tree, "final-surname"),
+        cc.human_keys(agnes_doc, "final-surname"),
+        cc.human_keys(agnes_tree, "final-surname"),
     )
     assert cc.keys_match(
-        cc.human_keys(cora_doc, "kin-surnames"),
-        cc.human_keys(cora_tree, "kin-surnames"),
+        cc.human_keys(agnes_doc, "kin-surnames"),
+        cc.human_keys(agnes_tree, "kin-surnames"),
     )
 
 
@@ -169,15 +171,15 @@ def test_given_names_match_by_prefix_not_by_surname_alone():
         manifest(
             "a" * 40,
             [
-                person("e1", "Theo Wexley"),
-                person("e2", "Theodore Wexley"),
-                person("e3", "Bram Wexley"),
+                person("e1", "Hilde Löbig"),
+                person("e2", "Hildegard Löbig"),
+                person("e3", "Sebastian Löbig"),
             ],
         )
     )
-    theo, theodore, bram = (cc.human_keys(m) for m in found)
-    assert cc.keys_match(theo, theodore)
-    assert not cc.keys_match(theo, bram)
+    hilde, hildegard, sebastian = (cc.human_keys(m) for m in found)
+    assert cc.keys_match(hilde, hildegard)
+    assert not cc.keys_match(hilde, sebastian)
 
 
 def test_place_key_variants():
@@ -187,20 +189,28 @@ def test_place_key_variants():
             [
                 {
                     "id": "e1",
-                    "label": "Oakfield Camp, Norland",
+                    "label": "Lager Klurnau, Klurnau",
                     "kind": "place",
                 },
-                {"id": "e2", "label": "Oakfield", "kind": "place"},
+                {"id": "e2", "label": "Klurnau", "kind": "place"},
+                {
+                    "id": "e3",
+                    "label": "8 Hawthorn Road, Stupfield",
+                    "kind": "place",
+                },
             ],
         )
     )
-    camp, town = found
-    assert cc.place_keys(camp, "first-component") == {"oakfield camp"}
-    assert cc.place_keys(camp) == {"oakfield", "camp"}
+    camp, town, address = found
+    assert cc.place_keys(camp, "first-component") == {"lager klurnau"}
+    assert cc.place_keys(camp) == {"lager", "klurnau"}
     assert not cc.place_keys(camp, "first-component") & cc.place_keys(
         town, "first-component"
     )
     assert cc.place_keys(camp) & cc.place_keys(town)
+    # A token of exactly four characters ("road") is a key.
+    assert cc.place_keys(address, "first-component") == {"8 hawthorn road"}
+    assert cc.place_keys(address) == {"hawthorn", "road"}
 
 
 # -- blocking -----------------------------------------------------------------
@@ -209,9 +219,9 @@ def test_place_key_variants():
 def two_documents():
     first = manifest(
         "a" * 40,
-        [person("e1", "Ada Wexley"), person("e2", "Bram Wexley")],
+        [person("e1", "Hildegard Löbig"), person("e2", "Sebastian Löbig")],
     )
-    second = manifest("b" * 40, [person("e1", "Ada Wexley")])
+    second = manifest("b" * 40, [person("e1", "Hildegard Löbig")])
     return mentions(first, second)
 
 
@@ -219,7 +229,7 @@ def test_one_token_blocks_a_shared_surname_name_key_does_not():
     found, index = two_documents()
     one_token = cc.block_one_token(found)
     name_key = cc.block_name_key(found)
-    assert len(one_token) == 3  # every pair shares "wexley"
+    assert len(one_token) == 3  # every pair shares "lobig"
     assert name_key == {
         cc.pair_key(f"{'a' * 40}:e1", f"{'b' * 40}:e1"),
     }
@@ -229,16 +239,16 @@ def test_events_block_through_their_participants():
     first = manifest(
         "a" * 40,
         [
-            person("e1", "Ada Wexley"),
-            {"id": "e2", "label": "Death of Ada", "kind": "death"},
+            person("e1", "Hildegard Löbig"),
+            {"id": "e2", "label": "Death of Hildegard", "kind": "death"},
         ],
         [claim("e2", "participant", item("e1"))],
     )
     second = manifest(
         "b" * 40,
         [
-            person("e1", "Ada Wexley"),
-            {"id": "e2", "label": "Obituary", "kind": "death"},
+            person("e1", "Hildegard Löbig"),
+            {"id": "e2", "label": "Burial register", "kind": "death"},
         ],
         [claim("e2", "participant", item("e1"))],
     )
@@ -249,32 +259,32 @@ def test_events_block_through_their_participants():
 
 def test_gedcom_anchored_pairs_mentions_only_with_their_anchor(tmp_path):
     tree = gedcom_manifest(tmp_path)
-    first = manifest("a" * 40, [person("e1", "Ada Wexley")])
-    second = manifest("b" * 40, [person("e1", "Ada Wexley")])
+    first = manifest("a" * 40, [person("e1", "Hildegard Löbig")])
+    second = manifest("b" * 40, [person("e1", "Hildegard Löbig")])
     found, index = mentions(first, second, tree)
     name_key = cc.block_name_key(found)
     anchored, anchors = cc.block_gedcom_anchored(found, name_key, index)
-    anchor = by_label(found, "Ada Wexley", tree.sha1).uid
-    first_ada, second_ada = f"{'a' * 40}:e1", f"{'b' * 40}:e1"
-    assert cc.pair_key(first_ada, second_ada) in name_key
+    anchor = by_label(found, "Hildegard Löbig", tree.sha1).uid
+    first_one, second_one = f"{'a' * 40}:e1", f"{'b' * 40}:e1"
+    assert cc.pair_key(first_one, second_one) in name_key
     documents = {
         pair
         for pair in anchored
         if not all(index[uid].source == "gedcom" for uid in pair)
     }
     assert documents == {
-        cc.pair_key(first_ada, anchor),
-        cc.pair_key(second_ada, anchor),
+        cc.pair_key(first_one, anchor),
+        cc.pair_key(second_one, anchor),
     }
-    assert anchors == {first_ada: {anchor}, second_ada: {anchor}}
+    assert anchors == {first_one: {anchor}, second_one: {anchor}}
 
 
 def test_keyless_people_pair_with_gedcom_given_names(tmp_path):
     tree = gedcom_manifest(tmp_path)
-    doc = manifest("a" * 40, [person("e1", "Ada")])
+    doc = manifest("a" * 40, [person("e1", "Hildegard")])
     found, _ = mentions(doc, tree)
     assert cc.partial_anchor_pairs(found) == {
-        cc.pair_key(f"{'a' * 40}:e1", by_label(found, "Ada Wexley").uid)
+        cc.pair_key(f"{'a' * 40}:e1", by_label(found, "Hildegard Löbig").uid)
     }
 
 
@@ -282,10 +292,12 @@ def test_keyless_people_pair_with_gedcom_given_names(tmp_path):
 
 
 def father_and_son():
-    """One document keeps two same-named people apart by a kin edge."""
+    """One document keeps two same-named people apart by a kin edge
+    (placeholder names: the example universe has no same-named father
+    and son)."""
     return manifest(
         "a" * 40,
-        [person("e1", "Sam Wexley"), person("e2", "Sam Wexley")],
+        [person("e1", "Xxx Yyy"), person("e2", "Xxx Yyy")],
         [claim("e2", "father", item("e1"))],
     )
 
@@ -314,35 +326,36 @@ def test_gedcom_places_are_not_cannot_link(tmp_path):
     places = manifest(
         "g" * 40,
         [
-            {"id": "pl1", "label": "Oakfield", "kind": "place"},
-            {"id": "pl2", "label": "Oakfield, Norland", "kind": "place"},
+            {"id": "pl1", "label": "Kredfeld", "kind": "place"},
+            {"id": "pl2", "label": "Kredfeld, Hesse", "kind": "place"},
         ],
         source="gedcom",
     )
     people = manifest(
-        "a" * 40, [person("e1", "Ada Wexley"), person("e2", "Bram Wexley")]
+        "a" * 40,
+        [person("e1", "Hildegard Löbig"), person("e2", "Sebastian Löbig")],
     )
     found, _ = mentions(places, people)
-    oakfield, oakfield_norland, ada, bram = found
-    assert not cc.cannot_link(oakfield, oakfield_norland)
-    assert cc.cannot_link(ada, bram)
+    kredfeld, kredfeld_hesse, hildegard, sebastian = found
+    assert not cc.cannot_link(kredfeld, kredfeld_hesse)
+    assert cc.cannot_link(hildegard, sebastian)
 
 
 def test_lifted_containment_prunes_a_place_against_its_container():
     doc = manifest(
         "a" * 40,
         [
-            {"id": "e1", "label": "Brightwater Camp", "kind": "place"},
-            {"id": "e2", "label": "Brightwater", "kind": "place"},
+            {"id": "e1", "label": "Lager Klurnau", "kind": "place"},
+            {"id": "e2", "label": "Klurnau", "kind": "place"},
         ],
         [claim("e1", "part_of", item("e2"))],
     )
     other = manifest(
-        "b" * 40, [{"id": "e1", "label": "Brightwater", "kind": "place"}]
+        "b" * 40, [{"id": "e1", "label": "Klurnau", "kind": "place"}]
     )
     found, index = mentions(doc, other)
-    camp = by_label(found, "Brightwater Camp")
-    town = by_label(found, "Brightwater", "b" * 40)
+    camp = by_label(found, "Lager Klurnau")
+    town = by_label(found, "Klurnau", "b" * 40)
     containment = cc.lifted_containment(found)
     assert (
         impossible_pair(
@@ -365,9 +378,9 @@ def dated(sha1: str, label: str, born: dict):
 
 def test_dates_compare_at_the_sources_precision():
     found, index = mentions(
-        dated("a" * 40, "Ada Wexley", year(1920, "decade")),
-        dated("b" * 40, "Ada Wexley", year(1926)),
-        dated("c" * 40, "Ada Wexley", year(1890)),
+        dated("a" * 40, "Hildegard Löbig", year(1870, "decade")),
+        dated("b" * 40, "Hildegard Löbig", year(1876)),
+        dated("c" * 40, "Hildegard Löbig", year(1862)),
     )
     decade, exact, early = found
     agree = cc.pair_evidence(decade, exact, index)
@@ -390,30 +403,42 @@ def test_a_bare_name_match_is_ambiguous():
 def test_places_nested_parts_are_confident():
     found, index = mentions(
         manifest(
-            "a" * 40, [{"id": "e1", "label": "Oakfield", "kind": "place"}]
+            "a" * 40, [{"id": "e1", "label": "Fläckfeld", "kind": "place"}]
         ),
         manifest(
             "b" * 40,
-            [{"id": "e1", "label": "Oakfield, Norland", "kind": "place"}],
+            [
+                {
+                    "id": "e1",
+                    "label": "Fläckfeld, Kreis Mockburg",
+                    "kind": "place",
+                }
+            ],
         ),
         manifest(
             "c" * 40,
-            [{"id": "e1", "label": "Oakfield, Southmere", "kind": "place"}],
+            [
+                {
+                    "id": "e1",
+                    "label": "Fläckfeld, Kreis Peiltal",
+                    "kind": "place",
+                }
+            ],
         ),
     )
-    bare, norland, southmere = found
-    nested = cc.pair_evidence(bare, norland, index)
-    rival = cc.pair_evidence(norland, southmere, index)
+    bare, mockburg, peiltal = found
+    nested = cc.pair_evidence(bare, mockburg, index)
+    rival = cc.pair_evidence(mockburg, peiltal, index)
     assert (nested.name, rival.name) == ("nested", "key")
-    assert cc.classify_pair(bare, norland, nested, index) == "confident"
-    assert cc.classify_pair(norland, southmere, rival, index) == "ambiguous"
+    assert cc.classify_pair(bare, mockburg, nested, index) == "confident"
+    assert cc.classify_pair(mockburg, peiltal, rival, index) == "ambiguous"
 
 
 # -- closure ------------------------------------------------------------------
 
 
 def test_closure_that_joins_a_kin_edge_is_conflicting():
-    other = manifest("b" * 40, [person("e1", "Sam Wexley")])
+    other = manifest("b" * 40, [person("e1", "Xxx Yyy")])
     doc = father_and_son()
     found, index = mentions(doc, other)
     result = cc.run_strategy(
@@ -454,11 +479,13 @@ def test_adjudication_chunks_keep_clusters_together_and_split_big_ones():
 
 
 def test_serial_per_artifact_rows_shrink_when_matches_merge():
-    docs = [manifest(sha * 40, [person("e1", "Ada Wexley")]) for sha in "abc"]
+    docs = [
+        manifest(sha * 40, [person("e1", "Hildegard Löbig")]) for sha in "abc"
+    ]
     plain = cc.simulate_serial(docs, 40)
     assert plain.rows == 0 + 1 + 2  # every earlier mention is a candidate
     merged = cc.simulate_serial(
-        docs, 40, {f"{sha * 40}:e1": "ada" for sha in "abc"}
+        docs, 40, {f"{sha * 40}:e1": "hildegard" for sha in "abc"}
     )
     assert merged.rows == 0 + 1 + 1
 
@@ -487,9 +514,9 @@ def corpus(tmp_path: Path) -> tuple[list[Path], Path]:
             manifest(
                 "a" * 40,
                 [
-                    person("e1", "Ada Wexley"),
-                    person("e2", "Cora Marrowby"),
-                    person("e3", "Bram Marrowby"),
+                    person("e1", "Hildegard Löbig"),
+                    person("e2", "Agnes Löbig"),
+                    person("e3", "Leopold Löbig"),
                 ],
                 [claim("e2", "spouse", item("e3"))],
             ),
@@ -498,7 +525,10 @@ def corpus(tmp_path: Path) -> tuple[list[Path], Path]:
             runs_root,
             "two",
             "b" * 40,
-            manifest("b" * 40, [person("e1", "Ada"), person("e2", "Sam")]),
+            manifest(
+                "b" * 40,
+                [person("e1", "Hildegard"), person("e2", "Sebastian")],
+            ),
         ),
     ]
     equivalences = runs[0] / "equivalences.csv"
@@ -511,11 +541,11 @@ def corpus(tmp_path: Path) -> tuple[list[Path], Path]:
         )  # fmt: skip
         writer.writeheader()
         writer.writerow(
-            {"entity_id": "e1", "qid": "Q5", "qid_label": "Ada Wexley",
+            {"entity_id": "e1", "qid": "Q5", "qid_label": "Hildegard Löbig",
              "verdict": "same", "confidence": "0.95"}
         )  # fmt: skip
         writer.writerow(
-            {"entity_id": "e2", "qid": "Q6", "qid_label": "Cora Ashgrove",
+            {"entity_id": "e2", "qid": "Q6", "qid_label": "Agnes Nertler",
              "verdict": "same", "confidence": "0.85"}
         )  # fmt: skip
     return runs, ged
@@ -525,9 +555,9 @@ def test_report_is_aggregate_only(tmp_path):
     runs, ged = corpus(tmp_path)
     summary, _ = cc.run_experiment(runs, ged, runs)
     report = cc.render_report(summary)
-    words = set(re.findall(r"[a-z]+", report.lower()))
-    names = {"ada", "wexley", "cora", "marrowby", "ashgrove", "bram"}
-    names |= {"dov", "tallow", "sam", "oakfield", "norland"}
+    words = set(re.findall(r"[^\W\d_]+", report.lower()))
+    names = {"hildegard", "löbig", "lobig", "agnes", "nertler", "leopold"}
+    names |= {"ursula", "sebastian", "kredfeld", "hesse"}
     assert "kin" in words  # the report's own vocabulary is seen
     assert not names & words
     assert summary["verdicts"]["rows"] == 2

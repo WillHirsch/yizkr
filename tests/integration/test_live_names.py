@@ -32,35 +32,35 @@ from yizkr.pipeline.writer import BatchWriter
 
 pytestmark = pytest.mark.live
 
-LABEL = "Ilka Livecheck"
+LABEL = "Ida Livecheck"
 # the forms a model might list for one person, messy on purpose
 FIRST_DOCUMENT_ALIASES = [
-    "Ilka",  # bare given name: derivable from the label -> dropped
+    "Ida",  # bare given name: derivable from the label -> dropped
     "I. Livecheck",  # initialism: derivable -> dropped
-    "ilka livecheck",  # the label again, other case -> dropped
-    "Ilkchen",  # nickname: adds a token -> kept
-    "ILKCHEN",  # case-duplicate of a kept form -> dropped
-    "Ilka Probewald",  # licensed alternative-surname composition -> kept
+    "ida livecheck",  # the label again, other case -> dropped
+    "Peppi",  # nickname: adds a token -> kept
+    "PEPPI",  # case-duplicate of a kept form -> dropped
+    "Ida Probewald",  # licensed alternative-surname composition -> kept
     "Livecheck-Probewald",  # hyphenated compound: kept whole
     "van der Probewald",  # particle surname: kept whole, never split
     "  ",  # blank -> dropped
 ]
-SECOND_DOCUMENT_ALIASES = ["Ilka", "Ilkchen", "I. Livecheck", "Ilka Testerhof"]
+SECOND_DOCUMENT_ALIASES = ["Ida", "Peppi", "I. Livecheck", "Ida Testerhof"]
 EXPECTED_ALIASES = {
-    "Ilkchen",
-    "Ilka Probewald",
+    "Peppi",
+    "Ida Probewald",
     "Livecheck-Probewald",
     "van der Probewald",
-    "Ilka Testerhof",  # the second document's one genuinely new form
+    "Ida Testerhof",  # the second document's one genuinely new form
 }
 
 FIRST_DOCUMENT = """\
 Register of the Livecheck household, 1950.
-1. Ilka Livecheck, nee Probewald, called Ilkchen; b. 1921 in Springfield.
+1. Ida Livecheck, nee Probewald, called Peppi; b. 1881 in Moshausen.
 """
 SECOND_DOCUMENT = """\
-Letter from Springfield, 1960.
-Mrs Ilka Testerhof (her married name) wrote; the family called her Ilkchen.
+Letter from Stupfield, 1960.
+Mrs Ida Testerhof (her married name) wrote; the family called her Peppi.
 """
 
 
@@ -193,9 +193,9 @@ def llm_path_person(client, tmp_path_factory):
         FIRST_DOCUMENT,
         entity_manifest(FIRST_DOCUMENT_ALIASES, mention_line=2),
         [
-            ("birth_name", name("Ilka Probewald"), "nee Probewald"),
-            ("nickname", name("Ilkchen"), "called Ilkchen"),
-            ("date_of_birth", {"type": "time", "year": 1921}, "b. 1921"),
+            ("birth_name", name("Ida Probewald"), "nee Probewald"),
+            ("nickname", name("Peppi"), "called Peppi"),
+            ("date_of_birth", {"type": "time", "year": 1881}, "b. 1881"),
         ],
     )
     # the validator already ran: the batch's manifest holds the clean bag.
@@ -203,7 +203,7 @@ def llm_path_person(client, tmp_path_factory):
     # regression must fail here rather than leave the fixture item dirty.
     (entity,) = first.entities
     assert entity.label == LABEL
-    assert set(entity.aliases) == EXPECTED_ALIASES - {"Ilka Testerhof"}
+    assert set(entity.aliases) == EXPECTED_ALIASES - {"Ida Testerhof"}
     written = BatchWriter(client).write_batch(first)
     qid = written.created_items["e1"]
 
@@ -212,7 +212,7 @@ def llm_path_person(client, tmp_path_factory):
         second_doc,
         SECOND_DOCUMENT,
         entity_manifest(SECOND_DOCUMENT_ALIASES, mention_line=2),
-        [("married_name", name("Ilka Testerhof"), "Mrs Ilka Testerhof")],
+        [("married_name", name("Ida Testerhof"), "Mrs Ida Testerhof")],
     )
     again = BatchWriter(client).write_batch(second)
     assert again.created_items["e1"] == qid  # the same item, found by label
@@ -233,11 +233,11 @@ def test_llm_path_typed_names_are_referenced_statements(
 ):
     qid, first_doc, second_doc = llm_path_person
     assert typed_names(client, qid, "birth_name") == {
-        "Ilka Probewald": {first_doc}
+        "Ida Probewald": {first_doc}
     }
-    assert typed_names(client, qid, "nickname") == {"Ilkchen": {first_doc}}
+    assert typed_names(client, qid, "nickname") == {"Peppi": {first_doc}}
     assert typed_names(client, qid, "married_name") == {
-        "Ilka Testerhof": {second_doc}
+        "Ida Testerhof": {second_doc}
     }
 
 
@@ -251,9 +251,9 @@ def test_llm_path_rewrite_changes_nothing(client, llm_path_person, tmp_path):
         FIRST_DOCUMENT,
         entity_manifest(FIRST_DOCUMENT_ALIASES, mention_line=2),
         [
-            ("birth_name", name("Ilka Probewald"), "nee Probewald"),
-            ("nickname", name("Ilkchen"), "called Ilkchen"),
-            ("date_of_birth", {"type": "time", "year": 1921}, "b. 1921"),
+            ("birth_name", name("Ida Probewald"), "nee Probewald"),
+            ("nickname", name("Peppi"), "called Peppi"),
+            ("date_of_birth", {"type": "time", "year": 1881}, "b. 1881"),
         ],
     )
     result = BatchWriter(client).write_batch(batch)
@@ -265,23 +265,23 @@ GEDCOM = """\
 0 HEAD
 1 CHAR UTF-8
 0 @I1@ INDI
-1 NAME Hedda Jolanda /Namecheck/
+1 NAME Hildegard Rahel /Namecheck/
 2 TYPE birth
-2 NICK Heddi
-1 NAME Hedda /Namecheck/
-1 NAME Hedda /Probewald-Namecheck/
+2 NICK Hilde
+1 NAME Hildegard /Namecheck/
+1 NAME Hildegard /Probewald-Namecheck/
 2 TYPE married
-1 NAME Hedda /van der Probewald/
-1 _MARNM Hedda Probewald
+1 NAME Hildegard /van der Probewald/
+1 _MARNM Hildegard Probewald
 1 BIRT
-2 DATE 1924
+2 DATE 1876
 0 TRLR
 """
 
 
 def test_gedcom_path_alias_bag_and_typed_names(client):
     """The adapter's names are hygiened like the LLM path's: the derivable
-    'Hedda Namecheck' is dropped, the compound forms land whole, and the
+    'Hildegard Namecheck' is dropped, the compound forms land whole, and the
     structured tags become typed, referenced name statements."""
     artifact_qid = register_artifact(
         client,
@@ -290,7 +290,10 @@ def test_gedcom_path_alias_bag_and_typed_names(client):
         title="Integration names GEDCOM tree",
         description="written by tests/integration; safe to delete",
     ).artifact_qid
-    expected_aliases = {"Hedda Probewald-Namecheck", "Hedda van der Probewald"}
+    expected_aliases = {
+        "Hildegard Probewald-Namecheck",
+        "Hildegard van der Probewald",
+    }
     result = adapt_gedcom(GEDCOM, artifact_qid=artifact_qid)
     # checked BEFORE writing: aliases are append-only, so a validator
     # regression must fail here rather than leave the fixture item dirty
@@ -299,15 +302,15 @@ def test_gedcom_path_alias_bag_and_typed_names(client):
     qid = BatchWriter(client).write_batch(result.batch).created_items["i1"]
 
     item = client.wbi.item.get(qid)
-    assert str(item.labels.get("en")) == "Hedda Jolanda Namecheck"
+    assert str(item.labels.get("en")) == "Hildegard Rahel Namecheck"
     assert aliases_on(client, qid) == expected_aliases
     assert typed_names(client, qid, "birth_name") == {
-        "Hedda Jolanda Namecheck": {artifact_qid}
+        "Hildegard Rahel Namecheck": {artifact_qid}
     }
-    assert typed_names(client, qid, "nickname") == {"Heddi": {artifact_qid}}
+    assert typed_names(client, qid, "nickname") == {"Hilde": {artifact_qid}}
     assert typed_names(client, qid, "married_name") == {
-        "Hedda Probewald-Namecheck": {artifact_qid},
-        "Hedda Probewald": {artifact_qid},
+        "Hildegard Probewald-Namecheck": {artifact_qid},
+        "Hildegard Probewald": {artifact_qid},
     }
 
     rerun = BatchWriter(client).write_batch(
