@@ -1,0 +1,154 @@
+# Thresholds of the anomaly checks (yizkr.pipeline.anomalies).
+#
+# docs/ANOMALIES.md says what each check measures, when it runs, and what
+# its alert and its fail-fast pause say. This file is the one place the
+# thresholds live, and every value below is the default.
+#
+# To change them, write a YAML file with the keys to change, nested as
+# here, and name it in $YIZKR_ANOMALIES (a driver may pass thresholds of
+# its own, anomalies.attach). Its values replace these; a list replaces
+# the whole list.
+# A key this file does not have is refused, so a misspelt key never passes
+# silently. The thresholds decide only which alerts are raised and which
+# slices are paused, never what a stage makes or what the LLM cache keys,
+# so a change to them reaches every stored output at the next dispatch, or
+# at once through a recheck, without recomputing any stage.
+#
+# Every check has `enabled`. A check marked `fail-fast` pauses its slice
+# (a stage, or a document kind) through the run's control file when it
+# fires; only the rate checks at the end can be.
+
+version: 1
+
+# How long a fail-fast pause may stand, in seconds, before its slice is
+# aborted for the rest of the invocation when nobody has resumed it; null
+# holds it until someone does.
+pause-timeout-s: 1800
+
+# The characters a page of a text file stands for, where a document's
+# yields are measured per page (a PDF or an image counts its own pages, a
+# deck its slides).
+chars-per-page: 2000
+
+checks:
+  # The transcription check's verdict: a transcription it fails in the run
+  # (a tool error, tool-failure or refusal text, a blank or implausibly
+  # short one), or a stored one it fails when the run reuses it.
+  transcription-check:
+    enabled: true
+
+  # A vision transcription with fewer letters and digits per page than
+  # `min-chars-per-page`, for a document of at least `min-pages` pages.
+  transcription-sparse:
+    enabled: true
+    min-pages: 2
+    min-chars-per-page: 50
+
+  # A detected language outside `expected` (language codes). The corpus's
+  # languages are the operator's to list: with none listed, any language
+  # is expected and the check raises nothing.
+  language-unexpected:
+    enabled: true
+    expected: []
+
+  # A language detected with less than `min-confidence`, or a fallback
+  # taken on a best guess the detector could not stand by.
+  language-low-confidence:
+    enabled: true
+    min-confidence: 0.9
+
+  # A language detected with at least `min-confidence` in a transcription
+  # of fewer than `max-chars` letters and digits.
+  language-short-text:
+    enabled: true
+    max-chars: 100
+    min-confidence: 0.9
+
+  # More than `max-share` of a batch's excerpts tagged with another
+  # language than its transcription's, over at least `min-count` excerpts.
+  language-mismatch:
+    enabled: true
+    max-share: 0.5
+    min-count: 4
+
+  # No entities, or no claims, from a transcription of at least
+  # `min-chars` letters and digits.
+  zero-entities:
+    enabled: true
+    min-chars: 200
+  zero-claims:
+    enabled: true
+    min-chars: 200
+
+  # An extraction that took the line-range tier for a refused entity
+  # manifest, or line windows for a refused segmentation.
+  fallback-manifest:
+    enabled: true
+  fallback-segmentation:
+    enabled: true
+
+  # Per document, more than `max-share` of its extraction's chunk calls
+  # failing, of its chunk answers cut off before their sentinel, or of the
+  # claims it was given rejected or unread, over at least `min-count`.
+  chunk-failures:
+    enabled: true
+    max-share: 0.25
+    min-count: 4
+  truncations:
+    enabled: true
+    max-share: 0.25
+    min-count: 4
+  schema-rejects:
+    enabled: true
+    max-share: 0.25
+    min-count: 4
+
+  # A document's entities per page, claims per page, or critic findings
+  # per item reviewed, more than `factor` times the median of the run's
+  # documents of its kind, or less than the median divided by it, once
+  # `min-samples` documents of the kind have one. `smoothing` is added to
+  # both sides of the comparison, so that a median near zero does not make
+  # every value an outlier.
+  entity-yield:
+    enabled: true
+    factor: 8
+    smoothing: 0.5
+    min-samples: 10
+  claim-yield:
+    enabled: true
+    factor: 8
+    smoothing: 0.5
+    min-samples: 10
+  critic-rate:
+    enabled: true
+    factor: 8
+    smoothing: 0.1
+    min-samples: 10
+
+  # A stage failing more than `max-share` of its last `window` dispatches
+  # in the invocation, once it has at least `min-count` of them. Its slice
+  # is the stage.
+  stage-failures:
+    enabled: true
+    window: 20
+    min-count: 10
+    max-share: 0.25
+    fail-fast: false
+
+  # A stage failing more than `max-share` of the first `first` documents
+  # of a kind it takes in the invocation (of all of them, for a kind with
+  # fewer), or since the kind was last resumed. Its slice is the kind.
+  kind-failures:
+    enabled: true
+    first: 10
+    max-share: 0.5
+    fail-fast: true
+
+  # More than `max-share` of a stage's last `window` engine calls failing,
+  # once it has made at least `min-count`. Its slice is the stage.
+  call-failures:
+    enabled: true
+    window: 10
+    min-count: 10
+    max-share: 0.5
+    fail-fast: true

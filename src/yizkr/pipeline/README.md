@@ -144,7 +144,11 @@ is moved aside whole as `.<doc>.superseded-<n>`, with nothing in it
 deleted, and the document is ingested afresh in a new one. See
 [docs/LLM_CACHE.md](../../../docs/LLM_CACHE.md) for the views, keys,
 rejection, forks, the switches, the run directory and these set-aside
-directories.
+directories. Anomaly checks watch every run's stage outputs and raise
+alerts in its run directory, and a fail-fast one pauses a slice through
+its control file; their thresholds are in `anomalies.yaml` here, and
+`$YIZKR_ANOMALIES` names a file of an operator's own over them
+([docs/ANOMALIES.md](../../../docs/ANOMALIES.md)).
 GEDCOM (`.ged`) files take a deterministic adapter in place of
 transcribe/extract; the gates, resolve, and write are identical.
 
