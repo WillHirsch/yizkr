@@ -56,14 +56,14 @@ def make_batch(entities=True) -> ClaimBatch:
                     "subject": {
                         "kind": "local",
                         "local_id": "e1",
-                        "label": "Anna",
+                        "label": "Rahel",
                     },
                     "property": "date_of_birth",
-                    "value": {"type": "time", "year": 1901},
+                    "value": {"type": "time", "year": 1871},
                     "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
                 }
             ],
-            "entities": [{"id": "e1", "label": "Anna", "kind": "human"}]
+            "entities": [{"id": "e1", "label": "Rahel", "kind": "human"}]
             if entities
             else [],
         }
@@ -162,9 +162,9 @@ class ScriptedOrchestrator(Orchestrator):
                 writer.writerow(
                     {
                         "entity_id": "e1",
-                        "entity_label": "Anna",
+                        "entity_label": "Rahel",
                         "qid": f"Q{40 + index}",
-                        "qid_label": "Anna Maria",
+                        "qid_label": "Rahel Löbig",
                         "verdict": "same",
                         "confidence": 0.9,
                         "evidence": "same spouse",
@@ -213,7 +213,7 @@ def quiet(*args, **kwargs):
 def make_run(tmp_path, name="letter.txt", **kwargs):
     folder = tmp_path / "docs"
     folder.mkdir(exist_ok=True)
-    (folder / name).write_text("Anna was born in 1901.")
+    (folder / name).write_text("Rahel was born in 1871.")
     kwargs.setdefault("log", quiet)
     orchestrator = ScriptedOrchestrator(folder, tmp_path / "state", **kwargs)
     return orchestrator
@@ -480,8 +480,7 @@ class TestIsolationAndDiscovery:
         folder = tmp_path / "docs"
         folder.mkdir()
         (folder / "family.ged").write_text(
-            "0 @I1@ INDI\n1 NAME Anna /Beispiel/\n"
-            "1 BIRT\n2 DATE 1901\n0 TRLR\n"
+            "0 @I1@ INDI\n1 NAME Rahel /Löbig/\n1 BIRT\n2 DATE 1871\n0 TRLR\n"
         )
         orchestrator = ScriptedOrchestrator(
             folder, tmp_path / "state", log=quiet
@@ -490,10 +489,10 @@ class TestIsolationAndDiscovery:
         (doc,) = orchestrator.documents()
         saved = ClaimBatch.model_validate_json(doc.batch.read_text())
         assert saved.extraction_run.model_identifier == "gedcom-adapter"
-        assert saved.entities[0].label == "Anna Beispiel"
+        assert saved.entities[0].label == "Rahel Löbig"
 
     def test_slugify_keeps_paths_safe(self):
-        assert slugify("Hirsch Family Tree") == "Hirsch-Family-Tree"
+        assert slugify("Lobig Family Tree") == "Lobig-Family-Tree"
         assert "/" not in slugify("weird/name")
         assert slugify("..") == "document"
 
@@ -566,11 +565,11 @@ class TestContentDedup:
         # a file fully ingested in a prior run, re-encountered under a new
         # name in a later run, must be recognised before any LLM step
         folder = self._folder(tmp_path)
-        (folder / "original.txt").write_text("Anna was born in 1901.")
+        (folder / "original.txt").write_text("Rahel was born in 1871.")
         first = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         self._complete(first)
 
-        (folder / "renamed-scan.txt").write_text("Anna was born in 1901.")
+        (folder / "renamed-scan.txt").write_text("Rahel was born in 1871.")
         second = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         second.run()
         original, renamed = second.documents()
@@ -584,13 +583,13 @@ class TestContentDedup:
         # an UNFINISHED prior document must not block a fresh identical
         # file from completing the ingestion
         folder = self._folder(tmp_path)
-        (folder / "stalled.txt").write_text("Anna was born in 1901.")
+        (folder / "stalled.txt").write_text("Rahel was born in 1871.")
         first = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         first.run()  # stops at the equivalence gate, never WRITTEN
         (stalled,) = first.documents()
         assert stalled.state.status == AWAITING_EQUIVALENCES
 
-        (folder / "fresh.txt").write_text("Anna was born in 1901.")
+        (folder / "fresh.txt").write_text("Rahel was born in 1871.")
         second = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         second.run()
         # nothing WRITTEN yet, so both are live; in-run dedup still keeps
@@ -604,13 +603,13 @@ class TestContentDedup:
     def test_changed_content_forces_reingest(self, tmp_path):
         folder = self._folder(tmp_path)
         source = folder / "record.txt"
-        source.write_text("Anna was born in 1901.")
+        source.write_text("Rahel was born in 1871.")
         orchestrator = ScriptedOrchestrator(
             folder, tmp_path / "state", log=quiet
         )
         self._complete(orchestrator)
 
-        source.write_text("Bernard was born in 1880.")  # same name, new bytes
+        source.write_text("Felix was born in 1867.")  # same name, new bytes
         again = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         again.run()
         (doc,) = again.documents()
@@ -1648,29 +1647,28 @@ class TestTranscribeLanguage:
         return doc
 
     def test_auto_detects_per_document(self, tmp_path):
-        german = (
-            "Berlin, den 8. Dezember 1937. Sehr geehrter Herr Direktor, "
-            "hiermit bestaetige ich den Empfang Ihres Schreibens. Die "
-            "Steuerangelegenheit ist geklaert und der Betrag beglichen."
-        )
-        english = (
-            "I was born in Berlin in 1929, the youngest of three children. "
-            "My father ran a small flour mill and my earliest memories are "
-            "of the smell of grain and the turning of the great wheels."
-        )
+        from tests.fixtures import example_universe as u
+
+        sources = {source.key: source for source in u.SOURCES}
+        german = sources["marriage-cert-1905"].text  # a register entry
+        english = sources["interview-2002"].text  # an oral history
         # one orchestrator, default language (auto), two languages in a folder
         orch = Orchestrator(tmp_path / "docs", tmp_path / "state", log=quiet)
-        de = orch._step_transcribe(self._doc(tmp_path, "brief.txt", german))
-        en = orch._step_transcribe(self._doc(tmp_path, "memoir.txt", english))
+        de = orch._step_transcribe(
+            self._doc(tmp_path, "marriage-cert-1905.txt", german)
+        )
+        en = orch._step_transcribe(
+            self._doc(tmp_path, "interview-2002.txt", english)
+        )
         assert de.language == "de"
         assert en.language == "en"
 
     def test_explicit_language_forces_and_records_source(self, tmp_path):
-        german = "Sehr geehrter Herr Direktor, die Steuerangelegenheit."
+        german = "Liebes Pünktchen! Seit Du am 22. Juni abgereist bist."
         orch = Orchestrator(
             tmp_path / "docs", tmp_path / "state", language="fr", log=quiet
         )
-        doc = self._doc(tmp_path, "brief.txt", german)
+        doc = self._doc(tmp_path, "postcard-1938.txt", german)
         transcription = orch._step_transcribe(doc)
         assert transcription.language == "fr"  # forced, not detected
         assert doc.state.detail["language"]["source"] == "override"
@@ -1683,7 +1681,7 @@ class TestTranscribeLanguage:
             fallback_language="de",
             log=quiet,
         )
-        doc = self._doc(tmp_path, "receipt.txt", "1937")  # too short to detect
+        doc = self._doc(tmp_path, "postmark.txt", "19.8.38")  # too short
         transcription = orch._step_transcribe(doc)
         assert transcription.language == "de"
         assert doc.state.detail["language"]["source"] == "fallback"
@@ -1721,8 +1719,8 @@ class TestSerialMode:
     def _two_doc_folder(self, tmp_path):
         folder = tmp_path / "docs"
         folder.mkdir()
-        (folder / "a.txt").write_text("Anna was born in 1901.")
-        (folder / "b.txt").write_text("Bella was born in 1902.")
+        (folder / "a.txt").write_text("Rahel was born in 1871.")
+        (folder / "b.txt").write_text("Felix was born in 1867.")
         return ScriptedOrchestrator(
             folder, tmp_path / "state", log=quiet, serial=True
         )
@@ -1762,8 +1760,8 @@ class TestSerialMode:
         # contrast: without --serial, both documents reach the gate at once
         folder = tmp_path / "docs"
         folder.mkdir()
-        (folder / "a.txt").write_text("Anna was born in 1901.")
-        (folder / "b.txt").write_text("Bella was born in 1902.")
+        (folder / "a.txt").write_text("Rahel was born in 1871.")
+        (folder / "b.txt").write_text("Felix was born in 1867.")
         orch = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
         orch.run()
         assert "reconcile:a.txt" in orch.calls
@@ -1774,8 +1772,8 @@ class TestSerialMode:
         # documents must still be extracted, and the serial invariant holds.
         folder = tmp_path / "docs"
         folder.mkdir()
-        (folder / "a.txt").write_text("Anna was born in 1901.")
-        (folder / "b.txt").write_text("Bella was born in 1902.")
+        (folder / "a.txt").write_text("Rahel was born in 1871.")
+        (folder / "b.txt").write_text("Felix was born in 1867.")
         orch = ScriptedOrchestrator(
             folder,
             tmp_path / "state",

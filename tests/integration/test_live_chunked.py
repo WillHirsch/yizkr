@@ -30,14 +30,14 @@ from yizkr.pipeline.transcribe import Transcription
 pytestmark = pytest.mark.live
 
 DOC = """\
-Record of the Example family, prepared 1990.
+The Löbig family of Flörburg, written up in 1984.
 
-1. Anna Example  b: 4 Mar 1900 in Springfield. d: 11 Nov 1980 in Springfield; age: 80.
-+ Bern Example  m: 2 Feb 1920 in Springfield.
-    2. Carla Example  b: abt 1922 in Springfield.
+Eugen Löbig, b. Bad Flörburg 1836, d. Flörburg 16 Mar 1909, aged 73.
+= (1859) Cäcilie 'Cilli' Tarle of Kredfeld, c. 1833-1902.
+    Their son: Sebastian 'Wastl' Löbig, b. Flörburg 15 Feb 1862.
 
 Note to readers: coffee and biscuits are served in the reading room.
-"""  # noqa: E501
+"""
 
 CACHE = Path(
     os.environ.get("YIZKR_LIVE_CACHE")
@@ -121,10 +121,10 @@ def test_chunked_extraction_end_to_end(tmp_path):
         for claim in batch.claims
         if hasattr(claim.subject, "label")
     }
-    assert any("Anna" in label for label in labels)
-    assert any("Carla" in label for label in labels)
+    assert any("Eugen" in label for label in labels)
+    assert any("Sebastian" in label for label in labels)
     # the entity manifest travels with the batch (ADR-0007)
-    assert any("Anna" in entity.label for entity in batch.entities)
+    assert any("Eugen" in entity.label for entity in batch.entities)
     # every claim carries its source (pydantic enforces; belt and braces)
     assert all(claim.source.artifact for claim in batch.claims)
     # the coverage report is written beside the batch
