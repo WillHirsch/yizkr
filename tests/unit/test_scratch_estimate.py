@@ -1269,20 +1269,33 @@ class TestRefusals:
             runs.chmod(0o700)
         assert per_stage(counted, "engine_calls") == made
 
-    def test_a_lock_file_it_cannot_open_is_refused(self, tmp_path, engine):
+    @pytest.mark.parametrize("lock", ["unwritable", "a folder"])
+    def test_a_lock_file_it_cannot_open_is_refused(
+        self, tmp_path, engine, lock
+    ):
         """A lock file this user cannot open to read and write (one a run
-        under another user left, say), in a runs directory or a cache
-        folder it can write in: the run refuses each as it opens the lock,
-        and so does the estimate, before it."""
+        under another user left, say), or a folder in its place, in a runs
+        directory or a cache folder it can write in: the run refuses each
+        as it opens the lock, and so does the estimate, before it."""
         corpus = small(tmp_path)
         runs, cache = runs_dir(tmp_path), tmp_path / "cache"
         for folder in (runs, cache):
             folder.mkdir(mode=0o700)
             folder.chmod(0o700)
-            (folder / ".lock").write_text("")
-            (folder / ".lock").chmod(0o400)
+            if lock == "a folder":
+                (folder / ".lock").mkdir()
+            else:
+                (folder / ".lock").write_text("")
+                (folder / ".lock").chmod(0o400)
+
+        def usable(path):
+            if lock == "a folder":
+                shutil.rmtree(path)
+            else:
+                path.chmod(0o600)
+
         try:
-            if os.access(runs / ".lock", os.W_OK):
+            if lock == "unwritable" and os.access(runs / ".lock", os.W_OK):
                 pytest.skip("this user writes to any file")
             with pytest.raises(ScratchRefused, match="cannot open its lock"):
                 estimate_of(tmp_path, corpus, engine)
@@ -1291,14 +1304,15 @@ class TestRefusals:
                 scratch.hold(runs),
             ):
                 pass
-            (runs / ".lock").chmod(0o600)
+            usable(runs / ".lock")
             with pytest.raises(CacheRefused, match="cannot open its lock"):
                 estimate_of(tmp_path, corpus, engine)
             with pytest.raises(CacheRefused, match="cannot open its lock"):
                 llm.open_cache(cache)
         finally:
             for folder in (runs, cache):
-                (folder / ".lock").chmod(0o600)
+                if lock == "unwritable" and (folder / ".lock").exists():
+                    (folder / ".lock").chmod(0o600)
         assert list(cache.iterdir()) == [cache / ".lock"]
 
     def test_a_closed_cache_folder_with_its_lock_is_refused(
