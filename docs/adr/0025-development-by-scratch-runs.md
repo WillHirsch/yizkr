@@ -227,8 +227,8 @@ a second store of assertions: the graph stays the system of record.
   the transcription call it stands for, whose origin is `adopted` and
   whose provenance is backfilled from the archive (engine and version,
   the time it was made and the prompt's hash where the archive tells
-  them, `backfilled: true`), so it claims neither the current prompt nor
-  the current model. A hit on it has the reason `adopted`. A change to
+  them, `backfilled: true`), so it claims only what the archive tells.
+  A hit on it has the reason `adopted`. A change to
   what the call sends gives it another key, and a stricter check rejects
   it, and either recomputes it, as the version bump did.
 - **Aborting a run loses no completed stage output.** Outputs are written

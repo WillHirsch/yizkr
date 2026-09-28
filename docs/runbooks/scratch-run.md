@@ -46,9 +46,11 @@ cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
   and claude CLI, which its keys name: after a CLI update, run it again.
   A transcription the check fails is rejected and the run reads its scan
   afresh; `--leave-out` gives the start of the SHA-1 of each scan to read
-  afresh anyway. It prints what it did with each scan's transcriptions and
-  the counts (imported, rejected, excluded, left out, skipped). What it
-  adopts, what it keeps of the archive, and when an adoption stops
+  afresh anyway, and withdraws, for good, any adoption the cache serves
+  for it. It prints what it did with each scan's transcriptions and the
+  counts (imported, rejected, excluded, left out, skipped): local output,
+  which names the corpus's files and quotes what the check matched. What
+  it adopts, what it reads of the archive, and when an adoption stops
   applying: docs/LLM_CACHE.md, Seeding.
 - **Preflight.** Before anything is written or called, the driver checks
   the claude CLI and its login, a full model id for every role, the

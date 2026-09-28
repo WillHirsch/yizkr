@@ -4,11 +4,15 @@
 **The archive** is a state directory that `yizkr ingest run` left: one
 folder per source file, holding the document's `state.json` (its source's
 `file`, and the SHA-1 of its bytes, `content_sha1`) and its views, the
-transcription (`transcription.json`: its `text`, `language` and `engine`,
-and the artifact it names) among them. A folder whose name starts with a
-dot is one a run set aside, and is passed over. Where the archive is a
-run directory, with the run's `events.jsonl` beside the document folders,
-the time each transcription was made is read from its events.
+transcription (`transcription.json`: its `text` and `engine`, and the
+artifact it names) among them. The import reads nothing of the archive
+but those two files of each document folder and, where the archive is a
+run directory, the run's `events.jsonl` in a folder of the archive that
+holds document folders, which gives the time each transcription was made.
+A folder whose name starts with a dot is one a run set aside, and is
+passed over. A file among those that is a symbolic link, or whose path
+resolves outside the archive, is not read: its transcription is skipped
+as unreadable, and such an events file gives no time.
 
 **What is adopted.** A scratch run transcribes each scan with one call,
 the transcription prompt and the scan, and every call goes through the
@@ -25,14 +29,23 @@ it makes names the client the archive names, not the one it asked. Each
 media's transcriptions, in turn:
 
 * **The never-ingest list** is asked first (yizkr.core.corpus.is_excluded),
-  with every file name and media SHA-1 the archive records for them, and
-  nothing else is done with an excluded one. Without a list the import
-  refuses to start.
-* **Left out.** One whose media's SHA-1 starts with a prefix the operator
-  gives is not adopted, so the next run transcribes it afresh, and an
-  adoption of it made earlier is withdrawn: moved aside as rejected. A
-  prefix that matches no transcription in the archive refuses the import
-  before anything is written.
+  in two passes. The first reads each document's `state.json` alone and
+  asks with its file name and media SHA-1; the second opens a
+  `transcription.json` only for a document the list leaves in, and asks
+  again with the SHA-1 the transcription names, before anything else is
+  done with it. A media one of whose transcriptions the list excludes is
+  excluded whole. A document with no readable `state.json` is not opened
+  at all: the list cannot be asked for it. Without a list the import
+  refuses to start. The corpus is found as the run finds it, with the
+  list asked of each file there too.
+* **Left out.** A media whose SHA-1 starts with a prefix the operator
+  gives is not adopted, so the next run transcribes it afresh, and any
+  adoption the cache serves for its call, whichever archive it came from,
+  is withdrawn: moved aside as rejected, so that no later import adopts
+  that text for the call again. The engine's own answer is never
+  withdrawn. A prefix that matches no media of the archive, or several,
+  refuses the import before anything is written; one that matches an
+  excluded media is named in its line.
 * **Made without a call**: a text file's transcription, a deck's slide
   text or a curator's correction. A run makes them again without a call,
   so there is nothing to adopt.
@@ -40,10 +53,12 @@ media's transcriptions, in turn:
   none of them adopted: nothing says which the run should take.
 * **Re-keyed by its media's SHA-1**, which its `state.json` records or its
   transcription names. The call's key needs the scan itself, so the
-  corpus must hold a scan with those bytes that the run would transcribe.
-  The QID a transcription in the QID format names its artifact by is
-  dropped: what is adopted is the text alone, and the view the run makes
-  of it names the artifact by the SHA-1.
+  corpus must hold a scan with those bytes that the run would transcribe;
+  the scan is read once for both its SHA-1 and the digest its key names,
+  so no adoption is keyed on bytes other than the archive's media. The
+  QID a transcription in the QID format names its artifact by is dropped:
+  what is adopted is the text alone, and the view the run makes of it
+  names the artifact by the SHA-1.
 * **Made with the prompt the run sends.** A vision transcription in the
   QID format (`artifact_qid`: its artifact named by an instance's item)
   was made with the prompt whose SHA-256 is QID_FORMAT_PROMPT, and is
@@ -51,10 +66,11 @@ media's transcriptions, in turn:
   does not say which prompt it was made with, and is not adopted.
 * **Checked**: the transcription check judges it as the run judges an
   answer (yizkr.pipeline.transcription_check), with its scan's page
-  count. One it fails is not adopted. It is recorded in the cache as an
-  answer rejected under its call's key, with the check's reason
-  (EngineCache.record_rejected), so the run's call misses as `rejected`
-  and goes to the engine, and no adoption takes it later.
+  count, whatever the cache holds for the call. One it fails is not
+  adopted: it is recorded in the cache as an answer rejected under its
+  call's key, with the check's reason (EngineCache.record_rejected), and
+  an adoption of it the cache serves is moved aside, so that no adoption
+  takes it later.
 * **Never over another answer.** An adoption never replaces what the
   cache holds for the call, the engine's answer or another adoption. One
   adopted already with the same text counts as imported, so running the
@@ -66,9 +82,10 @@ CLI version, model and model identifier that field names; the time it was
 made, where the archive's events give it, else None; the SHA-256 of the
 prompt it was made with, where its format tells it, else None; the media
 SHA-1, the archive and where in it the transcription lies; the check's
-verdict; and `backfilled: true`. Its origin is the adoption's reason,
-`adopted`, never the engine, so it never passes for an answer that the
-current prompt and model gave. No QID is kept.
+verdict; and `backfilled: true`. It claims only what the archive tells:
+what the archive leaves out stays None, never filled in from the run.
+Its origin is the adoption's reason, `adopted`, never the engine. No QID
+is kept.
 
 **Invalidation.** An adoption stands for one call: the one whose key it is
 stored under. A change to what that call sends (the prompt, the model,
@@ -85,6 +102,7 @@ and the check still pass.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -101,7 +119,7 @@ from yizkr.core.corpus import (
     ExclusionList,
     is_excluded,
 )
-from yizkr.pipeline.stages import read_jsonl, sha256_text
+from yizkr.pipeline.stages import sha256_text
 
 # the files of an archive the import reads: a document folder's state and
 # transcription, and a run directory's events
@@ -124,8 +142,9 @@ ANTHROPIC = "anthropic"
 QID_FORMAT_PROMPT = (
     "e9b42f6645e49dc3840b8ed973cad18eeeae43c446ab805725094b2320793b54"
 )
-# the origin of the engine's own answers in the cache, which an adoption
-# never replaces and the import never withdraws
+# the origin of the engine's own answers in the cache, which an entry
+# without one has too, as the cache serves it: an adoption never replaces
+# one, and the import never withdraws one
 ENGINE_ORIGIN = "engine"
 # the fewest hex digits a --leave-out prefix gives, and how many name a
 # media in the import's lines
@@ -145,6 +164,7 @@ NO_SHA1 = "no media SHA-1"
 NO_CALL = "made without a call"
 DIFFERING = "differing transcriptions"
 NOT_IN_CORPUS = "not in the corpus"
+CHANGED = "scan changed"
 OTHER_PROMPT = "another prompt"
 UNKNOWN_PROMPT = "prompt unknown"
 ANSWERED = "answered already"
@@ -161,11 +181,13 @@ class ImportRefused(RuntimeError):
 
 @dataclass
 class Archived:
-    """One transcription in the archive: its file, its folder relative to
-    the archive (`where`), the file names and media SHA-1s the archive
-    records for it, and what it holds, or why it cannot be read."""
+    """One transcription in the archive: its file, the archive's folder
+    (`root`, resolved) and its own folder relative to it (`where`), the
+    file names and media SHA-1s the archive records for it, and what it
+    holds, or why it cannot be read."""
 
     path: Path
+    root: Path
     where: str
     names: set[str] = field(default_factory=set)
     sha1s: set[str] = field(default_factory=set)
@@ -219,10 +241,34 @@ class ImportReport:
 # -- reading the archive -----------------------------------------------------
 
 
-def _load(path: Path) -> tuple[Any, str | None]:
-    """(the JSON at `path`, None), or (None, why it cannot be read)."""
+def _foreign(path: Path, root: Path) -> str | None:
+    """Why the file at `path` is not the archive's own, which the import
+    does not read: a symbolic link, or a path that resolves outside the
+    archive's folder `root`; None when it is its own."""
+    if path.is_symlink():
+        return "is a symbolic link"
     try:
-        return json.loads(path.read_text(encoding="utf-8")), None
+        inside = path.resolve().is_relative_to(root)
+    except (OSError, RuntimeError) as exc:
+        return f"cannot be resolved ({type(exc).__name__}: {exc})"
+    return None if inside else "resolves outside the archive"
+
+
+def _read_own(path: Path) -> bytes:
+    """The bytes of a file of the archive's own, opened without following
+    a symbolic link: OSError otherwise."""
+    with open(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as file:
+        return file.read()
+
+
+def _load(path: Path, root: Path) -> tuple[Any, str | None]:
+    """(the JSON of the archive's file at `path`, None), or (None, why it
+    is not read)."""
+    foreign = _foreign(path, root)
+    if foreign is not None:
+        return None, f"it {foreign}"
+    try:
+        return json.loads(_read_own(path).decode("utf-8")), None
     except (OSError, ValueError, RecursionError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
 
@@ -234,51 +280,59 @@ def _sha1(value: Any) -> str | None:
 
 
 def read_archive(archive: Path) -> list[Archived]:
-    """Every transcription the archive holds, in path order (the module
-    docstring says how it is read). ImportRefused when the archive is not
-    a folder."""
+    """Every transcription the archive holds, in path order, with the
+    identity its `state.json` records: the list's first pass (the module
+    docstring says what is read). No transcription is opened here
+    (read_transcription). ImportRefused when the archive is not a
+    folder."""
     if not archive.is_dir():
         raise ImportRefused(
             f"{archive} is not a folder: give the archived state directory, "
             f"which holds a folder per document with its {STATE} and "
             f"{TRANSCRIPTION}"
         )
+    root = archive.resolve()
     found = []
-    for path in sorted(archive.rglob(TRANSCRIPTION)):
-        folder = path.parent.relative_to(archive)
-        if path.is_file() and not any(
-            part.startswith(".") for part in folder.parts
-        ):
-            found.append(_read_one(path, folder.as_posix()))
-    made = _made_at({record.path.parent.parent for record in found})
-    for record in found:
-        if len(record.sha1s) == 1:
-            (sha1,) = record.sha1s
-            record.made_at = made[record.path.parent.parent].get(sha1)
+    for path in sorted(root.rglob(TRANSCRIPTION)):
+        folder = path.parent.relative_to(root)
+        if any(part.startswith(".") for part in folder.parts):
+            continue
+        if not path.is_symlink() and not path.is_file():
+            continue
+        record = Archived(path=path, root=root, where=folder.as_posix())
+        record.problem = _read_state(record)
+        found.append(record)
     return found
 
 
-def _read_one(path: Path, where: str) -> Archived:
-    """One transcription and the state beside it: its identity, as far as
-    the archive records it, and what it holds, or why it cannot be read."""
-    record = Archived(path=path, where=where)
+def _read_state(record: Archived) -> str | None:
+    """Read the identity the state beside a transcription records into
+    it; why the document cannot be read, or None."""
+    foreign = _foreign(record.path, record.root)
+    if foreign is not None:
+        return f"its {TRANSCRIPTION} {foreign}"
+    state, problem = _load(record.path.parent / STATE, record.root)
+    if problem is not None:
+        return f"its {STATE} is not read ({problem})"
+    if not isinstance(state, dict) or not isinstance(state.get("file"), str):
+        return f"its {STATE} names no source file"
+    record.names.add(Path(state["file"]).name)
+    if state.get("content_sha1") is not None:
+        sha1 = _sha1(state["content_sha1"])
+        if sha1 is None:
+            return f"its {STATE} records a malformed SHA-1"
+        record.sha1s.add(sha1)
+    return None
+
+
+def read_transcription(record: Archived) -> None:
+    """Open a transcription the list's first pass leaves in, and read what
+    it holds into it: the list's second pass asks with the SHA-1 it names
+    before its text is used. A problem found is its `problem`."""
+    data, problem = _load(record.path, record.root)
     problems = []
-    state, problem = _load(path.parent / STATE)
     if problem is not None:
-        problems.append(f"its {STATE} cannot be read ({problem})")
-    elif not isinstance(state, dict) or not isinstance(state.get("file"), str):
-        problems.append(f"its {STATE} names no source file")
-    else:
-        record.names.add(Path(state["file"]).name)
-        if state.get("content_sha1") is not None:
-            sha1 = _sha1(state["content_sha1"])
-            if sha1 is None:
-                problems.append(f"its {STATE} records a malformed SHA-1")
-            else:
-                record.sha1s.add(sha1)
-    data, problem = _load(path)
-    if problem is not None:
-        problems.append(f"it cannot be read ({problem})")
+        problems.append(f"it is not read ({problem})")
     elif not isinstance(data, dict):
         problems.append("it holds no transcription")
     else:
@@ -305,28 +359,57 @@ def _read_one(path: Path, where: str) -> Archived:
     if len(record.sha1s) > 1:
         problems.append(f"its {STATE} and the transcription name other media")
     record.problem = "; ".join(problems) or None
-    return record
 
 
-def _made_at(folders: Iterable[Path]) -> dict[Path, dict[str, str]]:
-    """For each folder that holds document folders of the archive: when a
-    run last made each document's transcription there, by the document's
-    SHA-1, from the folder's events (the latest `done` event of the
-    transcription stage); nothing where the folder holds no events."""
-    made: dict[Path, dict[str, str]] = {}
-    for folder in folders:
-        times: dict[str, str] = {}
-        for event in read_jsonl(folder / EVENTS):
-            subject, at = event.get("subject"), event.get("at")
-            if (
-                event.get("event") == "done"
-                and event.get("stage") == "transcription"
-                and isinstance(subject, str)
-                and isinstance(at, str)
-            ):
-                times[subject] = at
-        made[folder] = times
-    return made
+def _made_at(records: Iterable[Archived]) -> None:
+    """Read into each record when a run last made its transcription: the
+    time of the latest `done` event of the transcription stage for its
+    media, in the events of the folder that holds its document folder,
+    when that folder is the archive's (its own folder, or one inside it)
+    and its events are the archive's own file."""
+    times: dict[Path, dict[str, str]] = {}
+    for record in records:
+        if len(record.sha1s) != 1:
+            continue
+        folder = record.path.parent.parent
+        if folder not in times:
+            times[folder] = _transcribed(folder, record.root)
+        (sha1,) = record.sha1s
+        record.made_at = times[folder].get(sha1)
+
+
+def _transcribed(folder: Path, root: Path) -> dict[str, str]:
+    """media SHA-1 -> the time of its transcription stage's latest `done`
+    event, in the events of `folder`; nothing for a folder outside the
+    archive, or events that are not the archive's own file."""
+    events = folder / EVENTS
+    if not folder.is_relative_to(root) or not (
+        events.is_symlink() or events.is_file()
+    ):
+        return {}
+    if _foreign(events, root) is not None:
+        return {}
+    try:
+        lines = _read_own(events).split(b"\n")
+    except OSError:
+        return {}
+    times: dict[str, str] = {}
+    for line in lines:
+        try:
+            event = json.loads(line.decode("utf-8"))
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        subject, at = event.get("subject"), event.get("at")
+        if (
+            event.get("event") == "done"
+            and event.get("stage") == "transcription"
+            and isinstance(subject, str)
+            and isinstance(at, str)
+        ):
+            times[subject] = at
+    return times
 
 
 def archived_client(engine: str) -> dict[str, str | None]:
@@ -369,6 +452,29 @@ def _prefixes(leave_out: Iterable[str]) -> list[str]:
             )
         prefixes.append(prefix)
     return prefixes
+
+
+def _match_prefixes(
+    prefixes: Sequence[str], known: set[str], archive: Path
+) -> dict[str, str]:
+    """media SHA-1 -> the --leave-out prefix it matches. ImportRefused for
+    a prefix that matches no media of the archive, or several."""
+    matched: dict[str, str] = {}
+    for prefix in prefixes:
+        found = sorted(sha1 for sha1 in known if sha1.startswith(prefix))
+        if not found:
+            raise ImportRefused(
+                f"--leave-out {prefix}: no transcription in {archive} is of "
+                "a media whose SHA-1 starts so; nothing was imported"
+            )
+        if len(found) > 1:
+            raise ImportRefused(
+                f"--leave-out {prefix} is ambiguous: the SHA-1s of "
+                f"{len(found)} media of the archive start so; give more of "
+                "its digits. Nothing was imported"
+            )
+        matched[found[0]] = prefix
+    return matched
 
 
 def _run_model() -> str:
@@ -479,7 +585,8 @@ def _decide(media: _Media) -> Outcome | None:
             where,
             NOT_IN_CORPUS,
             "the corpus holds no scan with its bytes for the run to "
-            "transcribe",
+            "transcribe: none, one it cannot read, or one the never-ingest "
+            "list excludes by its name there",
         )
     skip = _prompt_skip(media.chosen)
     if skip is not None:
@@ -490,9 +597,17 @@ def _decide(media: _Media) -> Outcome | None:
 # -- the cache ---------------------------------------------------------------
 
 
-def _provenance(
-    record: Archived, sha1: str, check: Any, archive: Path
-) -> dict[str, Any]:
+def _digests(path: Path) -> tuple[str, str]:
+    """(SHA-1, SHA-256) of the file at `path`, from one reading of it."""
+    sha1, sha256 = hashlib.sha1(), hashlib.sha256()
+    with path.open("rb") as file:
+        for block in iter(lambda: file.read(1 << 20), b""):
+            sha1.update(block)
+            sha256.update(block)
+    return sha1.hexdigest(), sha256.hexdigest()
+
+
+def _provenance(record: Archived, sha1: str, check: Any) -> dict[str, Any]:
     """What made an archived transcription, as its archive records it
     (the module docstring lists it)."""
     from yizkr.pipeline.llm import COMPLETE
@@ -506,8 +621,8 @@ def _provenance(
         "made_at": record.made_at,
         "prompt_sha256": QID_FORMAT_PROMPT if record.qid_format else None,
         "media_sha1": sha1,
-        "archive": str(archive.absolute()),
-        "archived_as": record.path.relative_to(archive).as_posix(),
+        "archive": str(record.root),
+        "archived_as": record.path.relative_to(record.root).as_posix(),
         "check": check.model_dump(
             include={
                 "stage",
@@ -522,25 +637,38 @@ def _provenance(
     }
 
 
+def _engines(entry: dict[str, Any]) -> bool:
+    """Is a cache entry the engine's own answer, as the cache serves it
+    (an entry that names no origin included)?"""
+    return entry.get("origin", ENGINE_ORIGIN) == ENGINE_ORIGIN
+
+
 class _Adopter:
     """The transcribe role's client, as the run's (Orchestrator.
     role_client), and what it keys the run's calls for (`keyed`, once it
     has keyed one)."""
 
-    def __init__(self, client: Any, archive: Path, cache_dir: Path) -> None:
+    def __init__(self, client: Any, cache_dir: Path) -> None:
         self.client = client
         self.cache = client.cache
-        self.archive = archive
         self.cache_dir = cache_dir
         self.keyed: dict[str, Any] | None = None
 
-    def _call(self, scan: Path) -> tuple[str, dict[str, Any]]:
-        """(key, components) of the call the run transcribes `scan` with."""
+    def _call(self, media: _Media) -> tuple[str, dict[str, Any]] | None:
+        """(key, components) of the call the run transcribes the media's
+        scan with, keyed from bytes whose SHA-1 is the media's; None when
+        the scan's bytes are not those, or changed as they were read."""
         from yizkr.pipeline import transcribe
-        from yizkr.pipeline.llm import COMPLETE
 
-        prompt = transcribe.TRANSCRIPTION_PROMPT
-        components = self.client.components(COMPLETE, prompt, [scan])
+        scan = media.scan
+        if scan is None:
+            return None
+        sha1, sha256 = _digests(scan)
+        key, components = self.client.complete_call(
+            transcribe.TRANSCRIPTION_PROMPT, [scan]
+        )
+        if sha1 != media.sha1 or components["files"] != [sha256]:
+            return None
         if self.keyed is None:
             self.keyed = {
                 "client": self.client.model_identifier,
@@ -548,9 +676,9 @@ class _Adopter:
                 "config": components["config"],
                 "cache": str(Path(self.cache_dir).absolute()),
             }
-        return self.client.complete_key(prompt, [scan]), components
+        return key, components
 
-    def adopt(self, media: _Media, scan: Path) -> Outcome:
+    def adopt(self, media: _Media) -> Outcome:
         """Check a media's transcription, and adopt it for the run's call,
         or record it as rejected under the call's key."""
         from yizkr.pipeline.transcription_check import (
@@ -560,11 +688,21 @@ class _Adopter:
         )
 
         sha1, where = media.sha1, media.where
+        keyed = self._call(media)
+        if keyed is None or media.scan is None:
+            return Outcome(
+                SKIPPED,
+                sha1,
+                where,
+                CHANGED,
+                "the scan's bytes changed while the import read them: run "
+                "it again",
+            )
+        key, components = keyed
         record = media.chosen
         text = str(record.text)
-        key, components = self._call(scan)
-        check = check_transcription(text, pages=media_page_count(scan))
-        provenance = _provenance(record, sha1, check, self.archive)
+        check = check_transcription(text, pages=media_page_count(media.scan))
+        provenance = _provenance(record, sha1, check)
         live = self.cache.get(key)
         same = live is not None and live.get("response") == text
         if not check.passed:
@@ -582,7 +720,7 @@ class _Adopter:
                 )
             return Outcome(REJECTED, sha1, where, detail=reason)
         if live is not None:
-            engine = live.get("origin") == ENGINE_ORIGIN
+            engine = _engines(live)
             if same and not engine:
                 return Outcome(IMPORTED, sha1, where, detail="adopted already")
             held = "the engine's answer" if engine else "another adoption"
@@ -600,17 +738,17 @@ class _Adopter:
             "adopts no answer a caller rejected",
         )
 
-    def withdraw(self, media: _Media, scan: Path) -> bool:
-        """Withdraw the adoption of a left-out media's transcription that
-        the cache serves for the run's call, if it serves one: move it
-        aside as rejected. Returns whether it did."""
-        key, _components = self._call(scan)
+    def withdraw(self, media: _Media) -> bool:
+        """Withdraw the adoption the cache serves for the run's call for a
+        left-out media's scan, whatever made it: move it aside as
+        rejected. The engine's own answer stays. Returns whether one was
+        withdrawn."""
+        keyed = self._call(media)
+        if keyed is None:
+            return False
+        key, _components = keyed
         live = self.cache.get(key)
-        if (
-            live is None
-            or live.get("origin") == ENGINE_ORIGIN
-            or live.get("response") not in {r.text for r in media.vision}
-        ):
+        if live is None or _engines(live):
             return False
         return self.cache.reject(
             key,
@@ -658,12 +796,13 @@ def import_transcriptions(
     run keys its calls: the engine `llm`, `extract_effort` and
     $YIZKR_LLM_MODEL. `leave_out` gives prefixes of the SHA-1s of media
     whose transcriptions are not adopted. Refuses to start without a
-    never-ingest list (ExclusionConfigError); for a malformed or unmatched
-    prefix, no model or an alias, an archive or a corpus that is not a
-    folder, a scan in PDF without the renderer the check counts its pages
-    with, or an engine client that cannot start (ImportRefused); and when
-    the cache refuses its folder, or another process holds it, or the
-    engine cannot serve the pass (llm.PassPaused). Returns what became of
+    never-ingest list (ExclusionConfigError); for a malformed, unmatched
+    or ambiguous prefix, no model or an alias, an archive or a corpus that
+    is not a folder, a scan in PDF without the renderer the check counts
+    its pages with, or an engine client that cannot start (ImportRefused);
+    and when the cache refuses its folder, or another process holds it, or
+    the engine cannot serve the pass (llm.PassPaused). `log` takes the
+    corpus's discovery lines, which name its files. Returns what became of
     each media's transcriptions."""
     from yizkr.pipeline.orchestrate import Orchestrator
 
@@ -673,38 +812,55 @@ def import_transcriptions(
     _run_model()
     if not corpus.is_dir():
         raise ImportRefused(f"the corpus {corpus} is not a folder")
-    records = read_archive(archive)
-    known = {sha1 for record in records for sha1 in record.sha1s}
-    unmatched = [
-        prefix
-        for prefix in prefixes
-        if not any(sha1.startswith(prefix) for sha1 in known)
-    ]
-    if unmatched:
-        raise ImportRefused(
-            f"--leave-out {', '.join(unmatched)}: no transcription in "
-            f"{archive} is of a media whose SHA-1 starts so; nothing was "
-            "imported"
-        )
 
-    # the never-ingest list first: a media any of whose transcriptions it
-    # excludes is excluded whole, and nothing else is done with them
+    # the never-ingest list, first pass: the states alone. A media any of
+    # whose transcriptions it excludes is excluded whole
+    records = read_archive(archive)
     excluded = {
         sha1
         for record in records
         if _excluded(exclusions, record)
         for sha1 in record.sha1s
     }
-    outcomes: list[Outcome] = []
-    reported: set[str] = set()
-    media: dict[str, _Media] = {}
+
+    def out(record: Archived) -> bool:
+        return bool(record.sha1s & excluded) or _excluded(exclusions, record)
+
+    # second pass: the transcriptions the list leaves in, asked again with
+    # the SHA-1 each names before its text is used
     for record in records:
-        if record.sha1s & excluded or _excluded(exclusions, record):
+        if record.problem is None and not out(record):
+            read_transcription(record)
+            if _excluded(exclusions, record):
+                excluded |= record.sha1s
+    matched = _match_prefixes(
+        prefixes,
+        {sha1 for record in records for sha1 in record.sha1s},
+        archive,
+    )
+    _made_at(record for record in records if not out(record))
+
+    outcomes: list[Outcome] = []
+    media: dict[str, _Media] = {}
+    reported: set[str] = set()
+    for record in records:
+        if out(record):
             sha1 = min(record.sha1s) if record.sha1s else None
-            if sha1 not in reported:
-                outcomes.append(Outcome(EXCLUDED, sha1, record.where))
+            if sha1 is None or sha1 not in reported:
+                note = (
+                    f"--leave-out {matched[sha1]} matched it too"
+                    if sha1 in matched
+                    else ""
+                )
+                outcomes.append(
+                    Outcome(EXCLUDED, sha1, record.where, detail=note)
+                )
             if sha1 is not None:
                 reported.add(sha1)
+        elif len(record.sha1s) == 1 and next(iter(record.sha1s)) in matched:
+            # left out whole, whether or not it can be read
+            (sha1,) = record.sha1s
+            media.setdefault(sha1, _Media(sha1, [])).records.append(record)
         elif record.problem is not None:
             outcomes.append(
                 Outcome(
@@ -744,31 +900,24 @@ def import_transcriptions(
             for doc in orchestrator.documents()
             if doc.unreadable is None and doc.kind == "media"
         }
-        adopt: list[tuple[_Media, Path]] = []
+        adopt: list[_Media] = []
         left: list[_Media] = []
         for sha1, found in sorted(media.items()):
             found.scan = scans.get(sha1)
-            found.prefix = next(
-                (prefix for prefix in prefixes if sha1.startswith(prefix)),
-                None,
-            )
+            found.prefix = matched.get(sha1)
             if found.prefix is not None:
                 left.append(found)
                 continue
             decided = _decide(found)
             if decided is not None:
                 outcomes.append(decided)
-            elif found.scan is not None:
-                adopt.append((found, found.scan))
-        withdraw = [
-            (found, found.scan)
-            for found in left
-            if found.scan is not None and found.vision
-        ]
+            else:
+                adopt.append(found)
+        withdraw = [found for found in left if found.scan is not None]
         withdrawn: set[str] = set()
         keyed = None
         if adopt or withdraw:
-            _preflight(scan for _found, scan in adopt)
+            _preflight(found.scan for found in adopt if found.scan)
             try:
                 client = orchestrator.role_client(ROLE)
             except RuntimeError as exc:
@@ -776,13 +925,11 @@ def import_transcriptions(
                     f"the transcribe role's engine client cannot start, and "
                     f"the keys need it: {exc}"
                 ) from None
-            adopter = _Adopter(client, archive, cache_dir)
+            adopter = _Adopter(client, cache_dir)
             try:
-                outcomes += [adopter.adopt(*item) for item in adopt]
+                outcomes += [adopter.adopt(found) for found in adopt]
                 withdrawn = {
-                    found.sha1
-                    for found, scan in withdraw
-                    if adopter.withdraw(found, scan)
+                    found.sha1 for found in withdraw if adopter.withdraw(found)
                 }
             finally:
                 adopter.close()
@@ -794,7 +941,7 @@ def import_transcriptions(
                 found.where,
                 detail=f"--leave-out {found.prefix}"
                 + (
-                    "; its earlier adoption withdrawn"
+                    "; the adoption the cache served withdrawn"
                     if found.sha1 in withdrawn
                     else ""
                 ),

@@ -426,17 +426,20 @@ served under.
 
 The archived-transcription import (`yizkr scratch import-transcriptions`,
 #104) seeds the transcribe role's calls with the vision transcriptions of
-an earlier `ingest run`'s state directory. It asks the never-ingest list
-first, leaves out the scans the operator names, adopts only a
-transcription made with the prompt the run sends (the QID format was made
-with one prompt; the current format names none), and runs the
+an earlier `ingest run`'s state directory, reading no file outside it
+and following no link. It asks the never-ingest list first, of each
+document's state before its transcription is opened; leaves out the
+scans the operator names, withdrawing any adoption the cache serves for
+them; adopts only a transcription made with the prompt the run sends (the
+QID format was made with one prompt; the current format names none),
+keyed from the very bytes whose SHA-1 the archive names; and runs the
 transcription check on each: one it fails is recorded as rejected, so the
 run reads the scan afresh. Each adoption's provenance is backfilled from
-the archive (the client its `engine` field names, the prompt's SHA-256
-and the time it was made where the archive tells them, the check's
-verdict, `backfilled: true`), and it keeps no QID. The transcription view
-a run makes from it names the client the archive names. The details are
-in docs/LLM_CACHE.md, Seeding.
+the archive, and claims only what it tells (the client its `engine` field
+names, the prompt's SHA-256 and the time it was made where the archive
+tells them, the check's verdict, `backfilled: true`), and it keeps no
+QID. The transcription view a run makes from it names the client the
+archive names. The details are in docs/LLM_CACHE.md, Seeding.
 
 An adoption is invalidated as any answer is, never by a registry:
 

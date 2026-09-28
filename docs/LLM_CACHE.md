@@ -514,8 +514,9 @@ changed, or its replay failed) is no miss.
 stores an answer the engine did not give, for the call whose key the
 caching client computes (`complete_key(prompt, image_paths)`). The entry
 keeps the provenance it was given, and the key's components when the
-seeder gives them (the client's `components(...)`, which must hash to the
-key). A hit on it reports `reason` instead of a key match, and the answer
+seeder gives them, which must hash to the key (`complete_call(prompt,
+image_paths)` gives the key and its components from one reading of each
+file). A hit on it reports `reason` instead of a key match, and the answer
 it serves says what made it (`made_by`: the model identifier its
 provenance names, else the reason; the engine's answers say nothing). It
 never replaces an entry the key already has, never adopts an answer a
@@ -539,47 +540,71 @@ them rather than ask the engine to read those scans again.
 **The archive** is that run's state directory: a folder per source file,
 each with the document's `state.json` (`file`, the source's path, and
 `content_sha1`, the SHA-1 of its bytes) and `transcription.json` (`text`,
-`language`, `engine`, and the artifact: `artifact_qid` in the QID format
-the runs before #127 wrote, `artifact.sha1` in the current one). The
+`engine`, and the artifact: `artifact_qid` in the QID format the runs
+before #127 wrote, `artifact.sha1` in the current one). The
 transcription's `engine` names its route and then the client that made
 it: `llm-vision:claude-code/<CLI version>[:<model>]` for the claude CLI,
 `llm-vision:<model>` for the API; `text-file:…`, `pptx-adapter` and
-`correction` for the routes that make no call. A folder whose name starts
-with a dot is one a run set aside, and is passed over; nothing else in
-the archive is read, but for a run directory's `events.jsonl` beside the
-document folders, which gives the time each transcription was made (its
-stage's latest `done` event). File modification times are not read.
+`correction` for the routes that make no call. Nothing else of the
+archive is read, but for a run directory's `events.jsonl` in a folder of
+the archive that holds document folders, which gives the time each
+transcription was made (its stage's latest `done` event); no folder
+above the archive is looked in. A folder whose name starts with a dot is
+one a run set aside, and is passed over. A `state.json`,
+`transcription.json` or `events.jsonl` that is a symbolic link, or whose
+path resolves outside the archive, is not read: the document is skipped
+as unreadable, and such events give no time. The archive may be named
+through a link: it is resolved once. File modification times are not
+read.
 
 **What is adopted.** Each media's transcriptions are taken in turn:
 
-- the never-ingest list is asked first (`is_excluded`), with every file
-  name and media SHA-1 the archive records for them, and nothing else is
-  done with an excluded one (**excluded**). A media one of whose
-  transcriptions the list excludes is excluded whole. Without a list the
-  import refuses to start, before it reads the archive;
+- the never-ingest list is asked first (`is_excluded`), in two passes,
+  and nothing else is done with an excluded document (**excluded**). The
+  first reads each document's `state.json` alone and asks with the file
+  name and media SHA-1 it records. The second opens a
+  `transcription.json` only for a document the list leaves in, and asks
+  again with the SHA-1 the transcription names, before its text is used.
+  A media one of whose transcriptions the list excludes is excluded
+  whole. A document with no readable `state.json` gives the list nothing
+  to ask, and its transcription is not opened: it is skipped as
+  unreadable. Without a list the import refuses to start, before it
+  reads the archive;
 - `--leave-out SHA1` (repeatable; a prefix of at least 7 hex digits)
   leaves out the media whose SHA-1 starts so (**left out**): its
-  transcription is not adopted, and an adoption of it made earlier is
-  withdrawn, moved aside as rejected, so the next run transcribes it
-  afresh. The engine's own answer for the call is never withdrawn. A
-  prefix that matches no transcription in the archive refuses the import
-  before anything is written;
+  transcription is not adopted, and any adoption the cache serves for its
+  call is withdrawn, whichever archive it came from: moved aside as
+  rejected, so the next run transcribes the scan afresh. A withdrawal is
+  permanent: no later import adopts that text for the call again. The
+  engine's own answer for the call is never withdrawn. A prefix that
+  matches no media of the archive, or the SHA-1s of several, refuses the
+  import before anything is written; one that matches a media the list
+  excludes is named in its line;
 - a transcription made without a call, one a folder cannot give (a file
   that cannot be read, no media SHA-1, or a state and a transcription
-  that name other media), one of a media the corpus holds no scan of,
-  and a media with differing transcriptions, which nothing says how to
-  choose between, are **skipped**, with the reason;
+  that name other media), a media with differing transcriptions, which
+  nothing says how to choose between, and one of a media the corpus
+  holds no scan of that the run would transcribe (**not in the corpus**:
+  none with its bytes, one that cannot be read, or one the never-ingest
+  list excludes by the name it has there, which the import does not read
+  to tell apart), are **skipped**, with the reason;
+- the scan is read once for its SHA-1 and for the digest the call's key
+  names, so no adoption is keyed on bytes other than the archive's
+  media: a scan that changed since the corpus was read, or as it was
+  read, is skipped (**scan changed**), and the import can be run again;
 - a transcription is adopted only when made with the prompt the run
   sends. A vision transcription in the QID format was made with the one
   prompt the vision route sent while it wrote that format, and is adopted
   while the run sends it (`prompt_sha256` below); one in the current
   format does not say which prompt made it, and is skipped;
 - the transcription check judges it as the run judges an answer, with
-  its scan's page count. One it fails is **rejected**: recorded as a
-  rejected answer under the call's key, with the check's reason
-  (`record_rejected`), or, when the cache serves that text already, moved
-  aside as a rejection is; the run's call then misses as `rejected`, and
-  the engine reads the scan afresh;
+  its scan's page count, whatever the cache holds for the call. One it
+  fails is **rejected**: recorded as a rejected answer under the call's
+  key, with the check's reason (`record_rejected`), or, when the cache
+  serves that text already (an earlier import's adoption, say), moved
+  aside as a rejection is. The run's call then misses as `rejected`, and
+  the engine reads the scan afresh, unless the cache holds the engine's
+  own answer for the call, which the run is served, and checks, as any;
 - the rest are **imported**: adopted under the key of the call the run
   makes for the scan (the transcription prompt and the scan, keyed by the
   transcribe role's client, `--extract-effort` and `$YIZKR_LLM_MODEL`
@@ -592,9 +617,13 @@ stage's latest `done` event). File modification times are not read.
 It prints a line per media (a SHA-1 prefix, the outcome and why) and the
 counts: imported, rejected, excluded, left out and skipped (by reason).
 The lines are local output: a rejection's reason quotes the phrase the
-check matched. The import refuses a model named by an alias or none, as
-a scratch run does, and a scan in PDF when the PDF renderer is missing,
-since the check counts its pages with it.
+check matched, and the lines the corpus's discovery writes to standard
+error (a file excluded, or of a type the run skips) name the corpus's
+files. The import refuses a model named by an alias or none, as a
+scratch run does, and a scan in PDF when the PDF renderer is missing,
+since the check counts its pages with it. Ctrl-C stops it, and prints
+`interrupted` (exit 130): what it adopted or recorded until then stays,
+and running it again goes on.
 
 **Provenance.** An adoption's entry holds the key's components, `origin`
 `adopted`, and provenance backfilled from the archive: `backfilled:
@@ -606,10 +635,12 @@ names none); `made_at`, from the archive's events, else None;
 format tells it, else None; `media_sha1`, the `archive` and where in it
 the transcription lies (`archived_as`); the check's verdict (`check`);
 and `adopted_at`. No QID is kept: the answer adopted is the text alone.
-Its components are those of the call it stands for, and nothing else in
-it claims the current prompt or model: a hit on it reports `adopted`, and
-the transcription view the run makes from it names, in its `engine`, the
-client the archive names (`made_by`), not the one the run asked.
+Its components are those of the call it stands for, and its provenance
+claims only what the archive tells: what the archive leaves out, a model
+an older run named none of, say, stays None, never filled in from the
+run. A hit on it reports `adopted`, and the transcription view the run
+makes from it names, in its `engine`, the client the archive names
+(`made_by`), not the one the run asked.
 
 **What the run sees.** A scratch run's transcription call for an adopted
 scan is a `cache-hit` whose reason is `adopted`, and no engine call. The

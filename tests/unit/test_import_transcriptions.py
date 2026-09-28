@@ -44,8 +44,10 @@ from yizkr.pipeline import (
     transcribe,
     transcription_check,
 )
+from yizkr.pipeline import import_transcriptions as imports
 from yizkr.pipeline.import_transcriptions import (
     ANSWERED,
+    CHANGED,
     DIFFERING,
     EXCLUDED,
     IMPORTED,
@@ -235,6 +237,20 @@ def misses(run: Path, reason: str) -> set[str]:
     }
 
 
+def opened(monkeypatch) -> list[str]:
+    """The archive's files the import reads, as `<folder>/<name>`, from
+    now on."""
+    seen: list[str] = []
+    real = imports._read_own
+
+    def read_own(path):
+        seen.append(f"{Path(path).parent.name}/{Path(path).name}")
+        return real(path)
+
+    monkeypatch.setattr(imports, "_read_own", read_own)
+    return seen
+
+
 def read_by_the_engine(engine: Fakes) -> set[str]:
     return {name for what, name in engine.calls if what == "vision"}
 
@@ -329,7 +345,7 @@ class TestAdoption:
         """An archive that is a run directory records when each
         transcription was made: the latest `done` event of its stage."""
         corpus = small(tmp_path)
-        archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
+        archive = an_archive(tmp_path, corpus)
         photo = corpus.sha1(PHOTO)
         logged = [
             ("2026-09-27T23:10:00+00:00", "done", "transcription", photo),
@@ -344,8 +360,15 @@ class TestAdoption:
                 line |= {"subject": subject, "kind": "media", "stage": stage}
                 log.write(json.dumps(line) + "\n")
         import_(tmp_path, archive, corpus)
-        (entry,) = live(tmp_path)
-        assert entry["provenance"]["made_at"] == "2026-09-28T08:05:00+00:00"
+        made = {
+            entry["provenance"]["media_sha1"]: entry["provenance"]["made_at"]
+            for entry in live(tmp_path)
+        }
+        # the gravestone, which no event names, gets no time
+        assert made == {
+            photo: "2026-09-28T08:05:00+00:00",
+            corpus.sha1(STONE): None,
+        }
 
     def test_an_adoption_stands_only_for_the_call_it_was_keyed_for(
         self, tmp_path, engine
@@ -396,6 +419,95 @@ class TestAdoption:
         assert (found.outcome, found.skipped) == (SKIPPED, ANSWERED)
         assert "the engine's answer" in found.detail
 
+    def test_an_engine_field_naming_no_model_claims_none(
+        self, tmp_path, engine
+    ):
+        """An older run that configured no model named none in its engine
+        field: the adoption's provenance says None, never the model the
+        run is configured with, and the view names the client as the
+        archive does."""
+        corpus = small(tmp_path)
+        archive = Archive(tmp_path / "archive")
+        archive.add(
+            "portrait",
+            file=PHOTO,
+            sha1=corpus.sha1(PHOTO),
+            text=PORTRAIT,
+            engine="llm-vision:claude-code/1.0.44",
+        )
+        import_(tmp_path, archive, corpus)
+        (entry,) = live(tmp_path)
+        provenance = entry["provenance"]
+        assert provenance["model"] is None
+        assert (
+            provenance["engine"],
+            provenance["cli_version"],
+            provenance["model_identifier"],
+        ) == ("claude-code", "1.0.44", "claude-code/1.0.44")
+        assert MODEL not in json.dumps(provenance)
+        run = transcribe_only(tmp_path, corpus, engine)
+        assert view(run, corpus, PHOTO)["engine"] == (
+            "llm-vision:claude-code/1.0.44"
+        )
+
+    def test_a_scan_changed_as_it_is_read_is_not_adopted(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """The scan is read once for its SHA-1 and the digest its key
+        names: bytes that changed since the corpus was read, or between
+        the two readings, are no adoption's."""
+        corpus = small(tmp_path)
+        photo = corpus.sha1(PHOTO)
+        archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
+        real = orchestrate.Orchestrator.role_client
+
+        def rescanned(self, role, *, events=None):
+            (corpus.folder / PHOTO).write_bytes(b"\x89PNG rescanned")
+            return real(self, role, events=events)
+
+        monkeypatch.setattr(orchestrate.Orchestrator, "role_client", rescanned)
+        (found,) = import_(tmp_path, archive, corpus).outcomes
+        assert (found.sha1, found.outcome, found.skipped) == (
+            photo,
+            SKIPPED,
+            CHANGED,
+        )
+        monkeypatch.setattr(orchestrate.Orchestrator, "role_client", real)
+        corpus.image(PHOTO, "studio-photo-1890s")
+        assert corpus.sha1(PHOTO) == photo
+        real_digests = imports._digests
+
+        def changed_between(path):
+            sha1, _sha256 = real_digests(path)
+            return sha1, "0" * 64
+
+        monkeypatch.setattr(imports, "_digests", changed_between)
+        (found,) = import_(tmp_path, archive, corpus).outcomes
+        assert (found.outcome, found.skipped) == (SKIPPED, CHANGED)
+        assert live(tmp_path) == [] and rejected(tmp_path) == []
+
+    def test_an_entry_naming_no_origin_is_the_engines(self, tmp_path, engine):
+        """The cache serves an entry that names no origin as the engine's
+        answer: the import neither counts it as an adoption nor withdraws
+        it."""
+        corpus = small(tmp_path)
+        transcribe_only(tmp_path, corpus, engine)
+        for path in (tmp_path / "cache").glob("*/*.json"):
+            entry = json.loads(path.read_text())
+            entry.pop("origin")
+            path.write_text(json.dumps(entry))
+        before = cache_files(tmp_path)
+        archive = an_archive(tmp_path, corpus, **{PHOTO: corpus.texts[PHOTO]})
+        (found,) = import_(tmp_path, archive, corpus).outcomes
+        assert (found.outcome, found.skipped) == (SKIPPED, ANSWERED)
+        assert found.detail == "the cache holds the engine's answer"
+        prefix = corpus.sha1(PHOTO)[:10]
+        (found,) = import_(
+            tmp_path, archive, corpus, leave_out=[prefix]
+        ).outcomes
+        assert found.detail == f"--leave-out {prefix}"
+        assert cache_files(tmp_path) == before
+
 
 # -- the check ----------------------------------------------------------------
 
@@ -421,6 +533,9 @@ class TestTheCheck:
         assert entry["rejected"]["role"] == "transcribe"
         assert entry["provenance"]["backfilled"] is True
         assert entry["provenance"]["check"]["passed"] is False
+        (path,) = (tmp_path / "cache").glob("*/*.rejected-*.json")
+        assert "Q23" not in path.read_text()
+        assert "artifact_qid" not in path.read_text()
         assert [e["response"] for e in live(tmp_path)] == [PORTRAIT]
         # the run's call misses as rejected, and the engine reads the scan
         run = transcribe_only(tmp_path, corpus, engine)
@@ -486,6 +601,30 @@ class TestTheCheck:
         again = import_(tmp_path, archive, corpus)
         assert [o.outcome for o in again.outcomes] == [REJECTED]
 
+    def test_importing_again_under_a_stricter_check_withdraws_the_adoption(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """An adoption the cache serves, which a check made stricter since
+        fails, is moved aside when the import runs again, before any run:
+        the reading is rejected, with the check's reason."""
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
+        import_(tmp_path, archive, corpus)
+        signature = transcription_check._signature(
+            "slashed-names", transcription_check.TOOL_FAILURE, r"Muckel /"
+        )
+        monkeypatch.setattr(
+            transcription_check,
+            "SIGNATURES",
+            (*transcription_check.SIGNATURES, signature),
+        )
+        report = import_(tmp_path, archive, corpus)
+        assert [o.outcome for o in report.outcomes] == [REJECTED]
+        assert live(tmp_path) == []
+        (aside,) = rejected(tmp_path)
+        assert aside["response"] == PORTRAIT
+        assert "slashed-names" in aside["rejected"]["reason"]
+
 
 # -- leaving out, and the never-ingest list ---------------------------------
 
@@ -512,7 +651,7 @@ class TestLeavingOut:
         report = import_(tmp_path, archive, corpus, leave_out=[prefix])
         found = outcome_of(report, corpus.sha1(PHOTO))
         assert found.outcome == LEFT_OUT
-        assert found.detail.endswith("its earlier adoption withdrawn")
+        assert found.detail.endswith("the adoption the cache served withdrawn")
         assert outcome_of(report, corpus.sha1(STONE)).detail == (
             "adopted already"
         )
@@ -549,6 +688,76 @@ class TestLeavingOut:
         with pytest.raises(ImportRefused, match=refusal):
             import_(tmp_path, archive, corpus, leave_out=[prefix])
         assert not (tmp_path / "cache").exists()
+
+    def test_another_archives_adoption_is_withdrawn_too(
+        self, tmp_path, engine
+    ):
+        """Left out, a scan is read afresh by the run whatever adoption the
+        cache served for it, one of another archive's included; and no
+        later import adopts that reading again."""
+        corpus = small(tmp_path)
+        first = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
+        import_(tmp_path, first, corpus)
+        second = Archive(tmp_path / "second-archive")
+        second.add(
+            "portrait",
+            file=PHOTO,
+            sha1=corpus.sha1(PHOTO),
+            text=PORTRAIT + "\n[stamp]",
+        )
+        prefix = corpus.sha1(PHOTO)[:10]
+        (found,) = import_(
+            tmp_path, second, corpus, leave_out=[prefix]
+        ).outcomes
+        assert found.outcome == LEFT_OUT
+        assert found.detail.endswith("the adoption the cache served withdrawn")
+        (aside,) = rejected(tmp_path)
+        assert aside["response"] == PORTRAIT
+        run = transcribe_only(tmp_path, corpus, engine)
+        # the gravestone, which no archive held, is read too
+        assert read_by_the_engine(engine) == {PHOTO, STONE}
+        assert hits(run, "adopted") == set()
+        # the withdrawal stands: the first archive's reading is not
+        # adopted again
+        (found,) = import_(tmp_path, first, corpus).outcomes
+        assert found.outcome == SKIPPED
+
+    def test_an_ambiguous_prefix_refuses_the_import(self, tmp_path, engine):
+        corpus = small(tmp_path)
+        archive = Archive(tmp_path / "archive")
+        for folder, tail in (("one", "0"), ("two", "1")):
+            archive.add(
+                folder,
+                file=f"{folder}.png",
+                sha1="abcdef1" + tail * 33,
+                text=PORTRAIT,
+            )
+        with pytest.raises(ImportRefused, match="ambiguous"):
+            import_(tmp_path, archive, corpus, leave_out=["abcdef1"])
+        assert not (tmp_path / "cache").exists()
+        report = import_(tmp_path, archive, corpus, leave_out=["abcdef10"])
+        assert sorted(o.outcome for o in report.outcomes) == [
+            LEFT_OUT,
+            SKIPPED,
+        ]
+
+    def test_a_prefix_matching_an_excluded_media_is_named_in_its_line(
+        self, tmp_path, engine
+    ):
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus, **{STONE: GRAVESTONE})
+        prefix = corpus.sha1(STONE)[:10]
+        (found,) = import_(
+            tmp_path,
+            archive,
+            corpus,
+            exclusions=ExclusionList.parse(f"{corpus.sha1(STONE)}\n"),
+            leave_out=[prefix],
+        ).outcomes
+        assert (found.outcome, found.detail) == (
+            EXCLUDED,
+            f"--leave-out {prefix} matched it too",
+        )
 
 
 class TestTheNeverIngestList:
@@ -605,12 +814,207 @@ class TestTheNeverIngestList:
         ]
         assert live(tmp_path) == []
 
-    def test_without_a_list_nothing_is_read(self, tmp_path, engine):
+    def test_an_excluded_documents_transcription_is_never_opened(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """The list is asked with what the states record before any
+        transcription is opened: an excluded document's is never read."""
+        corpus = small(tmp_path)
+        archive = Archive(tmp_path / "archive")
+        archive.add(
+            "portrait",
+            file="loebig-portrait-draft.png",
+            sha1=corpus.sha1(PHOTO),
+            text=PORTRAIT,
+        )
+        archive.add(
+            "gravestone", file=STONE, sha1=corpus.sha1(STONE), text=GRAVESTONE
+        )
+        read = opened(monkeypatch)
+        report = import_(
+            tmp_path,
+            archive,
+            corpus,
+            exclusions=ExclusionList.parse(
+                f"{corpus.sha1(STONE)}\n*-portrait-draft.png\n"
+            ),
+        )
+        assert report.counts() == {EXCLUDED: 2}
+        assert sorted(read) == ["gravestone/state.json", "portrait/state.json"]
+
+    def test_a_transcription_naming_an_excluded_sha1_goes_no_further(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """A state that records no SHA-1 leaves the list's first pass
+        nothing to ask by it: the transcription is opened, and the SHA-1 it
+        names is asked before its text is used, so its tool-failure text
+        is neither checked nor recorded."""
+        corpus = small(tmp_path)
+        archive = Archive(tmp_path / "archive")
+        archive.add(
+            "gravestone",
+            file=STONE,
+            sha1=corpus.sha1(STONE),
+            text=TOOL_FAILURE,
+            current_format=True,
+            state_sha1=False,
+        )
+        checked = []
+        real = transcription_check.check_transcription
+
+        def check(text, *args, **kwargs):
+            checked.append(text)
+            return real(text, *args, **kwargs)
+
+        monkeypatch.setattr(transcription_check, "check_transcription", check)
+        (found,) = import_(
+            tmp_path,
+            archive,
+            corpus,
+            exclusions=ExclusionList.parse(f"{corpus.sha1(STONE)}\n"),
+        ).outcomes
+        assert (found.outcome, found.sha1) == (EXCLUDED, corpus.sha1(STONE))
+        assert checked == []
+        assert rejected(tmp_path) == [] and live(tmp_path) == []
+
+    def test_a_scan_the_list_excludes_by_its_corpus_name_is_not_adopted(
+        self, tmp_path, engine
+    ):
+        """The corpus is found as the run finds it, the list asked of each
+        file there: a scan the list excludes by a glob on the name it has
+        now, which the archive records under an older one, is no scan the
+        run would transcribe."""
+        corpus = small(tmp_path)
+        archive = Archive(tmp_path / "archive")
+        archive.add(
+            "portrait",
+            file="portrait-archived-name.png",
+            sha1=corpus.sha1(PHOTO),
+            text=PORTRAIT,
+        )
+        (found,) = import_(
+            tmp_path,
+            archive,
+            corpus,
+            exclusions=ExclusionList.parse("b-studio-*.png\n"),
+        ).outcomes
+        assert found.outcome != IMPORTED
+        assert (found.outcome, found.skipped) == (SKIPPED, NOT_IN_CORPUS)
+        assert live(tmp_path) == [] and rejected(tmp_path) == []
+
+    def test_without_a_list_nothing_is_read(
+        self, tmp_path, engine, monkeypatch
+    ):
         corpus = small(tmp_path)
         archive = an_archive(tmp_path, corpus)
+        read = opened(monkeypatch)
         with pytest.raises(ExclusionConfigError, match="never-ingest list"):
             import_(tmp_path, archive, corpus, exclusions=None)
+        assert read == []
         assert not (tmp_path / "cache").exists()
+
+
+class TestTheArchiveAlone:
+    """Nothing is read but the archive's own files: a symbolic link, or a
+    path that resolves outside the archive, is not followed."""
+
+    def outside(self, tmp_path, corpus, text=PORTRAIT) -> Path:
+        """A document folder outside the archive, with a reading of the
+        portrait."""
+        return Archive(tmp_path / "elsewhere").add(
+            "portrait", file=PHOTO, sha1=corpus.sha1(PHOTO), text=text
+        )
+
+    def test_a_linked_transcription_is_not_read(
+        self, tmp_path, engine, monkeypatch
+    ):
+        corpus = small(tmp_path)
+        elsewhere = self.outside(tmp_path, corpus)
+        archive = Archive(tmp_path / "archive")
+        folder = archive.add(
+            "portrait", file=PHOTO, sha1=corpus.sha1(PHOTO), text="x"
+        )
+        (folder / "transcription.json").unlink()
+        (folder / "transcription.json").symlink_to(
+            elsewhere / "transcription.json"
+        )
+        read = opened(monkeypatch)
+        (found,) = import_(tmp_path, archive, corpus).outcomes
+        assert (found.outcome, found.skipped) == (SKIPPED, UNREADABLE)
+        assert "symbolic link" in found.detail
+        assert read == []
+        assert live(tmp_path) == []
+
+    def test_a_linked_state_is_not_read(self, tmp_path, engine, monkeypatch):
+        corpus = small(tmp_path)
+        elsewhere = self.outside(tmp_path, corpus)
+        archive = Archive(tmp_path / "archive")
+        folder = archive.add(
+            "portrait", file=PHOTO, sha1=corpus.sha1(PHOTO), text=PORTRAIT
+        )
+        (folder / "state.json").unlink()
+        (folder / "state.json").symlink_to(elsewhere / "state.json")
+        read = opened(monkeypatch)
+        (found,) = import_(tmp_path, archive, corpus).outcomes
+        assert (found.outcome, found.skipped) == (SKIPPED, UNREADABLE)
+        assert "state.json is not read (it is a symbolic link)" in found.detail
+        # neither the state nor, with no state to ask the list by, the
+        # transcription beside it
+        assert read == []
+        assert live(tmp_path) == []
+
+    def test_a_path_through_a_linked_folder_is_not_the_archives(
+        self, tmp_path
+    ):
+        root = tmp_path / "archive"
+        root.mkdir()
+        (tmp_path / "elsewhere").mkdir()
+        (tmp_path / "elsewhere" / "state.json").write_text("{}")
+        (root / "linked").symlink_to(tmp_path / "elsewhere")
+        (root / "own").mkdir()
+        (root / "own" / "state.json").write_text("{}")
+        root = root.resolve()
+        assert imports._foreign(root / "linked" / "state.json", root) == (
+            "resolves outside the archive"
+        )
+        assert imports._foreign(root / "own" / "state.json", root) is None
+
+    def test_linked_events_give_no_time(self, tmp_path, engine):
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
+        events = tmp_path / "other-run-events.jsonl"
+        line = {"at": "2026-07-01T00:00:00+00:00", "event": "done"}
+        line |= {"stage": "transcription", "subject": corpus.sha1(PHOTO)}
+        events.write_text(json.dumps(line) + "\n")
+        (archive.path / "events.jsonl").symlink_to(events)
+        import_(tmp_path, archive, corpus)
+        (entry,) = live(tmp_path)
+        assert entry["provenance"]["made_at"] is None
+
+    def test_events_above_the_archive_are_not_read(self, tmp_path, engine):
+        """Given a document's folder as the archive, the events of the run
+        directory above it are outside the archive, and give no time."""
+        corpus = small(tmp_path)
+        run = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
+        line = {"at": "2026-07-01T00:00:00+00:00", "event": "done"}
+        line |= {"stage": "transcription", "subject": corpus.sha1(PHOTO)}
+        (run.path / "events.jsonl").write_text(json.dumps(line) + "\n")
+        folder = Archive(run.path / Path(PHOTO).stem)
+        (found,) = import_(tmp_path, folder, corpus).outcomes
+        assert found.outcome == IMPORTED
+        (entry,) = live(tmp_path)
+        assert entry["provenance"]["made_at"] is None
+        assert entry["provenance"]["archived_as"] == "transcription.json"
+
+    def test_an_archive_named_through_a_link_is_read(self, tmp_path, engine):
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
+        link = tmp_path / "the-archive"
+        link.symlink_to(archive.path)
+        (found,) = import_(tmp_path, Archive(link), corpus).outcomes
+        assert found.outcome == IMPORTED
+        (entry,) = live(tmp_path)
+        assert entry["provenance"]["archive"] == str(archive.path.resolve())
 
 
 # -- what is skipped ----------------------------------------------------------
@@ -813,7 +1217,7 @@ class TestRefusals:
 
 
 @pytest.mark.parametrize(
-    "engine, found",
+    "field, found",
     [
         (
             "llm-vision:claude-code/1.0.44:claude-sonnet-4-20250514",
@@ -827,10 +1231,10 @@ class TestRefusals:
         ("llm-vision:some/other:client", (None, None, None)),
     ],
 )
-def test_the_engine_field_names_the_client_that_answered(engine, found):
-    client = archived_client(engine)
+def test_the_engine_field_names_the_client_that_answered(field, found):
+    client = archived_client(field)
     assert (client["engine"], client["cli_version"], client["model"]) == found
-    assert client["model_identifier"] == engine.partition(":")[2]
+    assert client["model_identifier"] == field.partition(":")[2]
 
 
 # -- the command --------------------------------------------------------------
@@ -905,7 +1309,9 @@ class TestTheCommand:
         argv += ["--corpus", str(corpus.folder)]
         argv += ["--cache", str(tmp_path / "cache"), "--leave-out", "f" * 9]
         assert cli_run(*argv) == 1
-        assert "no transcription" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "no transcription" in err
+        assert len(err.splitlines()) == 1
 
     def test_a_cache_another_process_holds_stops_it_in_one_line(
         self, tmp_path, engine, monkeypatch, capsys
@@ -927,7 +1333,55 @@ class TestTheCommand:
         argv += ["--corpus", str(corpus.folder)]
         argv += ["--cache", str(tmp_path / "cache")]
         assert cli_run(*argv) == 1
-        assert "one process at a time uses a cache" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "one process at a time uses a cache" in err
+        assert len(err.splitlines()) == 1
+
+    def the_command(self, tmp_path, monkeypatch, *argv: str) -> list[str]:
+        """`scratch import-transcriptions` with an empty never-ingest list
+        and no corpus configured, the arguments given after it."""
+        never = tmp_path / "never-ingest.txt"
+        never.write_text("")
+        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
+        monkeypatch.delenv("YIZKR_CORPUS_DIR", raising=False)
+        monkeypatch.setenv("YIZKR_ENV_FILE", str(tmp_path / "no.env"))
+        return ["scratch", "import-transcriptions", *argv]
+
+    def test_without_a_corpus_it_says_so(self, tmp_path, engine, monkeypatch):
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus)
+        argv = self.the_command(tmp_path, monkeypatch, str(archive.path))
+        with pytest.raises(SystemExit, match="no corpus given"):
+            cli_run(*argv, "--cache", str(tmp_path / "cache"))
+        assert not (tmp_path / "cache").exists()
+
+    def test_it_keys_for_the_effort_it_is_given(
+        self, tmp_path, engine, monkeypatch, capsys
+    ):
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
+        argv = self.the_command(tmp_path, monkeypatch, str(archive.path))
+        argv += ["--corpus", str(corpus.folder)]
+        argv += ["--cache", str(tmp_path / "cache")]
+        assert cli_run(*argv, "--extract-effort", "high") == 0
+        assert f"{MODEL}, effort high" in capsys.readouterr().out
+        (entry,) = live(tmp_path)
+        assert entry["components"]["effort"] == "high"
+
+    def test_ctrl_c_is_interrupted(
+        self, tmp_path, engine, monkeypatch, capsys
+    ):
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus)
+
+        def interrupted(*args, **kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(imports, "import_transcriptions", interrupted)
+        argv = self.the_command(tmp_path, monkeypatch, str(archive.path))
+        argv += ["--corpus", str(corpus.folder)]
+        assert cli_run(*argv) == 130
+        assert capsys.readouterr().err == "interrupted\n"
 
 
 # -- the call estimate --------------------------------------------------------

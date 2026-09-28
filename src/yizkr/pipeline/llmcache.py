@@ -1215,6 +1215,17 @@ class CachingClient:
         an adoption of an answer for that call is seeded with."""
         return call_key(self.components(COMPLETE, prompt, image_paths))
 
+    def complete_call(
+        self,
+        prompt: str,
+        image_paths: Sequence[str | os.PathLike[str]] = (),
+    ) -> tuple[str, dict[str, Any]]:
+        """The key `complete(prompt, image_paths)` is served under, with
+        the components it hashes, from one reading of each file the call
+        is given: the components an adoption keeps are those of its key."""
+        components = self.components(COMPLETE, prompt, image_paths)
+        return call_key(components), components
+
     # -- calls ----------------------------------------------------------------
 
     def complete(

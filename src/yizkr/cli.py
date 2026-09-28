@@ -904,6 +904,7 @@ def cmd_scratch_import_transcriptions(args) -> int:
     from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
     from yizkr.pipeline import import_transcriptions as imports
     from yizkr.pipeline.llm import PassPaused
+    from yizkr.pipeline.scratch import EXIT_FAILED, EXIT_INTERRUPTED
 
     # fail closed: no never-ingest list, nothing read
     exclusions = load_exclusions(required=True, env_file=args.env_file)
@@ -924,7 +925,10 @@ def cmd_scratch_import_transcriptions(args) -> int:
         )
     except (imports.ImportRefused, PassPaused) as exc:
         print(str(exc), file=sys.stderr)
-        return 1
+        return EXIT_FAILED
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return EXIT_INTERRUPTED
     for line in imports.describe(report):
         print(line)
     return 0
@@ -1580,15 +1584,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _scratch_parsers(sub, effort_choices) -> None:
-    """`yizkr scratch`: the scratch driver (docs/runbooks/scratch-run.md)
-    and the run monitor's commands (docs/MONITOR.md)."""
+    """`yizkr scratch`: the scratch driver and its call estimate
+    (docs/runbooks/scratch-run.md), the import of archived transcriptions
+    for its calls (docs/LLM_CACHE.md, Seeding), and the run monitor's
+    commands (docs/MONITOR.md)."""
     from yizkr.pipeline import scratch
     from yizkr.pipeline.rundir import CONTROL_ACTIONS
 
     group = sub.add_parser(
         "scratch",
-        help="whole-corpus scratch runs: estimate one's calls, run it, "
-        "follow it, pause, resume or abort it (docs/runbooks/scratch-run.md)",
+        help="whole-corpus scratch runs: import archived transcriptions for "
+        "one's calls, estimate its calls, run it, follow it, pause, resume "
+        "or abort it (docs/runbooks/scratch-run.md)",
     )
     ssub = group.add_subparsers(dest="action", required=True)
     runs_help = (
