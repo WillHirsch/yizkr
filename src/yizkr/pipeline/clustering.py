@@ -1584,14 +1584,21 @@ def read_manifests(documents: Iterable[_Document]) -> list[Manifest]:
     return manifests
 
 
+# what an identity map of FORMAT holds, each a mapping
+_SECTIONS = ("mentions", "clusters", "summary")
+
+
 def read_identity_map(path: Path) -> dict[str, Any] | None:
     """The identity map at `path`, or None when there is none, or one of
-    another format, or one whose decisions do not hash to its hash."""
+    another format or without a section of its format, or one whose
+    decisions do not hash to its hash."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict) or data.get("format") != FORMAT:
+        return None
+    if not all(isinstance(data.get(name), dict) for name in _SECTIONS):
         return None
     mentions = data.get("mentions")
     try:

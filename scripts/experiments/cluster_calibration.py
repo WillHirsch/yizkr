@@ -9,6 +9,13 @@ what transitive closure does with the rest, and how many adjudication
 calls and owner review rows follow. No LLM calls, no graph access, no
 writes except to ``--out``.
 
+The recommended variants (the kin-surname person key, the first-component
+place token, GEDCOM anchoring, the lifted cannot-link constraints) are
+promoted into the scratch driver's clustering stage,
+``src/yizkr/pipeline/clustering.py`` (#105), whose thresholds live in
+``clustering.yaml`` beside it; this script keeps every variant it
+compared, for recalibration.
+
 Inputs (all paths are arguments; nothing is read from the repo):
 
 * ``--runs DIR ...``: run directories, each with a ``batch.json``

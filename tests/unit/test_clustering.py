@@ -1276,6 +1276,14 @@ class TestTheStage:
         assert again.identity_map == made.identity_map
         made.path.write_text('{"format": 1, "mentions": ')
         assert not ensure_identity_map(directory_, documents).reused
+        # a whole map, its decisions hashing to its hash, without the
+        # summary the stage reports from
+        data = json.loads(made.path.read_text())
+        del data["summary"]
+        made.path.write_text(json.dumps(data))
+        again = ensure_identity_map(directory_, documents)
+        assert not again.reused
+        assert again.identity_map["summary"] == made.identity_map["summary"]
 
     def test_run_stage_says_what_needs_attention(self, tmp_path):
         logged: list[str] = []
