@@ -3061,6 +3061,51 @@ class TestWriterPlaces:
             (["Q27"], []),
         ]
 
+    def test_an_explicit_kind_keeps_its_place_beside_the_minted_kind(self):
+        # (here) the certificate's batch also claims outright that Sebastian
+        # is a human, quoting the groom's particulars. The kind minted for
+        # him cites the certificate in no place, so the claim's excerpt is
+        # a block of its own beside it
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        given = _certificate_batch().model_dump(mode="json")
+        (born,) = given["claims"]
+        human = {"kind": "vocab", "key": "human"}
+        given["claims"].append(
+            dict(
+                born,
+                property="instance_of",
+                value={"type": "item", "value": human},
+                source={
+                    "artifact": ARTIFACT,
+                    "transcription_excerpt": _excerpt(
+                        "der Hutmacher Sebastian Löbig"
+                    ),
+                },
+            )
+        )
+        batch = ClaimBatch.model_validate(given)
+
+        first = BatchWriter(wiki).write_batch(batch)
+
+        sebastian = first.created_items["e01"]
+        (kind,) = _statements(wiki, sebastian, "instance_of")
+        assert _places(kind) == [
+            ("Q23", None, None, None),
+            ("Q23", None, None, "der Hutmacher Sebastian Löbig"),
+        ]
+        assert _sources(kind) == [
+            (["Q23"], []),
+            ([], [first.run_qid]),
+            (["Q23"], []),
+        ]
+        assert (first.written, first.referenced, first.skipped) == (1, 1, 0)
+        # and a re-run finds both places there
+        before = _snapshot(wiki, sebastian)
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
+        assert again.type_statements_referenced == 0
+        assert _snapshot(wiki, sebastian) == before
+
 
 class TestPrivacyDefaults:
     def test_no_default_llm_client(self):
