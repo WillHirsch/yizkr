@@ -126,9 +126,6 @@ FORMAT = 1
 ENGINE = "engine"
 ADOPTED = "adopted"
 
-# the kinds of call a key tells apart are llm.COMPLETE, llm.OPEN and
-# llm.FORK
-
 # the events a caching client emits
 HIT = "cache-hit"
 MISS = "cache-miss"
