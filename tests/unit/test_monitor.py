@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.unit.stage_counts import disagreement
 from yizkr.pipeline import monitor
 from yizkr.pipeline.monitor import (
     ABORTED,
@@ -64,17 +65,11 @@ from yizkr.pipeline.monitor import (
     write_status_page,
 )
 from yizkr.pipeline.rundir import (
-    DONE,
-    FAILED,
     INTERRUPTED,
-    NEEDS_ATTENTION,
-    PENDING,
     RUN_END,
     RUN_INTERRUPTED,
-    RUNNING,
     RunDir,
     run_state,
-    summarise,
 )
 
 SOURCES = {source.key: source for source in u.SOURCES}
@@ -429,33 +424,6 @@ def run(tmp_path) -> Path:
 @pytest.fixture
 def summary(run):
     return summarise_run(run, NOW)
-
-
-def disagreement(run: Path, summary=None) -> str | None:
-    """How the monitor's counts differ from rundir.run_state's for the
-    same files (the monitor's split recombined: done and reused are
-    done, and the interrupted, which the monitor counts among the
-    pending, are interrupted; a stage named as the monitor shows it), or
-    None (#300)."""
-    summary = summary or summarise_run(run, NOW)
-    expected = {
-        monitor._token(stage): counts
-        for stage, counts in summarise(run_state(RunDir(run))).items()
-    }
-    seen = {}
-    for counts in summary.stages:
-        row = {
-            PENDING: counts.pending - counts.interrupted,
-            RUNNING: counts.running,
-            INTERRUPTED: counts.interrupted,
-            DONE: counts.done + sum(counts.reused.values()),
-            NEEDS_ATTENTION: counts.attention,
-            FAILED: counts.failed,
-        }
-        row = {status: count for status, count in row.items() if count}
-        if row:
-            seen[counts.name] = row
-    return None if seen == expected else f"{seen} != {expected}"
 
 
 def cut_short(run: Path) -> set[tuple[str, str]]:

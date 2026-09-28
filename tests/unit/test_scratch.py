@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
-from tests.unit.test_monitor import disagreement
+from tests.unit.stage_counts import disagreement
 from tests.unit.test_no_wiki_before_write import (  # noqa: F401
     build_deck,
     refusals,
