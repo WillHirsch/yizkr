@@ -281,19 +281,22 @@ their prompts carry. They are local-only data, never committed or shared
   your own that its group can write. Its mode is left as it is: make it
   private (`chmod 700`), or name another folder.
 
-A folder that cannot be made, or is not a folder, is refused too. The
-checks run as the cache opens, and every command opens its cache before
-its first call: `ingest extract --cache` before it asks the engine,
-`ingest run` and `scratch run` when a stage first needs the engine. The
-refusal's message is one line, and it is raised as `CacheRefused`, a
-pause (`PassPaused`) like `CacheInUse`: it ends the pass rather than
-failing each document in turn (`scratch run` prints the line and exits
-2), and the pass goes on once the folder can hold the cache, or with
-another.
+A folder that cannot be made, is not a folder, or is private but not
+writable by this user (another user's, or one closed to its owner) is
+refused too, and so is a lock file that cannot be opened. The checks run
+as the cache opens, and every command opens its cache before its first
+call: `ingest extract --cache` before it asks the engine, `ingest run`
+and `scratch run` when a stage first needs the engine. The refusal's
+message is one line, and it is raised as `CacheRefused`, a pause
+(`PassPaused`) like `CacheInUse`: it ends the pass rather than failing
+each document in turn, the invocation ends `paused` (`scratch run`
+prints the line and exits 2), and the pass goes on once the folder can
+hold the cache, or with another.
 
 **Folders the cache makes are private** (mode 700, whatever the umask):
-the root and any missing folder above it, a key's folder, and a kept
-session's folders, however deep. A folder there already keeps its mode,
+the root and any missing folder above it, a key's folder for an answer
+or an adoption, and a kept session's folders, however deep. A folder
+there already keeps its mode, one another process makes first included,
 so the cache changes the mode of no folder it did not make; a private
 root keeps the folders under it from other users, whatever their modes.
 

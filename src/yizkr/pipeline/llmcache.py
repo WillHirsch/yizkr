@@ -48,12 +48,13 @@ their prompts carry, which is never committed or shared
 (docs/AGENT_PROTOCOL.md §6). So opening a cache refuses a root that a
 git work tree would track, where `git add` would pick its entries up, and
 a root that exists and is open to other users, whose mode it leaves
-alone (CacheRefused, a pause of its pass, before its first call). Every
-folder the cache makes, the root and any missing folder above it
-included, is made private to its owner (mode 700, whatever the umask); a
-folder there already keeps its mode, so the cache changes the mode of no
-folder it did not make. A private root keeps the folders under it from
-other users, whatever their modes.
+alone (CacheRefused, a pause of its pass, before its first call), as it
+refuses one it cannot make, write in or lock. Every folder the cache
+makes, the root and any missing folder above it included, is made
+private to its owner (mode 700, whatever the umask); a folder there
+already keeps its mode, so the cache changes the mode of no folder it did
+not make. A private root keeps the folders under it from other users,
+whatever their modes.
 
 One process at a time uses a cache (ADR-0032 §3). Opening it locks
 ``.lock`` exclusively (flock) for the rest of the process and records the
@@ -219,18 +220,19 @@ def call_key(components: Mapping[str, Any]) -> str:
 
 class CacheRefused(PassPaused):
     """The folder named for a cache cannot hold one: a git work tree would
-    track it, it exists and is open to other users, or it cannot be made
-    or is not a folder. Like CacheInUse, it is a pause: it ends the pass
-    before its first call, rather than failing each document in turn, and
-    the pass can go on once the folder is fit to hold the cache, or with
-    another."""
+    track it, it exists and is open to other users, or it cannot be made,
+    is not a folder, or is one this user cannot write in or lock. Like
+    CacheInUse, it is a pause: it ends the pass before its first call,
+    rather than failing each document in turn, and the pass can go on once
+    the folder is fit to hold the cache, or with another."""
 
 
 def _open_root(root: Path) -> None:
     """Make the cache root when it is not there yet, or refuse it
     (CacheRefused): one a git work tree would track, before anything is
-    made; one that cannot be made or is not a folder; and one that exists
-    and is open to other users, whose mode is left as it is."""
+    made; one that cannot be made or is not a folder; one that exists and
+    is open to other users; and one this user cannot write in. The mode of
+    a root there already is left as it is."""
     # the scratch driver keeps its runs directory out of work trees with
     # this check; its module loads the orchestrator, which a process that
     # only opens a cache does not need
@@ -260,6 +262,13 @@ def _open_root(root: Path) -> None:
             f"the LLM cache {root} is open to other users (mode {mode:o}), "
             "and its entries hold corpus content: make it private (chmod "
             "700), or give the cache another folder"
+        )
+    # a private folder of another user's, or one its owner has closed:
+    # the cache writes its lock file and its entries in it
+    if not os.access(root, os.W_OK | os.X_OK):
+        raise CacheRefused(
+            f"{root} cannot be the LLM cache: this user cannot write in it "
+            f"(mode {mode:o})"
         )
 
 
@@ -461,11 +470,11 @@ class EngineCache:
     entry; ``epochs`` gives roles an epoch other than 0. Opening a cache
     makes its root and holds it for the rest of the process (see the
     module docstring); it raises CacheRefused for a root a git work tree
-    would track, or one there already that is open to other users, and
-    CacheInUse when another process holds it. No entry is written until a
-    call is answered. The folders the cache makes are private to their
-    owner (mode 700), and it changes the mode of no folder it did not
-    make: the entries hold corpus content."""
+    would track, one there already that is open to other users, or one it
+    cannot use, and CacheInUse when another process holds it. No entry is
+    written until a call is answered. The folders the cache makes are
+    private to their owner (mode 700), and it changes the mode of no
+    folder it did not make: the entries hold corpus content."""
 
     def __init__(
         self,
@@ -489,7 +498,12 @@ class EngineCache:
         # in this run, until one is opened again
         self._sessions: dict[str, tuple[Any, Any, str]] = {}
         _open_root(self.root)
-        _hold(self.root)
+        try:
+            _hold(self.root)
+        except OSError as exc:  # a lock file it cannot open, say
+            raise CacheRefused(
+                f"{self.root} cannot be the LLM cache: {exc}"
+            ) from None
 
     def epoch(self, role: str) -> int:
         return self.epochs.get(role, 0)
