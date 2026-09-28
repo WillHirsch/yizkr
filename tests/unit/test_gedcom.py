@@ -700,6 +700,13 @@ def eugen(*lines: str) -> str:
     )
 
 
+def person(xref: str, name: str, *lines: str) -> str:
+    """A person's record, with its NAME and then (here) `lines`."""
+    return "\n".join(
+        [f"0 @{xref}@ INDI", f"1 NAME {name}", *lines, "0 TRLR", ""]
+    )
+
+
 def couple(marriage: str | None = None, divorce: str | None = None) -> str:
     """Leopold and Agnes's family record, its marriage and divorce dated
     (here) as given."""
@@ -1349,6 +1356,635 @@ def test_a_period_on_another_event_is_one_dates_range(
         sorted((q.property, shown(q.value)) for q in claim.qualifiers)
         == expected
     )
+
+
+def described(value, labels: dict[str, str]):
+    """A claim's or a qualifier's value: a time as (year, month, day,
+    precision), an entity by its label, a vocabulary item by its key, a
+    text as itself and a quantity as its amount."""
+    if value.type == "time":
+        return value.year, value.month, value.day, value.precision
+    if value.type == "item":
+        ref = value.value
+        return labels[ref.local_id] if ref.kind == "local" else ref.key
+    if value.type == "monolingual":
+        return value.value.text
+    return value.amount
+
+
+def stated(text: str, subject: str, prop: str) -> list[tuple]:
+    """`subject`'s `prop` claims in the batch's order, each as its value and
+    its qualifiers, which are (property, value) pairs in property order."""
+    batch = adapt_gedcom(text, artifact=EXPORT).batch
+    labels = {entity.id: entity.label for entity in batch.entities}
+    return [
+        (
+            described(claim.value, labels),
+            sorted(
+                (q.property, described(q.value, labels))
+                for q in claim.qualifiers
+            ),
+        )
+        for claim in claims_for(batch, subject, prop)
+    ]
+
+
+def spouse_pairs(text: str) -> list[list[tuple]]:
+    """The qualifiers of Leopold and Agnes's spouse claims, a list for each
+    pair of claims in the batch's order: each of Leopold's claims names
+    Agnes, and each of Agnes's mirrors his."""
+    leopold = stated(text, "i11", "spouse")
+    agnes = stated(text, "i17", "spouse")
+    assert {value for value, _ in leopold} == {"Agnes Löbig"}
+    assert {value for value, _ in agnes} == {"Leopold Löbig"}
+    assert [quals for _, quals in agnes] == [quals for _, quals in leopold]
+    return [quals for _, quals in leopold]
+
+
+def day(y: int, m: int, d: int) -> tuple:
+    return y, m, d, "day"
+
+
+FLOERBURG = "Flörburg, Hesse, Germany"
+
+
+class TestRepeatedEvents:
+    """A record that repeats a BIRT or a DEAT states alternatives, as
+    GEDCOM does, and each is read as claims of its own, with its own date,
+    place and circa, so that the alternatives coexist (ADR-0002, #322)."""
+
+    def test_each_birth_is_a_claim_of_its_own(self):
+        # Gustav was born on 7 January 1919 per the civil register and on
+        # 1 July 1919 per his naturalisation: (here) the export gives both
+        text = person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 BIRT",
+            "2 DATE 7 JAN 1919",
+            f"2 PLAC {FLOERBURG}",
+            "1 BIRT",
+            "2 DATE 1 JUL 1919",
+        )
+        assert stated(text, "i8", "date_of_birth") == [
+            (day(1919, 1, 7), []),
+            (day(1919, 7, 1), []),
+        ]
+        assert stated(text, "i8", "place_of_birth") == [(FLOERBURG, [])]
+        # each cites the lines of its own BIRT
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        assert [
+            claim.source.transcription_excerpt.text
+            for claim in claims_for(batch, "i8", "date_of_birth")
+        ] == [
+            f"1 BIRT | 2 DATE 7 JAN 1919 | 2 PLAC {FLOERBURG}",
+            "1 BIRT | 2 DATE 1 JUL 1919",
+        ]
+
+    def test_each_birth_keeps_its_own_circa(self):
+        # Cäcilie was born about 1833 per the tree and in 1833 per the
+        # gravestone: the circa is the tree's alone
+        text = person(
+            "I2",
+            "Cäcilie /Tarle/",
+            "1 BIRT",
+            "2 DATE ABT 1833",
+            "1 BIRT",
+            "2 DATE 1833",
+        )
+        assert stated(text, "i2", "date_of_birth") == [
+            (year(1833), [CIRCA]),
+            (year(1833), []),
+        ]
+
+    def test_each_death_is_a_claim_of_its_own(self):
+        # Eugen died on 16 March 1909 of Wassersucht, per the burial
+        # register, and in 1909 per the gravestone; (here) the export's
+        # second DEAT gives the cause in English
+        text = eugen(
+            "1 DEAT",
+            "2 DATE 16 MAR 1909",
+            f"2 PLAC {FLOERBURG}",
+            "2 CAUS Wassersucht",
+            "1 DEAT",
+            "2 DATE 1909",
+            "2 CAUS Dropsy",
+        )
+        assert stated(text, "i1", "date_of_death") == [
+            (day(1909, 3, 16), []),
+            (year(1909), []),
+        ]
+        assert stated(text, "i1", "place_of_death") == [(FLOERBURG, [])]
+        assert stated(text, "i1", "cause_of_death") == [
+            ("Wassersucht", []),
+            ("Dropsy", []),
+        ]
+
+    @pytest.mark.parametrize(
+        ("tag", "date", "prop", "expected"),
+        [
+            ("BIRT", "1836", "date_of_birth", year(1836)),
+            ("DEAT", "16 MAR 1909", "date_of_death", day(1909, 3, 16)),
+        ],
+    )
+    def test_an_undated_event_hides_no_dated_one(
+        self, tag, date, prop, expected
+    ):
+        # (here) the export says first that Eugen was born, or died, and
+        # then when
+        text = eugen(f"1 {tag} Y", f"1 {tag}", f"2 DATE {date}")
+        assert stated(text, "i1", prop) == [(expected, [])]
+
+    def test_a_restated_event_gives_its_claims_once(self):
+        # (here) the export repeats Eugen's birth line for line: the batch
+        # holds each claim once, so each has a claim id of its own on the
+        # review sheet
+        from yizkr.pipeline.review import claim_id
+
+        birth = [
+            "1 BIRT",
+            "2 DATE 1836",
+            "2 PLAC Bad Flörburg, Hesse, Germany",
+        ]
+        batch = adapt_gedcom(eugen(*birth, *birth), artifact=EXPORT).batch
+        assert len(claims_for(batch, "i1", "date_of_birth")) == 1
+        assert len(claims_for(batch, "i1", "place_of_birth")) == 1
+        assert len({claim_id(c) for c in batch.claims}) == len(batch.claims)
+
+    def test_a_restated_value_under_another_citation_is_its_own_claim(self):
+        # Gustav was born on 7 January 1919 per his birth register extract:
+        # (here) the export gives that date twice, citing the extract once
+        # and the tree once, with no PAGE, so only the citation tells the
+        # two apart. Each stays a claim of its own, with its own excerpt,
+        # so that neither source's reference is lost (rule 1, #322)
+        text = (
+            "0 @S1@ SOUR\n1 TITL Birth register extract for Gustav Löbig\n"
+            "0 @S2@ SOUR\n1 TITL Family tree drawn by Clara Lobig\n"
+        ) + person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 BIRT",
+            "2 DATE 7 JAN 1919",
+            "2 SOUR @S1@",
+            "1 BIRT",
+            "2 DATE 7 JAN 1919",
+            "2 SOUR @S2@",
+        )
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        births = claims_for(batch, "i8", "date_of_birth")
+        assert [shown(claim.value) for claim in births] == [
+            day(1919, 1, 7),
+            day(1919, 1, 7),
+        ]
+        assert [
+            claim.source.transcription_excerpt.text for claim in births
+        ] == [
+            "1 BIRT | 2 DATE 7 JAN 1919 | 2 SOUR @S1@"
+            " | cited: Birth register extract for Gustav Löbig",
+            "1 BIRT | 2 DATE 7 JAN 1919 | 2 SOUR @S2@"
+            " | cited: Family tree drawn by Clara Lobig",
+        ]
+        assert [claim.source.page_number for claim in births] == [None, None]
+
+    def test_the_summary_gives_every_birth_and_death_date(self):
+        # the undated BIRT hides neither birth date, and (here) the export
+        # dates Gustav's death twice
+        batch = adapt_gedcom(
+            person(
+                "I8",
+                "Gustav /Löbig/",
+                "1 BIRT Y",
+                "1 BIRT",
+                "2 DATE 7 JAN 1919",
+                "1 BIRT",
+                "2 DATE 1 JUL 1919",
+                "1 DEAT",
+                "2 DATE 1996",
+                "1 DEAT",
+                "2 DATE ABT 1996",
+            ),
+            artifact=EXPORT,
+        ).batch
+        (gustav,) = [e for e in batch.entities if e.id == "i8"]
+        assert gustav.summary == (
+            "b. 7 JAN 1919 or 1 JUL 1919; d. 1996 or ABT 1996"
+        )
+
+
+class TestRepeatedDetails:
+    """A second DATE, PLAC or CAUS beneath one event is non-standard
+    GEDCOM, and an alternative too: each is read as a claim of its own.
+    Where one claim holds both an event's date and its place, each of its
+    dates is paired with each of its places (#322)."""
+
+    def test_each_date_beneath_a_birth_is_a_claim_of_its_own(self):
+        # (here) one BIRT gives both of Gustav's birth dates
+        text = person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 BIRT",
+            "2 DATE 7 JAN 1919",
+            "2 DATE 1 JUL 1919",
+        )
+        assert stated(text, "i8", "date_of_birth") == [
+            (day(1919, 1, 7), []),
+            (day(1919, 7, 1), []),
+        ]
+
+    def test_each_place_beneath_a_birth_is_a_claim_of_its_own(self):
+        # Hildegard's Fläckfeld lies in Kreis Mockburg per the 1905
+        # certificate and in Kreis Peiltal per the 1984 tree: (here) one
+        # BIRT gives both
+        mockburg = "Fläckfeld, Kreis Mockburg, Hesse, Germany"
+        peiltal = "Fläckfeld, Kreis Peiltal, Hesse, Germany"
+        text = person(
+            "I4",
+            "Hildegard /Laudler/",
+            "1 BIRT",
+            "2 DATE 19 MAR 1876",
+            f"2 PLAC {mockburg}",
+            f"2 PLAC {peiltal}",
+        )
+        assert stated(text, "i4", "place_of_birth") == [
+            (mockburg, []),
+            (peiltal, []),
+        ]
+
+    def test_each_cause_beneath_a_death_is_a_claim_of_its_own(self):
+        text = eugen(
+            "1 DEAT",
+            "2 DATE 16 MAR 1909",
+            "2 CAUS Dropsy",
+            "2 CAUS Wassersucht",
+        )
+        assert stated(text, "i1", "cause_of_death") == [
+            ("Dropsy", []),
+            ("Wassersucht", []),
+        ]
+
+    def test_an_empty_place_hides_no_named_one(self):
+        # (here) the export's burial gives an empty PLAC before the cemetery
+        cemetery = "Friedhof Flörburg, Hesse, Germany"
+        text = eugen(
+            "1 BURI", "2 DATE 20 MAR 1909", "2 PLAC", f"2 PLAC {cemetery}"
+        )
+        assert adapt_gedcom(text, artifact=EXPORT).warnings == []
+        assert stated(text, "i1", "burial_place") == [
+            (cemetery, [("point_in_time", day(1909, 3, 20))]),
+        ]
+
+    def test_a_burial_pairs_each_date_with_each_place(self):
+        # Eugen was buried on 20 March 1909 in the Friedhof Flörburg, and
+        # (here) in 1909 in Flörburg too
+        cemetery = "Friedhof Flörburg, Hesse, Germany"
+        text = eugen(
+            "1 BURI",
+            "2 DATE 20 MAR 1909",
+            "2 DATE 1909",
+            f"2 PLAC {cemetery}",
+            f"2 PLAC {FLOERBURG}",
+        )
+        on_the_day = [("point_in_time", day(1909, 3, 20))]
+        in_the_year = [("point_in_time", year(1909))]
+        assert stated(text, "i1", "burial_place") == [
+            (cemetery, on_the_day),
+            (cemetery, in_the_year),
+            (FLOERBURG, on_the_day),
+            (FLOERBURG, in_the_year),
+        ]
+
+    def test_a_residence_pairs_each_date_with_each_place(self):
+        # (here) Gustav lived at 8 Hawthorn Road, in Stupfield, from 1939
+        # to 1952 and in 1952
+        road = "8 Hawthorn Road, Stupfield, Victoria, Australia"
+        town = "Stupfield, Victoria, Australia"
+        text = person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 RESI",
+            "2 DATE FROM 1939 TO 1952",
+            "2 DATE 1952",
+            f"2 PLAC {road}",
+            f"2 PLAC {town}",
+        )
+        period = [("end_time", year(1952)), ("start_time", year(1939))]
+        observed = [("point_in_time", year(1952))]
+        assert stated(text, "i8", "residence") == [
+            (road, period),
+            (road, observed),
+            (town, period),
+            (town, observed),
+        ]
+
+    def test_an_occupation_pairs_each_date_with_each_place(self):
+        # (here) Gustav was a hatter from 1939 to 1952 and in 1952, in
+        # Flörburg and in Stupfield
+        town = "Stupfield, Victoria, Australia"
+        text = person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 OCCU Hatter",
+            "2 DATE FROM 1939 TO 1952",
+            "2 DATE 1952",
+            f"2 PLAC {FLOERBURG}",
+            f"2 PLAC {town}",
+        )
+        period = [("end_time", year(1952)), ("start_time", year(1939))]
+        observed = [("point_in_time", year(1952))]
+        assert stated(text, "i8", "occupation") == [
+            ("Hatter", sorted([*period, ("location", FLOERBURG)])),
+            ("Hatter", sorted([*observed, ("location", FLOERBURG)])),
+            ("Hatter", sorted([*period, ("location", town)])),
+            ("Hatter", sorted([*observed, ("location", town)])),
+        ]
+
+    def test_each_date_of_a_media_object_dates_a_claim_of_its_own(self):
+        # the studio portrait of the 1890s, dated (here) to 1895 as well
+        text = (
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            "1 DATE BET 1890 AND 1899\n1 DATE 1895\n" + eugen("1 OBJE @O1@")
+        )
+        assert stated(text, "i1", "image") == [
+            (
+                "studio-portrait-1890s.jpg",
+                [
+                    ("earliest_date", year(1890)),
+                    ("latest_date", year(1899)),
+                    ("point_in_time", year(1890)),
+                ],
+            ),
+            ("studio-portrait-1890s.jpg", [("point_in_time", year(1895))]),
+        ]
+
+    def test_an_unparsed_date_adds_no_undated_claim(self):
+        # (here) the residence gives a date the grammar cannot parse before
+        # one it can: the one it can dates the only claim
+        text = person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 RESI",
+            "2 DATE SOMEDAY MAYBE",
+            "2 DATE 1952",
+            "2 PLAC 8 Hawthorn Road, Stupfield, Victoria, Australia",
+        )
+        assert adapt_gedcom(text, artifact=EXPORT).warnings == [
+            "line 4: unparsed residence date 'SOMEDAY MAYBE' — "
+            "point_in_time omitted"
+        ]
+        assert stated(text, "i8", "residence") == [
+            (
+                "8 Hawthorn Road, Stupfield, Victoria, Australia",
+                [("point_in_time", year(1952))],
+            ),
+        ]
+
+    @pytest.mark.parametrize(
+        ("tag", "date", "prop", "expected"),
+        [
+            ("BIRT", "1836", "date_of_birth", year(1836)),
+            ("DEAT", "1909", "date_of_death", year(1909)),
+        ],
+    )
+    def test_an_unparsed_date_hides_no_parsed_one(
+        self, tag, date, prop, expected
+    ):
+        # (here) Eugen's birth, or his death, gives a date the grammar
+        # cannot parse before one it can: the one it cannot is warned of,
+        # and the one it can is still claimed
+        text = eugen(f"1 {tag}", "2 DATE SOMEDAY MAYBE", f"2 DATE {date}")
+        assert adapt_gedcom(text, artifact=EXPORT).warnings == [
+            f"line 4: unparsed date 'SOMEDAY MAYBE' — no {prop} claim emitted"
+        ]
+        assert stated(text, "i1", prop) == [(expected, [])]
+
+
+class TestRepeatedMarriages:
+    """A family that repeats a MARR or a DIV states alternatives: its first
+    marriage (a date with a place) and its first divorce date one pair of
+    spouse claims, as its only MARR and DIV do, and every other one dates a
+    pair of its own, with its own date, place and circa (docs/MODELING.md,
+    "Marriages, residences and other periods"; #322)."""
+
+    def test_each_marriage_and_divorce_dates_a_pair_of_its_own(self):
+        # Leopold and Agnes married on 8 February 1947 in Flörburg and were
+        # divorced on 2 January 1957, per the judgment, and married in 1947
+        # and divorced in 1957 per the tree: (here) the export gives both
+        text = family(
+            "1 MARR",
+            "2 DATE 8 FEB 1947",
+            f"2 PLAC {FLOERBURG}",
+            "1 MARR",
+            "2 DATE 1947",
+            "1 DIV",
+            "2 DATE 2 JAN 1957",
+            "1 DIV",
+            "2 DATE 1957",
+        )
+        assert spouse_pairs(text) == [
+            [
+                ("end_time", day(1957, 1, 2)),
+                ("location", FLOERBURG),
+                ("start_time", day(1947, 2, 8)),
+            ],
+            [("start_time", year(1947))],
+            [("end_time", year(1957))],
+        ]
+        # every MARR and DIV is read, so the census counts none of them
+        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
+
+    def test_an_alternative_marriage_keeps_its_own_circa(self):
+        # (here) the export also has them married about 1946: the circa is
+        # that date's alone
+        text = family(
+            "1 MARR",
+            "2 DATE 8 FEB 1947",
+            "1 MARR",
+            "2 DATE ABT 1946",
+            "1 DIV",
+            "2 DATE 2 JAN 1957",
+        )
+        assert spouse_pairs(text) == [
+            [("end_time", day(1957, 1, 2)), ("start_time", day(1947, 2, 8))],
+            [CIRCA, ("start_time", year(1946))],
+        ]
+
+    @pytest.mark.parametrize(
+        ("lines", "expected", "counted"),
+        [
+            (
+                ["1 MARR Y", "1 MARR", "2 DATE 8 FEB 1947"],
+                [[("start_time", day(1947, 2, 8))]],
+                {},
+            ),
+            # the undated DIV is counted, as ever
+            (
+                ["1 DIV Y", "1 DIV", "2 DATE 2 JAN 1957"],
+                [[("end_time", day(1957, 1, 2))]],
+                {"DIV": 1},
+            ),
+        ],
+    )
+    def test_an_undated_marriage_or_divorce_hides_no_dated_one(
+        self, lines, expected, counted
+    ):
+        # (here) the family record says first that Leopold and Agnes
+        # married, or divorced, and then when: the undated one adds no
+        # undated pair beside the dated one
+        text = family(*lines)
+        assert spouse_pairs(text) == expected
+        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == counted
+
+    @pytest.mark.parametrize(
+        ("tag", "date", "warning", "expected"),
+        [
+            (
+                "MARR",
+                "8 FEB 1947",
+                "line 9: unparsed marriage date 'SOMEDAY MAYBE' — "
+                "start_time omitted",
+                [[("start_time", day(1947, 2, 8))]],
+            ),
+            (
+                "DIV",
+                "2 JAN 1957",
+                "line 9: unparsed divorce date 'SOMEDAY MAYBE' — "
+                "end_time omitted",
+                [[("end_time", day(1957, 1, 2))]],
+            ),
+        ],
+    )
+    def test_an_unparsed_date_hides_no_parsed_one_of_the_same_event(
+        self, tag, date, warning, expected
+    ):
+        # (here) one MARR, or one DIV, gives a date the grammar cannot parse
+        # before one it can: the one it cannot is warned of, and the one it
+        # can still dates the pair
+        text = family(f"1 {tag}", "2 DATE SOMEDAY MAYBE", f"2 DATE {date}")
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.warnings == [warning]
+        assert result.unsupported_tags == {}
+        assert spouse_pairs(text) == expected
+
+    def test_an_undated_marriage_keeps_its_place_beside_a_dated_one(self):
+        # (here) one MARR places the wedding in Flörburg and another dates it
+        text = family(
+            "1 MARR", f"2 PLAC {FLOERBURG}", "1 MARR", "2 DATE 8 FEB 1947"
+        )
+        assert spouse_pairs(text) == [
+            [("location", FLOERBURG)],
+            [("start_time", day(1947, 2, 8))],
+        ]
+
+    def test_a_restated_marriage_adds_no_pair(self):
+        # (here) the export gives the wedding twice, as the judgment does
+        wedding = ["1 MARR", "2 DATE 8 FEB 1947", f"2 PLAC {FLOERBURG}"]
+        text = family(*wedding, *wedding, "1 DIV", "2 DATE 2 JAN 1957")
+        assert spouse_pairs(text) == [
+            [
+                ("end_time", day(1957, 1, 2)),
+                ("location", FLOERBURG),
+                ("start_time", day(1947, 2, 8)),
+            ],
+        ]
+
+    def test_each_date_or_place_beneath_one_marriage_is_an_alternative(self):
+        # (here) one MARR gives both dates and two places, and one DIV both
+        # dates: each date is paired with each place
+        rekau = "Rekau, Hesse, Germany"
+        text = family(
+            "1 MARR",
+            "2 DATE 8 FEB 1947",
+            "2 DATE 1947",
+            f"2 PLAC {FLOERBURG}",
+            f"2 PLAC {rekau}",
+            "1 DIV",
+            "2 DATE 2 JAN 1957",
+            "2 DATE 1957",
+        )
+        assert spouse_pairs(text) == [
+            [
+                ("end_time", day(1957, 1, 2)),
+                ("location", FLOERBURG),
+                ("start_time", day(1947, 2, 8)),
+            ],
+            [("location", FLOERBURG), ("start_time", year(1947))],
+            [("location", rekau), ("start_time", day(1947, 2, 8))],
+            [("location", rekau), ("start_time", year(1947))],
+            [("end_time", year(1957))],
+        ]
+
+    @pytest.mark.parametrize("tag", ["HUSB", "WIFE"])
+    def test_a_further_husband_or_wife_is_counted(self, tag):
+        # a family has one husband and one wife: (here) Leopold and Agnes's
+        # family record names a further one, which the census counts, and
+        # no claim makes a spouse of
+        text = "\n".join(
+            [
+                "0 @I11@ INDI",
+                "1 NAME Leopold /Löbig/",
+                "0 @I17@ INDI",
+                "1 NAME Agnes /Löbig/",
+                "0 @I99@ INDI",
+                "1 NAME A /B/",
+                "0 @F5@ FAM",
+                "1 HUSB @I11@",
+                "1 WIFE @I17@",
+                f"1 {tag} @I99@",
+                "1 MARR",
+                "2 DATE 8 FEB 1947",
+                "0 TRLR",
+                "",
+            ]
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.unsupported_tags == {f"FAM.{tag}": 1}
+        assert not claims_for(result.batch, "i99", "spouse")
+        assert spouse_pairs(text) == [[("start_time", day(1947, 2, 8))]]
+
+
+class TestRepeatedAttributes:
+    """A SEX or an NCHI given twice, and a second TYPE or NICK beneath a
+    NAME, are read as claims of their own too: two that differ coexist
+    (ADR-0002). One that restates another line for line, its citation
+    included, is the same claim, which the batch holds once; the same value
+    under another citation is a claim of its own (#322)."""
+
+    def test_each_sex_is_a_claim_of_its_own(self):
+        # no source gives the sex of the unnamed infant of 1922: (here) the
+        # export gives it as M, as F and as M again
+        text = person("I13", "N.N. /Löbig/", "1 SEX M", "1 SEX F", "1 SEX M")
+        assert stated(text, "i13", "sex_or_gender") == [
+            ("male", []),
+            ("female", []),
+        ]
+
+    def test_each_child_count_is_a_claim_of_its_own(self):
+        # Eugen and Cäcilie had three children; (here) the export also counts
+        # four, after a count that is no number
+        text = eugen("1 NCHI several", "1 NCHI 3", "1 NCHI 4")
+        assert adapt_gedcom(text, artifact=EXPORT).warnings == [
+            "line 3: NCHI 'several' is not a number — no number_of_children "
+            "claim emitted"
+        ]
+        assert stated(text, "i1", "number_of_children") == [(3, []), (4, [])]
+
+    def test_each_type_beneath_a_name_types_it(self):
+        # (here) the export types Agnes's married name as official too
+        text = person(
+            "I17", "Agnes /Löbig/", "2 TYPE married", "2 TYPE official"
+        )
+        assert stated(text, "i17", "married_name") == [("Agnes Löbig", [])]
+        assert stated(text, "i17", "official_name") == [("Agnes Löbig", [])]
+
+    def test_each_nick_beneath_a_name_is_a_nickname(self):
+        # Gustav was Gustl, and later Gus: (here) one NAME gives both
+        text = person(
+            "I8",
+            "Gustav /Löbig/",
+            "2 TYPE birth",
+            "2 NICK Gustl",
+            "2 NICK Gus",
+        )
+        assert stated(text, "i8", "nickname") == [("Gustl", []), ("Gus", [])]
 
 
 class TestIngestGedcom:

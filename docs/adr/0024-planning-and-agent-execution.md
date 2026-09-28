@@ -203,7 +203,11 @@ now, cloud sessions later. Four things had to change together.
 - **Pushed history is not rewritten.** Earlier commits on main still
   contain real data. The repository is private, and the owner accepts this
   residual; a rewrite is revisited only if the repository or site is ever
-  made public (#171).
+  made public (#171). The residual also reaches cloud sessions, which
+  clone the private repository with its history: the owner accepts it
+  there as for GitHub's own hosting of the private repository (2026-09-28).
+  Cloud agents stay code-only, and no local-only data is copied into a
+  cloud session.
 
 **The token denylist was tried and retired.** On 2026-09-27 a categorised
 denylist of real names, places, organisations and dates was built (#35),

@@ -173,6 +173,25 @@ CALENDAR_URI = {
 }
 
 
+def century_of(year: int) -> int:
+    """The century a year falls in, counted as Wikibase and Wikidata count
+    centuries (docs/MODELING.md, "Uncertainty and time"): the nth century
+    runs from year 100(n - 1) + 1 to year 100n, so 1801 to 1900 is the 19th
+    century and 1800 is the last year of the 18th. There is no year zero: a
+    negative year counts back from 1 BCE, and its century is negative, so
+    -1800 to -1701 is the 18th century BCE, -18."""
+    count = (abs(year) + 99) // 100
+    return count if year > 0 else -count
+
+
+def century_years(century: int) -> tuple[int, int]:
+    """The first and last year of a century as `century_of` counts it: 1801
+    and 1900 for the 19th, and -1800 and -1701 for the 18th BCE (-18)."""
+    if century > 0:
+        return 100 * century - 99, 100 * century
+    return 100 * century, 100 * century + 99
+
+
 class TimeValue(StrictModel):
     """A date as the source states it — never rounder, never narrower.
 
@@ -181,7 +200,10 @@ class TimeValue(StrictModel):
     supplying a day means the claim narrows or pads what the source
     says; both are forbidden (docs/MODELING.md, "Uncertainty and
     time"). For decades use the first year (1890s -> year=1890,
-    precision=decade); same for centuries (1800).
+    precision=decade). Centuries are counted as Wikibase counts them:
+    the 19th century is 1801-1900, so use its first year (19th century
+    -> year=1801, precision=century); 1800 is in the 18th. The 1800s,
+    meaning 1800-1899, are no such century: give them as a range.
     Ranges ("between 1938 and 1939") are NOT a precision problem: use
     earliest_date/latest_date qualifiers on the claim. A start_time or
     end_time qualifier dating a period (a marriage, a residence) takes
@@ -223,6 +245,21 @@ class TimeValue(StrictModel):
                     f"precision {self.precision!r} cannot carry a {finest} "
                     f"field (never narrow or pad what a source says)"
                 )
+            # A century is given by its first year alone, as Wikibase
+            # counts centuries: every source that names it states one
+            # value, and a round hundred, which starts "the 1800s" but ends
+            # the 18th century in that count, never stands for the 19th.
+            if (
+                self.precision == "century"
+                and century_years(century_of(self.year))[0] != self.year
+            ):
+                raise ValueError(
+                    f"precision 'century' takes the first year of the "
+                    f"century, as Wikibase counts centuries: the 19th "
+                    f"century is 1801-1900, so year=1801 (the 18th century "
+                    f"BCE is -1800 to -1701, so year=-1800); year "
+                    f"{self.year} is not a century's first year"
+                )
         elif PRECISIONS.index(finest) > PRECISIONS.index(self.precision):
             raise ValueError(
                 f"fields are {finest}-precise but precision says "
@@ -238,7 +275,9 @@ class TimeValue(StrictModel):
 
     def to_wikibase(self) -> dict:
         """Wikibase time datavalue (unspecified parts zeroed, as on
-        Wikidata)."""
+        Wikidata). The year is written as given, so a century's first
+        year is stored, which Wikibase shows as that century: 1801 at
+        century precision is "19. century"."""
         sign = "-" if self.year < 0 else "+"
         return {
             "time": f"{sign}{abs(self.year):04d}-{self.month or 0:02d}-"

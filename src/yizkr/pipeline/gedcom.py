@@ -29,6 +29,35 @@ Source-first conventions carry over unchanged:
   A date the grammar cannot parse yields NO date claim and a warning —
   never a guess.
 
+Every occurrence of an event, of a DATE, PLAC or CAUS beneath one where
+the adapter reads that tag (a divorce's PLAC and a CAUS beneath any
+event but a death are counted instead, below), of a TYPE or NICK beneath
+a NAME, and of a person's SEX or NCHI, is read, not only the first. A
+record that repeats an event (a second BIRT, DEAT, MARR or DIV) or a
+detail (a second DATE, PLAC, CAUS, TYPE or NICK), or that gives a
+person's SEX or NCHI twice, states alternatives, and each gives claims
+of its own, with its own date, place and circa, so that the alternatives
+coexist (ADR-0002): Gustav's birth on 7 JAN 1919 and on 1 JUL 1919 is
+two date of birth claims. Where one claim holds both an event's date and
+its place (a burial, a residence, an occupation, a marriage), each of
+the event's dates is paired with each of its places, and each DATE of a
+media object dates an image claim of its own. A family's first marriage
+(a date with a place) and its first divorce date one pair of spouse
+claims, as a family's only MARR and DIV do, and every other marriage or
+divorce dates a pair of its own. What gives nothing to claim
+(`1 BIRT Y`, `1 MARR Y`, a date the grammar cannot parse) never hides
+what does: it adds no claim beside one that does, while an undated MARR
+that gives a place keeps it on a pair of its own. An event that restates
+another line for line, its citation included, gives the same claim,
+which the batch holds once; the same value under another citation is a
+claim of its own, save a family's spouse claims: they cite the family
+record, so a MARR or DIV that restates another's date and place gives no
+pair of its own, whatever its citation. Some tags are still read once: a
+family's HUSB and WIFE (a further one is counted, below), and, within
+the SOUR citations and OBJE objects that the adapter incorporates
+wholesale, a citation's PAGE, a source record's TITL, and an object's
+FILE and TITL.
+
 Supported (the fields family-tree exports actually carry):
 individuals (names -> label + aliases, PLUS typed referenced name
 claims: NAME TYPE birth/maiden/married/aka/official, the NICK subtag,
@@ -62,12 +91,16 @@ but not under a divorce, and a TYPE under a NAME but not under a MARR,
 so such a tag is named with its parent's tag where it goes unread
 (DIV.PLAC, MARR.TYPE). A DIV without a DATE is counted as DIV: it says a
 marriage ended at an unknown time, and a claim has no unknown value to
-state that with.
+state that with. A family has one husband and one wife, so the adapter
+reads a family's first HUSB and first WIFE alone, and a further one is
+counted with its parent's tag too (FAM.HUSB, FAM.WIFE).
 """
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
@@ -436,7 +469,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # Unsupported-tag census (ADR-0021). Name the top-most tag the adapter
     # does not map in EVERY branch of EVERY record — not merely the direct
     # children of INDI/FAM. `reads` holds what the adapter reads beneath
-    # each tag it maps; a tag it maps with nothing read beneath (SEX, FAMC,
+    # each tag it maps, every occurrence of it, save the tags in
+    # `reads_once`; a tag it maps with nothing read beneath (SEX, FAMC,
     # HUSB, DATE, PLAC...) has no entry. A child read where it stands is
     # descended into, so an unmapped tag nested under a mapped event still
     # surfaces. `handled` tags the adapter incorporates wholesale — SOUR
@@ -461,6 +495,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         "MARR": {"DATE", "PLAC"},
         "DIV": {"DATE"},
     }
+    # the tags the adapter reads only the first of beneath a tag: a family
+    # has one husband and one wife
+    reads_once = {"FAM": {"HUSB", "WIFE"}}
     # the tags each tag is read beneath
     read_beneath: dict[str, set[str]] = {}
     for parent, tags in reads.items():
@@ -473,21 +510,32 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         unsupported[tag] = unsupported.get(tag, 0) + 1
 
     def census(record: Record) -> None:
+        seen: set[str] = set()
         for child in record.children:
             if child.tag in handled or child.tag in envelope:
                 continue
-            if child.tag in reads.get(record.tag, set()) and not (
-                # a DIV dates the marriage's end only by its DATE: an
-                # undated one says it ended at an unknown time, and a
-                # claim has no unknown value to state that with
-                child.tag == "DIV" and child.first("DATE") is None
+            # only a family's first HUSB and first WIFE are read
+            further = child.tag in seen and child.tag in reads_once.get(
+                record.tag, set()
+            )
+            seen.add(child.tag)
+            if (
+                child.tag in reads.get(record.tag, set())
+                and not further
+                and not (
+                    # a DIV dates the marriage's end only by its DATE: an
+                    # undated one says it ended at an unknown time, and a
+                    # claim has no unknown value to state that with
+                    child.tag == "DIV" and child.first("DATE") is None
+                )
             ):
                 census(child)  # descend: an unmapped tag may sit deeper
             # otherwise the top-most unmapped tag stands for its whole
             # branch, named with its parent's tag (DIV.PLAC) when it is
-            # read beneath other tags: a bare PLAC would read as though
+            # read beneath other tags, or beneath this one in its first
+            # occurrence (FAM.HUSB): a bare PLAC would read as though
             # every PLAC went unmapped
-            elif read_beneath.get(child.tag, set()) - {record.tag}:
+            elif further or read_beneath.get(child.tag, set()) - {record.tag}:
                 count(f"{record.tag}.{child.tag}")
             else:
                 count(child.tag)
@@ -602,43 +650,79 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def local(entity_id: str) -> dict:
         return {"kind": "local", "local_id": entity_id}
 
+    def place_item(name: str) -> dict:
+        """An item value naming the place `name`."""
+        return {"type": "item", "value": local(place_entity(name))}
+
+    def located(name: str) -> dict:
+        """A location qualifier naming the place `name`."""
+        return {"property": "location", "value": place_item(name)}
+
+    # every claim the batch holds, as its JSON, source included: an event
+    # that restates another line for line, its citation included, gives
+    # the same claim again, which is not added twice, while the same value
+    # under another citation has a source of its own, and so is a claim of
+    # its own (a family's spouse claims cite the family record, so a MARR
+    # or DIV that restates another's date and place gives none of its own;
+    # see spouse_qualifiers)
+    made: set[str] = set()
+
     def claim(
         subject_id: str, prop: str, value: dict, record: Record, quals=()
     ):
-        claims.append(
-            {
-                "subject": local(subject_id),
-                "property": prop,
-                "value": value,
-                "qualifiers": list(quals),
-                "source": source(record),
-                "confidence": 1.0,
-            }
+        new = {
+            "subject": local(subject_id),
+            "property": prop,
+            "value": value,
+            "qualifiers": list(quals),
+            "source": source(record),
+            "confidence": 1.0,
+        }
+        key = json.dumps(new, sort_keys=True)
+        if key not in made:
+            made.add(key)
+            claims.append(new)
+
+    def places(event: Record) -> list[str]:
+        """The places an event's PLACs name, each once and in their order:
+        a further PLAC is an alternative, placed by a claim of its own."""
+        return list(
+            dict.fromkeys(
+                place.value for place in event.all("PLAC") if place.value
+            )
         )
 
-    def dated_qualifiers(event: Record, context: str) -> list[dict]:
-        """point_in_time (+uncertainty) qualifiers from an event's DATE."""
-        quals: list[dict] = []
-        date_record = event.first("DATE")
-        if date_record:
-            value, date_quals = parse_gedcom_date(date_record.value)
-            if value is None:
-                warnings.append(
-                    f"line {date_record.line_number}: unparsed {context} "
-                    f"date {date_record.value!r} — point_in_time omitted"
-                )
-            else:
-                quals.append({"property": "point_in_time", "value": value})
-                quals.extend(date_quals)
-        return quals
+    def each_date(
+        event: Record, qualifiers: Callable[..., list[dict]], *args: str
+    ) -> list[list[dict]]:
+        """The qualifiers that each DATE of `event` gives, from
+        `qualifiers(date, *args)`, each distinct list once: a further DATE
+        is an alternative, dated by a claim of its own. [[]] when no DATE
+        gives any, so that the event's claim goes undated; a DATE that gives
+        none (one the grammar cannot parse) adds no undated claim beside a
+        dated one."""
+        found: list[list[dict]] = []
+        for date_record in event.all("DATE"):
+            quals = qualifiers(date_record, *args)
+            if quals and quals not in found:
+                found.append(quals)
+        return found or [[]]
 
-    def dated_end(event: Record, end: str, context: str) -> list[dict]:
+    def dated_qualifiers(date_record: Record, context: str) -> list[dict]:
+        """point_in_time (+uncertainty) qualifiers from an event's DATE."""
+        value, date_quals = parse_gedcom_date(date_record.value)
+        if value is None:
+            warnings.append(
+                f"line {date_record.line_number}: unparsed {context} "
+                f"date {date_record.value!r} — point_in_time omitted"
+            )
+            return []
+        return [{"property": "point_in_time", "value": value}, *date_quals]
+
+    def dated_end(date_record: Record, end: str, context: str) -> list[dict]:
         """The qualifiers that date one end of a period, `end` (start_time
         or end_time), from an event's DATE: a marriage's date is the
         spouse statements' start, a divorce's their end."""
-        date_record = event.first("DATE")
-        if date_record is None:
-            return []
         value, date_quals = parse_gedcom_date(date_record.value)
         if value is None:
             warnings.append(
@@ -648,19 +732,16 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             return []
         return period_end(value, date_quals, end)
 
-    def period_qualifiers(event: Record, context: str) -> list[dict]:
+    def period_qualifiers(date_record: Record, context: str) -> list[dict]:
         """The qualifiers that date a statement which holds for a period (a
         residence, an occupation) from its event's DATE. A date period is
         the statement's start and end time, each dated by its own phrase
         with the range that phrase states (docs/MODELING.md, "Marriages,
         residences and other periods"); any other date is a point in time
         at which the source observes the statement."""
-        date_record = event.first("DATE")
-        phrases = (
-            split_gedcom_period(date_record.value) if date_record else None
-        )
+        phrases = split_gedcom_period(date_record.value)
         if phrases is None:
-            return dated_qualifiers(event, context)
+            return dated_qualifiers(date_record, context)
         quals: list[dict] = []
         for end, phrase in zip(
             ("start_time", "end_time"), phrases, strict=True
@@ -688,24 +769,19 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def event_claims(
         indi_xref: str, event: Record, date_prop: str, place_prop: str
     ):
-        date_record = event.first("DATE")
-        if date_record:
+        """A birth's or a death's claims: a date claim for each DATE and a
+        place claim for each PLAC, each with its own qualifiers."""
+        for date_record in event.all("DATE"):
             value, quals = parse_gedcom_date(date_record.value)
             if value is None:
                 warnings.append(
                     f"line {date_record.line_number}: unparsed date "
                     f"{date_record.value!r} — no {date_prop} claim emitted"
                 )
-            else:
-                claim(person_id(indi_xref), date_prop, value, event, quals)
-        place = event.text("PLAC")
-        if place:
-            claim(
-                person_id(indi_xref),
-                place_prop,
-                {"type": "item", "value": local(place_entity(place))},
-                event,
-            )
+                continue
+            claim(person_id(indi_xref), date_prop, value, event, quals)
+        for place in places(event):
+            claim(person_id(indi_xref), place_prop, place_item(place), event)
 
     def monolingual(text: str) -> dict:
         return {
@@ -734,16 +810,22 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             if not name_record.value:
                 continue
             cleaned = _clean_name(name_record.value)
-            prop = _NAME_TYPE_PROPERTY.get(
-                name_record.text("TYPE").strip().lower()
-            )
-            if prop == "nickname":
-                add_nickname(
-                    cleaned, name_record
-                )  # the whole aka IS the nickname
-            elif prop:
-                claim(person_id(xref), prop, monolingual(cleaned), name_record)
-            add_nickname(name_record.text("NICK").strip(), name_record)
+            # a further TYPE types the name a further way, a claim of its own
+            for name_type in name_record.all("TYPE"):
+                prop = _NAME_TYPE_PROPERTY.get(name_type.value.strip().lower())
+                if prop == "nickname":
+                    add_nickname(
+                        cleaned, name_record
+                    )  # the whole aka IS the nickname
+                elif prop:
+                    claim(
+                        person_id(xref),
+                        prop,
+                        monolingual(cleaned),
+                        name_record,
+                    )
+            for nick in name_record.all("NICK"):
+                add_nickname(nick.value.strip(), name_record)
             for inline in _inline_nicknames(cleaned):
                 add_nickname(inline, name_record)
         # non-standard married-name tag some tools emit at the INDI level
@@ -756,6 +838,43 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     marnm,
                 )
 
+    def spouse_qualifiers(fam: Record) -> list[list[dict]]:
+        """The qualifiers of a family's spouse claims, a list for each pair
+        of claims. A MARR's date is the claims' start time and its place
+        their location, and a DIV's date is their end time (docs/MODELING.md,
+        "Marriages, residences and other periods").
+
+        Each MARR gives a start for each of its dates with each of its
+        places, and each DIV an end for each of its dates. The family's
+        first start and first end date one pair of claims, as its only MARR
+        and DIV do; every other start or end is an alternative the record
+        states, and dates a pair of its own, with its own circa (ADR-0002).
+        A MARR that neither dates nor places anything, or a DIV that dates
+        nothing, gives no start or end, and so no pair beside one that
+        does: the family's claims state the marriage already. A start or
+        an end that restates another gives none either."""
+        starts: list[list[dict]] = []
+        for marriage in fam.all("MARR"):
+            dates = each_date(marriage, dated_end, "start_time", "marriage")
+            locations = [[located(place)] for place in places(marriage)]
+            for location in locations or [[]]:
+                for quals in dates:
+                    start = quals + location
+                    if start and start not in starts:
+                        starts.append(start)
+        ends: list[list[dict]] = []
+        for divorce in fam.all("DIV"):
+            for end in each_date(divorce, dated_end, "end_time", "divorce"):
+                if end and end not in ends:
+                    ends.append(end)
+        first = starts[0] if starts else []
+        # a circa the marriage's date gave the statement already stands for
+        # the divorce's too
+        first = first + [
+            q for q in (ends[0] if ends else []) if q not in first
+        ]
+        return [first, *starts[1:], *ends[1:]]
+
     # individuals -> entities + birth/death claims
     for xref, record in individuals.items():
         names = [
@@ -766,12 +885,19 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         if not names:
             warnings.append(f"{xref}: no NAME; skipped entirely")
             continue
-        birth, death = record.first("BIRT"), record.first("DEAT")
+        # every date the record gives a birth or a death, as it gives them
         summary_bits = []
-        if birth and birth.text("DATE"):
-            summary_bits.append(f"b. {birth.text('DATE')}")
-        if death and death.text("DATE"):
-            summary_bits.append(f"d. {death.text('DATE')}")
+        for tag, mark in (("BIRT", "b."), ("DEAT", "d.")):
+            dates = [
+                date.value
+                for event in record.all(tag)
+                for date in event.all("DATE")
+                if date.value
+            ]
+            if dates:
+                summary_bits.append(
+                    f"{mark} " + " or ".join(dict.fromkeys(dates))
+                )
         entities.append(
             {
                 "id": person_id(xref),
@@ -784,48 +910,54 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         )
         name_claims(xref, record)
         # SEX -> sex_or_gender (the kinship calculus needs it for gendered
-        # terms, ADR-0014); only the unambiguous M/F are mapped
-        sex = record.text("SEX").strip().upper()
-        sex_value = {"M": "male", "F": "female"}.get(sex)
-        if sex_value:
-            claim(
-                person_id(xref),
-                "sex_or_gender",
-                {"type": "item", "value": {"kind": "vocab", "key": sex_value}},
-                record.first("SEX"),
+        # terms, ADR-0014); only the unambiguous M/F are mapped, and a
+        # second SEX that differs coexists with the first (ADR-0002)
+        for sex in record.all("SEX"):
+            sex_value = {"M": "male", "F": "female"}.get(
+                sex.value.strip().upper()
             )
-        if birth:
+            if sex_value:
+                claim(
+                    person_id(xref),
+                    "sex_or_gender",
+                    {
+                        "type": "item",
+                        "value": {"kind": "vocab", "key": sex_value},
+                    },
+                    sex,
+                )
+        for birth in record.all("BIRT"):
             event_claims(xref, birth, "date_of_birth", "place_of_birth")
-        if death:
+        for death in record.all("DEAT"):
             event_claims(xref, death, "date_of_death", "place_of_death")
             # cause of death stays verbatim prose (docs/MODELING.md);
             # "en" matches the export's language, like the excerpts
-            cause = death.text("CAUS")
-            if cause:
-                claim(
-                    person_id(xref),
-                    "cause_of_death",
-                    {
-                        "type": "monolingual",
-                        "value": {"text": cause, "language": "en"},
-                    },
-                    death,
-                )
+            for cause in death.all("CAUS"):
+                if cause.value:
+                    claim(
+                        person_id(xref),
+                        "cause_of_death",
+                        monolingual(cause.value),
+                        death,
+                    )
         for burial in record.all("BURI"):
-            place = burial.text("PLAC")
-            if not place:
+            burial_places = places(burial)
+            if not burial_places:
                 warnings.append(
                     f"line {burial.line_number}: BURI without PLAC — "
                     "no burial claim emitted"
                 )
                 continue
-            claim(
-                person_id(xref),
-                "burial_place",
-                {"type": "item", "value": local(place_entity(place))},
-                burial,
-                dated_qualifiers(burial, "burial"),
-            )
+            dates = each_date(burial, dated_qualifiers, "burial")
+            for place in burial_places:
+                for quals in dates:
+                    claim(
+                        person_id(xref),
+                        "burial_place",
+                        place_item(place),
+                        burial,
+                        quals,
+                    )
         for occupation in record.all("OCCU"):
             name = occupation.value.strip()
             if not name:
@@ -834,56 +966,52 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     "no occupation claim emitted"
                 )
                 continue
-            quals = period_qualifiers(occupation, "occupation")
-            place = occupation.text("PLAC")
-            if place:
-                quals.append(
-                    {
-                        "property": "location",
-                        "value": {
-                            "type": "item",
-                            "value": local(place_entity(place)),
-                        },
-                    }
-                )
-            claim(
-                person_id(xref),
-                "occupation",
-                {"type": "item", "value": local(occupation_entity(name))},
-                occupation,
-                quals,
-            )
-        nchi = record.first("NCHI")
-        if nchi:
+            dates = each_date(occupation, period_qualifiers, "occupation")
+            locations = [[located(place)] for place in places(occupation)]
+            held = {"type": "item", "value": local(occupation_entity(name))}
+            for location in locations or [[]]:
+                for quals in dates:
+                    claim(
+                        person_id(xref),
+                        "occupation",
+                        held,
+                        occupation,
+                        quals + location,
+                    )
+        # competing counts coexist (docs/MODELING.md)
+        for nchi in record.all("NCHI"):
             try:
-                count = int(nchi.value.strip())
+                number = int(nchi.value.strip())
             except ValueError:
                 warnings.append(
                     f"line {nchi.line_number}: NCHI {nchi.value!r} is not a "
                     "number — no number_of_children claim emitted"
                 )
-            else:
-                claim(
-                    person_id(xref),
-                    "number_of_children",
-                    {"type": "quantity", "amount": count},
-                    nchi,
-                )
+                continue
+            claim(
+                person_id(xref),
+                "number_of_children",
+                {"type": "quantity", "amount": number},
+                nchi,
+            )
         for residence in record.all("RESI"):
-            place = residence.text("PLAC")
-            if not place:
+            residence_places = places(residence)
+            if not residence_places:
                 warnings.append(
                     f"line {residence.line_number}: RESI without PLAC — "
                     "no residence claim emitted"
                 )
                 continue
-            claim(
-                person_id(xref),
-                "residence",
-                {"type": "item", "value": local(place_entity(place))},
-                residence,
-                period_qualifiers(residence, "residence"),
-            )
+            dates = each_date(residence, period_qualifiers, "residence")
+            for place in residence_places:
+                for quals in dates:
+                    claim(
+                        person_id(xref),
+                        "residence",
+                        place_item(place),
+                        residence,
+                        quals,
+                    )
         # OBJE -> an un-held media item the person `image`s (ADR-0021).
         # A pointer resolves to its level-0 OBJE record; some tools embed
         # the object inline. Reference the media, never fetch its bytes.
@@ -899,13 +1027,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     continue
             else:
                 obje = obje_ptr  # media embedded inline under the person
-            claim(
-                person_id(xref),
-                "image",
-                {"type": "item", "value": local(media_entity(obje))},
-                obje,
-                dated_qualifiers(obje, "media"),
-            )
+            media = {"type": "item", "value": local(media_entity(obje))}
+            for quals in each_date(obje, dated_qualifiers, "media"):
+                claim(person_id(xref), "image", media, obje, quals)
 
     # families -> parentage and spouse claims
     for fam in families.values():
@@ -924,36 +1048,15 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         fam,
                     )
         if husband in individuals and wife in individuals:
-            quals: list[dict] = []
-            marriage = fam.first("MARR")
-            if marriage:
-                quals.extend(dated_end(marriage, "start_time", "marriage"))
-                place = marriage.text("PLAC")
-                if place:
-                    quals.append(
-                        {
-                            "property": "location",
-                            "value": {
-                                "type": "item",
-                                "value": local(place_entity(place)),
-                            },
-                        }
+            for quals in spouse_qualifiers(fam):
+                for subject, other in ((husband, wife), (wife, husband)):
+                    claim(
+                        person_id(subject),
+                        "spouse",
+                        {"type": "item", "value": local(person_id(other))},
+                        fam,
+                        quals,
                     )
-            divorce = fam.first("DIV")
-            if divorce:
-                for qualifier in dated_end(divorce, "end_time", "divorce"):
-                    # a circa the marriage's date gave the statement
-                    # already stands for the divorce's too
-                    if qualifier not in quals:
-                        quals.append(qualifier)
-            for subject, other in ((husband, wife), (wife, husband)):
-                claim(
-                    person_id(subject),
-                    "spouse",
-                    {"type": "item", "value": local(person_id(other))},
-                    fam,
-                    quals,
-                )
 
     # ADR-0022 §4: the same alias hygiene the LLM path runs — GEDCOM's
     # structured NAME/TYPE tags already do the typing; this only drops

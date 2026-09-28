@@ -9,6 +9,10 @@ deferred to a future ADR (#168).
 Amended by #308 (2026-09-28): the census reads each tag where it stands,
 so a divorce's PLAC, a MARR's TYPE and an undated DIV are counted: see
 Amendments.
+Amended by #322 (2026-09-28): the adapter reads every occurrence of an
+event, of a DATE, PLAC or CAUS beneath one where it reads that tag, of a
+NAME's TYPE or NICK, and of a SEX or NCHI, so a repeated event or detail gives claims of its own,
+and a further HUSB or WIFE is counted: see Amendments.
 
 ## Context
 
@@ -155,3 +159,53 @@ since the model has no property that fits it:
 
 The spouse claims' verbatim excerpt still shows their lines, within its
 400 characters.
+
+Amended by #322 (2026-09-28): **every repeated event and detail is read
+or counted.** The census took every occurrence of a tag it descends into
+as read, but the adapter read only the first BIRT, DEAT, MARR, DIV, SEX
+and NCHI of a record, and the first DATE, PLAC, CAUS, TYPE and NICK
+beneath a tag, so the others were dropped silently. Among them was the
+alternative date, which GEDCOM states by repeating the event. The adapter
+now reads every occurrence of these, and each gives claims of its own,
+with its own date, place and circa, so that the alternatives coexist
+(ADR-0002):
+
+- a repeated BIRT or DEAT, or a repeated DATE, PLAC or CAUS beneath one,
+  gives a date, place or cause claim of its own, and a repeated SEX,
+  NCHI, NAME TYPE or NICK a claim of its own. Two that differ coexist, as
+  competing counts do (docs/MODELING.md). One that restates another line
+  for line, its citation included, gives the same claim, which the batch
+  holds once; the same value under another citation is a claim of its
+  own in the batch, with that citation's excerpt and locator (CLAUDE.md
+  rule 1). The writer's keeping of that reference beside the first is
+  #335;
+- where one claim holds both an event's date and its place (BURI, RESI,
+  OCCU, MARR), each of the event's dates is paired with each of its
+  places, and each DATE of an OBJE dates an image claim of its own;
+- a family's first marriage (a date with a place) and its first divorce
+  date one pair of spouse claims, as a family's only MARR and DIV do, and
+  every other marriage or divorce dates a pair of its own (docs/MODELING.md,
+  "Marriages, residences and other periods"), save one that restates
+  another's date and place: spouse claims cite the family record, so it
+  gives no pair of its own, whatever its citation. Pairing only the first
+  keeps each MARR's and each DIV's date on one pair of claims, rather than
+  pairing every marriage with every divorce;
+- what gives nothing to claim (`1 BIRT Y`, `1 MARR Y`, a date the
+  grammar cannot parse) adds no claim beside one that does, so it never
+  hides one, while an undated MARR that gives a place keeps it on a pair
+  of its own. An undated DIV is still counted as `DIV`, as above.
+
+These are mapped rather than counted because each is something the record
+states that a claim of the model can hold, and a claim of its own keeps
+it apart from the others. A family's HUSB and WIFE are the exception: the
+adapter reads a family's first of each alone, since a family has one
+husband and one wife, and mapping a second would give the other partner
+a second spouse and each child a second parent, which the record cannot
+mean. A further one is counted, named with its parent's tag (`FAM.HUSB`,
+`FAM.WIFE`), since the adapter reads the first beneath the same tag.
+
+Within the SOUR citations and OBJE objects that the adapter incorporates
+wholesale (Decision above), some tags are still read once: a citation's
+PAGE, a SOUR record's TITL, and an OBJE's FILE and TITL. The census does
+not look inside SOUR or OBJE, so a second one of these goes uncounted;
+#324 tracks it.

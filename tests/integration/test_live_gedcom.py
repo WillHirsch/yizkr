@@ -1,5 +1,6 @@
-"""Live write path for the GEDCOM adapter's SOUR/OBJE handling (ADR-0021)
-and a residence's date period (#308).
+"""Live write path for the GEDCOM adapter's SOUR/OBJE handling (ADR-0021),
+a residence's date period (#308) and a repeated event's alternatives
+(#322).
 
 A source citation (SOUR) must fold into the birth statement's reference
 as a page-number locator, and a multimedia object (OBJE) must become an
@@ -7,9 +8,11 @@ un-held media item the person `image`s — an ordinary `artifact` with NO
 content hash (its bytes are referenced, never fetched). A residence's
 date period (FROM x TO y) must become the residence statement's start and
 end time, each with the range its own phrase states (docs/MODELING.md,
-"Marriages, residences and other periods"). All flow through the generic
-writer unchanged; this proves they land in the graph. Every claim cites
-the export by the SHA-1 of its bytes (#102)."""
+"Marriages, residences and other periods"). A repeated BIRT or MARR, as
+GEDCOM states an alternative, must become statements of its own, each
+with its own date, circa and citation, beside the first. All flow through
+the generic writer unchanged; this proves they land in the graph. Every
+claim cites the export by the SHA-1 of its bytes (#102)."""
 
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ from yizkr.pipeline.writer import BatchWriter
 pytestmark = pytest.mark.live
 
 # The export's text, with {marker} in each label it gives an item: the
-# person's, the media object's and the place's (_marker).
+# people's, the media object's and the place's (_marker).
 TEMPLATE = """\
 0 HEAD
 1 CHAR UTF-8
@@ -44,9 +47,26 @@ TEMPLATE = """\
 2 DATE 1950
 2 SOUR @S1@
 3 PAGE Volume 1, Page 1
+1 BIRT
+2 DATE ABT 1951
+2 SOUR @S1@
+3 PAGE Volume 2, Page 7
 1 RESI
 2 DATE FROM BET 1956 AND 1957 TO BET 1974 AND 1984
 2 PLAC Integration Town {marker}
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Gedcom Spouse /Tester {marker}/
+1 FAMS @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 WIFE @I2@
+1 MARR
+2 DATE 1975
+1 MARR
+2 DATE ABT 1974
+1 DIV
+2 DATE 1980
 0 TRLR
 """
 
@@ -208,6 +228,82 @@ def test_gedcom_residence_period_is_a_start_and_an_end(
         "earliest_end_date": [("+1974-00-00T00:00:00Z", year)],
         "latest_date": [("+1984-00-00T00:00:00Z", year)],
     }
+
+
+def test_gedcom_alternatives_are_statements_of_their_own(
+    client, gedcom_artifact
+):
+    """A repeated BIRT and a repeated MARR land as statements of their own,
+    each with its own date, circa and citation: a birth in 1950 per page 1
+    and one about 1951 per page 7; a marriage from 1975 until the divorce
+    of 1980, and one from about 1974 (#322)."""
+    _, export = gedcom_artifact
+    write = BatchWriter(client).write_batch(
+        adapt_gedcom(GEDCOM, artifact=export).batch
+    )
+    person_qid = write.created_items["i1"]
+    spouse_qid = write.created_items["i2"]
+    properties, items = client.vocabulary()
+    key_of = {pid: key for key, pid in properties.items()}
+
+    def statements(prop):
+        found = client.api_get(
+            {
+                "action": "wbgetclaims",
+                "entity": person_qid,
+                "property": properties[prop],
+            }
+        )
+        return [
+            statement
+            for statements in found["claims"].values()
+            for statement in statements
+        ]
+
+    def qualifiers(statement):
+        """(property, time or item) pairs, in property order."""
+        return sorted(
+            (
+                key_of[pid],
+                snak["datavalue"]["value"].get("time")
+                or snak["datavalue"]["value"]["id"],
+            )
+            for pid, snaks in statement.get("qualifiers", {}).items()
+            for snak in snaks
+        )
+
+    def pages(statement):
+        return sorted(
+            snak["datavalue"]["value"]
+            for ref in statement.get("references", [])
+            for snak in ref["snaks"].get(properties["page_number"], [])
+        )
+
+    circa = ("sourcing_circumstances", items["circa"])
+    births = sorted(
+        (
+            statement["mainsnak"]["datavalue"]["value"]["time"],
+            qualifiers(statement),
+            pages(statement),
+        )
+        for statement in statements("date_of_birth")
+    )
+    assert births == [
+        ("+1950-00-00T00:00:00Z", [], ["Volume 1, Page 1"]),
+        ("+1951-00-00T00:00:00Z", [circa], ["Volume 2, Page 7"]),
+    ]
+    spouses = sorted(
+        qualifiers(statement)
+        for statement in statements("spouse")
+        if statement["mainsnak"]["datavalue"]["value"]["id"] == spouse_qid
+    )
+    assert spouses == [
+        [
+            ("end_time", "+1980-00-00T00:00:00Z"),
+            ("start_time", "+1975-00-00T00:00:00Z"),
+        ],
+        [circa, ("start_time", "+1974-00-00T00:00:00Z")],
+    ]
 
 
 def test_gedcom_write_is_idempotent(client, gedcom_artifact):

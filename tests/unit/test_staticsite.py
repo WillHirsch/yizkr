@@ -1073,4 +1073,25 @@ class TestTimeFormatting:
         assert format_time("+1909-03-16T00:00:00Z", "10") == "1909-03"
         assert format_time("+1909-00-00T00:00:00Z", "9") == "1909"
         assert format_time("+1890-00-00T00:00:00Z", "8") == "1890s"
-        assert format_time("+1800-00-00T00:00:00Z", "7") == "19th century"
+        assert format_time("+1801-00-00T00:00:00Z", "7") == "19th century"
+
+    @pytest.mark.parametrize(
+        ("stored", "shown"),
+        [
+            # the 19th century runs from 1801 to 1900, as Wikibase counts
+            # it, whichever year in it is stored (#241)
+            ("1801-01-01T00:00:00Z", "19th century"),
+            ("1850-01-01T00:00:00Z", "19th century"),
+            ("1900-01-01T00:00:00Z", "19th century"),
+            # 1800 is the 18th century's last year, 1901 the 20th's first
+            ("1800-01-01T00:00:00Z", "18th century"),
+            ("1901-01-01T00:00:00Z", "20th century"),
+            # before the common era the query service gives a century's
+            # year as stored: 1800 to 1701 BCE is the 18th century BCE
+            ("-1800-01-01T00:00:00Z", "−18th century"),
+            ("-1701-01-01T00:00:00Z", "−18th century"),
+            ("-1700-01-01T00:00:00Z", "−17th century"),
+        ],
+    )
+    def test_a_century_is_the_one_wikibase_counts(self, stored, shown):
+        assert format_time(stored, "7") == shown
