@@ -1,6 +1,7 @@
 """Fixtures shared by the offline unit tests.
 
-Two defaults keep the unit tests fast without changing what they check:
+Three defaults keep the unit tests fast and self-contained, without
+changing what they check:
 
 - **One BLAS thread.** Language detection (py3langid) runs on numpy,
   whose threaded OpenBLAS build starts a worker thread per CPU, and the
@@ -24,8 +25,18 @@ Two defaults keep the unit tests fast without changing what they check:
   marker is registered in pyproject.toml), as the durability tests in
   test_stages.py and test_llmcache.py are. The live tests under
   tests/integration always make the real calls.
+- **No pause timer, and the default anomaly thresholds.** A fail-fast
+  anomaly check that pauses a slice starts a timer to time the pause
+  out (yizkr.pipeline.anomalies), and a unit test that fails a stage
+  can pause one. Every unit test records those timers instead of
+  starting them (the `_no_anomaly_timers` fixture, which yields the
+  RecordedTimer of each), so no thread outlives the test, and forgets
+  the checks and the watched slices it made. A test that needs the real
+  timer takes the one test_anomalies.py saves. `$YIZKR_ANOMALIES`, an
+  operator's file of thresholds, is left out of every unit test, whose
+  checks run on the defaults.
 
-test_conftest.py tests both.
+test_conftest.py tests the first two, and test_anomalies.py the third.
 """
 
 from __future__ import annotations
@@ -118,3 +129,42 @@ def _no_claude_config(monkeypatch, tmp_path_factory):
     and before every call). Tests that need one set their own."""
     missing = tmp_path_factory.getbasetemp() / "no-claude-config"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(missing))
+
+
+class RecordedTimer:
+    """A timer recorded, never started: when it would call `callback`
+    (`seconds`), and whether it was cancelled."""
+
+    def __init__(self, seconds: float, callback) -> None:
+        self.seconds = seconds
+        self.callback = callback
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+@pytest.fixture(autouse=True)
+def _no_anomaly_timers(monkeypatch):
+    """Record the anomaly checks' pause timers instead of starting them,
+    and run the checks on their default thresholds; yield the recorded
+    timers. The checks and the watched slices the test made are
+    forgotten after it, and a timer it started itself is cancelled."""
+    from yizkr.pipeline import anomalies
+
+    started: list[RecordedTimer] = []
+
+    def record(seconds, callback):
+        started.append(RecordedTimer(seconds, callback))
+        return started[-1]
+
+    monkeypatch.setattr(anomalies, "_start_timer", record)
+    monkeypatch.delenv(anomalies.CONFIG_VARIABLE, raising=False)
+    yield started
+    with anomalies._WATCHES_LOCK:
+        for watch in anomalies._WATCHES.values():
+            for watched in watch._slices.values():
+                anomalies._cancel(watched.pending)
+        anomalies._WATCHES.clear()
+    with anomalies._REGISTRY_LOCK:
+        anomalies._REGISTRY.clear()
