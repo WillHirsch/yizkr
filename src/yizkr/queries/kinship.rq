@@ -1,110 +1,334 @@
-# Derived kinship (ADR-0014): how each person is related to a subject,
-# COMPUTED from the primitive edges (father, mother, spouse, sibling,
-# child) — never stored. Second-order relations (grandparent, aunt/uncle,
-# cousin, in-law) are property PATHS; the same term set describes any
-# pair, so a frontend reuses this to answer "how are A and B related?".
-# Each row reads "?relative is ?subject's ?relationship". A term a source
-# asserts with `relative` + `kinship_type` is read as ADR-0018 records
-# it: the statement's subject is the person the term names (the row's
-# ?relative), and its value is the ego (the row's ?subject).
+# Derived kinship (ADR-0014): how each person is related to a subject.
+# Each row reads "?relative is ?subject's ?relationship".
+#
+# The rows come from the primitive edges (father, mother, child, spouse,
+# sibling), never from a stored compound relation. A parent step reads a
+# father or mother statement on the child or a child statement on the
+# parent; spouse and sibling statements are read either way; and two
+# people who share a parent are siblings. Second-order relations are
+# paths of these steps, as ADR-0014 defines them, each with its inverse:
+# grandparent and grandchild; aunt or uncle (a parent's sibling, and that
+# sibling's spouse) and niece or nephew (a sibling's child, and a
+# spouse's sibling's child); cousin (a parent's sibling's child); and the
+# in-laws (a spouse's parent, a child's spouse, a sibling's spouse and a
+# spouse's sibling). The same term set describes any pair, so a frontend
+# reuses this to answer "how are A and B related?".
+#
+# A term a source asserts with `relative` + `kinship_type` is read as
+# ADR-0018 records it: the statement's subject is the person the term
+# names (the row's ?relative), and its value is the ego (the row's
+# ?subject). The named relative also gets a row with the inverse term,
+# gendered by the ego ("nephew" or "niece" for "aunt"). A term the
+# inverse table does not know gives "relative", which asserts no kind,
+# except a plain cousin term ("second cousin", "double cousin", "cousin
+# once removed"), which is its own inverse; a cousin term with any other
+# word ("Dad's cousin", "cousin's wife", "great-cousin") gives
+# "relative".
+#
+# Ranks (rules 4 and 6): every statement read, the subject's type and
+# the relative's sex included, is at normal or preferred rank and never
+# deprecated, so no preferred value is needed and none hides another.
 #
 # Gendered terms (father vs mother, aunt vs uncle) come from the
 # ?relative's `sex_or_gender`; where sex is unknown the neutral term is
-# used — never guessed. This starter covers the common relations; degrees
-# ("great-", "once removed", half- vs full) are a frontend extension over
-# the same primitives.
+# used, never guessed. Not derived here: step-relations (a parent's
+# spouse, a spouse's child), longer paths, and the degrees ("great-",
+# "once removed", half- vs full) of derived relations, which a frontend
+# derives over the same steps.
 #
-# For one subject, append e.g.:  FILTER(?subject = wd:Q26)
+# The sets below are the query service's named subqueries (WITH { … } AS
+# %name, then INCLUDE %name), each computed once. The engine joins two
+# sets through a hash index only on a variable that each binds in a
+# triple pattern or renames in its SELECT line, so the sets rename there
+# and never with BIND. A set takes part in one join at most, and is
+# otherwise included on its own, because the engine fails a query in
+# which one set starts two joins.
+#
+# For one subject, add to the main WHERE:  VALUES ?subject { wd:Q26 }
 SELECT DISTINCT ?subject ?subjectLabel ?relative ?relativeLabel ?relationship
-WHERE {
-  ?subject wdt:{P:instance_of} wd:{Q:human} .
-
-  {
-    # --- first order (X father Y ⇒ Y is X's father, so the edge's
-    #     SUBJECT is the child) ----------------------------------------
-    { ?subject wdt:{P:father}|wdt:{P:mother} ?relative . BIND("parent" AS ?base) }
-    UNION { ?relative wdt:{P:father}|wdt:{P:mother} ?subject . BIND("child" AS ?base) }
-    UNION { ?subject wdt:{P:child} ?relative . BIND("child" AS ?base) }
-    UNION { ?subject wdt:{P:spouse}|^wdt:{P:spouse} ?relative . BIND("spouse" AS ?base) }
-    UNION {
-      ?subject wdt:{P:sibling}|^wdt:{P:sibling} ?relative .
-      BIND("sibling" AS ?base)
+WITH {
+  # ?parent is ?child's parent
+  SELECT DISTINCT ?child ?parent WHERE {
+    {
+      ?child p:{P:father} ?st .
+      ?st ps:{P:father} ?parent .
+    } UNION {
+      ?child p:{P:mother} ?st .
+      ?st ps:{P:mother} ?parent .
+    } UNION {
+      ?parent p:{P:child} ?st .
+      ?st ps:{P:child} ?child .
     }
-    UNION {
-      # sibling derived from a shared parent (self excluded below)
-      ?subject wdt:{P:father}|wdt:{P:mother} ?p .
-      ?relative wdt:{P:father}|wdt:{P:mother} ?p .
-      BIND("sibling" AS ?base)
+    ?st wikibase:rank ?rank .
+    FILTER(?rank != wikibase:DeprecatedRank)
+  }
+} AS %parents
+WITH {
+  # ?b is ?a's spouse
+  SELECT DISTINCT ?a ?b WHERE {
+    {
+      ?a p:{P:spouse} ?st .
+      ?st ps:{P:spouse} ?b .
+    } UNION {
+      ?b p:{P:spouse} ?st .
+      ?st ps:{P:spouse} ?a .
     }
-    # --- second order ------------------------------------------------
-    UNION {
-      ?subject (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:father}|wdt:{P:mother}) ?relative .
-      BIND("grandparent" AS ?base)
+    ?st wikibase:rank ?rank .
+    FILTER(?rank != wikibase:DeprecatedRank)
+  }
+} AS %spouses
+# two children of one parent
+WITH { SELECT (?child AS ?a) ?parent WHERE { INCLUDE %parents } } AS %childA
+WITH { SELECT (?child AS ?b) ?parent WHERE { INCLUDE %parents } } AS %childB
+WITH {
+  # ?b is ?a's sibling: asserted either way, or through a shared parent
+  SELECT DISTINCT ?a ?b WHERE {
+    {
+      {
+        ?a p:{P:sibling} ?st .
+        ?st ps:{P:sibling} ?b .
+      } UNION {
+        ?b p:{P:sibling} ?st .
+        ?st ps:{P:sibling} ?a .
+      }
+      ?st wikibase:rank ?rank .
+      FILTER(?rank != wikibase:DeprecatedRank)
+    } UNION {
+      INCLUDE %childA
+      INCLUDE %childB
     }
-    UNION {
-      ?relative (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:father}|wdt:{P:mother}) ?subject .
-      BIND("grandchild" AS ?base)
-    }
-    UNION {
-      # parent's sibling (aunt/uncle), by blood only: the path takes no spouse step
-      ?subject (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:sibling}|^wdt:{P:sibling}) ?relative .
-      BIND("pibling" AS ?base)
-    }
-    UNION {
-      # sibling's child (niece/nephew)
-      ?subject (wdt:{P:sibling}|^wdt:{P:sibling})/(^wdt:{P:father}|^wdt:{P:mother}) ?relative .
-      BIND("nibling" AS ?base)
-    }
-    UNION {
-      # first cousin: parent's sibling's child
-      ?subject (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:sibling}|^wdt:{P:sibling})/(^wdt:{P:father}|^wdt:{P:mother}) ?relative .
-      BIND("cousin" AS ?base)
-    }
-    # --- by marriage -------------------------------------------------
-    UNION {
-      ?subject wdt:{P:spouse}/(wdt:{P:father}|wdt:{P:mother}) ?relative .
-      BIND("parent-in-law" AS ?base)
-    }
-    UNION {
-      ?subject (wdt:{P:sibling}|^wdt:{P:sibling})/wdt:{P:spouse} ?relative .
-      BIND("sibling-in-law" AS ?base)
-    }
-    UNION {
-      ?subject wdt:{P:spouse}/(wdt:{P:sibling}|^wdt:{P:sibling}) ?relative .
-      BIND("sibling-in-law" AS ?base)
-    }
-    # --- source-asserted compound relation (the `relative` fallback:
-    #     X relative Y, kinship type T ⇒ X is Y's T, so the edge's
-    #     SUBJECT is the relative and its value the ego; ADR-0018) -----
-    UNION {
-      ?relative p:{P:relative} ?rst .
-      ?rst ps:{P:relative} ?subject .
-      OPTIONAL { ?rst pq:{P:kinship_type} ?asserted }
-      BIND(COALESCE(?asserted, "relative") AS ?base)
+    FILTER(?a != ?b)
+  }
+} AS %siblings
+# the first step of a path: ?y is ?x's parent, child, sibling or spouse
+WITH { SELECT (?child AS ?x) (?parent AS ?y) WHERE { INCLUDE %parents } } AS %parentX
+WITH { SELECT (?parent AS ?x) (?child AS ?y) WHERE { INCLUDE %parents } } AS %childX
+WITH { SELECT (?a AS ?x) (?b AS ?y) WHERE { INCLUDE %siblings } } AS %siblingX
+WITH { SELECT (?a AS ?x) (?b AS ?y) WHERE { INCLUDE %spouses } } AS %spouseX
+WITH {
+  # ?z is ?y's child or spouse (?via)
+  SELECT ?y ?z ?via WHERE {
+    {
+      SELECT (?parent AS ?y) (?child AS ?z) ("child" AS ?via)
+      WHERE { INCLUDE %parents }
+    } UNION {
+      SELECT (?a AS ?y) (?b AS ?z) ("spouse" AS ?via)
+      WHERE { INCLUDE %spouses }
     }
   }
-
+} AS %afterSibling
+WITH {
+  # ?z is the child or spouse (?via) of ?x's sibling
+  SELECT ?x ?z ?via WHERE { INCLUDE %siblingX INCLUDE %afterSibling }
+} AS %bySibling
+WITH {
+  # ?z is ?x's ?base when ?y is ?x's parent
+  SELECT ?y ?z ?base WHERE {
+    {
+      SELECT (?child AS ?y) (?parent AS ?z) ("grandparent" AS ?base)
+      WHERE { INCLUDE %parents }
+    } UNION {
+      SELECT (?a AS ?y) (?b AS ?z) ("pibling" AS ?base)
+      WHERE { INCLUDE %siblings }
+    } UNION {
+      # a parent's sibling's child is a cousin; a parent's sibling's
+      # spouse is an aunt or uncle
+      SELECT (?x AS ?y) ?z (IF(?via = "child", "cousin", "pibling") AS ?base)
+      WHERE { INCLUDE %bySibling }
+    }
+  }
+} AS %afterParent
+WITH {
+  # ?z is ?x's ?base when ?y is ?x's child
+  SELECT ?y ?z ?base WHERE {
+    {
+      SELECT (?parent AS ?y) (?child AS ?z) ("grandchild" AS ?base)
+      WHERE { INCLUDE %parents }
+    } UNION {
+      SELECT (?a AS ?y) (?b AS ?z) ("child-in-law" AS ?base)
+      WHERE { INCLUDE %spouses }
+    }
+  }
+} AS %afterChild
+WITH {
+  # ?z is ?x's ?base when ?y is ?x's spouse
+  SELECT ?y ?z ?base WHERE {
+    {
+      SELECT (?child AS ?y) (?parent AS ?z) ("parent-in-law" AS ?base)
+      WHERE { INCLUDE %parents }
+    } UNION {
+      SELECT (?a AS ?y) (?b AS ?z) ("sibling-in-law" AS ?base)
+      WHERE { INCLUDE %siblings }
+    } UNION {
+      # a spouse's sibling's child is a niece or nephew
+      SELECT (?x AS ?y) ?z ("nibling" AS ?base)
+      WHERE { INCLUDE %bySibling FILTER(?via = "child") }
+    }
+  }
+} AS %afterSpouse
+WITH {
+  # a term a source asserts: ?named is ?ego's ?term (ADR-0018)
+  SELECT DISTINCT ?named ?ego ?term WHERE {
+    ?named p:{P:relative} ?st .
+    ?st ps:{P:relative} ?ego ; wikibase:rank ?rank .
+    FILTER(?rank != wikibase:DeprecatedRank)
+    OPTIONAL { ?st pq:{P:kinship_type} ?asserted }
+    BIND(COALESCE(STR(?asserted), "relative") AS ?term)
+  }
+} AS %asserted
+WITH {
+  SELECT ?subject WHERE {
+    ?subject p:{P:instance_of} ?typed .
+    ?typed ps:{P:instance_of} wd:{Q:human} ; wikibase:rank ?typedRank .
+    FILTER(?typedRank != wikibase:DeprecatedRank)
+  }
+} AS %humans
+WITH {
+  SELECT ?subject ?relative ?base ?degree WHERE {
+    # --- one step ----------------------------------------------------
+    {
+      SELECT (?child AS ?subject) (?parent AS ?relative) ("parent" AS ?base)
+      WHERE { INCLUDE %parents }
+    } UNION {
+      SELECT (?parent AS ?subject) (?child AS ?relative) ("child" AS ?base)
+      WHERE { INCLUDE %parents }
+    } UNION {
+      SELECT (?a AS ?subject) (?b AS ?relative) ("spouse" AS ?base)
+      WHERE { INCLUDE %spouses }
+    } UNION {
+      SELECT (?a AS ?subject) (?b AS ?relative) ("sibling" AS ?base)
+      WHERE { INCLUDE %siblings }
+    }
+    # --- two and three steps -----------------------------------------
+    UNION {
+      SELECT (?x AS ?subject) (?z AS ?relative)
+             (IF(?via = "child", "nibling", "sibling-in-law") AS ?base)
+      WHERE { INCLUDE %bySibling }
+    } UNION {
+      SELECT (?x AS ?subject) (?z AS ?relative) ?base
+      WHERE { INCLUDE %parentX INCLUDE %afterParent }
+    } UNION {
+      SELECT (?x AS ?subject) (?z AS ?relative) ?base
+      WHERE { INCLUDE %childX INCLUDE %afterChild }
+    } UNION {
+      SELECT (?x AS ?subject) (?z AS ?relative) ?base
+      WHERE { INCLUDE %spouseX INCLUDE %afterSpouse }
+    }
+    # --- a term a source asserts, on the ego's row -------------------
+    UNION {
+      SELECT (?ego AS ?subject) (?named AS ?relative) (?term AS ?base)
+      WHERE { INCLUDE %asserted }
+    }
+    # --- its inverse, on the named relative's row --------------------
+    UNION {
+      SELECT (?named AS ?subject) (?ego AS ?relative) ?base ?degree WHERE {
+        INCLUDE %asserted
+        # A side ("maternal aunt") names the ego's parent, so the inverse
+        # drops it; a leading "great-" (or German "Ur-") is a degree,
+        # which the inverse of a grand-, aunt or uncle, niece or nephew
+        # term keeps.
+        BIND(REPLACE(LCASE(?term), "^\\s+|\\s+$", "") AS ?said)
+        BIND(REPLACE(?said, "^(maternal|paternal)[ -]+", "") AS ?unsided)
+        BIND(REPLACE(?unsided, "^((great[ -]+|ur-?)*).*$", "$1") AS ?greats)
+        BIND(SUBSTR(?unsided, STRLEN(?greats) + 1) AS ?core)
+        # The table is matched with a FILTER, by value: the engine joins a
+        # computed string with a table's constant by term identity, and
+        # that misses a term the store also holds.
+        OPTIONAL {
+          VALUES (?key ?inverse) {
+            ("father" "child") ("mother" "child") ("parent" "child")
+            ("dad" "child") ("mum" "child") ("mom" "child")
+            ("papa" "child") ("mama" "child")
+            ("vater" "child") ("vati" "child") ("mutter" "child")
+            ("mutti" "child")
+            ("son" "parent") ("daughter" "parent") ("child" "parent")
+            ("sohn" "parent") ("tochter" "parent")
+            ("brother" "sibling") ("sister" "sibling") ("sibling" "sibling")
+            ("bruder" "sibling") ("schwester" "sibling")
+            ("husband" "spouse") ("wife" "spouse") ("spouse" "spouse")
+            ("ehemann" "spouse") ("ehefrau" "spouse")
+            ("grandfather" "grandchild") ("grandmother" "grandchild")
+            ("grandparent" "grandchild") ("grandpa" "grandchild")
+            ("grandma" "grandchild") ("nana" "grandchild")
+            ("großvater" "grandchild") ("großmutter" "grandchild")
+            ("opa" "grandchild") ("oma" "grandchild")
+            ("grandson" "grandparent") ("granddaughter" "grandparent")
+            ("grandchild" "grandparent")
+            ("enkel" "grandparent") ("enkelin" "grandparent")
+            ("uncle" "nibling") ("aunt" "nibling") ("aunt or uncle" "nibling")
+            ("onkel" "nibling") ("tante" "nibling")
+            ("nephew" "pibling") ("niece" "pibling")
+            ("niece or nephew" "pibling")
+            ("neffe" "pibling") ("nichte" "pibling")
+            ("cousin" "cousin") ("vetter" "cousin") ("cousine" "cousin")
+            ("father-in-law" "child-in-law") ("mother-in-law" "child-in-law")
+            ("parent-in-law" "child-in-law")
+            ("schwiegervater" "child-in-law")
+            ("schwiegermutter" "child-in-law")
+            ("son-in-law" "parent-in-law") ("daughter-in-law" "parent-in-law")
+            ("child-in-law" "parent-in-law")
+            ("schwiegersohn" "parent-in-law")
+            ("schwiegertochter" "parent-in-law")
+            ("brother-in-law" "sibling-in-law")
+            ("sister-in-law" "sibling-in-law")
+            ("sibling-in-law" "sibling-in-law")
+            ("schwager" "sibling-in-law") ("schwägerin" "sibling-in-law")
+          }
+          FILTER(?key = ?core)
+        }
+        BIND(BOUND(?inverse)
+             && (?greats = ""
+                 || ?inverse IN ("grandparent", "grandchild", "pibling", "nibling"))
+             AS ?known)
+        # A cousin term the table does not list is its own inverse only
+        # when its other words number, double or halve the cousinship or
+        # count its removes ("second cousin", "cousin once removed"). Any
+        # other word can make the inverse a different term: a possessive
+        # names another person ("Dad's cousin", "cousin's wife"), a
+        # degree may name a parent's cousin ("great-cousin"), and a
+        # German compound is gendered by the person it names
+        # ("Großcousine"). Such a term gives "relative".
+        BIND(IF(?known, ?inverse,
+                IF(REGEX(?unsided, "^((first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|[0-9]+(st|nd|rd|th)|double|half)[ -]+)*cousin( (once|twice|[a-z0-9]+ times) removed)?$"),
+                   ?unsided, "relative")) AS ?base)
+        BIND(IF(?known, REPLACE(?greats, "(great[ -]+|ur-?)", "great-"), "")
+             AS ?degree)
+      }
+    }
+  }
+} AS %kin
+WHERE {
+  INCLUDE %kin
+  INCLUDE %humans
   FILTER(?relative != ?subject)
-  OPTIONAL { ?relative wdt:{P:sex_or_gender} ?sex . }
+
+  OPTIONAL {
+    ?relative p:{P:sex_or_gender} ?sexed .
+    ?sexed ps:{P:sex_or_gender} ?sex ; wikibase:rank ?sexRank .
+    FILTER(?sexRank != wikibase:DeprecatedRank)
+  }
   # gender token, unbound-safe: an unknown/absent sex yields "n" (neutral)
   # rather than erroring the whole expression
   BIND(IF(BOUND(?sex),
           IF(?sex = wd:{Q:male}, "m", IF(?sex = wd:{Q:female}, "f", "n")),
           "n") AS ?g)
-
-  # map (base relation, gender) to a term; "n" gives the neutral form
+  # map (base relation, gender) to a term; "n" gives the neutral form, and
+  # a base the map does not know, such as most terms a source asserts, is
+  # shown as it is
   BIND(
-    IF(?base = "parent",  IF(?g = "m", "father", IF(?g = "f", "mother", "parent")),
-    IF(?base = "child",   IF(?g = "m", "son", IF(?g = "f", "daughter", "child")),
+    IF(?base = "parent", IF(?g = "m", "father", IF(?g = "f", "mother", "parent")),
+    IF(?base = "child", IF(?g = "m", "son", IF(?g = "f", "daughter", "child")),
     IF(?base = "sibling", IF(?g = "m", "brother", IF(?g = "f", "sister", "sibling")),
+    IF(?base = "spouse", IF(?g = "m", "husband", IF(?g = "f", "wife", "spouse")),
     IF(?base = "grandparent", IF(?g = "m", "grandfather", IF(?g = "f", "grandmother", "grandparent")),
     IF(?base = "grandchild", IF(?g = "m", "grandson", IF(?g = "f", "granddaughter", "grandchild")),
     IF(?base = "pibling", IF(?g = "m", "uncle", IF(?g = "f", "aunt", "aunt or uncle")),
     IF(?base = "nibling", IF(?g = "m", "nephew", IF(?g = "f", "niece", "niece or nephew")),
-    IF(?base = "spouse", IF(?g = "m", "husband", IF(?g = "f", "wife", "spouse")),
     IF(?base = "parent-in-law", IF(?g = "m", "father-in-law", IF(?g = "f", "mother-in-law", "parent-in-law")),
+    IF(?base = "child-in-law", IF(?g = "m", "son-in-law", IF(?g = "f", "daughter-in-law", "child-in-law")),
     IF(?base = "sibling-in-law", IF(?g = "m", "brother-in-law", IF(?g = "f", "sister-in-law", "sibling-in-law")),
-    ?base)))))))))) AS ?relationship)
+    ?base))))))))))) AS ?gendered)
+  BIND(CONCAT(COALESCE(?degree, ""), ?gendered) AS ?relationship)
 
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
 }

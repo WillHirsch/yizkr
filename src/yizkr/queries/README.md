@@ -51,10 +51,30 @@ uv run yizkr publish-queries             # or: make publish-queries
   the kinship primitives and gendered by the relative's `sex_or_gender`
   (ADR-0014), beside the terms sources assert with `relative` +
   `kinship_type`. A row reads "?relative is ?subject's ?relationship".
-  An asserted term names the statement's subject and has the ego as its
+  A parent is read from a `father` or `mother` statement on the child or
+  a `child` statement on the parent, spouse and sibling statements
+  either way, and two children of one parent are siblings. The
+  second-order relations are paths of those steps, among them the aunt
+  or uncle by marriage (a parent's sibling's spouse), the niece or
+  nephew by marriage (a spouse's sibling's child) and the child-in-law.
+  Every value at normal or preferred rank is read and a deprecated one
+  never, so no preferred value is needed and none hides another. An
+  asserted term names the statement's subject and has the ego as its
   value (ADR-0018), so `Klara —relative→ Nicholas ; kinship_type =
-  "aunt"` is Nicholas's row, with Klara as his aunt
-  (`tests/integration/test_live_kinship.py`).
+  "aunt"` is Nicholas's row, with Klara as his aunt, and Klara gets the
+  inverse row, with Nicholas as her nephew, gendered by his sex. A term
+  the query's table does not invert gives "relative", except a plain
+  cousin term ("second cousin", "cousin once removed"), which is its own
+  inverse; a cousin term with any other word ("Dad's cousin", "cousin's
+  wife", "great-cousin") gives "relative"
+  (`tests/integration/test_live_kinship.py`). The query is built from
+  the query service's named subqueries (`WITH { … } AS %name`,
+  `INCLUDE %name`), which the bundled WDQS and its query UI run and
+  other SPARQL engines do not. For one subject, add `VALUES ?subject {
+  wd:Q… }` to its main WHERE; the named sets are still computed over the
+  whole graph. Rendered, it is longer than the query service accepts in
+  a GET request line, so a client sends it by POST, as the live tests
+  do.
 - **places-map** — coordinates + what connects to each place; renders
   as a map view in the query UI.
 - **unreferenced-statements** — QC report; every row is a
