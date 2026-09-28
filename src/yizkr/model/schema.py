@@ -119,9 +119,11 @@ class Manifest(BaseModel):
 def load_manifest(source=DEFAULT_MANIFEST) -> Manifest:
     """The manifest at `source`, parsed and validated.
 
-    The text is read on every call, and each distinct text is parsed
-    once per process. Every call returns its own deep copy, so a caller
-    that changes its manifest changes no other caller's.
+    The text is read on every call, and parsed only when it is not among
+    the eight distinct texts loaded most recently; threads that load a
+    new text at once may each parse it. Every call returns its own deep
+    copy, so a caller that changes its manifest changes no other
+    caller's.
     """
     return _parse_manifest(read_manifest_data(source)).model_copy(deep=True)
 
