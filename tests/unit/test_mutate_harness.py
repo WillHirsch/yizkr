@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from stat import S_IMODE
 from types import SimpleNamespace
 
 import pytest
@@ -62,19 +63,26 @@ def double(n):
 
 
 def hang(stubborn=False):
-    """Start a grandchild process, note both pids, then block for far
-    longer than any test waits.
+    """Start two processes, note their pids and pytest's, then block for
+    far longer than any test waits. One is a Python grandchild. The other
+    is a shell's background job, which ignores SIGINT, as POSIX has it.
 
-    A stubborn hang ignores SIGINT, and so does its grandchild."""
+    A stubborn hang ignores SIGINT itself, and so does its grandchild."""
     if stubborn:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     child = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(10)"]
     )
+    job = subprocess.run(
+        ["sh", "-c", "sleep 10 >/dev/null 2>&1 & echo $!"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     pidfile = os.environ.get("CALC_PIDFILE")
     if pidfile:
         with open(pidfile + ".tmp", "w") as out:
-            out.write(f"{os.getpid()} {child.pid}")
+            out.write(f"{os.getpid()} {child.pid} {job.stdout.strip()}")
         os.replace(pidfile + ".tmp", pidfile)
     time.sleep(10)
 '''
@@ -110,6 +118,54 @@ def test_compile_calc():
         doraise=True,
     )
 '''
+
+
+TEST_HELPER = '''\
+import os
+import signal
+import subprocess
+
+from calc import add
+
+
+def test_add_beside_a_background_job():
+    """Start a shell's background job, and stop it only if the test gets
+    that far, as a test that cleans up at the end of its body does."""
+    job = subprocess.run(
+        ["sh", "-c", "sleep 10 >/dev/null 2>&1 & echo $!"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    pid = int(job.stdout)
+    pidfile = os.environ.get("HELPER_PIDS")
+    if pidfile:
+        with open(pidfile, "a") as out:
+            out.write(f"{pid}\\n")
+    assert add(2, 3) == 5
+    os.kill(pid, signal.SIGKILL)
+'''
+
+# test_b.py passes after test_a.py, but fails alone
+REGISTRY = "HANDLERS = {}\n"
+
+TEST_A = """\
+import registry
+from calc import add
+
+
+def test_add_registers_its_handler():
+    registry.HANDLERS["add"] = add
+    assert add(2, 3) == 5
+"""
+
+TEST_B = """\
+import registry
+
+
+def test_the_registered_handler_adds():
+    assert registry.HANDLERS["add"](2, 2) == 4
+"""
 
 
 def mutation(name, old, new, tests=("test_calc.py::test_add",), **extra):
@@ -148,10 +204,18 @@ def template(tmp_path_factory):
         pytest.skip("git not installed")
     root = tmp_path_factory.mktemp("template") / "repo"
     root.mkdir()
-    (root / "pytest.ini").write_text("[pytest]\n")
-    (root / "calc.py").write_text(CALC)
-    (root / "test_calc.py").write_text(TEST_CALC)
-    (root / "test_bytecode.py").write_text(TEST_BYTECODE)
+    files = {
+        "pytest.ini": "[pytest]\n",
+        "calc.py": CALC,
+        "test_calc.py": TEST_CALC,
+        "test_bytecode.py": TEST_BYTECODE,
+        "test_helper.py": TEST_HELPER,
+        "registry.py": REGISTRY,
+        "test_a.py": TEST_A,
+        "test_b.py": TEST_B,
+    }
+    for name, text in files.items():
+        (root / name).write_text(text)
     git(root, "init", "-q", "-b", "main")
     git(root, "add", ".")
     git(root, "commit", "-q", "-m", "seed")
@@ -254,8 +318,8 @@ def wait_until(condition, timeout=30.0):
 
 
 def kill_leftovers(pidfile):
-    """Clean up after a failure: kill the processes that hang() noted, if
-    any still run."""
+    """Clean up after a failure: kill the processes that a test noted in
+    `pidfile`, if any still run."""
     if not pidfile.exists():
         return
     for pid in map(int, pidfile.read_text().split()):
@@ -266,10 +330,17 @@ def kill_leftovers(pidfile):
 # -- a default run, shared by the tests below ------------------------------
 
 
+DEFAULT_TESTS = [
+    "test_calc.py::test_add",
+    "test_bytecode.py",
+    "test_helper.py",
+]
+
+
 @pytest.fixture(scope="module")
 def default_run(template, tmp_path_factory):
     """One default run, the baseline included, of a mutant that the tests
-    kill, with bytecode traps set:
+    kill, with traps set:
 
     * before the run, bytecode compiled from broken code is cached for
       calc.py, in the unchecked hash-based form that Python loads without
@@ -284,7 +355,12 @@ def default_run(template, tmp_path_factory):
     * PYTHONPYCACHEPREFIX is set, and test_bytecode.py checks that pytest
       runs without it and without writing bytecode;
     * PY_COLORS asks pytest for colour, which would hide its failures
-      from the harness unless the harness turns colour off."""
+      from the harness unless the harness turns colour off;
+    * PYTEST_ADDOPTS asks for --collect-only, which would make every run
+      pass without running a test, unless the harness drops it;
+    * test_helper.py starts a background job and stops it only when its
+      assertion holds, so the mutant's run leaves the job to the harness
+      to kill, though pytest exits by itself."""
     scratch = tmp_path_factory.mktemp("default-run")
     repo = copy(template, scratch)
     calc = repo / "calc.py"
@@ -293,24 +369,25 @@ def default_run(template, tmp_path_factory):
     # The control: the cached bytecode, not the source, is what runs.
     control = load(calc).add(2, 3)
     report = scratch / "report.json"
-    spec = mutation(
-        "sum becomes difference",
-        "a + b",
-        "a - b",
-        tests=["test_calc.py::test_add", "test_bytecode.py"],
-    )
+    helper_pids = scratch / "helper-pids"
+    spec = mutation("sum becomes difference", "a + b", "a - b", DEFAULT_TESTS)
     env = environment(
-        PYTHONPYCACHEPREFIX=str(scratch / "prefix"), PY_COLORS="1"
+        PYTHONPYCACHEPREFIX=str(scratch / "prefix"),
+        PY_COLORS="1",
+        PYTEST_ADDOPTS="--collect-only",
+        HELPER_PIDS=str(helper_pids),
     )
     result = harness(repo, spec, "--json", str(report), env=env)
-    return SimpleNamespace(
+    yield SimpleNamespace(
         repo=repo,
         calc=calc,
         before=before,
         control=control,
         result=result,
         report=report,
+        helper_pids=helper_pids,
     )
+    kill_leftovers(helper_pids)
 
 
 def test_a_killed_mutant_is_reported(default_run):
@@ -320,9 +397,26 @@ def test_a_killed_mutant_is_reported(default_run):
     assert (row["file"], row["result"], row["detail"]) == (
         "calc.py",
         "killed",
-        "1 failed, 2 passed",
+        "2 failed, 2 passed",
     )
-    assert "failed: test_calc.py::test_add" in result.stderr
+    for test in (
+        "test_calc.py::test_add",
+        "test_helper.py::test_add_beside_a_background_job",
+    ):
+        assert f"failed: {test}" in result.stderr
+
+
+def test_nothing_the_tests_started_outlives_their_run(default_run):
+    # One job from the baseline, which stopped it itself, and one from the
+    # mutant's run, which pytest left behind when it exited.
+    pids = [int(pid) for pid in default_run.helper_pids.read_text().split()]
+    assert len(pids) == 2
+    wait_until(lambda: not any(running(pid) for pid in pids), timeout=5)
+
+
+def test_pytest_runs_without_the_callers_pytest_addopts(default_run):
+    stderr = default_run.result.stderr
+    assert "PYTEST_ADDOPTS is set here; pytest runs without it" in stderr
 
 
 def test_the_mutated_file_is_restored_byte_for_byte_with_its_mtime(
@@ -333,7 +427,7 @@ def test_the_mutated_file_is_restored_byte_for_byte_with_its_mtime(
 
 def test_the_baseline_ignores_stale_bytecode(default_run):
     assert default_run.control == 6
-    assert "baseline: 3 passed" in default_run.result.stderr
+    assert "baseline: 4 passed" in default_run.result.stderr
 
 
 def test_stale_bytecode_cannot_mask_a_mutant(default_run):
@@ -358,14 +452,23 @@ def test_the_json_report(default_run):
     data = json.loads(default_run.report.read_text())
     head = git(default_run.repo, "rev-parse", "HEAD").stdout.strip()
     assert data["commit"] == head
-    assert data["baseline"]["result"] == "passed"
+    # one entry for each distinct list of tests
+    [baseline] = data["baseline"]
+    assert {key: baseline[key] for key in ("tests", "result", "detail")} == {
+        "tests": DEFAULT_TESTS,
+        "result": "passed",
+        "detail": "4 passed",
+    }
     [entry] = data["mutations"]
     assert {key: entry[key] for key in ("name", "file", "result")} == {
         "name": "sum becomes difference",
         "file": "calc.py",
         "result": "killed",
     }
-    assert entry["failed"] == ["test_calc.py::test_add"]
+    assert entry["failed"] == [
+        "test_calc.py::test_add",
+        "test_helper.py::test_add_beside_a_background_job",
+    ]
     assert data["counts"]["killed"] == 1
     assert data["exit_status"] == 0
 
@@ -373,23 +476,39 @@ def test_the_json_report(default_run):
 # -- other results, and restoration after each ------------------------------
 
 
-def test_restore_brings_back_the_bytes_and_times_of_a_changed_or_deleted_file(
+def test_restore_brings_back_bytes_mode_and_mtime_and_never_follows_a_link(
     tmp_path,
 ):
     path = tmp_path / "calc.py"
     path.write_bytes(CALC.encode())
+    path.chmod(0o640)
     os.utime(path, ns=(STAMP, STAMP))
     stat = path.stat()
-    for damage in (
-        lambda: path.write_text("def add(a, b): ...\n"),
-        path.unlink,
-    ):
-        damage()
-        assert mutate.restore(path, CALC.encode(), stat) is None
-        # stat() before reading: a read may move the access time on
+    decoy = tmp_path / "decoy.py"
+    decoy.write_text("left alone\n")
+
+    def link_to_the_decoy():
+        path.unlink()
+        path.symlink_to(decoy)
+
+    damages = {
+        "changed": lambda: path.write_text("def add(a, b): ...\n"),
+        "deleted": path.unlink,
+        "read-only": lambda: path.chmod(0o444),
+        "unreadable": lambda: path.chmod(0),
+        "a symlink": link_to_the_decoy,
+    }
+    for damage, harm in damages.items():
+        harm()
+        assert mutate.restore(path, CALC.encode(), stat) is None, damage
+        assert not path.is_symlink(), damage
         restored = path.stat()
-        assert (restored.st_atime_ns, restored.st_mtime_ns) == (STAMP, STAMP)
-        assert path.read_bytes() == CALC.encode()
+        assert (S_IMODE(restored.st_mode), restored.st_mtime_ns) == (
+            0o640,
+            STAMP,
+        ), damage
+        assert path.read_bytes() == CALC.encode(), damage
+    assert decoy.read_text() == "left alone\n"
 
 
 def test_an_internal_error_still_restores_the_file_and_exits_2(
@@ -415,6 +534,102 @@ def test_an_internal_error_still_restores_the_file_and_exits_2(
     assert during == [CALC.replace("a + b", "a - b").encode()]
     assert snapshot(calc) == before
     assert "RuntimeError: the test run broke" in capsys.readouterr().err
+
+
+def scripted(monkeypatch, repo, spec, run):
+    """Get ready to run the harness in-process on `spec`, with `run`
+    standing in for every pytest run."""
+    for key, value in GIT_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.chdir(repo)
+    path = repo.parent / "spec.toml"
+    path.write_text(spec)
+    monkeypatch.setattr(mutate.Harness, "run_tests", run)
+    return str(path)
+
+
+def test_a_file_git_does_not_show_clean_after_its_restore_is_an_error(
+    repo, monkeypatch, capsys
+):
+    """A test that stages the mutant leaves git's index changed. The bytes
+    come back, but the harness says git disagrees, and stops the run."""
+    calc = repo / "calc.py"
+
+    def staging_run(self, tests):
+        git(repo, "add", "calc.py")
+        return mutate.Run(
+            1,
+            SUMMARY + "FAILED test_calc.py::test_add - assert -1 == 5\n",
+            0.1,
+        )
+
+    spec = scripted(monkeypatch, repo, SUM + DOUBLE, staging_run)
+    assert mutate.main([spec, "--no-baseline", "--keep-going"]) == 2
+    captured = capsys.readouterr()
+    assert (
+        "calc.py is restored, but git does not show it clean: calc.py has "
+        "unstaged changes" in captured.err
+    )
+    assert outcomes(captured.out) == {
+        "sum becomes difference": "killed",
+        "untested double": "not run",
+    }
+    assert calc.read_bytes() == CALC.encode()
+
+
+# -- the baseline ------------------------------------------------------------
+
+
+def test_the_baseline_runs_each_list_of_tests_as_its_mutants_will(
+    repo, tmp_path
+):
+    """test_b.py passes after test_a.py, but fails alone. A baseline of
+    both mutations' tests in one run would pass, and the docstring edit,
+    which runs test_b.py alone, would then look killed."""
+    calc = repo / "calc.py"
+    before = snapshot(calc)
+    spec = mutation(
+        "sum becomes difference",
+        "a + b",
+        "a - b",
+        ["test_a.py", "test_b.py"],
+    ) + mutation(
+        "the docstring changes",
+        "A tiny module",
+        "A small module",
+        ["test_b.py"],
+    )
+    report = tmp_path / "report.json"
+    result = harness(repo, spec, "--keep-going", "--json", str(report))
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "the tests in test_b.py fail unmutated (1 failed)" in result.stderr
+    assert result.stdout == ""
+    baseline = json.loads(report.read_text())["baseline"]
+    assert [(entry["tests"], entry["result"]) for entry in baseline] == [
+        (["test_a.py", "test_b.py"], "passed"),
+        (["test_b.py"], "failed"),
+    ]
+    assert snapshot(calc) == before
+
+
+def test_a_baseline_in_which_no_test_passes_is_refused(
+    repo, monkeypatch, capsys
+):
+    """Tests that only skip or xfail pass, yet no mutant could fail them."""
+    ran = []
+
+    def skipping_run(self, tests):
+        ran.append(tests)
+        counts = "1 skipped, 1 xfailed, 1 xpassed in 0.01s"
+        return mutate.Run(0, f"=========== {counts} ===========\n", 0.1)
+
+    spec = scripted(monkeypatch, repo, SUM, skipping_run)
+    assert mutate.main([spec]) == 2
+    assert ran == [["test_calc.py::test_add"]]
+    assert (
+        "no test in test_calc.py::test_add passes unmutated (1 skipped, "
+        "1 xfailed, 1 xpassed)" in capsys.readouterr().err
+    )
 
 
 def test_a_survivor_stops_the_run_and_fails_it(repo):
@@ -447,22 +662,38 @@ def test_a_collection_error_is_an_error_and_the_file_is_restored(repo):
     assert snapshot(calc) == before
 
 
-def test_a_timeout_is_an_error_and_the_file_is_restored(repo, tmp_path):
+def test_a_timeout_is_an_error_that_stops_all_the_tests_started(
+    repo, tmp_path
+):
+    """pytest exits on the harness's SIGINT at once, but the shell's
+    background job that hang() started ignores SIGINT: only SIGKILL to
+    the group, once pytest has exited, stops it. The job must have started
+    before the timeout, so a busy machine gets longer timeouts."""
     calc = repo / "calc.py"
     before = snapshot(calc)
     spec = mutation("sum hangs", "return a + b", "return hang()")
     pidfile = tmp_path / "pids"
     env = environment(CALC_PIDFILE=str(pidfile))
     try:
-        result = harness(
-            repo, spec, "--no-baseline", "--timeout", "0.3", env=env
+        for timeout in ("1.5", "5", "15"):
+            result = harness(
+                repo, spec, "--no-baseline", "--timeout", timeout, env=env
+            )
+            if pidfile.exists():
+                break
+        else:
+            pytest.fail("the tests never reached hang() before the timeout")
+        assert result.returncode == 2, result.stdout + result.stderr
+        row = results(result.stdout)["sum hangs"]
+        assert (row["result"], row["detail"]) == (
+            "error",
+            f"timed out after {timeout} s",
         )
+        assert snapshot(calc) == before
+        pids = [int(pid) for pid in pidfile.read_text().split()]
+        wait_until(lambda: not any(running(pid) for pid in pids), timeout=5)
     finally:
         kill_leftovers(pidfile)
-    assert result.returncode == 2, result.stdout + result.stderr
-    row = results(result.stdout)["sum hangs"]
-    assert (row["result"], row["detail"]) == ("error", "timed out after 0.3 s")
-    assert snapshot(calc) == before
 
 
 # Runs the harness after undoing any "ignore" of its stop signals that
@@ -481,7 +712,7 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 def test_sigint_stops_the_tests_even_if_they_ignore_it_and_restores(
     repo, tmp_path
 ):
-    """The tests ignore SIGINT, and so does a process they started: the
+    """The tests ignore SIGINT, and so do the processes they started: the
     harness passes SIGINT on to them, then SIGKILL after --grace."""
     calc = repo / "calc.py"
     before = snapshot(calc)
@@ -503,7 +734,7 @@ def test_sigint_stops_the_tests_even_if_they_ignore_it_and_restores(
     try:
         wait_until(lambda: pidfile.exists() or process.poll() is not None)
         assert pidfile.exists(), process.communicate()
-        # pytest, and the grandchild it started, are running the mutant
+        # pytest, and the processes it started, are running the mutant
         pids = [int(pid) for pid in pidfile.read_text().split()]
         assert b"return hang(" in calc.read_bytes()
         process.send_signal(signal.SIGINT)
@@ -733,6 +964,7 @@ def toml(**changes):
         (toml(new="a + b"), "new is the same as old"),
         (toml(tests=[]), "tests must name at least one test id or path"),
         (toml(tests=["-x", "test_calc.py"]), "not pytest options"),
+        (toml(tests=["@more-args.txt"]), "not pytest options or @argfiles"),
         (toml(count=0), "count must be a positive integer"),
         (toml(count=True), "count must be a positive integer"),
         (toml() + toml(), "mutation 2 ('sum'): the name is used twice"),
@@ -899,3 +1131,17 @@ COLLECTING = "_____ ERROR collecting t.py _____\nE   ImportError: boom\n"
 )
 def test_classifies_a_test_run(run, expected):
     assert mutate.classify(run, timeout=0.5) == expected
+
+
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGRTMIN"), reason="no real-time signals here"
+)
+def test_names_a_real_time_signal_by_number():
+    # signal.Signals has no member for most real-time signals
+    signum = signal.SIGRTMIN + 1
+    run = mutate.Run(-signum, "", 0.3)
+    assert mutate.classify(run, timeout=0.5) == (
+        "error",
+        f"pytest died of signal {signum}",
+        [],
+    )

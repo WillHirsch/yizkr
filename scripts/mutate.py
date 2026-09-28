@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation harness: show that tests catch the regressions they guard.
+r"""Mutation harness: show that tests catch the regressions they guard.
 
 A spec file lists mutations. Each is an exact text edit to one file in
 the repository, plus the tests that should catch it. For each mutation
@@ -12,8 +12,12 @@ mutant that brings it back.
                                          [--no-baseline] [--timeout SECONDS]
                                          [--grace SECONDS] [--json PATH] [-q]
 
-Run it from anywhere inside the repository. It needs only the standard
-library and pytest, and runs pytest with the interpreter it runs under.
+Run it from anywhere inside the repository, with that checkout's own
+environment: `uv run` from the checkout or worktree whose files the spec
+names. The harness runs pytest with the interpreter it runs under, and
+an environment made for another checkout imports that checkout's src/
+through its editable install, where no mutation lands: every mutant
+would falsely survive. It needs only the standard library and pytest.
 
 The spec
 --------
@@ -29,9 +33,13 @@ SPEC is a TOML file with one [[mutation]] table per mutation:
     #             # every occurrence is replaced
 
 `tests` holds pytest node ids or paths, relative to the repository
-root; a single string is fine too. TOML literal strings ('...' and
-'''...''') keep backslashes in code exactly as written. A multi-line
-string drops a newline that directly follows its opening quotes.
+root; a single string is fine too. Write code in TOML literal strings,
+in single quotes ('...', or three of them around several lines), which
+keep every character as written: '\n' there is a backslash and an n.
+In double-quoted basic strings a backslash starts an escape, and in a
+multi-line one a backslash at the end of a line joins that line to the
+next. A multi-line string of either kind drops a newline that directly
+follows its opening quotes.
 
 Guarantees
 ----------
@@ -40,13 +48,17 @@ mutation's file is outside the repository, is a symlink, is not tracked
 by git, or has uncommitted changes, staged or not. The same goes for a
 mutation whose old text is missing, occurs a different number of times
 than count, or overlaps itself, and for one that would leave a Python
-file unparseable. Because every file is clean and tracked,
+file unparseable. `tests` takes test ids and paths only, never pytest
+options or @argfiles. Because every file is clean and tracked,
 `git checkout -- FILE` can always recover it, whatever happens to the
 harness.
 
-Baseline. First, every listed test runs once on the unmutated tree, and
-all must pass, since a kill proves nothing when the tests fail anyway.
---no-baseline skips this run.
+Baseline. First, the tests run on the unmutated tree, once for each
+distinct list of tests in the spec, just as the mutants' runs will run
+them. Each run must pass, and at least one of its tests must pass rather
+than skip: a kill proves nothing when the tests fail anyway, and a
+survivor proves nothing when they only skip. The baseline stops at the
+first list that fails. --no-baseline skips these runs.
 
 No stale bytecode. Python loads a module's cached bytecode without
 reading the source when the source's recorded size and timestamp still
@@ -59,22 +71,29 @@ compiles the mutated source. The bytecode is deleted again after the
 restore, so nothing compiled from a mutant outlives the run.
 -p no:cacheprovider keeps mutant runs out of pytest's cache.
 
-Restoration. Each file is written back byte for byte, with its access
-and modification times, in a `finally` block. This covers test
-failures, errors and timeouts, and SIGINT (Ctrl-C), SIGTERM and SIGHUP.
-A signal stops the test run. The harness then restores the file, prints
-the table so far and exits with 128 + the signal number. A harness
-killed any other way, such as by SIGKILL, can leave a mutation in
-place. The progress lines name the file being mutated, and
-`git checkout -- FILE` recovers it.
+Restoration. Each file is written back byte for byte, with its mode and
+modification time, in a `finally` block. This covers test failures,
+errors and timeouts, and SIGINT (Ctrl-C), SIGTERM and SIGHUP. A file
+that a test deleted is written back, and a symlink that a test left in
+its place is removed, never written through. After each restore, git
+must show the file clean again. If it does not (say a test staged the
+mutant), the harness reports it and stops with an error. A signal stops
+the test run. The harness then restores the file, prints the table so
+far and exits with 128 + the signal number. A harness killed any other
+way, such as by SIGKILL, can leave a mutation in place. The progress
+lines name the file being mutated, and `git checkout -- FILE` recovers
+it.
 
 Test runs
 ---------
 pytest runs as `python -P -m pytest -p no:cacheprovider -rfE
 --color=no TESTS` from the repository root, in a process group of its
-own. When a run outlives --timeout, or a signal stops the harness, the
-whole group gets SIGINT, so pytest can tear its fixtures down. If
-pytest has not exited --grace seconds later, the group gets SIGKILL.
+own, and without PYTEST_ADDOPTS. When a run outlives --timeout, or a
+signal stops the harness, the whole group gets SIGINT, so pytest can
+tear its fixtures down. Once pytest has exited, or after --grace
+seconds, the group gets SIGKILL. It gets SIGKILL when pytest exits on
+its own too, so nothing a test started, such as a shell's background
+job, outlives the run to hold a lock or a port against the next one.
 
 Results
 -------
@@ -95,7 +114,8 @@ writes a report.
 Exit status: 0 when every mutation that ran was killed, or survived
 under --allow-survivors; 1 when a mutant survived and nothing else went
 wrong; 2 after a refusal, a failing baseline, a mutation's error, a
-failed restore or an internal error; 128 + N after signal N.
+failed restore, a file git does not show clean after its restore, or an
+internal error; 128 + N after signal N.
 """
 
 from __future__ import annotations
@@ -117,6 +137,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
+from stat import S_IMODE
 
 DEFAULT_TIMEOUT = 300.0
 DEFAULT_GRACE = 5.0
@@ -143,6 +164,8 @@ MUTATION_KEYS = frozenset({"name", "file", "old", "new", "tests", "count"})
 COUNTS = re.compile(
     r"\b\d+ (?:failed|passed|errors?|skipped|deselected|xfailed|xpassed)\b"
 )
+# the tests that passed outright, in those counts ("xpassed" is not one)
+PASSED = re.compile(r"\b(\d+) passed\b")
 # the heading pytest gives each module that it fails to collect
 COLLECTION_ERROR = re.compile(r"^_+ ERROR collecting ", re.MULTILINE)
 
@@ -270,8 +293,10 @@ def _mutation(index: int, table: dict) -> tuple[Mutation | None, list[str]]:
         or not all(isinstance(test, str) and test.strip() for test in tests)
     ):
         problems.append("tests must name at least one test id or path")
-    elif any(test.startswith("-") for test in tests):
-        problems.append("tests takes test ids and paths, not pytest options")
+    elif any(test.startswith(("-", "@")) for test in tests):
+        problems.append(
+            "tests takes test ids and paths, not pytest options or @argfiles"
+        )
     count = table.get("count", 1)
     # bool is a subclass of int, and `count = true` is no count
     if type(count) is not int or count < 1:
@@ -355,7 +380,7 @@ def git_problem(root: Path, rel: str) -> str | None:
         ).returncode
         if status == 1:
             state = "staged" if staged else "unstaged"
-            return f"{rel} has {state} changes; commit or stash them first"
+            return f"{rel} has {state} changes"
         if status != 0:
             return f"git diff failed on {rel}"
     return None
@@ -468,14 +493,23 @@ def clear_bytecode(path: Path) -> None:
 
 
 def restore(path: Path, data: bytes, stat: os.stat_result) -> str | None:
-    """Put `data` back in `path`, with its original access and
-    modification times, and delete any bytecode compiled meanwhile.
-    Returns what went wrong, or None."""
+    """Put the file back as `stat` and `data` found it: its bytes, mode and
+    modification time. Deletes any bytecode compiled meanwhile. Returns
+    what went wrong, or None."""
+    mode = S_IMODE(stat.st_mode)
     try:
+        if path.is_symlink():
+            # a test swapped the file for a link: never write through it
+            path.unlink()
+        if path.is_file() and S_IMODE(path.stat().st_mode) != mode:
+            # a test made it unwritable or unreadable, say
+            os.chmod(path, mode)
         if _contents(path) != data:
             path.write_bytes(data)
             if _contents(path) != data:
                 return "the file still differs from its original"
+        if S_IMODE(path.stat().st_mode) != mode:
+            os.chmod(path, mode)
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
         clear_bytecode(path)
     except OSError as exc:
@@ -514,6 +548,9 @@ def pytest_environment() -> dict[str, str]:
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     # bytecode under a prefix directory would escape clear_bytecode()
     env.pop("PYTHONPYCACHEPREFIX", None)
+    # options from outside the spec, such as --collect-only or -x, would
+    # change what a run means
+    env.pop("PYTEST_ADDOPTS", None)
     return env
 
 
@@ -541,6 +578,12 @@ def counts(output: str) -> str:
             text = line.strip().strip("=").strip()
             return re.sub(r"\s+in [\d.]+s\b.*$", "", text)
     return ""
+
+
+def passes(output: str) -> int:
+    """How many tests passed outright, by pytest's closing counts."""
+    found = PASSED.search(counts(output))
+    return int(found.group(1)) if found else 0
 
 
 def classify(run: Run, timeout: float) -> tuple[str, str, list[str]]:
@@ -574,12 +617,40 @@ def classify(run: Run, timeout: float) -> tuple[str, str, list[str]]:
     if code is None:
         return ERROR, "pytest could not be stopped", failed
     if code < 0:
-        return ERROR, f"pytest died of {signal.Signals(-code).name}", failed
+        return ERROR, f"pytest died of {signal_name(-code)}", failed
     return ERROR, f"pytest exit status {code}", failed
+
+
+def signal_name(signum: int) -> str:
+    """SIGKILL for 9; a real-time signal has no name of its own."""
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal {signum}"
 
 
 def tail(output: str) -> str:
     return "\n".join(output.rstrip().splitlines()[-TAIL:])
+
+
+def exited(child: subprocess.Popen, timeout: float) -> bool:
+    """Whether the child has exited, or does within `timeout` seconds.
+
+    The child is left unreaped, so its pid, and with it the id of the
+    process group it leads, cannot be given to another process yet."""
+    if child.returncode is not None:
+        return True
+    deadline = time.monotonic() + timeout
+    flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
+    while True:
+        try:
+            if os.waitid(os.P_PID, child.pid, flags) is not None:
+                return True
+        except ChildProcessError:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
 
 
 def signal_group(child: subprocess.Popen, signum: int) -> None:
@@ -661,7 +732,8 @@ class Harness:
         self.root: Path | None = None
         self.signum: int | None = None
         self.results: list[Result] = []
-        self.baseline: dict | None = None
+        # one entry per list of tests the baseline ran
+        self.baseline: list[dict] | None = None
         self.problems: list[str] = []
         self.unrestored: list[str] = []
 
@@ -683,6 +755,8 @@ class Harness:
             return self._finish()
         if problems:
             return self._refuse(problems)
+        if os.environ.get("PYTEST_ADDOPTS"):
+            self._say("PYTEST_ADDOPTS is set here; pytest runs without it")
         self.results = [Result(mutation) for mutation in mutations]
         if not self.args.no_baseline and not self._baseline(mutations):
             return self._finish()
@@ -703,32 +777,54 @@ class Harness:
         return result.result == ERROR
 
     def _baseline(self, mutations: list[Mutation]) -> bool:
-        """Run every listed test on the unmutated tree; True if all pass."""
-        tests = list(dict.fromkeys(t for m in mutations for t in m.tests))
+        """Run each distinct list of tests on the unmutated tree, just as
+        the mutants' runs will: a test may pass after another yet fail
+        alone. True if every list passes; stops at the first that fails."""
+        self.baseline = []
+        paths = {mutation.path for mutation in mutations}
+        for tests in dict.fromkeys(tuple(m.tests) for m in mutations):
+            if self.signum is not None:
+                return False
+            try:
+                for path in paths:
+                    clear_bytecode(path)
+            except OSError as exc:
+                self._problem(f"cannot delete stale bytecode: {exc}")
+                return False
+            if not self._baseline_run(list(tests)):
+                return False
+        return True
+
+    def _baseline_run(self, tests: list[str]) -> bool:
         self._say(f"baseline: running {describe(tests)} unmutated")
-        try:
-            for path in {mutation.path for mutation in mutations}:
-                clear_bytecode(path)
-        except OSError as exc:
-            self._problem(f"cannot delete stale bytecode: {exc}")
-            return False
         run = self.run_tests(tests)
         result, detail, _ = classify(run, self.args.timeout)
         detail = self._relative(detail)
-        passed = result == SURVIVED
-        self.baseline = {
-            "result": "passed" if passed else "failed",
-            "seconds": _rounded(run.seconds),
-            "returncode": run.returncode,
-            "detail": detail,
-            "output_tail": "" if passed else tail(run.output),
-        }
+        # A run whose tests only skip or xfail passes, but proves nothing:
+        # every mutant would survive it.
+        passed = result == SURVIVED and passes(run.output) > 0
+        self.baseline.append(
+            {
+                "tests": tests,
+                "result": "passed" if passed else "failed",
+                "seconds": _rounded(run.seconds),
+                "returncode": run.returncode,
+                "detail": detail,
+                "output_tail": "" if passed else tail(run.output),
+            }
+        )
         if passed:
             self._say(f"baseline: {detail} in {run.seconds:.1f} s")
+        elif result == SURVIVED:
+            self._problem(
+                f"no test in {describe(tests)} passes unmutated ({detail}), "
+                "so every mutant would survive; they only skip or xfail, or "
+                "pytest printed no counts"
+            )
         elif result != INTERRUPTED:
             self._problem(
-                f"the tests do not pass unmutated ({detail}), so no kill "
-                "would prove anything; fix them or their ids"
+                f"the tests in {describe(tests)} fail unmutated ({detail}), "
+                "so no kill would prove anything; fix them or their ids"
             )
             self._tail(run.output)
         return passed
@@ -784,6 +880,15 @@ class Harness:
                 f"COULD NOT RESTORE {mutation.rel}: {problem}. "
                 f"Recover it with: git checkout -- {mutation.rel}"
             )
+        elif (unclean := git_problem(self.root, mutation.rel)) is not None:
+            # The bytes are back, yet git disagrees: a test changed the
+            # index, the file's type or its mode, say.
+            self.unrestored.append(mutation.rel)
+            self._problem(
+                f"{mutation.rel} is restored, but git does not show it "
+                f"clean: {unclean}. Check it with: git status; "
+                f"git diff HEAD -- {mutation.rel}"
+            )
         if failure is not None:
             result.result, result.detail = ERROR, failure
         elif run is None:
@@ -807,8 +912,9 @@ class Harness:
             self._tail(result.output)
 
     def run_tests(self, tests: list[str]) -> Run:
-        """Run pytest on `tests` in a process group of its own, and stop
-        the whole group on a timeout or a signal."""
+        """Run pytest on `tests` in a process group of its own. Stop the
+        whole group on a timeout or a signal, and kill whatever is left in
+        it once pytest has exited."""
         started = time.monotonic()
         with tempfile.TemporaryFile() as output:
             # Output goes to a file, not a pipe, so that a straggling
@@ -844,23 +950,24 @@ class Harness:
             if remaining <= 0:
                 self._halt(child)
                 return "timeout"
-            try:
-                child.wait(timeout=min(remaining, POLL))
-            except subprocess.TimeoutExpired:
-                continue
-            return None
+            if exited(child, min(remaining, POLL)):
+                self._reap(child)
+                return None
 
     def _halt(self, child: subprocess.Popen) -> None:
         """SIGINT to pytest's process group, so that pytest can tear its
-        fixtures down; SIGKILL to the group if pytest outlives the grace
-        period."""
-        for signum in (signal.SIGINT, signal.SIGKILL):
-            signal_group(child, signum)
-            try:
-                child.wait(timeout=self.args.grace)
-            except subprocess.TimeoutExpired:
-                continue
-            return
+        fixtures down. Once pytest exits, or the grace period is over,
+        SIGKILL to what is left of the group."""
+        signal_group(child, signal.SIGINT)
+        exited(child, self.args.grace)
+        self._reap(child)
+
+    def _reap(self, child: subprocess.Popen) -> None:
+        # pytest is unreaped, so its pid still names its process group:
+        # kill whatever its tests left running there, then reap it.
+        signal_group(child, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            child.wait(timeout=self.args.grace)
 
     # -- output -------------------------------------------------------------
 
@@ -889,7 +996,7 @@ class Harness:
 
     def _finish(self) -> int:
         if self.signum is not None:
-            name = signal.Signals(self.signum).name
+            name = signal_name(self.signum)
             restored = "" if self.unrestored else "; files restored"
             _write(sys.stderr, f"mutate: stopped by {name}{restored}\n")
         if any(result.result != NOT_RUN for result in self.results):
@@ -922,9 +1029,7 @@ class Harness:
             "mutations": [result.as_json() for result in self.results],
             "counts": {name: tally[name] for name in RESULTS},
             "problems": self.problems,
-            "signal": signal.Signals(self.signum).name
-            if self.signum
-            else None,
+            "signal": signal_name(self.signum) if self.signum else None,
             "exit_status": status,
         }
 
