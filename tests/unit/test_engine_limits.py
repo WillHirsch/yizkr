@@ -725,16 +725,18 @@ class TestReserve:
         assert clock.slept == []
 
     def test_a_window_the_clock_has_passed_starts_afresh(self, pacer, clock):
-        """The use per call measured in a window does not pace the next
+        """Once the clock passes a window's reset, the window holds
+        nothing, and the use per call measured in it does not pace the next
         one."""
         resets = START + HOUR
         calls(
             pacer,
             report(0.60, resets_at=resets),
-            report(0.70, resets_at=resets),
+            report(0.80, resets_at=resets),
         )
-        clock.now = resets + 60
-        calls(pacer, report(0.72, resets_at=resets + 5 * HOUR))
+        clock.now = resets + 1
+        admit(pacer, max_wait=0)
+        pacer.done([report(0.72, resets_at=resets + 5 * HOUR)])
         admit(pacer, max_wait=0)
         assert clock.slept == []
 
@@ -1186,6 +1188,7 @@ class TestEstimate:
             # a stage that paused, then was made in the next invocation
             event(ENGINE_CALL, C, role="critique", outcome="paused"),
             event(ENGINE_CALL, C, "i2", role="critique"),
+            event(ENGINE_CALL, C, "i2", role="critique"),
             event("done", C, "i2", stage="critique"),
             # a view reused later keeps the count it was made with
             event("reused", B, "i2", stage="critique"),
@@ -1194,7 +1197,7 @@ class TestEstimate:
             (A, "extraction"): 2,
             (B, "critique"): 2,
             (B, "transcription"): 0,
-            (C, "critique"): 1,
+            (C, "critique"): 2,
         }
 
     def test_the_stale_work_per_stage(self):
