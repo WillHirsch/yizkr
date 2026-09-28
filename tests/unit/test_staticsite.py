@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from tests.fixtures import example_universe as u
+from tests.unit.test_backup import FACTS
 from tests.unit.test_disagreement import (
     INTERVIEW,
     POSTCARD,
@@ -34,11 +35,14 @@ from tests.unit.test_disagreement import (
     stated,
     text,
 )
+from tests.unit.test_privacy import BIRTHS, CASES, EXCLUDED, birth_rows
 from yizkr import disagreement
+from yizkr.backup import exclusion_report
 from yizkr.core import sparql
 from yizkr.core.config import Config
+from yizkr.core.privacy import BIRTHS_QUERY
 from yizkr.model.schema import read_manifest_data
-from yizkr.queries.publish import load_templates
+from yizkr.queries.publish import load_templates, prefix_block
 from yizkr.staticsite import SiteBuilder, format_time
 
 
@@ -166,16 +170,16 @@ def time_literal(value: str) -> dict:
     }
 
 
-# ?deceased / ?birth are the runtime possibly-living signals (ADR-0020):
-# Q7 has death evidence (?deceased true) → not living; Q8 has neither
-# death evidence nor a birth → possibly living, so it earns the badge.
+# ?deceased and the births query are the runtime possibly-living signals
+# (ADR-0020): Q7 has death evidence (?deceased true) → not living; Q8 has
+# neither death evidence nor a birth → possibly living, so it earns the
+# badge.
 PEOPLE = [
     {
         "person": uri("Q7"),
         "personLabel": literal('Eugen "Muckel" & Co <Löbig>'),
         "personDescription": literal("master hatter"),
         "deceased": literal("true"),
-        "birth": time_literal("+1836-01-01T00:00:00Z"),
         "aliases": literal("Eugen Löbig|Muckel"),
     },
     {
@@ -394,8 +398,12 @@ def hostile_label(monkeypatch) -> str:
     return "earliest &lt;date&gt; &amp; co"
 
 
+# Eugen's birth in 1836, as the births query gives it
+EUGENS_BIRTH = birth_rows("Q7", [(("1836-01-01T00:00:00Z", 9), [], [])])
+
 RESPONSES = {
     "GROUP_CONCAT(DISTINCT ?alias": PEOPLE,
+    'BIND("value" AS ?bound)': EUGENS_BIRTH,  # the privacy module's births
     "GROUP_CONCAT(DISTINCT ?qualifierText": STATEMENTS,
     'date of birth"@en': TIMELINE,  # person-timeline UNION arm marker
     "Special:FilePath": GALLERY,  # photo-gallery builds this URL
@@ -446,6 +454,85 @@ class TestPersonPage:
         assert (
             index.count('class="badge"') == 1
         )  # only the possibly-living one
+
+
+# The people of the privacy module's shared cases, as PEOPLE_QUERY gives
+# them: ?deceased is true for those with death evidence.
+PRIVACY_PEOPLE = [
+    {
+        "person": uri(qid),
+        "personLabel": literal(description),
+        "deceased": literal("true" if has_death else "false"),
+        "aliases": literal(""),
+    }
+    for qid, (description, _, has_death, _) in CASES.items()
+]
+PRIVACY_RESPONSES = {
+    **RESPONSES,
+    "GROUP_CONCAT(DISTINCT ?alias": PRIVACY_PEOPLE,
+    'BIND("value" AS ?bound)': BIRTHS,
+}
+
+
+class TestTheBadgeReadsEveryBirth:
+    """The badge marks whom the public export drops, with the export's own
+    reading of births: every birth statement a curator has not
+    deprecated, each at the latest year it allows (#334)."""
+
+    def badged(self, site) -> set[str]:
+        return {
+            qid
+            for qid in CASES
+            if "possibly living — never in public exports"
+            in (site / f"people/{qid}.html").read_text()
+        }
+
+    def test_the_badge_follows_every_birth(self, tmp_path, vocabulary):
+        site, _ = build(tmp_path, vocabulary, PRIVACY_RESPONSES)
+        assert self.badged(site) == EXCLUDED
+
+    def test_the_index_badges_the_same_people(self, tmp_path, vocabulary):
+        site, _ = build(tmp_path, vocabulary, PRIVACY_RESPONSES)
+        index = (site / "index.html").read_text()
+        marked = set(
+            re.findall(
+                r'<li><a href="people/(Q\d+)\.html">[^<]*</a>'
+                r' <span class="badge">possibly living</span></li>',
+                index,
+            )
+        )
+        assert marked == EXCLUDED
+
+    def test_the_site_and_the_export_agree(self, tmp_path, vocabulary):
+        site, _ = build(tmp_path, vocabulary, PRIVACY_RESPONSES)
+
+        def run(query: str) -> list[dict]:
+            if "SAMPLE(?deathDate)" in query:
+                return FACTS
+            return BIRTHS if 'BIND("value" AS ?bound)' in query else []
+
+        export = exclusion_report(config(), run=run, vocabulary=vocabulary)
+        assert self.badged(site) == export.excluded
+
+    def test_births_are_read_once_with_the_exports_query(
+        self, tmp_path, vocabulary
+    ):
+        calls = []
+
+        def run(query: str) -> list[dict]:
+            calls.append(query)
+            return []
+
+        builder = SiteBuilder(
+            config(), tmp_path / "site", run=run, vocabulary=vocabulary
+        )
+        assert builder._possibly_living(PRIVACY_PEOPLE[0])
+        assert builder._possibly_living(PRIVACY_PEOPLE[1])
+        properties, _ = vocabulary
+        assert calls == [
+            prefix_block(config().concept_uri)
+            + BIRTHS_QUERY.format(**properties)
+        ]
 
 
 class TestSections:

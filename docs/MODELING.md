@@ -616,11 +616,27 @@ not a signal to grow the schema on.
   that as an ordinary death assertion, not a flag.
 - The public export (`yizkr backup`) is **conservative**: a person
   enters it only on positive evidence they are not living — any death
-  evidence above, or birth beyond a 100-year cutoff (default,
+  evidence above, or births beyond a 100-year cutoff (default,
   `--cutoff-years`). **Unknown means excluded.** Exclusion removes every
   mention (other people's claims about them, orphaned provenance nodes),
   and transcription excerpts — raw source quotations, which can name
   anyone — never enter the public tier.
+- **Births fail closed** (ADR-0020, as amended by #334). A birth releases
+  a person only at the latest year it allows, and only when every
+  `date of birth` statement a curator has not deprecated does so by the
+  cutoff, never one value sampled from them. A statement's latest year
+  is its latest date's, when it states one, as a stated range bounds a
+  date ("Contradictions"); it has none when it states only an earliest
+  date, since "after 1850" is open at its late end. Otherwise it is the
+  last year its value allows at its precision: 1899 for the 1890s, and
+  2000 for the 20th century, with centuries and millennia counted as
+  Wikibase counts them, except that a round hundred is read as the
+  century it opens, so 1900 at century precision allows 1999. A
+  statement whose value lies wholly after its own latest date is read
+  without it. A statement with an unknown value and no latest date, a
+  time that cannot be read (one before the common era included), or a
+  precision coarser than a millennium allows no latest year, and keeps
+  its person possibly living.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never in
   public exports"), using the same runtime call.

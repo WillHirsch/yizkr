@@ -226,8 +226,10 @@ directory under `var/backups/` containing:
   determination from the absence of death evidence, not a stored flag.
   Conservative by construction: a person is included only on positive
   evidence they are not living (any death evidence — a date, place, or
-  cause of death, a burial place, or a death event — or birth beyond the
-  100-year cutoff); *unknown means excluded*. Every triple that
+  cause of death, a burial place, or a death event — or births that all
+  lie beyond the 100-year cutoff, each read at the latest year it allows:
+  docs/MODELING.md, "Living persons and privacy"); *unknown means
+  excluded*. Every triple that
   mentions an excluded person is dropped — including other people's
   claims about them and orphaned provenance nodes — and transcription
   excerpts (raw source quotations) never enter the public tier at all.

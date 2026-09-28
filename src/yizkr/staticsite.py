@@ -40,9 +40,10 @@ from yizkr import disagreement
 from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.core.privacy import (
+    BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
     is_possibly_living,
-    year_of,
+    latest_births,
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import Disagreement, Side
@@ -63,16 +64,16 @@ def qid_of(binding: dict, name: str) -> str:
 # possibly-living signal (ADR-0020): ?deceased is true when the graph
 # holds any death-implying statement (date/place/cause of death, place
 # of burial) or a death event with the person as participant — none of
-# which needs a date. ?birth feeds the birth-recency cutoff. No stored
-# "living" flag is read; the badge is derived, like the public export.
+# which needs a date. Births, for the birth-recency cutoff, are read
+# statement by statement with the public export's own query
+# (core/privacy.py). No stored "living" flag is read; the badge is
+# derived, like the public export.
 PEOPLE_QUERY = """\
 SELECT ?person ?personLabel ?personDescription ?deceased
-       (SAMPLE(?birthDate) AS ?birth)
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
 WHERE {{
   ?person wdt:{instance_of} wd:{human} .
   OPTIONAL {{ ?person skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
-  OPTIONAL {{ ?person wdt:{date_of_birth} ?birthDate . }}
   BIND((
         EXISTS {{ ?person wdt:{date_of_death} [] }}
      || EXISTS {{ ?person wdt:{place_of_death} [] }}
@@ -341,14 +342,20 @@ class SiteBuilder:
 
     # -- helpers ------------------------------------------------------------
 
+    @cached_property
+    def _latest_births(self) -> dict[str, list[int | None]]:
+        """The latest year each birth statement allows, by person, read
+        with the query and the reading the public export uses."""
+        return latest_births(self.run(self._instance_query(BIRTHS_QUERY)))
+
     def _possibly_living(self, person: dict) -> bool:
         """Runtime privacy determination (ADR-0020): possibly living
-        unless the graph holds death evidence or a birth beyond the
-        cutoff. The same call the public export makes — here it only
-        decides a display badge on the (private) site."""
-        birth_year = year_of(cell(person, "birth"))
+        unless the graph holds death evidence, or every birth it records
+        lies beyond the cutoff. The same call the public export makes —
+        here it only decides a display badge on the (private) site."""
+        births = self._latest_births.get(qid_of(person, "person"), [])
         has_death = cell(person, "deceased") == "true"
-        return is_possibly_living(birth_year, has_death, self._cutoff_year)[0]
+        return is_possibly_living(births, has_death, self._cutoff_year)[0]
 
     def _instance_query(self, template: str) -> str:
         vocabulary = {**self.items, **self.properties}
