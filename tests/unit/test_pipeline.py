@@ -20,6 +20,7 @@ from yizkr.claims import (
     LocalRef,
     MonolingualText,
     QidRef,
+    RegionPercent,
 )
 from yizkr.pipeline import extract
 from yizkr.pipeline.extract import (
@@ -2770,6 +2771,295 @@ class TestWriterAliases:
         assert len(_statements(wiki, sebastian, "spouse")) == 1
         # the other writer's birth year is there too
         assert len(_statements(wiki, sebastian, "date_of_birth")) == 2
+
+
+# -- writer: each place an artifact asserts a value keeps its block (#335) --
+
+# (Here) the 1905 marriage certificate gives Sebastian Löbig's birth twice:
+# in the groom's particulars, and again in the registrar's margin note.
+GROOM = "geboren am 15. Februar 1862 zu Flörburg"
+MARGIN = "geb. 15.2.1862"
+LATER_RUN = dict(RUN, started_at="2026-07-20T09:00:00Z")
+
+
+def _excerpt(text: str) -> dict:
+    return {"text": text, "language": "de"}
+
+
+# two places in the certificate, by what sets them apart -> the first
+# claim's locators and the second's
+PLACES = {
+    "another page": (
+        {"page_number": "1", "transcription_excerpt": _excerpt(GROOM)},
+        {"page_number": "2", "transcription_excerpt": _excerpt(GROOM)},
+    ),
+    "another excerpt, no page": (
+        {"transcription_excerpt": _excerpt(GROOM)},
+        {"transcription_excerpt": _excerpt(MARGIN)},
+    ),
+    "another region": (
+        {"region": {"x": 10, "y": 20, "width": 60, "height": 10}},
+        {"region": {"x": 75, "y": 5, "width": 20, "height": 40}},
+    ),
+}
+
+
+def _births(
+    *places: dict, run: dict = RUN, curated: bool = False
+) -> ClaimBatch:
+    """The certificate's batch (_certificate_batch) with Sebastian's birth
+    claimed once in each of `places`, each claim citing the certificate
+    with that place's locators."""
+    batch = _certificate_batch().model_dump(mode="json")
+    (claim,) = batch["claims"]
+    batch["claims"] = [
+        dict(claim, source={"artifact": ARTIFACT, **place}, curated=curated)
+        for place in places
+    ]
+    return ClaimBatch.model_validate(dict(batch, extraction_run=run))
+
+
+def _places(statement) -> list[tuple]:
+    """Each source block's (artifact, page number, region, excerpt text),
+    None for what the block does not give. Run blocks are left out."""
+
+    def one(block, key: str):
+        values = [
+            snak.datavalue["value"]
+            for snak in block.snaks.get(PROPERTIES[key])
+        ]
+        return values[0] if values else None
+
+    places = []
+    for block in statement.references.references:
+        artifact = one(block, "stated_in")
+        if artifact is None:
+            continue
+        excerpt = one(block, "transcription_excerpt")
+        places.append(
+            (
+                artifact["id"],
+                one(block, "page_number"),
+                one(block, "relative_position_within_image"),
+                excerpt["text"] if excerpt else None,
+            )
+        )
+    return places
+
+
+def _place(place: dict, artifact: str = "Q23") -> tuple:
+    """`_places`' view of the block a claim with `place`'s locators cites
+    `artifact` with."""
+    region = place.get("region")
+    return (
+        artifact,
+        place.get("page_number"),
+        RegionPercent(**region).as_wikibase_string() if region else None,
+        (place.get("transcription_excerpt") or {}).get("text"),
+    )
+
+
+class TestWriterPlaces:
+    """One artifact can assert one value in several places: on two pages,
+    in two passages or in two regions of a scan. The claims agree, so they
+    are one statement, and each place is a reference block of its own on
+    it: the statement keeps every locator and excerpt, beside the run's
+    block (rules 1 and 2, ADR-0003). A re-run adds nothing, and no block
+    is changed or removed (rule 3). The instance serves every read as a
+    copy (DetachedItems), so the blocks compared are those it stores."""
+
+    @pytest.mark.parametrize(
+        ("first", "second"), PLACES.values(), ids=PLACES.keys()
+    )
+    def test_each_place_is_a_block_of_its_own(self, first, second):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+
+        result = BatchWriter(wiki).write_batch(_births(first, second))
+
+        sebastian = result.created_items["e01"]
+        (born,) = _statements(wiki, sebastian, "date_of_birth")
+        assert _places(born) == [_place(first), _place(second)]
+        # both claims are the run's, so its block is there once
+        assert _sources(born) == [
+            (["Q23"], []),
+            ([], [result.run_qid]),
+            (["Q23"], []),
+        ]
+        assert (result.written, result.referenced, result.skipped) == (
+            1,
+            1,
+            0,
+        )
+
+    def test_the_same_place_twice_is_one_block(self):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        groom, _ = PLACES["another page"]
+
+        result = BatchWriter(wiki).write_batch(_births(groom, groom))
+
+        (born,) = _statements(
+            wiki, result.created_items["e01"], "date_of_birth"
+        )
+        assert _places(born) == [_place(groom)]
+        assert _sources(born) == [(["Q23"], []), ([], [result.run_qid])]
+        assert (result.written, result.referenced, result.skipped) == (
+            1,
+            0,
+            1,
+        )
+
+    @pytest.mark.parametrize(
+        "run", [RUN, LATER_RUN], ids=["same run", "later run"]
+    )
+    def test_a_rewrite_adds_nothing(self, run):
+        # every place written, then written again: by the same batch, or
+        # by a later run's batch that finds the same places
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        places = [place for pair in PLACES.values() for place in pair]
+        first = BatchWriter(wiki).write_batch(_births(*places))
+        sebastian = first.created_items["e01"]
+        (born,) = _statements(wiki, sebastian, "date_of_birth")
+        assert _places(born) == [_place(place) for place in places]
+        before = _snapshot(wiki, sebastian)
+
+        again = BatchWriter(wiki).write_batch(_births(*places, run=run))
+
+        assert (again.written, again.referenced, again.skipped) == (
+            0,
+            0,
+            len(places),
+        )
+        # not even a later run's block is added where its places are
+        assert _snapshot(wiki, sebastian) == before
+
+    @pytest.mark.parametrize(
+        "curated", [False, True], ids=["machine claim", "curated claim"]
+    )
+    def test_a_later_claim_adds_its_place_with_its_provenance(self, curated):
+        # a later batch finds the margin note: a later run's extraction,
+        # or a reviewer's correction (a curated claim, which carries no
+        # run block)
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        groom, margin = PLACES["another excerpt, no page"]
+        first = BatchWriter(wiki).write_batch(_births(groom))
+        sebastian = first.created_items["e01"]
+        (born,) = _statements(wiki, sebastian, "date_of_birth")
+        groom_block = json.dumps(
+            born.references.references[0].get_json(), sort_keys=True
+        )
+
+        later = BatchWriter(wiki).write_batch(
+            _births(margin, run=LATER_RUN, curated=curated)
+        )
+
+        (born,) = _statements(wiki, sebastian, "date_of_birth")
+        assert _places(born) == [_place(groom), _place(margin)]
+        assert _sources(born) == [
+            (["Q23"], []),
+            ([], [first.run_qid]),
+            (["Q23"], []),
+            *([] if curated else [([], [later.run_qid])]),
+        ]
+        # the first place's block is as it was written
+        assert (
+            json.dumps(
+                born.references.references[0].get_json(), sort_keys=True
+            )
+            == groom_block
+        )
+        assert (later.written, later.referenced, later.skipped) == (0, 1, 0)
+
+    def test_another_artifact_of_the_same_run_adds_its_source_block(self):
+        # (here) the directory gives the firm's founding year on its second
+        # page too, a scan of its own: an agreeing second source of the
+        # same run, whose block is not repeated
+        wiki = FakeWiki(
+            {DIRECTORY_SHA1: "Q26", DIRECTORY_PAGE_2_SHA1: "Q28"},
+            detached=True,
+        )
+        batch = _directory_batch().model_dump(mode="json")
+        (founded,) = batch["claims"]
+        page_2 = {"kind": "artifact", "sha1": DIRECTORY_PAGE_2_SHA1}
+        batch["claims"].append(
+            dict(founded, source=dict(founded["source"], artifact=page_2))
+        )
+
+        directory = BatchWriter(wiki).write_batch(
+            ClaimBatch.model_validate(batch)
+        )
+
+        (founding,) = _statements(
+            wiki, directory.created_items["firm"], "start_time"
+        )
+        assert _sources(founding) == [
+            (["Q26"], []),
+            ([], [directory.run_qid]),
+            (["Q28"], []),
+        ]
+        assert (directory.written, directory.referenced) == (1, 1)
+
+    @pytest.mark.parametrize("curation", ["human write", "deprecated"])
+    def test_a_curated_statement_citing_the_artifact_is_left_as_it_is(
+        self, curation
+    ):
+        # a curated statement is compared by artifact alone: a claim whose
+        # artifact it cites, in whatever place, adds nothing to it
+        from wikibaseintegrator.wbi_enums import WikibaseRank
+
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        groom, margin = PLACES["another page"]
+        first = BatchWriter(wiki).write_batch(
+            _births(groom, curated=curation == "human write")
+        )
+        sebastian = first.created_items["e01"]
+        if curation == "deprecated":
+            item = wiki.wbi.item.get(sebastian)
+            (born,) = item.claims.get(PROPERTIES["date_of_birth"])
+            born.rank = WikibaseRank.DEPRECATED
+            item.write()
+        before = _snapshot(wiki, sebastian)
+
+        later = BatchWriter(wiki).write_batch(_births(margin, run=LATER_RUN))
+
+        assert (later.written, later.referenced, later.skipped) == (0, 0, 1)
+        assert _snapshot(wiki, sebastian) == before
+
+    def test_a_gedcom_export_keeps_both_citations_of_one_birth(self):
+        from yizkr.pipeline.gedcom import adapt_gedcom
+
+        # (here) the family's export gives Gustav's birth, 7 January 1919,
+        # twice: citing his birth register extract, and citing the tree.
+        # The adapter keeps each citation on a claim of its own (#322)
+        text = (
+            "0 HEAD\n1 CHAR UTF-8\n"
+            "0 @S1@ SOUR\n1 TITL Birth register extract for Gustav Löbig\n"
+            "0 @S2@ SOUR\n1 TITL Family tree drawn by Clara Lobig\n"
+            "0 @I8@ INDI\n1 NAME Gustav /Löbig/\n"
+            "1 BIRT\n2 DATE 7 JAN 1919\n2 SOUR @S1@\n"
+            "1 BIRT\n2 DATE 7 JAN 1919\n2 SOUR @S2@\n"
+            "0 TRLR\n"
+        )
+        exported = ArtifactRef.from_bytes(text.encode())
+        wiki = FakeWiki({exported.sha1: "Q27"}, detached=True)
+
+        gedcom = BatchWriter(wiki).write_batch(
+            adapt_gedcom(text, artifact=exported).batch
+        )
+
+        (born,) = _statements(
+            wiki, gedcom.created_items["i8"], "date_of_birth"
+        )
+        assert [excerpt for *_, excerpt in _places(born)] == [
+            "1 BIRT | 2 DATE 7 JAN 1919 | 2 SOUR @S1@"
+            " | cited: Birth register extract for Gustav Löbig",
+            "1 BIRT | 2 DATE 7 JAN 1919 | 2 SOUR @S2@"
+            " | cited: Family tree drawn by Clara Lobig",
+        ]
+        assert _sources(born) == [
+            (["Q27"], []),
+            ([], [gedcom.run_qid]),
+            (["Q27"], []),
+        ]
 
 
 class TestPrivacyDefaults:

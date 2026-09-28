@@ -75,6 +75,16 @@ Every statement carries at least one reference with:
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item
 
+A value asserted more than once, by several artifacts or by one artifact
+in several places (two pages, two passages, two regions of a scan), is
+one statement for each set of qualifiers. It carries a `stated in`
+reference for each place, with that place's locators and excerpt, and,
+once, the run reference of each run that added one; writing a batch
+again adds no reference (#335). A statement a curator wrote or re-ranked
+is the exception: the writer adds nothing to it for another place of an
+artifact it already cites (the writer's module docstring,
+`src/yizkr/pipeline/writer.py`, gives the rule).
+
 Curator-attributed statements (a value correction from the review CSV)
 carry the `stated in → artifact` reference only:
 process provenance is for machine writes, and a human decision's
