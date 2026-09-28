@@ -756,8 +756,7 @@ def disagreements(
 ) -> list[Disagreement]:
     """The disagreement report of one instance: its two library queries,
     rendered for the instance's vocabulary and run with `run`, and
-    compared. The static site's inconsistencies page and the scratch-run
-    report both read it."""
+    compared. The static site's inconsistencies page reads it."""
     templates = load_templates()
 
     def fetch(name: str) -> list[dict]:
