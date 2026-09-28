@@ -1,6 +1,18 @@
-"""Fixtures shared by the offline unit tests."""
+"""Fixtures shared by the offline unit tests.
+
+**One BLAS thread.** Language detection (py3langid) runs on numpy, whose
+threaded OpenBLAS build starts a worker thread per CPU, and the workers
+spin after every call. `OPENBLAS_NUM_THREADS` defaults to 1 here, before
+anything imports numpy; a value already set in the environment is kept.
+"""
 
 from __future__ import annotations
+
+import os
+
+# OpenBLAS reads this once, when numpy first loads it, so it is set
+# before anything here or in a test module can import numpy.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 import pytest
 
