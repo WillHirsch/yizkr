@@ -64,11 +64,12 @@ never auto-confirmed and no claim reaches the graph without an explicit
 **Reading a run.** Each document prints a status — `awaiting equivalences
 review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done),
 `paused` (the run's control file held one of its stages), or `failed`
-(errored; just re-run to retry). The exit code summarises the batch: `0`
-all written, `2` something awaits you, `1` something failed. Re-running
-is always safe: finished work is skipped, and a corrected upstream file
-re-does only what depends on it (make-style, by content hash;
-modification times are never read).
+(errored; re-run to retry, unless the model's answers caused it: see
+below). The exit code summarises the batch: `0` all written, `2`
+something awaits you, `1` something failed. Re-running is always safe:
+finished work is skipped, and a corrected upstream file re-does only what
+depends on it (make-style, by content hash; modification times are never
+read).
 
 A transcription that fails the transcription check (below), such as a
 tool-failure message or a refusal instead of the page's text, fails its
@@ -85,6 +86,25 @@ the same run, as the engine would have been asked without the cache; an
 answer of the engine's that fails it fails the document, and the next
 run asks again. Slide text from a deck and a curator's correction are
 not checked.
+
+An extraction that ends with no claims because the model's answers could
+not be used fails its document too (ADR-0006 §5): a chunk failed, the
+chunks' answers held JSON objects with content the parser cannot read
+as claims (claims wrapped in one object or carried in the sentinel, say,
+or written with other keys; an object that holds nothing at any depth,
+such as `{}` or `{"claims": [{}]}`, counts for nothing), or validation
+rejected every claim. The `error` leads with that outcome and names
+every cause, then any fallback tier taken, with each attempt's reason. A
+chunk that failed because its engine call failed, or its answer was cut
+off, is asked again on the next run. A failure the model's answers
+caused is not cured by re-running: the LLM cache replays the same
+answers, at no engine cost, and they fail the same way (so a parser fix
+does reach them). To ask the model again, run with `--epoch extract=N`
+(a new epoch), which re-asks only the documents without a current batch,
+such as a failed one, or with `--refresh extract`, which extracts every
+document again. An extraction whose accepted answers say the document
+holds no claims, on either tier, is no failure: its batch is kept, and
+its `extraction` stage needs attention, with the reason.
 
 State for each document lives in `var/runs/<folder>/<doc>/`: its views
 (`transcription.json`, `batch.json`, `critique.json`, and the extractor's

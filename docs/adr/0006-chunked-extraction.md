@@ -8,6 +8,9 @@ correctly downgraded to year precision instead of silently guessed).
 Amended by #87 (2026-09-27): chunk state lives in the stage store (§5).
 Amended by #225 (2026-09-27): the stage store gives way to the LLM cache
 of ADR-0032, and `--cache` replaces `--resume` (§5, §7).
+Amended by #45 (2026-09-28): an extraction that ends with no claims
+either fails or is claim-free (§5), and `coverage.json` records the
+extraction's health on either tier (§6).
 
 ## Context
 
@@ -209,9 +212,40 @@ answer the cache kept from an earlier call spends no retry: the engine is
 asked once more (ADR-0032 §4). A fallback tier is taken only when the
 engine answered: an outage fails the extraction, to be retried. Per-chunk
 progress is the log, and the chunks that failed, with the first reason,
-are the extraction's error. Coverage, rejects and gaps are side outputs in
-the extractor's state directory (`<doc>/extraction/` under `ingest run`,
-`<out>.chunks/` for `ingest extract`), written for a complete extraction.
+are the extraction's error. An extraction that ends with no claims fails
+(amended by #45, 2026-09-28) when the model's answers could not be used:
+chunks failed, the chunks' answers held JSON objects with content the
+parser cannot read (claims wrapped in one object or carried in the
+sentinel, or written with other keys), or validation rejected every
+claim. What an object holds decides, at any depth, not its shape: an
+object that holds nothing, such as `{}`, `{"claims": []}` or
+`{"result": {"claims": [{}]}}`, says there is nothing, and so does a
+sentinel whose lists and objects hold nothing. A note in a string on the
+sentinel is harmless, and a gap line merged into it is read as a gap
+when it has a subject and a predicate, the shape the gap parser reads,
+and carries nothing else that holds something in a list or object. A
+note in an object of its own beside the sentinel is unread, and so is
+any other list or object on the sentinel that holds something, under
+`gap` as under any other key: claims, a gap line that carries them, a
+list of gap lines, even a list of notes or of line numbers. A failure
+that shows, which `--refresh extract` asks the model again for, is
+preferred to claims lost in silence. The failed extraction's error leads
+with that outcome and names every cause, then any fallback tier taken,
+with the reason each attempt at the refused turn gave, each cut short so
+that the whole stays within a `failed` event. A failure keeps no view,
+so each run makes the extraction again, from the cache at no engine
+cost, and a parser fix reaches it; the same answers fail the same way
+until `--refresh extract` or a new epoch asks afresh.
+Otherwise the empty batch is claim-free, on the word of the answers the
+extractor accepted, on either tier: a refused manifest falls back rather
+than failing the document (ADR-0032 §5), and when the line-range tier
+finds nothing (every unit `extract: false`, or chunks that answered with
+none), the batch is kept like any other. The stage is done with an
+attention reason that says why, naming the refused manifest after a
+fallback, and every run that reuses the view reports it (ADR-0032 §1,
+§8). Coverage, rejects and gaps are side outputs in the extractor's state
+directory (`<doc>/extraction/` under `ingest run`, `<out>.chunks/` for
+`ingest extract`), written for a complete extraction that did not fail.
 Sidecar state from before the store is never read. `yizkr ingest run` sets
 aside whole a document directory without `derivations.json`, and starts it
 afresh, as it does one whose source bytes changed (ADR-0010); nothing in
@@ -257,6 +291,17 @@ After merge, a `coverage.json` in the state dir lists: units with
 the diff between segmentation unit labels and distinct subject labels
 in the batch. Advisory and curator-facing — no automatic re-extraction
 loop in v1.
+
+Amended by #45 (2026-09-28): on either tier, `coverage.json` also records
+the extraction's health: how many chunks it asked (`chunks`), its claims
+(`claims`), the claims validation rejected (`rejected_claims`), the
+objects in the chunks' answers the parser could not read
+(`unread_objects`), and each fallback tier it took, with the reason
+(`fallback`). It is written with the batch it describes, so the anomaly
+checks (#196) and the flag framework (#112) can read it beside a stored
+batch, a reused one included. It is written only when no chunk failed,
+so its `failed_chunks` is always empty; chunk failures are the
+extraction's error (§5).
 
 ### 7. Strategy selection and CLI surface
 

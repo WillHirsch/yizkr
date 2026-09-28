@@ -60,6 +60,19 @@ DEFAULT_CHUNK_BUDGET = 2_000
 # cost outweigh the benefit.
 INLINE_DOCUMENT_LIMIT = 100_000
 
+# The longest a single reason runs inside another message (a chunk's, or
+# an attempt's at a fallback tier), so that a failure message, which leads
+# with the outcome, stays well within what a stage's failed event keeps.
+REASON_LIMIT = 40
+
+
+def _brief(reason: str) -> str:
+    """`reason` on one line, cut to REASON_LIMIT characters."""
+    flat = " ".join(reason.split())
+    if len(flat) <= REASON_LIMIT:
+        return flat
+    return flat[: REASON_LIMIT - 1] + "…"
+
 
 class SegmentationUnit(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -393,6 +406,20 @@ class ChunkIncomplete(Exception):
     """Chunk response truncated: cut off before its terminal sentinel."""
 
 
+class ExtractionFailed(RuntimeError):
+    """The extraction ended with no claims for want of a usable answer: a
+    chunk failed, the chunks' answers held objects the parser could not
+    read as claims, or validation rejected every claim. The message leads
+    with that outcome and its causes, then names any fallback tier taken,
+    with the reason each attempt at the refused turn gave; it is the
+    reason the extraction stage records.
+
+    An extraction that ends with no claims because the answers it accepted
+    say the document holds none, on whichever tier, is not a failure: its
+    batch is returned, and the extractor's `attention` says why it is
+    empty."""
+
+
 def parse_chunk_response(
     response: str, warn: Callable[[str], None] | None = None
 ) -> list[dict]:
@@ -426,6 +453,16 @@ def parse_chunk_response(
     return claims
 
 
+def _gap_line(gap: Any) -> bool:
+    """Whether the value under a `gap` key is one parse_chunk_gaps reads
+    as a gap: an object with a subject and a predicate."""
+    return (
+        isinstance(gap, dict)
+        and bool(gap.get("subject"))
+        and bool(gap.get("predicate"))
+    )
+
+
 def parse_chunk_gaps(response: str) -> list[dict]:
     """Gap lines (ADR-0013): relations no property expresses, surfaced
     for review, never written to the graph.
@@ -438,11 +475,7 @@ def parse_chunk_gaps(response: str) -> list[dict]:
     gaps: list[dict] = []
     for obj in scan_json_objects(response):
         gap = obj.get("gap")
-        if (
-            isinstance(gap, dict)
-            and gap.get("subject")
-            and gap.get("predicate")
-        ):
+        if _gap_line(gap):
             gaps.append(
                 {
                     "subject": str(gap.get("subject", "")),
@@ -452,6 +485,84 @@ def parse_chunk_gaps(response: str) -> list[dict]:
                 }
             )
     return gaps
+
+
+def _holds(value: Any) -> bool:
+    """Whether a JSON value holds something at any depth: an object when
+    one of its values does, a list when one of its items does, anything
+    else when it is not empty (null, false, 0 or "").
+
+    It walks the value with a stack of its own rather than by recursion,
+    so a nest as deep as json decodes never raises RecursionError."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif item:
+            return True
+    return False
+
+
+_GAP_FIELDS = frozenset({"subject", "predicate", "object", "evidence"})
+
+
+def _merged_gap_line(gap: Any) -> bool:
+    """Whether the value under the terminal sentinel's `gap` key is a gap
+    line merged into it: a gap line (_gap_line) that carries nothing else
+    that holds something, no list or object that holds something under a
+    key other than the four that parse_chunk_gaps reads."""
+    return _gap_line(gap) and not any(
+        isinstance(value, (list, dict)) and _holds(value)
+        for key, value in gap.items()
+        if key not in _GAP_FIELDS
+    )
+
+
+def parse_chunk_unread(response: str) -> list[dict]:
+    """The JSON objects of a chunk answer that hold something the claim
+    parser cannot read: claims wrapped in one object, say, or written with
+    other keys than `subject` and `property`.
+
+    Whether an object holds something (_holds) decides, not its shape. A
+    claim and a gap line (well formed or not) are read. The terminal
+    sentinel is read too, unless one of its keys holds a list or object
+    that holds something, such as claims carried inside it. A note in a
+    string on it is harmless, and so is a gap line merged into it
+    (_merged_gap_line), which parse_chunk_gaps reads: a `gap` that has a
+    subject and a predicate and carries nothing else that holds something
+    in a list or object. Anything else under `gap`, such as claims, a gap
+    line that carries them or a list of gap lines, is unread like a list
+    of notes or of line numbers under any other key, since a failure that
+    shows, which `--refresh extract` asks the model again for, is
+    preferred to claims lost in silence. Any other object is unread unless
+    it holds nothing at any depth, as in `{}`, `{"claims": []}` or
+    `{"result": {"claims": [{}]}}`, which say there is nothing.
+
+    They are counted, never guessed at. A chunk whose answer held such
+    objects and no claim reads as unreadable rather than as answered with
+    none, so an extraction left without claims by them fails
+    (_refuse_empty) instead of passing for a claim-free document's.
+    """
+    unread = []
+    for obj in scan_json_objects(response):
+        if obj.get("done") is True:
+            carried = [
+                value
+                for key, value in obj.items()
+                if not (key == "gap" and _merged_gap_line(value))
+                and isinstance(value, (list, dict))
+                and _holds(value)
+            ]
+            if carried:
+                unread.append(obj)
+        elif "gap" in obj or ("subject" in obj and "property" in obj):
+            continue
+        elif _holds(obj):
+            unread.append(obj)
+    return unread
 
 
 def pack_units(
@@ -611,7 +722,10 @@ class ChunkedClaimExtractor:
     `failure_reasons` — the batch is still returned (partial progress is
     the point) and the caller decides how loudly to fail — and
     `attention` says what a reader of the batch should know: a fallback
-    tier, or no claims at all.
+    tier, or why it holds no claims. An extraction that would end with no
+    claims for want of a usable answer raises ExtractionFailed instead
+    (`_refuse_empty`), so a batch without claims is returned only when the
+    answers the extractor accepted say the document holds none.
     """
 
     def __init__(
@@ -648,6 +762,11 @@ class ChunkedClaimExtractor:
         self.used_fallback_segmentation = False
         # why each fallback tier was taken: "manifest", "segmentation"
         self.fallback: dict[str, str] = {}
+        # per fallback tier taken, why each of its attempts failed
+        self._refusals: dict[str, list[str]] = {}
+        # per chunk, the objects in its answer that held something the
+        # parser could not read (parse_chunk_unread)
+        self._unread: dict[str, list[dict]] = {}
         # how chunk calls saw the document: fork, inline or compressed
         self.context_mode: str | None = None
         self.attention: list[str] = []
@@ -674,19 +793,21 @@ class ChunkedClaimExtractor:
 
     def _first_turn(
         self, prompt: str, parse: Callable[[str], tuple[Any, list[str]]]
-    ) -> tuple[Any, Any, str, bool]:
-        """(parsed answer or None, conversation handle, last error, any call
-        answered) for a turn that opens the extraction: the entity
-        manifest, or the segmentation behind it.
+    ) -> tuple[Any, Any, list[str], bool]:
+        """(parsed answer or None, conversation handle, why each attempt
+        that gave no usable answer failed, any call answered) for a turn
+        that opens the extraction: the entity manifest, or the
+        segmentation behind it.
 
         Two attempts, each asked through `for_attempt`, so that behind the
         LLM cache a refused answer is kept under its own attempt and a
-        later run replays the same attempts to the same outcome. No handle
-        survives a refused answer: forking would plant known-bad output in
-        every chunk's context."""
+        later run replays the same attempts to the same outcome. An
+        attempt fails when the engine raises or its answer is refused, and
+        each gives its own reason. No handle survives a refused answer:
+        forking would plant known-bad output in every chunk's context."""
         handle = None
         answered = False
-        last_error = "engine has no conversation support"
+        reasons: list[str] = []
         for attempt in range(2):
             client = for_attempt(self.client, attempt)
             try:
@@ -695,21 +816,23 @@ class ChunkedClaimExtractor:
                 else:
                     response = client.complete(prompt)
             except Exception as exc:
-                last_error, handle = f"{type(exc).__name__}: {exc}", None
+                reasons.append(f"{type(exc).__name__}: {exc}")
+                handle = None
                 continue
             answered = True
             parsed, problems = parse(response)
             if parsed is not None and not problems:
-                return parsed, handle, "", answered
-            last_error = "; ".join(problems or ["unparseable"])
+                return parsed, handle, reasons, answered
+            reasons.append("; ".join(problems or ["unparseable"]))
             self._close_conversation(handle)
             handle = None
-        return None, None, last_error, answered
+        return None, None, reasons, answered
 
     def _entity_manifest(
         self, transcription: Transcription, artifact_qid: str
-    ) -> tuple[list[EntityRecord] | None, Any, str, bool]:
-        """(entities, conversation handle, last error, any call answered).
+    ) -> tuple[list[EntityRecord] | None, Any, list[str], bool]:
+        """(entities, conversation handle, why each attempt failed, any
+        call answered).
 
         No entities means the manifest was unusable in both attempts; the
         caller falls back to line-range segmentation."""
@@ -731,13 +854,23 @@ class ChunkedClaimExtractor:
     def _parse_entity_manifest(
         response: str, line_count: int
     ) -> tuple[list[EntityRecord] | None, list[str]]:
+        """(entities, problems); entities is None when the answer holds no
+        entity list. Only a list, or null, is one, and any other value is
+        unusable. An empty one, the engine's word that the document names
+        nothing, comes with the problem "empty entity list", so that it is
+        refused and the line-range tier looks again."""
         _, item_keys = load_vocabulary()
         for obj in scan_json_objects(response):
             if "entities" not in obj:
                 continue
+            listed = obj["entities"]
+            if listed is not None and not isinstance(listed, list):
+                return None, [
+                    f"'entities' is not a list ({type(listed).__name__})"
+                ]
             try:
                 records = []
-                for raw in obj["entities"] or []:
+                for raw in listed or []:
                     data = dict(raw)
                     data.pop("qid", None)  # resolution state, never model-set
                     records.append(EntityRecord.model_validate(data))
@@ -768,12 +901,13 @@ class ChunkedClaimExtractor:
 
     def _segment(
         self, transcription: Transcription, artifact_qid: str
-    ) -> tuple[DocumentSegmentation, Any, str, bool]:
-        """(segmentation, handle or None, fallback reason, any call answered).
+    ) -> tuple[DocumentSegmentation, Any, list[str], bool]:
+        """(segmentation, handle or None, why each attempt failed when it
+        fell back, any call answered).
 
         A None handle means chunk calls cannot fork (context mode 2/3).
-        On segmentation fallback the handle is always None and the reason
-        is set: forking a conversation whose segmentation turn was
+        On segmentation fallback the handle is always None and the reasons
+        are set: forking a conversation whose segmentation turn was
         refused would plant known-bad output in every chunk's context.
         """
         line_count = len(transcription.text.splitlines())
@@ -782,16 +916,16 @@ class ChunkedClaimExtractor:
             language=transcription.language,
             numbered_text=number_lines(transcription.text),
         )
-        segmentation, handle, last_error, answered = self._first_turn(
+        segmentation, handle, reasons, answered = self._first_turn(
             prompt,
             lambda response: self._parse_segmentation(response, line_count),
         )
         if segmentation is not None:
-            return segmentation, handle, "", answered
+            return segmentation, handle, [], answered
         return (
             self._fallback_segmentation(line_count),
             None,
-            last_error,
+            reasons,
             answered,
         )
 
@@ -838,27 +972,29 @@ class ChunkedClaimExtractor:
         degraded path the engine never chose.
         """
         self._log("  scanning document for entities...")
-        entities, handle, manifest_error, answered = self._entity_manifest(
+        entities, handle, reasons, answered = self._entity_manifest(
             transcription, artifact_qid
         )
         if entities is not None:
             return entities, None, handle
         if not answered:
             raise RuntimeError(
-                f"entity manifest: no engine response ({manifest_error})"
+                f"entity manifest: no engine response ({reasons[-1]})"
             )
         self.used_fallback_manifest = True
-        self.fallback["manifest"] = manifest_error
-        segmentation, handle, segmentation_error, answered = self._segment(
+        self.fallback["manifest"] = reasons[-1]
+        self._refusals["manifest"] = reasons
+        segmentation, handle, reasons, answered = self._segment(
             transcription, artifact_qid
         )
         if not answered:
             raise RuntimeError(
-                f"segmentation: no engine response ({segmentation_error})"
+                f"segmentation: no engine response ({reasons[-1]})"
             )
-        if segmentation_error:
+        if reasons:
             self.used_fallback_segmentation = True
-            self.fallback["segmentation"] = segmentation_error
+            self.fallback["segmentation"] = reasons[-1]
+            self._refusals["segmentation"] = reasons
         return None, segmentation, handle
 
     # -- chunk calls -----------------------------------------------------
@@ -1030,6 +1166,8 @@ class ChunkedClaimExtractor:
         self._rejects = []
         self.used_fallback_manifest = False
         self.used_fallback_segmentation = False
+        self._refusals = {}
+        self._unread = {}
 
         entities, segmentation, handle = self._phase_one(
             transcription, artifact_qid
@@ -1107,7 +1245,11 @@ class ChunkedClaimExtractor:
                 self._note_chunk_done(total, ok=False)
                 return None
             self._note_chunk_done(total, ok=True, claims=len(claims))
-            return _Chunk(claims, parse_chunk_gaps(response))
+            return _Chunk(
+                claims,
+                parse_chunk_gaps(response),
+                parse_chunk_unread(response),
+            )
 
         try:
             with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
@@ -1119,8 +1261,8 @@ class ChunkedClaimExtractor:
         batch, extras = self._merge(
             chunk_ids, outcomes, transform, entities, segmentation, text_lines
         )
-        self._refuse_empty(batch, rejected=len(self._rejects))
-        self.attention = self._attention(batch)
+        self._refuse_empty(batch, chunks=total)
+        self.attention = self._attention(batch, chunks=total)
         if not self.failed_chunks:
             self._write_side_outputs(extras)
         return batch
@@ -1132,21 +1274,45 @@ class ChunkedClaimExtractor:
         if handle is not None and callable(close):
             close(handle)
 
-    def _attention(self, batch: ClaimBatch) -> list[str]:
+    def _attention(self, batch: ClaimBatch, *, chunks: int) -> list[str]:
+        """What a reader of the batch should know: each fallback tier
+        taken, with its reason, and why a batch without claims is empty.
+        Only a claim-free batch gets this far without claims
+        (_refuse_empty)."""
         reasons = []
-        if "manifest" in self.fallback:
+        if self.used_fallback_manifest:
             reasons.append(
                 "entity manifest fell back to line-range segmentation: "
                 f"{self.fallback['manifest']}"
             )
-        if "segmentation" in self.fallback:
+        if self.used_fallback_segmentation:
             reasons.append(
                 "segmentation fell back to line windows: "
                 f"{self.fallback['segmentation']}"
             )
         if not batch.claims:
-            reasons.append("no claims extracted")
+            reasons.append(f"no claims extracted: {self._why_empty(chunks)}")
         return reasons
+
+    def _why_empty(self, chunks: int) -> str:
+        """Why an extraction holds no claims when no chunk failed, none
+        gave an object the parser could not read and validation rejected
+        nothing: what the answers it accepted say, naming the refused
+        manifest when the line-range tier stood in for it."""
+        if chunks:
+            plural = "" if chunks == 1 else "s"
+            found = f"{chunks} chunk{plural} answered with none"
+        elif self.used_fallback_manifest:
+            found = "every unit in the segmentation is extract=false"
+        else:
+            return "every entity in the manifest is extract=false"
+        if not self.used_fallback_manifest:
+            return found
+        return (
+            "the entity manifest was refused "
+            f"({_brief(self.fallback['manifest'])}), and on the line-range "
+            f"tier {found}"
+        )
 
     def _write_side_outputs(self, extras: dict[str, str]) -> None:
         if self.state_dir is None:
@@ -1158,13 +1324,74 @@ class ChunkedClaimExtractor:
             else:
                 path.unlink(missing_ok=True)
 
-    def _refuse_empty(self, batch: ClaimBatch, *, rejected: int) -> None:
-        if not batch.claims and (self.failed_chunks or rejected):
-            raise ValueError(
-                f"chunked extraction produced no valid claims "
-                f"({len(self.failed_chunks)} failed chunks, "
-                f"{rejected} rejected claims)"
+    def _refuse_empty(self, batch: ClaimBatch, *, chunks: int) -> None:
+        """Raise ExtractionFailed when the batch holds no claims because
+        the model's answers could not be used, rather than hand on an empty
+        batch that reads as a claim-free document's:
+
+        - chunks failed after their retries;
+        - the chunks' answers held objects the parser could not read as
+          claims (parse_chunk_unread), such as claims wrapped in one
+          object or written with other keys;
+        - validation rejected every claim the chunks gave.
+
+        The message leads with the outcome and every cause, then names any
+        fallback tier taken, with why each attempt at the turn it stood in
+        for failed, each reason cut short (REASON_LIMIT). A failure keeps
+        no view, so each run makes the extraction again, from the LLM
+        cache at no engine cost, and a parser fix reaches it.
+
+        Otherwise a batch without claims is claim-free, on the word of the
+        answers the extractor accepted, the line-range tier's included
+        when it stood in for a refused manifest (ADR-0032 §5), and
+        `attention` says why."""
+        if batch.claims:
+            return
+        causes = []
+        if self.failed_chunks:
+            first = self.failed_chunks[0]
+            plural = "" if chunks == 1 else "s"
+            causes.append(
+                f"{len(self.failed_chunks)} of {chunks} chunk{plural} failed "
+                f"({first}: {_brief(self.failure_reasons.get(first, ''))})"
             )
+        if self._unread:
+            count = sum(len(objects) for objects in self._unread.values())
+            first, objects = next(iter(self._unread.items()))
+            keys = _brief(", ".join(map(str, objects[0])))
+            plural = "" if count == 1 else "s"
+            causes.append(
+                f"{count} unreadable object{plural} in the chunk answers "
+                f"({first}: keys {keys})"
+            )
+        if self._rejects:
+            causes.append(
+                f"validation rejected every claim ({len(self._rejects)})"
+            )
+        if not causes:
+            return
+        message = "no claims extracted: " + "; ".join(causes)
+        if self.used_fallback_manifest:
+            message += (
+                "; the entity manifest was refused "
+                f"({self._attempts('manifest')})"
+            )
+        if self.used_fallback_segmentation:
+            message += (
+                f", and the segmentation ({self._attempts('segmentation')})"
+            )
+        raise ExtractionFailed(message)
+
+    def _attempts(self, tier: str) -> str:
+        """Why each attempt at a refused turn failed, cut short: once for
+        them all when every attempt failed the same way, else numbered."""
+        reasons = self._refusals[tier]
+        if len(set(reasons)) == 1:
+            return f"every attempt: {_brief(reasons[0])}"
+        return "; ".join(
+            f"{number}: {_brief(reason)}"
+            for number, reason in enumerate(reasons, start=1)
+        )
 
     def _merge(
         self,
@@ -1180,9 +1407,12 @@ class ChunkedClaimExtractor:
         raw_claims: list[dict] = []
         transform_rejects: list[dict] = []
         gaps: list[dict] = []
+        unread: dict[str, list[dict]] = {}
         for chunk_id, chunk in zip(chunk_ids, outcomes, strict=True):
             if chunk is None:
                 continue
+            if chunk.unread:
+                unread[chunk_id] = chunk.unread
             for claim in chunk.claims:
                 # one malformed claim (a double-nested local_id, say)
                 # must never sink the whole document's merge — degrade
@@ -1199,6 +1429,7 @@ class ChunkedClaimExtractor:
                     )
             gaps.extend(chunk.gaps)
         self.gaps = gaps
+        self._unread = unread
 
         deduped: list[dict] = []
         for claim in raw_claims:
@@ -1234,7 +1465,16 @@ class ChunkedClaimExtractor:
             coverage = self._entity_coverage(entities, batch, text_lines)
         else:
             coverage = self._coverage(segmentation, batch, len(text_lines))
-            coverage["fallback"] = dict(self.fallback)
+        # the extraction's health, on either tier, for the checks that read
+        # a stored batch: how many chunks it asked, what they came to, and
+        # each fallback tier it took, with the reason
+        coverage |= {
+            "chunks": len(chunk_ids),
+            "claims": len(batch.claims),
+            "rejected_claims": len(rejects),
+            "unread_objects": sum(len(found) for found in unread.values()),
+            "fallback": dict(self.fallback),
+        }
         extras["coverage.json"] = json.dumps(coverage, indent=2)
         return batch, extras
 
@@ -1324,7 +1564,11 @@ class ChunkedClaimExtractor:
 
 
 class _Chunk(NamedTuple):
-    """One chunk's parsed claims and gaps."""
+    """One chunk's parsed claims and gaps, and the objects in its answer
+    that held something the parser could not read (parse_chunk_unread):
+    their count is what tells an unreadable answer from one with no
+    claims."""
 
     claims: list[dict]
     gaps: list[dict]
+    unread: list[dict]
