@@ -517,6 +517,29 @@ class TestCounts:
         text = "\n".join(estimate.describe(counted))
         assert "6 chunk calls after 3 replayed conversations" in text
 
+    def test_the_report_tells_the_forks_after_a_replay_apart(
+        self, tmp_path, engine
+    ):
+        """A letter whose conversation is replayed, and a photograph whose
+        reading is the engine's: the forks after the replay are counted
+        apart from the extraction llm.estimate_calls counts."""
+        engine.people = 12
+        corpus = one_letter(tmp_path)
+        corpus.image(PHOTO, "studio-photo-1890s")
+        run(tmp_path, corpus, engine)
+        cache = tmp_path / "cache"
+        for fork in entries(cache, call="fork"):
+            if corpus.sha1(TEXT) in json.loads(fork.read_text())["response"]:
+                fork.unlink()
+        for kept in cache.rglob("*.session"):
+            shutil.rmtree(kept)
+        for reading in entries(cache, role="transcribe"):
+            reading.unlink()
+        counted = estimate_of(tmp_path, corpus, engine, new=True)
+        text = "\n".join(estimate.describe(counted))
+        assert "2 chunk calls after 1 replayed conversation" in text
+        assert "3 extraction calls for 1 document" in text
+
     def test_a_kept_critique_the_run_rejects_is_asked_again(
         self, tmp_path, engine
     ):
@@ -572,6 +595,9 @@ class TestCounts:
         extraction = counted.stages["extraction"]
         assert (extraction.hits, extraction.known) == (1, 1)
         assert extraction.more == FIRST_TURNS - 2
+        # the run before measured the stage: both attempts, the
+        # segmentation and its chunk; the two first turns keyed are off it
+        assert (extraction.measured, extraction.estimated) == (1, 2)
         made = run(tmp_path, corpus, engine, new=True)
         assert extraction.known <= made["extraction"]
         assert made["extraction"] <= (
