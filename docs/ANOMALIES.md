@@ -39,9 +39,10 @@ answered: it is checked as it is stored, and its alerts are carried.
 
 Each invocation of a run has its own checks, made at its first stage
 outcome: the windows, the first documents of each kind and the
-distributions start afresh with every invocation. `yizkr ingest run` runs
-its stages through the orchestrator, as the scratch driver (#194) is to,
-so both are checked the same way.
+distributions start afresh with every invocation. `yizkr ingest run` and
+the scratch driver (`yizkr scratch run`, docs/runbooks/scratch-run.md)
+both run their stages through the orchestrator, so both are checked the
+same way.
 
 ## New and carried
 
@@ -319,37 +320,37 @@ pending: a slice never goes unwatched.
 
 The slice stays watched after its pause is aborted, resumed or cleared,
 because a driver that invokes the run again in the same process, as the
-scratch driver (#194) is to after a wait for a subscription limit, asks
-again, after its new start marker, for the requests in force before it,
-with the `by` and the reason they had and a new time (a carry). The
-carried pause stands again, and no invocation's checks asked for it.
-Each look times it from the checks' own request, which the watch keeps,
-never from the carry's new time. So a pause carried through one
-re-invocation after another is still aborted once the timeout has
-passed since the checks asked for it, whether or not any check runs in
-the new invocation, and even when the timer looks between the start
-marker and the carry. A pause whose timeout passes during the wait is
-aborted there, and the driver carries the abort instead; a pause carried
-from a reading of the file older than the checks' abort is aborted again
-at the next look. The watch lives in the process whose checks asked for
-the pause: a pause carried into another process is not watched there,
-and holds until someone resumes or aborts it. A driver that carries
-pauses from one invocation to the next within its process, as the
-scratch driver does, needs nothing more.
+scratch driver does after a wait for a subscription limit, asks again,
+after its new start marker, for the requests in force before it, with
+the `by` and the reason they had and a new time (a carry). The carried
+pause stands again, and no invocation's checks asked for it. Each look
+times it from the checks' own request, which the watch keeps, never from
+the carry's new time. So a pause carried through one re-invocation after
+another is still aborted once the timeout has passed since the checks
+asked for it, whether or not any check runs in the new invocation, and
+even when the timer looks between the start marker and the carry. A
+pause whose timeout passes during the wait is aborted there, and the
+driver carries the abort instead; a pause carried from a reading of the
+file older than the checks' abort is aborted again at the next look. The
+watch lives in the process whose checks asked for the pause: a pause
+carried into another process is not watched there, and holds until
+someone resumes or aborts it. A driver that carries pauses from one
+invocation to the next within its process, as the scratch driver does,
+needs nothing more.
 
 **How a driver sees it.** A driver folds `control.jsonl` with
 `rundir.fold_control`, as it folds every request, the monitor's
-included: the slice is `paused` from the pause on, and `aborted` from the
-abort for the rest of the invocation; a resume ends the pause. `yizkr
-ingest run` honours a kind's pause or abort between documents, and a
-stage's or a kind's before every stage: a document it does not dispatch
-keeps its status, and one whose stage is held is `paused`. A driver that
-waits on a paused slice, as the scratch driver (#194) is to, finds the
-abort in the same fold and stops waiting: the checks end the wait,
-carried pauses included, without any code of the driver's beyond
-folding the control file and running in the same process. A new
-invocation's start marker clears every pause and abort, apart from
-those a driver asks for again (above).
+included: the slice is `paused` from the pause on, and `aborted` from
+the abort for the rest of the invocation; a resume ends the pause.
+`yizkr ingest run` honours a kind's pause or abort between documents,
+and a stage's or a kind's before every stage: a document it does not
+dispatch keeps its status, and one whose stage is held is `paused`. A
+driver that waits on a paused slice, as the scratch driver does, finds
+the abort in the same fold and stops waiting: the checks end the wait,
+carried pauses included, without any code of the driver's beyond folding
+the control file and running in the same process. A new invocation's
+start marker clears every pause and abort, apart from those a driver
+asks for again (above).
 
 The checks run wherever the orchestrator stores, reuses or fails a
 stage: in `Orchestrator._transcription`, `_derive`, `_critique`,
