@@ -12,16 +12,16 @@ running stack, then pins the report's rows for the fixture subjects:
 * a deprecated value is left out;
 * a date whose span lies inside another's is a refinement, not a
   disagreement. The span is the period the precision names (a bare year
-  beside a day in it; the 19th century beside 1850) or the range the
+  beside a day in it; the 19th century beside 1863) or the range the
   source states with earliest and latest dates ("between 1938 and 1939"
-  beside 22 June 1938 and beside 3 March 1939, the universe's forms,
+  beside 22 June 1938 and beside 3 September 1939, the universe's forms,
   docs/EXAMPLES.md). A stated range can make a pair a disagreement: "the
-  1930s, between 1930 and 1935" and 1937 disagree, as do a year narrowed
-  to March-June and 2 November of it (rule 5), and the report carries the
-  range beside the value;
+  1890s, between 1890 and 1890" and 1899 disagree, as do a year narrowed
+  to August-September and 1 October of it (rule 5), and the report
+  carries the range beside the value;
 * two dates stored alike are compared through their stated ranges (#136):
-  1930 and "the 1930s, between 1934 and 1936" disagree, as do "before
-  1920" and "after 1920", though each pair shares one stored value;
+  1890 and "the 1890s, between 1899 and 1899" disagree, as do "before
+  1945" and "after 1945", though each pair shares one stored value;
 * an event's own date is compared, and so are the start times of one
   residence place and of one spouse, dated two ways; two residence
   observations at different points in time are not;
@@ -230,27 +230,27 @@ def fixture_graph(client, config):
                 claim(PERSON, "date_of_birth", date(1919), c),
                 # the machine's reading, corrected below from the same
                 # artifact
-                claim(PERSON, "date_of_death", date(1970), a),
+                claim(PERSON, "date_of_death", date(1930), a),
                 # a page of an artifact beside the artifact itself
                 claim(PERSON, "place_of_death", item(TOWN), page_one_of_a),
                 claim(PERSON, "place_of_death", item(OTHER_TOWN), a),
                 # the second value is deprecated below
                 claim(PERSON, "place_of_birth", item(TOWN), a),
                 claim(PERSON, "place_of_birth", item(OTHER_TOWN), b),
-                # arrived there in 1939 per one source, in 1940 per another
+                # arrived there in 1941 per one source, in 1942 per another
                 claim(
                     PERSON,
                     "residence",
                     item(TOWN),
                     a,
-                    (("start_time", date(1939)),),
+                    (("start_time", date(1941)),),
                 ),
                 claim(
                     PERSON,
                     "residence",
                     item(TOWN),
                     b,
-                    (("start_time", date(1940)), ("end_time", date(1952))),
+                    (("start_time", date(1942)), ("end_time", date(1952))),
                 ),
                 # lived there in 1912 and in 1919: two observations
                 claim(
@@ -306,51 +306,51 @@ def fixture_graph(client, config):
                     b,
                     (("start_time", date(1946)),),
                 ),
-                # a stated range narrows a decade: 1937 lies outside it
+                # a stated range narrows a decade: 1899 lies outside it
                 claim(
                     RANGES,
                     "date_of_birth",
-                    date(1930, precision="decade"),
+                    date(1890, precision="decade"),
                     a,
-                    between(date(1930), date(1935)),
+                    between(date(1890), date(1890)),
                 ),
-                claim(RANGES, "date_of_birth", date(1937), b),
-                # and a year: 2 November lies outside March to June
+                claim(RANGES, "date_of_birth", date(1899), b),
+                # and a year: 1 October lies outside August to September
                 claim(
                     RANGES,
                     "date_of_death",
-                    date(1935),
+                    date(1939),
                     a,
-                    between(date(1935, 3), date(1935, 6)),
+                    between(date(1939, 8), date(1939, 9)),
                 ),
-                claim(RANGES, "date_of_death", date(1935, 11, 2), b),
-                # stored alike, set apart by a stated range: 1930 per two
-                # sources and "the 1930s, between 1934 and 1936" per a third
-                claim(SAME_YEAR, "date_of_birth", date(1930), a),
-                claim(SAME_YEAR, "date_of_birth", date(1930), c),
+                claim(RANGES, "date_of_death", date(1939, 10, 1), b),
+                # stored alike, set apart by a stated range: 1890 per two
+                # sources and "the 1890s, between 1899 and 1899" per a third
+                claim(SAME_YEAR, "date_of_birth", date(1890), a),
+                claim(SAME_YEAR, "date_of_birth", date(1890), c),
                 claim(
                     SAME_YEAR,
                     "date_of_birth",
-                    date(1930, precision="decade"),
+                    date(1890, precision="decade"),
                     b,
-                    between(date(1934), date(1936)),
+                    between(date(1899), date(1899)),
                 ),
-                # and "before 1920" beside "after 1920"
+                # and "before 1945" beside "after 1945"
                 claim(
                     SAME_YEAR,
                     "date_of_death",
-                    date(1920),
+                    date(1945),
                     a,
-                    (("latest_date", date(1920)),),
+                    (("latest_date", date(1945)),),
                 ),
                 claim(
                     SAME_YEAR,
                     "date_of_death",
-                    date(1920),
+                    date(1945),
                     b,
-                    (("earliest_date", date(1920)),),
+                    (("earliest_date", date(1945)),),
                 ),
-                # an event's own date: 22 June per one source and 22 July
+                # an event's own date: 22 June per one source and 19 August
                 # per another, while "between 1938 and 1939" refines both
                 claim(EMIGRATION, "point_in_time", date(1938, 6, 22), b),
                 claim(
@@ -360,7 +360,7 @@ def fixture_graph(client, config):
                     c,
                     between(date(1938), date(1939)),
                 ),
-                claim(EMIGRATION, "point_in_time", date(1938, 7, 22), a),
+                claim(EMIGRATION, "point_in_time", date(1938, 8, 19), a),
                 # a day in the stated range's second year refines it too
                 claim(
                     SECOND_EMIGRATION,
@@ -372,17 +372,17 @@ def fixture_graph(client, config):
                 claim(
                     SECOND_EMIGRATION,
                     "point_in_time",
-                    date(1939, 3, 3),
+                    date(1939, 9, 3),
                     a,
                 ),
-                # a century is a span: 1850 lies inside the 19th
+                # a century is a span: 1863 lies inside the 19th
                 claim(
                     SECOND_EMIGRATION,
                     "start_time",
                     date(1800, precision="century"),
                     a,
                 ),
-                claim(SECOND_EMIGRATION, "start_time", date(1850), b),
+                claim(SECOND_EMIGRATION, "start_time", date(1863), b),
             ]
         )
     )
@@ -390,7 +390,7 @@ def fixture_graph(client, config):
         batch(
             [
                 # a curator's correction of artifact A's reading
-                claim(PERSON, "date_of_death", date(1971), a, curated=True),
+                claim(PERSON, "date_of_death", date(1931), a, curated=True),
             ]
         )
     )
@@ -550,7 +550,7 @@ EXPECTED = {
         "",
         frozenset({"1919-01-07", "1919-07-01"}),
     ),
-    ("person", "residence", "town", "start time", frozenset({"1939", "1940"})),
+    ("person", "residence", "town", "start time", frozenset({"1941", "1942"})),
     (
         "spouse",
         "birth name",
@@ -570,35 +570,35 @@ EXPECTED = {
         "date of birth",
         "",
         "",
-        frozenset({"1930s [1930..1935]", "1937"}),
+        frozenset({"1890s [1890..1890]", "1899"}),
     ),
     (
         "ranges",
         "date of death",
         "",
         "",
-        frozenset({"1935 [1935-03..1935-06]", "1935-11-02"}),
+        frozenset({"1939 [1939-08..1939-09]", "1939-10-01"}),
     ),
     (
         "same year",
         "date of birth",
         "",
         "",
-        frozenset({"1930", "1930s [1934..1936]"}),
+        frozenset({"1890", "1890s [1899..1899]"}),
     ),
     (
         "same year",
         "date of death",
         "",
         "",
-        frozenset({"1920 [..1920]", "1920 [1920..]"}),
+        frozenset({"1945 [..1945]", "1945 [1945..]"}),
     ),
     (
         "emigration",
         "point in time",
         "",
         "",
-        frozenset({"1938-06-22", "1938-07-22"}),
+        frozenset({"1938-06-22", "1938-08-19"}),
     ),
 }
 
@@ -619,23 +619,23 @@ def test_each_value_names_the_artifacts_that_state_it(
     stated_by = {
         "1919-01-07": {source["A"]},
         "1919-07-01": {source["B"]},
-        "1939": {source["A"]},
-        "1940": {source["B"]},
+        "1941": {source["A"]},
+        "1942": {source["B"]},
         # both spellings of one name, listed together
         "fixture spouse birth name": {source["A"], source["C"]},
         "fixture spouse maiden name": {source["B"]},
         "1947-02-08": {source["A"]},
         "1946": {source["B"]},
-        "1930s [1930..1935]": {source["A"]},
-        "1937": {source["B"]},
-        "1935 [1935-03..1935-06]": {source["A"]},
-        "1935-11-02": {source["B"]},
-        "1930": {source["A"], source["C"]},
-        "1930s [1934..1936]": {source["B"]},
-        "1920 [..1920]": {source["A"]},
-        "1920 [1920..]": {source["B"]},
+        "1890s [1890..1890]": {source["A"]},
+        "1899": {source["B"]},
+        "1939 [1939-08..1939-09]": {source["A"]},
+        "1939-10-01": {source["B"]},
+        "1890": {source["A"], source["C"]},
+        "1890s [1899..1899]": {source["B"]},
+        "1945 [..1945]": {source["A"]},
+        "1945 [1945..]": {source["B"]},
         "1938-06-22": {source["B"]},
-        "1938-07-22": {source["A"]},
+        "1938-08-19": {source["A"]},
     }
     for row in report_rows(client, config, qids):
         for side in "AB":
@@ -660,7 +660,7 @@ def test_values_keep_their_stated_precision(client, config, fixture_graph):
 
 def test_a_stated_range_travels_with_its_value(client, config, fixture_graph):
     """Rule 5: the range a source states is never silently dropped; it is
-    why "the 1930s" and 1937 disagree."""
+    why "the 1890s" and 1899 disagree."""
     qids, _ = fixture_graph
     ranges = {}
     for row in report_rows(client, config, qids):
@@ -669,20 +669,20 @@ def test_a_stated_range_travels_with_its_value(client, config, fixture_graph):
         for side in "AB":
             ranges[shown(row, side)] = stated_range(row, side)
     assert ranges == {
-        "1930s": ("1930", "1935"),
-        "1937": (None, None),
-        "1935": ("1935-03", "1935-06"),
-        "1935-11-02": (None, None),
+        "1890s": ("1890", "1890"),
+        "1899": (None, None),
+        "1939": ("1939-08", "1939-09"),
+        "1939-10-01": (None, None),
     }
 
 
 def test_dates_stored_alike_differ_by_their_stated_ranges(
     client, config, fixture_graph
 ):
-    """Rule 5: 1930 and "the 1930s, between 1934 and 1936" share a stored
-    value, and so do "before 1920" and "after 1920", but their spans do not
+    """Rule 5: 1890 and "the 1890s, between 1899 and 1899" share a stored
+    value, and so do "before 1945" and "after 1945", but their spans do not
     overlap or nest. Each pair is listed once, and the two sources that
-    state 1930 alike are listed together."""
+    state 1890 alike are listed together."""
     qids, source = fixture_graph
     rows = [
         row
@@ -698,12 +698,12 @@ def test_dates_stored_alike_differ_by_their_stated_ranges(
     assert len(rows) == len(listed)
     assert listed == {
         "date of birth": {
-            "1930": {source["A"], source["C"]},
-            "1930s [1934..1936]": {source["B"]},
+            "1890": {source["A"], source["C"]},
+            "1890s [1899..1899]": {source["B"]},
         },
         "date of death": {
-            "1920 [..1920]": {source["A"]},
-            "1920 [1920..]": {source["B"]},
+            "1945 [..1945]": {source["A"]},
+            "1945 [1945..]": {source["B"]},
         },
     }
 
@@ -765,7 +765,7 @@ def test_what_the_report_leaves_out(client, config, fixture_graph):
             if row["propertyLabel"]["value"] == labels[prop_key]
         ], reason
     # refinements: a span never faces a date inside it ("between 1938 and
-    # 1939" and 3 March 1939; the 19th century and 1850)
+    # 1939" and 3 September 1939; the 19th century and 1863)
     second = qids["second emigration"]
     for prop_key in ("point_in_time", "start_time"):
         assert len(statements(client, second, prop_key)) == 2, prop_key
@@ -773,7 +773,7 @@ def test_what_the_report_leaves_out(client, config, fixture_graph):
         row for row in rows if row_key(row, qids)[0] == "second emigration"
     ]
     shown_values = {shown(row, side) for row in rows for side in "AB"}
-    assert not shown_values & {"1919", "1938", "19th century", "1850"}
+    assert not shown_values & {"1919", "1938", "19th century", "1863"}
     # residence observations and a one-sided end time are not compared
     assert len(statements(client, person, "residence")) == 4
     residence_rows = [
@@ -787,6 +787,6 @@ def test_what_the_report_leaves_out(client, config, fixture_graph):
             "residence",
             "town",
             "start time",
-            frozenset({"1939", "1940"}),
+            frozenset({"1941", "1942"}),
         )
     ]
