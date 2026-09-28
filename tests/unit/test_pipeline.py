@@ -1940,6 +1940,100 @@ class TestWriterRefKindWitnesses:
         assert wiki.wbi.item.writes == writes
         assert _snapshot(wiki, firm) == before
 
+    def test_a_refs_kind_gives_way_to_its_record(self):
+        # a claims file with a manifest names the firm by its QID on page
+        # 1 and by a local id on page 2, whose ref says human and whose
+        # record says organization: the record's kind is recorded, citing
+        # the page that first mentions the firm, and the ref gives none
+        wiki = _three_sources()
+        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        firm = interview.created_items["firm"]
+        given = _directory_pages_batch(None, "human").model_dump(mode="json")
+        given["claims"][0]["subject"] = {"kind": "qid", "qid": firm}
+        given["entities"] = [
+            {"id": "c002:firm", "label": FIRM_LABEL, "kind": "organization"}
+        ]
+
+        directory = BatchWriter(wiki).write_batch(
+            ClaimBatch.model_validate(given)
+        )
+
+        assert directory.created_items == {"c002:firm": firm}
+        kinds = _by_value(_statements(wiki, firm, "instance_of"))
+        assert set(kinds) == {
+            ITEMS["unclassified_entity"],
+            ITEMS["organization"],
+        }
+        assert _sources(kinds[ITEMS["organization"]]) == [
+            (["Q26"], []),
+            ([], [directory.run_qid]),
+        ]
+        assert directory.type_statements_written == 1
+        assert directory.type_statements_referenced == 0
+
+    # a local id whose manifest record and ref give different kinds, one
+    # of them a kind the vocabulary lacks -> the kind warned of, if any
+    RECORD_AND_REF = {
+        "record known": ("organization", "hat_shop", None),
+        "record unknown": ("hat_shop", "organization", "hat_shop"),
+    }
+
+    @pytest.mark.parametrize(
+        ("record_kind", "ref_kind", "warned"),
+        RECORD_AND_REF.values(),
+        ids=RECORD_AND_REF.keys(),
+    )
+    def test_a_records_kind_is_the_one_checked(
+        self, record_kind, ref_kind, warned
+    ):
+        given = _directory_batch(record_kind).model_dump(mode="json")
+        given["claims"][0]["subject"]["instance_of"] = ref_kind
+
+        planned = BatchWriter(_two_sources(), dry_run=True).write_batch(
+            ClaimBatch.model_validate(given)
+        )
+
+        assert planned.warnings == (
+            [
+                f"entity 'firm' has the kind {warned!r}, which the "
+                "vocabulary lacks: no kind is recorded for it"
+            ]
+            if warned
+            else []
+        )
+
+    @pytest.mark.parametrize("position", ["value", "qualifier"])
+    def test_an_unknown_kind_is_found_in_every_ref_position(self, position):
+        # the directory places the firm in Flörburg, typed by a kind the
+        # vocabulary lacks: as the value of the firm's location, or as the
+        # location qualifying its founding
+        town = {
+            "kind": "local",
+            "local_id": "floerburg",
+            "label": "Flörburg",
+            "instance_of": "town",
+        }
+        given = _directory_batch().model_dump(mode="json")
+        founded = given["claims"][0]
+        located = {"type": "item", "value": town}
+        if position == "value":
+            given["claims"].append(
+                dict(founded, property="location", value=located)
+            )
+        else:
+            founded["qualifiers"] = [
+                {"property": "location", "value": located}
+            ]
+
+        planned = BatchWriter(_two_sources(), dry_run=True).write_batch(
+            ClaimBatch.model_validate(given)
+        )
+
+        assert planned.warnings == [
+            "entity 'floerburg' has the kind 'town', which the vocabulary "
+            "lacks: no kind is recorded for it"
+        ]
+
 
 # -- writer: a document's aliases reach the item however it was found (#240)
 
