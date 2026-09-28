@@ -900,14 +900,20 @@ class TestTheCacheFolder:
             open_cache(a_file)
         with pytest.raises(CacheRefused, match="cannot be the LLM cache"):
             open_cache(a_file / "cache")
+        # one it cannot write in, and one it cannot even look into
         closed = private_folder(tmp_path / "closed", 0o500)
+        sealed = private_folder(tmp_path / "sealed", 0o000)
         try:
-            if os.access(closed, os.W_OK):
+            if os.access(closed, os.W_OK) or os.access(sealed, os.X_OK):
                 pytest.skip("this user writes to any folder")
-            with pytest.raises(CacheRefused, match="cannot be the LLM cache"):
-                open_cache(closed / "cache")
+            for root in (closed / "cache", sealed / "cache"):
+                with pytest.raises(
+                    CacheRefused, match="cannot be the LLM cache"
+                ):
+                    open_cache(root)
         finally:
             closed.chmod(0o700)
+            sealed.chmod(0o700)
 
 
 # -- one process per cache -----------------------------------------------

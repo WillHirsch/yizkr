@@ -236,16 +236,16 @@ def _open_root(root: Path) -> None:
     # only opens a cache does not need
     from yizkr.pipeline.scratch import tracked_by_git
 
-    tree = tracked_by_git(root)
-    if tree is not None:
-        raise CacheRefused(
-            f"the LLM cache {root} is in the git work tree {tree}, which "
-            "does not ignore it: its entries hold corpus content, which is "
-            "never committed (docs/AGENT_PROTOCOL.md §6). Give the cache a "
-            "folder git ignores, such as var/llm-cache, or one outside the "
-            "work tree"
-        )
     try:
+        tree = tracked_by_git(root)
+        if tree is not None:
+            raise CacheRefused(
+                f"the LLM cache {root} is in the git work tree {tree}, "
+                "which does not ignore it: its entries hold corpus content, "
+                "which is never committed (docs/AGENT_PROTOCOL.md §6). Give "
+                "the cache a folder git ignores, such as var/llm-cache, or "
+                "one outside the work tree"
+            )
         _make_private(root)
         info = root.stat()
     except OSError as exc:
