@@ -47,7 +47,9 @@ claims, as a family's only MARR and DIV do, and every other marriage or
 divorce dates a pair of its own. What gives nothing to claim
 (`1 BIRT Y`, `1 MARR Y`, a date the grammar cannot parse) never hides
 what does: it adds no claim beside one that does, while an undated MARR
-that gives a place keeps it on a pair of its own. An event that restates
+that gives a place keeps it on a pair of its own, and a DEAT that gives
+no date, place or cause still states the death, as a `death` event
+(below), beside what another DEAT gives. An event that restates
 another line for line, its citation included, gives the same claim,
 which the batch holds once; the same value under another citation is a
 claim of its own, save a family's spouse claims: they cite the family
@@ -59,12 +61,16 @@ wholesale, a citation's PAGE, a source record's TITL, and an object's
 FILE and TITL.
 
 Supported (the fields family-tree exports actually carry):
-individuals (names -> label + aliases, PLUS typed referenced name
-claims: NAME TYPE birth/maiden/married/aka/official, the NICK subtag,
-the non-standard _MARNM tag, and the universal inline convention where a
-quoted or parenthetical token is a nickname — "Ida (Peppi) Sörne",
-"Cäcilie 'Cilli' Tarle"; docs/MODELING.md "Names"), birth/death dates
-and places,
+individuals (names -> label + aliases, a NAME without a value read from
+its parts, PLUS typed referenced name claims: NAME TYPE
+birth/maiden/married/aka/official, the NICK subtag, the non-standard
+_MARNM tag, and the universal inline convention where a quoted or
+parenthetical token is a nickname — "Ida (Peppi) Sörne", "Cäcilie
+'Cilli' Tarle"; docs/MODELING.md "Names"; a nickname that several NAMEs
+give is a claim of each, citing its own NAME), birth/death dates and
+places, a death the export states with no date, place or cause
+(`1 DEAT Y`), which is a `death` event with the person as participant
+(ADR-0020),
 cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
 the record is), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
@@ -93,7 +99,13 @@ so such a tag is named with its parent's tag where it goes unread
 marriage ended at an unknown time, and a claim has no unknown value to
 state that with. A family has one husband and one wife, so the adapter
 reads a family's first HUSB and first WIFE alone, and a further one is
-counted with its parent's tag too (FAM.HUSB, FAM.WIFE).
+counted with its parent's tag too (FAM.HUSB, FAM.WIFE). A family's MARR
+and DIV date the spouse claims between its HUSB and its WIFE, so in a
+family with one partner or none (its HUSB or its WIFE is missing, or
+names no person the adapter maps) they are counted as MARR and DIV: no
+claim names the other partner, and a claim has no unknown value to name
+them with. A person none of whose NAMEs gives a name is skipped, with a
+warning, and the family links that name them give no claim.
 """
 
 from __future__ import annotations
@@ -356,6 +368,27 @@ def _clean_name(name: str) -> str:
     return re.sub(r"\s+", " ", name.replace("/", " ")).strip()
 
 
+# A NAME's parts in the order GEDCOM writes a name: prefix, given name,
+# surname prefix, surname and suffix ("Lt. Cmndr. Joseph /Allen/ jr.").
+_NAME_PARTS = ("NPFX", "GIVN", "SPFX", "SURN", "NSFX")
+
+
+def _name_text(name: Record) -> str:
+    """A NAME's display form: its value, cleaned ('Eugen /Löbig/' ->
+    'Eugen Löbig'), or, when the value gives none (it is empty, or '//'),
+    its parts in the order GEDCOM writes a name, each part's
+    comma-separated pieces in turn (a GIVN 'Eugen' and a SURN 'Löbig'
+    give 'Eugen Löbig'). Empty when neither gives a name."""
+    return _clean_name(name.value) or _clean_name(
+        " ".join(
+            piece
+            for tag in _NAME_PARTS
+            for part in name.all(tag)
+            for piece in part.value.split(",")
+        )
+    )
+
+
 def _source_title(record: Record) -> str:
     """A level-0 SOUR record's human title (TITL), else its inline value.
 
@@ -458,6 +491,15 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # upstream source a citation cites; OBJE = a multimedia object (ADR-0021)
     sources = {r.xref: r for r in roots if r.tag == "SOUR" and r.xref}
     media_records = {r.xref: r for r in roots if r.tag == "OBJE" and r.xref}
+    # each person's names, from the NAMEs that give one; a person with none
+    # is skipped, so `people` holds the xrefs of those the batch holds
+    names_of = {
+        xref: [
+            text for name in record.all("NAME") if (text := _name_text(name))
+        ]
+        for xref, record in individuals.items()
+    }
+    people = {xref for xref, names in names_of.items() if names}
     warnings: list[str] = []
     unsupported: dict[str, int] = {}
 
@@ -481,11 +523,13 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # itemised down to its PAGE/_APID leaves. What remains reported is the
     # genuine tail (REPO, SUBM, tool-specific `_` tags), and what a mapped
     # record carries that the model has no property for (a divorce's PLAC,
-    # a marriage's TYPE).
+    # a marriage's TYPE). A tag read where it stands can still go unread
+    # for what one occurrence says (`unread`): it is counted then too.
     reads = {
         "INDI": HANDLED_INDI,
         "FAM": HANDLED_FAM,
-        # name parts are read, or restated by the NAME value that is read
+        # a NAME's parts give its name when it has no value, and are
+        # restated by the value that is read when it has one
         "NAME": {"TYPE", "NICK", "GIVN", "SURN", "NPFX", "NSFX", "SPFX"},
         "BIRT": {"DATE", "PLAC"},
         "DEAT": {"DATE", "PLAC", "CAUS"},
@@ -509,6 +553,25 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def count(tag: str) -> None:
         unsupported[tag] = unsupported.get(tag, 0) + 1
 
+    def coupled(fam: Record) -> bool:
+        """Whether a family's first HUSB and first WIFE each name a person
+        the batch holds, so that its spouse claims name the one to the
+        other."""
+        return fam.text("HUSB") in people and fam.text("WIFE") in people
+
+    def unread(parent: Record, child: Record) -> bool:
+        """Whether `child`, of a tag the adapter reads beneath `parent`'s,
+        goes unread for what it says there."""
+        if child.tag == "DIV" and child.first("DATE") is None:
+            # a DIV dates the marriage's end only by its DATE: an undated
+            # one says it ended at an unknown time, and a claim has no
+            # unknown value to state that with
+            return True
+        # a family's MARR and DIV date the spouse claims between its two
+        # partners: with one or none, no claim names the other, and a claim
+        # has no unknown value to name them with
+        return child.tag in ("MARR", "DIV") and not coupled(parent)
+
     def census(record: Record) -> None:
         seen: set[str] = set()
         for child in record.children:
@@ -522,12 +585,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             if (
                 child.tag in reads.get(record.tag, set())
                 and not further
-                and not (
-                    # a DIV dates the marriage's end only by its DATE: an
-                    # undated one says it ended at an unknown time, and a
-                    # claim has no unknown value to state that with
-                    child.tag == "DIV" and child.first("DATE") is None
-                )
+                and not unread(record, child)
             ):
                 census(child)  # descend: an unmapped tag may sit deeper
             # otherwise the top-most unmapped tag stands for its whole
@@ -768,9 +826,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
 
     def event_claims(
         indi_xref: str, event: Record, date_prop: str, place_prop: str
-    ):
+    ) -> bool:
         """A birth's or a death's claims: a date claim for each DATE and a
-        place claim for each PLAC, each with its own qualifiers."""
+        place claim for each PLAC, each with its own qualifiers. Whether
+        the event gave any."""
+        gave = False
         for date_record in event.all("DATE"):
             value, quals = parse_gedcom_date(date_record.value)
             if value is None:
@@ -779,9 +839,57 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     f"{date_record.value!r} — no {date_prop} claim emitted"
                 )
                 continue
+            gave = True
             claim(person_id(indi_xref), date_prop, value, event, quals)
         for place in places(event):
+            gave = True
             claim(person_id(indi_xref), place_prop, place_item(place), event)
+        return gave
+
+    # person xref -> the local id of their death event
+    death_ids: dict[str, str] = {}
+
+    def death_event(xref: str, label: str, death: Record) -> str:
+        """The death event of the person `xref`, labelled with the
+        person's `label`: one for each person, however many DEATs state
+        the death."""
+        if xref not in death_ids:
+            death_ids[xref] = f"{person_id(xref)}-death"
+            entities.append(
+                {
+                    "id": death_ids[xref],
+                    "label": f"Death of {label}",
+                    "kind": "death",
+                    "summary": "death stated in the GEDCOM export",
+                    "mention_lines": [death.line_number],
+                }
+            )
+        return death_ids[xref]
+
+    def died(xref: str, label: str, death: Record) -> None:
+        """A DEAT that gives no date, place or cause states that the
+        person died, and nothing else: a `death` event with the person
+        as participant (ADR-0020 §2, docs/MODELING.md "Living persons and
+        privacy"), which the participant claim states, citing this DEAT.
+
+        A death event is death evidence, which marks the person as not
+        possibly living (ADR-0020), so only a DEAT whose own line states
+        the death, with a Y or with no value, gives one. Any other value,
+        such as an N denying the death or a date written on the DEAT's own
+        line, is warned of and gives no event."""
+        value = death.value.strip()
+        if value.upper() not in ("", "Y"):
+            warnings.append(
+                f"line {death.line_number}: DEAT {value!r} is neither Y "
+                "nor empty — no death event emitted"
+            )
+            return
+        claim(
+            death_event(xref, label, death),
+            "participant",
+            {"type": "item", "value": local(person_id(xref))},
+            death,
+        )
 
     def monolingual(text: str) -> dict:
         return {
@@ -795,23 +903,22 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         The item's label/aliases remain the flat match index; this adds
         the source's OWN name typing (NAME TYPE, NICK, _MARNM) plus the
         universal inline-nickname convention, each attributed to the
-        GEDCOM record that states it.
+        GEDCOM record that states it. A nickname that several NAMEs give is
+        thus a claim of each, with its own citation, while one NAME that
+        gives it twice (a NICK and its inline form) gives the one claim.
         """
-        emitted_nicknames: set[str] = set()
 
         def add_nickname(text: str, name_record: Record) -> None:
-            if text and text not in emitted_nicknames:
-                emitted_nicknames.add(text)
+            if text:
                 claim(
                     person_id(xref), "nickname", monolingual(text), name_record
                 )
 
         for name_record in record.all("NAME"):
-            if not name_record.value:
-                continue
-            cleaned = _clean_name(name_record.value)
-            # a further TYPE types the name a further way, a claim of its own
-            for name_type in name_record.all("TYPE"):
+            cleaned = _name_text(name_record)
+            # a further TYPE types the name a further way, a claim of its
+            # own; a NAME that gives no name has none to type
+            for name_type in name_record.all("TYPE") if cleaned else []:
                 prop = _NAME_TYPE_PROPERTY.get(name_type.value.strip().lower())
                 if prop == "nickname":
                     add_nickname(
@@ -830,11 +937,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 add_nickname(inline, name_record)
         # non-standard married-name tag some tools emit at the INDI level
         for marnm in record.all("_MARNM"):
-            if marnm.value:
+            if married := _clean_name(marnm.value):
                 claim(
                     person_id(xref),
                     "married_name",
-                    monolingual(_clean_name(marnm.value)),
+                    monolingual(married),
                     marnm,
                 )
 
@@ -877,13 +984,12 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
 
     # individuals -> entities + birth/death claims
     for xref, record in individuals.items():
-        names = [
-            _clean_name(name.value)
-            for name in record.all("NAME")
-            if name.value
-        ]
+        names = names_of[xref]
         if not names:
-            warnings.append(f"{xref}: no NAME; skipped entirely")
+            warnings.append(
+                f"{xref}: no NAME gives a name; skipped entirely, with the "
+                "family links that name it"
+            )
             continue
         # every date the record gives a birth or a death, as it gives them
         summary_bits = []
@@ -929,17 +1035,22 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         for birth in record.all("BIRT"):
             event_claims(xref, birth, "date_of_birth", "place_of_birth")
         for death in record.all("DEAT"):
-            event_claims(xref, death, "date_of_death", "place_of_death")
+            gave = event_claims(xref, death, "date_of_death", "place_of_death")
             # cause of death stays verbatim prose (docs/MODELING.md);
             # "en" matches the export's language, like the excerpts
             for cause in death.all("CAUS"):
                 if cause.value:
+                    gave = True
                     claim(
                         person_id(xref),
                         "cause_of_death",
                         monolingual(cause.value),
                         death,
                     )
+            # each DEAT that states the death alone gives the death event,
+            # beside what any other DEAT gives
+            if not gave:
+                died(xref, names[0], death)
         for burial in record.all("BURI"):
             burial_places = places(burial)
             if not burial_places:
@@ -1031,13 +1142,14 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             for quals in each_date(obje, dated_qualifiers, "media"):
                 claim(person_id(xref), "image", media, obje, quals)
 
-    # families -> parentage and spouse claims
+    # families -> parentage and spouse claims, between people the batch
+    # holds: a HUSB, WIFE or CHIL that names no one it holds gives none
     for fam in families.values():
         husband = fam.text("HUSB")
         wife = fam.text("WIFE")
         for child in fam.all("CHIL"):
             for parent_xref, prop in ((husband, "father"), (wife, "mother")):
-                if parent_xref in individuals and child.value in individuals:
+                if parent_xref in people and child.value in people:
                     claim(
                         person_id(child.value),
                         prop,
@@ -1047,7 +1159,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         },
                         fam,
                     )
-        if husband in individuals and wife in individuals:
+        # a family with one partner or none gives no spouse claims, and the
+        # census counts its MARR and DIV
+        if coupled(fam):
             for quals in spouse_qualifiers(fam):
                 for subject, other in ((husband, wife), (wife, husband)):
                     claim(

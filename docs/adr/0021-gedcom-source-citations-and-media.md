@@ -13,6 +13,11 @@ Amended by #322 (2026-09-28): the adapter reads every occurrence of an
 event, of a DATE, PLAC or CAUS beneath one where it reads that tag, of a
 NAME's TYPE or NICK, and of a SEX or NCHI, so a repeated event or detail gives claims of its own,
 and a further HUSB or WIFE is counted: see Amendments.
+Amended by #323 (2026-09-28): a DEAT that gives no date, place or cause
+is a `death` event with the person as participant, a family with one
+partner or none has its MARR and DIV counted, a NAME without a value is
+read from its parts, and a nickname that several NAMEs give is a claim
+of each: see Amendments.
 
 ## Context
 
@@ -209,3 +214,74 @@ wholesale (Decision above), some tags are still read once: a citation's
 PAGE, a SOUR record's TITL, and an OBJE's FILE and TITL. The census does
 not look inside SOUR or OBJE, so a second one of these goes uncounted;
 #324 tracks it.
+
+Amended by #323 (2026-09-28): **an undated death, a family with one
+partner, a NAME without a value and a repeated nickname are mapped or
+counted.** Each was dropped silently:
+
+- **An undated death is a `death` event.** A DEAT that gives no date,
+  place or cause (`1 DEAT Y`, a bare `1 DEAT`, or one whose only lines
+  are a SOUR, an AGE or a NOTE) gave no claim. It now gives a `death`
+  event with the person as `participant`, the form in which ADR-0020 §2
+  and docs/MODELING.md ("Living persons and privacy") state "died,
+  nothing else known". The person has one death event, labelled "Death
+  of" and the person's label, and each such DEAT gives a participant
+  claim on it that cites that DEAT, with its SOUR and PAGE. It does so
+  beside what any other DEAT gives, so `1 DEAT Y` beside a dated DEAT
+  keeps both the event and the date. A DEAT whose only DATE is one the
+  grammar cannot parse gives the event too: its DATE still states the
+  death, and the date is warned of as before.
+
+  A death event is death evidence (ADR-0020 §2), so the person is no
+  longer taken as possibly living: the public export includes them, and
+  the private site shows no badge. So the DEAT's own line must state the
+  death: one whose value is neither Y nor empty is warned of and gives
+  no event. That value may be an N, which GEDCOM 5.5.1 does not allow as
+  a denial but a tool may write as one, or a date written on the DEAT's
+  own line. GEDCOM 5.5.1 reads less into a DEAT than the adapter does:
+  it asserts an event only by a DATE, a PLAC or a Y, and lets a SOUR or
+  NOTE be attached to a DEAT "without implying that the event occurred".
+  The adapter also takes a bare DEAT, and a DEAT with only a SOUR, as the
+  export's statement of the death, as #323 asks, since a tool may drop
+  the Y once it attaches a citation.
+- **A family with one partner or none has its MARR and DIV counted.** A
+  family whose HUSB or WIFE is missing, or names no person the adapter
+  maps (no INDI record, or a person without a name, below), gives no
+  spouse claims, and its MARR and DIV were dropped. They are now
+  counted, as `MARR` and `DIV`, each standing for its branch, as an
+  undated DIV is (above), rather than mapped. A family's MARR and DIV
+  date the spouse statements between its two partners (docs/MODELING.md,
+  "Marriages, residences and other periods"). With one partner, no
+  statement names the other, and the claim schema has no unknown value
+  to name them with: the gap that keeps an undated DIV counted. A
+  `marriage` event with the one partner as `participant` could hold the
+  MARR's date and place, but was not taken. It would state a family's
+  marriage one way with two partners and another way with one. A
+  person's second such marriage would share the first's label, and so
+  its item, since the writer finds an item by its label. And the DIV
+  would still go unmapped, since the model has no divorce event. With
+  unknown values, a one-partner family's MARR and DIV would date a
+  spouse statement whose value is unknown, as an undated DIV would end
+  one.
+- **A NAME without a value is read from its parts.** A NAME whose value
+  is empty, or `//`, gave no name, while the census took its GIVN and
+  SURN as read. A person whose only NAME was such was skipped entirely,
+  and a family that named them made the adapter fail, since its claims
+  named an entity the batch lacked. A NAME or `_MARNM` of `//` failed it
+  too. Such a NAME is now read from its parts: NPFX, GIVN, SPFX, SURN
+  and NSFX in the order GEDCOM writes a name, each part's pieces in turn
+  (GEDCOM 5.5.1 separates a part's pieces with commas). A GIVN Rudolf
+  and a SURN Löbig give "Rudolf Löbig", a label or alias like any NAME's
+  value, which the NAME's TYPE types. A NAME whose value and parts give
+  no name gives none, though its NICKs still give nicknames. A person
+  none of whose NAMEs gives a name is skipped, with a warning, as before,
+  and so are the family links that name them, where they made the
+  adapter fail. A family that names such a person as a partner has one
+  partner (above).
+- **A nickname that several NAMEs give is a claim of each.** The adapter
+  gave a nickname once for each person, so the same nickname given by a
+  second NAME, with its own citation, was dropped, citation and all
+  (CLAUDE.md rule 1). A nickname is now a claim of each NAME that gives
+  it, citing that NAME, as another repeated value is (above). One NAME
+  that gives it twice, by a NICK and inline, gives one claim, as a claim
+  restated line for line does.
