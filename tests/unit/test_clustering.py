@@ -547,6 +547,38 @@ class TestBlocking:
         # an event of another kind is never its candidate
         assert pair(papers, "e3", talk, "e2") not in pairs
 
+    def test_an_exports_death_event_meets_a_documents_through_people(self):
+        """An export that says only that Felix died (DEAT Y) makes a death
+        event; the card's death of Felix, named otherwise, meets it through
+        the two Felixes, as events meet, and not by its name."""
+        text = (
+            "0 HEAD\n1 CHAR UTF-8\n"
+            "0 @I6@ INDI\n1 NAME Felix /Löbig/\n1 DEAT Y\n0 TRLR\n"
+        )
+        artifact = ArtifactRef.from_bytes(text.encode())
+        adapted = adapt_gedcom(text, artifact).batch
+        (event,) = [e for e in adapted.entities if e.kind == "death"]
+        export = Doc(
+            "gedcom",
+            Manifest(artifact.sha1, adapted, GEDCOM),
+            {"i6": "felix-loebig", event.id: "felix-loebig"},
+        )
+        card = document(
+            "registration-card-1945",
+            [
+                entity("e1", "Felix Löbig"),
+                entity("e2", "Felix's death", "death"),
+            ],
+            [
+                ("e2", "participant", item("e1")),
+                ("e2", "point_in_time", day(1931)),
+            ],
+            {"e1": "felix-loebig", "e2": "felix-loebig"},
+        )
+        pairs = blocked_pairs([export.manifest, card.manifest])
+        assert pair(card, "e2", export, event.id) in pairs
+        assert pair(card, "e1", export, "i6") in pairs
+
     def test_organizations_block_when_one_name_holds_the_other(self):
         book = directory()
         deck = document(

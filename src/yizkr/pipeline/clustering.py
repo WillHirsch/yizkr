@@ -15,9 +15,10 @@ documents' manifests (by content), VERSION and the thresholds stand.
 fingerprint (yizkr.pipeline.fingerprints): its artifact's SHA-1, its
 canonical label, its kind and its excerpt span, never the manifest's id.
 A batch without an entity manifest gives a mention per local id its
-claims name. The GEDCOM export's people, places, occupations and media
-are mentions too. Only mentions the manifest marks for extraction are
-clustered; the others are each a cluster of their own ("unclustered").
+claims name. The GEDCOM export's people, places, occupations, media and
+death events are mentions too. Only mentions the manifest marks for
+extraction are clustered; the others are each a cluster of their own
+("unclustered").
 
 **Lifting.** Relations the manifest states between its own local ids are
 lifted into mention space: kin (father, mother, child, spouse and
@@ -48,13 +49,13 @@ by one shared token:
   match; an event without participants keys on its whole name.
 - *Everything else*: the whole name, normalised.
 
-With `gedcom-anchored`, a mention that key-matches a mention of a GEDCOM
-export pairs with those GEDCOM anchors only, never with other mentions,
-so the export is the roster documents meet. A person named by one token
-only, with no kin to key a surname, pairs only with GEDCOM people whose
-given name is compatible. Blocking looks keys up in indexes, so its work
-grows with the mentions and the pairs it proposes, never with every pair
-of mentions.
+With `gedcom-anchored`, a mention (of any kind but an event's) that
+key-matches a mention of a GEDCOM export pairs with those GEDCOM anchors
+only, never with other mentions, so the export is the roster documents
+meet. A person named by one token only, with no kin to key a surname,
+pairs only with GEDCOM people whose given name is compatible. Blocking
+looks keys up in indexes, so its work grows with the mentions and the
+pairs it proposes, never with every pair of mentions.
 
 **Cannot-link.** Two ids of one manifest are kept apart (soft): the
 manifest already unified what it could. The places and occupations of a
@@ -972,7 +973,8 @@ def _block(
     anchors: dict[str, frozenset[str]] = {}
     for kind, group in sorted(by_kind.items()):
         if kind in EVENT_KINDS:
-            # events are never anchored: an export holds none
+            # events meet through their participants, an export's death
+            # events among them, and never through an anchor
             pairs |= _within(group, _Events(group, index))
             continue
         found, anchored = _block_kind(
