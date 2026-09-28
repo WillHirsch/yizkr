@@ -1303,7 +1303,7 @@ class TestChunks:
         engine = Engine()
         extractor = ChunkedClaimExtractor(engine, budget=LINE_LENGTH)
         with pytest.raises(UsageLimitReached):
-            extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
+            extractor.extract(transcription(), DOC_REF)
         assert extractor.failed_chunks == []
         assert engine.closed == ["session-1"]
 
@@ -1364,7 +1364,7 @@ class TestChunks:
         engine = PooledEngine(pacer, refusals=[2, 0], max_wait=150.0)
         extractor = ChunkedClaimExtractor(engine, budget=LINE_LENGTH)
         with pytest.raises(UsageLimitReached):
-            extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
+            extractor.extract(transcription(), DOC_REF)
         assert engine.calls == []
 
 

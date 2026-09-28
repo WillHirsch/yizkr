@@ -256,10 +256,20 @@ class TestCli:
     def test_a_single_step_runs_without_a_list(self, env, corpus, tmp_path):
         # the single steps are debugging tools: no list, no refusal
         out = tmp_path / "transcription.json"
+        # the postcard's scan, and the text read from it
+        scan = tmp_path / "postcard-1938.png"
+        scan.write_bytes(b"fictional scan: the 1938 postcard")
         postcard = corpus / "postcard-1938.txt"
-        args = ("--file", str(postcard), "--text-file", str(postcard))
+        args = ("--file", str(scan), "--text-file", str(postcard))
         assert run_cli("ingest", "transcribe", *args, "--out", str(out)) == 0
-        assert json.loads(out.read_text())["text"] == POSTCARD
+        transcription = json.loads(out.read_text())
+        assert transcription["text"] == POSTCARD
+        # it names the scan by the SHA-1 of its bytes, never the text file
+        # it was read from (#127)
+        assert transcription["artifact"] == {
+            "kind": "artifact",
+            "sha1": hashlib.sha1(scan.read_bytes()).hexdigest(),
+        }
 
     def test_a_single_step_refuses_a_listed_file(
         self, env, corpus, tmp_path, monkeypatch
