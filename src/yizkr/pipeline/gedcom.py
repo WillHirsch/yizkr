@@ -29,29 +29,34 @@ Source-first conventions carry over unchanged:
   A date the grammar cannot parse yields NO date claim and a warning —
   never a guess.
 
-Every occurrence of an event, of a DATE, PLAC or CAUS beneath one, of a
-TYPE or NICK beneath a NAME, and of a person's SEX or NCHI, is read, not
-only the first. A record that repeats an event (a second BIRT, DEAT, MARR
-or DIV) or a detail (a second DATE, PLAC, CAUS, TYPE or NICK), or that
-gives a person's SEX or NCHI twice, states alternatives, and each gives
-claims of its own, with its own date, place and circa, so that the
-alternatives coexist (ADR-0002): Gustav's birth on 7 JAN 1919 and on
-1 JUL 1919 is two date of birth claims. Where one claim holds both an
-event's date and its place (a burial, a residence, an occupation, a
-marriage), each of the event's dates is paired with each of its places,
-and each DATE of a media object dates an image claim of its own. A
-family's first marriage (a date with a place) and its first divorce date
-one pair of spouse claims, as a family's only MARR and DIV do, and every
-other marriage or divorce dates a pair of its own. What gives nothing to
-claim (`1 BIRT Y`, `1 MARR Y`, a date the grammar cannot parse) never
-hides what does: it adds no claim beside one that does, while an undated
-MARR that gives a place keeps it on a pair of its own. An event that
-restates another line for line, its citation included, gives the same
-claim, which the batch holds once; the same value under another citation
-is a claim of its own. Some tags are still read once: a family's HUSB and
-WIFE (a further one is counted, below), and, within the SOUR citations
-and OBJE objects that the adapter incorporates wholesale, a citation's
-PAGE, a source record's TITL, and an object's FILE and TITL.
+Every occurrence of an event, of a DATE, PLAC or CAUS beneath one where
+the adapter reads that tag (a divorce's PLAC and a CAUS beneath any
+event but a death are counted instead, below), of a TYPE or NICK beneath
+a NAME, and of a person's SEX or NCHI, is read, not only the first. A
+record that repeats an event (a second BIRT, DEAT, MARR or DIV) or a
+detail (a second DATE, PLAC, CAUS, TYPE or NICK), or that gives a
+person's SEX or NCHI twice, states alternatives, and each gives claims
+of its own, with its own date, place and circa, so that the alternatives
+coexist (ADR-0002): Gustav's birth on 7 JAN 1919 and on 1 JUL 1919 is
+two date of birth claims. Where one claim holds both an event's date and
+its place (a burial, a residence, an occupation, a marriage), each of
+the event's dates is paired with each of its places, and each DATE of a
+media object dates an image claim of its own. A family's first marriage
+(a date with a place) and its first divorce date one pair of spouse
+claims, as a family's only MARR and DIV do, and every other marriage or
+divorce dates a pair of its own. What gives nothing to claim
+(`1 BIRT Y`, `1 MARR Y`, a date the grammar cannot parse) never hides
+what does: it adds no claim beside one that does, while an undated MARR
+that gives a place keeps it on a pair of its own. An event that restates
+another line for line, its citation included, gives the same claim,
+which the batch holds once; the same value under another citation is a
+claim of its own, save a family's spouse claims: they cite the family
+record, so a MARR or DIV that restates another's date and place gives no
+pair of its own, whatever its citation. Some tags are still read once: a
+family's HUSB and WIFE (a further one is counted, below), and, within
+the SOUR citations and OBJE objects that the adapter incorporates
+wholesale, a citation's PAGE, a source record's TITL, and an object's
+FILE and TITL.
 
 Supported (the fields family-tree exports actually carry):
 individuals (names -> label + aliases, PLUS typed referenced name
@@ -657,7 +662,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # that restates another line for line, its citation included, gives
     # the same claim again, which is not added twice, while the same value
     # under another citation has a source of its own, and so is a claim of
-    # its own
+    # its own (a family's spouse claims cite the family record, so a MARR
+    # or DIV that restates another's date and place gives none of its own;
+    # see spouse_qualifiers)
     made: set[str] = set()
 
     def claim(

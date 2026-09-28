@@ -10,8 +10,8 @@ Amended by #308 (2026-09-28): the census reads each tag where it stands,
 so a divorce's PLAC, a MARR's TYPE and an undated DIV are counted: see
 Amendments.
 Amended by #322 (2026-09-28): the adapter reads every occurrence of an
-event, of a DATE, PLAC or CAUS beneath one, of a NAME's TYPE or NICK, and
-of a SEX or NCHI, so a repeated event or detail gives claims of its own,
+event, of a DATE, PLAC or CAUS beneath one where it reads that tag, of a
+NAME's TYPE or NICK, and of a SEX or NCHI, so a repeated event or detail gives claims of its own,
 and a further HUSB or WIFE is counted: see Amendments.
 
 ## Context
@@ -185,7 +185,9 @@ with its own date, place and circa, so that the alternatives coexist
 - a family's first marriage (a date with a place) and its first divorce
   date one pair of spouse claims, as a family's only MARR and DIV do, and
   every other marriage or divorce dates a pair of its own (docs/MODELING.md,
-  "Marriages, residences and other periods"). Pairing only the first
+  "Marriages, residences and other periods"), save one that restates
+  another's date and place: spouse claims cite the family record, so it
+  gives no pair of its own, whatever its citation. Pairing only the first
   keeps each MARR's and each DIV's date on one pair of claims, rather than
   pairing every marriage with every divorce;
 - what gives nothing to claim (`1 BIRT Y`, `1 MARR Y`, a date the
