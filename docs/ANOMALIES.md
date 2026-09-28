@@ -37,9 +37,9 @@ answered: it is checked as it is stored, and its alerts are carried.
 
 Each invocation of a run has its own checks, made at its first stage
 outcome: the windows, the first documents of each kind and the
-distributions start afresh with every invocation. `yizkr ingest run` and
-the scratch driver both run their stages through the orchestrator, so
-both are checked the same way.
+distributions start afresh with every invocation. `yizkr ingest run` runs
+its stages through the orchestrator, as the scratch driver (#194) is to,
+so both are checked the same way.
 
 ## New and carried
 
@@ -68,7 +68,7 @@ Each alert is a line of `alerts.jsonl` in the run directory
 | `stage` | `transcription`, `extraction`, `critique` or `gedcom`; `run` for `anomaly-config` |
 | `check` | the check's name (below) |
 | `subject` | the document: the first 12 hex digits of its SHA-1 (empty for `anomaly-config`) |
-| `value` | the measured value: a number, or `true` for a check that measures a presence |
+| `value` | the measured value: a number, a language code (`language-unexpected`), or `true` for a check that measures a presence |
 | `status` | `new` or `carried` |
 | `kind` | the document's kind: `text`, `media`, `presentation` or `gedcom` |
 | `limit` | the threshold the value crossed |
@@ -217,15 +217,14 @@ slice is the stage; not fail-fast by default. Value: the share; `count`,
 kind's documents the run plans, for a kind with fewer. It fires as soon
 as the failures pass that share, even before the first documents are all
 in, and once per stage and kind. Its slice is the kind; fail-fast by
-default. Value: the failures; `of` (the documents counted),
-`first`, `pause`.
+default. Value: the failures; `of` (the documents counted), `first`,
+`pause`.
 
 **`call-failures`**: more than `max-share` of a stage's last `window`
 engine calls failing (`call` events with the outcome `error`; calls
 paused or interrupted are not counted), once it has made at least
 `min-count`. It fires as `stage-failures` does. Its slice is the stage;
-fail-fast by default. Value: the
-share; `count`, `of`, `pause`.
+fail-fast by default. Value: the share; `count`, `of`, `pause`.
 
 ### The configuration itself
 

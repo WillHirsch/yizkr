@@ -5,8 +5,9 @@
 # thresholds live, and every value below is the default.
 #
 # To change them, write a YAML file with the keys to change, nested as
-# here, and name it in $YIZKR_ANOMALIES (the scratch driver may pass one
-# of its own). Its values replace these; a list replaces the whole list.
+# here, and name it in $YIZKR_ANOMALIES (a driver may pass thresholds of
+# its own, anomalies.attach). Its values replace these; a list replaces
+# the whole list.
 # A key this file does not have is refused, so a misspelt key never passes
 # silently. The thresholds decide only which alerts are raised and which
 # slices are paused, never what a stage makes or what the LLM cache keys,
