@@ -693,6 +693,10 @@ class TestTheRecordIsCurrentWhileItIsWhole:
         # never upload through it
         elsewhere = tmp_path / "elsewhere.png"
         elsewhere.write_bytes(PORTRAIT)
+        # the bytes a write through the link would leave are these same
+        # bytes, so the file's inode and a pinned mtime show it unwritten
+        os.utime(elsewhere, ns=(1_000_000_000, 1_000_000_000))
+        before = elsewhere.stat()
 
         def link(deck):
             self.portrait(deck).unlink()
@@ -700,7 +704,12 @@ class TestTheRecordIsCurrentWhileItIsWhole:
 
         recorded, second, deck = self.run_twice(tmp_path, refusals, link)
         self.assert_made_again(recorded, second, deck)
-        assert elsewhere.read_bytes() == PORTRAIT  # replaced, not written
+        after = elsewhere.stat()  # replaced, not written through
+        assert (after.st_ino, after.st_mtime_ns) == (
+            before.st_ino,
+            before.st_mtime_ns,
+        )
+        assert elsewhere.read_bytes() == PORTRAIT
 
     @pytest.mark.skipif(
         not hasattr(os, "geteuid") or os.geteuid() == 0,
