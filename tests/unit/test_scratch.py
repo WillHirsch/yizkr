@@ -286,8 +286,9 @@ def command(tmp_path, corpus, fakes, **kwargs) -> int:
     test's driver."""
     fakes.corpus = corpus
     kwargs.setdefault("cache_dir", tmp_path / "cache")
+    kwargs.setdefault("driver", Driver)
     return scratch.scratch_run(
-        corpus.folder, runs=runs_dir(tmp_path), driver=Driver, **kwargs
+        corpus.folder, runs=runs_dir(tmp_path), **kwargs
     )
 
 
@@ -564,6 +565,61 @@ class TestReuse:
         latest = scratch.runs_in(runs_dir(tmp_path))[-1]
         misses = events(latest, "cache-miss")
         assert {miss["reason"] for miss in misses} == {"refresh"}
+
+    def test_a_refresh_whose_view_is_not_saved_is_made_again(
+        self, tmp_path, fakes
+    ):
+        """A resume adds --refresh to a run whose views were made without
+        it, and the letter's refreshed batch cannot be saved (a full
+        disk). Its view counts as refreshed only once saved, so the next
+        invocation refreshes it again, rather than take the stage as done
+        and reuse the unrefreshed batch."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes) == EXIT_OK
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        full = [1]
+
+        class FullDisk(Driver):
+            def _update_batch_view(self, doc, batch):
+                if doc.source.name == LETTER and full:
+                    full.pop()
+                    raise OSError(28, "No space left on device")
+                return super()._update_batch_view(doc, batch)
+
+        refresh = {"resume": run.name, "refresh": ["extract"]}
+        assert (
+            command(tmp_path, corpus, fakes, driver=FullDisk, **refresh) == 1
+        )
+        letter = corpus.sha1(LETTER)
+        refreshed = set(stages_of(run, scratch.REFRESHED))
+        others = {corpus.sha1(name) for name in (TEXT, PHOTO, STONE)}
+        assert refreshed == {(sha1, "extraction") for sha1 in others}
+        fakes.calls.clear()
+        assert command(tmp_path, corpus, fakes, **refresh) == EXIT_OK
+        asked = {n for what, n in fakes.calls if what in ("manifest", "chunk")}
+        assert asked == {LETTER}
+        assert (letter, "extraction") in started(run, invocation=-1)
+        assert (letter, "extraction") in stages_of(run, scratch.REFRESHED)
+
+    def test_only_a_current_view_made_under_a_refresh_counts(self, tmp_path):
+        """A view a refresh made, then made again without one, is no
+        longer the refreshed view: a later refresh makes it again."""
+        run = RunDir(tmp_path / "run")
+        run.start(run_id="r")
+        made_again, kept = "a" * 40, "b" * 40
+        for subject in (made_again, kept):
+            run.emit("done", subject=subject, stage="extraction")
+            run.emit(
+                scratch.REFRESHED,
+                subject=subject,
+                stage="extraction",
+                role="extract",
+            )
+        run.emit("done", subject=made_again, stage="extraction")
+        extract = ScratchDriver(tmp_path, run.path, refresh=["extract"])
+        assert extract._refreshes_made() == {(kept, "extraction")}
+        critique = ScratchDriver(tmp_path, run.path, refresh=["critique"])
+        assert critique._refreshes_made() == set()
 
     def test_a_scratch_run_needs_the_cache(self, tmp_path):
         with pytest.raises(ValueError, match="LLM cache"):
@@ -1322,6 +1378,24 @@ class TestCorpusStages:
             command(tmp_path, corpus, fakes)
         assert (run / "run.json").read_bytes() == before
 
+    def test_a_document_new_to_the_run_keeps_it_from_other_code(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """A document added since the run reached its barrier has no
+        events, so it has not ended its stages: a change of code is
+        refused, as any other change is, rather than taken past the
+        barrier without it."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes) == EXIT_OK
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        corpus.text("e-directory-1912.txt", "directory-1912")
+        before = (run / "run.json").read_bytes()
+        other = dict(RunDir(run).manifest()["code"], commit="f" * 40)
+        monkeypatch.setattr(scratch, "code_version", lambda: dict(other))
+        with pytest.raises(RunSettingsConflict, match="code.commit"):
+            command(tmp_path, corpus, fakes, resume=run.name)
+        assert (run / "run.json").read_bytes() == before
+
     def test_an_abort_of_a_corpus_stage_outranks_a_pause_of_the_run(
         self, tmp_path, fakes
     ):
@@ -1631,7 +1705,7 @@ class TestRunsDirectory:
         with scratch.hold(runs):
             pass
 
-    def test_the_command_waits_its_turn_behind_another_driver(
+    def test_the_command_is_refused_while_another_driver_holds_the_runs(
         self, tmp_path, fakes
     ):
         corpus = small(tmp_path)
@@ -1911,7 +1985,7 @@ class TestCommandLine:
             "--corpus", str(folder), "--runs", "my-runs", "--new",
             "--until", "critique", "--refresh", "transcribe",
             "--refresh", "critique", "--cache", "my-cache",
-            "--language", "de", "--fallback-language", "de",
+            "--language", "de", "--fallback-language", "fr",
             "--chunk-concurrency", "5", "--extract-effort", "medium",
             "--review-effort", "max", "--extract-model", "claude-opus-5-5",
             "--min-free", "3",
@@ -1929,7 +2003,7 @@ class TestCommandLine:
             "cache_dir": Path("my-cache"),
             "env_file": env,
             "language": "de",
-            "fallback_language": "de",
+            "fallback_language": "fr",
             "chunk_concurrency": 5,
             "extract_effort": "medium",
             "review_effort": "max",

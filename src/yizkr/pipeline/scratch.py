@@ -630,6 +630,9 @@ class ScratchDriver(Orchestrator):
         # stage's role made in this run, read from its events at the
         # start of each invocation: it stands for the rest of the run
         self._refreshed: set[tuple[str, str]] = set()
+        # (document, stage, role) of each view the stage in hand made
+        # under a refresh, recorded once it is saved (_dispatch_one)
+        self._refreshing: list[tuple[DocumentRun, str, str]] = []
 
     # -- stages -----------------------------------------------------------
 
@@ -1009,12 +1012,21 @@ class ScratchDriver(Orchestrator):
         return {key for key, role in made.items() if role in self.refresh}
 
     def _run_stage(self, doc, stage, compute, attention=None):
-        """The orchestrator's stage, noting a view made under a refresh of
-        its role (a `refreshed` event), so that the run's later
-        invocations reuse it rather than make it again."""
+        """The orchestrator's stage, noting a view it makes under a
+        refresh of its role. The view is written and recorded after the
+        stage, so the refresh is recorded only once it is saved
+        (_dispatch_one): one whose view was never saved is made again."""
         result = super()._run_stage(doc, stage, compute, attention)
         role = STAGE_ROLES.get(stage)
         if role in self.refresh:
+            self._refreshing.append((doc, stage, role))
+        return result
+
+    def _record_refreshes(self) -> None:
+        """Record each view the stage in hand made under a refresh, now
+        saved: a `refreshed` event, so that the run's later invocations
+        reuse it rather than make it again."""
+        for doc, stage, role in self._refreshing:
             self._refreshed.add((doc.sha1, stage))
             self.rundir.emit(
                 REFRESHED,
@@ -1023,7 +1035,7 @@ class ScratchDriver(Orchestrator):
                 stage=stage,
                 role=role,
             )
-        return result
+        self._refreshing = []
 
     def _reused_view(self, doc, view, load, recheck=None):
         """The orchestrator's reuse of a view, with a view a refresh of
@@ -1060,8 +1072,12 @@ class ScratchDriver(Orchestrator):
         """Run a stage of a document, and fail only the document when it
         fails: _ENDED_HERE, _HELD (the control file held it as it started)
         or _FAILED_HERE. A pause of the pass or Ctrl-C goes on through,
-        with the state the document reached saved where it can be."""
+        with the state the document reached saved where it can be. A view
+        the stage made under a refresh is recorded as refreshed only once
+        the stage has ended with its view and the document's state
+        saved."""
         self.log(f"{stage:13} {doc.source.name}")
+        self._refreshing = []
         try:
             self._run_stage_of(doc, stage)
         except DispatchStopped as exc:
@@ -1079,6 +1095,7 @@ class ScratchDriver(Orchestrator):
         if unsaved is not None:
             self._fail(doc, unsaved, save=False)
             return _FAILED_HERE
+        self._record_refreshes()
         return _ENDED_HERE
 
     # -- the corpus ---------------------------------------------------------

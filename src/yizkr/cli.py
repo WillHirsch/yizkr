@@ -1516,9 +1516,10 @@ def _scratch_parsers(sub, effort_choices) -> None:
         nargs="?",
         const=scratch.LATEST,
         metavar="RUN",
-        help="invoke this run again (a run id or directory; the latest "
-        "when none is named), even one taken to the end: to go past the "
-        "barrier to a corpus stage registered since, say",
+        help="invoke this run again (a run id, or a run directory, which "
+        "must be in --runs; the latest when none is named), even one "
+        "taken to the end: to go past the barrier to a corpus stage "
+        "registered since, say",
     )
     p.add_argument(
         "--until",
@@ -1535,8 +1536,9 @@ def _scratch_parsers(sub, effort_choices) -> None:
         action="append",
         choices=MODEL_ROLES,
         metavar="ROLE",
-        help="make this role's views again in this invocation, asking the "
-        "engine afresh for each call even where the cache holds an answer "
+        help="make this role's views again once in the run, asking the "
+        "engine afresh for each call even where the cache holds an answer; "
+        "a later invocation with the same refresh reuses those already made "
         f"(repeatable; one of {', '.join(MODEL_ROLES)})",
     )
     p.add_argument(

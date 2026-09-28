@@ -505,7 +505,7 @@ in, and the kind of call:
 | `failed` | a stage failed | `reason` |
 | `held` | the control file stopped a stage's dispatch | `reason` |
 | `barrier` | a scratch run went past the barrier: every document's stages had ended, and its corpus stages come next | `documents` (whose stages all completed), `failed` (with a failed stage) |
-| `refreshed` | in a scratch run, a stage's view was just made under a refresh of its role (`--refresh`): the run's later invocations that refresh the role reuse it | `role` |
+| `refreshed` | in a scratch run, a stage's view made under a refresh of its role (`--refresh`) was saved: the run's later invocations that refresh the role reuse it | `role` |
 | `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `file` (a directory's), `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
 | `document-failed` | a document failed, and only it: a stage failed (with its own `failed` event too), or something outside its stages, such as its source or `state.json` that could not be read, its first record, or a step between the stages | `file`, `reason` |
 | `cache-hit` | the cache answered a call | `reason`: `key match`, or an adoption's reason |
@@ -655,8 +655,9 @@ than the longest wait pauses the pass rather than hold a pool's threads
 for hours: the scratch driver waits until a minute past `resumes_at`,
 and a minute at least when that time has passed already (a pause can
 hold past the time it reports), reading the control file as it waits,
-and then invokes the run again by itself (docs/runbooks/scratch-run.md). Set `$YIZKR_CLAUDE_MAX_WAIT` to
-21600 to wait through a five-hour window inside the call instead.
+and then invokes the run again by itself
+(docs/runbooks/scratch-run.md). Set `$YIZKR_CLAUDE_MAX_WAIT` to 21600 to
+wait through a five-hour window inside the call instead.
 
 **The reserve** (`$YIZKR_CLAUDE_RESERVE`, a share of each window, 0.25 by
 default; 0 keeps none). The engine estimates a window's use from its last

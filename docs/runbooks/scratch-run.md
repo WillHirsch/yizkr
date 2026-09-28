@@ -91,9 +91,9 @@ uv run yizkr scratch run
   afresh for each call even where the cache holds an answer, once in the
   run: a later invocation that refreshes the role again, the driver's
   own after a subscription limit or yours with the same `--refresh`,
-  reuses the views the refresh has made already and makes the rest. One
-  without `--refresh` makes the views not made yet from the cache's
-  answers, unrefreshed. So resume a refresh with its `--refresh`.
+  reuses the views the refresh has made and saved already, and makes the
+  rest. One without `--refresh` makes the views not made yet from the
+  cache's answers, unrefreshed. So resume a refresh with its `--refresh`.
 - **The end.** The driver prints how the invocation ended, the states of
   the stages, and the commands that show the run and resume it. It exits
   0 when it finished and no document failed; 1 when a document or a
