@@ -36,6 +36,12 @@ per the civil register, 1 July per his naturalisation: day and month
 transposed), and the sources carry every uncertain date form: circa,
 before, after, between and decade.
 
+Nicholas's 2011 booklet, "Letters from Flörburg", is a compilation: it
+sets an image of the top of a 1939 letter from Sebastian to Klara, an
+artifact of its own, beside a translation made with translation
+software, which misreads the letter's Brunnenring 35 as 36.  The two
+are witnesses of one text that disagree (ADR-0008, as amended by #289).
+
 ``GEDCOM_FIXTURE`` renders the family as a genealogy program would
 export it from these sources; ``tests/unit/test_example_universe.py``
 checks that every name, date, place and family link in it is one the
@@ -478,6 +484,16 @@ PLACES = (
         ("brunnenring",),
         note="The firm's premises and the family home.",
     ),
+    Place(
+        "brunnenring-36",
+        "Brunnenring 36",
+        "address",
+        ("brunnenring",),
+        note=(
+            "Named only by the 2011 booklet's translation, which misreads "
+            "the letter's Brunnenring 35."
+        ),
+    ),
     Place("wasserallee", "Wasserallee", "street", ("floerburg",)),
     Place("wasserallee-59", "Wasserallee 59", "address", ("wasserallee",)),
     Place("angerring", "Angerring", "street", ("floerburg",)),
@@ -867,7 +883,54 @@ SOURCES = (
         ),
         note="A possibly living narrator; family hearsay throughout.",
     ),
+    Source(
+        "family-booklet-2011",
+        "Letters from Flörburg",
+        "en",
+        2011,
+        "artifact",
+        text=(
+            "[page 1] Letters from Flörburg. Compiled by Nicholas Lobig. "
+            "Stupfield, 2011.\n"
+            "[page 2] All translations in this booklet were done with "
+            "translation software; any mistakes are mine.\n"
+            "[page 3] [image 1] Wastl to Klara, July 1939.\n"
+            "Translation: Flörburg, Brunnenring 36, 28 July 1939. Dear "
+            "Pünktchen! Gustl finally has his visa. Hilde is sewing him "
+            "shirts for the journey.\n"
+            "Klara kept this letter all her life. Wastl died in Rekau in "
+            "1945."
+        ),
+        note=(
+            "A compilation, holding its own text only: the image beside "
+            "the translation is letter-excerpt-1939, an artifact of its own "
+            "(ADR-0008). The translation misreads the letter's 35 as 36."
+        ),
+    ),
+    Source(
+        "letter-excerpt-1939",
+        "Letters from Flörburg — page 3, image 1",
+        "de",
+        1939,
+        "photograph",
+        text=(
+            "Flörburg, Brunnenring 35, den 28. Juli 1939.\n"
+            "Liebes Pünktchen! Gustl hat endlich sein Visum. Hilde näht "
+            "ihm Hemden für die Reise."
+        ),
+        note=(
+            "The top of the first page of Sebastian's letter to Klara, as "
+            "the booklet reproduces it; the archive holds the letter only "
+            "as this image."
+        ),
+    ),
 )
+
+# Values the assertions use that the manifest does not hold yet.
+# ADR-0008 (as amended by #289) adds `machine_assisted`, the sourcing
+# circumstance of a text that its source says was prepared with machine
+# assistance, with the extraction change that sets it (its follow-up B).
+PLANNED_VOCABULARY = ("machine_assisted",)
 
 ASSERTIONS = tuple(
     _said(
@@ -1936,6 +1999,93 @@ ASSERTIONS = tuple(
             "Aunt Pünktchen died last year",
         ),
     )
+    + _said(
+        "family-booklet-2011",
+        (
+            "family-booklet-2011",
+            "point_in_time",
+            Date(2011),
+            "Stupfield, 2011",
+        ),
+        # the booklet asserts its own composition (ADR-0008)
+        (
+            "letter-excerpt-1939",
+            "part_of",
+            "family-booklet-2011",
+            {"page_number": "3"},
+        ),
+        # read from the translation, which page 2 says was done with
+        # translation software: each claim carries the marker
+        (
+            "sebastian-loebig",
+            "residence",
+            "brunnenring-36",
+            {
+                "point_in_time": Date(1939, 7, 28),
+                "sourcing_circumstances": "machine_assisted",
+            },
+            "Flörburg, Brunnenring 36",
+        ),
+        (
+            "klara-loebig",
+            "nickname",
+            "Pünktchen",
+            {"sourcing_circumstances": "machine_assisted"},
+            "Dear Pünktchen!",
+        ),
+        (
+            "gustav-loebig",
+            "nickname",
+            "Gustl",
+            {"sourcing_circumstances": "machine_assisted"},
+            "Gustl finally has his visa",
+        ),
+        (
+            "hildegard-loebig",
+            "nickname",
+            "Hilde",
+            {"sourcing_circumstances": "machine_assisted"},
+            "Hilde is sewing him shirts",
+        ),
+        # the caption and the commentary are no translation: no marker
+        ("sebastian-loebig", "nickname", "Wastl", "Wastl to Klara"),
+        (
+            "sebastian-loebig",
+            "place_of_death",
+            "rekau",
+            "Wastl died in Rekau in 1945",
+        ),
+        (
+            "sebastian-loebig",
+            "date_of_death",
+            Date(1945),
+            "Wastl died in Rekau in 1945",
+        ),
+    )
+    + _said(
+        "letter-excerpt-1939",
+        (
+            "letter-excerpt-1939",
+            "point_in_time",
+            Date(1939, 7, 28),
+            "den 28. Juli 1939",
+        ),
+        (
+            "sebastian-loebig",
+            "residence",
+            "brunnenring-35",
+            {"point_in_time": Date(1939, 7, 28)},
+            "Flörburg, Brunnenring 35",
+        ),
+        ("klara-loebig", "nickname", "Pünktchen", "Liebes Pünktchen!"),
+        (
+            "gustav-loebig",
+            "nickname",
+            "Gustl",
+            "Gustl hat endlich sein Visum",
+        ),
+        ("hildegard-loebig", "nickname", "Hilde", "Hilde näht ihm Hemden"),
+    )
 )
 
 # (subject, property) pairs where two sources disagree and nothing in
@@ -1945,6 +2095,11 @@ CONTRADICTIONS = (
     ("gustav-loebig", "date_of_birth"),
     # Kreis Mockburg (1905 certificate) vs Kreis Peiltal (1984 tree).
     ("flaeckfeld", "part_of"),
+    # Brunnenring 35 (the letter's excerpt) vs Brunnenring 36 (the 2011
+    # booklet's machine-assisted translation of it) on 28 July 1939: two
+    # witnesses of one text (ADR-0008).  The disagreement report compares
+    # a residence only by its dates, so it does not list this one.
+    ("sebastian-loebig", "residence"),
 )
 
 # (subject, property) pairs where one source is vaguer than another but

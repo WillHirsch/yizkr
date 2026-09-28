@@ -92,6 +92,9 @@ class TestIntegrity:
 
     def test_assertions_follow_the_manifest(self):
         manifest = load_manifest()
+        # a sourcing circumstance is a vocabulary item: the manifest's, or
+        # one it is planned to gain
+        circumstances = set(manifest.items) | set(u.PLANNED_VOCABULARY)
         for assertion in u.ASSERTIONS:
             assert assertion.subject in KEYS, assertion
             assert assertion.source in SOURCES, assertion
@@ -100,7 +103,9 @@ class TestIntegrity:
                 *assertion.qualifiers,
             ):
                 datatype = manifest.properties[prop].datatype
-                if datatype == "wikibase-item":
+                if prop == "sourcing_circumstances":
+                    assert value in circumstances, (prop, value)
+                elif datatype == "wikibase-item":
                     assert value in KEYS, (prop, value)
                 elif datatype == "time":
                     assert isinstance(value, u.Date), (prop, value)
@@ -108,6 +113,10 @@ class TestIntegrity:
                     assert isinstance(value, int), (prop, value)
                 else:
                     assert isinstance(value, str) and value, (prop, value)
+
+    def test_planned_vocabulary_is_not_in_the_manifest_yet(self):
+        # an item leaves u.PLANNED_VOCABULARY when the manifest gains it
+        assert not set(u.PLANNED_VOCABULARY) & set(load_manifest().items)
 
     def test_kinds_are_manifest_items(self):
         items = load_manifest().items
@@ -545,6 +554,80 @@ class TestEventsAndDates:
             when.year >= 1940 and when.precision == "year"
             for when in values("nicholas-lobig", "date_of_birth")
         )
+
+
+class TestCompilation:
+    """ADR-0008, as amended by #289: an original excerpt that a compilation
+    embeds is an artifact of its own, part of the compilation, so the
+    original and the compilation's translation of it are two witnesses."""
+
+    MARKED = ("sourcing_circumstances", "machine_assisted")
+
+    @staticmethod
+    def embedded() -> list[u.Assertion]:
+        """Each part-of link from a source to a source that embeds it;
+        the universe has at least one."""
+        links = [
+            a
+            for a in u.ASSERTIONS
+            if a.property == "part_of"
+            and a.subject in SOURCES
+            and a.value in SOURCES
+        ]
+        assert links
+        return links
+
+    @staticmethod
+    def said_by(key: str) -> list[u.Assertion]:
+        return [a for a in u.ASSERTIONS if a.source == key]
+
+    def test_an_excerpt_is_part_of_its_compilation(self):
+        for link in self.embedded():
+            excerpt, compilation = SOURCES[link.subject], SOURCES[link.value]
+            # the compilation asserts its own composition, with the page
+            assert link.source == compilation.key
+            page = dict(link.qualifiers)["page_number"]
+            # labelled "<compilation title> — page <n>, image <k>"
+            label = f"{compilation.title} — page {page}, image "
+            assert re.fullmatch(re.escape(label) + r"[1-9]\d*", excerpt.title)
+            # the compilation's text is its own: nothing read from the
+            # excerpt is in it
+            for a in self.said_by(excerpt.key):
+                assert a.excerpt and a.excerpt not in compilation.text, a
+
+    def test_a_translation_and_its_original_are_two_witnesses(self):
+        for link in self.embedded():
+            original = self.said_by(link.subject)
+            compilation = self.said_by(link.value)
+            translated = [
+                a for a in compilation if self.MARKED in a.qualifiers
+            ]
+            # the compilation says its translations were made with machine
+            # assistance: the claims read from them carry the marker, and
+            # no claim of the original does
+            assert translated
+            assert not [a for a in original if self.MARKED in a.qualifiers]
+            # each claim read from the translation renders one that the
+            # original makes, and at least one gives it another value
+            read: dict[tuple[str, str], set] = {}
+            for a in original:
+                read.setdefault((a.subject, a.property), set()).add(a.value)
+            assert {(a.subject, a.property) for a in translated} <= set(read)
+            misread = {
+                (a.subject, a.property)
+                for a in translated
+                if a.value not in read[(a.subject, a.property)]
+            }
+            assert misread
+            assert misread <= set(u.CONTRADICTIONS)
+            # the compilation's own text says something the original does
+            # not, with no marker
+            own = {
+                (a.subject, a.property)
+                for a in compilation
+                if self.MARKED not in a.qualifiers and a.subject in PEOPLE
+            }
+            assert own - set(read)
 
 
 @pytest.fixture(scope="module")
