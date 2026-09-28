@@ -26,7 +26,7 @@ rules; §2's write-side key, §3's run report and §4's diff are amended in
 place.
 
 Amended by #101 (2026-09-28): a subscription limit pauses the pass
-through the engine (`UsageLimitReached`, a pause of the pass) rather than
+through the engine (`UsageLimitReached`, a `PassPaused`) rather than
 through a request in the control file, and the pause gives the time the
 pass can go on; §3's abort and resume is amended in place.
 
