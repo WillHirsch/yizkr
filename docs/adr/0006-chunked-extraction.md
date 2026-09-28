@@ -213,24 +213,26 @@ asked once more (ADR-0032 §4). A fallback tier is taken only when the
 engine answered: an outage fails the extraction, to be retried. Per-chunk
 progress is the log, and the chunks that failed, with the first reason,
 are the extraction's error. An extraction that ends with no claims fails
-(amended by #45, 2026-09-28), its error naming each cause, when chunks
-failed, when validation rejected every claim, or when the entity manifest
-was refused and the line-range tier that stood in for it extracted
-nothing: a degraded tier's silence says nothing about the document, so
-its empty batch is no view to keep. A manifest refused in every attempt
-only for naming no entity is no failed pass: the engine said the
-document names nothing, and the line-range tier looked again. Otherwise
-the empty batch is claim-free, on the word of the answers the extractor
-accepted: the stage is done with an attention reason that says why
-(every entity or unit is `extract: false`, or the chunks answered with
-none), and every run that reuses the view reports it (ADR-0032 §1, §8).
-Behind the cache the refused manifest replays (ADR-0032 §5), so an
-extraction that failed this way fails again, the same way, in every run
-until `--refresh extract` or a new epoch asks afresh, or a change to the
-manifest's prompt or parser yields a usable one. Coverage, rejects and
-gaps are side outputs in the extractor's state directory
-(`<doc>/extraction/` under `ingest run`, `<out>.chunks/` for `ingest
-extract`), written for a complete extraction that did not fail.
+(amended by #45, 2026-09-28) when the model's answers could not be used:
+chunks failed, the chunks' answers held JSON objects the parser reads as
+neither a claim, a gap line nor the sentinel (claims wrapped in one
+object, or written with other keys), or validation rejected every claim.
+Its error leads with that outcome and names every cause, then any
+fallback tier taken, with the reason each attempt at the refused turn
+gave, each cut short so that the whole stays within a `failed` event. A
+failure keeps no view, so each run makes the extraction again, from the
+cache at no engine cost, and a parser fix reaches it; the same answers
+fail the same way until `--refresh extract` or a new epoch asks afresh.
+Otherwise the empty batch is claim-free, on the word of the answers the
+extractor accepted, on either tier: a refused manifest falls back rather
+than failing the document (ADR-0032 §5), and when the line-range tier
+finds nothing (every unit `extract: false`, or chunks that answered with
+none), the batch is kept like any other. The stage is done with an
+attention reason that says why, naming the refused manifest after a
+fallback, and every run that reuses the view reports it (ADR-0032 §1,
+§8). Coverage, rejects and gaps are side outputs in the extractor's state
+directory (`<doc>/extraction/` under `ingest run`, `<out>.chunks/` for
+`ingest extract`), written for a complete extraction that did not fail.
 Sidecar state from before the store is never read. `yizkr ingest run` sets
 aside whole a document directory without `derivations.json`, and starts it
 afresh, as it does one whose source bytes changed (ADR-0010); nothing in
@@ -279,11 +281,14 @@ loop in v1.
 
 Amended by #45 (2026-09-28): on either tier, `coverage.json` also records
 the extraction's health: how many chunks it asked (`chunks`), its claims
-(`claims`) and the claims validation rejected (`rejected_claims`), and
-each fallback tier it took, with the reason (`fallback`). It is written
-with the batch it describes, so the anomaly checks (#196) and the flag
-framework (#112) can read it beside a stored batch, a reused one
-included.
+(`claims`), the claims validation rejected (`rejected_claims`), the
+objects in the chunks' answers the parser could not read
+(`unread_objects`), and each fallback tier it took, with the reason
+(`fallback`). It is written with the batch it describes, so the anomaly
+checks (#196) and the flag framework (#112) can read it beside a stored
+batch, a reused one included. It is written only when no chunk failed,
+so its `failed_chunks` is always empty; chunk failures are the
+extraction's error (§5).
 
 ### 7. Strategy selection and CLI surface
 
