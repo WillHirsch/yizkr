@@ -162,6 +162,22 @@ says so in one line, "state unknown: the control file cannot be read",
 and the page lists every slice as unknown, under a line that says why;
 the header of each adds "run state unknown".
 
+**A log that cannot be read.** While `events.jsonl` cannot be read (its
+mode forbids it, say), the driver's reader cannot read it either, and
+`rundir.run_state` raises. The views then show nothing from it, rather
+than every planned stage pending: the stages, the calls and the
+documents in flight each say, in their place, that they are unknown and
+why, in one line of the terminal view and one of the page ("counts
+unknown: events.jsonl cannot be read", for the stages). The header's
+last event is `unknown`, and so is the time the run has been running
+when an invocation was killed, since only its events say how far it
+ran; a run whose `run.json` records no invocation, or is missing, is in
+an `unknown` state. The plan, the slices and the alerts are shown as
+the other files give them. While `alerts.jsonl` cannot be read, the
+alerts say "unknown: alerts.jsonl cannot be read" in the same way, and
+the stage counts, which do not come from it, still agree with
+`run_state`.
+
 **Alerts.** The counts, new and carried, and by check; and the latest
 ten, newest first: time, `new` (on an output the engine answered in this
 run) or `carried` (on one made from cached answers), stage, check,
@@ -212,6 +228,19 @@ writer killed mid-line, then another appending after it) is skipped and
 counted. A log that shrinks or is replaced, or whose first line changes
 (one deleted and written afresh on a reused inode, or rewritten in
 place), starts the monitor over: it is read again from its start.
+
+A log is looked at as the driver's reader looks at it (`read_jsonl`). A
+path that holds no regular file (none yet, a directory, a FIFO) holds no
+entries, and is never opened. One that cannot be read, by that reader
+either (the file is there, but its mode forbids reading it, or an I/O
+error cuts a read short, say), leaves nothing read from it standing,
+since the driver has no last good read of it: what the monitor read of
+it is forgotten, and what would come from it is unknown (A log that
+cannot be read, above). A read cut short takes none of its lines. Every
+refresh tries it again, and the one that can read it reads it from its
+start, so no record appended meanwhile is skipped and none read before
+counts twice. The refresh at which a log cannot be read, and the one at
+which it can again, count as changes: the view is drawn again.
 
 `run.json` is read after the logs, since an invocation records itself
 there before its first event, and parsed again only when its inode, size
