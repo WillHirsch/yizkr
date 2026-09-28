@@ -34,8 +34,9 @@ copied into the repository, GitHub or a cloud session.
 Code: `yizkr.pipeline.orchestrate` (the views), `yizkr.pipeline.llmcache`
 (the cache), `yizkr.pipeline.llm` (the engines and their limits, the
 reports of their calls, the call estimate, and the client factory that
-alone imports the cache: `open_cache`, `cached_client`) and
-`yizkr.pipeline.rundir` (the run directory and run state).
+alone imports the cache: `open_cache`, `read_cache`, `cached_client`,
+`cache_holder`) and `yizkr.pipeline.rundir` (the run directory and run
+state).
 
 ## Views
 
@@ -284,6 +285,14 @@ it likes and holds it once. Nothing deletes the lock file: one removed
 while a process holds the cache no longer excludes anyone, and the
 holder, when it next opens the cache, warns and locks the file there
 again, or is refused if another process has taken it meanwhile.
+
+**Reading a cache as it is.** `llm.read_cache` gives the entries a run
+would be served, without opening the cache: it takes no lock, makes no
+folder and writes nothing, and what calls made through it change (an
+answer rejected, one stored) stays in memory. The call estimate reads
+the cache so, beside a run that holds it (docs/runbooks/scratch-run.md,
+Before a run). `llm.cache_holder` names the process that holds a cache,
+from its lock file's record, without taking the lock.
 
 Why one process: several session paths assume it. A resumed claude-code
 session's transcript sits under its original id in the CLI's projects
@@ -729,10 +738,14 @@ cache's hits and misses, or without the cache its `call` events; a stage
 made without a call counts 0), else the baseline's mean for documents of
 its kind, else typical: a vision call per scan and none for a text file
 or slide text, the entity manifest and a chunk per 2000 characters for
-extraction, and a critique each. These are the pipeline's calls: the
-cache answers those whose keys it holds, which only the run can tell.
-`yizkr scratch estimate`, which #101 adds to the scratch command group,
-is to print them.
+extraction, and a critique each. These are the pipeline's calls,
+counted without their keys. `yizkr scratch estimate`
+(docs/runbooks/scratch-run.md, Before a run) counts a planned scratch
+run's calls by their keys: it takes each stale stage through the
+pipeline's own code with the cache as it is (`llm.read_cache`), so each
+call the cache answers, and each it cannot, is known, and it counts by
+`llm.estimate_calls` only the calls whose keys wait on an answer the
+engine has yet to give.
 
 ## Checks once per run
 
