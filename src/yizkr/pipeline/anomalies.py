@@ -996,16 +996,18 @@ class _SliceWatch:
         timer: Callable[[float, Callable[[], None]], Any],
     ) -> None:
         """Watch a slice the checks have just paused, with their timeout,
-        clock and timer. With no timeout the slice is not watched: its
-        pauses hold until someone resumes it."""
+        clock and timer, in place of any earlier watch of it. With no
+        timeout the slice is not watched: its pauses hold until someone
+        resumes it. The checks pause a slice as they read the run's
+        events, and the look at every watched slice that ends each read
+        (AnomalyChecks._poll) reads the pause's origin and starts its
+        timer."""
         with self._lock:
             watched = self._slices.pop(scope, None)
             if watched is not None:
                 _cancel(watched.pending)
             if timeout is not None:
-                watched = _Watched(check, timeout, now, timer)
-                self._slices[scope] = watched
-                self._look(scope, watched)
+                self._slices[scope] = _Watched(check, timeout, now, timer)
 
     def look(self) -> None:
         """Look at every watched slice now."""
