@@ -45,7 +45,7 @@ from datetime import UTC, datetime
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
-from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch, century_of
 from yizkr.disagreement import Disagreement, disagreements
 from yizkr.pipeline.writer import BatchWriter
 
@@ -442,11 +442,12 @@ def fixture_graph(client, config):
                     date(1939, 9, 3),
                     a,
                 ),
-                # a century is a span: 1863 lies inside the 19th
+                # a century is a span: 1863 lies inside the 19th, which
+                # a claim gives by its first year (#241)
                 claim(
                     SECOND_EMIGRATION,
                     "start_time",
-                    date(1800, precision="century"),
+                    date(1801, precision="century"),
                     a,
                 ),
                 claim(SECOND_EMIGRATION, "start_time", date(1863), b),
@@ -539,12 +540,12 @@ def as_row(found: Disagreement) -> dict:
 
 
 def time_shown(value: str, precision: int) -> str:
-    """A time at its stated precision (a century as its first year's
-    century, a decade as its first year)."""
+    """A time at its stated precision (a century as Wikibase counts it for
+    its year, #241; a decade as its first year)."""
     day = value.lstrip("+")[:10]
     year = int(day[:4])
     if precision <= 7:
-        return f"{year // 100 + 1}th century"
+        return f"{century_of(year)}th century"
     if precision == 8:
         return f"{year // 10 * 10}s"
     return day[: {9: 4, 10: 7}.get(precision, 10)]

@@ -27,9 +27,9 @@ Each rule of MODELING.md "Contradictions" is one function here:
 * ``comparison_key``: a name compares as text, letter case and language
   tag aside, and an item through its merge redirect;
 * ``span``: the period a date names, which is the range its source states
-  or else the period its precision names (``period``, with the century
-  convention in ``century``); ``named`` and ``spans_nest`` then set aside a
-  date whose span lies inside the other's;
+  or else the period its precision names (``period``, with centuries
+  counted as Wikibase counts them in ``century``); ``named`` and
+  ``spans_nest`` then set aside a date whose span lies inside the other's;
 * ``stored_alike_order``: two dates stored alike are compared through the
   ranges their statements state;
 * ``place_within``: a place the graph records inside the other differs
@@ -52,6 +52,7 @@ from itertools import permutations, product
 
 import yaml
 
+from yizkr.claims import century_of, century_years
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import load_templates, render_for_instance
 
@@ -481,10 +482,18 @@ def comparison_key(value: Value, containment: Containment) -> str:
 
 def century(year: int) -> tuple[int, int]:
     """The first and last year of the century a century-precision date
-    names. A century is stored as its first year, as claims.py writes it:
-    the 19th century as 1800, naming 1800 to 1899."""
-    first = year // 100 * 100
-    return first, first + 99
+    names, counted as Wikibase counts centuries (``claims.century_of``): a
+    date stored as any year from 1801 to 1900 names the 19th century, 1801
+    to 1900, whichever year a writer chose for it. The query service gives
+    a century's year as stored, but a year, a month or a day before the
+    common era one year on, in XSD 1.1's count, where 1 BCE is year 0. So
+    a century before the common era is given in that count, to compare
+    with them: the 18th century BCE, stored as -1800 to -1701, spans -1799
+    to -1700."""
+    first, last = century_years(century_of(year))
+    if year < 0:
+        return first + 1, last + 1
+    return first, last
 
 
 _DATE = re.compile(r"^([+-]?\d+)-(\d{2})-(\d{2})")

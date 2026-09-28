@@ -10,6 +10,10 @@ a marriage date is settled (MODELING.md, "Marriages, residences and other
 periods"), so a residence's or a spouse's start and end each have a range
 of their own, the fetch lists the two bounds that are new, and
 `compared_as_stated` is gone (§1, §2, §5).
+Amended by #241 (2026-09-28): the open question of which century a
+century-precision date names is settled (MODELING.md, "Uncertainty and
+time"): centuries are counted as Wikibase counts them, so `century` gives
+the 19th century the span 1801 to 1900 (§2).
 
 ## Context
 
@@ -115,6 +119,20 @@ compared like any other date, through `span`, `stored_alike_order` and
 `paired` as they stand, and `compared_as_stated`, which kept every
 difference of resolution beside such dates while their end was unknown,
 is gone.
+
+Amended by #241 (2026-09-28): #241 settled which century a
+century-precision date names (MODELING.md, "Uncertainty and time").
+Centuries are counted as Wikibase and Wikidata count them, from year 1:
+the 19th century runs from 1801 to 1900, whichever of its years is
+stored, and a claim gives it by its first year, 1801. So `century` gives
+a date stored as 1801 or as 1900 the span 1801 to 1900, and one stored
+as 1800 the 18th century's span, 1701 to 1800, and the site's
+`format_time` names the same century as the wiki. In the report the
+answer stayed in that function, as above, with one addition: the query
+service serves a year, a month or a day before the common era one year
+on, in XSD 1.1's count where 1 BCE is year 0, but a century's year as
+stored, so a century before the common era is given its span in the
+count of the dates it is compared with.
 
 ### 3. The published query page lists attributed values
 
