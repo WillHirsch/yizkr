@@ -7,6 +7,7 @@ against an edited copy.
 
 from __future__ import annotations
 
+import functools
 from importlib.resources import files
 from pathlib import Path
 from typing import Literal
@@ -116,4 +117,25 @@ class Manifest(BaseModel):
 
 
 def load_manifest(source=DEFAULT_MANIFEST) -> Manifest:
-    return Manifest.model_validate(yaml.safe_load(read_manifest_data(source)))
+    """The manifest at `source`, parsed and validated.
+
+    The text is read on every call, and each distinct text is parsed
+    once per process. Every call returns its own deep copy, so a caller
+    that changes its manifest changes no other caller's.
+    """
+    return _parse_manifest(read_manifest_data(source)).model_copy(deep=True)
+
+
+# Keyed on the text itself, never on the path or its modification time,
+# so an edited file is parsed afresh. The pure-Python YAML parse costs
+# tens of milliseconds, and the pipeline loads the manifest for every
+# extraction, from several threads when documents are extracted
+# concurrently. lru_cache is thread-safe: threads that meet a new text
+# together may each parse it, to equal results. A process meets one
+# manifest or a few edited copies of it; the bound stops a long-lived
+# one from keeping every text it has read.
+@functools.lru_cache(maxsize=8)
+def _parse_manifest(text: str) -> Manifest:
+    """Shared by every caller, so never handed out: `load_manifest`
+    returns copies."""
+    return Manifest.model_validate(yaml.safe_load(text))
