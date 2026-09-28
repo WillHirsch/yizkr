@@ -824,15 +824,15 @@ def import_transcriptions(
     }
 
     def out(record: Archived) -> bool:
+        """Does the list exclude the record, by its own identity or its
+        media's? Asked again once its transcription is read, with the
+        SHA-1 that names, before its text is used."""
         return bool(record.sha1s & excluded) or _excluded(exclusions, record)
 
-    # second pass: the transcriptions the list leaves in, asked again with
-    # the SHA-1 each names before its text is used
+    # second pass: the transcriptions the list leaves in
     for record in records:
         if record.problem is None and not out(record):
             read_transcription(record)
-            if _excluded(exclusions, record):
-                excluded |= record.sha1s
     matched = _match_prefixes(
         prefixes,
         {sha1 for record in records for sha1 in record.sha1s},
