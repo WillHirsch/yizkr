@@ -547,8 +547,11 @@ def cmd_accept_all(args) -> int:
 def cmd_write(args) -> int:
     from yizkr.pipeline.writer import BatchWriter
 
+    # a batch file that does not load is refused before the instance is
+    # contacted
+    batch = _load_batch(args.batch)
     result = BatchWriter(_client(args), dry_run=args.dry_run).write_batch(
-        _load_batch(args.batch)
+        batch
     )
     print(json.dumps(result.__dict__, indent=2))
     if args.dry_run:
@@ -688,14 +691,21 @@ def cmd_detect_faces(args) -> int:
     return 0
 
 
-def cmd_match_faces(args) -> int:
-    from yizkr.pipeline.faces import (
-        Gallery,
-        load_detections,
-        proposals_to_batch,
-    )
+def _detections(path: Path):
+    """The detections saved at `path`; a file without the photograph's
+    SHA-1 is refused, with the fix."""
+    from yizkr.pipeline.faces import UnkeyedDetections, load_detections
 
-    detection = load_detections(args.detections)
+    try:
+        return load_detections(path)
+    except UnkeyedDetections as exc:
+        sys.exit(str(exc))
+
+
+def cmd_match_faces(args) -> int:
+    from yizkr.pipeline.faces import Gallery, proposals_to_batch
+
+    detection = _detections(args.detections)
     batch, unmatched = proposals_to_batch(
         detection, Gallery.load(args.gallery), args.threshold
     )
@@ -708,15 +718,11 @@ def cmd_match_faces(args) -> int:
 
 
 def cmd_enroll_face(args) -> int:
-    from yizkr.pipeline.faces import (
-        Gallery,
-        enroll_from_detections,
-        load_detections,
-    )
+    from yizkr.pipeline.faces import Gallery, enroll_from_detections
 
     gallery = Gallery.load(args.gallery)
     person = enroll_from_detections(
-        load_detections(args.detections),
+        _detections(args.detections),
         args.face,
         gallery,
         label=args.label,
@@ -934,8 +940,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="the transcribed artifact's media file: the llm engine's claims "
         "cite it by the SHA-1 of its bytes, which the write resolves to the "
-        "item `ingest register` made for it (a claims file's claims cite "
-        "their artifacts themselves)",
+        "item `ingest register` made for it. The file engine, whose claims "
+        "cite their artifacts themselves, uses it only for the never-ingest "
+        "check",
     )
     p.add_argument(
         "--artifact",

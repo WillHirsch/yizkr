@@ -344,6 +344,24 @@ class TestExtract:
         assert result.claims[0].source.artifact == other
 
 
+# Person One's birth as one page of a document gives it, in May 1914, in a
+# model's answer that cites the artifact's item as the prompt asks
+BORN = dict(
+    CLAIMS[1],
+    source={
+        "artifact": {"kind": "qid", "qid": "Q23"},
+        "page_number": "1",
+        "region": {"x": 10, "y": 20, "width": 30, "height": 5},
+        "transcription_excerpt": {"text": "b. May 1914", "language": "en"},
+    },
+)
+
+
+def born_restated(**source) -> dict:
+    """BORN, with the fields `source` gives replaced in its source."""
+    return dict(BORN, source={**BORN["source"], **source})
+
+
 class TestExtractedClaimsCiteTheirDocument:
     """The extractor names each claim's source artifact itself: the
     document's content key, whatever the model wrote there (#102). The
@@ -406,18 +424,91 @@ class TestExtractedClaimsCiteTheirDocument:
         assert len(batch.claims) == 1
 
     @pytest.mark.parametrize(
+        "second",
+        [
+            # 29 May per another line: two values, one property (ADR-0002)
+            dict(
+                BORN,
+                value={"type": "time", "year": 1914, "month": 5, "day": 29},
+            ),
+            born_restated(page_number="2"),
+            born_restated(region={"x": 10, "y": 60, "width": 30, "height": 5}),
+            born_restated(
+                transcription_excerpt={"text": "born 5/1914", "language": "en"}
+            ),
+        ],
+        ids=[
+            "another-value",
+            "another-page",
+            "another-region",
+            "another-excerpt",
+        ],
+    )
+    def test_claims_that_differ_beside_their_artifact_coexist(self, second):
+        """Only claims that are the same once they cite the document are
+        kept once: two values the document gives for one property, or one
+        value it gives in two places, stay two claims (ADR-0002)."""
+        batch = self.answered(BORN, second)
+        assert len(batch.claims) == 2
+        assert [claim.source.artifact for claim in batch.claims] == [
+            MEDIA_REF,
+            MEDIA_REF,
+        ]
+
+    @pytest.mark.parametrize(
         "source", ["Q23", None, ...], ids=["text", "null", "missing"]
     )
     def test_a_claim_without_a_source_object_is_still_refused(self, source):
         """Only a source the model gave is completed: a claim without one
-        is refused, as any claim without its reference is (ADR-0003)."""
+        is refused, as any claim without its reference is (ADR-0003), and
+        counted among the rejects, never dropped unseen."""
         claim = {key: value for key, value in CLAIMS[1].items()}
         if source is ...:
             del claim["source"]
         else:
             claim["source"] = source
-        with pytest.raises(ValueError, match="every extracted claim failed"):
+        with pytest.raises(
+            ValueError,
+            match=r"every extracted claim failed validation \(1 rejects\)",
+        ):
             self.answered(claim)
+
+    def test_a_claim_the_model_marks_curated_is_a_machine_claim(self):
+        """`curated` marks a claim a person stated, which the writer
+        references to no extraction run, and the schema the prompt
+        carries shows it, so a model can set it. The extractor drops it:
+        every claim it gives is a machine claim, written with its run
+        reference (CLAUDE.md rule 2, ADR-0003)."""
+        batch = self.answered(dict(CLAIMS[1], curated=True))
+        (claim,) = batch.claims
+        assert claim.curated is False
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        result = BatchWriter(wiki).write_batch(batch)
+        person = wiki.wbi.item.get(result.created_items["person-1"])
+        (statement,) = person.claims.get(PROPERTIES["date_of_birth"])
+        assert _cited(statement, "stated_in") == ["Q23"]
+        assert _cited(statement, "inferred_from_extraction_run") == [
+            result.run_qid
+        ]
+
+    def test_a_row_approval_the_model_writes_is_dropped(self):
+        """A depicts claim is written only with the approval a curator
+        gives it on its own review-sheet row (ADR-0005). One the model
+        wrote is dropped, so the writer's gate holds the claim for a
+        curator."""
+        from yizkr.pipeline.review import unapproved_depicts
+
+        depicts = {
+            "subject": {"kind": "qid", "qid": "Q30"},
+            "property": "depicts",
+            "value": {"type": "item", "value": CLAIMS[1]["subject"]},
+            "source": {"artifact": {"kind": "qid", "qid": "Q30"}},
+            "row_approval": "0123456789ab",
+        }
+        batch = self.answered(depicts)
+        (claim,) = batch.claims
+        assert claim.row_approval is None
+        assert unapproved_depicts(batch) == [claim_id(claim)]
 
 
 class TestIngestExtract:
@@ -1109,7 +1200,8 @@ class TestWriterArtifactResolution:
     ):
         """No dual format (#102): a batch file whose claim cites its
         artifact item by QID, as batches made before content addressing
-        did, does not load, so `ingest write` reads and writes nothing."""
+        did, does not load, so `ingest write` refuses it before it
+        contacts the instance: it reads and writes nothing."""
         from pydantic import ValidationError
 
         from yizkr import cli
@@ -1128,14 +1220,16 @@ class TestWriterArtifactResolution:
                 }
             )
         )
-        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
+
+        def no_instance(args):
+            raise AssertionError("ingest write contacted the instance")
+
+        monkeypatch.setattr(cli, "_client", no_instance)
         args = cli.build_parser().parse_args(
             ["ingest", "write", "--batch", str(batch_json)]
         )
         with pytest.raises(ValidationError, match="artifact"):
             args.func(args)
-        assert (wiki.index_reads, wiki.wbi.item.writes) == (0, 0)
 
 
 # -- writer: a minted item's type statements carry both references (#88) ---

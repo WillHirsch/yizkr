@@ -116,11 +116,20 @@ def test_gedcom_sour_folds_and_obje_becomes_unheld_media(
     ]
     assert any("Volume 1" in page for page in pages)
     # the claim cited the export by its bytes' SHA-1, which the writer
-    # resolved to the export's item
-    stated_in = {
-        snak["datavalue"]["value"]["id"]
+    # resolved to the export's item. Only the statement this export gives
+    # counts: an instance may hold the statements of earlier versions of
+    # the fixture's export (another birth year, #247), each stated in the
+    # item of its own bytes
+    this_export = [
+        claim
         for claims in dob["claims"].values()
         for claim in claims
+        if claim["mainsnak"]["datavalue"]["value"]["time"]
+        == "+1950-00-00T00:00:00Z"
+    ]
+    stated_in = {
+        snak["datavalue"]["value"]["id"]
+        for claim in this_export
         for ref in claim.get("references", [])
         for snak in ref["snaks"].get(properties["stated_in"], [])
     }

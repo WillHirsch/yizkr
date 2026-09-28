@@ -206,6 +206,15 @@ class TestAdapter:
         (birth,) = claims_for(batch, "i3", "date_of_birth")
         assert "2 DATE 15 FEB 1862" in birth.source.transcription_excerpt.text
 
+    def test_the_adapter_cites_the_key_it_is_given(self):
+        """The adapter cites the export by the key its caller hashed from
+        the file's bytes, never by one it makes from the text it reads: a
+        snippet adapted under the fixture's key cites that key (#102)."""
+        snippet = "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1871\n0 TRLR\n"
+        batch = adapt_gedcom(snippet, artifact=EXPORT).batch
+        assert batch.claims
+        assert all(claim.source.artifact == EXPORT for claim in batch.claims)
+
     def test_unparseable_date_warns_instead_of_guessing(self):
         result = adapt_gedcom(
             "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE SOMEDAY MAYBE\n"
@@ -610,15 +619,15 @@ class TestUnsupportedFormat:
 
 
 class TestIngestGedcom:
-    def test_the_claims_cite_the_file_by_its_bytes(
-        self, tmp_path, monkeypatch
-    ):
-        """`yizkr ingest gedcom` cites the export it reads by the SHA-1 of
-        its bytes, whatever the file is called; it takes no QID (#102)."""
+    """`yizkr ingest gedcom` on a copy of the fixture under another name."""
+
+    @staticmethod
+    def run(tmp_path, monkeypatch, never_ingest: str = ""):
+        """(the command's status, the batch file it was to write)."""
         from yizkr.cli import build_parser
 
         never = tmp_path / "never-ingest.txt"
-        never.write_text("")
+        never.write_text(never_ingest)
         monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
         export = tmp_path / "another-name.ged"
         export.write_bytes(FIXTURE.read_bytes())
@@ -626,7 +635,23 @@ class TestIngestGedcom:
         args = build_parser().parse_args(
             ["ingest", "gedcom", "--file", str(export), "--out", str(out)]
         )
-        assert args.func(args) == 0
+        return args.func(args), out
+
+    def test_the_claims_cite_the_file_by_its_bytes(
+        self, tmp_path, monkeypatch
+    ):
+        """It cites the export it reads by the SHA-1 of its bytes, whatever
+        the file is called; it takes no QID (#102)."""
+        status, out = self.run(tmp_path, monkeypatch)
+        assert status == 0
         batch = ClaimBatch.model_validate_json(out.read_text())
         assert batch.claims
         assert all(claim.source.artifact == EXPORT for claim in batch.claims)
+
+    def test_a_file_on_the_never_ingest_list_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        """A listed export is refused before it is read: no batch."""
+        with pytest.raises(SystemExit, match="never-ingest"):
+            self.run(tmp_path, monkeypatch, never_ingest=f"{EXPORT.sha1}\n")
+        assert not (tmp_path / "batch.json").exists()

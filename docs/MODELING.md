@@ -79,7 +79,9 @@ Curator-attributed statements (a value correction from the review CSV)
 carry the `stated in → artifact` reference only:
 process provenance is for machine writes, and a human decision's
 process is the MediaWiki edit history. The pipeline marks these with
-the claim contract's `curated` flag.
+the claim contract's `curated` flag, which only the review sets: an
+extractor drops the flag, and any row approval, from a model's answer,
+so every claim a model gives is written with its run reference.
 
 The pipeline's claim JSON contract implementing this pattern is
 `src/yizkr/claims.py` (`ClaimBatch`): sources are required fields there,

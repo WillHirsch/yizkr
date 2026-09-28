@@ -35,6 +35,7 @@ from yizkr.pipeline.faces import (
     Gallery,
     InsightFaceDetector,
     PixelBox,
+    UnkeyedDetections,
     best_match,
     cosine_similarity,
     enroll_from_detections,
@@ -229,17 +230,46 @@ class TestPhotoKey:
             "Q30",
         )
 
-    def test_a_detections_file_without_the_photos_key_is_refused(
-        self, tmp_path
-    ):
-        """No dual format: a detections file saved without the photo's
-        key cannot give its depicts claims their source."""
+    @staticmethod
+    def unkeyed(tmp_path):
+        """A detections file saved without the photo's key."""
         saved = json.loads(detection(face(0, A)).model_dump_json())
         del saved["photo_sha1"]
         path = tmp_path / "detections.json"
         path.write_text(json.dumps(saved))
-        with pytest.raises(ValueError, match="photo_sha1"):
-            load_detections(path)
+        return path
+
+    def test_a_detections_file_without_the_photos_key_is_refused(
+        self, tmp_path
+    ):
+        """No dual format: a detections file saved without the photo's
+        key cannot give its depicts claims their source. It is refused,
+        saying what to do, not with the schema's error."""
+        with pytest.raises(UnkeyedDetections, match="run detect-faces"):
+            load_detections(self.unkeyed(tmp_path))
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            ["match-faces"],
+            ["enroll-face", "--face", "0", "--label", "Person One"],
+        ],
+        ids=["match-faces", "enroll-face"],
+    )
+    def test_the_face_commands_refuse_it_with_the_fix(self, tmp_path, command):
+        detections = self.unkeyed(tmp_path)
+        gallery = tmp_path / "gallery.json"
+        args = build_parser().parse_args(
+            [
+                "ingest",
+                *command,
+                *("--detections", str(detections)),
+                *("--gallery", str(gallery)),
+            ]
+        )
+        with pytest.raises(SystemExit, match="run detect-faces"):
+            args.func(args)
+        assert not gallery.exists()
 
 
 # The universe's 1890s studio portrait, under the QID `detection` gives it.

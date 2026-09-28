@@ -164,11 +164,6 @@ class Registered:
     ref: ArtifactRef
     fragment_qids: dict[int, str] = field(default_factory=dict)
 
-    @property
-    def cited(self) -> dict:
-        """The artifact as a claim's source names it."""
-        return self.ref.model_dump(mode="json")
-
 
 def register_fictional(
     client: WikiClient, title: str, artifact_type: str, pages: int = 0

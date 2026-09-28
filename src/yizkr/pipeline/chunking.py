@@ -596,8 +596,8 @@ def pack_units(
 def _rewrite_local_refs(claim: dict, fix) -> dict:
     """Deep-copy a claim dict and apply `fix` to every local ref in it:
     its subject's, its item value's and its qualifiers' item values'. A
-    source never holds one: the extractor names the source artifact
-    itself (cite_artifact)."""
+    local ref the model put in the source is left as it is: the extractor
+    replaces the source artifact afterwards (cite_artifact)."""
     fixed = json.loads(json.dumps(claim))  # deep copy, JSON-native
 
     def visit(ref: Any) -> None:

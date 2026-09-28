@@ -35,7 +35,7 @@ import math
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from yizkr.claims import (
     ArtifactRef,
@@ -315,8 +315,28 @@ def make_detector(engine: str) -> FaceDetector:
 # ---------------------------------------------------------------------------
 
 
+class UnkeyedDetections(ValueError):
+    """A saved detections file that names no `photo_sha1`: its faces'
+    depicts claims would have no source to cite."""
+
+
 def load_detections(path: Path) -> DetectionResult:
-    return DetectionResult.model_validate_json(path.read_text())
+    """The detections saved at `path`. A file that names no `photo_sha1`,
+    the SHA-1 of the photograph's bytes, raises UnkeyedDetections, which
+    says to run detect-faces on the photograph again."""
+    try:
+        return DetectionResult.model_validate_json(path.read_text())
+    except ValidationError as exc:
+        if any(
+            error["type"] == "missing" and error["loc"] == ("photo_sha1",)
+            for error in exc.errors()
+        ):
+            raise UnkeyedDetections(
+                f"{path} names no photo_sha1, the SHA-1 of the photograph's "
+                f"bytes, by which its faces' depicts claims cite the "
+                f"photograph: run detect-faces on the photograph again"
+            ) from None
+        raise
 
 
 def enroll_from_detections(

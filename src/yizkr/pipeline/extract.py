@@ -18,8 +18,9 @@ model proposes are `local` refs; resolution to existing items happens
 in the resolve step, never inside extraction. The model-driven
 extractors, this module's and yizkr.pipeline.chunking's, set every
 claim's source artifact themselves, to the content key of the document
-they read (`cite_artifact`), whatever the model wrote there; a prepared
-claims file's claims cite their artifacts themselves.
+they read, whatever the model wrote there, and keep no review state the
+model wrote (`cite_artifact`); a prepared claims file's claims cite
+their artifacts themselves.
 """
 
 from __future__ import annotations
@@ -168,29 +169,42 @@ def _parse_response(response: str) -> dict:
     return {"claims": deduped}
 
 
+# The claim fields that record a curator's review, never the machine's
+# extraction: `curated` (a person stated the claim, so it carries no
+# extraction-run reference) and `row_approval` (a curator approved the
+# claim on its own review-sheet row). The JSON Schema the prompts carry
+# shows `curated` with the rest of a claim.
+REVIEW_STATE = ("curated", "row_approval")
+
+
 def cite_artifact(claims: Iterable, artifact: ArtifactRef) -> list:
-    """The claims read from one document, each citing that document:
+    """The claims read from one document, as the machine extracted them:
     every claim's `source.artifact` becomes `artifact`, the document's
-    content key, whatever the model wrote there, and claims that are then
-    the same are kept once, in the order first given.
+    content key, whatever the model wrote there; the review-state fields
+    (REVIEW_STATE) are dropped, so every claim is a machine claim, which
+    the writer references to its extraction run (ADR-0003); and claims
+    that are then the same are kept once, in the order first given.
 
     An extractor reads one document's transcription, so every claim it
     gives is an assertion of that document, and the extractor, handed the
     document's key, names the source itself: no claim cites another
     artifact through a key the model copied wrongly, or through a form of
     reference the claim contract does not have. A claim whose source is
-    not an object is kept as it is, for validation to reject, as a claim
-    without its source is."""
+    not an object keeps it, for validation to reject, as a claim without
+    its source is."""
     cited: list = []
     for claim in claims:
-        if isinstance(claim, dict) and isinstance(claim.get("source"), dict):
+        if isinstance(claim, dict):
             claim = {
-                **claim,
-                "source": {
+                key: value
+                for key, value in claim.items()
+                if key not in REVIEW_STATE
+            }
+            if isinstance(claim.get("source"), dict):
+                claim["source"] = {
                     **claim["source"],
                     "artifact": artifact.model_dump(mode="json"),
-                },
-            }
+                }
         if claim not in cited:
             cited.append(claim)
     return cited

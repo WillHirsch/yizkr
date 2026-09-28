@@ -820,6 +820,24 @@ class TestClaimsCiteTheirDocument:
             "e2",
         ]
 
+    def test_a_claim_a_chunk_marks_curated_is_a_machine_claim(self):
+        """A chunk's answer that marks a claim `curated`, which the schema
+        in the prompt shows, gives a machine claim all the same: the
+        writer references it to its extraction run (CLAUDE.md rule 2)."""
+        curated = claim("e1", "Hildegard", 1876)
+        curated["curated"] = True
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([curated]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+            ]
+        )
+        batch = ChunkedClaimExtractor(llm, budget=LINE_LENGTH).extract(
+            transcription(), DOC_REF, artifact_qid="Q23"
+        )
+        assert [claim.curated for claim in batch.claims] == [False, False]
+
 
 class TestEntityFirstExtractor:
     def extractor(self, llm, tmp_path, **kwargs):
