@@ -2062,6 +2062,20 @@ class TestSeeding:
         assert engine.complete("Read a third.").made_by is None
         assert engine.complete("Read a third.").made_by is None
 
+    def test_a_cache_read_as_it_is_records_nothing(self, tmp_path):
+        """(#104) The cache read as it is (llm.read_cache, the call
+        estimate's) writes nothing: it neither adopts an answer nor records
+        one as rejected, and makes no folder."""
+        as_is = llm.read_cache(tmp_path / "cache")
+        key = "a" * 64
+        assert not as_is.seed(key, "archived", self.PROVENANCE)
+        assert not as_is.record_rejected(
+            key, "a tool failure", self.PROVENANCE, "the check fails it"
+        )
+        assert as_is.get(key) is None
+        assert as_is.rejected(key) == []
+        assert not (tmp_path / "cache").exists()
+
     def test_a_rejected_offer_is_recorded_and_never_served(self, tmp_path):
         """(#104) An archived answer a check fails is recorded as rejected
         under its call's key: the call misses as rejected and goes to the

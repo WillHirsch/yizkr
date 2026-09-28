@@ -952,6 +952,9 @@ class CacheAsIs(EngineCache):
     def seed(self, *args: Any, **kwargs: Any) -> bool:
         return False
 
+    def record_rejected(self, *args: Any, **kwargs: Any) -> bool:
+        return False
+
     def keep_session(
         self, key: str, opening: str, files: Mapping[str, bytes]
     ) -> None:

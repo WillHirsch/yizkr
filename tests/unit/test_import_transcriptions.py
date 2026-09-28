@@ -37,6 +37,7 @@ from tests.unit.test_scratch import (  # noqa: F401
 from yizkr import cli
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline import (
+    estimate,
     llm,
     llmcache,
     orchestrate,
@@ -927,3 +928,50 @@ class TestTheCommand:
         argv += ["--cache", str(tmp_path / "cache")]
         assert cli_run(*argv) == 1
         assert "one process at a time uses a cache" in capsys.readouterr().err
+
+
+# -- the call estimate --------------------------------------------------------
+
+
+class TestTheEstimate:
+    def test_the_estimate_counts_an_adoption_as_the_caches_answer(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """`yizkr scratch estimate` (#101) sees each adoption as the run
+        does: a hit whose reason is `adopted`, and no engine call. The
+        reading the import rejected is an engine call, a miss whose reason
+        is `rejected`; the run then asks the engine as often as counted."""
+        corpus = small(tmp_path)
+        archive = an_archive(
+            tmp_path, corpus, **{PHOTO: PORTRAIT, STONE: TOOL_FAILURE}
+        )
+        import_(tmp_path, archive, corpus)
+        seen = []
+        record = estimate._Tally.record
+
+        def spy(self, event, **fields):
+            seen.append((event, fields.get("role"), fields.get("reason")))
+            return record(self, event, **fields)
+
+        monkeypatch.setattr(estimate._Tally, "record", spy)
+        engine.corpus = corpus
+        before = cache_files(tmp_path)
+        counted = estimate.scratch_estimate(
+            corpus.folder,
+            runs=tmp_path / "runs",
+            until="transcription",
+            cache_dir=tmp_path / "cache",
+            exclusions=ExclusionList(),
+            log=lambda *a, **k: None,
+            min_free=0,
+        )
+        assert cache_files(tmp_path) == before
+        stage = counted.stages["transcription"]
+        assert (stage.hits, stage.known, stage.estimated) == (1, 1, 0)
+        assert sorted(seen) == [
+            ("cache-hit", "transcribe", "adopted"),
+            ("cache-miss", "transcribe", "rejected"),
+        ]
+        run = transcribe_only(tmp_path, corpus, engine)
+        assert read_by_the_engine(engine) == {STONE}
+        assert hits(run, "adopted") == {corpus.sha1(PHOTO)}
