@@ -58,18 +58,23 @@ Per batch, the writer:
    equivalence, by exact label here, or by the resolve step's exact-label
    match), and the kind a local ref without a record gives on its
    `instance_of` when the writer matched it by exact label (the kind an
-   item minted from it would take). An item the resolve step matched
-   gains the record's aliases here too, as the others have by now. A
-   local ref the resolve step matched reaches the writer as the item's
-   bare QID: without a record, it brings no kind. A record's kind and
-   type hint cite the artifact of the first claim that mentions the
-   item, as a minted item's do. A ref's kind cites the artifact of the
-   claim the ref is in (the writer reads the first ref to each local id,
-   as it does for the label), so each such artifact is a witness of the
-   kind. A kind or type hint is compared with the item's
-   unqualified statements on the same property (a type hint as free
-   text, ignoring case, Unicode form and spacing), so a qualified
-   statement never matches:
+   item minted from it would take). Such a ref's kind is recorded too on
+   an item the batch minted from an earlier ref under another local id,
+   as each chunk or page of a document can name an entity by an id of
+   its own: the item holds the kind it was minted with, and each later
+   ref that found it by label witnesses its own, so a second write of
+   the batch adds nothing. An item the resolve step matched gains the
+   record's aliases here too, as the others have by now. A local ref the
+   resolve step matched reaches the writer as the item's bare QID:
+   without a record, it brings no kind. A record's kind and type hint
+   cite the artifact of the first claim that mentions the item, as a
+   minted item's do. A ref's kind cites the artifact of the claim the
+   ref is in (the writer reads the first ref to each local id, as it
+   does for the label), so each such artifact is a witness of the kind.
+   A kind or type hint is compared with the item's unqualified
+   statements on the same property (a type hint as free text, ignoring
+   case, Unicode form and spacing), so a qualified statement never
+   matches:
    * a matching statement already referenced to that artifact: nothing
      to add (safe re-run);
    * a matching machine statement at normal rank: it gains this
@@ -163,9 +168,10 @@ class WriteResult:
     created_items: dict[str, str] = field(
         default_factory=dict
     )  # local_id -> QID
-    # `instance of` and `type hint` statements of items this batch found
-    # rather than minted: new statements written, and existing ones that
-    # gained this batch's source (step 5 of the module docstring)
+    # step 5 of the module docstring, on the `instance of` and `type hint`
+    # statements of items a ref or record found: the statements written,
+    # and each artifact whose references an existing statement gained (a
+    # statement two artifacts witness counts twice)
     type_statements_written: int = 0
     type_statements_referenced: int = 0
     # what the writer left out and why, such as a kind the vocabulary
@@ -175,9 +181,10 @@ class WriteResult:
 
 @dataclass(frozen=True)
 class _FoundEntity:
-    """What a batch says of an item it found rather than minted (step 5 of
-    the module docstring): the kind, and type hint, its source gives, and
-    the document's aliases when no earlier step has appended them.
+    """What a batch says of an item one of its refs or records found
+    rather than minted (step 5 of the module docstring): the kind, and
+    type hint, its source gives, and the document's aliases when no
+    earlier step has appended them.
 
     `artifact` is the artifact the kind is cited to: for a local ref's
     kind, that of the claim whose ref gives it. It is None for a manifest
@@ -675,7 +682,8 @@ class BatchWriter:
 
     def _found_entities(self, result: WriteResult) -> list[_FoundEntity]:
         """What the batch says of each item that existed before it and that
-        one of its claims mentions (step 5 of the module docstring).
+        one of its claims mentions, and the kinds that later refs give an
+        item it minted (step 5 of the module docstring).
 
         A manifest record names its item by an approved equivalence
         (`qid`), by the exact-label match that materialized its local refs
@@ -713,10 +721,13 @@ class BatchWriter:
                 _FoundEntity(qid, kind, artifact=artifact)
                 for kind, artifact in witnesses
             )
+        # an item the batch minted holds the kind of the ref or record that
+        # minted it; a later ref that found it by label witnesses its own
         return [
             entity
             for entity in found
-            if entity.qid in self._mentions and entity.qid not in self._minted
+            if entity.qid in self._mentions
+            and (entity.qid not in self._minted or entity.artifact is not None)
         ]
 
     def _is_curated(self, statement) -> bool:

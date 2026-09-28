@@ -171,19 +171,25 @@ and local refs.
   A face-proposal batch's sitters are such refs, so a sitter a curator
   approved and the writer found gains the photograph and the detection
   run as a source of its kind, as a sitter the writer mints takes its
-  kind from them (ADR-0005). An item the batch itself minted is left
-  out: it took its kind from the first ref that named it. A kind the
-  vocabulary lacks is recorded for no item, and the writer's result
-  warns of each, found before its first write.
+  kind from them (ADR-0005). An item the batch itself minted holds the
+  kind of the ref that minted it; a later ref to it under another local
+  id, as each chunk or page of a document can name an entity by an id
+  of its own, finds it by label as any such ref does, and is a witness
+  of its own kind on the first write, so writing the batch again adds
+  nothing. A kind the vocabulary lacks is recorded for no item, and the
+  writer's result warns of each, found before its first write.
 - **Where kinds do not arrive.** A ref the resolve step replaced with
   the item's QID brings no kind, since a QID carries none. `ingest run`
-  resolves every batch before its write, so there a later source's kind
-  for an item that existed when the resolve step ran does not arrive:
-  only `ingest write` of an unresolved batch, and refs the resolve step
-  left, bring it. #109, whose identity map is to replace exact-label
-  resolution, takes on carrying every ref's kind to its item, including
-  a later ref's to an item minted in the same batch, and kinds that
-  chunks give differently.
+  resolves every batch before its write, so there a kind that a later
+  source gives only on a ref (a batch without a manifest) does not
+  arrive for an item that existed when the resolve step ran: only
+  `ingest write` of an unresolved batch, and refs the resolve step left,
+  bring it. A manifest record's kind still arrives, through the resolve
+  step's label match (see the #233 amendment). Nor does a later ref to a
+  local id an earlier ref named bring a kind, since the first ref to
+  each local id gives it. #109, whose identity map is to replace
+  exact-label resolution, takes on carrying every ref's kind to its
+  item.
 - The orchestrator's write summary (`write.json`) and its log line count
   the type statements written and referenced.
 

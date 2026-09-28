@@ -1694,13 +1694,23 @@ class TestWriterLaterSourceTypes:
         assert directory.type_statements_referenced == 0
 
 
-def _two_page_lines_batch(
-    page_1_kind: str | None, page_2_kind: str | None
-) -> ClaimBatch:
-    """The directory's batch as the line-range tier gives it for two of
-    its pages (ADR-0006): each page's chunk names the firm by a local id
-    of its own, with the kind it gives (None: none). Page 1 gives the
-    founding year, page 2 the firm's name as written."""
+# the directory's pages, each scanned as an artifact of its own
+DIRECTORY_PAGE_3_SHA1 = hashlib.sha1(
+    "fictional scan: the 1912 Flörburg address book, page 3".encode()
+).hexdigest()
+DIRECTORY_PAGES = (
+    DIRECTORY_SHA1,
+    DIRECTORY_PAGE_2_SHA1,
+    DIRECTORY_PAGE_3_SHA1,
+)
+
+
+def _directory_pages_batch(*page_kinds: str | None) -> ClaimBatch:
+    """A claims file with no entity manifest that cites the directory's
+    pages, one claim per page, each page an artifact of its own. Page 1
+    gives the firm's founding year, each later page the firm's name as
+    written. Each page's claim names the firm by a local id of its own,
+    with the kind that page gives (None: none)."""
 
     def firm(local_id: str, kind: str | None) -> dict:
         ref = {"kind": "local", "local_id": local_id, "label": FIRM_LABEL}
@@ -1714,25 +1724,30 @@ def _two_page_lines_batch(
             "transcription_excerpt": {"text": excerpt, "language": "de"},
         }
 
+    founded = {
+        "property": "start_time",
+        "value": {"type": "time", "year": 1863},
+        "source": source(DIRECTORY_SHA1, "gegr. 1863"),
+    }
+    named = [
+        {
+            "property": "referred_to_as",
+            "value": {
+                "type": "monolingual",
+                "value": {"text": FIRM_LABEL, "language": "de"},
+            },
+            "source": source(sha1, FIRM_LABEL),
+        }
+        for sha1 in DIRECTORY_PAGES[1 : len(page_kinds)]
+    ]
     return ClaimBatch.model_validate(
         {
             "extraction_run": DIRECTORY_RUN,
             "claims": [
-                {
-                    "subject": firm("c001:firm", page_1_kind),
-                    "property": "start_time",
-                    "value": {"type": "time", "year": 1863},
-                    "source": source(DIRECTORY_SHA1, "gegr. 1863"),
-                },
-                {
-                    "subject": firm("c002:firm", page_2_kind),
-                    "property": "referred_to_as",
-                    "value": {
-                        "type": "monolingual",
-                        "value": {"text": FIRM_LABEL, "language": "de"},
-                    },
-                    "source": source(DIRECTORY_PAGE_2_SHA1, FIRM_LABEL),
-                },
+                dict(claim, subject=firm(f"c{page:03d}:firm", kind))
+                for page, (claim, kind) in enumerate(
+                    zip([founded, *named], page_kinds, strict=True), 1
+                )
             ],
         }
     )
@@ -1755,13 +1770,13 @@ class TestWriterRefKindWitnesses:
     whose ref gives the kind is a witness of it (rule 1)."""
 
     def test_a_refs_kind_cites_its_own_claims_artifact(self):
-        # page 1's chunk names the firm without a kind; page 2's types it
+        # page 1's claim names the firm without a kind; page 2's types it
         wiki = _three_sources()
         interview = BatchWriter(wiki).write_batch(_firm_batch())
         firm = interview.created_items["firm"]
 
         directory = BatchWriter(wiki).write_batch(
-            _two_page_lines_batch(None, "organization")
+            _directory_pages_batch(None, "organization")
         )
 
         kinds = _by_value(_statements(wiki, firm, "instance_of"))
@@ -1777,11 +1792,11 @@ class TestWriterRefKindWitnesses:
         assert directory.type_statements_referenced == 0
 
     def test_every_page_that_gives_the_kind_witnesses_it(self):
-        # both pages' chunks give the kind the interview gave
+        # both pages' claims give the kind the interview gave
         wiki = _three_sources()
         interview = BatchWriter(wiki).write_batch(_firm_batch())
         firm = interview.created_items["firm"]
-        batch = _two_page_lines_batch(
+        batch = _directory_pages_batch(
             "unclassified_entity", "unclassified_entity"
         )
 
@@ -1804,11 +1819,11 @@ class TestWriterRefKindWitnesses:
         assert _snapshot(wiki, firm) == before
 
     # the directory typing the firm by the interview's word for it, which
-    # is no kind in the vocabulary: on a local ref of its line-range batch,
-    # or in its entity manifest -> (the batch, the firm's local id, claims)
+    # is no kind in the vocabulary: on a local ref of a claims file, or in
+    # its entity manifest -> (the batch, the firm's local id, claims)
     UNKNOWN_KIND = {
         "ref": (
-            lambda: _two_page_lines_batch("hat_shop", None),
+            lambda: _directory_pages_batch("hat_shop", None),
             "c001:firm",
             2,
         ),
@@ -1857,6 +1872,73 @@ class TestWriterRefKindWitnesses:
         assert directory.written == claims
         assert kinds(directory.created_items[local_id]) == kinds_before
         assert directory.type_statements_written == 0
+
+    # a claims file written on an empty instance: page 1's ref mints the
+    # firm, and each later page's ref, under a local id of its own, finds
+    # it by label -> (the pages' kinds, the artifacts each of the firm's
+    # kinds cites after the first write, its type statements written and
+    # referenced)
+    MINTED = {
+        "same kind": (
+            ("organization", "organization"),
+            {"organization": ["Q26", "Q28"]},
+            (0, 1),
+        ),
+        "kinds differ": (
+            ("organization", "unclassified_entity"),
+            {"organization": ["Q26"], "unclassified_entity": ["Q28"]},
+            (1, 0),
+        ),
+        "no kind on page 1": (
+            (None, "organization"),
+            {"organization": ["Q28"]},
+            (1, 0),
+        ),
+        "three pages": (
+            ("organization", "unclassified_entity", "organization"),
+            {"organization": ["Q26", "Q30"], "unclassified_entity": ["Q28"]},
+            (1, 1),
+        ),
+    }
+
+    @pytest.mark.parametrize(
+        ("page_kinds", "cited", "counts"),
+        MINTED.values(),
+        ids=MINTED.keys(),
+    )
+    def test_a_minted_items_later_refs_witness_it_on_the_first_write(
+        self, page_kinds, cited, counts
+    ):
+        wiki = FakeWiki(
+            dict(zip(DIRECTORY_PAGES, ("Q26", "Q28", "Q30"), strict=True))
+        )
+        batch = _directory_pages_batch(*page_kinds)
+
+        first = BatchWriter(wiki).write_batch(batch)
+
+        (firm,) = set(first.created_items.values())
+        kinds = _by_value(_statements(wiki, firm, "instance_of"))
+        assert {
+            value: _cited(statement, "stated_in")
+            for value, statement in kinds.items()
+        } == {ITEMS[kind]: artifacts for kind, artifacts in cited.items()}
+        for statement in kinds.values():
+            assert _cited(statement, "inferred_from_extraction_run") == [
+                first.run_qid
+            ]
+        assert (
+            first.type_statements_written,
+            first.type_statements_referenced,
+        ) == counts
+        # so a second write of the batch finds every witness there
+        before = _snapshot(wiki, firm)
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.referenced) == (0, 0)
+        assert again.type_statements_written == 0
+        assert again.type_statements_referenced == 0
+        assert wiki.wbi.item.writes == writes
+        assert _snapshot(wiki, firm) == before
 
 
 # -- writer: a document's aliases reach the item however it was found (#240)
