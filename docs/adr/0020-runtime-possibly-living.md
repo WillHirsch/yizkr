@@ -5,6 +5,10 @@ Status: **accepted** — implemented (`yizkr.core.privacy`, the reworked
 its `living` column removed and `warning` renamed `critique_notes`).
 Supersedes the living-person mechanism that ingestion originally shipped
 (a curated `living person` flag set from a review-CSV column).
+Amended by #334 (2026-09-28): births fail closed. Every birth statement a
+curator has not deprecated is read, each at the latest year it allows,
+and a person is released by birth only when all of them lie at or before
+the cutoff (§1, §4).
 
 ## Context
 
@@ -53,12 +57,47 @@ shared place.
 
 ### 1. One shared predicate (`yizkr.core.privacy`)
 
-`is_possibly_living(birth_year, has_death_evidence, cutoff_year)` is the
+`is_possibly_living(births, has_death_evidence, cutoff_year)` is the
 single source of truth. A person is possibly living **unless** the graph
-holds positive death evidence, or a birth at/beyond the cutoff (default
-100 years). **Conservative: unknown means possibly living, hence
-excluded.** There is no override in either direction — the answer is
-exactly what the graph's own referenced statements assert.
+holds positive death evidence, or births that all lie at/beyond the
+cutoff (by default `DEFAULT_CUTOFF_YEARS` years, a value #72 settles).
+**Conservative: unknown means possibly living, hence excluded.** There
+is no override in either direction — the answer is exactly what the
+graph's own referenced statements assert.
+
+Amended by #334 (2026-09-28): a birth releases a person only at the
+latest year it allows, and only when every birth does. The check first
+read one birth sampled from the truthy values and took its stored year,
+whatever its precision. So a birth in the 20th century, stored as 1901
+(or 1900, its round hundred), counted as that year, before the cutoff;
+and a sample could pick an early birth over a later one, or a preferred
+early birth hide a normal later one. Now:
+
+- **Every birth statement.** `yizkr.core.privacy.BIRTHS_QUERY` reads
+  every `date of birth` statement a curator has not deprecated, through
+  its statement node, with its earliest and latest dates. A deprecated
+  statement counts for nothing, either way.
+- **Its latest year** (`latest_birth_year`). A range its source states
+  bounds the birth, as the disagreement report reads a date's span
+  (MODELING.md, "Contradictions"), since a range is stored with its first
+  date as the value: a latest date's last year, when it states one, and
+  none when it states only an earliest date ("after 1850" is open at its
+  late end). Otherwise the value's last year at its precision: the year,
+  a decade's last year, or a century's or a millennium's as Wikibase
+  counts them (1801–1900 is the 19th century), a round hundred being read
+  as the first year of the century it opens (1900–1999), the reading that
+  allows the later birth. A statement that contradicts itself, whose
+  value or an earliest date lies wholly after its latest date, is read
+  without that latest date, which fails closed: with an earliest date it
+  then allows no latest year.
+- **Unknown still means excluded.** A statement allows no latest year
+  when a latest date in it cannot be read, or, where no latest date
+  bounds it, when its value is unknown, unreadable (one before the common
+  era included) or coarser than a millennium, or it states only an
+  earliest date. A readable latest date bounds even a statement whose
+  value is unknown, unreadable or coarser than a millennium. A statement
+  that allows no latest year keeps its person possibly living, as does a
+  person with no birth at all.
 
 ### 2. Death evidence is any death-presupposing assertion
 
@@ -83,13 +122,14 @@ is renamed **`critique_notes`** to reflect its now-single role (ADR-0013).
 ### 4. Consumers share the predicate
 
 - **Public export** (`yizkr backup`): `exclusion_report` queries the death
-  signals above and calls the shared predicate; every triple mentioning an
-  excluded person is still dropped, and excerpts still never leave.
+  signals above, reads births with the shared module's query, and calls
+  the shared predicate; every triple mentioning an excluded person is
+  still dropped, and excerpts still never leave.
 - **Private static site** (`yizkr publish-site`): includes everyone but
   badges each subject the export would drop ("possibly living — never in
-  public exports"), computed at render time with the same predicate — the
-  private site therefore shows exactly what the public export would
-  remove, derived, never stored.
+  public exports"), computed at render time with the same births query
+  and predicate — the private site therefore shows exactly what the
+  public export would remove, derived, never stored.
 
 ### 5. Vocabulary retired
 
@@ -112,7 +152,8 @@ is strictly safer, since the determination is now absence-of-death only.
 4. **No reviewer duty.** The review CSV has no `living` column; `warning`
    becomes `critique_notes`.
 5. **One predicate, shared.** `yizkr.core.privacy.is_possibly_living` is
-   the sole implementation; export and site both call it.
+   the sole implementation; export and site both call it, with the births
+   its one query reads (amended by #334).
 
 ## Consequences
 

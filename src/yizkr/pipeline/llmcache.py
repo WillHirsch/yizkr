@@ -227,12 +227,13 @@ class CacheRefused(PassPaused):
     the folder is fit to hold the cache, or with another."""
 
 
-def _open_root(root: Path) -> None:
-    """Make the cache root when it is not there yet, or refuse it
-    (CacheRefused): one a git work tree would track, before anything is
-    made; one that cannot be made or is not a folder; one that exists and
-    is open to other users; and one this user cannot write in. The mode of
-    a root there already is left as it is."""
+def _root_refusal(root: Path) -> str | None:
+    """Why `root` cannot be the cache root, found without making or
+    changing anything; None when it can be. One a git work tree would
+    track is refused first; then one there already that is not a folder,
+    is open to other users, or that this user cannot write in; and one not
+    there yet, when the nearest folder above it is not a folder this user
+    can make it in."""
     # the scratch driver keeps its runs directory out of work trees with
     # this check; its module loads the orchestrator, which a process that
     # only opens a cache does not need
@@ -241,24 +242,41 @@ def _open_root(root: Path) -> None:
     try:
         tree = tracked_by_git(root)
         if tree is not None:
-            raise CacheRefused(
+            return (
                 f"the LLM cache {root} is in the git work tree {tree}, "
                 "which does not ignore it: its entries hold corpus content, "
                 "which is never committed (docs/AGENT_PROTOCOL.md §6). Give "
                 "the cache a folder git ignores, such as var/llm-cache, or "
                 "one outside the work tree"
             )
-        _make_private(root)
-        info = root.stat()
+        if os.path.lexists(root):
+            return _folder_refusal(root, root.stat())
+        folder = root.parent
+        while not os.path.lexists(folder) and folder.parent != folder:
+            folder = folder.parent
+        if not folder.is_dir():
+            return f"{root} cannot be the LLM cache: {folder} is not a folder"
+        if not os.access(folder, os.W_OK | os.X_OK):
+            return (
+                f"{root} cannot be the LLM cache: this user cannot make it "
+                f"in {folder}"
+            )
     except OSError as exc:
-        raise CacheRefused(f"{root} cannot be the LLM cache: {exc}") from None
+        return f"{root} cannot be the LLM cache: {exc}"
+    return None
+
+
+def _folder_refusal(root: Path, info: os.stat_result) -> str | None:
+    """Why the folder at `root`, as `info` states it, cannot hold the
+    cache: not a folder, open to other users, one this user cannot write
+    in, or one whose lock file there already this user cannot open to
+    read and write, as opening the cache does (_hold); None when it
+    can."""
     if not stat.S_ISDIR(info.st_mode):
-        raise CacheRefused(
-            f"{root} cannot be the LLM cache: it is not a folder"
-        )
+        return f"{root} cannot be the LLM cache: it is not a folder"
     mode = stat.S_IMODE(info.st_mode)
     if mode & 0o077:
-        raise CacheRefused(
+        return (
             f"the LLM cache {root} is open to other users (mode {mode:o}), "
             "and its entries hold corpus content: make it private (chmod "
             "700), or give the cache another folder"
@@ -266,10 +284,37 @@ def _open_root(root: Path) -> None:
     # a private folder of another user's, or one its owner has closed:
     # the cache writes its lock file and its entries in it
     if not os.access(root, os.W_OK | os.X_OK):
-        raise CacheRefused(
+        return (
             f"{root} cannot be the LLM cache: this user cannot write in it "
             f"(mode {mode:o})"
         )
+    lock = root / LOCK_FILE
+    if os.path.lexists(lock) and not (
+        lock.is_file() and os.access(lock, os.R_OK | os.W_OK)
+    ):
+        return (
+            f"{root} cannot be the LLM cache: this user cannot open its lock "
+            f"file {lock} to read and write it"
+        )
+    return None
+
+
+def _open_root(root: Path) -> None:
+    """Make the cache root when it is not there yet, or refuse it
+    (CacheRefused): a root _root_refusal refuses, before anything is made,
+    and one that cannot be made when it comes to it. The mode of a root
+    there already is left as it is."""
+    refusal = _root_refusal(root)
+    if refusal is not None:
+        raise CacheRefused(refusal)
+    try:
+        _make_private(root)
+        info = root.stat()
+    except OSError as exc:
+        raise CacheRefused(f"{root} cannot be the LLM cache: {exc}") from None
+    refusal = _folder_refusal(root, info)
+    if refusal is not None:
+        raise CacheRefused(refusal)
 
 
 def _make_private(folder: Path) -> None:
@@ -757,6 +802,143 @@ class EngineCache:
         if isinstance(entry, dict):
             atomic_write_text(aside, _dump(entry | dict(note)))
         return True
+
+
+class CacheAsIs(EngineCache):
+    """The entries under one cache root as a run would be served them,
+    read as they are: without the cache's lock, which a running pass may
+    hold, and with nothing written, the folders included. What calls made
+    through it change (an answer rejected, one stored, a key refreshed) it
+    keeps in memory, for as long as it lives. It takes the layout, and the
+    reading of an entry, from EngineCache, but none of its opening, which
+    makes the root and holds its lock; a root the cache would refuse
+    (_root_refusal) it refuses too, with CacheRefused, so that it reads no
+    folder a run would refuse to use. A kept session is given by its
+    files' names, without their bytes: whether they can resume a
+    conversation is all a reader of it asks. A kept session is read
+    through its folder, opened once, so a process that replaces it
+    meanwhile (keep_session: the old folder renamed aside, the new one
+    renamed in) never tears the listing, and a folder missing where
+    another is kept under the key is read again a moment later, as it is
+    while one replaces it."""
+
+    def __init__(
+        self,
+        root: str | os.PathLike[str],
+        *,
+        refresh: Iterable[str] = (),
+        epochs: Mapping[str, int] | None = None,
+    ) -> None:
+        self.root = Path(root)
+        self.refresh = frozenset(refresh)
+        self.epochs = {
+            role: int(epoch) for role, epoch in (epochs or {}).items()
+        }
+        self._lock = threading.Lock()
+        self._refreshed: set[str] = set()
+        self._warned: set[str] = set()
+        self._sessions: dict[str, tuple[Any, Any, str]] = {}
+        # answers stored, and keys rejected, through this view
+        self._stored: dict[str, dict] = {}
+        self._rejected: set[str] = set()
+        refusal = _root_refusal(self.root)
+        if refusal is not None:
+            raise CacheRefused(refusal)
+
+    def warn_unpinned(self, role: str) -> None:
+        """Nothing is written, and nothing is said."""
+
+    def remember_session(
+        self, key: str, client: Any, session: Any, opening: str
+    ) -> None:
+        """No session is made through this view, so none is held."""
+
+    def take_session(self, key: str, client: Any) -> None:
+        return None
+
+    def get(self, key: str) -> dict | None:
+        if key in self._stored:
+            return self._stored[key]
+        if key in self._rejected:
+            return None
+        return super().get(key)
+
+    def rejected(self, key: str) -> list[Path]:
+        if key in self._rejected:
+            return [self.path(key)]
+        return super().rejected(key)
+
+    def put(self, key: str, entry: Mapping[str, Any]) -> None:
+        self._stored[key] = dict(entry)
+
+    def reject(
+        self, key: str, response: str, reason: str, **fields: Any
+    ) -> bool:
+        entry = self.get(key)
+        if entry is None or entry["response"] != response:
+            return False
+        self._stored.pop(key, None)
+        self._rejected.add(key)
+        return True
+
+    def seed(self, *args: Any, **kwargs: Any) -> bool:
+        return False
+
+    def keep_session(
+        self, key: str, opening: str, files: Mapping[str, bytes]
+    ) -> None:
+        """No session is made through this view, so none is kept."""
+
+    def kept_session(self, key: str, opening: str) -> dict[str, bytes]:
+        folder = self._session_dir(key, opening)
+        if not folder.parent.is_dir():
+            # nothing kept for any answer under the key
+            return {}
+        for attempt in range(_HOLDER_READS):
+            if attempt:
+                time.sleep(_HOLDER_WAIT)
+            try:
+                return _file_names(folder)
+            except OSError:
+                continue
+        return {}
+
+
+def _file_names(folder: Path) -> dict[str, bytes]:
+    """The files under `folder`, by their paths relative to it, with no
+    bytes, listed through the folder opened once. OSError when it cannot
+    be opened (missing, say) or read."""
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return {
+            Path(os.path.normpath(os.path.join(top, name))).as_posix(): b""
+            for top, _dirs, files, _fd in os.fwalk(
+                ".", dir_fd=fd, onerror=fail
+            )
+            for name in sorted(files)
+        }
+    finally:
+        os.close(fd)
+
+
+def held_by(root: str | os.PathLike[str]) -> str | None:
+    """The process that holds the cache under `root` now, described, as
+    its lock file records it, read without taking the lock; None when the
+    record names no running process, or there is none."""
+    try:
+        text = (Path(root) / LOCK_FILE).read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return None
+    record = _parse_record(text.strip())
+    if record is None or not _running(record):
+        return None
+    return _describe(record)
 
 
 def _release(client: Any, session: Any) -> None:

@@ -1,0 +1,1059 @@
+"""The call estimate: what a scratch run is to ask the engine, counted
+before it runs (`yizkr scratch estimate`; ADR-0025, ADR-0032).
+
+The planned run is the one `yizkr scratch run` with the same options
+would make now: a new run, or the run it would invoke again, with the
+same documents (the never-ingest list asked first), stages, `--until` and
+`--refresh`. Its stale work is each stage of a document whose view does
+not stand: every stage in a new run, whose state directories are fresh,
+and in a run invoked again, the stages whose views the driver would make
+again (not current, refreshed, or failing the transcription check now).
+
+**Known calls.** The estimate takes each stale stage through the
+pipeline's own code, as the run takes it, with a client that keys every
+call as the run's LLM cache keys it (the same prompts and files, models,
+efforts and engine configuration, the claude CLI's version among them)
+and answers it from the cache alone. So it knows which calls the cache
+answers and which reach the engine, among them an answer the cache kept
+that the run rejects and asks for again (a transcription the check
+fails, an answer cut off before its sentinel), a call another document
+asks earlier in the run, which the run's cache answers by then, and the
+replay of a conversation whose session was not kept, for its forks. A
+chunk the cache cannot answer is answered empty, so that the chunks after
+it are keyed and counted too.
+
+**Estimated calls.** A call's key can depend on an answer the engine has
+yet to give: an extraction after a transcription the engine makes, the
+chunks after an entity manifest it answers, the forks after a replayed
+conversation, and the critique of a batch that holds chunks it answers.
+Each such call is counted as the engine's, since a new answer changes
+the keys after it: an extraction as the latest run to make it measured
+it (llm.run_calls), else by the mean for its kind over the runs
+measured, else by its text's length (llm.estimate_calls); the forks
+after a replay as the chunks the cache kept leave them unanswered, as
+they are when the replay answers as the cache did; and a critique as one
+call.
+
+**Up to more.** What only the engine's answers decide is counted apart.
+An entity manifest the engine answers, a replay's among them, can be
+refused, and then its second attempt and the segmentation's two are
+asked: 3 more for an extraction at most. A replayed conversation that
+answers differently starts its extraction over, and asks the forks the
+cache answered too, which can number otherwise. These are estimates, not
+ceilings: the chunks an entity manifest makes follow its entities, which
+a text's length only approaches, so a dense document can take more. Not
+counted at all: a call asked again after an engine error, or after a
+chunk answer cut off (up to 2 a chunk), and the waits for the
+subscription, which are no calls. Nor is a slice the anomaly checks
+pause as the run unfolds (docs/ANOMALIES.md): it makes fewer calls than
+counted.
+
+**Nothing written, held or asked.** The estimate reads the corpus, the
+runs directory and the cache (llm.read_cache), and writes none of them;
+it refuses a runs directory the run refuses (scratch.runs_refusal).
+It takes no lock, neither the runs directory's nor the cache's, so it
+runs while a driver runs, counting what they hold at that moment, and it
+says who holds them. It makes no model call and asks the wiki nothing
+(ADR-0025 §2). What the keys name, it reads from the engine's clients,
+made as the driver makes them, as a role's first stale stage needs one:
+for the claude-code engine that runs `claude --version`, which calls no
+model.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import functools
+import uuid
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.core.corpus import MISSING_LIST, ExclusionConfigError
+from yizkr.pipeline import llm
+from yizkr.pipeline.chunking import ChunkedClaimExtractor, ExtractionFailed
+from yizkr.pipeline.critique import run_critique
+from yizkr.pipeline.orchestrate import (
+    BATCH_VOLATILE,
+    DOCUMENT_STAGES,
+    TRANSCRIPTION_VOLATILE,
+    DocumentRun,
+    _findings,
+    route_transcription,
+)
+from yizkr.pipeline.rundir import (
+    _CLIENT_FIXED,
+    RunDir,
+    RunSettingsConflict,
+    settings_conflicts,
+)
+from yizkr.pipeline.scratch import (
+    DEFAULT_RUNS,
+    PHASES,
+    PreflightFailed,
+    ScratchDriver,
+    ScratchRefused,
+    choose_run,
+    runs_holder,
+    runs_in,
+    runs_refusal,
+)
+from yizkr.pipeline.stages import content_hash
+from yizkr.pipeline.transcribe import Transcription
+
+# the LLM cache's events the estimate counts (rundir.CACHE_EVENTS): an
+# answer it gives, a call it cannot answer, and the replay of an opening
+# turn for a fork
+HIT, MISS, REPLAY = "cache-hit", "cache-miss", "cache-replay"
+# how a stale stage's calls are counted without their keys: an
+# extraction after a transcription the engine makes, the chunks of one
+# after an entity manifest it answers, and a critique of a batch that
+# holds chunks it answers
+WHOLE = "whole"
+CHUNKS = "chunks"
+CRITIQUE = "critique"
+# the extraction's first turns: two attempts at the entity manifest, then,
+# when both are refused, two at the segmentation (ChunkedClaimExtractor)
+FIRST_TURNS = 4
+# the answer the estimate gives a chunk the cache cannot answer: whole,
+# and empty, so that the chunks after it are keyed and counted too
+EMPTY_CHUNK = '{"done": true, "claims_emitted": 0, "gaps_emitted": 0}'
+# the parts of an extraction the estimate counts apart
+_FIRST, _CHUNK_CALLS = "first turns", "chunks"
+
+
+class _Unanswered(BaseException):
+    """A call the cache cannot answer, whose answer the stage goes on
+    from: what the stage makes after it is the engine's to decide. A
+    BaseException, as a paused pass is, so that no step takes it for a
+    failed call of its own and falls back."""
+
+
+# -- counting -----------------------------------------------------------------
+
+
+@dataclass
+class _Tally:
+    """The calls one stage of one document makes, as the LLM cache's
+    events report them (docs/LLM_CACHE.md). A call under a key the engine
+    is asked earlier in the planned run is a hit, since the run's cache
+    holds its answer by then: `asked` holds those keys, for the whole
+    run."""
+
+    asked: set[str] = field(default_factory=set)
+    hits: int = 0
+    # engine calls whose keys are known: misses and replays
+    known: int = 0
+    replays: int = 0
+    # the extraction's first turns asked (answered or not); its chunk
+    # calls the cache answered, those it cannot answer that are new to the
+    # run, and every one the estimate answered empty, which leaves the
+    # batch the engine's to make
+    first_turns: int = 0
+    chunk_hits: int = 0
+    chunk_misses: int = 0
+    answered: int = 0
+    phase: str = ""
+
+    def record(self, event: str, **fields: Any) -> None:
+        if event == MISS and self.phase == _CHUNK_CALLS:
+            # the estimate answers it empty (_Keyed)
+            self.answered += 1
+        key = fields.get("key")
+        if event == MISS and key in self.asked:
+            event = HIT
+        if event == HIT:
+            self.hits += 1
+            if self.phase == _CHUNK_CALLS:
+                self.chunk_hits += 1
+        elif event == MISS:
+            self.known += 1
+            self.asked.add(key)
+            if self.phase == _CHUNK_CALLS:
+                self.chunk_misses += 1
+        elif event == REPLAY:
+            self.known += 1
+            self.replays += 1
+        if self.phase == _FIRST and event in (HIT, MISS):
+            self.first_turns += 1
+
+
+@dataclass
+class _Made:
+    """What one stage of one document comes to in the planned run."""
+
+    # the view stands, and nothing is made
+    reused: bool = False
+    tally: _Tally = field(default_factory=_Tally)
+    # what the stage makes, when the cache answers all of it, or the view
+    # that stands; None when the engine's answers decide it
+    view: Any = None
+    # whether that differs from the view the directory recorded before
+    changed: bool = True
+    # why the stage fails in the run, so that the stages after it are not
+    # reached
+    fails: str | None = None
+    # how its calls are counted without their keys (WHOLE, CHUNKS,
+    # CRITIQUE), and the length of the text an extraction reads
+    estimated: str | None = None
+    size: int | None = None
+
+
+@dataclass
+class StageCalls:
+    """One stage's part of a planned run: the documents whose view it
+    makes and those whose view stands, and the calls its stale work makes
+    (the module docstring says how each count is known)."""
+
+    made: int = 0
+    reused: int = 0
+    # of those made, the ones that fail in the run, as the cache answers
+    # them: the stages after them are not reached
+    failing: int = 0
+    # calls the cache answers
+    hits: int = 0
+    # engine calls whose keys are known
+    known: int = 0
+    # engine calls counted without their keys (all of them, below); the
+    # documents whose calls llm.estimate_calls counts, and how many of
+    # those a baseline run measured
+    estimated: int = 0
+    estimated_documents: int = 0
+    measured: int = 0
+    # conversations replayed for their forks, and the forks after them,
+    # which are among the estimated calls
+    replays: int = 0
+    replay_calls: int = 0
+    # the engine calls more that only the engine's answers can bring
+    more: int = 0
+
+    @property
+    def engine_calls(self) -> int:
+        return self.known + self.estimated
+
+
+@dataclass
+class Estimate:
+    """The calls of one planned invocation of a scratch run, per stage."""
+
+    run: Path
+    resumed: bool
+    cache: Path
+    stages: dict[str, StageCalls] = field(default_factory=dict)
+    cli_version: str | None = None
+    # an invocation on other code that goes past the barrier alone
+    past_barrier_only: bool = False
+    duplicates: int = 0
+    unreadable: int = 0
+    # the corpus stages the invocation runs, which are not estimated
+    corpus_stages: list[str] = field(default_factory=list)
+    # who holds the runs directory and the cache now
+    holders: list[str] = field(default_factory=list)
+    # what the run's preflight would refuse now, beyond what the estimate
+    # refuses itself
+    preflight: list[str] = field(default_factory=list)
+
+    def total(self) -> StageCalls:
+        total = StageCalls()
+        for calls in self.stages.values():
+            for name in vars(total):
+                setattr(
+                    total, name, getattr(total, name) + getattr(calls, name)
+                )
+        return total
+
+
+# -- an engine that answers nothing -------------------------------------------
+
+
+class _Keyed:
+    """An engine's client as the LLM cache keys its calls, which answers
+    none of them: its engine, model, effort, configuration hash, system
+    prompt and call text are the client's own. A call the cache cannot
+    answer reaches it, and it ends the stage there (_Unanswered), or, for
+    a chunk, answers it empty (EMPTY_CHUNK), while `answering`."""
+
+    def __init__(self, client: Any) -> None:
+        self.engine = getattr(client, "engine", type(client).__name__)
+        self.model = getattr(client, "model", None)
+        self.effort = getattr(client, "effort", None)
+        self.config_hash = client.config_hash
+        self.system_prompt = getattr(client, "system_prompt", None)
+        self.call_text = getattr(client, "call_text", None)
+        self.model_identifier = getattr(client, "model_identifier", "")
+        self.cli_version = getattr(client, "cli_version", None)
+        self.answering = False
+
+    def last_report(self) -> dict[str, Any]:
+        return {}
+
+    def complete(self, prompt: str, image_paths: Any = ()) -> str:
+        if self.answering:
+            return EMPTY_CHUNK
+        raise _Unanswered
+
+    def close(self) -> None:
+        """Nothing to release."""
+
+
+class _KeyedConversations(_Keyed):
+    """A _Keyed client for an engine that holds conversations. A fork the
+    cache cannot answer needs its conversation's session: resumed from
+    the files the cache kept, when they can resume it, which is no call,
+    or else replayed, which is a call, and taken to answer as the cache
+    did (the bound counts the other case)."""
+
+    def __init__(self, client: Any) -> None:
+        super().__init__(client)
+        # the conversations whose kept files cannot resume them, by their
+        # opening prompt, with the answer a replay is taken to give
+        self._replays: dict[str, str] = {}
+        if callable(getattr(client, "resume_conversation", None)):
+            self.resume_conversation = self._resume
+        if callable(getattr(client, "keep_conversation", None)):
+            self.keep_conversation = self._keep
+
+    def open_conversation(self, prompt: str) -> tuple[str, Any]:
+        if prompt in self._replays:
+            return self._replays.pop(prompt), ("replayed", prompt)
+        raise _Unanswered
+
+    def fork(self, handle: Any, prompt: str) -> str:
+        if self.answering:
+            return EMPTY_CHUNK
+        raise _Unanswered
+
+    def close_conversation(self, handle: Any) -> None:
+        """Nothing to release."""
+
+    def _keep(self, handle: Any) -> dict[str, bytes]:
+        return {}
+
+    def _resume(
+        self, prompt: str, response: str, files: dict[str, bytes]
+    ) -> Any:
+        if self._resumable(files):
+            return ("resumed", prompt)
+        self._replays[prompt] = response
+        raise ValueError("no session is kept that can resume it")
+
+    def _resumable(self, files: Iterable[str]) -> bool:
+        """Whether the kept files resume a conversation: for the
+        claude-code engine, when they hold one session transcript, named
+        by its session id (ClaudeCodeClient.resume_conversation); another
+        engine rebuilds it from its opening turn."""
+        if self.engine != "claude-code":
+            return True
+        transcripts = [name for name in files if name.endswith(".jsonl")]
+        if len(transcripts) != 1:
+            return False
+        try:
+            uuid.UUID(Path(transcripts[0]).stem)
+        except ValueError:
+            return False
+        return True
+
+
+def _keyed(client: Any) -> _Keyed:
+    """The _Keyed stand-in for `client`, conversational exactly when the
+    client is, as the cache's client for it is (llmcache.wrap)."""
+    if isinstance(client, llm.ConversationalLlmClient):
+        return _KeyedConversations(client)
+    return _Keyed(client)
+
+
+class _Extractor(ChunkedClaimExtractor):
+    """The chunked extractor, telling its first turns from its chunks: a
+    first turn the cache cannot answer ends the count of the stage's
+    known calls, since the chunks are made from its answer; a chunk it
+    cannot answer is answered empty (_Keyed)."""
+
+    def __init__(self, client: Any, keyed: _Keyed, tally: _Tally) -> None:
+        # as the driver makes it (Orchestrator._step_extract), one chunk
+        # at a time: how many run at once changes no key
+        super().__init__(client)
+        self._keyed = keyed
+        self._tally = tally
+
+    def _phase_one(self, transcription, artifact):
+        self._tally.phase = _FIRST
+        self._keyed.answering = False
+        try:
+            return super()._phase_one(transcription, artifact)
+        finally:
+            self._tally.phase = _CHUNK_CALLS
+            self._keyed.answering = True
+
+
+# -- the estimator ------------------------------------------------------------
+
+
+def _text(client: Any, name: str) -> str | None:
+    """A client's attribute as the run manifest records it (as the
+    orchestrator reads it off an engine it starts)."""
+    value = getattr(client, name, None)
+    return value if isinstance(value, str) and value else None
+
+
+def _why(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+class Estimator(ScratchDriver):
+    """Plans an invocation of a scratch run as the driver would, and
+    counts its calls without making any (the module docstring says how).
+    It takes the driver's options. It neither holds nor writes the runs
+    directory, the run or the cache, and runs no stage's side of the
+    driver: no event, view, state or record is written."""
+
+    def __init__(self, folder: Path, run_dir: Path, **options: Any) -> None:
+        super().__init__(folder, run_dir, **options)
+        # each role's engine client, made as the driver makes it when the
+        # role's first stale stage needs it, and its stand-in behind the
+        # cache, which answers nothing
+        self._clients: dict[str, Any] = {}
+        self._keyed: dict[str, _Keyed] = {}
+        # the LLM cache as it is (llm.read_cache)
+        self._as_is: Any = None
+        # the run manifest of the run it would invoke again, if any
+        self._recorded: dict[str, Any] = {}
+        # the keys the engine is asked in the planned run, so far
+        self._asked: set[str] = set()
+        # the stage being counted
+        self._tally = _Tally(self._asked)
+
+    def run(self) -> int:
+        """An estimator counts a run's calls, and never makes the run:
+        `estimate`."""
+        raise TypeError("an Estimator never runs a run: call estimate()")
+
+    def _llm(self, role: str, doc: DocumentRun) -> Any:
+        """The role's client for one document, as the driver's stages see
+        it, but for the engine: behind the cache as it is, keyed as the
+        run keys its calls, and answering none itself; what the cache
+        does is counted for the stage in hand. The role's client is
+        started already (_engine_for)."""
+        return llm.cached_client(
+            self._keyed[role],
+            self._as_is,
+            role=role,
+            events=self._tally.record,
+        )
+
+    def estimate(self) -> Estimate:
+        """The calls of the invocation `yizkr scratch run` would make now.
+        Refuses as the driver would, before any call: without a
+        never-ingest list (ExclusionConfigError); with a role whose model
+        is no full id, a pacing setting the engine refuses, or a PDF and
+        no renderer (PreflightFailed); with other settings, or another
+        claude CLI, than the run it would invoke again recorded
+        (RunSettingsConflict); with an engine client that cannot start
+        (ScratchRefused), or a pause as one starts (llm.PassPaused), a
+        cache folder the cache refuses among them. A corpus with no
+        document is no call, as it is to the driver."""
+        if self.exclusions is None:
+            raise ExclusionConfigError(MISSING_LIST)
+        problems = self._model_problems() + self._pacing_problems()
+        if problems:
+            raise PreflightFailed(problems)
+        self._recorded = self.rundir.manifest()
+        estimate = Estimate(
+            run=self.state_dir,
+            resumed=bool(self._recorded.get("run_id")),
+            cache=Path(self.cache_dir),
+            holders=_holders(self.state_dir.parent, Path(self.cache_dir)),
+            preflight=self._engine_problems() + self._disk_problems(),
+        )
+        found = self.documents()
+        if not found:
+            return estimate
+        docs = [doc for doc in found if doc.unreadable is None]
+        self._preflight_documents(docs)
+        taken, duplicates = self._canonical(docs)
+        fields = self._fields(docs, self._canaries(taken))
+        past = self._past_barrier_only(fields, taken)
+        if past and self.refresh:
+            raise ScratchRefused(
+                "the code differs from the run's, so the invocation would "
+                "only take the run past the barrier and make no view "
+                "again: drop --refresh, or start a new run"
+            )
+        if estimate.resumed and not past:
+            conflicts = settings_conflicts(self._recorded, fields)
+            if conflicts:
+                raise RunSettingsConflict(self.state_dir, conflicts)
+        estimate.past_barrier_only = past
+        estimate.duplicates = len(duplicates)
+        estimate.unreadable = len(found) - len(docs)
+        estimate.corpus_stages = [s.name for s in self._corpus_in_range()]
+        if past or not taken:
+            return estimate
+        self._refreshed = self._refreshes_made()
+        try:
+            made = {doc: self._count(doc) for doc in taken}
+        finally:
+            estimate.cli_version = next(
+                (_text(c, "cli_version") for c in self._clients.values()),
+                None,
+            )
+            self._close_clients()
+        for stages in made.values():
+            for stage, outcome in stages.items():
+                self._add(estimate, stage, outcome)
+        self._estimate_extractions(estimate, made)
+        estimate.stages = dict(
+            sorted(estimate.stages.items(), key=lambda item: PHASES[item[0]])
+        )
+        return estimate
+
+    # -- the engine's clients ------------------------------------------------
+
+    def _engine_for(self, role: str) -> None:
+        """Start the role's engine client on first use, as the driver
+        does (Orchestrator._engine): the role's first stale stage starts
+        it. So a client that cannot start (ScratchRefused), a pause as it
+        starts (llm.PassPaused), or one that applies other settings than
+        the run it would invoke again recorded, a claude CLI updated
+        since among them (RunSettingsConflict, as RunDir.record_engine
+        refuses it), stops the estimate where it would stop the run, and
+        nothing stale starts none. The cache is read from here on, as the
+        run opens it here: a cache folder the cache refuses stops the
+        estimate too (llmcache.CacheRefused, a pause). Called before a
+        stage's own code, whose failures are the stage's."""
+        if role in self._keyed:
+            return
+        effort, model = self._engine_settings(role)
+        try:
+            client = llm.make_client(self.llm, effort=effort, model=model)
+        except (RuntimeError, ValueError) as exc:
+            raise ScratchRefused(
+                f"the {role} role's engine client cannot start, and its "
+                f"calls' keys name what it applies: {exc}"
+            ) from None
+        self._clients[role] = client
+        conflicts = self._client_conflicts(role, client)
+        if conflicts:
+            raise RunSettingsConflict(self.state_dir, conflicts)
+        if self._as_is is None:
+            # the run opens its cache here too, as a stage first needs
+            # the engine: a folder it would refuse is refused
+            # (llmcache.CacheRefused)
+            self._as_is = llm.read_cache(
+                self.cache_dir, refresh=self.refresh, epochs=self.epochs
+            )
+        self._keyed[role] = _keyed(client)
+
+    def _client_conflicts(self, role: str, client: Any) -> list[tuple]:
+        """What `client` applies otherwise than the run it would invoke
+        again recorded for the role, as RunDir.record_engine compares
+        them: the claude CLI's version first."""
+        conflicts = []
+        pinned = (self._recorded.get("engine") or {}).get("cli_version")
+        version = _text(client, "cli_version")
+        if version and pinned and version != pinned:
+            conflicts.append(("engine.cli_version", pinned, version))
+        roles = self._recorded.get("roles") or {}
+        before = (roles.get(role) or {}).get("client") or {}
+        conflicts += [
+            (f"roles.{role}.client.{key}", before[key], _text(client, key))
+            for key in _CLIENT_FIXED
+            if key in before and before[key] != _text(client, key)
+        ]
+        return conflicts
+
+    def _close_clients(self) -> None:
+        for client in self._clients.values():
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+        self._clients = {}
+
+    # -- one document ---------------------------------------------------------
+
+    def _fresh(self, doc: DocumentRun) -> bool:
+        """Whether every view of the document is made afresh: it has no
+        directory yet, or the driver sets its directory aside (_prepare)."""
+        if not doc.dir.is_dir():
+            return True
+        if doc.state.content_sha1 and doc.state.content_sha1 != doc.sha1:
+            return True
+        return doc.unrecorded
+
+    def _stands(
+        self,
+        doc: DocumentRun,
+        view: Path,
+        load: Callable[[str], Any],
+        recheck: Callable[[Any], str | None] | None = None,
+    ) -> Any:
+        """The view, loaded, when the driver would reuse it
+        (_reused_view), without a word of it said: current, not refreshed
+        in this invocation unless a refresh made it in the run already,
+        and passing `recheck`. None when the view is to be made."""
+        role, stage = doc.views[view]
+        if role in self.refresh and (doc.sha1, stage) not in self._refreshed:
+            return None
+        if not doc.derivations.current(view):
+            return None
+        try:
+            loaded = load(view.read_text())
+        except (OSError, ValueError):
+            return None
+        if recheck is not None and recheck(loaded) is not None:
+            return None
+        return loaded
+
+    def _count(self, doc: DocumentRun) -> dict[str, _Made]:
+        """What each stage the invocation plans for the document comes to,
+        in order, up to one that fails in the run."""
+        planned = [
+            stage for stage in DOCUMENT_STAGES[doc.kind] if self._within(stage)
+        ]
+        fresh = self._fresh(doc)
+        made: dict[str, _Made] = {}
+        if doc.kind == "gedcom":
+            # the adapter makes no call
+            for stage in planned:
+                made[stage] = _Made(
+                    reused=not fresh
+                    and self._stands(
+                        doc, doc.batch, ClaimBatch.model_validate_json
+                    )
+                    is not None
+                )
+            return made
+        count = {
+            "transcription": self._transcription,
+            "extraction": self._extraction,
+            "critique": self._critique,
+        }
+        before = _Made()
+        for stage in planned:
+            self._tally = _Tally(self._asked)
+            before = made[stage] = count[stage](doc, fresh, before)
+            if before.fails:
+                break
+        return made
+
+    def _transcription(
+        self, doc: DocumentRun, fresh: bool, _before: _Made
+    ) -> _Made:
+        method = route_transcription(
+            doc.source, None if fresh else doc.correction
+        )
+        if not fresh:
+            recheck = (
+                functools.partial(self._transcription_failure, doc)
+                if method in ("vision", "text-file")
+                else None
+            )
+            view = self._stands(
+                doc,
+                doc.transcription,
+                Transcription.model_validate_json,
+                recheck,
+            )
+            if view is not None:
+                return _Made(reused=True, view=view, changed=False)
+        if method == "vision":
+            self._engine_for("transcribe")
+        made = _Made(tally=self._tally)
+        try:
+            transcription, _resolution = self._transcribe(doc, method)
+        except _Unanswered:
+            return made
+        except Exception as exc:
+            made.fails = _why(exc)
+            return made
+        made.view = transcription
+        made.changed = content_hash(
+            transcription.model_dump(mode="json"),
+            volatile=TRANSCRIPTION_VOLATILE,
+        ) != doc.derivations.content(doc.transcription.name)
+        return made
+
+    def _extraction(
+        self, doc: DocumentRun, fresh: bool, before: _Made
+    ) -> _Made:
+        if not fresh and before.view is not None and not before.changed:
+            view = self._stands(doc, doc.batch, ClaimBatch.model_validate_json)
+            if view is not None:
+                return _Made(reused=True, view=view, changed=False)
+        self._engine_for("extract")
+        if before.view is None:
+            return _Made(estimated=WHOLE)
+        made = _Made(tally=self._tally)
+        keyed = self._keyed["extract"]
+        extractor = _Extractor(self._llm("extract", doc), keyed, made.tally)
+        try:
+            batch = extractor.extract(before.view, ArtifactRef(sha1=doc.sha1))
+        except _Unanswered:
+            made.estimated = CHUNKS
+            made.size = len(before.view.text)
+            return made
+        except ExtractionFailed as exc:
+            # with chunks the engine answers, the batch is not this one
+            if not made.tally.answered:
+                made.fails = _why(exc)
+            return made
+        except Exception as exc:
+            made.fails = _why(exc)
+            return made
+        finally:
+            keyed.answering = False
+        if extractor.failed_chunks:
+            made.fails = f"{len(extractor.failed_chunks)} chunks failed"
+            return made
+        if not made.tally.answered:
+            made.view = batch
+            made.changed = self._batch_changed(doc, batch)
+        return made
+
+    def _critique(self, doc: DocumentRun, fresh: bool, before: _Made) -> _Made:
+        if (
+            not fresh
+            and before.view is not None
+            and not before.changed
+            and self._stands(doc, doc.critique, _findings) is not None
+        ):
+            return _Made(reused=True)
+        self._engine_for("critique")
+        if before.view is None:
+            return _Made(estimated=CRITIQUE)
+        made = _Made(tally=self._tally)
+        with contextlib.suppress(_Unanswered):
+            run_critique(self._llm("critique", doc), before.view)
+        return made
+
+    def _batch_changed(self, doc: DocumentRun, batch: ClaimBatch) -> bool:
+        """Whether the batch differs from the one the document's views
+        after it were made from, as the driver tells (_update_batch_view)."""
+        digest = content_hash(
+            batch.model_dump(mode="json"), volatile=BATCH_VOLATILE
+        )
+        recorded = doc.derivations.content(doc.batch.name)
+        if recorded is None and doc.batch.exists():
+            try:
+                existing = ClaimBatch.model_validate_json(
+                    doc.batch.read_text()
+                )
+            except (OSError, ValueError):
+                return True
+            recorded = content_hash(
+                existing.model_dump(mode="json"), volatile=BATCH_VOLATILE
+            )
+        return recorded != digest
+
+    # -- the sums -------------------------------------------------------------
+
+    @staticmethod
+    def _add(estimate: Estimate, stage: str, made: _Made) -> None:
+        calls = estimate.stages.setdefault(stage, StageCalls())
+        if made.reused:
+            calls.reused += 1
+            return
+        calls.made += 1
+        calls.failing += bool(made.fails)
+        calls.hits += made.tally.hits
+        calls.known += made.tally.known
+        if made.tally.replays:
+            # the replay is known; the forks after it are estimated, those
+            # the cache's chunks leave unanswered, since a replay that
+            # answers differently starts the extraction over from its new
+            # answer: its forks, the ones the cache answered among them,
+            # can number otherwise, and a refused answer takes the
+            # fallback
+            calls.known -= made.tally.chunk_misses
+            calls.estimated += made.tally.chunk_misses
+            calls.replays += made.tally.replays
+            calls.replay_calls += made.tally.chunk_misses
+            calls.more += made.tally.chunk_hits + FIRST_TURNS - 1
+        if made.estimated == WHOLE:
+            calls.more += FIRST_TURNS - 1
+        elif made.estimated == CHUNKS:
+            calls.more += FIRST_TURNS - made.tally.first_turns
+        elif made.estimated == CRITIQUE:
+            calls.estimated += 1
+            calls.estimated_documents += 1
+
+    def _estimate_extractions(
+        self, estimate: Estimate, made: dict[DocumentRun, dict[str, _Made]]
+    ) -> None:
+        """Count the extraction calls whose keys wait for the engine's
+        answers, document by document (llm.estimate_calls): the whole
+        stage after a transcription the engine makes, and the rest of it
+        after an entity manifest the engine answers. A run's measure
+        counts every call of the stage, so the calls the estimate keyed
+        already (the first turns, a kept refused attempt among them, and
+        any chunk) are taken off it; the mean for the kind, or the text's
+        length, counts one first turn, the one the engine answers, known
+        already."""
+        extractions = {
+            doc: stages["extraction"]
+            for doc, stages in made.items()
+            if "extraction" in stages
+        }
+        waiting = {
+            doc: e
+            for doc, e in extractions.items()
+            if e.estimated in (WHOLE, CHUNKS)
+        }
+        if not waiting:
+            return
+        baseline = self._baseline(
+            {(doc.sha1, "extraction") for doc in waiting}
+        )
+        plan = [
+            {"sha1": doc.sha1, "kind": doc.kind, "stages": ["extraction"]}
+            for doc in extractions
+        ]
+        everyone = {(doc.sha1, "extraction") for doc in extractions}
+        calls = estimate.stages["extraction"]
+        for doc, extraction in waiting.items():
+            counted = llm.estimate_calls(
+                plan,
+                current=everyone - {(doc.sha1, "extraction")},
+                baseline=baseline,
+                sizes={doc.sha1: extraction.size} if extraction.size else {},
+            )["extraction"]
+            tally = extraction.tally
+            keyed = tally.chunk_hits + tally.chunk_misses
+            if extraction.estimated == WHOLE:
+                count = counted.calls
+            elif counted.measured:
+                count = counted.calls - tally.first_turns - keyed
+            else:
+                count = counted.calls - 1 - keyed
+            calls.estimated += max(0, count)
+            calls.estimated_documents += 1
+            calls.measured += counted.measured
+
+    def _baseline(self, needed: set[tuple[str, str]]) -> dict:
+        """(document SHA-1, stage) -> the calls the latest invocation to
+        finish the stage made for it (llm.run_calls, over that
+        invocation's events), from the newest run in the runs directory
+        back, until every pair in `needed` has its count. A stage counts
+        only as an invocation that finished it made it, so a later
+        invocation cut short in it, a refresh's say, leaves the measure
+        whole."""
+        measured: dict[tuple[str, str], int] = {}
+        for run in reversed(runs_in(self.state_dir.parent)):
+            if needed <= measured.keys():
+                break
+            invocations: dict[Any, list[dict]] = {}
+            for event in RunDir(run).events():
+                invocations.setdefault(event.get("invocation"), []).append(
+                    event
+                )
+            finished: dict[tuple[str, str], int] = {}
+            for events in invocations.values():
+                done = {
+                    (event.get("subject"), event.get("stage"))
+                    for event in events
+                    if event.get("event") == "done"
+                }
+                for pair, count in llm.run_calls(events).items():
+                    if pair in done:
+                        finished[pair] = count
+            for pair, count in finished.items():
+                measured.setdefault(pair, count)
+        return measured
+
+
+def _holders(runs: Path, cache: Path) -> list[str]:
+    """Who holds the runs directory and the LLM cache now, as their lock
+    files record it, read without taking either lock."""
+    held = []
+    for what, where, holder in (
+        ("the runs directory", runs, runs_holder(runs)),
+        ("the LLM cache", cache, llm.cache_holder(cache)),
+    ):
+        if holder is not None:
+            held.append(f"{what} {where} by {holder}")
+    return held
+
+
+def scratch_estimate(
+    folder: Path,
+    *,
+    runs: Path = DEFAULT_RUNS,
+    resume: str | None = None,
+    new: bool = False,
+    estimator: type[Estimator] = Estimator,
+    **options: Any,
+) -> Estimate:
+    """`yizkr scratch estimate`: the calls of the invocation `yizkr
+    scratch run` with the same options would make now (choose_run,
+    Estimator), with the runs directory neither held nor written. A runs
+    directory the run refuses (runs_refusal) is refused here too
+    (ScratchRefused)."""
+    refusal = runs_refusal(runs)
+    if refusal is not None:
+        raise ScratchRefused(refusal)
+    run_dir = choose_run(runs, resume=resume, new=new)
+    return estimator(folder, run_dir, **options).estimate()
+
+
+# -- the report ---------------------------------------------------------------
+
+
+def _plural(count: int, one: str, many: str | None = None) -> str:
+    return f"{count} {one if count == 1 else many or one + 's'}"
+
+
+def describe(estimate: Estimate) -> list[str]:
+    """The estimate as `yizkr scratch estimate` prints it: a line per
+    stage and the total, then what is known, estimated and bounded."""
+    if estimate.resumed:
+        what = (
+            f"run {estimate.run.name} in {estimate.run.parent}, invoked again"
+        )
+    else:
+        what = f"a new run in {estimate.run.parent}"
+    lines = [f"Estimate of {what}"]
+    keyed = f"the LLM cache {estimate.cache}"
+    if estimate.cli_version:
+        keyed = f"claude CLI {estimate.cli_version}, {keyed}"
+    lines.append(f"Keyed as the run keys its calls: {keyed}")
+    if estimate.past_barrier_only:
+        lines.append(
+            "The code differs from the run's, and every document has ended "
+            "its stages: the invocation goes past the barrier alone, and "
+            "makes no document's stage, so no call."
+        )
+    if not estimate.stages:
+        if not estimate.past_barrier_only:
+            lines.append("No document to take: no call.")
+        return lines + _notes(estimate)
+    lines += [
+        "",
+        f"{'stage':14} {'made':>5} {'reused':>6} {'cache hits':>10} "
+        f"{'engine calls':>12} {'estimated':>9}",
+    ]
+    rows = [*estimate.stages.items(), ("total", estimate.total())]
+    for stage, calls in rows:
+        lines.append(
+            f"{stage:14} {calls.made:>5} {calls.reused:>6} {calls.hits:>10} "
+            f"{calls.engine_calls:>12} {calls.estimated:>9}"
+        )
+    total = estimate.total()
+    summary = (
+        f"Engine calls: {total.engine_calls}, {total.known} known and "
+        f"{total.estimated} estimated"
+    )
+    if total.more:
+        summary += f", and up to {total.more} more"
+    lines += ["", summary + "."]
+    lines.append(
+        "- Known: keyed as the run keys them, from the same prompts, "
+        "files, models, efforts and engine configuration, and answered by "
+        "the cache or by the engine."
+    )
+    if total.estimated:
+        lines.append(
+            "- Estimated: calls whose keys wait on an answer the engine is "
+            "yet to give (a reading, an entity manifest, a chunk): "
+            + "; ".join(_estimated(estimate))
+            + "."
+        )
+    if total.more:
+        lines.append(
+            f"- Up to {total.more} more, where only the engine's answers "
+            "decide: an entity manifest the engine answers may be refused, "
+            "and then its second attempt and the segmentation's two are "
+            "asked (3 more for an extraction at most); a replayed "
+            "conversation that answers differently starts its extraction "
+            "over, asks its forks the cache answered too, and can make a "
+            "number of chunks of its own. The chunks an entity manifest "
+            "makes follow its entities, which a text's length only "
+            "approaches, so a dense document can take more still: an "
+            "estimate, not a ceiling."
+        )
+    lines.append(
+        "- Not counted: calls asked again after an engine error or after a "
+        "chunk answer cut off (at most 2 for a chunk), and the waits for "
+        "the subscription, which are no calls. A slice the anomaly checks "
+        "pause makes fewer calls than counted."
+    )
+    return lines + _notes(estimate)
+
+
+def _estimated(estimate: Estimate) -> list[str]:
+    """What the estimated calls are, stage by stage, and how each is
+    counted."""
+    parts = []
+    extraction = estimate.stages.get("extraction", StageCalls())
+    if extraction.estimated_documents:
+        documents = extraction.estimated_documents
+        if extraction.measured == documents:
+            how = "each as the latest run to make it measured it"
+        elif extraction.measured:
+            how = (
+                f"{extraction.measured} as the latest run to make them "
+                "measured them, the others by the mean for their kind over "
+                "the runs measured, or by their text's length"
+            )
+        else:
+            how = (
+                "by the mean for their kind over the runs measured, or by "
+                "their text's length"
+            )
+        parts.append(
+            _plural(
+                extraction.estimated - extraction.replay_calls,
+                "extraction call",
+            )
+            + f" for {_plural(documents, 'document')}, {how}"
+        )
+    if extraction.replays:
+        parts.append(
+            f"{_plural(extraction.replay_calls, 'chunk call')} after "
+            f"{_plural(extraction.replays, 'replayed conversation')}, those "
+            "the cache's chunks leave unanswered"
+        )
+    critique = estimate.stages.get("critique", StageCalls())
+    if critique.estimated:
+        parts.append(f"{_plural(critique.estimated, 'critique')}, one each")
+    return parts
+
+
+def _notes(estimate: Estimate) -> list[str]:
+    notes = []
+    failing = [
+        _plural(calls.failing, stage)
+        for stage, calls in estimate.stages.items()
+        if calls.failing
+    ]
+    if failing:
+        notes.append(
+            "- Failing in the run, as the cache answers it: "
+            + ", ".join(failing)
+            + ". The stages after them are not reached."
+        )
+    if estimate.duplicates or estimate.unreadable:
+        taken = []
+        if estimate.duplicates:
+            taken.append(_plural(estimate.duplicates, "duplicate"))
+        if estimate.unreadable:
+            taken.append(f"{estimate.unreadable} unreadable")
+        notes.append(f"- No stage for {' and '.join(taken)}.")
+    if estimate.corpus_stages:
+        notes.append(
+            "- Not estimated: the corpus stages "
+            + ", ".join(estimate.corpus_stages)
+            + "."
+        )
+    for held in estimate.holders:
+        notes.append(
+            f"- Held now: {held}. The estimate takes no lock, and counts "
+            "what the run and the cache hold as it reads them."
+        )
+    if estimate.preflight:
+        notes.append(
+            "- The run's preflight would refuse it now: "
+            + "; ".join(problem.rstrip(".") for problem in estimate.preflight)
+            + "."
+        )
+    return notes

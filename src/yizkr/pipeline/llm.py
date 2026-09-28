@@ -2587,6 +2587,39 @@ def open_cache(
     return EngineCache(root, refresh=refresh, epochs=epochs)
 
 
+def read_cache(
+    root: str | os.PathLike[str],
+    *,
+    refresh: Iterable[str] = (),
+    epochs: Mapping[str, int] | None = None,
+) -> Any:
+    """The LLM cache under ``root`` as a run with this ``refresh`` and
+    these ``epochs`` would be served it, read as it is (ADR-0032 §3):
+    without its lock, which a running pass may hold, and with nothing
+    written. A client `cached_client` makes over it asks its engine for
+    what the cache cannot answer; what the calls change, an answer
+    rejected or one stored, is kept in memory. A kept session comes back
+    as the names of its files only, with no bytes: whether they can
+    resume a conversation is all a reader asks. A folder the cache would
+    refuse to open, one a git work tree would track, one open to other
+    users, or one this user cannot write in or make, is refused here too
+    (llmcache.CacheRefused, a pause). The call estimate counts a planned
+    run's calls through it (yizkr.pipeline.estimate)."""
+    from yizkr.pipeline.llmcache import CacheAsIs
+
+    return CacheAsIs(root, refresh=refresh, epochs=epochs)
+
+
+def cache_holder(root: str | os.PathLike[str]) -> str | None:
+    """The process that holds the LLM cache under ``root`` now, described
+    (its id, host, command and start), as the cache's lock file records
+    it, read without taking the lock; None when none runs that holds it
+    (One process per cache, docs/LLM_CACHE.md)."""
+    from yizkr.pipeline.llmcache import held_by
+
+    return held_by(root)
+
+
 def cached_client(
     client: LlmClient,
     cache: Any,
@@ -2595,15 +2628,16 @@ def cached_client(
     events: Callable[..., Any] | None = None,
 ) -> LlmClient:
     """``client`` with every call answered from ``cache`` (an `open_cache`
-    result) when the same call was answered before, and otherwise made
-    and kept. ``client`` is an engine's client, or one `observed_client`
-    made of it, whose calls are those that reach the engine: the misses
-    and the replays. ``role`` names the pipeline step whose calls these
-    are (transcribe, extract, critique): its epoch and refresh setting
-    apply. ``events``, when given, receives an event for every hit, miss,
-    resume, replay, rejection and adoption. The wrapper presents the
-    conversational capability exactly when ``client`` has it, and adds
-    `reject` (RejectingLlmClient) and `attempt` (AttemptingLlmClient)."""
+    or `read_cache` result) when the same call was answered before, and
+    otherwise made and kept. ``client`` is an engine's client, or one
+    `observed_client` made of it, whose calls are those that reach the
+    engine: the misses and the replays. ``role`` names the pipeline step
+    whose calls these are (transcribe, extract, critique): its epoch and
+    refresh setting apply. ``events``, when given, receives an event for
+    every hit, miss, resume, replay, rejection and adoption. The wrapper
+    presents the conversational capability exactly when ``client`` has
+    it, and adds `reject` (RejectingLlmClient) and `attempt`
+    (AttemptingLlmClient)."""
     from yizkr.pipeline.llmcache import wrap
 
     return wrap(client, cache, role=role, events=events)
@@ -2691,10 +2725,13 @@ def estimate_calls(
     characters of the text when `sizes` gives its length (SHA-1 to
     characters), else one; a GEDCOM file calls no engine.
 
-    These are the pipeline's calls. The LLM cache answers those whose keys
-    it holds, which only the run can tell, so the engine is asked no more
-    often, but for the replays of conversations whose kept session is
-    gone (ADR-0032 §6)."""
+    These are the pipeline's calls, counted without their keys. The LLM
+    cache answers those whose keys it holds, so the engine is asked no
+    more often, but for the replays of conversations whose kept session
+    is gone (ADR-0032 §6). The scratch run's call estimate keys what it
+    can, with the cache as it is (yizkr.pipeline.estimate), and counts by
+    this only the calls whose keys wait on an answer the engine has yet
+    to give."""
     from yizkr.pipeline.chunking import DEFAULT_CHUNK_BUDGET
 
     documents = list(documents)

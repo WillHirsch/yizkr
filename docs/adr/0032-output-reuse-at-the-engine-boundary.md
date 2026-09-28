@@ -30,6 +30,11 @@ Amended by #305 (2026-09-28): the cache refuses a folder a git work tree
 would track, and one there already that is open to other users, and
 changes the mode only of the folders it makes (§3).
 
+Amended by #101 (2026-09-28): a reader that only reads a cache, the call
+estimate's, takes no lock and writes nothing, so it reads beside the
+process that holds the cache, and it refuses the folders the cache
+refuses (§3).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -214,6 +219,14 @@ an artifact a new QID changes no key.
   process shares, so one process's release could pull it from under
   another's forks, and a session held after a replay (§6) is known only
   to its process.
+- A reader that only reads a cache holds no lock (`llm.read_cache`): the
+  call estimate reads the entries a run would be served, and the names of
+  the session files kept, beside the process that holds the cache,
+  without making a folder or writing anything. It holds nothing that
+  process needs. What its own calls would change it keeps in memory; the
+  entries it reads are whole, as every reader's are, and a kept session's
+  folder, which its keeper replaces by renames, is listed through the
+  folder opened once, and looked for again a moment later while missing.
 
 ### 4. Rejection
 
