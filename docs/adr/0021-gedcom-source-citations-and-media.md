@@ -9,6 +9,9 @@ deferred to a future ADR (#168).
 Amended by #308 (2026-09-28): the census reads each tag where it stands,
 so a divorce's PLAC, a MARR's TYPE and an undated DIV are counted: see
 Amendments.
+Amended by #322 (2026-09-28): the adapter reads every occurrence of a
+tag, so a repeated event or detail gives claims of its own, and a
+further HUSB or WIFE is counted: see Amendments.
 
 ## Context
 
@@ -155,3 +158,40 @@ since the model has no property that fits it:
 
 The spouse claims' verbatim excerpt still shows their lines, within its
 400 characters.
+
+Amended by #322 (2026-09-28): **every occurrence is read or counted.**
+The census took every occurrence of a tag it descends into as read, but
+the adapter read only the first BIRT, DEAT, MARR, DIV, SEX and NCHI of a
+record, and the first DATE, PLAC, CAUS, TYPE and NICK beneath a tag, so
+the others were dropped silently. Among them was the alternative date,
+which GEDCOM states by repeating the event. The adapter now reads every
+occurrence, and each gives claims of its own, with its own date, place
+and circa, so that the alternatives coexist (ADR-0002):
+
+- a repeated BIRT or DEAT, or a repeated DATE, PLAC or CAUS beneath one,
+  gives a date, place or cause claim of its own, and a repeated SEX,
+  NCHI, NAME TYPE or NICK a claim of its own. Two that differ coexist, as
+  competing counts do (docs/MODELING.md); one that restates another gives
+  the same claim, which the batch holds once;
+- where one claim holds both an event's date and its place (BURI, RESI,
+  OCCU, MARR), each of the event's dates is paired with each of its
+  places;
+- a family's first marriage (a date with a place) and its first divorce
+  date one pair of spouse claims, as a family's only MARR and DIV do, and
+  every other marriage or divorce dates a pair of its own (docs/MODELING.md,
+  "Marriages, residences and other periods"). Pairing only the first
+  keeps each MARR's and each DIV's date on one pair of claims, rather than
+  pairing every marriage with every divorce;
+- what dates nothing (`1 BIRT Y`, `1 MARR Y`, a date the grammar cannot
+  parse) adds no undated claim beside a dated one of the same event or
+  family, so it never hides a dated one. An undated DIV is still counted
+  as `DIV`, as above.
+
+These are mapped rather than counted because each is something the record
+states that a claim of the model can hold, and a claim of its own keeps
+it apart from the others. A family's HUSB and WIFE are the exception: the
+adapter reads a family's first of each alone, since a family has one
+husband and one wife, and mapping a second would give the other partner
+a second spouse and each child a second parent, which the record cannot
+mean. A further one is counted, named with its parent's tag (`FAM.HUSB`,
+`FAM.WIFE`), since the adapter reads the first beneath the same tag.
