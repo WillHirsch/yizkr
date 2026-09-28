@@ -487,6 +487,11 @@ class Estimator(ScratchDriver):
         # the stage being counted
         self._tally = _Tally(self._asked)
 
+    def run(self) -> int:
+        """An estimator counts a run's calls, and never makes the run:
+        `estimate`."""
+        raise TypeError("an Estimator never runs a run: call estimate()")
+
     def _pacing(self) -> dict[str, float] | None:
         """The engine's pacing, or None when the preflight would refuse
         it: pacing decides when calls are made, never what they send, and

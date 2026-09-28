@@ -876,6 +876,17 @@ class TestNothingTouched:
         ]
         assert all(f"process {pid} " in line for line in counted.holders)
 
+    def test_an_estimator_never_runs_the_run(self, tmp_path, engine):
+        corpus = small(tmp_path)
+        engine.corpus = corpus
+        estimator = Quiet(
+            corpus.folder, runs_dir(tmp_path) / "r", cache_dir=tmp_path / "c"
+        )
+        with pytest.raises(TypeError, match="estimate"):
+            estimator.run()
+        assert not runs_dir(tmp_path).exists()
+        assert engine.calls == []
+
     def test_a_new_run_makes_no_directory(self, tmp_path, engine):
         corpus = small(tmp_path)
         counted = estimate_of(tmp_path, corpus, engine)
