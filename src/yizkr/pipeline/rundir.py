@@ -13,10 +13,11 @@ one run, and the run state derived from them.
     <run dir>/control.jsonl  append-only pause/resume/abort requests
 
 Every file is append-only JSON lines except run.json, which is replaced
-atomically. Readers skip a torn line, so a reader never needs a lock and
-an interrupted writer never corrupts the log; a writer that finds the
-last line torn ends it before its own record, so the torn line costs
-only the record its writer was writing. Every stage start,
+atomically. Readers skip a torn line, so a reader never needs a lock. A
+writer locks the log while it reads the last byte and appends, and ends
+a torn last line before its own record, so a writer that dies mid-write
+loses only the record it was writing wherever the lock holds
+(_append_line says where it does not). Every stage start,
 completion and failure is an event, and so is every view a run reuses
 (yizkr.pipeline.orchestrate) and every answer the LLM cache gives or
 cannot give (yizkr.pipeline.llmcache); the driver, the live monitor, the
@@ -40,7 +41,9 @@ again, with the reason, while the control file holds it.
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import fcntl
 import functools
 import hashlib
 import json
@@ -426,11 +429,32 @@ def _append_line(path: Path, line: bytes) -> None:
     write ends it first with a newline: the fragment is left a line of its
     own, which readers skip, and `line` stays whole. Only a newline ends a
     line, as readers split at newlines only, so a log ending in a carriage
-    return counts as torn. Two appenders that both find the last line torn
-    both end it, which leaves a blank line that readers skip too.
+    return counts as torn.
+
+    An exclusive POSIX lock on the log (fcntl.lockf) covers the check and
+    the write, and closing the descriptor, or the writer's death,
+    releases it. Appenders in different processes therefore take turns: a
+    writer that dies mid-write leaves its fragment before the next
+    appender's check, which ends it. The lock does not hold everywhere:
+
+    - Where lockf raises OSError (a filesystem without POSIX locks), the
+      append goes ahead unlocked rather than failing.
+    - A POSIX lock belongs to the process, so appenders in one process
+      (two RunDirs, each with its own in-process lock) share it, and
+      closing any descriptor on the log in that process, a reader's in
+      another thread say, releases it.
+
+    Where the lock does not hold, an appender may find the last line torn
+    when another has just ended it, or while another's large write is
+    under way, and its newline then leaves a blank line, which readers
+    skip. And a writer in another process that dies mid-write between
+    this append's check and its write takes this record with it.
     """
     descriptor = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o666)
     try:
+        # where no lock is to be had, the append goes ahead unlocked
+        with contextlib.suppress(OSError):
+            fcntl.lockf(descriptor, fcntl.LOCK_EX)
         size = os.lseek(descriptor, 0, os.SEEK_END)
         if size:
             os.lseek(descriptor, size - 1, os.SEEK_SET)

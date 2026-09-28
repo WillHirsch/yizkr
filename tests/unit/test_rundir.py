@@ -4,8 +4,15 @@ events (#87, #225)."""
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import hashlib
 import os
+import signal
+import subprocess
+import sys
+import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -166,11 +173,17 @@ class TestAppendAfterATornLine:
         RunDir(tmp_path).emit("started", stage="extraction")
         assert names(tmp_path) == ["done", "started"]
 
-    def test_a_log_holding_only_a_fragment(self, tmp_path):
-        tear(tmp_path / "events.jsonl")
+    @pytest.mark.parametrize(
+        "fragment",
+        [TORN, b"{", b"\xc3"],
+        ids=["fragment", "brace", "lead-byte"],
+    )
+    def test_a_log_holding_only_a_fragment(self, tmp_path, fragment):
+        """A log of one byte is checked like any other."""
+        tear(tmp_path / "events.jsonl", fragment)
         RunDir(tmp_path).emit("run-start")
         data = (tmp_path / "events.jsonl").read_bytes()
-        assert data.startswith(TORN + b"\n{")
+        assert data.startswith(fragment + b"\n{")
         assert names(tmp_path) == ["run-start"]
 
     @pytest.mark.parametrize("exists", [False, True], ids=["missing", "empty"])
@@ -216,9 +229,10 @@ class TestAppendAfterATornLine:
     def test_two_appenders_that_find_one_torn_line_keep_both_records(
         self, tmp_path, monkeypatch
     ):
-        """Two appenders (two processes, or two RunDirs with a lock each)
-        both find the last line torn and both end it: that leaves a blank
-        line, which readers skip."""
+        """Two appenders that the log's lock does not order (two RunDirs
+        in one process, with a lock each, or two processes where no lock
+        is to be had) both find the last line torn and both end it: that
+        leaves a blank line, which readers skip."""
         tear(tmp_path / "events.jsonl")
         first, second = RunDir(tmp_path), RunDir(tmp_path)
         # the second appends after the first has found the line torn and
@@ -230,6 +244,111 @@ class TestAppendAfterATornLine:
         data = (tmp_path / "events.jsonl").read_bytes()
         assert data.startswith(TORN + b"\n{") and data.count(b"\n\n") == 1
         assert names(tmp_path) == ["run-start", "done"]
+
+
+# another process's writer: it takes the log's lock, says so, and on a line
+# from its stdin writes a fragment and dies
+HOLDER = """
+import fcntl, os, signal, sys
+log = os.open(sys.argv[1], os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o666)
+fcntl.lockf(log, fcntl.LOCK_EX)
+print("locked", flush=True)
+sys.stdin.readline()
+os.write(log, sys.argv[2].encode())
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+
+# another process that tries for a shared lock on the log without waiting
+PROBE = """
+import fcntl, os, sys
+log = os.open(sys.argv[1], os.O_RDONLY)
+try:
+    fcntl.lockf(log, fcntl.LOCK_SH | fcntl.LOCK_NB)
+except OSError:
+    print("refused")
+else:
+    print("taken")
+"""
+
+
+class TestTheAppendLock:
+    """An append locks the log from before it reads the last byte until
+    its record is written, so a writer in another process that dies
+    mid-write costs only its own record (#271)."""
+
+    def test_an_append_checks_the_last_line_after_the_lock_is_free(
+        self, tmp_path, monkeypatch
+    ):
+        """A writer in another process holds the lock and dies mid-write.
+        An append begun meanwhile waits, then finds the fragment and ends
+        it. Were the check made before the lock, the append would find the
+        last line whole, and its write would land on the fragment."""
+        log = tmp_path / "events.jsonl"
+        RunDir(tmp_path).emit("started", stage="transcription")
+        command = [sys.executable, "-c", HOLDER, str(log), TORN.decode()]
+        with subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE
+        ) as holder:
+            once = threading.Lock()
+
+            def die():
+                with once:
+                    if holder.poll() is None:
+                        holder.stdin.write(b"go\n")
+                        holder.stdin.flush()
+                        holder.wait()
+
+            try:
+                assert holder.stdout.readline() == b"locked\n"
+                # an append that reaches its write first lets the writer
+                # die before it writes
+                monkeypatch.setattr(rundir, "os", _OsWrites(before=die))
+                append = threading.Thread(
+                    target=RunDir(tmp_path).emit,
+                    args=("run-start",),
+                    daemon=True,
+                )
+                append.start()
+                append.join(0.2)
+                assert append.is_alive()  # waiting for the lock
+                die()
+                append.join(10)
+                assert not append.is_alive()
+            finally:
+                holder.kill()
+        monkeypatch.undo()
+        assert holder.returncode == -signal.SIGKILL
+        assert names(tmp_path) == ["started", "run-start"]
+        assert log.read_bytes().count(TORN + b"\n{") == 1
+
+    def test_the_lock_is_held_until_the_record_is_written(
+        self, tmp_path, monkeypatch
+    ):
+        log = tmp_path / "events.jsonl"
+        seen = []
+
+        def probe():
+            command = [sys.executable, "-c", PROBE, str(log)]
+            seen.append(subprocess.run(command, capture_output=True).stdout)
+
+        monkeypatch.setattr(rundir, "os", _OsWrites(before=probe))
+        RunDir(tmp_path).emit("run-start")
+        assert seen == [b"refused\n"]
+
+    @pytest.mark.parametrize(
+        "error", [errno.ENOLCK, errno.EINVAL], ids=["ENOLCK", "EINVAL"]
+    )
+    def test_an_append_goes_ahead_where_no_lock_is_to_be_had(
+        self, tmp_path, monkeypatch, error
+    ):
+        def lockf(descriptor, command):
+            raise OSError(error, os.strerror(error))
+
+        no_locks = SimpleNamespace(LOCK_EX=fcntl.LOCK_EX, lockf=lockf)
+        monkeypatch.setattr(rundir, "fcntl", no_locks)
+        tear(tmp_path / "events.jsonl")
+        RunDir(tmp_path).emit("run-start")
+        assert names(tmp_path) == ["run-start"]
 
 
 class TestControl:

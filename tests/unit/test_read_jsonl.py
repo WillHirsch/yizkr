@@ -1,5 +1,6 @@
 """Append-only logs keep records whose strings hold line separators other
-than a newline: the run directory writes them raw (#271)."""
+than a newline: the run directory writes them raw. A line that is not
+valid UTF-8 is skipped alone (#271)."""
 
 from __future__ import annotations
 
@@ -39,3 +40,16 @@ def test_a_crlf_log_is_read(tmp_path):
     log = tmp_path / "events.jsonl"
     log.write_bytes(b'{"event": "a"}\r\n{"event": "b"}\r\n')
     assert read_jsonl(log) == [{"event": "a"}, {"event": "b"}]
+
+
+def test_a_whole_record_that_is_not_utf8_is_skipped_alone(tmp_path):
+    """A complete line in the middle of a log that holds a byte UTF-8
+    does not allow (Latin-1's "ö") is skipped, never read with the byte
+    replaced, and the records around it are kept."""
+    log = tmp_path / "events.jsonl"
+    log.write_bytes(
+        b'{"event": "a"}\n'
+        b'{"event": "b", "note": "Klara L\xf6big"}\n'
+        b'{"event": "c"}\n'
+    )
+    assert read_jsonl(log) == [{"event": "a"}, {"event": "c"}]
