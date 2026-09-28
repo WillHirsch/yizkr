@@ -454,7 +454,9 @@ class _Media:
 
 def _decide(media: _Media) -> Outcome | None:
     """The outcome of a media's transcriptions that no key is needed for;
-    None for one to adopt, which is its only vision transcription."""
+    None when one is to be adopted: its vision transcriptions agree, the
+    corpus holds its scan, and the chosen one was made with the prompt the
+    run sends."""
     sha1, where = media.sha1, media.where
     vision = media.vision
     if not vision:
