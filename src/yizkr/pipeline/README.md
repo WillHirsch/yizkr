@@ -4,6 +4,10 @@ Takes an artifact from a digitised file to reviewed, source-referenced
 statements in the graph (R3, ADR-0003). Every step reads and writes plain
 files, so a run pauses for review, can be inspected, and resumes.
 
+Whole-corpus scratch runs (`yizkr scratch run`, ADR-0025) have a runbook
+of their own, [docs/runbooks/scratch-run.md](../../../docs/runbooks/scratch-run.md),
+and a live monitor, [docs/MONITOR.md](../../../docs/MONITOR.md).
+
 ## The ingest loop: one command, two gates, repeat
 
 `yizkr ingest run <folder>` is the whole workflow. It advances every

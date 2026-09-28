@@ -3,10 +3,10 @@
 Every run directory holds a `run.json`: the run manifest. It says what
 shaped the run, in enough detail for a later tool to tell two runs apart
 by their configuration, and it plans the documents the run takes through
-its stages. `yizkr stages state` reads it, and so will the run report
-(#124), the live monitor (#195), the call estimate (#101) and the
-scratch diff (#198); `yizkr stages manifest <run dir>` prints it for a
-person.
+its stages. `yizkr stages state`, the scratch driver and the live
+monitor ([docs/MONITOR.md](MONITOR.md)) read it, and so will the run
+report (#124), the call estimate (#101) and the scratch diff (#198);
+`yizkr stages manifest <run dir>` prints it for a person.
 
 The other files of the run directory (`events.jsonl`, `alerts.jsonl`,
 `control.jsonl`) and the LLM cache are described in
@@ -14,14 +14,16 @@ The other files of the run directory (`events.jsonl`, `alerts.jsonl`,
 reasons for both.
 
 Code: `yizkr.pipeline.rundir` (the file, the settings check, the code
-version, the never-ingest list's hash, the alias rule) and
-`yizkr.pipeline.orchestrate` (what `yizkr ingest run` records).
+version, the never-ingest list's hash, the alias rule),
+`yizkr.pipeline.orchestrate` (what `yizkr ingest run` records) and
+`yizkr.pipeline.scratch` (what a scratch run records,
+docs/runbooks/scratch-run.md).
 
 ## What it records, and what it never does
 
 The manifest records settings, hashes and paths:
 
-- the mode (`ingest run`; the scratch driver, #194, will add its own) and
+- the mode (`ingest run`, or `scratch run` for the scratch driver) and
   the project stage (`development`; keeper mode, #118, records `kept`);
 - the engine, and the claude CLI version the pass is pinned to;
 - for each role the engine is called in (`transcribe`, `extract`,
@@ -85,8 +87,8 @@ The manifest describes the run **as its latest invocation ran it**.
   view that stands is reused whatever the settings. A role's `client`
   and the engine's `cli_version` start `null` in each invocation and say
   what this invocation's engines applied.
-- **A run that keeps its settings** (`fixed_settings`, for the scratch
-  driver, #194): an invocation must ask for the settings the run
+- **A run that keeps its settings** (`fixed_settings`: a scratch run,
+  `yizkr scratch run`): an invocation must ask for the settings the run
   recorded, or it is refused with `RunSettingsConflict` before anything
   is written or called. The refusal lists each setting that differs,
   with the recorded value and the one asked for, and says what to do:
@@ -123,6 +125,21 @@ these exceptions, which may change between its invocations:
 A `run.json` written before format 1 lacks these settings, so a run that
 keeps its settings refuses to resume from one.
 
+**A scratch run past its barrier.** A scratch run keeps its code with one
+exception, so that a corpus stage registered after the run reached its
+barrier can still run on it. When every document's per-document stages
+have ended in the run's events, done or failed, and the code is the only
+setting an invocation changes, the invocation goes past the barrier
+alone: it dispatches no document's stage, and runs the corpus stages
+over the views as they are. The run's `code` stays the code the
+documents' stages ran on, and the invocation records its own under
+`scratch.code`, with `scratch.past_barrier_only`. Such an invocation
+refuses `--refresh`, which would make views again. With any other
+setting changed, or a document's stage still to run, a change of code is
+refused as any other change is: start a new run, whose fresh state
+directories make every view again with the new code, the LLM cache
+answering every call the change leaves the same.
+
 ## Model ids, never aliases
 
 A run refuses to start when its configuration names a model by an alias:
@@ -143,7 +160,9 @@ Two cases pass the check and stay visible elsewhere:
 
 - **No model at all.** The engine then runs its own default. The run
   records the role's `model` as `null`, and the LLM cache warns once per
-  role that its keys name no model (docs/LLM_CACHE.md, Keys).
+  role that its keys name no model (docs/LLM_CACHE.md, Keys). A scratch
+  run, whose answers later runs reuse, refuses this too: its preflight
+  asks every role for a model.
 - **An undated name of a model that also has dated snapshots.** Its form
   cannot tell it from a full id. Every cache entry records the model the
   engine reported, and #98 will compare the model each call's stream
@@ -160,15 +179,17 @@ version of the code: `run.json` files from before format 1 hold only
 | Field | What it holds |
 |---|---|
 | `format` | `1` |
-| `run_id` | Set at the first invocation and kept: `<UTC time>-<6 hex digits>` |
-| `mode` | What wrote the manifest: `ingest run` |
+| `run_id` | Set at the first invocation and kept: `<UTC time>-<6 hex digits>`. A scratch run's is its directory's name, and its hex digits give the microsecond it started, so that runs sort as they started |
+| `mode` | What wrote the manifest: `ingest run`, or `scratch run` |
 | `project_stage` | `development`, or `kept` from keeper mode on (ADR-0024 §7, ADR-0025 §6) |
 | `engine` | `{name, cli_version}`: `claude-code` or `anthropic`; the claude CLI version the pass is pinned to, once a claude-code client started in the invocation (`null` otherwise, and for the API engine) |
 | `roles` | Per role (`transcribe`, `extract`, `critique`), see below |
 | `cache` | The LLM cache's absolute path; `null` when the run has none (`--no-cache`) |
 | `corpus` | `{folder, exclusions}`: the corpus folder's absolute path; the never-ingest list as `{file, sha256}`, see below |
 | `code` | `{version, commit, dirty, diff_sha256}`, see below |
-| `config` | The run's configuration: `engine`, `language`, `fallback_language`, `extract_effort`, `review_effort`, `extract_model`, `refresh` (the refreshed roles), `epochs` (role to epoch, where not 0), `artifact_type`, `serial`, `chunk_concurrency`, `extract_concurrency` |
+| `config` | The run's configuration: `engine`, `language`, `fallback_language`, `extract_effort`, `review_effort`, `extract_model`, `refresh` (the refreshed roles), `epochs` (role to epoch, where not 0), `artifact_type`, `serial`, `chunk_concurrency`, `extract_concurrency`; a scratch run's has no `artifact_type`, `serial` or `extract_concurrency`, which it does not use |
+| `pacing` | A scratch run's: the engine's pacing, as the latest invocation ran it (not a setting it keeps): `reserve`, the share of each usage window left to development sessions (`$YIZKR_CLAUDE_RESERVE`), and `max_wait`, the longest a call waits for the subscription, in seconds (`$YIZKR_CLAUDE_MAX_WAIT`); `null` for the API engine |
+| `scratch` | A scratch run's latest invocation (not a setting it keeps): `until` (the stage it was asked to stop after, or `null`), `canaries` (the SHA-1s of the documents that went first), `corpus_stages` (the names of those registered), `past_barrier_only` and, when it is true, `code` (the invocation's own code, see above), and `complete` (whether it went through every stage there is, which `yizkr scratch run` reads to resume the latest run or start a new one) |
 | `documents` | One entry per planned document, `{sha1, file, kind, stages}`: its media SHA-1, its file name, its slice (`text`, `media`, `presentation`, `gedcom`) and the stages planned for it. A document whose source or `state.json` cannot be read is not planned; a `document-failed` event names it (docs/LLM_CACHE.md) |
 | `started_at` | When the first invocation started (UTC, ISO 8601, to the second) |
 | `ended_at` | When the latest invocation ended; `null` while it runs, or when it was killed |
@@ -206,8 +227,8 @@ and `dirty` are `null`. The code version is measured once per process.
 |---|---|
 | `invocation` | The invocation's id, which every event it emits carries |
 | `started_at`, `ended_at` | Its start and end; `ended_at` stays `null` while it runs, or if it was killed |
-| `outcome` | `finished` (it went through its documents, whatever their statuses, and no request for the whole run held any of them), `stopped` (a control request for the whole run stopped it: before a document, or by holding a stage of one, the last document's included; a request for one stage or kind holds documents at it, and the invocation still finishes), `interrupted` (Ctrl-C), `paused` (the pass paused, `PassPaused`: the claude CLI changed while the invocation ran, say, or a subscription limit would hold a call longer than the engine waits, `UsageLimitReached`, whose call event gives the time the run can go on; docs/LLM_CACHE.md, Subscription limits), `refused` (`RunSettingsConflict`: other settings than the run recorded, a claude CLI updated since it recorded its version included) or `failed` (another error escaped it); `null` while it runs |
-| `reason` | When it did not finish: the control request that stopped it (`run aborted`, `run paused`), or the name of the exception, never its message, which may quote a document |
+| `outcome` | `finished` (it went through its documents, whatever their statuses, and no request for the whole run held any of them), `stopped` (a control request for the whole run stopped it: before a document, or by holding a stage of one, the last document's included; a request for one stage or kind holds documents at it, and the invocation still finishes; in a scratch run, whose barrier waits for every document, a request that aborts a stage or kind stops the invocation too, once nothing else is left to do), `interrupted` (Ctrl-C), `paused` (the pass paused, `PassPaused`: the claude CLI changed while the invocation ran, say, or a subscription limit would hold a call longer than the engine waits, `UsageLimitReached`, whose call event gives the time the run can go on; docs/LLM_CACHE.md, Subscription limits), `refused` (`RunSettingsConflict`: other settings than the run recorded, a claude CLI updated since it recorded its version included) or `failed` (another error escaped it, or a scratch run's corpus stage failed); `null` while it runs |
+| `reason` | When it did not finish: the control request that stopped it (`run aborted`, `run paused`; in a scratch run, the slices whose aborts held it, such as `kind:media aborted`), or the name of the exception, never its message, which may quote a document |
 
 ## An example
 
@@ -266,17 +287,19 @@ otherwise.
 - **The resolved model per call.** The manifest says what a run
   configures and what its clients apply; which model answered each call
   is in the LLM cache's entries, and #98 parses it from the stream.
-- **The engine's pacing.** The share of each usage window left to
-  development sessions and the longest a call waits for the subscription
-  (`$YIZKR_CLAUDE_RESERVE`, `$YIZKR_CLAUDE_MAX_WAIT`; docs/LLM_CACHE.md)
-  decide only when calls are made, never what they send, and the
-  manifest does not record them yet. A pause they cause is the
-  invocation's `paused` outcome, and its call event says why and when
-  the run can go on — except a report that a call ran on usage credits,
-  which stops dispatch only once that report arrives: the reported
-  call, and any others already in flight when it lands, may already
-  have used credits, and only turning extra usage off on the account
-  guarantees none does. Its call event gives no `resumes_at` at all: the
-  subscription does not say when the pause clears, so the operator
-  confirms that extra usage is off on the account before invoking the
-  run again, rather than waiting for a time nothing will report.
+- **The engine's pacing in `ingest run`.** The share of each usage
+  window left to development sessions and the longest a call waits for
+  the subscription (`$YIZKR_CLAUDE_RESERVE`, `$YIZKR_CLAUDE_MAX_WAIT`;
+  docs/LLM_CACHE.md) decide only when calls are made, never what they
+  send; a scratch run records them (`pacing`), and `ingest run` does not
+  yet. A pause they cause is the invocation's `paused` outcome, and its
+  call event says why and when the run can go on (a scratch run waits
+  for that time and goes on by itself, docs/runbooks/scratch-run.md) —
+  except a report that a call ran on usage credits, which stops dispatch
+  only once that report arrives: the reported call, and any others
+  already in flight when it lands, may already have used credits, and
+  only turning extra usage off on the account guarantees none does. Its
+  call event gives no `resumes_at` at all: the subscription does not say
+  when the pause clears, so the operator confirms that extra usage is off
+  on the account before invoking the run again, rather than waiting for
+  a time nothing will report.

@@ -15,9 +15,21 @@ and writes them.
 
 ## Using it
 
-`yizkr scratch watch [<run>]` and `yizkr scratch pause|resume|abort` come
-with the scratch driver (#194) and call `monitor.watch` and
-`monitor.request`. Until then, run the monitor as a module:
+A scratch run is followed and stopped with the scratch driver's commands
+(docs/runbooks/scratch-run.md), which call `monitor.watch` and
+`monitor.request`:
+
+```
+uv run yizkr scratch watch [<run>] [--interval 2] [--once] [--no-page] [--serve ADDRESS:PORT]
+uv run yizkr scratch pause|resume|abort [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
+```
+
+`<run>` is a run id in the runs directory (`--runs`, default
+`var/scratch`) or a run directory's path; left out, it is the latest run
+there. Their requests are written by `operator`, and a resume of an
+aborted slice is not written, as in the view (below). The monitor also
+runs as a module, on any run directory, an `ingest run` state directory
+included:
 
 ```
 uv run python -m yizkr.pipeline.monitor watch <run dir> [--interval 2] [--once] [--no-page] [--serve ADDRESS:PORT]
