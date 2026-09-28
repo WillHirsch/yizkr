@@ -285,6 +285,16 @@ later check looks too. Only a pause the checks alone asked for is
 aborted: once someone else asks for a pause of the same slice, it is
 theirs. `pause-timeout-s: null` holds a pause until someone resumes it.
 
+The timeout runs from the first pause of the stretch that stands since
+the invocation's start marker. A driver that invokes the run again in
+the same process, as the scratch driver (#194) is to after a wait for a
+subscription limit, asks again for the pauses still standing, with the
+`by` they had. Such a pause stands from that request: the timer of the
+checks that first asked for it finds it short of the timeout, starts
+again for the time left, and aborts it then, whether or not any check
+runs in the new invocation. A pause the timer found past the timeout
+during the wait is aborted there, and such a driver carries the abort.
+
 **How a driver sees it.** A driver folds `control.jsonl` with
 `rundir.fold_control`, as it folds every request, the monitor's
 included: the slice is `paused` from the pause on, and `aborted` from the
@@ -295,7 +305,13 @@ keeps its status, and one whose stage is held is `paused`. A driver that
 waits on a paused slice, as the scratch driver (#194) is to, finds the
 abort in the same fold and stops waiting: the checks end the wait
 without any help from it. A new invocation's start marker clears every
-pause and abort. A pause or an abort only stops dispatch: in-flight
+pause and abort, apart from those a driver asks for again (above).
+
+The checks run wherever the orchestrator stores, reuses or fails a
+stage: in `Orchestrator._transcription`, `_derive`, `_critique`,
+`_reused_view` and `_run_stage`. `yizkr ingest run` reaches them through
+`_advance`, and a driver that takes each stage of each document through
+those methods reaches them the same way. A pause or an abort only stops dispatch: in-flight
 calls finish, every completed output stays stored, and the next
 invocation takes the slice up where it stopped.
 

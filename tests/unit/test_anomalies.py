@@ -168,16 +168,21 @@ def clock(monkeypatch) -> Clock:
 
 
 class Timers:
-    """The timers the checks start, recorded instead of started."""
+    """The timers the checks start, recorded instead of started: `fire`
+    runs each timer not run yet, as a real one runs once when its time
+    has come."""
 
     def __init__(self) -> None:
         self.started: list[tuple[float, object]] = []
+        self._pending: list = []
 
     def __call__(self, seconds, callback):
         self.started.append((seconds, callback))
+        self._pending.append(callback)
 
     def fire(self) -> None:
-        for _seconds, callback in self.started:
+        due, self._pending = self._pending, []
+        for callback in due:
             callback()
 
 
@@ -1310,7 +1315,9 @@ class TestFailFastPauses:
         assert run.control().stopped(kind="media") == "kind:media aborted"
 
     def test_the_timer_runs_on_a_thread_of_its_own(self, tmp_path):
-        """With the real timer: an abort without any later check."""
+        """With the real timer and clock: an abort that no later check
+        makes. The pause stands when the check that asked for it ends, and
+        the timer's thread, of a daemon, aborts it in its own time."""
         started = []
 
         def start(seconds, callback):
@@ -1318,15 +1325,50 @@ class TestFailFastPauses:
 
         run = RunDir(tmp_path / "run")
         checks = AnomalyChecks(
-            run, load_config(overrides={"pause-timeout-s": 0}), timer=start
+            run, load_config(overrides={"pause-timeout-s": 2}), timer=start
         )
         outcomes(run, "transcription", "media", "xxxxxx")
         checks.poll()
+        assert run.control().stopped(kind="media") == "kind:media paused"
         (timer,) = started
         assert timer.daemon
-        timer.join(timeout=10)
+        timer.join(timeout=30)
         assert not timer.is_alive()
         assert run.control().stopped(kind="media") == "kind:media aborted"
+
+    def test_a_pause_a_driver_carries_on_times_out_from_the_carry(
+        self, tmp_path, clock
+    ):
+        """A driver that invokes the run again after a subscription limit
+        asks again for the pauses still standing, with who asked for them,
+        as the scratch driver (#194) does. The checks that paused the
+        slice keep a timer on it: the carried pause times out from its own
+        request, with no check made in the new invocation."""
+        timers = Timers()
+        paused_media(tmp_path, clock=clock, timers=timers)
+        clock.advance(600)
+        run = RunDir(tmp_path / "run")
+        run.start()
+        run.request(
+            "pause",
+            kind="media",
+            by="anomaly",
+            reason="kind-failures: transcription failed 6 of the first 6 "
+            "media documents",
+            carried=True,
+        )
+        clock.advance(1201)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(600)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+        abort = requests(run)[-1]
+        assert (abort["action"], abort["by"], abort["check"]) == (
+            "abort",
+            "anomaly",
+            "kind-failures",
+        )
 
 
 # -- new and carried ----------------------------------------------------------

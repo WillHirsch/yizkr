@@ -61,8 +61,11 @@ and the other slices go on. When the pause has stood for the configured
 timeout and nobody has resumed the slice, the checks append an abort of
 it, so an unattended run never waits on it indefinitely: a timer started
 with the pause does it even while no stage runs, and every later check
-looks too. A pause of the same slice that someone else asked for is
-theirs, and is never aborted here. An abort, like a pause, only stops
+looks too. A driver that invokes the run again asks again for the pauses
+still standing, as they stood; such a pause is timed from that request,
+and the timer goes on watching it in the new invocation. A pause of the
+same slice that someone else asked for is theirs, and is never aborted
+here. An abort, like a pause, only stops
 dispatch: nothing is deleted, and every completed output stays.
 
 Alerts are signals. The checks never change, move or drop an output or a
@@ -921,8 +924,11 @@ class AnomalyChecks:
         self._planned: Counter | None = None
         self._raised: set[tuple] = set()
         # the slices these checks paused and still watch: scope -> (the
-        # check, what to start afresh once the slice is resumed)
+        # check, what to start afresh once the slice is resumed); the
+        # pending timer of each, by the token it was started with; and the
+        # slices they aborted, or saw aborted
         self._paused: dict[str, tuple[str, Callable[[], None]]] = {}
+        self._armed: dict[str, object] = {}
         self._aborted: set[str] = set()
 
     # -- what the orchestrator calls ------------------------------------------
@@ -1423,18 +1429,30 @@ class AnomalyChecks:
             PAUSE, by=BY, reason=reason, check=check, **{what: name}
         )
         self._paused[scope] = (check, reset)
-        timeout = self.config.pause_timeout_s
-        if timeout is not None:
-            self._timer(timeout + 1, self._expire)
+        if self.config.pause_timeout_s is not None:
+            self._arm(scope, self.config.pause_timeout_s)
         return scope
 
     def _control(self) -> list[dict]:
         return read_jsonl(self.run.path / CONTROL)
 
-    def _expire(self) -> None:
-        """The pause timer's end: abort what has stood past the timeout."""
+    def _arm(self, scope: str, seconds: float) -> None:
+        """Start the timer that looks at a paused slice once its pause has
+        stood `seconds` more, and a second more, since the control file
+        stamps its requests in whole seconds. A slice has one timer
+        pending at a time."""
+        token = object()
+        self._armed[scope] = token
+        self._timer(seconds + 1, lambda: self._expire(scope, token))
+
+    def _expire(self, scope: str, token: object) -> None:
+        """A pause timer's end: the slices are looked at again, so that one
+        paused past the timeout is aborted, and a timer is started again
+        for one whose pause still stands short of it."""
         try:
             with self._lock:
+                if self._armed.get(scope) is token:
+                    del self._armed[scope]
                 self._watch_slices()
         except Exception as exc:
             _report(self.run, "timer", exc)
@@ -1443,27 +1461,34 @@ class AnomalyChecks:
         """Each slice these checks paused, as the control file leaves it:
         resumed, its check starts afresh on what comes after; aborted, it
         is never paused again in the invocation; paused by these checks
-        alone past the timeout, it is aborted."""
+        alone past the timeout, it is aborted; and paused by them short of
+        the timeout, a timer looks at it again when the timeout comes.
+
+        The timeout runs from the first pause of the stretch that stands,
+        since the latest start marker. A driver that invokes the run again
+        asks there for the pauses still standing, with who asked for them,
+        so the pause these checks asked for stands on in the next
+        invocation, from that request, and their timer aborts it there."""
         state, stretches = _fold_scopes(self._control())
         timeout = self.config.pause_timeout_s
         now = self._now()
         for scope, (check, reset) in list(self._paused.items()):
             held = state.get(scope)
-            if held is None:
-                reset()
-                del self._paused[scope]
-                continue
             if held != "paused":
-                self._aborted.add(scope)
+                if held is None:
+                    reset()
+                else:
+                    self._aborted.add(scope)
                 del self._paused[scope]
+                self._armed.pop(scope, None)
                 continue
             since, ours = stretches.get(scope, (None, False))
-            if (
-                timeout is None
-                or not ours
-                or since is None
-                or (now - since).total_seconds() < timeout
-            ):
+            if timeout is None or not ours or since is None:
+                continue
+            elapsed = (now - since).total_seconds()
+            if elapsed < timeout:
+                if scope not in self._armed:
+                    self._arm(scope, timeout - elapsed)
                 continue
             what, name = scope.split(":", 1)
             self.run.request(
@@ -1475,6 +1500,7 @@ class AnomalyChecks:
             )
             self._aborted.add(scope)
             del self._paused[scope]
+            self._armed.pop(scope, None)
 
 
 def _excerpt_language(claim: Any) -> Any:
