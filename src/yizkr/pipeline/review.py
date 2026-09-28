@@ -161,9 +161,16 @@ def _local_refs(claim: Claim) -> list[LocalRef]:
     return [ref for ref in refs if isinstance(ref, LocalRef)]
 
 
-def _entity_records(batch: ClaimBatch) -> dict[str, EntityRecord]:
-    """The batch's entity manifest by id, as the writer reads it: the last
-    record with an id is the one that id's local refs resolve through."""
+def entity_records(batch: ClaimBatch) -> dict[str, EntityRecord]:
+    """The batch's entity manifest by id: the record each local ref of that
+    id resolves through (ADR-0007). When two records share an id, the last
+    one counts: the other resolves no local ref, and the writer adds no
+    alias or kind from it. It is still part of the batch file, which the
+    extraction-run item's fingerprint covers whole.
+
+    The writer reads the manifest through this lookup alone, and so does
+    `approval_digest`: the records a depicts claim's approval binds are the
+    records its local refs are written through (ADR-0005)."""
     return {record.id: record for record in batch.entities}
 
 
@@ -185,12 +192,13 @@ def approval_digest(claim: Claim, batch: ClaimBatch) -> str:
     `batch`: a digest of the claim's id and of the entity-manifest record
     each of its local refs resolves through, or of that ref having none.
 
-    The writer resolves a local ref through the manifest record of its id
-    when the batch has one (ADR-0007), so the claim's own content does not
-    fix the item it names. The digest covers both: editing the claim, or
-    adding, editing or removing a record one of its local refs resolves
+    The writer resolves a local ref through the manifest record that
+    `entity_records` gives for its id, when there is one (ADR-0007), so the
+    claim's own content does not fix the item it names. The digest covers
+    both, reading the records through that same lookup: editing the claim,
+    or adding, editing or removing a record one of its local refs resolves
     through, changes it."""
-    return _approval_digest(claim, _entity_records(batch))
+    return _approval_digest(claim, entity_records(batch))
 
 
 def unapproved_depicts(batch: ClaimBatch) -> list[str]:
@@ -207,10 +215,12 @@ def unapproved_depicts(batch: ClaimBatch) -> list[str]:
     A local ref without a manifest record is resolved by the writer from
     the first ref in the batch to its local id, which may be another
     claim's. So a depicts claim also fails when another ref in the batch
-    to one of those local ids differs from its own: the item it would
-    depict then depends on the batch's order, not on the row the curator
+    to one of those local ids differs from its own (its subject, its value
+    or a qualifier's value) in any field, its label, description or kind:
+    the item it would name, and what the writer writes of that item, would
+    then depend on the batch's order, not on the row the curator
     approved."""
-    records = _entity_records(batch)
+    records = entity_records(batch)
     unrecorded: dict[str, list[LocalRef]] = {}
     for claim in batch.claims:
         for ref in _local_refs(claim):
@@ -409,7 +419,7 @@ def apply_review(
     """
     rows: dict[str, dict] = {}
     warnings: list[str] = []
-    records = _entity_records(batch)
+    records = entity_records(batch)
     with open(csv_path, newline="", encoding=SHEET_ENCODING) as f:
         reader = csv.DictReader(f)
         foreign = [

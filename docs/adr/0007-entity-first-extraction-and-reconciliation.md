@@ -154,6 +154,52 @@ rank (ADR-0002). A curated statement, one with no run reference or a
 rank a curator set, is never altered: a source that agrees with it gets
 a statement of its own beside it. A re-run adds nothing.
 
+Amended by #240 (2026-09-28): a document's aliases and kinds reach an
+existing item on the paths that bring the writer its manifest records
+and local refs.
+
+- **Aliases.** A record whose item the resolve step matched by exact
+  label gives the item the document's aliases too, after the claims, as
+  a record the writer matches or an approved equivalence names already
+  does. The resolve step leaves the record without a `qid`, so the writer
+  pairs it with a QID that one of the batch's claims mentions, by that
+  item's label; a record no claim mentions adds no alias.
+- **Kinds without a manifest.** A batch without an entity manifest, such
+  as the line-range tier of ADR-0006 produces, states each entity's kind
+  only on its local refs' `instance_of`. When the writer matches such a
+  ref to an existing item by exact label, it records that kind as it
+  records a manifest's, with the same comparison and with curated
+  statements left as they are. It cites the artifact of the claim the
+  ref is in, beside the batch's run: a manifest's kind cites the first
+  claim that mentions the item, but a ref states its kind where it
+  stands. The writer reads the first ref to each local id, as it does
+  for the label, so each artifact where such a ref gives the kind is a
+  witness of it.
+  A face-proposal batch's sitters are such refs, so a sitter a curator
+  approved and the writer found gains the photograph and the detection
+  run as a source of its kind, as a sitter the writer mints takes its
+  kind from them (ADR-0005). An item the batch itself minted holds the
+  kind of the ref that minted it; a later ref to it under another local
+  id, as each chunk or page of a document can name an entity by an id
+  of its own, finds it by label as any such ref does, and is a witness
+  of its own kind on the first write, so writing the batch again adds
+  nothing. A kind the vocabulary lacks is recorded for no item, and the
+  writer's result warns of each, found before its first write.
+- **Where kinds do not arrive.** A ref the resolve step replaced with
+  the item's QID brings no kind, since a QID carries none. `ingest run`
+  resolves every batch before its write, so there a kind that a later
+  source gives only on a ref (a batch without a manifest) does not
+  arrive for an item that existed when the resolve step ran: only
+  `ingest write` of an unresolved batch, and refs the resolve step left,
+  bring it. A manifest record's kind still arrives, through the resolve
+  step's label match (see the #233 amendment). Nor does a later ref to a
+  local id an earlier ref named bring a kind, since the first ref to
+  each local id gives it. #109, whose identity map is to replace
+  exact-label resolution, takes on carrying every ref's kind to its
+  item.
+- The orchestrator's write summary (`write.json`) and its log line count
+  the type statements written and referenced.
+
 Coverage report: in place of ADR-0006's line audit, `coverage.json`
 flags transcription lines that mention no manifest entity (heuristic:
 capitalized-token match against labels/aliases) plus manifest entities

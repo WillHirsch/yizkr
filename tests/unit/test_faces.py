@@ -18,6 +18,7 @@ from yizkr.claims import (
     MonolingualText,
     MonolingualValue,
     QidRef,
+    Qualifier,
     SourceReference,
     TimeValue,
     validate_against_manifest,
@@ -41,6 +42,7 @@ from yizkr.pipeline.review import (
     apply_review,
     approval_digest,
     claim_id,
+    entity_records,
     export_review_csv,
     is_bulk_accepted,
     unapproved_depicts,
@@ -270,17 +272,68 @@ def portrait_faces_by_label(manifest: bool = False) -> ClaimBatch:
     return batch
 
 
-def muckel(label: str) -> Claim:
+def muckel(label: str, **fields) -> Claim:
     """The name the portrait gives its first sitter, "Muckel", on a claim
-    naming that sitter by the first face's local id, with `label`."""
+    naming that sitter by the first face's local id, with `label` and the
+    face's kind, or other `fields`."""
     return Claim(
         subject=LocalRef(
-            local_id="face-person-0", label=label, instance_of="human"
+            **{
+                "local_id": "face-person-0",
+                "label": label,
+                "instance_of": "human",
+                **fields,
+            }
         ),
         property="referred_to_as",
         value=MonolingualValue(
             value=MonolingualText(text="Muckel", language="de")
         ),
+        source=SourceReference(artifact=PORTRAIT),
+    )
+
+
+# The town the portrait's mount names, "Photograph Brüsrich · Peiltal":
+# by a local ref, as a batch without an entity manifest names a place.
+PEILTAL = u.by_key()["peiltal"].label
+KREDFELD = u.by_key()["kredfeld"].label
+
+
+def town(label: str = PEILTAL) -> LocalRef:
+    """The studio's town, by the local id `studio-town`, with `label`."""
+    return LocalRef(local_id="studio-town", label=label, instance_of="place")
+
+
+def portrait_faces_in(place: LocalRef) -> ClaimBatch:
+    """The portrait's two faces, each depicted at `place`: a `location`
+    qualifier whose item is a local ref, beside the image region."""
+    faces = portrait_faces()
+    located = [
+        claim.model_copy(
+            update={
+                "qualifiers": [
+                    *claim.qualifiers,
+                    Qualifier(
+                        property="location", value=ItemValue(value=place)
+                    ),
+                ]
+            }
+        )
+        for claim in faces.claims
+    ]
+    return faces.model_copy(update={"claims": located})
+
+
+def studio_in(place: LocalRef) -> Claim:
+    """The mount's own statement: the studio is located at `place`."""
+    return Claim(
+        subject=LocalRef(
+            local_id="studio",
+            label=u.by_key()["studio-bruesrich"].label,
+            instance_of="organization",
+        ),
+        property="location",
+        value=ItemValue(value=place),
         source=SourceReference(artifact=PORTRAIT),
     )
 
@@ -1035,17 +1088,30 @@ class TestWriteRefusesUnapprovedDepicts:
         assert wiki.wbi.item.writes == writes
         assert depicted(wiki) == {}
 
+    # A ref to the first face's local id, which has no record, that differs
+    # from the face's own ref in one field (#258). The writer makes the id
+    # into an item from the first ref it meets, so a claim naming it ahead
+    # of the approved ones decides what the first depicts claim depicts.
+    OTHER_REFS = {
+        # another person's name: the writer would make the id her item
+        "label": {"label": RAHEL},
+        # the item minted for him would take this description instead
+        "description": {"label": EUGEN, "description": "master hatter"},
+        # and this kind, or the writer would record it on the item it
+        # finds by his label
+        "kind": {"label": EUGEN, "instance_of": "unclassified_entity"},
+    }
+
+    @pytest.mark.parametrize(
+        "differs", OTHER_REFS.values(), ids=OTHER_REFS.keys()
+    )
     def test_approval_does_not_survive_another_ref_to_its_local_id(
-        self, tmp_path
+        self, tmp_path, differs
     ):
-        # a claim added ahead of the approved ones names the first face's
-        # local id, which has no record, by another person's label: the
-        # writer would make that id her item, and the first depicts claim
-        # would depict her
         approved = reviewed(portrait_faces_by_label(), tmp_path)
         eugen, sebastian = approved.claims
         retargeted = approved.model_copy(
-            update={"claims": [muckel(RAHEL), eugen, sebastian]}
+            update={"claims": [muckel(**differs), eugen, sebastian]}
         )
         wiki = wiki_with_portrait()
 
@@ -1075,6 +1141,73 @@ class TestWriteRefusesUnapprovedDepicts:
         )
         assert name.mainsnak.datavalue["value"]["text"] == "Muckel"
 
+    # A depicts claim's qualifier can name an item by a local ref too: the
+    # portrait's sitters depicted at the studio's town, which the mount's
+    # own claim about the studio names by the same local id (#258).
+
+    def test_a_qualifiers_local_ref_is_written_as_approved(self, tmp_path):
+        faces = portrait_faces_in(town())
+        approved = reviewed(
+            faces.model_copy(
+                update={"claims": [studio_in(town()), *faces.claims]}
+            ),
+            tmp_path,
+        )
+        wiki = wiki_with_portrait()
+
+        result = BatchWriter(wiki).write_batch(approved)
+
+        assert result.written == 3
+        peiltal = result.created_items["studio-town"]
+        assert str(wiki.wbi.item.get(peiltal).labels.get("en")) == PEILTAL
+        for statement in depicted(wiki).values():
+            (place,) = statement.qualifiers.get(PROPERTIES["location"])
+            assert place.datavalue["value"]["id"] == peiltal
+
+    def test_approval_does_not_survive_another_ref_to_its_qualifiers_local_id(
+        self, tmp_path
+    ):
+        # the mount's claim, added ahead of the approved depicts claims,
+        # names the studio's town by the same local id as another town:
+        # the writer would place both sitters there
+        approved = reviewed(portrait_faces_in(town()), tmp_path)
+        retargeted = approved.model_copy(
+            update={"claims": [studio_in(town(KREDFELD)), *approved.claims]}
+        )
+        wiki = wiki_with_portrait()
+
+        with pytest.raises(UnapprovedDepictsError) as refusal:
+            BatchWriter(wiki).write_batch(retargeted)
+
+        assert refusal.value.claim_ids == [
+            claim_id(claim) for claim in approved.claims
+        ]
+        assert depicted(wiki) == {}
+
+    def test_approval_covers_the_record_a_qualifiers_ref_resolves_through(
+        self, tmp_path
+    ):
+        # with a manifest record for the town, the approval binds it: a
+        # record renamed to another town after review voids it
+        faces = portrait_faces_in(town())
+        record = EntityRecord(id="studio-town", label=PEILTAL, kind="place")
+        approved = reviewed(
+            faces.model_copy(update={"entities": [record]}), tmp_path
+        )
+        assert unapproved_depicts(approved) == []
+        moved = approved.model_copy(
+            update={
+                "entities": [record.model_copy(update={"label": KREDFELD})]
+            }
+        )
+
+        with pytest.raises(UnapprovedDepictsError) as refusal:
+            BatchWriter(wiki_with_portrait()).write_batch(moved)
+
+        assert refusal.value.claim_ids == [
+            claim_id(claim) for claim in approved.claims
+        ]
+
     def test_batch_without_depicts_is_written_unreviewed(self):
         # as the scratch write stage writes a batch, without its depicts
         # claims (ADR-0025): the gate leaves such a batch alone
@@ -1082,6 +1215,116 @@ class TestWriteRefusesUnapprovedDepicts:
         dated = text.model_copy(update={"claims": text.claims[:1]})
         result = BatchWriter(wiki_with_portrait()).write_batch(dated)
         assert result.written == 1
+
+
+class TestOneEntityRecordLookup:
+    """The writer and the depicts gate read a batch's entity manifest
+    through one lookup (`entity_records`, #258): the record a depicts
+    claim's approval binds is the record the writer resolves its local
+    ref through, however the lookup picks among records that share an
+    id. A record it does not pick leaves the approval as it is, resolves
+    no local ref, and adds no alias or kind; it is still part of the
+    batch file, which the extraction-run item's fingerprint covers
+    whole."""
+
+    @staticmethod
+    def two_records_for_the_first_face(tmp_path) -> ClaimBatch:
+        """The portrait's faces approved row by row, with two manifest
+        records under the first face's local id (which manifest
+        validation would refuse), each naming a different item."""
+        faces = portrait_faces_by_label(manifest=True)
+        first, second = faces.entities
+        doubled = faces.model_copy(
+            update={
+                "entities": [
+                    first.model_copy(update={"qid": "Q26"}),
+                    first.model_copy(update={"label": RAHEL, "qid": "Q28"}),
+                    second,
+                ]
+            }
+        )
+        return reviewed(doubled, tmp_path)
+
+    @staticmethod
+    def wiki() -> FakeWiki:
+        """The portrait's instance, with Eugen's item under Q26 too."""
+        wiki = wiki_with_portrait()
+        eugen = wiki.wbi.item.new()
+        eugen.id = "Q26"
+        eugen.labels.set("en", EUGEN)
+        eugen.write()
+        return wiki
+
+    @staticmethod
+    def edited(batch: ClaimBatch, record: EntityRecord, **update):
+        """`batch` with `record` alone, of its entities, changed."""
+        return batch.model_copy(
+            update={
+                "entities": [
+                    entity.model_copy(update=update)
+                    if entity is record
+                    else entity
+                    for entity in batch.entities
+                ]
+            }
+        )
+
+    def test_the_approval_binds_the_record_the_writer_resolves_through(
+        self, tmp_path
+    ):
+        approved = self.two_records_for_the_first_face(tmp_path)
+        picked = entity_records(approved)["face-person-0"]
+        wiki = self.wiki()
+
+        BatchWriter(wiki).write_batch(approved)
+
+        assert picked.qid in depicted(wiki)
+        # an edit to the picked record voids the approval
+        with pytest.raises(UnapprovedDepictsError):
+            BatchWriter(self.wiki()).write_batch(
+                self.edited(approved, picked, qid="Q27")
+            )
+
+    def test_passed_over_record_resolves_no_local_ref_adds_no_alias_or_kind(
+        self, tmp_path
+    ):
+        approved = self.two_records_for_the_first_face(tmp_path)
+        picked = entity_records(approved)["face-person-0"]
+        (passed_over,) = [
+            record
+            for record in approved.entities
+            if record.id == "face-person-0" and record is not picked
+        ]
+        # were it read, it would name Rahel, and give her item its aliases
+        # and a kind of its own
+        edited = self.edited(
+            approved,
+            passed_over,
+            qid="Q28",
+            aliases=["Muckel"],
+            kind="unclassified_entity",
+        )
+        assert unapproved_depicts(edited) == []
+        written, run_labels = {}, {}
+        for name, batch in (("approved", approved), ("edited", edited)):
+            wiki = self.wiki()
+            result = BatchWriter(wiki).write_batch(batch)
+            rahel = wiki.wbi.item.get("Q28")
+            written[name] = (
+                set(depicted(wiki)),
+                rahel.aliases.get("en"),
+                sorted(
+                    kind.mainsnak.datavalue["value"]["id"]
+                    for kind in rahel.claims.get(PROPERTIES["instance_of"])
+                ),
+            )
+            run_labels[name] = str(
+                wiki.wbi.item.get(result.run_qid).labels.get("en")
+            )
+        assert written["edited"] == written["approved"]
+        # the run item's label carries the fingerprint of the whole batch
+        # file, the record passed over included
+        assert run_labels["edited"] != run_labels["approved"]
 
 
 class TestIngestWriteRefusesUnapprovedDepicts:

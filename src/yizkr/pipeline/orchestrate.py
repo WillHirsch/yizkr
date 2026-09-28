@@ -1541,11 +1541,21 @@ class Orchestrator:
         result = BatchWriter(self.client).write_batch(
             approved, bulk_accepted=is_bulk_accepted(doc.review_reviewed)
         )
+        for warning in result.warnings:
+            self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
+        self.log(
+            f"  written: {result.written} new, {result.referenced} "
+            f"referenced, {result.skipped} skipped; type statements of "
+            f"items found: {result.type_statements_written} new, "
+            f"{result.type_statements_referenced} referenced"
+        )
         return {
             "run_qid": result.run_qid,
             "written": result.written,
             "skipped": result.skipped,
             "referenced": result.referenced,
+            "type_statements_written": result.type_statements_written,
+            "type_statements_referenced": result.type_statements_referenced,
             "created_items": result.created_items,
             "approved_claims": len(approved.claims),
         }
@@ -1905,11 +1915,6 @@ class Orchestrator:
             atomic_write_text(doc.write_result, json.dumps(summary, indent=2))
             derivations.record(doc.write_result)
             doc.state.detail = (doc.state.detail or {}) | {"write": summary}
-            self.log(
-                f"  written: {summary['written']} new, "
-                f"{summary['referenced']} referenced, "
-                f"{summary['skipped']} skipped"
-            )
         doc.state.status = WRITTEN
         return doc.state.status
 
