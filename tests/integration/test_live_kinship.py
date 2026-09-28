@@ -14,16 +14,22 @@ curator's rank:
 * the interview's "Aunt Pünktchen": ``Klara —relative→ Nicholas ;
   kinship_type = "aunt"``, with the person the term names as the
   statement's subject and the ego as its value;
+* ADR-0018's "our great grandmother", with a side as well:
+  ``Cäcilie —relative→ Nicholas ; kinship_type = "paternal great
+  grandmother"`` (in the universe she is his father Gustav's
+  grandmother; the fixture states none of her other relations), so her
+  inverse row drops the side and keeps the degree;
 * two statements a curator deprecated, so neither gives a row: Felix
   misread as Klara's father, and the courtesy title "Nana Maisie" misread
   as kinship (it is a `referred_to_as`, never a `relative`).
 
 The query reads each row as "?relative is ?subject's ?relationship", so
-the fixture gives the 42 rows of RELATIVES: the stated steps from both
+the fixture gives the 44 rows of RELATIVES: the stated steps from both
 sides, the siblings through a shared parent, the second-order relations
 through them (Leopold's uncle Sebastian and his aunt by marriage
-Hildegard, whose nephew he is), the in-laws, the asserted aunt, and her
-inverse row, with Nicholas as Klara's nephew.
+Hildegard, whose nephew he is), the in-laws, the asserted aunt and
+great-grandmother, and their inverse rows, with Nicholas as Klara's
+nephew and Cäcilie's great-grandson.
 
 The fixture writes the people under labels of its own, so a re-run
 reuses its entities, and the query is scoped to them with a VALUES line
@@ -61,6 +67,7 @@ GUSTAV = "gustav-loebig"
 LEOPOLD = "leopold-loebig"
 NICHOLAS = "nicholas-lobig"
 MAISIE = "maisie-cutmore"
+CAECILIE = "caecilie-loebig"
 PEOPLE = (
     EUGEN,
     SEBASTIAN,
@@ -72,6 +79,7 @@ PEOPLE = (
     LEOPOLD,
     NICHOLAS,
     MAISIE,
+    CAECILIE,
 )
 
 # (subject, property, value, kinship term)
@@ -84,6 +92,7 @@ STATEMENTS = [
     (SEBASTIAN, "spouse", HILDEGARD, None),
     (URSULA, "sibling", KLARA, None),
     (KLARA, "relative", NICHOLAS, "aunt"),
+    (CAECILIE, "relative", NICHOLAS, "paternal great grandmother"),
     (MAISIE, "relative", NICHOLAS, "Nana"),
     (KLARA, "father", FELIX, None),
 ]
@@ -142,6 +151,11 @@ RELATIVES = {
     (LEOPOLD, KLARA, "cousin"),
     (LEOPOLD, GUSTAV, "cousin"),
     (NICHOLAS, KLARA, "aunt"),
+    # a term a source asserts is shown as the source gives it
+    (NICHOLAS, CAECILIE, "paternal great grandmother"),
+    # its inverse drops the side, which names Nicholas's parent, and
+    # keeps the degree
+    (CAECILIE, NICHOLAS, "great-grandson"),
 }
 
 

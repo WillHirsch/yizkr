@@ -61,8 +61,11 @@ uv run yizkr publish-queries             # or: make publish-queries
   asserted term names the statement's subject and has the ego as its
   value (ADR-0018), so `Klara —relative→ Nicholas ; kinship_type =
   "aunt"` is Nicholas's row, with Klara as his aunt, and Klara gets the
-  inverse row, with Nicholas as her nephew, gendered by his sex; a term
-  the query's table does not invert gives "relative"
+  inverse row, with Nicholas as her nephew, gendered by his sex. A term
+  the query's table does not invert gives "relative", except a plain
+  cousin term ("second cousin", "cousin once removed"), which is its own
+  inverse; a cousin term with any other word ("Dad's cousin", "cousin's
+  wife", "great-cousin") gives "relative"
   (`tests/integration/test_live_kinship.py`). The query is built from
   the query service's named subqueries (`WITH { … } AS %name`,
   `INCLUDE %name`), which the bundled WDQS and its query UI run and

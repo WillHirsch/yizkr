@@ -119,6 +119,46 @@ def inverse_table(q: str) -> dict[str, str]:
     return table
 
 
+# The inverse arm, step by step. Each <name> is a pattern, a list or the
+# table that the test reads from the arm and applies; every other
+# character is pinned, so the steps the test evaluates are the arm's own,
+# on the same variables and in the same order.
+INVERSE_ARM = [
+    "SELECT (?named AS ?subject) (?ego AS ?relative) ?base ?degree WHERE {",
+    "INCLUDE %asserted",
+    'BIND(REPLACE(LCASE(?term), "<trim>", "") AS ?said)',
+    'BIND(REPLACE(?said, "<side>", "") AS ?unsided)',
+    'BIND(REPLACE(?unsided, "<greats>", "$1") AS ?greats)',
+    "BIND(SUBSTR(?unsided, STRLEN(?greats) + 1) AS ?core)",
+    "OPTIONAL { VALUES (?key ?inverse) { <table> } FILTER(?key = ?core) }",
+    'BIND(BOUND(?inverse) && (?greats = "" '
+    "|| ?inverse IN (<kept>)) AS ?known)",
+    "BIND(IF(?known, ?inverse, "
+    'IF(REGEX(?unsided, "<cousin>"), ?unsided, "relative")) AS ?base)',
+    'BIND(IF(?known, REPLACE(?greats, "<step>", "great-"), "") AS ?degree)',
+    "}",
+]
+
+
+def inverse_arm(sets: dict[str, str]) -> dict[str, str]:
+    """What the inverse arm holds at each <name> of INVERSE_ARM, which
+    must match the arm's text, whitespace aside."""
+    (arm,) = [a for a in kin_arms(sets) if "?inverse" in a]
+    parts = re.split(r"<(\w+)>", " ".join(INVERSE_ARM))
+    template = "".join(
+        f"(?P<{part}>.*?)" if odd else re.escape(part)
+        for odd, part in zip(itertools.cycle((False, True)), parts)
+    )
+    found = re.fullmatch(template, " ".join(arm.split()))
+    assert found, "the inverse arm is not the chain of steps INVERSE_ARM pins"
+    return found.groupdict()
+
+
+def pattern(literal: str) -> str:
+    """A regular expression as the query's string literal writes it."""
+    return literal.replace("\\\\", "\\")
+
+
 class TestAssertedKinship:
     """The `relative` + `kinship_type` arms: the query's reading of a
     kinship term that a source asserts, and its inverse."""
@@ -174,52 +214,71 @@ class TestInverseTerms:
             ("great great grandmother", "grandchild", "great-great-"),
             ("maternal aunt", "nibling", ""),
             ("Paternal Uncle", "nibling", ""),
+            ("paternal great grandmother", "grandchild", "great-"),
             ("Oma", "grandchild", ""),
             ("Urgroßmutter", "grandchild", "great-"),
             ("Tante", "nibling", ""),
             (" aunt ", "nibling", ""),
             ("Schwiegermutter", "child-in-law", ""),
-            ("second cousin", "second cousin", ""),
             ("Vetter", "cousin", ""),
+            ("second cousin", "second cousin", ""),
+            ("maternal second cousin", "second cousin", ""),
+            ("double cousin", "double cousin", ""),
+            ("first cousin once removed", "first cousin once removed", ""),
+            ("2nd cousin 3 times removed", "2nd cousin 3 times removed", ""),
+            # a cousin term with any other word asserts no kind
+            ("Dad's cousin", "relative", ""),
+            # with a typographic apostrophe
+            ("Dad\u2019s cousin", "relative", ""),
+            ("my mother's cousin", "relative", ""),
+            ("cousin's wife", "relative", ""),
+            ("cousin of my father", "relative", ""),
+            ("great-cousin", "relative", ""),
+            ("Großcousin", "relative", ""),
+            ("Großcousine", "relative", ""),
+            ("cousin-in-law", "relative", ""),
             ("great-father", "relative", ""),
             ("godmother", "relative", ""),
             ("stepmother", "relative", ""),
         ],
     )
     def test_a_term_is_read_as_the_inverse_arm_reads_it(
-        self, q, term, inverse, degree
+        self, q, sets, term, inverse, degree
     ):
-        """The arm's own patterns, applied as its BINDs apply them: a
-        side is dropped, a "great-" (or "Ur-") degree is kept on a
-        grand-, aunt or uncle, niece or nephew term, an unknown cousin
-        term is its own inverse, and any other unknown term gives
+        """The arm's steps, as INVERSE_ARM pins them, applied in turn
+        with the arm's own patterns: a side is dropped, a "great-" (or
+        "Ur-") degree is kept on a grand-, aunt or uncle, niece or nephew
+        term, a plain cousin term the table does not list is its own
+        inverse, and any other term the table does not know gives
         "relative"."""
-
-        def pattern(literal: str) -> str:
-            return literal.replace("\\\\", "\\")
-
-        (trim,) = re.findall(
-            r'BIND\(REPLACE\(LCASE\(\?term\), "(.+?)", ""\)', q
-        )
-        (side,) = re.findall(r'BIND\(REPLACE\(\?said, "(.+?)", ""\)', q)
-        (greats,) = re.findall(
-            r'BIND\(REPLACE\(\?unsided, "(.+?)", "\$1"\) AS \?greats\)', q
-        )
-        (kept,) = re.findall(r"\?inverse IN \(([^)]*)\)", q)
-        (step,) = re.findall(r'REPLACE\(\?greats, "(.+?)", "great-"\)', q)
-        said = re.sub(pattern(trim), "", term.lower())
-        unsided = re.sub(pattern(side), "", said)
-        prefix = re.sub(pattern(greats), r"\1", unsided)
-        found = inverse_table(q).get(unsided[len(prefix) :])
+        arm = inverse_arm(sets)
+        said = re.sub(pattern(arm["trim"]), "", term.lower())
+        unsided = re.sub(pattern(arm["side"]), "", said)
+        greats = re.sub(pattern(arm["greats"]), r"\1", unsided)
+        core = unsided[len(greats) :]
+        found = inverse_table(q).get(core)
         known = found is not None and (
-            prefix == "" or f'"{found}"' in kept.split(", ")
+            greats == "" or f'"{found}"' in arm["kept"].split(", ")
         )
         if known:
-            degrees = re.sub(pattern(step), "great-", prefix)
-            assert (found, degrees) == (inverse, degree)
+            base = found
+            degrees = re.sub(pattern(arm["step"]), "great-", greats)
         else:
-            fallback = unsided if "cousin" in unsided else "relative"
-            assert (fallback, "") == (inverse, degree)
+            cousin = re.search(pattern(arm["cousin"]), unsided)
+            base, degrees = (unsided if cousin else "relative"), ""
+        assert (base, degrees) == (inverse, degree)
+
+    def test_the_inverse_terms_degree_reaches_its_row(self, sets, main):
+        # the rows' set passes the arm's degree on, and the row's term is
+        # that degree before the gendered base ("great-" + "nephew")
+        assert re.match(
+            r"\s*SELECT \?subject \?relative \?base \?degree WHERE",
+            sets["kin"],
+        )
+        assert (
+            'BIND(CONCAT(COALESCE(?degree, ""), ?gendered) AS ?relationship)'
+            in main
+        )
 
 
 class TestRanks:

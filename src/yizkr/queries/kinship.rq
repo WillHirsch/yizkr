@@ -18,8 +18,12 @@
 # ADR-0018 records it: the statement's subject is the person the term
 # names (the row's ?relative), and its value is the ego (the row's
 # ?subject). The named relative also gets a row with the inverse term,
-# gendered by the ego ("nephew" or "niece" for "aunt"); a term the
-# inverse table does not know gives "relative", which asserts no kind.
+# gendered by the ego ("nephew" or "niece" for "aunt"). A term the
+# inverse table does not know gives "relative", which asserts no kind,
+# except a plain cousin term ("second cousin", "double cousin", "cousin
+# once removed"), which is its own inverse; a cousin term with any other
+# word ("Dad's cousin", "cousin's wife", "great-cousin") gives
+# "relative".
 #
 # Ranks (rules 4 and 6): every statement read, the subject's type and
 # the relative's sex included, is at normal or preferred rank and never
@@ -276,9 +280,17 @@ WITH {
              && (?greats = ""
                  || ?inverse IN ("grandparent", "grandchild", "pibling", "nibling"))
              AS ?known)
-        # an unknown cousin term ("second cousin") is its own inverse
+        # A cousin term the table does not list is its own inverse only
+        # when its other words number, double or halve the cousinship or
+        # count its removes ("second cousin", "cousin once removed"). Any
+        # other word can make the inverse a different term: a possessive
+        # names another person ("Dad's cousin", "cousin's wife"), a
+        # degree may name a parent's cousin ("great-cousin"), and a
+        # German compound is gendered by the person it names
+        # ("Großcousine"). Such a term gives "relative".
         BIND(IF(?known, ?inverse,
-                IF(CONTAINS(?unsided, "cousin"), ?unsided, "relative")) AS ?base)
+                IF(REGEX(?unsided, "^((first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|[0-9]+(st|nd|rd|th)|double|half)[ -]+)*cousin( (once|twice|[a-z0-9]+ times) removed)?$"),
+                   ?unsided, "relative")) AS ?base)
         BIND(IF(?known, REPLACE(?greats, "(great[ -]+|ur-?)", "great-"), "")
              AS ?degree)
       }
