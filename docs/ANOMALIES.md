@@ -286,20 +286,23 @@ and nobody has resumed the slice, the checks append an abort of it:
  "check": "kind-failures"}
 ```
 
-The timeout runs from the first pause of the stretch that stands since
-the latest start marker. Only a pause the checks alone asked for is
-aborted: once someone else asks for a pause of the same slice, it is
-theirs. `pause-timeout-s: null` holds a pause until someone resumes it.
+The timeout runs from the checks' request for the pause, and a driver's
+carry of the pause into a later invocation (below) does not restart it.
+Only a pause the checks alone asked for is aborted: once someone else
+asks for a pause of the same slice, it is theirs. `pause-timeout-s:
+null` holds a pause until someone resumes it.
 
 **The slice stays watched.** From the checks' first pause of a slice to
 the end of the run's process, one watch per run directory looks at the
 slice: a timer on a thread of its own, so a look comes even while no
 stage runs, and every later check the orchestrator calls. Each look
 reads the control file as a driver folds it and, when a pause of the
-checks alone has stood on the slice for the timeout, appends the abort;
-when such a pause stands short of it, the next look comes when it is
-due, and otherwise a timeout later. A slice has one pending timer at a
-time, cancelled when a look needs a sooner one. The look holds the lock
+checks alone stands on the slice and the timeout has passed since they
+asked for it, appends the abort. When such a pause stands short of the
+timeout, the next look comes when it is due; otherwise the next look
+comes when the checks' request would reach the timeout, or, that past,
+a timeout later. A slice has one pending timer at a time, cancelled
+when a look needs a sooner one. The look holds the lock
 the control file's appenders take (rundir's `_append_line`) from its
 read to its abort, so no other process appends a request in between:
 an operator's resume lands before the look, and is seen, or after the
@@ -310,17 +313,20 @@ closed.
 The slice stays watched after its pause is aborted, resumed or cleared,
 because a driver that invokes the run again in the same process, as the
 scratch driver (#194) is to after a wait for a subscription limit, asks
-again, after its new start marker, for the pauses that stood when it
-looked, with the `by` they had (a carry). It may have looked before the
-checks aborted a pause, during its wait or the next invocation's
-preflight, or the timer may look between its start marker and its
-carry; either way the carried pause stands again, and no invocation's
-checks asked for it. The watch finds it at its next look and times it
-out from the carried request. So a carried pause of the checks is
-aborted a timeout after the carry at the latest, as long as the process
-runs, whenever the carry comes and whether or not any check runs in the
-new invocation; a pause found past its timeout during the wait is
-aborted there, and such a driver carries the abort instead.
+again, after its new start marker, for the requests in force before it,
+with the `by` and the reason they had and a new time (a carry). The
+carried pause stands again, and no invocation's checks asked for it.
+Each look times it from the checks' own request, which the watch keeps,
+never from the carry's new time. So a pause carried through one
+re-invocation after another is still aborted once the timeout has
+passed since the checks asked for it, whether or not any check runs in
+the new invocation, and even when the timer looks between the start
+marker and the carry. A pause whose timeout passes during the wait is
+aborted there, and the driver carries the abort instead; a pause carried
+from a reading of the file older than the checks' abort is aborted again
+at the next look. The watch keeps the request's time in the process, so
+a pause that another process carried would be timed from its own
+request.
 
 **How a driver sees it.** A driver folds `control.jsonl` with
 `rundir.fold_control`, as it folds every request, the monitor's

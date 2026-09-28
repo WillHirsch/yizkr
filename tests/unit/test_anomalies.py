@@ -1203,7 +1203,8 @@ def requests_since_start(run: RunDir) -> list[dict]:
 
 def carry(run: RunDir, carried: list[dict]) -> None:
     """Ask again for the stops `carried`, as that driver does after its
-    start marker: with who asked for them and why."""
+    start marker: with who asked for them and why, at a new time, and
+    marked carried."""
     for request in carried:
         which, _, name = request["scope"].partition(":")
         run.request(
@@ -1214,6 +1215,15 @@ def carry(run: RunDir, carried: list[dict]) -> None:
             reason=request.get("reason") or "",
             carried=True,
         )
+
+
+def reinvoke(run: RunDir) -> None:
+    """Invoke the run again as the scratch driver does after a wait for a
+    subscription limit (#194, #297): a start marker, and after it the
+    requests in force just before it, asked for again."""
+    carried = standing(run)
+    run.start()
+    carry(run, carried)
 
 
 def held_elsewhere(path: Path) -> str:
@@ -1433,31 +1443,24 @@ class TestFailFastPauses:
         timer.join(timeout=30)
         assert timer.interval == threading.TIMEOUT_MAX
 
-    def test_a_pause_a_driver_carries_on_times_out_from_the_carry(
+    def test_a_carried_pause_times_out_from_the_checks_request(
         self, tmp_path, clock
     ):
         """A driver that invokes the run again after a subscription limit
-        asks again for the pauses still standing, with who asked for them,
-        as the scratch driver (#194) does. The checks that paused the
-        slice keep a timer on it: the carried pause times out from its own
-        request, with no check made in the new invocation."""
+        asks again, after its start marker, for the requests in force
+        before it, with who asked and why and a new time, as the scratch
+        driver (#194, #297) does. The checks keep watching the slice, and
+        the carried pause times out from their own request, with no check
+        made in the new invocation."""
         timers = Timers()
         paused_media(tmp_path, clock=clock, timers=timers)
         clock.advance(600)
         run = RunDir(tmp_path / "run")
-        run.start()
-        run.request(
-            "pause",
-            kind="media",
-            by="anomaly",
-            reason="kind-failures: transcription failed 6 of the first 6 "
-            "media documents",
-            carried=True,
-        )
-        clock.advance(1201)
+        reinvoke(run)
+        clock.advance(1199)
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media paused"
-        clock.advance(600)
+        clock.advance(2)
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
         abort = requests(run)[-1]
@@ -1467,15 +1470,38 @@ class TestFailFastPauses:
             "kind-failures",
         )
 
+    def test_re_invocations_do_not_restart_a_pause_s_timeout(
+        self, tmp_path, clock
+    ):
+        """The carry stamps each request it asks for again with a new time,
+        so a timeout measured from the carried request would start again
+        at every re-invocation (#297's review). Re-invoked every 700 s,
+        across the timeout, the pause is aborted once the checks' own
+        request is 1800 s old, though the carried one is 401 s old."""
+        timers = Timers()
+        paused_media(tmp_path, clock=clock, timers=timers)
+        run = RunDir(tmp_path / "run")
+        for _ in range(2):
+            clock.advance(700)
+            reinvoke(run)
+            (carried,) = requests_since_start(run)
+            assert carried["at"] == clock.at.isoformat(timespec="seconds")
+            timers.fire()
+            assert run.control().stopped(kind="media") == "kind:media paused"
+        clock.advance(401)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+
     @pytest.mark.parametrize("delay", [0, 4000])
-    def test_a_pause_carried_after_its_abort_times_out_again(
+    def test_a_stale_carry_of_an_aborted_pause_is_aborted_again(
         self, tmp_path, clock, delay
     ):
-        """The driver reads the pauses standing before its next
-        invocation's preflight, and asks for them again after its start
-        marker. When the timeout passes in between, the checks abort the
-        pause, and the carry asks for it again: it stands, from the carry,
-        and times out from there, however long the preflight took."""
+        """A driver that reads the pauses to carry before its next
+        invocation's preflight, as the scratch driver once did (#297), can
+        carry a pause the checks aborted in between. The slice stays
+        watched, and the stale pause, past the timeout since the checks
+        asked for it, is aborted at the next look, however long the
+        preflight took."""
         timers = Timers()
         paused_media(tmp_path, clock=clock, timers=timers)
         run = RunDir(tmp_path / "run")
@@ -1492,10 +1518,6 @@ class TestFailFastPauses:
         run.start()
         carry(run, carried)
         assert run.control().stopped(kind="media") == "kind:media paused"
-        clock.advance(1000)
-        timers.fire()
-        assert run.control().stopped(kind="media") == "kind:media paused"
-        clock.advance(801)
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
         assert [r["action"] for r in requests(run)] == [
@@ -1511,7 +1533,8 @@ class TestFailFastPauses:
     ):
         """The timer looks just after the driver's start marker has
         cleared the pause and just before the carry asks for it again: the
-        slice stays watched, and the carried pause times out."""
+        slice stays watched, its next look comes when the checks' request
+        reaches the timeout, and the carried pause is aborted then."""
         timers = Timers()
         paused_media(tmp_path, clock=clock, timers=timers)
         clock.advance(600)
@@ -1520,8 +1543,11 @@ class TestFailFastPauses:
         run.start()
         timers.fire()
         assert run.control().stopped(kind="media") is None
+        (pending,) = timers.waiting()
+        # the request's own timeout, not one from this look (1801 s)
+        assert 1200 < pending.seconds <= 1201
         carry(run, carried)
-        clock.advance(1799)
+        clock.advance(1199)
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media paused"
         clock.advance(2)

@@ -57,16 +57,17 @@ stored output without recomputing a stage.
 
 A rate check marked fail-fast asks for a pause of its slice when it
 fires: the stage, or the document kind (RunDir.request, with `by` BY),
-and the other slices go on. When a pause of the checks alone has stood
-on the slice for the configured timeout since the latest start marker,
-the checks append an abort of it, so an unattended run never waits on
-it indefinitely. A slice they paused stays watched for the rest of the
+and the other slices go on. When a pause of the checks alone stands on
+the slice and the configured timeout has passed since they asked for
+it, the checks append an abort of it, so an unattended run never waits
+on it indefinitely. A slice they paused stays watched for the rest of the
 process, by a timer that looks even while no stage runs and by every
 later check: a driver that invokes the run again may ask again for a
-pause of theirs as it stood, and such a pause is timed out from that
-request (_SliceWatch). A pause of the same slice that someone else asked
-for is theirs, and is never aborted here. An abort, like a pause, only
-stops dispatch: nothing is deleted, and every completed output stays.
+pause of theirs as it stood, and the timeout of such a pause still runs
+from the checks' own request (_SliceWatch). A pause of the same slice
+that someone else asked for is theirs, and is never aborted here. An
+abort, like a pause, only stops dispatch: nothing is deleted, and every
+completed output stays.
 
 Alerts are signals. The checks never change, move or drop an output or a
 claim (ADR-0002), and a check that fails is an `anomaly-error` event and
@@ -939,14 +940,16 @@ def _locked_control(path: Path) -> Iterator[list[dict]]:
 @dataclass
 class _Watched:
     """A slice the checks paused: the check that paused it last, and that
-    check's timeout, clock and timer; and the pending timer that looks at
-    the slice next, by the token it calls back with, and when it is due
-    on that clock."""
+    check's timeout, clock and timer; when the checks asked for the pause,
+    as the control file stamps the request (`origin`, once a look has read
+    it); and the pending timer that looks at the slice next, by the token
+    it calls back with, and when it is due on that clock."""
 
     check: str
     timeout: float
     now: Callable[[], datetime]
     timer: Callable[[float, Callable[[], None]], Any]
+    origin: datetime | None = None
     pending: Any = None
     token: object | None = None
     due: datetime | None = None
@@ -964,18 +967,19 @@ class _SliceWatch:
 
     A slice stays watched from the checks' pause on, whatever becomes of
     the pause. A driver that invokes the run again asks again, after the
-    new start marker, for the pauses that stood when it looked (a carry),
-    with the `by` they had: a pause it looked at before the checks aborted
-    it, or before the start marker cleared it, stands again, and no
-    invocation's checks asked for it. So each look reads the control file
-    as the driver folds it, under the lock its appenders take, and aborts
-    the slice when a pause of the checks alone has stood on it for the
-    timeout since the latest start marker, counted from the first request
-    of that pause. A look that finds such a pause short of its timeout
-    looks again when it is due; any other look, the one that aborts
-    included, looks again a timeout later, for a carry still to come.
-    One pending timer per slice makes the looks, and so does every check
-    the orchestrator calls."""
+    new start marker, for the pauses that stood before it (a carry), with
+    the `by` they had and a new time: a pause of the checks stands again,
+    and no invocation's checks asked for it. So each look reads the
+    control file as the driver folds it, under the lock its appenders
+    take, and aborts the slice when a pause of the checks alone stands on
+    it and the timeout has passed since the checks asked for the pause
+    (its origin, which a carry does not change; a pause they did not ask
+    for in this process is timed from its own request). A look that finds
+    such a pause short of its timeout looks again when it is due; any
+    other look, the one that aborts included, looks again when the
+    checks' request would reach its timeout, or once that has passed, a
+    timeout later, for a carry still to come. One pending timer per slice
+    makes the looks, and so does every check the orchestrator calls."""
 
     def __init__(self, path: Path) -> None:
         self.run = RunDir(path)
@@ -1037,19 +1041,23 @@ class _SliceWatch:
         watched.pending = watched.timer(wait, lambda: self._fire(scope, token))
 
     def _judge(self, scope: str, watched: _Watched) -> datetime:
-        """Abort the slice when a pause of the checks alone has stood on it
-        for the timeout; when the slice is to be looked at again: when a
-        pause standing short of the timeout reaches it, or else a timeout
-        from now, and a second more, since the control file stamps its
-        requests in whole seconds."""
+        """Abort the slice when a pause of the checks alone stands on it
+        and the timeout has passed since its origin; when the slice is to
+        be looked at again: when a pause standing short of the timeout
+        reaches it, or else when the checks' request would reach it, or,
+        that past, a timeout from now; and a second more, since the
+        control file stamps its requests in whole seconds."""
         margin = timedelta(seconds=watched.timeout + 1)
         now = watched.now()
         with _locked_control(self.run.path / CONTROL) as requests:
             state, stretches = _fold_scopes(requests)
             since, ours = stretches.get(scope, (None, False))
             if state.get(scope) == "paused" and ours and since is not None:
-                if (now - since).total_seconds() < watched.timeout:
-                    return since + margin
+                if watched.origin is None:
+                    watched.origin = since
+                start = min(since, watched.origin)
+                if (now - start).total_seconds() < watched.timeout:
+                    return start + margin
                 what, name = scope.split(":", 1)
                 self.run.request(
                     ABORT,
@@ -1059,6 +1067,9 @@ class _SliceWatch:
                     check=watched.check,
                     **{what: name},
                 )
+        origin = watched.origin
+        if origin is not None and origin + margin > now:
+            return origin + margin
         return now + margin
 
 
