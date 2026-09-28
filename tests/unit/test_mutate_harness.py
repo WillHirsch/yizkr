@@ -1439,8 +1439,9 @@ def test_a_killed_harness_leaves_the_lock_to_its_run_until_the_run_ends(
         # the baseline's run: the job has started, and the stack test runs
         wait_until(lambda: run_pid.exists() or process.poll() is not None)
         assert run_pid.exists(), output.read_text()
-        run, job = int(run_pid.read_text()), int(job_pid.read_text())
-        pids = [run, job]
+        for noted in (run_pid, job_pid):
+            pids.append(int(noted.read_text()))
+        run, job = pids
         process.kill()
         process.wait(timeout=30)
         with (

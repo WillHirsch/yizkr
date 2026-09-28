@@ -29,17 +29,16 @@ open file description holds the lock or nothing does. Otherwise the
 process takes the lock as any other does. So even a stray or stale
 variable never lets two sessions hold the lock at once.
 
-The child makes the descriptor close-on-exec, as the one that hold()
-opens is, as it imports this module; conftest.py imports it before any
-test runs. So no program that the child starts shares the hold in turn,
-not even one that a test starts before any test uses the stack; a
-process that the child forks without exec does, as with any holder's
-descriptor. The import does
-nothing else: it locks nothing, and it leaves the descriptor alone
-unless it is open on the lock file itself, so a stray variable naming
-another descriptor, such as stdout, changes nothing. hold() makes the
-shared descriptor close-on-exec too, for a process that imported the
-module before the variable was set.
+As the child imports this module, which conftest.py does before any
+test runs, the module makes the descriptor close-on-exec, as the one
+that hold() opens is. So no program that the child starts shares the
+hold in turn, not even one that a test starts before any test uses the
+stack; a process that the child forks without exec does, as with any
+holder's descriptor. The import does nothing else: it locks nothing, and
+it leaves the descriptor alone unless it is open on the lock file
+itself, so a stray variable naming another descriptor, such as stdout,
+changes nothing. hold() makes the shared descriptor close-on-exec too,
+for a process that imported the module before the variable was set.
 
 A holder killed while a child shares its hold leaves the lock held until
 the child, and every process that it forked without exec, has ended. For

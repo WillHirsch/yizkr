@@ -316,17 +316,17 @@ path, though a leading `~` is expanded.
   otherwise the session waits its turn like any other. So even a stray or
   stale variable never lets two sessions hold the lock at once. A run that
   shares the hold never releases it or writes the record, which names the
-  harness. The descriptor is close-on-exec, as a session's own descriptor
-  is, before the run's first test: `live_lock.py` makes it so as the
-  run's conftest imports it, when the variable names a descriptor of the
-  lock file, and changes nothing else. So no program that a test starts
-  (by `os.system`, a shell's background job or `close_fds=False`) shares
-  the hold; a process that a test forks without exec does. If the harness
-  is killed, the run's copy of the descriptor keeps the lock held until
-  the run ends (Crashes, above). A session waiting meanwhile names the
-  harness from the record, with its working directory, in the checkout
-  where it left the mutant, and says that it has ended and that the lock
-  is held by a process with no record of its own.
+  harness. As the run's conftest imports `live_lock.py`, before any test
+  runs, the module makes the descriptor close-on-exec, as a session's own
+  descriptor is; it does so only when the variable names a descriptor of
+  the lock file, and changes nothing else. So no program that a test
+  starts (by `os.system`, a shell's background job or `close_fds=False`)
+  shares the hold; a process that a test forks without exec does. If the
+  harness is killed, the run's copy of the descriptor keeps the lock held
+  until the run ends (Crashes, above). A session waiting meanwhile names
+  the harness from the record, with its working directory, in the
+  checkout where it left the mutant, and says that it has ended and that
+  the lock is held by a process with no record of its own.
 - **Only live test sessions and the harness take it.** A scratch run's
   reset and write, `yizkr bootstrap` and other writers to the stack
   don't, so the orchestrating session still gives the stack to one agent
