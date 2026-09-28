@@ -1,6 +1,6 @@
 """Live write path for the GEDCOM adapter's SOUR/OBJE handling (ADR-0021),
-a residence's date period (#308) and a repeated event's alternatives
-(#322).
+a residence's date period (#308), a repeated event's alternatives (#322)
+and an undated death (#323).
 
 A source citation (SOUR) must fold into the birth statement's reference
 as a page-number locator, and a multimedia object (OBJE) must become an
@@ -10,9 +10,12 @@ date period (FROM x TO y) must become the residence statement's start and
 end time, each with the range its own phrase states (docs/MODELING.md,
 "Marriages, residences and other periods"). A repeated BIRT or MARR, as
 GEDCOM states an alternative, must become statements of its own, each
-with its own date, circa and citation, beside the first. All flow through
-the generic writer unchanged; this proves they land in the graph. Every
-claim cites the export by the SHA-1 of its bytes (#102)."""
+with its own date, circa and citation, beside the first. A DEAT that gives
+no date, place or cause must become a death event: an item that is an
+instance of `death`, with the person as its participant, which is what
+the possibly-living check reads as death evidence (ADR-0020 §2). All flow
+through the generic writer unchanged; this proves they land in the graph.
+Every claim cites the export by the SHA-1 of its bytes (#102)."""
 
 from __future__ import annotations
 
@@ -29,12 +32,15 @@ from yizkr.pipeline.writer import BatchWriter
 pytestmark = pytest.mark.live
 
 # The export's text, with {marker} in each label it gives an item: the
-# people's, the media object's and the place's (_marker).
+# people's (and so the death event's), the media object's and the place's
+# (_marker).
 TEMPLATE = """\
 0 HEAD
 1 CHAR UTF-8
 0 @S1@ SOUR
 1 TITL Integration birth register
+0 @S2@ SOUR
+1 TITL Integration burial register
 0 @O1@ OBJE
 1 FILE https://example.test/portrait.jpg
 2 FORM jpg
@@ -57,6 +63,9 @@ TEMPLATE = """\
 1 FAMS @F1@
 0 @I2@ INDI
 1 NAME Gedcom Spouse /Tester {marker}/
+1 DEAT Y
+2 SOUR @S2@
+3 PAGE Volume 3, Page 9
 1 FAMS @F1@
 0 @F1@ FAM
 1 HUSB @I1@
@@ -304,6 +313,50 @@ def test_gedcom_alternatives_are_statements_of_their_own(
         ],
         [circa, ("start_time", "+1974-00-00T00:00:00Z")],
     ]
+
+
+def test_gedcom_undated_death_is_a_death_event(client, gedcom_artifact):
+    """`1 DEAT Y`, with a citation and nothing else beneath it, lands as a
+    death event: an item that is an instance of `death`, with the spouse
+    as its participant at normal rank, cited to the export at the
+    citation's page. The spouse has no date of death (#323)."""
+    export_qid, export = gedcom_artifact
+    write = BatchWriter(client).write_batch(
+        adapt_gedcom(GEDCOM, artifact=export).batch
+    )
+    spouse_qid = write.created_items["i2"]
+    event_qid = write.created_items["i2-death"]
+    properties, items = client.vocabulary()
+    kinds = {v["id"] for v in _claim_values(client, event_qid, "instance_of")}
+    assert kinds == {items["death"]}
+    found = client.api_get(
+        {
+            "action": "wbgetclaims",
+            "entity": event_qid,
+            "property": properties["participant"],
+        }
+    )
+    (participant,) = [
+        statement
+        for statements in found["claims"].values()
+        for statement in statements
+    ]
+    assert participant["mainsnak"]["datavalue"]["value"]["id"] == spouse_qid
+    assert participant["rank"] == "normal"
+    references = participant.get("references", [])
+    stated_in = {
+        snak["datavalue"]["value"]["id"]
+        for ref in references
+        for snak in ref["snaks"].get(properties["stated_in"], [])
+    }
+    assert stated_in == {export_qid}
+    pages = [
+        snak["datavalue"]["value"]
+        for ref in references
+        for snak in ref["snaks"].get(properties["page_number"], [])
+    ]
+    assert pages == ["Volume 3, Page 9"]
+    assert _claim_values(client, spouse_qid, "date_of_death") == []
 
 
 def test_gedcom_write_is_idempotent(client, gedcom_artifact):
