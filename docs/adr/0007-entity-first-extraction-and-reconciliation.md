@@ -11,6 +11,13 @@ as different generations; approved equivalences applied through
 `resolve --equivalences` end to end)
 Amended by #225 (2026-09-27): the entity manifest's state moves from
 the stage store to the LLM cache of ADR-0032 (State and CLI).
+Amended by #128 (2026-09-28): in `ingest run`, phase 3 has no roster.
+Reconciliation is a stage before the write, and those read nothing from
+the wiki (ADR-0025 §2), so the reconcile step matches a document's
+entities against no graph entity and proposes nothing; matching against
+a kept graph's roster comes back as an explicit, keyed input (#130). The
+standalone `ingest reconcile` step and `reconcile-graph` still read the
+graph's roster.
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
