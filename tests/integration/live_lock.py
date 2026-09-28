@@ -23,9 +23,10 @@ share, so the child holds the lock through that descriptor: it neither
 waits nor records itself, and it never releases the lock, which would
 release the holder's too. The variable counts only when it names a
 descriptor, open in the process, of the lock file itself, and flock on
-that descriptor succeeds at once. A stray or stale variable names no
-such descriptor, and the process then takes the lock as any other does,
-so the variable lets no session past the lock.
+that descriptor succeeds at once, as it does only while the descriptor's
+open file description holds the lock or nothing does. Otherwise the
+process takes the lock as any other does. So even a stray or stale
+variable never lets two sessions hold the lock at once.
 
 Never delete the lock file. A session that then found no file would
 create and lock a new one, while the session still holding the old one
