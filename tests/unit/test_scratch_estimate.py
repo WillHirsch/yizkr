@@ -54,6 +54,7 @@ from yizkr import cli
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline import estimate, llm, scratch
 from yizkr.pipeline.estimate import FIRST_TURNS, Estimator, StageCalls
+from yizkr.pipeline.llmcache import CacheRefused
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import (
     EXIT_FAILED,
@@ -1254,6 +1255,53 @@ class TestRefusals:
             )  # fmt: skip
         assert sorted(path.name for path in repo.iterdir()) == [".git"]
 
+    def test_a_cache_folder_the_cache_refuses(self, tmp_path, engine):
+        """A cache folder open to other users, one this user cannot write
+        in, and one under a folder it cannot make it in: the run refuses
+        each as its first stale stage opens the cache, and so does the
+        estimate, leaving the folder as it was. With nothing stale, the
+        run opens no cache, and the estimate reads none."""
+        corpus = small(tmp_path)
+        shared = tmp_path / "shared"
+        shared.mkdir(mode=0o750)
+        shared.chmod(0o750)
+        with pytest.raises(CacheRefused, match="open to other users"):
+            estimate_of(tmp_path, corpus, engine, cache_dir=shared)
+        assert stat.S_IMODE(shared.stat().st_mode) == 0o750
+        assert list(shared.iterdir()) == []
+        closed = tmp_path / "closed"
+        closed.mkdir(mode=0o700)
+        closed.chmod(0o500)
+        try:
+            if os.access(closed, os.W_OK):
+                pytest.skip("this user writes to any folder")
+            for cache, why in (
+                (closed, "cannot write in it"),
+                (closed / "cache", "cannot make it in"),
+            ):
+                with pytest.raises(CacheRefused, match=why):
+                    estimate_of(tmp_path, corpus, engine, cache_dir=cache)
+        finally:
+            closed.chmod(0o700)
+        run(tmp_path, corpus, engine)
+        counted = estimate_of(
+            tmp_path, corpus, engine, resume=LATEST, cache_dir=shared
+        )
+        assert counted.total().engine_calls == 0
+
+    def test_a_cache_folder_git_would_track(
+        self, tmp_path, engine, monkeypatch
+    ):
+        if shutil.which("git") is None:
+            pytest.skip("no git")
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        corpus = small(tmp_path)
+        monkeypatch.chdir(repo)
+        with pytest.raises(CacheRefused, match="git work tree"):
+            estimate_of(tmp_path, corpus, engine, cache_dir=repo / "cache")
+        assert sorted(path.name for path in repo.iterdir()) == [".git"]
+
     @pytest.mark.parametrize("how", ["emptied", "excluded"])
     def test_a_corpus_with_no_document_is_no_call(
         self, tmp_path, engine, how, monkeypatch
@@ -1529,8 +1577,9 @@ class TestCommandLine:
             ScratchRefused("no scratch run in my-runs"),
             RunSettingsConflict(Path("r"), [("config.language", "de", "en")]),
             llm.PassPaused("the CLI's global config sets variables"),
+            CacheRefused("the LLM cache is open to other users"),
         ],
-        ids=["refused", "settings", "paused"],
+        ids=["refused", "settings", "paused", "cache"],
     )
     def test_a_refusal_is_said_and_exits_1(
         self, tmp_path, monkeypatch, capsys, refusal

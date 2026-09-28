@@ -292,7 +292,10 @@ message is one line, and it is raised as `CacheRefused`, a pause
 (`PassPaused`) like `CacheInUse`: it ends the pass rather than failing
 each document in turn, the invocation ends `paused` (`scratch run`
 prints the line and exits 2), and the pass goes on once the folder can
-hold the cache, or with another.
+hold the cache, or with another. `yizkr scratch estimate` refuses the
+same folders, found without making or changing anything
+(`llm.read_cache`), where the run would meet them, as a stale stage
+first needs the engine; it prints the line and exits 1.
 
 **Folders the cache makes are private** (mode 700, whatever the umask):
 the root and any missing folder above it, a key's folder for an answer
@@ -329,14 +332,15 @@ again, or is refused if another process has taken it meanwhile.
 **Reading a cache as it is.** `llm.read_cache` gives the entries a run
 would be served, without opening the cache: it takes no lock, makes no
 folder and writes nothing, and what calls made through it change (an
-answer rejected, one stored) stays in memory (ADR-0032 §3). A kept
-session comes back as the names of its files only, with no bytes, read
-through its folder opened once, so one replaced meanwhile by renames is
-never read torn, and looked for again a moment later while it is
-missing. The call estimate reads the cache so, beside a run that holds
-it (docs/runbooks/scratch-run.md, Before a run). `llm.cache_holder` names
-the process that holds a cache, from its lock file's record, without
-taking the lock.
+answer rejected, one stored) stays in memory (ADR-0032 §3). A folder the
+cache would refuse to open it refuses too (`CacheRefused`; The cache
+folder, above). A kept session comes back as the names of its files
+only, with no bytes, read through its folder opened once, so one
+replaced meanwhile by renames is never read torn, and looked for again a
+moment later while it is missing. The call estimate reads the cache so,
+beside a run that holds it (docs/runbooks/scratch-run.md, Before a run).
+`llm.cache_holder` names the process that holds a cache, from its lock
+file's record, without taking the lock.
 
 Why one process: several session paths assume it. A resumed claude-code
 session's transcript sits under its original id in the CLI's projects

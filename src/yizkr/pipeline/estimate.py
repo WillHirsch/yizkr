@@ -449,8 +449,9 @@ class Estimator(ScratchDriver):
         no renderer (PreflightFailed); with other settings, or another
         claude CLI, than the run it would invoke again recorded
         (RunSettingsConflict); with an engine client that cannot start
-        (ScratchRefused), or a pause as one starts (llm.PassPaused). A
-        corpus with no document is no call, as it is to the driver."""
+        (ScratchRefused), or a pause as one starts (llm.PassPaused), a
+        cache folder the cache refuses among them. A corpus with no
+        document is no call, as it is to the driver."""
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)
         problems = self._model_problems() + self._pacing_problems()
@@ -489,9 +490,6 @@ class Estimator(ScratchDriver):
         if past or not taken:
             return estimate
         self._refreshed = self._refreshes_made()
-        self._as_is = llm.read_cache(
-            self.cache_dir, refresh=self.refresh, epochs=self.epochs
-        )
         try:
             made = {doc: self._count(doc) for doc in taken}
         finally:
@@ -519,8 +517,10 @@ class Estimator(ScratchDriver):
         the run it would invoke again recorded, a claude CLI updated
         since among them (RunSettingsConflict, as RunDir.record_engine
         refuses it), stops the estimate where it would stop the run, and
-        nothing stale starts none. Called before a stage's own code, whose
-        failures are the stage's."""
+        nothing stale starts none. The cache is read from here on, as the
+        run opens it here: a cache folder the cache refuses stops the
+        estimate too (llmcache.CacheRefused, a pause). Called before a
+        stage's own code, whose failures are the stage's."""
         if role in self._keyed:
             return
         effort, model = self._engine_settings(role)
@@ -535,6 +535,13 @@ class Estimator(ScratchDriver):
         conflicts = self._client_conflicts(role, client)
         if conflicts:
             raise RunSettingsConflict(self.state_dir, conflicts)
+        if self._as_is is None:
+            # the run opens its cache here too, as a stage first needs
+            # the engine: a folder it would refuse is refused
+            # (llmcache.CacheRefused)
+            self._as_is = llm.read_cache(
+                self.cache_dir, refresh=self.refresh, epochs=self.epochs
+            )
         self._keyed[role] = _keyed(client)
 
     def _client_conflicts(self, role: str, client: Any) -> list[tuple]:

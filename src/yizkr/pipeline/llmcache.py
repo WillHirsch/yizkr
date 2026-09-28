@@ -227,12 +227,13 @@ class CacheRefused(PassPaused):
     the folder is fit to hold the cache, or with another."""
 
 
-def _open_root(root: Path) -> None:
-    """Make the cache root when it is not there yet, or refuse it
-    (CacheRefused): one a git work tree would track, before anything is
-    made; one that cannot be made or is not a folder; one that exists and
-    is open to other users; and one this user cannot write in. The mode of
-    a root there already is left as it is."""
+def _root_refusal(root: Path) -> str | None:
+    """Why `root` cannot be the cache root, found without making or
+    changing anything; None when it can be. One a git work tree would
+    track is refused first; then one there already that is not a folder,
+    is open to other users, or that this user cannot write in; and one not
+    there yet, when the nearest folder above it is not a folder this user
+    can make it in."""
     # the scratch driver keeps its runs directory out of work trees with
     # this check; its module loads the orchestrator, which a process that
     # only opens a cache does not need
@@ -241,24 +242,39 @@ def _open_root(root: Path) -> None:
     try:
         tree = tracked_by_git(root)
         if tree is not None:
-            raise CacheRefused(
+            return (
                 f"the LLM cache {root} is in the git work tree {tree}, "
                 "which does not ignore it: its entries hold corpus content, "
                 "which is never committed (docs/AGENT_PROTOCOL.md §6). Give "
                 "the cache a folder git ignores, such as var/llm-cache, or "
                 "one outside the work tree"
             )
-        _make_private(root)
-        info = root.stat()
+        if os.path.lexists(root):
+            return _folder_refusal(root, root.stat())
+        folder = root.parent
+        while not os.path.lexists(folder) and folder.parent != folder:
+            folder = folder.parent
+        if not folder.is_dir():
+            return f"{root} cannot be the LLM cache: {folder} is not a folder"
+        if not os.access(folder, os.W_OK | os.X_OK):
+            return (
+                f"{root} cannot be the LLM cache: this user cannot make it "
+                f"in {folder}"
+            )
     except OSError as exc:
-        raise CacheRefused(f"{root} cannot be the LLM cache: {exc}") from None
+        return f"{root} cannot be the LLM cache: {exc}"
+    return None
+
+
+def _folder_refusal(root: Path, info: os.stat_result) -> str | None:
+    """Why the folder at `root`, as `info` states it, cannot hold the
+    cache: not a folder, open to other users, or one this user cannot
+    write in; None when it can."""
     if not stat.S_ISDIR(info.st_mode):
-        raise CacheRefused(
-            f"{root} cannot be the LLM cache: it is not a folder"
-        )
+        return f"{root} cannot be the LLM cache: it is not a folder"
     mode = stat.S_IMODE(info.st_mode)
     if mode & 0o077:
-        raise CacheRefused(
+        return (
             f"the LLM cache {root} is open to other users (mode {mode:o}), "
             "and its entries hold corpus content: make it private (chmod "
             "700), or give the cache another folder"
@@ -266,10 +282,29 @@ def _open_root(root: Path) -> None:
     # a private folder of another user's, or one its owner has closed:
     # the cache writes its lock file and its entries in it
     if not os.access(root, os.W_OK | os.X_OK):
-        raise CacheRefused(
+        return (
             f"{root} cannot be the LLM cache: this user cannot write in it "
             f"(mode {mode:o})"
         )
+    return None
+
+
+def _open_root(root: Path) -> None:
+    """Make the cache root when it is not there yet, or refuse it
+    (CacheRefused): a root _root_refusal refuses, before anything is made,
+    and one that cannot be made when it comes to it. The mode of a root
+    there already is left as it is."""
+    refusal = _root_refusal(root)
+    if refusal is not None:
+        raise CacheRefused(refusal)
+    try:
+        _make_private(root)
+        info = root.stat()
+    except OSError as exc:
+        raise CacheRefused(f"{root} cannot be the LLM cache: {exc}") from None
+    refusal = _folder_refusal(root, info)
+    if refusal is not None:
+        raise CacheRefused(refusal)
 
 
 def _make_private(folder: Path) -> None:
@@ -766,7 +801,9 @@ class CacheAsIs(EngineCache):
     through it change (an answer rejected, one stored, a key refreshed) it
     keeps in memory, for as long as it lives. It takes the layout, and the
     reading of an entry, from EngineCache, but none of its opening, which
-    makes the root and holds its lock. A kept session is given by its
+    makes the root and holds its lock; a root the cache would refuse
+    (_root_refusal) it refuses too, with CacheRefused, so that it reads no
+    folder a run would refuse to use. A kept session is given by its
     files' names, without their bytes: whether they can resume a
     conversation is all a reader of it asks. A kept session is read
     through its folder, opened once, so a process that replaces it
@@ -794,6 +831,9 @@ class CacheAsIs(EngineCache):
         # answers stored, and keys rejected, through this view
         self._stored: dict[str, dict] = {}
         self._rejected: set[str] = set()
+        refusal = _root_refusal(self.root)
+        if refusal is not None:
+            raise CacheRefused(refusal)
 
     def warn_unpinned(self, role: str) -> None:
         """Nothing is written, and nothing is said."""

@@ -94,17 +94,18 @@ cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
   first call: no never-ingest list, a runs directory the driver refuses
   (open to others, tracked by git, a file, one it cannot write), a model
   that is no full id, a pacing setting the engine refuses, a PDF without
-  the renderer, and other settings or another claude CLI for a run
-  invoked again. It lists what the run's preflight would still refuse
-  (the login, disk space); a stage that touches the wiki is left to the
-  run's own preflight. A corpus with no document is no call, whatever the
-  settings, as it is to the run. Like the driver, it starts a role's
-  engine client when the role's first stale stage needs it, which for
-  the claude CLI runs `claude --version`, for the version every key
-  names: a client that cannot start, or pauses as it starts, stops the
-  estimate as it would stop the run, and nothing stale starts none. How
-  the LLM cache keys a call, and what a run's events count:
-  docs/LLM_CACHE.md.
+  the renderer, other settings or another claude CLI for a run invoked
+  again, and, once a stale stage needs the engine, a cache folder the
+  cache refuses (What stays local, below). It lists what the run's
+  preflight would still refuse (the login, disk space); a stage that
+  touches the wiki is left to the run's own preflight. A corpus with no
+  document is no call, whatever the settings, as it is to the run. Like
+  the driver, it starts a role's engine client when the role's first
+  stale stage needs it, which for the claude CLI runs `claude --version`,
+  for the version every key names: a client that cannot start, or pauses
+  as it starts, stops the estimate as it would stop the run, and nothing
+  stale starts none. How the LLM cache keys a call, and what a run's
+  events count: docs/LLM_CACHE.md.
 
 ## Run
 

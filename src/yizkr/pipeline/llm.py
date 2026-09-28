@@ -2600,8 +2600,11 @@ def read_cache(
     what the cache cannot answer; what the calls change, an answer
     rejected or one stored, is kept in memory. A kept session comes back
     as the names of its files only, with no bytes: whether they can
-    resume a conversation is all a reader asks. The call estimate counts
-    a planned run's calls through it (yizkr.pipeline.estimate)."""
+    resume a conversation is all a reader asks. A folder the cache would
+    refuse to open, one a git work tree would track, one open to other
+    users, or one this user cannot write in or make, is refused here too
+    (llmcache.CacheRefused, a pause). The call estimate counts a planned
+    run's calls through it (yizkr.pipeline.estimate)."""
     from yizkr.pipeline.llmcache import CacheAsIs
 
     return CacheAsIs(root, refresh=refresh, epochs=epochs)
