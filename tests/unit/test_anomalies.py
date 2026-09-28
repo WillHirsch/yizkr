@@ -718,6 +718,7 @@ class TestExtraction:
         """The reason a failed extraction gives, as the extractor words it,
         for every claim rejected by validation or unread by the parser."""
         from tests.unit.test_chunking import (
+            DOC_REF,
             LINE_LENGTH,
             ScriptedLlm,
             claim,
@@ -741,7 +742,7 @@ class TestExtraction:
             budget=LINE_LENGTH,
         )
         with pytest.raises(ExtractionFailed) as failed:
-            extractor.extract(transcription(), "Q23")
+            extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         run, checks = make_checks(
             tmp_path, {"checks": {"schema-rejects": {"min-count": 2}}}
         )
