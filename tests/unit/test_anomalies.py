@@ -176,13 +176,19 @@ def clock(monkeypatch) -> Clock:
 class Timers:
     """The timers the checks start, recorded instead of started: `fire`
     runs each one neither run nor cancelled yet, as a real timer runs once
-    when its time has come, and `waiting` lists them."""
+    when its time has come, and `waiting` lists them. While `refuse` is
+    above 0, a timer cannot start, as when no thread can, and each refusal
+    counts it down."""
 
     def __init__(self) -> None:
         self.started: list[RecordedTimer] = []
         self._run: set[int] = set()
+        self.refuse = 0
 
     def __call__(self, seconds, callback):
+        if self.refuse:
+            self.refuse -= 1
+            raise RuntimeError("can't start new thread")
         self.started.append(RecordedTimer(seconds, callback))
         return self.started[-1]
 
@@ -1228,6 +1234,20 @@ def reinvoke(run: RunDir) -> None:
     carry(run, carried)
 
 
+def failing_once(locked, error: Exception):
+    """A stand-in for anomalies._locked_control whose first call raises
+    `error`, as a control file that cannot be opened or read does; the
+    calls after it read the file."""
+    errors = [error]
+
+    def call(path):
+        if errors:
+            raise errors.pop()
+        return locked(path)
+
+    return call
+
+
 def held_elsewhere(path: Path) -> str:
     """Whether another process can take the lock a control file's
     appenders take: `held` or `free`."""
@@ -1592,6 +1612,113 @@ class TestFailFastPauses:
         # the disk has room again, and the next look aborts
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
+
+    def test_a_check_whose_look_fails_leaves_a_timer_a_timeout_later(
+        self, tmp_path, clock, monkeypatch
+    ):
+        """The first look at a slice the checks have just paused is the
+        check's own, at the end of its read of the run's events. When it
+        fails, here as the control file cannot be opened, the check is an
+        `anomaly-error` event, and the slice still has a timer, a timeout
+        later, whose look aborts the pause."""
+        timers = Timers()
+        run = RunDir(tmp_path / "run")
+        anomalies.attach(
+            run,
+            load_config(),
+            now=clock,
+            timer=timers,
+            page_count=lambda source: None,
+        )
+        monkeypatch.setattr(
+            anomalies,
+            "_locked_control",
+            failing_once(
+                anomalies._locked_control,
+                OSError(errno.EMFILE, "Too many open files"),
+            ),
+        )
+        outcomes(run, "transcription", "media", "xxxxxx")
+        anomalies.failed(
+            run, Doc(tmp_path, "media-5", "media"), "transcription"
+        )
+        assert run.control().stopped(kind="media") == "kind:media paused"
+        (error,) = [
+            event
+            for event in run.events()
+            if event["event"] == "anomaly-error"
+        ]
+        assert (error["error"], error["hook"]) == ("OSError", "failed")
+        (pending,) = timers.waiting()
+        assert pending.seconds == 1801
+        clock.advance(1802)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+
+    def test_a_failed_look_stops_no_other_slice(
+        self, tmp_path, clock, monkeypatch
+    ):
+        """A check looks at every watched slice; one whose look fails leaves
+        the others to be looked at, and each slice has its timer."""
+        timers = Timers()
+        run = RunDir(tmp_path / "run")
+        run.request("pause", kind="media", by="anomaly", reason="kind")
+        run.request("pause", stage="critique", by="anomaly", reason="calls")
+        watch = anomalies._watch_of(run.path)
+        watch.watch("kind:media", "kind-failures", 1800.0, clock, timers)
+        watch.watch("stage:critique", "call-failures", 1800.0, clock, timers)
+        monkeypatch.setattr(
+            anomalies,
+            "_locked_control",
+            failing_once(
+                anomalies._locked_control,
+                OSError(errno.EIO, "Input/output error"),
+            ),
+        )
+        with pytest.raises(OSError):
+            watch.look()
+        # the failed look's timer comes a timeout from now; the other's when
+        # its pause, stamped in whole seconds, reaches the timeout
+        assert len(timers.waiting()) == 2
+        assert all(1800 < timer.seconds <= 1801 for timer in timers.waiting())
+
+    def test_a_clock_that_steps_back_brings_the_next_look_forward(
+        self, tmp_path, clock
+    ):
+        """The looks agree on when a slice is to be looked at again, so a
+        look wants a sooner timer only when the wall clock steps back: then
+        one is started for the look the slice needs, and the pending one
+        cancelled."""
+        timers = Timers()
+        run, checks = paused_media(tmp_path, clock=clock, timers=timers)
+        clock.advance(1802)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+        (idle,) = timers.waiting()
+        clock.advance(-3600)
+        checks.poll()
+        (sooner,) = timers.waiting()
+        assert idle.cancelled
+        # the checks' request, stamped in whole seconds, reaches its timeout
+        # 3599 s from the stepped back clock
+        assert 3598 < sooner.seconds <= 3599
+
+    def test_a_timer_that_cannot_start_leaves_the_pending_one(
+        self, tmp_path, clock
+    ):
+        """A sooner timer that cannot start, as when no thread can, leaves
+        the pending one as it was, and the look raises."""
+        timers = Timers()
+        run, checks = paused_media(tmp_path, clock=clock, timers=timers)
+        clock.advance(1802)
+        timers.fire()
+        (idle,) = timers.waiting()
+        clock.advance(-3600)
+        timers.refuse = 1
+        with pytest.raises(RuntimeError):
+            checks.poll()
+        assert timers.waiting() == [idle]
+        assert not idle.cancelled
 
     def test_a_slice_has_one_pending_timer(self, tmp_path, clock):
         """A look keeps the pending timer when it is due soon enough, and

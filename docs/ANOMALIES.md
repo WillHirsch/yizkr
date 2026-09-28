@@ -309,11 +309,13 @@ appenders take (rundir's `_append_line`) from its read to its abort, so
 no other process appends a request in between: an operator's resume
 lands before the look, and is seen, or after the abort. The lock is
 POSIX's, so it does not hold against this process's own threads, nor
-after any descriptor on the file in this process is closed. A look the
-timer makes that fails (the control file cannot be read, or the abort
-cannot be appended, on a full disk say) is an `anomaly-error` event,
-under the watch's own invocation, `watch-<hex>`, and the slice is looked
-at again a timeout later: it never goes unwatched.
+after any descriptor on the file in this process is closed. A look that
+fails (the control file cannot be opened, read or appended to, on a full
+disk say, or a timer cannot start) is an `anomaly-error` event: under
+the watch's own invocation, `watch-<hex>`, when a timer made it, and
+under the check's otherwise. Either way it stops the look at no other
+slice, and leaves the slice a timer a timeout later when none is
+pending: a slice never goes unwatched.
 
 The slice stays watched after its pause is aborted, resumed or cleared,
 because a driver that invokes the run again in the same process, as the

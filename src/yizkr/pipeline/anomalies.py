@@ -1012,54 +1012,65 @@ class _SliceWatch:
                 self._slices[scope] = _Watched(check, timeout, now, timer)
 
     def look(self) -> None:
-        """Look at every watched slice now."""
+        """Look at every watched slice now. A look that fails stops no
+        other: every slice is looked at, and the first failure is raised
+        after."""
         with self._lock:
+            failure = None
             for scope, watched in list(self._slices.items()):
-                self._look(scope, watched)
+                try:
+                    self._look(scope, watched)
+                except Exception as exc:
+                    failure = failure or exc
+            if failure is not None:
+                raise failure
 
     def _fire(self, scope: str, token: object) -> None:
         """A pending timer's end: its slice is looked at, unless a later
-        look has put another timer in its place. A look that fails (the
-        control file cannot be read, or the abort cannot be appended) is an
-        `anomaly-error` event, and the slice is looked at again a timeout
-        later, so that it never goes unwatched."""
+        look has put another timer in its place. A look that fails is an
+        `anomaly-error` event, and leaves a timer pending (_look)."""
         try:
             with self._lock:
                 watched = self._slices.get(scope)
                 if watched is None or watched.token is not token:
                     return
                 watched.pending = watched.token = watched.due = None
-                try:
-                    self._look(scope, watched)
-                finally:
-                    if watched.pending is None:
-                        margin = timedelta(seconds=watched.timeout + 1)
-                        self._arm(scope, watched, watched.now() + margin)
+                self._look(scope, watched)
         except Exception as exc:
             _report(self.run, "timer", exc)
 
     def _look(self, scope: str, watched: _Watched) -> None:
-        """Look at a slice, and see that its next look is pending: a timer
-        is started when none is, or when this look wants one sooner than
-        the pending one is due, which is then cancelled. The looks agree
-        on when a pause is due, so a sooner one comes only when the wall
-        clock steps back; the pending timer is then never later than the
-        look the slice needs."""
-        due = self._judge(scope, watched)
-        if watched.pending is not None and (
-            watched.due is not None and watched.due <= due
-        ):
-            return
-        self._arm(scope, watched, due)
+        """Look at a slice, and see that its next look is pending, whether
+        a timer or a check makes the look and whether it succeeds or fails.
+        A timer is started when none is, or when this look wants one
+        sooner than the pending one is due, which is then cancelled. The
+        looks agree on when a pause is due, so a sooner one comes only when
+        the wall clock steps back; the pending timer is then never later
+        than the look the slice needs. A look that fails (the control file
+        cannot be opened, read or appended to, or a timer cannot start)
+        raises, and leaves a timer a timeout later when none is pending, so
+        that the slice never goes unwatched."""
+        try:
+            due = self._judge(scope, watched)
+            if watched.pending is not None and (
+                watched.due is not None and watched.due <= due
+            ):
+                return
+            self._arm(scope, watched, due)
+        finally:
+            if watched.pending is None:
+                margin = timedelta(seconds=watched.timeout + 1)
+                self._arm(scope, watched, watched.now() + margin)
 
     def _arm(self, scope: str, watched: _Watched, due: datetime) -> None:
-        """Start the timer that looks at the slice when `due` comes, in
-        place of the pending one, which is cancelled."""
-        _cancel(watched.pending)
+        """Start the timer that looks at the slice when `due` comes, and
+        only then cancel the pending one it replaces: a timer that cannot
+        start leaves the pending one as it was."""
         token = object()
-        watched.token, watched.due = token, due
         wait = max(0.0, (due - watched.now()).total_seconds())
-        watched.pending = watched.timer(wait, lambda: self._fire(scope, token))
+        pending = watched.timer(wait, lambda: self._fire(scope, token))
+        _cancel(watched.pending)
+        watched.pending, watched.token, watched.due = pending, token, due
 
     def _judge(self, scope: str, watched: _Watched) -> datetime:
         """Abort the slice when a pause of the checks alone stands on it
