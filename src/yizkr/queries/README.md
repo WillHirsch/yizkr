@@ -22,12 +22,38 @@ uv run yizkr publish-queries             # or: make publish-queries
 
 ## Queries
 
-- **disagreement-report** — the flagship R2 view: entity+property pairs
-  holding two or more different attributed values, each labeled by its
-  source. Rows here are a healthy resting state (ADR-0002), not errors.
+- **disagreement-report** — the flagship R2 view: values that different
+  artifacts attribute to the same entity and property, side by side,
+  each with every source that states it. Rows here are a healthy resting
+  state (ADR-0002), not errors. Two readings of one artifact are not two
+  sources (ADR-0023 §4), and a page fragment counts as its artifact; a
+  deprecated statement is left out, and nothing needs a preferred rank.
+  It compares the single-valued properties (dates and places of birth and
+  death, parents, birth name, an event's own point in time, start and end
+  time, a place's identity properties), and the start and end times of
+  one residence place or one spouse that sources date differently (a
+  point in time on those statements is not compared). A date whose span
+  lies inside another's and a place recorded inside the other are
+  differences of resolution, and are not listed: a date's span is the
+  period its precision names or the range its source states with
+  earliest and latest dates, which the report shows beside the value.
+  Two dates stored alike are compared through those stated ranges. When
+  either residence or spouse statement carries earliest or latest dates,
+  their start and end times are compared as stated, with no difference
+  of resolution suppressed. Spellings of a name that differ only in case
+  or language are one value. See MODELING.md "Contradictions" for the
+  full rules.
 - **person-timeline** — every dated assertion about each person
   (statements, dated qualifiers such as a marriage's point in time, and
   events participated in), plural-by-default with sources (R6).
+- **kinship** — how each person is related to a subject, derived from
+  the kinship primitives and gendered by the relative's `sex_or_gender`
+  (ADR-0014), beside the terms sources assert with `relative` +
+  `kinship_type`. A row reads "?relative is ?subject's ?relationship".
+  An asserted term names the statement's subject and has the ego as its
+  value (ADR-0018), so `Klara —relative→ Nicholas ; kinship_type =
+  "aunt"` is Nicholas's row, with Klara as his aunt
+  (`tests/integration/test_live_kinship.py`).
 - **places-map** — coordinates + what connects to each place; renders
   as a map view in the query UI.
 - **unreferenced-statements** — QC report; every row is a
@@ -49,6 +75,7 @@ vocabulary via `{P:key}`/`{Q:key}`, and re-run the publisher. The
 offline tests (`make test`) verify that every placeholder matches a
 real manifest key, so templates and model cannot drift apart; the live
 tests (`make test-live`) execute every query against WDQS, assert
-the zero-unreferenced-statements invariant, and pin the
-under-witnessed queue's rows on a fictional fixture
-(`tests/integration/test_live_under_witnessed.py`).
+the zero-unreferenced-statements invariant, and pin the rows of the
+under-witnessed queue and the disagreement report on fictional fixtures
+(`tests/integration/test_live_under_witnessed.py`,
+`tests/integration/test_live_disagreement.py`).

@@ -1,10 +1,14 @@
 """Offline tests for the model manifest and bootstrap helpers (pytest)."""
 
+import os
+import uuid
+
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from yizkr.model.bootstrap import build_mapping_wikitext
-from yizkr.model.schema import Manifest, load_manifest
+from yizkr.model.schema import Manifest, load_manifest, read_manifest_data
 
 
 @pytest.fixture(scope="module")
@@ -233,6 +237,61 @@ class TestValidators:
         raw["properties"]["stated_in"]["description"] = "x" * 251
         with pytest.raises(ValidationError, match="at most 250"):
             Manifest.model_validate(raw)
+
+
+class TestLoading:
+    """load_manifest parses each distinct text once and hands every
+    caller a manifest of its own (#254)."""
+
+    def test_one_text_is_parsed_once_whatever_path_it_comes_from(
+        self, tmp_path, monkeypatch
+    ):
+        # a comment no other load carries, so this text is new to the cache
+        text = yaml.safe_dump(minimal_raw()) + f"# {uuid.uuid4().hex}\n"
+        first, second = tmp_path / "first.yaml", tmp_path / "second.yaml"
+        first.write_text(text)
+        second.write_text(text)
+        parses = []
+        real_safe_load = yaml.safe_load
+
+        def safe_load(stream):
+            parses.append(stream)
+            return real_safe_load(stream)
+
+        monkeypatch.setattr(yaml, "safe_load", safe_load)
+        loads = [load_manifest(first), load_manifest(second)]
+        loads.append(load_manifest(first))
+        assert len(parses) == 1
+        assert loads[0] == loads[1] == loads[2]
+
+    def test_a_manifest_rewritten_on_disk_is_read_again(self, tmp_path):
+        path = tmp_path / "manifest.yaml"
+        raw = minimal_raw()
+        path.write_text(yaml.safe_dump(raw))
+        assert load_manifest(path).items["artifact"].label == "artifact"
+        before = path.stat()
+        raw["items"]["artifact"]["label"] = "artefact"
+        path.write_text(yaml.safe_dump(raw))
+        # the same size and modification time: only the text has changed
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = path.stat()
+        assert (after.st_size, after.st_mtime_ns) == (
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        assert load_manifest(path).items["artifact"].label == "artefact"
+
+    def test_changing_a_loaded_manifest_changes_no_later_load(self):
+        text = read_manifest_data()
+        pristine = Manifest.model_validate(yaml.safe_load(text))
+        first = load_manifest()
+        first.version += 1
+        first.items["human"].label = "changed"
+        first.properties["stated_in"].aliases.append("changed")
+        del first.items["place"]
+        second = load_manifest()
+        assert second is not first
+        assert second == pristine
 
 
 class TestMappingPage:
