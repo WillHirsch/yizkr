@@ -20,10 +20,11 @@ doubtful assertions as stated by their sources.
 
 **Clarified stance (see ADR-0002):** the core requirement is to *see*
 disagreements, not to resolve them. The system must hold a neutral
-collection of potentially contradictory assertions – e.g. "person X
-moved to France in 1929 per source A, in 1930–1935 per source B, and
-married there in 1933 per the marriage record" – so a reader can weigh
-the evidence even when no curator or algorithm has expressed a view.
+collection of potentially contradictory assertions – e.g. "Gustav
+Löbig was born on 7 January 1919 per his birth register extract, on
+1 July 1919 per his naturalisation certificate, and in 1919 per a
+family tree" – so a reader can weigh the evidence even when no
+curator or algorithm has expressed a view.
 Resolution mechanisms are a bonus feature, never a dependency.
 
 ## R3 – Automated LLM ingestion, first-class
