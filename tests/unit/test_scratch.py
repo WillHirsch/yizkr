@@ -1724,9 +1724,11 @@ class TestRunsDirectory:
             ):
                 pass
         assert sorted(p.name for p in repo.iterdir()) == [".git", ".gitignore"]
-        with scratch.hold(Path("var/scratch")):
-            pass
-        assert (repo / "var" / "scratch" / scratch.LOCK_FILE).is_file()
+        # the ignored directory itself, not made yet, and one inside it
+        for runs in (Path("var"), Path("var/scratch")):
+            with scratch.hold(runs):
+                pass
+            assert (repo / runs / scratch.LOCK_FILE).is_file()
 
     def test_the_command_resumes_the_latest_run_unless_it_went_to_the_end(
         self, tmp_path
