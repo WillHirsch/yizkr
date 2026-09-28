@@ -694,8 +694,10 @@ class TestInterruptedWorkStops:
         it loads, never cancels the write (which would wedge the engine's
         writer), kills its curl, waits for the engine to abort the write,
         and leaves the engine writable. The file is uploaded, not
-        streamed."""
-        fake.set_world([SANDBOX], hang="load", triples=99)
+        streamed. Another sandbox command's query, running beside it and
+        ending on its own, is never cancelled."""
+        other = {**OTHER_QUERY, "until": time.time() + 3}
+        fake.set_world([SANDBOX], hang="load", triples=99, running=[other])
         fake.record(SANDBOX["name"], loaded=["/elsewhere/old.ttl"])
         code, _, err, loaded_during = fake.interrupt(
             "load",
