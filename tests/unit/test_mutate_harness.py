@@ -230,15 +230,18 @@ def held_elsewhere(path):
 
 
 def test_add_on_the_stack(live_stack_lock):
-    """Note who holds the live-stack lock while the test runs, in the file
-    that $LIVE_LOG names, then check add()."""
+    """Note who holds the live-stack lock while the test runs, and whether
+    a program the test started would inherit the descriptor it shares, in
+    the file that $LIVE_LOG names, then check add()."""
     path = lock_path()
+    shared = os.environ.get("YIZKR_LIVE_LOCK_FD")
     note = {
         "pid": os.getpid(),
         "ppid": os.getppid(),
         "held": held_elsewhere(path),
         "record": json.loads(path.read_text() or "null"),
         "mtime_ns": path.stat().st_mtime_ns,
+        "inheritable": os.get_inheritable(int(shared)) if shared else None,
     }
     with open(os.environ["LIVE_LOG"], "a") as log:
         log.write(json.dumps(note) + "\\n")
@@ -1171,12 +1174,15 @@ def test_the_harness_holds_the_lock_through_every_live_run(live_run):
     found it held, recorded as the harness's own, with the same record.
     Each session's live_stack_lock fixture shared that hold rather than
     taking the lock itself, which would record the session instead, or
-    waiting for it, which would give up."""
+    waiting for it, which would give up. Sharing it, the fixture made the
+    descriptor close-on-exec: a program the test started with exec, such
+    as a shell's background job, would not keep the lock after the run."""
     assert len(live_run.notes) == 2
     for note in live_run.notes:
         assert note["held"]
         assert note["record"]["pid"] == note["ppid"] != note["pid"]
         assert "mutate.py" in note["record"]["command"]
+        assert note["inheritable"] is False
     first, second = live_run.notes
     assert first["record"] == second["record"]
     assert first["mtime_ns"] == second["mtime_ns"]
@@ -1269,12 +1275,15 @@ def test_a_live_spec_is_refused_when_the_lock_cannot_be_used(
 def test_a_live_spec_waits_for_the_lock_and_gives_up_naming_the_holder(
     repo, tmp_path, holder
 ):
-    """Nothing runs: not the baseline, nor any mutant."""
+    """Nothing runs: not the baseline, nor any mutant. A baseline run
+    without the lock would only error at its fixture's setup, which leaves
+    no trace but the report (#304 review)."""
     calc = repo / "calc.py"
     before = snapshot(calc)
     lock = tmp_path / "live-stack.lock"
     held = holder(lock)
     log = tmp_path / "live-log"
+    report = tmp_path / "report.json"
     env = environment(
         LIVE_LOG=str(log),
         **{
@@ -1283,14 +1292,19 @@ def test_a_live_spec_waits_for_the_lock_and_gives_up_naming_the_holder(
             ENV_FILE: str(stack_settings(tmp_path)),
         },
     )
-    result = harness(repo, LIVE_SUM, env=env)
+    result = harness(repo, LIVE_SUM, "--json", str(report), env=env)
     assert result.returncode == 2, result.stdout + result.stderr
     assert (
         "mutate: Gave up after 0.3 s waiting for the live-stack lock "
         f"{lock}, held by pid {held.pid} " in result.stderr
     )
     assert "internal error" not in result.stderr
+    # the holder runs still, so nothing says that it has ended
+    assert "has ended" not in result.stderr
     assert result.stdout == ""
+    data = json.loads(report.read_text())
+    assert data["baseline"] is None
+    assert [entry["result"] for entry in data["mutations"]] == ["not run"]
     assert not log.exists()
     assert snapshot(calc) == before
     assert json.loads(lock.read_text())["pid"] == held.pid
@@ -1353,13 +1367,18 @@ def test_a_process_given_the_holders_descriptor_shares_its_hold(
 ):
     """What each live run of the harness does: hold() finds the harness's
     descriptor, from which no new one could take the lock, and holds the
-    lock through it, leaving it locked, open and recorded as it was."""
+    lock through it, leaving it locked, open and recorded as it was. It
+    makes the descriptor close-on-exec, which pass_fds leaves it not, so
+    that no program the run starts shares the hold (#304 review)."""
     lock = tmp_path / "live-stack.lock"
     with live_lock.hold(lock, timeout=0) as fd:
         record = lock.read_text()
+        # as the run inherits it through pass_fds
+        os.set_inheritable(fd, True)
         monkeypatch.setenv(SHARED_ENV, str(fd))
         with live_lock.hold(lock, timeout=0) as shared:
             assert shared == fd
+        assert not os.get_inheritable(fd)
         assert taken(lock)
         os.fstat(fd)
         assert lock.read_text() == record
@@ -1397,14 +1416,20 @@ def test_a_variable_that_names_no_descriptor_of_the_lock_is_ignored(
         os.close(other)
 
 
+@pytest.mark.parametrize("shared", [False, True], ids=["held", "shared"])
 def test_a_descriptor_of_the_lock_that_does_not_hold_it_gets_nobody_in(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, shared
 ):
     """While one open file description holds the lock, a process named
     another one of the lock file waits its turn like any other: here it
-    gives up."""
+    gives up. So it does after a process has shared the hold, which leaves
+    the lock exclusive: a shared lock would let the stray one share it."""
     lock = tmp_path / "live-stack.lock"
-    with live_lock.hold(lock, timeout=0):
+    with live_lock.hold(lock, timeout=0) as fd:
+        if shared:
+            monkeypatch.setenv(SHARED_ENV, str(fd))
+            with live_lock.hold(lock, timeout=0) as sharer:
+                assert sharer == fd
         stray = os.open(lock, os.O_RDWR)
         try:
             monkeypatch.setenv(SHARED_ENV, str(stray))
@@ -1415,6 +1440,68 @@ def test_a_descriptor_of_the_lock_that_does_not_hold_it_gets_nobody_in(
                 pytest.fail("got past a lock that another description held")
         finally:
             os.close(stray)
+
+
+def test_a_waiter_names_a_holder_that_ended_while_its_hold_is_shared(
+    tmp_path, monkeypatch
+):
+    """The lock is held, but the process that the record names has ended,
+    as when a killed harness's live run holds it still. A waiting process
+    names the recorded holder, with the working directory it ran in, and
+    says that it has ended, rather than that nothing is recorded."""
+    monkeypatch.setattr(live_lock, "RECORD_INTERVAL", 0)
+    ended = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.getpid())"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    pid = int(ended.stdout)
+    lock = tmp_path / "live-stack.lock"
+    with live_lock.hold(lock, timeout=0) as fd:
+        record = json.loads(lock.read_text())
+        record["pid"] = pid
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, json.dumps(record).encode(), 0)
+        announced = []
+        with (
+            pytest.raises(live_lock.LiveStackBusy) as gave_up,
+            live_lock.hold(lock, timeout=0.05, announce=announced.append),
+        ):
+            pytest.fail("took a lock that another description held")
+    for message in (*announced, str(gave_up.value)):
+        assert f"held by pid {pid} since {record['started']}\n" in message
+        assert f"  cwd: {record['cwd']}\n" in message
+        assert (
+            f"  pid {pid} has ended, and a process that shares its hold "
+            "holds the lock" in message
+        )
+    assert len(announced) == 1
+
+
+def test_a_lock_that_cannot_be_taken_is_a_problem_not_an_internal_error(
+    repo, tmp_path, monkeypatch, capsys
+):
+    """The lock's folder cannot be made, for a file is in its way: the
+    harness says so, and runs nothing."""
+    in_the_way = tmp_path / "not-a-folder"
+    in_the_way.write_text("")
+    monkeypatch.setenv(LOCK_ENV, str(in_the_way / "live-stack.lock"))
+    monkeypatch.setenv(ENV_FILE, str(stack_settings(tmp_path)))
+    ran = []
+
+    def passing_run(self, tests, live=False):
+        ran.append(tests)
+        return mutate.Run(
+            0, "=========== 1 passed in 0.01s ===========\n", 0.1
+        )
+
+    spec = scripted(monkeypatch, repo, LIVE_SUM, passing_run)
+    assert mutate.main([spec]) == 2
+    errors = capsys.readouterr().err
+    assert "mutate: cannot take the live-stack lock: " in errors
+    assert "internal error" not in errors
+    assert ran == []
 
 
 # -- refusals ----------------------------------------------------------------

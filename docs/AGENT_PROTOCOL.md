@@ -202,9 +202,11 @@ with the full suite once before its push.
   `gh run list --commit $(git rev-parse <sha>)`, since the filter matches
   only the full 40-character SHA. It runs targeted tests and its own
   probes instead: the tests the PR adds or changes, the PR's mutation
-  spec or one of its own, and edge cases the PR doesn't list. If CI fails
-  for that commit, the failure is a required fix. CI never runs live
-  tests; they run centrally (§5).
+  spec or one of its own, and edge cases the PR doesn't list. A spec with
+  live mutations is the exception: it runs centrally, under the
+  live-stack lock (§5), and a worktree without a configured stack refuses
+  it anyway. If CI fails for that commit, the failure is a required fix.
+  CI never runs live tests; they run centrally (§5).
 - **Resume, don't restart.** Where the orchestrating session can, every
   fix round on a PR resumes the same fixer, and every re-review the same
   reviewer, rather than starting a new agent, so their context carries
@@ -229,7 +231,9 @@ feature, decision, ingestion pass). An agent that files an issue with
 
 ## 5. Verification that needs a local session
 
-- **`needs:live-test`** goes on any PR that changes a write path. A local
+- **`needs:live-test`** goes on any PR that changes a write path, and on
+  any PR whose mutation evidence has a live spec (a mutation with
+  `live = true`), so that the central live run runs the spec. A local
   session runs `make test-live` and posts the results on the PR before
   merge. Live tests run on the one instance, which scratch runs reset
   (ADR-0025), and hold the live stack while they run (§3). They write
@@ -255,9 +259,9 @@ feature, decision, ingestion pass). An agent that files an issue with
   live-stack lock (#253, docs/TESTING.md) when its first test that uses
   the stack sets up, and holds it to the end; a second session waits,
   saying who holds the lock. No one checks by hand for another live
-  session. Only live test sessions take the lock, so the scratch reset,
-  bootstrap and other writers still get the stack from the orchestrating
-  session (§3).
+  session. Only live test sessions and the mutation harness take the
+  lock, so the scratch reset, bootstrap and other writers still get the
+  stack from the orchestrating session (§3).
 - **`needs:scratch-diff`** goes on any PR that changes a stage before
   write that already runs (§2). The procedure:
   1. **Run.** A local session runs a whole-corpus scratch run at the PR's

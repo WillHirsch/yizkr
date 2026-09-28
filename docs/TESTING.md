@@ -171,7 +171,11 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   and holds it until its last run ends; each live run shares its hold.
   Live tests run centrally (AGENT_PROTOCOL §5), so for a new or changed
   live test the PR gives such a spec under Mutation evidence, and the
-  central live run runs it and posts the table.
+  central live run runs it and posts the table. Start the harness for a
+  live spec where it can finish, in the background or with no short tool
+  timeout: a harness killed outright (SIGKILL), as a tool's timeout may
+  kill it, leaves the mutant in place and its run holding the lock
+  (below).
 - **Stop what a test detaches.** Each pytest run has a process group of
   its own, killed when the run ends or outlives `--timeout` (default
   300 s). A process that leaves the group escapes, and can hold a lock or
@@ -277,9 +281,10 @@ path, though a leading `~` is expanded.
   with that message.
 - **Crashes.** The lock is a flock, which the kernel releases when its
   holder ends, however it ends, so a crashed or killed session blocks
-  nothing. The holder records itself in the lock file and empties the
-  record as it releases the lock, so a record in a free lock file was
-  left by a crash.
+  nothing. The exception is a killed mutation harness, whose live run
+  keeps the lock until the run ends (below). The holder records itself in
+  the lock file and empties the record as it releases the lock, so a
+  record in a free lock file was left by a crash.
 - **Never delete the lock file.** A session that found no file would
   create and lock a new one, while the holder of the old one went on:
   two sessions on the stack at once.
@@ -297,8 +302,14 @@ path, though a leading `~` is expanded.
   otherwise the session waits its turn like any other. So even a stray or
   stale variable never lets two sessions hold the lock at once. A run that
   shares the hold never releases it or writes the record, which names the
-  harness, and its copy of the descriptor keeps the lock held while it
-  lasts, even if the harness is killed.
+  harness. Its fixture makes the descriptor close-on-exec, as a session's
+  own descriptor is, so a program started once the fixture has run (by
+  `os.system`, a shell's background job or `close_fds=False`) does not
+  share the hold. If the harness is killed, the run's copy of the
+  descriptor keeps the lock held until the run ends. A session waiting
+  meanwhile names the harness from the record, with its working
+  directory, in the checkout where it left the mutant, and says that it
+  has ended.
 - **Only live test sessions and the harness take it.** A scratch run's
   reset and write, `yizkr bootstrap` and other writers to the stack
   don't, so the orchestrating session still gives the stack to one agent
