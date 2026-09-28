@@ -35,7 +35,7 @@ def source(**overrides) -> dict:
         "artifact": {"kind": "artifact", "sha1": MEDIA_SHA1},
         "page_number": "1",
         "region": {"x": 10, "y": 42.5, "width": 60, "height": 8},
-        "transcription_excerpt": {"text": "married 1933", "language": "en"},
+        "transcription_excerpt": {"text": "married 1905", "language": "en"},
     }
     base.update(overrides)
     return base
@@ -61,7 +61,7 @@ def spouse_claim(**overrides) -> dict:
         "qualifiers": [
             {
                 "property": "point_in_time",
-                "value": {"type": "time", "year": 1933},
+                "value": {"type": "time", "year": 1905},
             },
             {
                 "property": "sourcing_circumstances",
