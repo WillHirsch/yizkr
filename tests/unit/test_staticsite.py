@@ -73,19 +73,55 @@ class TestTheQueryClient:
         assert request.full_url == "http://query.example/sparql"
         assert urllib.parse.parse_qs(request.data.decode())["query"] == [query]
 
-    def test_a_refused_query_reports_the_engines_answer(self, monkeypatch):
+    @staticmethod
+    def refused(monkeypatch, body: bytes, code: int = 400) -> None:
         def urlopen(request, timeout):
             raise urllib.error.HTTPError(
-                request.full_url,
-                400,
-                "Bad Request",
-                {},
-                io.BytesIO(b"MalformedQueryException: line 1"),
+                request.full_url, code, "Refused", {}, io.BytesIO(body)
             )
 
         monkeypatch.setattr(sparql.urllib.request, "urlopen", urlopen)
-        with pytest.raises(sparql.SparqlError, match="MalformedQuery"):
-            sparql.runner(config())("SELECT")
+
+    def test_a_refused_query_reports_the_engines_answer(self, monkeypatch):
+        # the query service echoes the whole query before it explains, with
+        # each character outside ASCII echoed as "?"; a query longer than
+        # the message keeps is still explained
+        query = (
+            "# Disagreement report — the values sources attribute\n"
+            + "".join(f"# comment line {n}\n" for n in range(200))
+            + "SELECT ?x WHERE { ?x ?p ?o }\n}"
+        )
+        assert len(query.encode()) > sparql.DETAIL_LIMIT
+        echoed = query.encode("ascii", errors="replace")
+        self.refused(
+            monkeypatch,
+            b"SPARQL-QUERY: queryStr="
+            + echoed
+            + b"\njava.util.concurrent.ExecutionException: "
+            b"org.openrdf.query.MalformedQueryException: Encountered "
+            b'" "}" "} "" at line 203, column 1.\n'
+            b"\tat java.util.concurrent.FutureTask.report(FutureTask.java:122)"
+            b"\n",
+        )
+        with pytest.raises(sparql.SparqlError) as refused:
+            sparql.runner(config())(query)
+        message = str(refused.value)
+        assert "HTTP 400" in message
+        assert "MalformedQueryException: Encountered" in message
+        assert "at line 203, column 1." in message
+        assert "comment line" not in message
+
+    def test_an_answer_that_names_no_exception_is_kept_from_its_start(
+        self, monkeypatch
+    ):
+        # a proxy in front of the engine refuses with a page of its own
+        self.refused(
+            monkeypatch,
+            b"<html><head><title>502 Bad Gateway</title></head></html>\n",
+            code=502,
+        )
+        with pytest.raises(sparql.SparqlError, match="HTTP 502: <html>"):
+            sparql.runner(config())("SELECT ?x WHERE {}")
 
     def test_a_missing_endpoint_is_named(self):
         with pytest.raises(sparql.SparqlError, match="WDQS_PUBLIC_HOST"):

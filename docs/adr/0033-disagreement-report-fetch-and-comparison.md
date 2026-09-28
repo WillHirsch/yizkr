@@ -111,9 +111,13 @@ any one entity.
 
 `yizkr.core.sparql` sends every query as a form-encoded POST body, so no
 query's length matters, and reports a refused query with the engine's
-own message. The static site and the live tests' `run_sparql` use it. The
-other readers (smoke, backup, places, reconcile) send fixed-size queries
-by GET and move to the client when they are next touched.
+own message. The engine's answer echoes the whole query before it names
+the exception (a MalformedQueryException, a TimeoutException), so the
+client keeps the line that names it, whatever the query's length, and
+the start of an answer that names none. The static site and the live
+tests' `run_sparql` use it. The other readers (smoke, backup, places,
+reconcile) send fixed-size queries by GET and move to the client when
+they are next touched.
 
 ### 5. Behaviour is preserved, where the query kept to its documentation
 
