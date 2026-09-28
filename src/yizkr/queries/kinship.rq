@@ -46,7 +46,7 @@ WHERE {
       BIND("grandchild" AS ?base)
     }
     UNION {
-      # parent's sibling (aunt/uncle), incl. its spouse (by marriage)
+      # parent's sibling (aunt/uncle), by blood only: the path takes no spouse step
       ?subject (wdt:{P:father}|wdt:{P:mother})/(wdt:{P:sibling}|^wdt:{P:sibling}) ?relative .
       BIND("pibling" AS ?base)
     }
