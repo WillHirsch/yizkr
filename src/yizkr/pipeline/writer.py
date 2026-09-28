@@ -45,13 +45,29 @@ Per batch, the writer:
      qualifiers inside the reference;
    * inferred from extraction run -> the run item;
 4. when a statement with the same property, value, AND qualifiers
-   already exists: if it is not yet referenced to this claim's
-   artifact, the claim's references are APPENDED to it (an agreeing
-   second source is knowledge — R2 records who asserts a fact, not
-   just the fact); if the artifact reference is already present the
-   claim is skipped (safe re-run). Same value but different
-   qualifiers is a different assertion and coexists as its own
-   statement (ADR-0002);
+   already exists, the claim is recorded on that statement rather than
+   beside it: an agreeing second source is knowledge, and so is each
+   place where one source asserts the value (R2 records who asserts a
+   fact, and where, not just the fact). The claim's source block,
+   `stated in` with its page number, region and excerpt, is compared
+   whole with the statement's reference blocks as the instance stores
+   them. So its page number, region and excerpt are sent in Unicode
+   NFC, the form the instance stores text in:
+   * the statement already carries that block: the claim is skipped
+     (safe re-run);
+   * otherwise the claim's blocks are APPENDED to the statement, each
+     only if the statement does not already carry it, so a second claim
+     of the same run adds its source block but not the run's block
+     again. The same artifact under another page, region or excerpt
+     thus adds a block of its own beside the first, as another artifact
+     does. No block the statement carries is changed or removed.
+   A curated statement, one with no extraction-run reference (a
+   curator's own write, until a machine claim's blocks join it) or
+   whose rank a curator changed, is compared by artifact alone: the
+   claim is skipped when any of the statement's blocks cites the
+   claim's artifact, under whatever locator, and otherwise its blocks
+   are appended as above. Same value but different qualifiers is a
+   different assertion and coexists as its own statement (ADR-0002);
 5. after the claims, records what the batch says of every item that
    existed before it and that one of its claims mentions: the kind and
    type hint of the manifest record that names the item (by an approved
@@ -161,8 +177,9 @@ class WriteResult:
     run_qid: str
     written: int = 0
     skipped: int = 0
-    # existing same-value statements that gained this batch's source
-    # reference (an agreeing second source)
+    # claims recorded on an existing equal statement as reference blocks
+    # it gained: an agreeing second source, or the same source in another
+    # place (step 4 of the module docstring)
     referenced: int = 0
     created_items: dict[str, str] = field(
         default_factory=dict
@@ -206,6 +223,16 @@ def normalized_type_hint(text: str) -> str:
     compatibility forms, letter case and runs of whitespace do not
     make two hints different."""
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def _stored_string(text: str) -> str:
+    """`text` in the form the instance stores text in: Unicode NFC, to
+    which Wikibase normalizes the text of a string or monolingual text
+    value it is sent. A reference block's page number, region and
+    excerpt are sent in this form, so that the block the writer builds
+    for a claim is equal to the block the instance gives back for it
+    (step 4 of the module docstring)."""
+    return unicodedata.normalize("NFC", text)
 
 
 class BatchWriter:
@@ -514,22 +541,25 @@ class BatchWriter:
             source_ref.add(
                 String(
                     prop_nr=self.properties["page_number"],
-                    value=claim.source.page_number,
+                    value=_stored_string(claim.source.page_number),
                 )
             )
         if claim is not None and claim.source.region:
             source_ref.add(
                 String(
                     prop_nr=self.properties["relative_position_within_image"],
-                    value=claim.source.region.as_wikibase_string(),
+                    value=_stored_string(
+                        claim.source.region.as_wikibase_string()
+                    ),
                 )
             )
         if claim is not None and claim.source.transcription_excerpt:
             excerpt = claim.source.transcription_excerpt
             # excerpts are verification aids: Wikibase caps text values
             # at 400 chars and forbids newlines in monolingual text —
-            # normalize visibly, never fail the write
-            text = excerpt.text.replace("\n", " | ")
+            # normalize visibly, never fail the write. The cap counts the
+            # characters of the form the instance stores (_stored_string)
+            text = _stored_string(excerpt.text).replace("\n", " | ")
             if len(text) > 400:
                 text = text[:397].rsplit(" ", 1)[0] + "…"
             source_ref.add(
@@ -668,6 +698,39 @@ class BatchWriter:
                 if isinstance(value, dict) and value.get("id") == artifact_qid:
                     return True
         return False
+
+    def _blocks_to_add(self, statement, references, artifact_qid: str) -> list:
+        """The reference blocks of a claim that the equal statement it
+        matches gains (step 4 of the module docstring); none when the
+        claim is already recorded there.
+
+        `references` are the claim's blocks as `_references` builds them,
+        its source block first. The source block is compared whole with
+        the statement's blocks: `stated in` with the page number, region
+        and excerpt. So the same artifact under another locator or
+        excerpt, another place where it asserts the value, adds a block
+        of its own. A curated statement is compared by artifact alone: a
+        block that cites the claim's artifact under any locator records
+        the claim. The blocks returned are those the statement does not
+        already carry, so a run's block is not repeated for a second
+        claim of the same run.
+        """
+        present = {
+            self._reference_key(block)
+            for block in statement.references.references
+        }
+        source = references.references[0]
+        if (
+            self._has_artifact_reference(statement, artifact_qid)
+            if self._is_curated(statement)
+            else self._reference_key(source) in present
+        ):
+            return []
+        return [
+            block
+            for block in references.references
+            if self._reference_key(block) not in present
+        ]
 
     # -- items a ref or record found rather than minted ----------------------
 
@@ -927,18 +990,23 @@ class BatchWriter:
             # no extraction-run reference (ADR-0003 — process provenance
             # is for machine writes)
             run_qid = None if claim.curated else result.run_qid
+            references = self._references(
+                artifact_qid=artifact_qid, run_qid=run_qid, claim=claim
+            )
             existing = self._find_matching_statement(subject_qid, wbi_claim)
             if existing is not None:
-                if self._has_artifact_reference(existing, artifact_qid):
+                blocks = self._blocks_to_add(
+                    existing, references, artifact_qid
+                )
+                if not blocks:
                     result.skipped += 1
                     continue
-                # an agreeing second source: the statement stays one
-                # statement, and gains this claim's references (R2 —
-                # who asserts a fact is knowledge, not just the fact)
-                for reference in self._references(
-                    artifact_qid=artifact_qid, run_qid=run_qid, claim=claim
-                ).references:
-                    existing.references.add(reference)
+                # an agreeing source, or the same source in another place:
+                # the statement stays one statement, and gains this
+                # claim's blocks (R2 — who asserts a fact, and where, is
+                # knowledge, not just the fact)
+                for block in blocks:
+                    existing.references.add(block)
                 entity = self._entity_cache[subject_qid]
                 entity.write(
                     summary="ingest: additional source for existing statement"
@@ -948,9 +1016,7 @@ class BatchWriter:
                 )
                 result.referenced += 1
                 continue
-            wbi_claim.references = self._references(
-                artifact_qid=artifact_qid, run_qid=run_qid, claim=claim
-            )
+            wbi_claim.references = references
             if not self.dry_run:
                 entity = self._entity_cache.get(
                     subject_qid
