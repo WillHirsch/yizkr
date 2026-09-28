@@ -2,10 +2,10 @@
 
 `yizkr publish-site` renders the graph into a self-contained static
 site: person pages showing EVERY attributed value side by side with
-its source label (R6/ADR-0002 — never silently pick one), a timeline,
-a photo gallery (ADR-0008 derived media included), the disagreement
-report, and a places index that becomes a map once places carry
-coordinates.
+its source label (R6/ADR-0002 — never silently pick one), a timeline
+that shows beside each date the range its source states, a photo
+gallery (ADR-0008 derived media included), the disagreement report, and
+a places index that becomes a map once places carry coordinates.
 
 Design constraints:
 
@@ -33,6 +33,7 @@ import shutil
 import urllib.parse
 from collections import defaultdict
 from collections.abc import Iterable
+from functools import cached_property
 from pathlib import Path
 
 from yizkr import disagreement
@@ -298,6 +299,28 @@ def format_time(value: str, precision: str) -> str:
     return f"{sign}{date}"
 
 
+def range_text(bounds: Iterable[tuple[str, str, str]]) -> str:
+    """The range a source states for a date, as text to show beside it.
+    Each bound is (the label of the qualifier that states it, its
+    xsd:dateTime, its precision) and shows under that label at its own
+    precision, as the person page shows every qualifier: "earliest date:
+    1938; latest date: 1939". The caller passes only the bounds the source
+    gives, so a range open at one end names the one bound it has
+    ("earliest date: 1945"), never a closed range or a bare date."""
+    return "; ".join(
+        f"{label}: {format_time(value, precision)}"
+        for label, value, precision in bounds
+    )
+
+
+def qualifier_span(text: str) -> str:
+    """`text` beside a value, escaped, in the muted style of the person
+    page's qualifiers; nothing when there is no text."""
+    if not text:
+        return ""
+    return f' <span class="qualifiers">({esc(text)})</span>'
+
+
 class SiteBuilder:
     def __init__(
         self, config: Config, out_dir: Path, run=None, vocabulary=None
@@ -342,6 +365,29 @@ class SiteBuilder:
         path = self.out / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
+
+    @cached_property
+    def _property_labels_by_id(self) -> dict[str, str]:
+        """The label of each manifest property, by its id on the instance."""
+        labels = disagreement.property_labels()
+        return {pid: labels[key] for key, pid in self.properties.items()}
+
+    def timeline_range(self, row: dict) -> str:
+        """The range a person-timeline row's source states for its date, as
+        ``range_text``: each bound the query returns, named by the
+        qualifier the query read it from (?low for ?earliest, ?high for
+        ?latest). So a start's upper bound reads as its latest start date
+        and an end's lower bound as its earliest end date (MODELING.md,
+        "Marriages, residences and other periods")."""
+        return range_text(
+            (
+                self._property_labels_by_id[qid_of(row, qualifier)],
+                cell(row, bound),
+                cell(row, f"{bound}Precision"),
+            )
+            for qualifier, bound in (("low", "earliest"), ("high", "latest"))
+            if cell(row, bound)
+        )
 
     # -- sections -----------------------------------------------------------
 
@@ -589,7 +635,12 @@ class SiteBuilder:
         body = [
             "<h1>Timeline</h1>",
             '<p class="sub">every dated assertion, labeled by its source — '
-            "the same fact from two sources appears twice, on purpose</p>",
+            "the same fact from two sources appears twice, on purpose. "
+            "Beside a date is the range its source states for it, if any: "
+            "its earliest and latest date, or for a start or end time the "
+            "bounds of that end, a start running from its earliest date to "
+            "its latest start date and an end from its earliest end date to "
+            "its latest date.</p>",
             '<div class="timeline">',
         ]
         current_year = None
@@ -612,8 +663,9 @@ class SiteBuilder:
             )
             body.append(
                 '<div class="entry">'
-                f"{esc(format_time(date, cell(row, 'precision')))} — "
-                f'<a href="people/{person}.html">'
+                f"{esc(format_time(date, cell(row, 'precision')))}"
+                f"{qualifier_span(self.timeline_range(row))} — "
+                f'<a href="people/{esc(person)}.html">'
                 f"{esc(cell(row, 'personLabel'))}</a>, "
                 f"{esc(cell(row, 'what'))}" + source + "</div>"
             )
@@ -621,7 +673,12 @@ class SiteBuilder:
         return page("Timeline", "".join(body))
 
     def timeline_feed(self, rows: list[dict]) -> str:
-        """TimelineJS-compatible JSON, if the user later wants that UI."""
+        """TimelineJS-compatible JSON, if the user later wants that UI.
+        TimelineJS shows an event's headline and text, and a date's
+        display_date, as HTML, so each is escaped. A date its source gives
+        a range for carries a display_date, the date with its range as the
+        timeline page shows them; TimelineJS shows any other date from its
+        year, month and day, as far as its precision goes."""
         events = []
         for row in rows:
             date = cell(row, "date")
@@ -635,14 +692,18 @@ class SiteBuilder:
                 start["month"] = parts[1]
             if precision >= 11:
                 start["day"] = parts[2]
+            stated = self.timeline_range(row)
+            if stated:
+                shown = format_time(date, cell(row, "precision"))
+                start["display_date"] = esc(f"{shown} ({stated})")
             events.append(
                 {
                     "start_date": start,
                     "text": {
-                        "headline": (
+                        "headline": esc(
                             f"{cell(row, 'personLabel')}: {cell(row, 'what')}"
                         ),
-                        "text": (
+                        "text": esc(
                             f"per {cell(row, 'sourceLabel') or 'unattributed'}"
                         ),
                     },
@@ -806,25 +867,21 @@ class SiteBuilder:
             return text
 
         def stated_range(row: Disagreement, side: Side) -> str:
-            """The range a statement gives the date compared, as the person
-            page shows qualifiers: for a value its earliest and latest
-            dates, and for a residence's or a spouse's start or end the
-            bounds of that end (disagreement.BOUNDS)."""
+            """The range a statement gives the date compared, worded as the
+            timeline words a date's (``range_text``): for a value its
+            earliest and latest dates, and for a residence's or a spouse's
+            start or end the bounds of that end (disagreement.BOUNDS)."""
             labels = disagreement.property_labels()
             low, high = disagreement.BOUNDS[row.qualifier]
-            bounds = [
-                f"{labels[key]}: "
-                + format_time(time.value, str(time.precision))
-                for key, time in (
-                    (low, side.value.earliest),
-                    (high, side.value.latest),
+            return qualifier_span(
+                range_text(
+                    (labels[key], time.value, str(time.precision))
+                    for key, time in (
+                        (low, side.value.earliest),
+                        (high, side.value.latest),
+                    )
+                    if time is not None
                 )
-                if time is not None
-            ]
-            if not bounds:
-                return ""
-            return (
-                f' <span class="qualifiers">({esc("; ".join(bounds))})</span>'
             )
 
         def rendered(row: Disagreement, side: Side) -> str:

@@ -13,7 +13,10 @@ the home of a father "wohnhaft in Flörburg, Brunnenring 35", while the
 naturalisation names only Floerburg. The extract's address is recorded
 inside the town (Brunnenring 35, part of Brunnenring, part of Flörburg;
 ADR-0009), so the two places differ in resolution, not in substance. A
-photograph of the family gravestone gives the gallery an image.
+photograph of the family gravestone gives the gallery an image, and
+Rahel Löbig's death, which the family tree gives as "after 1945", gives
+the timeline a date with a range its source states, open at one end
+(#309).
 
 Every label carries a marker, so the fixture never reuses an item that
 another test or run wrote, and a re-run reuses and skips everything.
@@ -61,6 +64,7 @@ UNIVERSE = u.by_key()
 EXTRACT = "birth-extract-1938"
 NATURALISATION = "naturalisation-1952"
 PHOTO = "gravestone-photo-1956"
+TREE = "family-tree-1984"
 MARK = "(site test)"
 
 
@@ -75,13 +79,14 @@ PERSON = marked("gustav-loebig")
 ADDRESS = marked("brunnenring-35")
 STREET = marked("brunnenring")
 TOWN = marked("floerburg")
+RAHEL = marked("rahel-loebig")
 
 
-def said(source: str, prop: str) -> u.Assertion:
-    """What `source` says about Gustav's `prop` in the universe."""
-    (assertion,) = [
-        a for a in u.about("gustav-loebig", prop) if a.source == source
-    ]
+def said(
+    source: str, prop: str, subject: str = "gustav-loebig"
+) -> u.Assertion:
+    """What `source` says about `subject`'s `prop` in the universe."""
+    (assertion,) = [a for a in u.about(subject, prop) if a.source == source]
     return assertion
 
 
@@ -90,6 +95,7 @@ BIRTHS = {  # the two days, 7 January and 1 July 1919
     for source in (EXTRACT, NATURALISATION)
 }
 NATURALISED_PLACE = said(NATURALISATION, "place_of_birth")
+RAHEL_DIED = said(TREE, "date_of_death", "rahel-loebig")  # after 1945
 # the extract's own words for the birth at home, and for the address
 HOME = (
     "wohnhaft in Flörburg, Brunnenring 35, zeigte an, daß von seiner "
@@ -152,20 +158,24 @@ def time_value(date: u.Date) -> dict:
     return {"type": "time", **{k: v for k, v in parts.items() if v}}
 
 
-def birth_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
-    """The two sources' claims about the birth, and the extract's
-    placing of the address in the town, each citing its source by the
-    SHA-1 of its media (#102)."""
+def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
+    """The two sources' claims about the birth, the extract's placing of
+    the address in the town, and the tree's claim about Rahel's death,
+    each citing its source by the SHA-1 of its media (#102)."""
     person = local("person", PERSON, "human")
     address = local("address", ADDRESS, "place")
     street = local("street", STREET, "place")
     town = local("town", TOWN, "place")
+    rahel = local("rahel", RAHEL, "human")
 
-    def claim(subject, prop, value, source, excerpt):
+    def claim(subject, prop, value, source, excerpt, qualifiers=()):
         return {
             "subject": subject,
             "property": prop,
             "value": value,
+            "qualifiers": [
+                {"property": key, "value": bound} for key, bound in qualifiers
+            ],
             "source": {
                 "artifact": sources[source].model_dump(mode="json"),
                 "page_number": "1",
@@ -203,6 +213,16 @@ def birth_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
             NATURALISATION,
             NATURALISED_PLACE.excerpt,
         ),
+        # "after 1945" as the GEDCOM adapter writes it: 1945, with 1945 as
+        # its earliest date and no latest date
+        claim(
+            rahel,
+            "date_of_death",
+            time_value(RAHEL_DIED.value),
+            TREE,
+            RAHEL_DIED.excerpt,
+            qualifiers=[("earliest_date", time_value(RAHEL_DIED.value))],
+        ),
     ]
     return ClaimBatch.model_validate({"extraction_run": RUN, "claims": claims})
 
@@ -212,6 +232,7 @@ class Site:
     out: Path
     summary: dict
     person: str  # the seeded person's QID
+    rahel: str  # Rahel's QID, whose death has a stated range
     places: dict[str, str]  # "address", "street", "town" -> QID
     sources: dict[str, str]  # universe source key -> artifact QID
     photo_file: str  # the gravestone photograph's file page
@@ -230,6 +251,7 @@ def site(client, config, tmp_path_factory):
         (EXTRACT, "certificate"),
         (NATURALISATION, "certificate"),
         (PHOTO, "photograph"),
+        (TREE, UNIVERSE[TREE].artifact_class),
     ):
         path = media / f"site-test-{key}.png"
         path.write_bytes(png(f"yizkr live site test: {key}"))
@@ -242,10 +264,10 @@ def site(client, config, tmp_path_factory):
             description="written by tests/integration; safe to delete",
         )
     sources = {key: r.artifact_qid for key, r in registered.items()}
-    written = BatchWriter(client).write_batch(birth_batch(cited))
+    written = BatchWriter(client).write_batch(fixture_batch(cited))
     seeded = [
         written.created_items[local_id]
-        for local_id in ("person", "address", "street", "town")
+        for local_id in ("person", "address", "street", "town", "rahel")
     ]
     wait_for_query_service(config, client, [*seeded, *sources.values()])
 
@@ -255,6 +277,7 @@ def site(client, config, tmp_path_factory):
             out=out,
             summary=publish_site(config, out),
             person=written.created_items["person"],
+            rahel=written.created_items["rahel"],
             places={
                 local_id: written.created_items[local_id]
                 for local_id in ("address", "street", "town")
@@ -324,7 +347,8 @@ def test_gallery_and_timeline_render(site):
     )
     assert '<img src="' in figure and image in figure
 
-    # each dated assertion is its own entry, under its own source
+    # each dated assertion is its own entry, under its own source; a date
+    # its source states no range for shows alone
     person = f'href="people/{site.person}.html"'
     timeline = re.findall(
         r'<div class="entry">(.*?)</div>', site.read("timeline.html")
@@ -332,6 +356,7 @@ def test_gallery_and_timeline_render(site):
     dated = [entry for entry in timeline if person in entry]
     for source, birth in BIRTHS.items():
         (entry,) = [e for e in dated if e.startswith(shown(birth.value))]
+        assert entry.startswith(f"{shown(birth.value)} — ")
         assert source_link(site, source, root="") in entry
 
     feed = json.loads(site.read("timeline.json"))
@@ -343,6 +368,36 @@ def test_gallery_and_timeline_render(site):
     for birth in BIRTHS.values():
         year, month, day = shown(birth.value).split("-")
         assert {"year": year, "month": month, "day": day} in starts
+
+
+def test_the_timeline_shows_a_stated_range_beside_its_date(site):
+    # the tree gives Rahel's death as "after 1945": the timeline names the
+    # range's one bound, under the qualifier the query read it from, and
+    # never shows 1945 alone or as a closed range (#309)
+    person = f'href="people/{site.rahel}.html"'
+    (entry,) = [
+        entry
+        for entry in re.findall(
+            r'<div class="entry">(.*?)</div>', site.read("timeline.html")
+        )
+        if person in entry
+    ]
+    assert entry.startswith(
+        '1945 <span class="qualifiers">(earliest date: 1945)</span> — '
+    )
+    assert source_link(site, TREE, root="") in entry
+
+    feed = json.loads(site.read("timeline.json"))
+    (event,) = [
+        event
+        for event in feed["events"]
+        if event["text"]["headline"].startswith(f"{RAHEL}: ")
+    ]
+    assert event["start_date"] == {
+        "year": "1945",
+        "display_date": "1945 (earliest date: 1945)",
+    }
+    assert event["text"]["text"] == f"per {html.escape(marked(TREE))}"
 
 
 def test_sources_hyperlink_to_artifact_pages_with_downloads(site):
