@@ -58,7 +58,7 @@ In `yizkr ingest run`:
 2. register derived media (idempotent and keyed on content, see the
    amendment below; re-runs reuse the items). Non-image media (video,
    audio) are counted and reported, not uploaded — W1 media handling
-   is image-first;
+   is image-first (#171);
 3. the transcription is built deterministically, one `[Slide N]`
    block per slide (speaker notes as `[Slide N notes]`) — no
    LLM-vision call; extraction is instructed by the markers to carry

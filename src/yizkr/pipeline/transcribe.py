@@ -253,7 +253,11 @@ class TextFileTranscriber(_CheckedTranscriber):
 
 
 class HtrPlatformAdapter:
-    """Handwritten-text-recognition platform adapter (not yet implemented)."""
+    """Handwritten-text-recognition platform adapter: a stub that raises.
+
+    LLM vision is sufficient for handwriting, so no HTR platform is
+    integrated; the `llm` and `textfile` engines transcribe instead.
+    """
 
     def __init__(self, platform: str = "transkribus") -> None:
         self.platform = platform

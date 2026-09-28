@@ -7,8 +7,9 @@ Status, Size, Owner touchpoint and Iteration fields of the
 `docs/AGENT_PROTOCOL.md` §1 says how to cite work: issues by `#number`,
 decisions by ADR number, requirements by R-number.
 
-Deferred work waits in the deferred-on-trigger register, #171, where each
-entry names its trigger and its source.
+Deferred work waits in the deferred-on-trigger register, #171. Each
+deferred item there names its source, and its trigger or the issue whose
+body states it.
 
 ## Old item numbers
 

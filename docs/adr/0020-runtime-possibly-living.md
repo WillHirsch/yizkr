@@ -42,7 +42,7 @@ Three problems with the flag:
 The correct shape is the one the data already supports: **do not store the
 inference; compute it when it matters.** "Possibly living" is only ever
 needed at a privacy-sensitive boundary (the public export; a future
-internet-facing publish). At that boundary the graph is right there to
+internet-facing publish, #163). At that boundary the graph is right there to
 query.
 
 ## Decision

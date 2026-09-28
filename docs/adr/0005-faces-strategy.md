@@ -23,13 +23,13 @@ identity link.
   reference to the detection run and the confirming curator.
 - W3: immich replaces the script as the detection/clustering engine
   ("initial manual inputs" = naming clusters); the sync bot writes the
-  same statement shape.
+  same statement shape (#167).
 - W2: regions may instead be W3C annotations on IIIF canvases, with
   the depicts statement referencing the annotation URI – same
-  confirmation rule.
+  confirmation rule (#166).
 - Portability goal: support exporting confirmed regions as XMP/MWG
   region metadata embedded in the image files, so identifications
-  survive outside this system.
+  survive outside this system (#161).
 
 ## Consequences
 

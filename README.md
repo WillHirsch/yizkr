@@ -10,7 +10,10 @@ sources contradict each other.
 claim schema, ingestion pipeline (chunked extraction, GEDCOM adapter,
 reconciliation, review with corrections, folder orchestration via
 `yizkr ingest run`), face proposals, query library, and backup/export
-done; second ingestion trial (photos/HTR/German) next.
+done. The second ingestion trial found LLM vision sufficient for
+handwriting, so the HTR adapter is dropped; its photograph leg waits
+for #160, and German-language documents run with the whole corpus
+(#145).
 
 Start here:
 - `CLAUDE.md` – standing instructions for AI-assisted development
