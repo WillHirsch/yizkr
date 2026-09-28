@@ -10,6 +10,8 @@ treatment is *generalised*, not overturned) and **ADR-0013** (the extraction
 critic's `Finding` gains an `axis`). Sibling to **ADR-0020** ("don't store a
 derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance),
 and MODELING.md (a human decision's process is the MediaWiki edit history).
+Amended by #136 (2026-09-27): the disagreement report now pairs only values
+from different artifacts (§4).
 
 ## Context
 
@@ -137,6 +139,14 @@ because `date_of_birth` (and the other single-value properties) are in
 `disagreement-report.rq`'s `VALUES`, same-source candidates would appear as a fake
 contradiction in the flagship R2 view. Coexistence is reserved for genuine
 cross-source value multiplicity.
+
+Amended by #136 (2026-09-27): the disagreement report now enforces this
+structurally. It pairs only values whose sources are not all one artifact (a page
+fragment counts as its artifact), so a curator's correction beside the machine
+reading it corrects, or any two readings of one artifact, no longer surface there
+as a contradiction; it also leaves out deprecated statements. The ruling stands:
+a second statement from one source still fabricates an assertion the source never
+made (rule 5), so the "two coexisting candidates" fallback stays rejected.
 
 ### 5. Reappraisal is a structural SPARQL query, honestly labelled
 
