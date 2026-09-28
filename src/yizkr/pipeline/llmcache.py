@@ -100,9 +100,13 @@ from pathlib import Path
 from typing import Any
 
 from yizkr.pipeline.llm import (
+    COMPLETE,
+    FORK,
+    OPEN,
     ConversationalLlmClient,
     ConversationChanged,
     PassPaused,
+    engine_client,
 )
 from yizkr.pipeline.stages import (
     atomic_write_text,
@@ -121,11 +125,6 @@ FORMAT = 1
 # carries its own reason
 ENGINE = "engine"
 ADOPTED = "adopted"
-
-# the kinds of call a key tells apart
-COMPLETE = "complete"
-OPEN = "open"
-FORK = "fork"
 
 # the events a caching client emits
 HIT = "cache-hit"
@@ -758,12 +757,17 @@ class CachingClient:
     """An engine's client whose calls the cache answers when the same call
     was answered before, keyed as the module docstring describes.
 
+    ``client`` is the engine's own client, or one that reports the calls
+    it makes (llm.observed_client). The calls go through ``client``;
+    everything that describes the engine (the key's components, an
+    entry's provenance, the sessions it holds) is read from the engine's
+    own client, so that a key is the same whoever reports the calls.
     ``role`` names the pipeline step the calls are made for (transcribe,
-    extract, critique): the role's epoch is keyed, and its refresh setting
-    applies. ``events``, when given, is called with each event's name and
-    fields: a hit (with its reason: a key match, or the adoption's
-    reason), a miss (absent, rejected or refresh) as the engine is asked,
-    a resume, a replay, a rejection or an adoption."""
+    extract, critique): the role's epoch is keyed, and its refresh
+    setting applies. ``events``, when given, is called with each event's
+    name and fields: a hit (with its reason: a key match, or the
+    adoption's reason), a miss (absent, rejected or refresh) as the
+    engine is asked, a resume, a replay, a rejection or an adoption."""
 
     def __init__(
         self,
@@ -773,23 +777,27 @@ class CachingClient:
         role: str,
         events: Callable[..., Any] | None = None,
     ) -> None:
-        if not hasattr(client, "config_hash"):
+        engine = engine_client(client)
+        if not hasattr(engine, "config_hash"):
             raise TypeError(
-                f"{type(client).__name__} has no config_hash, so its calls "
+                f"{type(engine).__name__} has no config_hash, so its calls "
                 "cannot be keyed"
             )
         self.client = client
+        # the engine's own client: what it applies, and the sessions it
+        # holds, whoever reports its calls
+        self._engine = engine
         self.cache = cache
         self.role = role
         self._events = events
         self._attempt = 0
         # None or "": the engine runs a default model of its own
-        if getattr(client, "model", "unnamed") in (None, ""):
+        if getattr(engine, "model", "unnamed") in (None, ""):
             cache.warn_unpinned(role)
 
     @property
     def model_identifier(self) -> str:
-        return self.client.model_identifier
+        return self._engine.model_identifier
 
     def attempt(self, number: int) -> CachingClient:
         """This client for attempt `number` of the same call: each attempt
@@ -809,7 +817,7 @@ class CachingClient:
         opening: str | None = None,
     ) -> dict[str, Any]:
         """The components of a call's key (see the module docstring)."""
-        client = self.client
+        client = self._engine
         render = getattr(client, "call_text", None)
         text = render(prompt, image_paths) if callable(render) else prompt
         files: list[str] = []
@@ -915,7 +923,7 @@ class CachingClient:
         provenance: dict[str, Any],
     ) -> dict[str, Any]:
         """A new entry for a response the engine has just returned."""
-        last_report = getattr(self.client, "last_report", None)
+        last_report = getattr(self._engine, "last_report", None)
         report = last_report() if callable(last_report) else {}
         return {
             "format": FORMAT,
@@ -929,9 +937,9 @@ class CachingClient:
                 "engine": components["engine"],
                 "model": report.get("model"),
                 "cli_version": report.get("cli_version")
-                or getattr(self.client, "cli_version", None),
+                or getattr(self._engine, "cli_version", None),
                 "config_hash": components["config"],
-                "model_identifier": self.client.model_identifier,
+                "model_identifier": self._engine.model_identifier,
                 "at": _now(),
                 **provenance,
             },
@@ -1033,7 +1041,7 @@ class ConversationalCachingClient(CachingClient):
             self._keep(response.key, conversation.opening_sha256, sessions[0])
             return response, conversation
         conversation = Conversation(components, prompt, str(response))
-        held = self.cache.take_session(response.key, self.client)
+        held = self.cache.take_session(response.key, self._engine)
         if held is not None:
             session, opening = held
             if opening == conversation.opening_sha256:
@@ -1144,7 +1152,7 @@ class ConversationalCachingClient(CachingClient):
             )
             opening = sha256_text(response)
             self._keep(key, opening, session)
-            self.cache.remember_session(key, self.client, session, opening)
+            self.cache.remember_session(key, self._engine, session, opening)
             conversation.changed = True
             raise _changed(key)
 

@@ -448,9 +448,16 @@ Two Anthropic-backed providers, differing in how usage is billed:
   approved, so images and PDFs are read from disk for vision and nothing
   can be executed or written. A call whose stream reports offering the
   model any other tool pauses the pass (`CliToolsMismatch`) and its
-  output is discarded. Note subscriptions have rolling usage windows
-  rather than API rate limits — fine for evening-sized ingestion runs,
-  less suited to bulk backlogs.
+  output is discarded. Note subscriptions have usage windows (five
+  hours, and weekly) rather than API rate limits. A call a limit refuses
+  never fails a document: the engine asks again once the limit lifts, or
+  pauses the pass (`UsageLimitReached`) with the time it can go on, and it
+  paces its calls, from what the CLI itself reports of each window, to
+  leave a reserve of it to development sessions
+  (`$YIZKR_CLAUDE_RESERVE`, `$YIZKR_CLAUDE_MAX_WAIT`; docs/LLM_CACHE.md,
+  Subscription limits) — best-effort, since the CLI reports a window's
+  use only once one of its own warning thresholds is passed, so the
+  reserve gives no protection below the first of those.
 
   A pass runs on one **pinned** CLI version (#133). The first client
   pins the installed version; every later client is checked when it

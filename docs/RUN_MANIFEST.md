@@ -4,8 +4,9 @@ Every run directory holds a `run.json`: the run manifest. It says what
 shaped the run, in enough detail for a later tool to tell two runs apart
 by their configuration, and it plans the documents the run takes through
 its stages. `yizkr stages state` reads it, and so will the run report
-(#124), the live monitor (#195), pacing (#101) and the scratch diff
-(#198); `yizkr stages manifest <run dir>` prints it for a person.
+(#124), the live monitor (#195), the call estimate (#101) and the
+scratch diff (#198); `yizkr stages manifest <run dir>` prints it for a
+person.
 
 The other files of the run directory (`events.jsonl`, `alerts.jsonl`,
 `control.jsonl`) and the LLM cache are described in
@@ -205,7 +206,7 @@ and `dirty` are `null`. The code version is measured once per process.
 |---|---|
 | `invocation` | The invocation's id, which every event it emits carries |
 | `started_at`, `ended_at` | Its start and end; `ended_at` stays `null` while it runs, or if it was killed |
-| `outcome` | `finished` (it went through its documents, whatever their statuses, and no request for the whole run held any of them), `stopped` (a control request for the whole run stopped it: before a document, or by holding a stage of one, the last document's included; a request for one stage or kind holds documents at it, and the invocation still finishes), `interrupted` (Ctrl-C), `paused` (the pass paused, `PassPaused`: the claude CLI changed while the invocation ran, say), `refused` (`RunSettingsConflict`: other settings than the run recorded, a claude CLI updated since it recorded its version included) or `failed` (another error escaped it); `null` while it runs |
+| `outcome` | `finished` (it went through its documents, whatever their statuses, and no request for the whole run held any of them), `stopped` (a control request for the whole run stopped it: before a document, or by holding a stage of one, the last document's included; a request for one stage or kind holds documents at it, and the invocation still finishes), `interrupted` (Ctrl-C), `paused` (the pass paused, `PassPaused`: the claude CLI changed while the invocation ran, say, or a subscription limit would hold a call longer than the engine waits, `UsageLimitReached`, whose call event gives the time the run can go on; docs/LLM_CACHE.md, Subscription limits), `refused` (`RunSettingsConflict`: other settings than the run recorded, a claude CLI updated since it recorded its version included) or `failed` (another error escaped it); `null` while it runs |
 | `reason` | When it did not finish: the control request that stopped it (`run aborted`, `run paused`), or the name of the exception, never its message, which may quote a document |
 
 ## An example
@@ -265,3 +266,17 @@ otherwise.
 - **The resolved model per call.** The manifest says what a run
   configures and what its clients apply; which model answered each call
   is in the LLM cache's entries, and #98 parses it from the stream.
+- **The engine's pacing.** The share of each usage window left to
+  development sessions and the longest a call waits for the subscription
+  (`$YIZKR_CLAUDE_RESERVE`, `$YIZKR_CLAUDE_MAX_WAIT`; docs/LLM_CACHE.md)
+  decide only when calls are made, never what they send, and the
+  manifest does not record them yet. A pause they cause is the
+  invocation's `paused` outcome, and its call event says why and when
+  the run can go on — except a report that a call ran on usage credits,
+  which stops dispatch only once that report arrives: the reported
+  call, and any others already in flight when it lands, may already
+  have used credits, and only turning extra usage off on the account
+  guarantees none does. Its call event gives no `resumes_at` at all: the
+  subscription does not say when the pause clears, so the operator
+  confirms that extra usage is off on the account before invoking the
+  run again, rather than waiting for a time nothing will report.

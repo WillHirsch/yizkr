@@ -20,8 +20,10 @@ Development runs the whole corpus through the pipeline again and again
   have been asked without the cache.
 
 The run directory beside them records what each run did, for the driver
-(#194), the live monitor (#195), the anomaly checks (#196), pacing (#101)
-and the run report (#124).
+(#194), the live monitor (#195), the anomaly checks (#196), the call
+estimate (#101) and the run report (#124). How the claude-code engine
+meets the subscription's limits, and paces its calls to leave headroom
+for development sessions, is under Subscription limits, below.
 
 All three are runtime state under `var/` and are **local-only data**
 (docs/AGENT_PROTOCOL.md §6): they hold transcriptions, claims, session
@@ -29,8 +31,9 @@ transcripts and raw model output of the corpus. Nothing from them is
 copied into the repository, GitHub or a cloud session.
 
 Code: `yizkr.pipeline.orchestrate` (the views), `yizkr.pipeline.llmcache`
-(the cache), `yizkr.pipeline.llm` (the engines, and the client factory
-that alone imports the cache: `open_cache`, `cached_client`) and
+(the cache), `yizkr.pipeline.llm` (the engines and their limits, the
+reports of their calls, the call estimate, and the client factory that
+alone imports the cache: `open_cache`, `cached_client`) and
 `yizkr.pipeline.rundir` (the run directory and run state).
 
 ## Views
@@ -411,7 +414,8 @@ changed, or its replay failed) is no miss.
 - `--no-cache`: the engine directly; nothing is read or written. Views
   persist and are reused as with the cache, and a rejected answer the
   cache kept is asked for again in its run, so the run is otherwise the
-  same.
+  same. Its calls are `call` events, as with the cache (The run
+  directory, below).
 - `--refresh ROLE` (repeatable; `transcribe`, `extract`, `critique`): the
   role's views are made again in the run, current or not, and their calls
   go to the engine once per key whatever the cache holds; the new answer
@@ -451,9 +455,9 @@ torn last line, so an interrupted writer never corrupts a log.
 | File | Written by | Read by |
 |---|---|---|
 | `run.json` | the driver at start (merged, replaced atomically) | everything |
-| `events.jsonl` | the stage runner, the driver, the LLM cache, the anomaly checks | the monitor, the report, run state |
+| `events.jsonl` | the stage runner, the driver, the LLM cache, the engine's call reports, the anomaly checks | the monitor, the report, run state, the call estimate |
 | `alerts.jsonl` | the anomaly checks | the monitor, the report |
-| `control.jsonl` | the monitor, the anomaly checks, pacing, `yizkr scratch abort`; the driver's start marker | the driver |
+| `control.jsonl` | the monitor, the anomaly checks, `yizkr scratch abort`; the driver's start marker | the driver |
 
 ### `run.json`
 
@@ -477,7 +481,8 @@ source's file name, which names a document whose source could not be
 read and so has no `subject`; stage events add `stage` (`transcription`,
 `extraction`, `critique` or `gedcom`); cache events add `role` and `key`,
 and all of them but `cache-reject` and `cache-adopt` the kind of call
-(`call`):
+(`call`); call events add `role`, the `stage` the role's calls are made
+in, and the kind of call:
 
 | Event | Meaning | Extra fields |
 |---|---|---|
@@ -495,6 +500,7 @@ and all of them but `cache-reject` and `cache-adopt` the kind of call
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
 | `cache-reject` | a caller's rejection moved an answer aside | `reason` |
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
+| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears) |
 | `alert` | an anomaly alert was appended | `check`, `status` |
 | `run-end` | the invocation ended, other than by Ctrl-C | `outcome` and `reason` as `run.json` records them for the invocation (docs/RUN_MANIFEST.md: `finished`, `stopped`, `paused`, `refused` or `failed`), `statuses` (documents per status) |
 | `run-interrupted` | the invocation was interrupted (Ctrl-C) | `outcome` (`interrupted`), `statuses` |
@@ -555,6 +561,131 @@ file (`rundir.run_state`, `yizkr stages state <run dir>`):
 (`rundir.cache_counts`): hits and misses by reason, resumes, replays,
 rejections and adoptions. The counts are totals over every invocation the
 run directory has seen.
+
+## Subscription limits
+
+The claude-code engine draws on the subscription's usage windows: a
+session window of five hours and weekly ones, each reopening at a set
+time. A call a limit refuses never fails a document, and the engine
+paces its calls to leave a reserve of each window to development
+sessions (#101; `yizkr.pipeline.llm`, "Subscription limits").
+
+**What the CLI reports**, as the pinned 2.1.237 prints it in its
+stream-json output:
+
+- a `rate_limit_event` whenever its view of the limits changes, which in
+  a new process, as each call is, means with the call's first response.
+  Its `rate_limit_info` gives the `status` (`allowed`, `allowed_warning`
+  or `rejected`), the window that binds (`rateLimitType`: `five_hour`,
+  `seven_day`, `seven_day_opus`, ...), when it reopens (`resetsAt`, Unix
+  seconds), whether the call ran on usage credits (`isUsingOverage`),
+  and the share of it used (`utilization`), but only once that share
+  passes one of the CLI's own warning thresholds: for the five-hour
+  window, 90%, and only while at most 72% of the window has elapsed;
+  for the weekly window, 75%, 50% or 25%, early in the week (as CLI
+  2.1.237's `-p` mode reports them). Short of that threshold, or past
+  its elapsed-time gate, no `utilization` is reported at all;
+- a call the API refuses ends on an API error: an assistant event whose
+  `error` is `rate_limit` (`overloaded` for an overload), with the CLI's
+  notice as its text ("You've hit your session limit · resets 3pm"), and
+  a result with `is_error` and `api_error_status` 429 (529); the process
+  exits with 1. A used-up window is also reported `rejected`, with its
+  `rateLimitType` and `resetsAt`. A refusal of another kind (the server
+  limiting requests, which the CLI has already retried with a backoff of
+  its own) gives no reset time.
+
+**What it does not report**: the use of a window below the CLI's warning
+thresholds (the CLI reads it from every response's headers, but shows it
+only in its interactive status line), the size of a window in calls or
+tokens, and how much of it other sessions use: the reported utilization
+includes their use.
+
+**A refused call** is never answered with its notice, so the cache never
+keeps one. The engine asks again after the reported reset of a used-up
+window (with a margin of 30 s), or after a backoff that doubles from one
+minute up to eight when a refusal gives no reset time, or one the local
+clock has passed already (a skewed clock). A hold that one call meets
+holds every thread's next call, since the windows are the account's. A
+hold that would take a call's wait past `$YIZKR_CLAUDE_MAX_WAIT` (in
+seconds, all told; 16 minutes by default, a margin above the backoff
+sequence's own sum) pauses the pass instead:
+`UsageLimitReached`, a `PassPaused`, with the time the pass can go on
+(`resumes_at`: the reset the CLI reported, else when the engine would
+have asked again). The pause unwinds the invocation as any pause does: no
+document fails, the invocation's outcome is `paused`
+(docs/RUN_MANIFEST.md), every call answered before it is in the cache, a
+stage it cut short counts as running and is made in the next run, and the
+paused call's `call` event gives `resumes_at`. A wait ends early, as a
+pause, when the engine's client is closed.
+
+Waits happen inside the call, on the thread that makes it. Ctrl-C
+interrupts a wait on the calling thread as it does any other work there;
+it is only a wait on a chunk pool's worker threads that neither Ctrl-C
+nor the control file reaches until it ends, since a pool's threads are
+not the one Python delivers a signal to. So a window that reopens later
+than the longest wait pauses the pass rather than hold a pool's threads
+for hours: the driver (#194) is to invoke the run again after
+`resumes_at`. Set `$YIZKR_CLAUDE_MAX_WAIT` to 21600 to wait through a
+five-hour window inside the call instead.
+
+**The reserve** (`$YIZKR_CLAUDE_RESERVE`, a share of each window, 0.25 by
+default; 0 keeps none). The engine estimates a window's use from its last
+reported `utilization`, plus the use of every call completed or still in
+flight since, at the use per call measured between the window's first
+report and its latest. Dispatch stops at the reserve line until the
+window reopens (a hold like any other, so one beyond the longest wait
+pauses the pass), and short of the line it is spaced so that what is left
+above the line lasts until the reset: with a share *left* above the line,
+a use *per call* and *T* seconds to the reset, one call every
+*T* × *per call* / *left* seconds.
+
+**What the reserve achieves and what it cannot.** It only ever paces
+from a report the CLI has actually sent, so it inherits exactly the gaps
+above: below the first warning threshold there is no `utilization` to
+pace against, so the reserve gives no protection there at all, whatever
+`$YIZKR_CLAUDE_RESERVE` is set to; and a first warning that arrives late
+— close to 100% already used, or past its elapsed-time gate — can give
+little or none either, since there may be no room left to pace before
+the CLI refuses outright at 100%. What it does achieve is pacing dispatch
+from whichever warning it does get, so that ordinary use across a
+window's many calls keeps what is left above the line spread out to the
+reset rather than spent all at once. The only way to keep headroom below
+the first warning is a local budget that needs no CLI report at all,
+counting a window's own use independently; the owner decided
+(2026-09-28) not to add one, so this reserve is best-effort pacing from
+the CLI's own reports, not a guarantee of headroom. Two more limits:
+
+- the use per call includes what other sessions used meanwhile, which
+  makes the pacing stricter, never looser;
+- a report that a call ran on usage credits (`isUsingOverage`) pauses
+  the pass at once, process-wide, whatever the reserve, whatever window
+  the report names or fails to, and whatever else it says or leaves
+  out. This stops dispatch only once a call is *reported* to have run
+  on credits: that call, and any others already in flight when the
+  report arrives, may already have used credits; only turning extra
+  usage off on the account guarantees none does. Nothing local says
+  when the pause clears, so only a new process resumes; the operator
+  confirms extra usage is off on the account first
+  (docs/RUN_MANIFEST.md).
+
+The reserve and the longest wait decide only when calls are made, never
+what a call sends: they are no part of the engine's `effective_config`,
+so no cache key depends on them, and `run.json` does not record them.
+
+**The call estimate.** `llm.estimate_calls` gives, per stage, the calls a
+planned run is expected to make for its stale work: its planned documents
+(the run manifest's `documents`), less the (document, stage) pairs whose
+views stand, of which a scratch run, starting from fresh state
+directories, has none. A document's calls in a stage are those a baseline
+run made for it (`llm.run_calls` over the baseline's `events.jsonl`: the
+cache's hits and misses, or without the cache its `call` events; a stage
+made without a call counts 0), else the baseline's mean for documents of
+its kind, else typical: a vision call per scan and none for a text file
+or slide text, the entity manifest and a chunk per 2000 characters for
+extraction, and a critique each. These are the pipeline's calls: the
+cache answers those whose keys it holds, which only the run can tell.
+`yizkr scratch estimate` prints them once the scratch command group
+(#194) wires it.
 
 ## Checks once per run
 

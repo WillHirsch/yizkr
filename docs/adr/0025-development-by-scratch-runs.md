@@ -25,6 +25,19 @@ stage keys, stage or method versions and reused stage outputs, ADR-0032
 rules; §2's write-side key, §3's run report and §4's diff are amended in
 place.
 
+Amended by #101 (2026-09-28): a subscription limit pauses the pass
+through the engine (`UsageLimitReached`, a `PassPaused`) rather than
+through a request in the control file, and the pause gives the time the
+pass can go on; §3's abort and resume is amended in place. The pass also
+paces its calls to leave a reserve of each usage window to development
+sessions, but only from what the claude CLI itself reports: it reports a
+window's use only once one of its own warning thresholds is passed, so
+the reserve is best-effort pacing from there on, not a guarantee of
+headroom below the first warning or, if that first report arrives late,
+above it either. A local budget needing no CLI report is the only way to
+keep headroom below the first warning; the owner decided (2026-09-28)
+not to add one.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -256,11 +269,13 @@ futile, and explain itself afterwards.
   it within a configurable timeout, the paused slice is aborted, so an
   overnight run never stalls indefinitely.
 - **Abort and resume.** Ctrl-C, `yizkr scratch abort`, or a request in
-  the control file from the monitor, an anomaly check or pacing stops
-  dispatch for the whole run or for one slice. In-flight calls finish or
-  are cancelled, every completed output stays stored (§2), and re-running
-  the same command resumes. Subscription limits pause a run and never
-  fail a document (#101).
+  the control file from the monitor or an anomaly check stops dispatch
+  for the whole run or for one slice. In-flight calls finish or are
+  cancelled, every completed output stays stored (§2), and re-running the
+  same command resumes. Subscription limits never fail a document: the
+  engine waits for a limit to lift, or pauses the pass with the time it
+  can go on, and paces its calls to leave a reserve of each usage window
+  to development sessions (#101).
 - **The run report** (#124). `yizkr scratch report` works on a completed,
   running or aborted run. Per stage it shows what was computed, reused by
   reason, failed or needs attention, and the key component that forced
@@ -385,8 +400,10 @@ ruling before the keeper run.
   confirmed.
 - Every prompt, schema or model change costs a whole-corpus run of the
   stages it affects. Stage reuse and batched verification keep that
-  affordable, and pacing (#101) keeps headroom on the subscription for
-  development sessions.
+  affordable, and pacing (#101) paces dispatch, from what the claude CLI
+  reports, to keep headroom on the subscription for development sessions
+  where the CLI reports enough to pace against; below its first warning
+  the reserve is no guarantee.
 - Stage keys make reuse sound, but only while every input is named in a
   key. The registry test, the stage labels and the convergence report's
   unlabelled-change check are the guards.
