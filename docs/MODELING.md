@@ -198,7 +198,9 @@ artifact a new QID, changes neither.
   precision, so a range open at one end names its one bound: Rahel's
   death "after 1945" per the family tree shows as "1945 (earliest date:
   1945)".
-- "circa": sourcing circumstances qualifier.
+- "circa": sourcing circumstances qualifier. A compilation's statement
+  that its text was prepared with machine assistance is another
+  sourcing circumstance (planned: "Compound artifacts").
 - Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
   date) are kept verbatim as qualifiers (`age at death`), never derived or
   dropped: sources assert them, so the archive records them.
@@ -306,6 +308,40 @@ and reference the artifact itself or the producing run.
   item already has that label (ADR-0008 as amended by #50).
 - Unpacking is deterministic (documented ZIP+XML), never generative;
   only claim extraction from the slide text uses an LLM.
+- **A compilation's original excerpts are artifacts of their own**
+  (planned: ADR-0008 as amended by #289 lists what is still to do,
+  starting with #176). A compilation sets text of its own (a typed
+  translation, commentary) beside images of excerpts from the originals
+  it draws on: two witnesses of one text, which may disagree. An image
+  that a PDF places within one of its pages is a derived item like a
+  deck's: keyed by its SHA-1, `part_of` the PDF once per page it is on
+  (page-number qualified), and labelled "<title> — page <n>, image <k>".
+  An image that is a whole page, as a scanned page is, is that page.
+  Until #176 routes PDFs by page, a PDF is read whole, and every claim
+  read from it cites the PDF.
+- A claim cites the witness that asserts it. A claim read from the
+  compilation's own text cites the compilation, with its page as the
+  locator; a claim read from an excerpt cites the excerpt, with no page
+  number and optionally a region of the image. Each transcription excerpt
+  is tagged with the language it is written in, so a retyped
+  transcription in the compilation takes the original's language. Each
+  witness has its own transcription and its own batch, and an extractor
+  cites the document it read, so neither witness's claims can cite the
+  other.
+- **Machine-assisted preparation is a sourcing circumstance.** When a
+  compilation states that its text was prepared with machine assistance
+  (that its translations are machine translations, say), each claim read
+  from that text carries `sourcing_circumstances` → `machine_assisted`:
+  the claims read from the passages the statement names, or from all of
+  its own text when it names no part. The manifest's one sourcing
+  circumstances value, `circa`, says that a value is approximate and
+  does not fit, so `machine_assisted` (label "machine-assisted") joins
+  the manifest with the extraction change that sets it (planned). The
+  marker records what the source says of its own making: it is never
+  inferred from how a text reads, never set on an excerpt's claims, and
+  never a rank. The pipeline's own machine work stays process provenance
+  (ADR-0003, ADR-0023). Like circa, it makes the compilation's claim a
+  statement of its own beside the same value from a source without it.
 
 ## Faces and depiction (see ADR-0005)
 
@@ -562,12 +598,14 @@ not a signal to grow the schema on.
   page shows its rows, each value with every source that states it. Two
   readings of one artifact (a curator's correction beside the machine
   reading it corrects) are not two sources, and a page fragment counts as
-  its artifact. A statement with no stated-in source attributes its value
-  to no artifact and takes no part. (The unreferenced-statements report
-  lists only a statement with no reference at all, not one whose
-  references lack a stated-in source.) A deprecated statement is left
-  out; a preferred one is listed like any other, so the report never
-  needs a preference.
+  its artifact. An image that a deck or a compilation embeds is an
+  artifact of its own, not a fragment, so a compilation and an original
+  excerpt it embeds are two sources (ADR-0008). A statement with no
+  stated-in source attributes its value to no artifact and takes no
+  part. (The unreferenced-statements report lists only a statement with
+  no reference at all, not one whose references lack a stated-in
+  source.) A deprecated statement is left out; a preferred one is listed
+  like any other, so the report never needs a preference.
 - It compares values only for properties that can hold at most one true
   value per subject (dates/places of birth and death, parents, birth
   name, an event's or other entity's own point in time or start/end time,
