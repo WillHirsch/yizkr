@@ -642,6 +642,16 @@ class TestSettings:
             DEFAULT_MAX_WAIT,
         )
 
+    def test_the_default_max_wait_has_a_margin_above_the_backoff_sum(self):
+        """DEFAULT_MAX_WAIT sits above the backoff sequence's own sum (60
+        + 120 + 240 + 480 s, once every doubling since has been capped),
+        not equal to it: an equal value makes a pause's boundary depend
+        on a coincidence with the default rather than the schedule's own
+        cap (BACKOFF_CAP)."""
+        backoff_sum = BACKOFF + BACKOFF * 2 + BACKOFF * 4 + BACKOFF_CAP
+        assert backoff_sum == 900.0
+        assert backoff_sum < DEFAULT_MAX_WAIT
+
     def test_the_environment_and_the_factory(self, cli, monkeypatch):
         monkeypatch.setenv(RESERVE_ENV, "0.4")
         monkeypatch.setenv(MAX_WAIT_ENV, "21600")
