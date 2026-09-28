@@ -18,12 +18,15 @@ from yizkr.queries.publish import (
 
 EXPECTED_QUERIES = {
     "disagreement-report",
+    # the recorded containment the disagreement comparison reads (#266)
+    "place-containment",
     "person-timeline",
     "places-map",
     "photo-gallery",
     "unreferenced-statements",
     "artifact-assertions",
     "under-witnessed-statements",
+    "kinship",
 }
 
 
