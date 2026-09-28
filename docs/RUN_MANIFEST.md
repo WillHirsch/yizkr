@@ -3,10 +3,11 @@
 Every run directory holds a `run.json`: the run manifest. It says what
 shaped the run, in enough detail for a later tool to tell two runs apart
 by their configuration, and it plans the documents the run takes through
-its stages. `yizkr stages state`, the scratch driver and the live
-monitor ([docs/MONITOR.md](MONITOR.md)) read it, and so will the run
-report (#124), the call estimate (#101) and the scratch diff (#198);
-`yizkr stages manifest <run dir>` prints it for a person.
+its stages. `yizkr stages state`, the scratch driver, the live monitor
+([docs/MONITOR.md](MONITOR.md)) and the call estimate (`yizkr scratch
+estimate`, docs/runbooks/scratch-run.md) read it, and so will the run
+report (#124) and the scratch diff (#198); `yizkr stages manifest <run
+dir>` prints it for a person.
 
 The other files of the run directory (`events.jsonl`, `alerts.jsonl`,
 `control.jsonl`) and the LLM cache are described in

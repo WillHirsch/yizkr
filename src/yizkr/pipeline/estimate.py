@@ -16,25 +16,31 @@ efforts and engine configuration, the claude CLI's version among them)
 and answers it from the cache alone. So it knows which calls the cache
 answers and which reach the engine, among them an answer the cache kept
 that the run rejects and asks for again (a transcription the check
-fails, an answer cut off before its sentinel), and the replay of a
-conversation whose session was not kept, for its forks. A chunk the
-cache cannot answer is answered empty, so that the chunks after it are
-keyed and counted too.
+fails, an answer cut off before its sentinel), a call another document
+asks earlier in the run, which the run's cache answers by then, and the
+replay of a conversation whose session was not kept, for its forks. A
+chunk the cache cannot answer is answered empty, so that the chunks after
+it are keyed and counted too.
 
 **Estimated calls.** A call's key can depend on an answer the engine has
 yet to give: an extraction after a transcription the engine makes, the
-chunks after an entity manifest it answers, and the critique of a batch
-that holds chunks it answers. Each such call is counted as the engine's,
-since a new answer changes the keys after it: an extraction as the
-latest run to make it measured it (llm.run_calls), else by the mean for
-its kind there, else by its text's length (llm.estimate_calls), and a
-critique as one call.
+chunks after an entity manifest it answers, the forks after a replayed
+conversation, and the critique of a batch that holds chunks it answers.
+Each such call is counted as the engine's, since a new answer changes
+the keys after it: an extraction as the latest run to make it measured
+it (llm.run_calls), else by the mean for its kind there, else by its
+text's length (llm.estimate_calls); the forks after a replay as the
+chunks the cache kept leave them unanswered, as they are when the replay
+answers as the cache did; and a critique as one call.
 
-**At most more.** What only the engine's answers decide is counted as a
-bound. An entity manifest the engine answers can be refused, and then its
-second attempt and the segmentation's two are asked: at most 3 more for
-an extraction. A replayed conversation that answers differently starts
-its extraction over, and asks the forks the cache answered too. Not
+**Up to more.** What only the engine's answers decide is counted apart.
+An entity manifest the engine answers, a replay's among them, can be
+refused, and then its second attempt and the segmentation's two are
+asked: 3 more for an extraction at most. A replayed conversation that
+answers differently starts its extraction over, and asks the forks the
+cache answered too, which can number otherwise. These are estimates, not
+ceilings: the chunks an entity manifest makes follow its entities, which
+a text's length only approaches, so a dense document can take more. Not
 counted at all: a call asked again after an engine error, or after a
 chunk answer cut off (up to 2 a chunk), and the waits for the
 subscription, which are no calls. Nor is a slice the anomaly checks
@@ -42,13 +48,15 @@ pause as the run unfolds (docs/ANOMALIES.md): it makes fewer calls than
 counted.
 
 **Nothing written, held or asked.** The estimate reads the corpus, the
-runs directory and the cache (llm.read_cache), and writes none of them.
+runs directory and the cache (llm.read_cache), and writes none of them;
+it refuses a runs directory the run refuses (scratch.runs_refusal).
 It takes no lock, neither the runs directory's nor the cache's, so it
 runs while a driver runs, counting what they hold at that moment, and it
 says who holds them. It makes no model call and asks the wiki nothing
 (ADR-0025 §2). What the keys name, it reads from the engine's clients,
-made as the driver makes them: for the claude-code engine that runs
-`claude --version`, which calls no model.
+made as the driver makes them, as a role's first stale stage needs one:
+for the claude-code engine that runs `claude --version`, which calls no
+model.
 """
 
 from __future__ import annotations
@@ -69,7 +77,6 @@ from yizkr.pipeline.critique import run_critique
 from yizkr.pipeline.orchestrate import (
     BATCH_VOLATILE,
     DOCUMENT_STAGES,
-    MODEL_ROLES,
     TRANSCRIPTION_VOLATILE,
     DocumentRun,
     _findings,
@@ -90,6 +97,7 @@ from yizkr.pipeline.scratch import (
     choose_run,
     runs_holder,
     runs_in,
+    runs_refusal,
 )
 from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.transcribe import Transcription
@@ -138,10 +146,13 @@ class _Tally:
     # engine calls whose keys are known: misses and replays
     known: int = 0
     replays: int = 0
-    # the extraction's first turns asked (answered or not), the chunk
-    # calls the cache answered, and those the estimate answered empty
+    # the extraction's first turns asked (answered or not); its chunk
+    # calls the cache answered, those it cannot answer that are new to the
+    # run, and every one the estimate answered empty, which leaves the
+    # batch the engine's to make
     first_turns: int = 0
     chunk_hits: int = 0
+    chunk_misses: int = 0
     answered: int = 0
     phase: str = ""
 
@@ -159,6 +170,8 @@ class _Tally:
         elif event == MISS:
             self.known += 1
             self.asked.add(key)
+            if self.phase == _CHUNK_CALLS:
+                self.chunk_misses += 1
         elif event == REPLAY:
             self.known += 1
             self.replays += 1
@@ -202,12 +215,17 @@ class StageCalls:
     hits: int = 0
     # engine calls whose keys are known
     known: int = 0
-    # engine calls counted without their keys, for how many documents,
-    # and for how many of those a baseline run measured them
+    # engine calls counted without their keys (all of them, below); the
+    # documents whose calls llm.estimate_calls counts, and how many of
+    # those a baseline run measured
     estimated: int = 0
     estimated_documents: int = 0
     measured: int = 0
-    # at most this many engine calls more
+    # conversations replayed for their forks, and the forks after them,
+    # which are among the estimated calls
+    replays: int = 0
+    replay_calls: int = 0
+    # the engine calls more that only the engine's answers can bring
     more: int = 0
 
     @property
@@ -391,14 +409,15 @@ class Estimator(ScratchDriver):
 
     def __init__(self, folder: Path, run_dir: Path, **options: Any) -> None:
         super().__init__(folder, run_dir, **options)
-        # each role's engine client, made as the driver makes it, and its
-        # stand-in behind the cache, which answers nothing
+        # each role's engine client, made as the driver makes it when the
+        # role's first stale stage needs it, and its stand-in behind the
+        # cache, which answers nothing
         self._clients: dict[str, Any] = {}
         self._keyed: dict[str, _Keyed] = {}
         # the LLM cache as it is (llm.read_cache)
         self._as_is: Any = None
-        # the roles whose clients the planned stale work starts
-        self._used: set[str] = set()
+        # the run manifest of the run it would invoke again, if any
+        self._recorded: dict[str, Any] = {}
         # the keys the engine is asked in the planned run, so far
         self._asked: set[str] = set()
         # the stage being counted
@@ -409,21 +428,12 @@ class Estimator(ScratchDriver):
         `estimate`."""
         raise TypeError("an Estimator never runs a run: call estimate()")
 
-    def _pacing(self) -> dict[str, float] | None:
-        """The engine's pacing, or None when the preflight would refuse
-        it: pacing decides when calls are made, never what they send, and
-        the estimate counts them all the same."""
-        try:
-            return super()._pacing()
-        except ValueError:
-            return None
-
     def _llm(self, role: str, doc: DocumentRun) -> Any:
         """The role's client for one document, as the driver's stages see
         it, but for the engine: behind the cache as it is, keyed as the
         run keys its calls, and answering none itself; what the cache
-        does is counted for the stage in hand."""
-        self._used.add(role)
+        does is counted for the stage in hand. The role's client is
+        started already (_engine_for)."""
         return llm.cached_client(
             self._keyed[role],
             self._as_is,
@@ -435,20 +445,31 @@ class Estimator(ScratchDriver):
         """The calls of the invocation `yizkr scratch run` would make now.
         Refuses as the driver would, before any call: without a
         never-ingest list (ExclusionConfigError); with a role whose model
-        is no full id, or a PDF and no renderer (PreflightFailed); and
-        with other settings, or another claude CLI, than the run it would
-        invoke again recorded (RunSettingsConflict)."""
+        is no full id, a pacing setting the engine refuses, or a PDF and
+        no renderer (PreflightFailed); with other settings, or another
+        claude CLI, than the run it would invoke again recorded
+        (RunSettingsConflict); with an engine client that cannot start
+        (ScratchRefused), or a pause as one starts (llm.PassPaused). A
+        corpus with no document is no call, as it is to the driver."""
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)
-        problems = self._model_problems()
+        problems = self._model_problems() + self._pacing_problems()
         if problems:
             raise PreflightFailed(problems)
+        self._recorded = self.rundir.manifest()
+        estimate = Estimate(
+            run=self.state_dir,
+            resumed=bool(self._recorded.get("run_id")),
+            cache=Path(self.cache_dir),
+            holders=_holders(self.state_dir.parent, Path(self.cache_dir)),
+            preflight=self._engine_problems() + self._disk_problems(),
+        )
         found = self.documents()
+        if not found:
+            return estimate
         docs = [doc for doc in found if doc.unreadable is None]
         self._preflight_documents(docs)
         taken, duplicates = self._canonical(docs)
-        recorded = self.rundir.manifest()
-        resumed = bool(recorded.get("run_id"))
         fields = self._fields(docs, self._canaries(taken))
         past = self._past_barrier_only(fields, taken)
         if past and self.refresh:
@@ -457,35 +478,27 @@ class Estimator(ScratchDriver):
                 "only take the run past the barrier and make no view "
                 "again: drop --refresh, or start a new run"
             )
-        if resumed and not past:
-            conflicts = settings_conflicts(recorded, fields)
+        if estimate.resumed and not past:
+            conflicts = settings_conflicts(self._recorded, fields)
             if conflicts:
                 raise RunSettingsConflict(self.state_dir, conflicts)
-        estimate = Estimate(
-            run=self.state_dir,
-            resumed=resumed,
-            cache=Path(self.cache_dir),
-            past_barrier_only=past,
-            duplicates=len(duplicates),
-            unreadable=len(found) - len(docs),
-            corpus_stages=[stage.name for stage in self._corpus_in_range()],
-            holders=_holders(self.state_dir.parent, Path(self.cache_dir)),
-            preflight=self._preflight_notes(),
-        )
+        estimate.past_barrier_only = past
+        estimate.duplicates = len(duplicates)
+        estimate.unreadable = len(found) - len(docs)
+        estimate.corpus_stages = [s.name for s in self._corpus_in_range()]
         if past or not taken:
             return estimate
+        self._refreshed = self._refreshes_made()
+        self._as_is = llm.read_cache(
+            self.cache_dir, refresh=self.refresh, epochs=self.epochs
+        )
         try:
-            self._start_clients()
-            estimate.cli_version = _text(
-                next(iter(self._clients.values())), "cli_version"
-            )
-            self._refreshed = self._refreshes_made()
-            self._as_is = llm.read_cache(
-                self.cache_dir, refresh=self.refresh, epochs=self.epochs
-            )
             made = {doc: self._count(doc) for doc in taken}
-            self._refuse_other_clients(recorded)
         finally:
+            estimate.cli_version = next(
+                (_text(c, "cli_version") for c in self._clients.values()),
+                None,
+            )
             self._close_clients()
         for stages in made.values():
             for stage, outcome in stages.items():
@@ -496,57 +509,51 @@ class Estimator(ScratchDriver):
         )
         return estimate
 
-    # -- the host -------------------------------------------------------------
+    # -- the engine's clients ------------------------------------------------
 
-    def _preflight_notes(self) -> list[str]:
-        """What the run's preflight would refuse now that the estimate
-        needs no answer to: the pacing, the engine's login, disk space.
-        The stack is left to the run, since asking it is a wiki read."""
-        notes = []
+    def _engine_for(self, role: str) -> None:
+        """Start the role's engine client on first use, as the driver
+        does (Orchestrator._engine): the role's first stale stage starts
+        it. So a client that cannot start (ScratchRefused), a pause as it
+        starts (llm.PassPaused), or one that applies other settings than
+        the run it would invoke again recorded, a claude CLI updated
+        since among them (RunSettingsConflict, as RunDir.record_engine
+        refuses it), stops the estimate where it would stop the run, and
+        nothing stale starts none. Called before a stage's own code, whose
+        failures are the stage's."""
+        if role in self._keyed:
+            return
+        effort, model = self._engine_settings(role)
         try:
-            super()._pacing()
-        except ValueError as exc:
-            notes.append(str(exc))
-        return notes + self._engine_problems() + self._disk_problems()
-
-    def _start_clients(self) -> None:
-        """Make each role's engine client as the driver makes it
-        (Orchestrator._engine), for what its calls' keys name."""
-        for role in MODEL_ROLES:
-            effort, model = self._engine_settings(role)
-            try:
-                client = llm.make_client(self.llm, effort=effort, model=model)
-            except (RuntimeError, ValueError) as exc:
-                raise ScratchRefused(
-                    f"the {role} role's engine client cannot start, and its "
-                    f"calls' keys name what it applies: {exc}"
-                ) from None
-            self._clients[role] = client
-            self._keyed[role] = _keyed(client)
-
-    def _refuse_other_clients(self, recorded: dict) -> None:
-        """Refuse, as RunDir.record_engine would, a client the run's stale
-        work starts that applies other settings than the run it would
-        invoke again recorded: a claude CLI updated since among them."""
-        conflicts = []
-        pinned = (recorded.get("engine") or {}).get("cli_version")
-        for role in MODEL_ROLES:
-            if role not in self._used:
-                continue
-            client = self._clients[role]
-            version = _text(client, "cli_version")
-            if version and pinned and version != pinned and not conflicts:
-                conflicts.append(("engine.cli_version", pinned, version))
-            before = (
-                ((recorded.get("roles") or {}).get(role) or {}).get("client")
-            ) or {}
-            conflicts += [
-                (f"roles.{role}.client.{key}", before[key], _text(client, key))
-                for key in _CLIENT_FIXED
-                if key in before and before[key] != _text(client, key)
-            ]
+            client = llm.make_client(self.llm, effort=effort, model=model)
+        except (RuntimeError, ValueError) as exc:
+            raise ScratchRefused(
+                f"the {role} role's engine client cannot start, and its "
+                f"calls' keys name what it applies: {exc}"
+            ) from None
+        self._clients[role] = client
+        conflicts = self._client_conflicts(role, client)
         if conflicts:
             raise RunSettingsConflict(self.state_dir, conflicts)
+        self._keyed[role] = _keyed(client)
+
+    def _client_conflicts(self, role: str, client: Any) -> list[tuple]:
+        """What `client` applies otherwise than the run it would invoke
+        again recorded for the role, as RunDir.record_engine compares
+        them: the claude CLI's version first."""
+        conflicts = []
+        pinned = (self._recorded.get("engine") or {}).get("cli_version")
+        version = _text(client, "cli_version")
+        if version and pinned and version != pinned:
+            conflicts.append(("engine.cli_version", pinned, version))
+        roles = self._recorded.get("roles") or {}
+        before = (roles.get(role) or {}).get("client") or {}
+        conflicts += [
+            (f"roles.{role}.client.{key}", before[key], _text(client, key))
+            for key in _CLIENT_FIXED
+            if key in before and before[key] != _text(client, key)
+        ]
+        return conflicts
 
     def _close_clients(self) -> None:
         for client in self._clients.values():
@@ -642,6 +649,8 @@ class Estimator(ScratchDriver):
             )
             if view is not None:
                 return _Made(reused=True, view=view, changed=False)
+        if method == "vision":
+            self._engine_for("transcribe")
         made = _Made(tally=self._tally)
         try:
             transcription, _resolution = self._transcribe(doc, method)
@@ -664,6 +673,7 @@ class Estimator(ScratchDriver):
             view = self._stands(doc, doc.batch, ClaimBatch.model_validate_json)
             if view is not None:
                 return _Made(reused=True, view=view, changed=False)
+        self._engine_for("extract")
         if before.view is None:
             return _Made(estimated=WHOLE)
         made = _Made(tally=self._tally)
@@ -701,6 +711,7 @@ class Estimator(ScratchDriver):
             and self._stands(doc, doc.critique, _findings) is not None
         ):
             return _Made(reused=True)
+        self._engine_for("critique")
         if before.view is None:
             return _Made(estimated=CRITIQUE)
         made = _Made(tally=self._tally)
@@ -740,8 +751,17 @@ class Estimator(ScratchDriver):
         calls.hits += made.tally.hits
         calls.known += made.tally.known
         if made.tally.replays:
-            # a replay that answers differently asks every fork again
-            calls.more += made.tally.chunk_hits
+            # the replay is known; the forks after it are estimated, those
+            # the cache's chunks leave unanswered, since a replay that
+            # answers differently starts the extraction over from its new
+            # answer: its forks, the ones the cache answered among them,
+            # can number otherwise, and a refused answer takes the
+            # fallback
+            calls.known -= made.tally.chunk_misses
+            calls.estimated += made.tally.chunk_misses
+            calls.replays += made.tally.replays
+            calls.replay_calls += made.tally.chunk_misses
+            calls.more += made.tally.chunk_hits + FIRST_TURNS - 1
         if made.estimated == WHOLE:
             calls.more += FIRST_TURNS - 1
         elif made.estimated == CHUNKS:
@@ -754,69 +774,83 @@ class Estimator(ScratchDriver):
         self, estimate: Estimate, made: dict[DocumentRun, dict[str, _Made]]
     ) -> None:
         """Count the extraction calls whose keys wait for the engine's
-        answers (llm.estimate_calls): the whole stage after a transcription
-        the engine makes, and the chunks after an entity manifest it
-        answers."""
+        answers, document by document (llm.estimate_calls): the whole
+        stage after a transcription the engine makes, and the rest of it
+        after an entity manifest the engine answers. A run's measure
+        counts every call of the stage, so the calls the estimate keyed
+        already (the first turns, a kept refused attempt among them, and
+        any chunk) are taken off it; the mean for the kind, or the text's
+        length, counts one first turn, the one the engine answers, known
+        already."""
         extractions = {
             doc: stages["extraction"]
             for doc, stages in made.items()
             if "extraction" in stages
         }
-        whole = [doc for doc, e in extractions.items() if e.estimated == WHOLE]
-        chunks = {
-            doc: e.size
+        waiting = {
+            doc: e
             for doc, e in extractions.items()
-            if e.estimated == CHUNKS
+            if e.estimated in (WHOLE, CHUNKS)
         }
-        if not whole and not chunks:
+        if not waiting:
             return
-        needed = {(doc.sha1, "extraction") for doc in [*whole, *chunks]}
-        baseline = self._baseline(needed)
+        baseline = self._baseline(
+            {(doc.sha1, "extraction") for doc in waiting}
+        )
         plan = [
             {"sha1": doc.sha1, "kind": doc.kind, "stages": ["extraction"]}
             for doc in extractions
         ]
         everyone = {(doc.sha1, "extraction") for doc in extractions}
         calls = estimate.stages["extraction"]
-        # a document's count holds its entity manifest, which the known
-        # calls hold already after a manifest the engine answers
-        for group, sizes, known_first in (
-            (whole, {}, 0),
-            (
-                list(chunks),
-                {doc.sha1: size for doc, size in chunks.items()},
-                1,
-            ),
-        ):
-            if not group:
-                continue
-            asked = {(doc.sha1, "extraction") for doc in group}
+        for doc, extraction in waiting.items():
             counted = llm.estimate_calls(
-                plan, current=everyone - asked, baseline=baseline, sizes=sizes
+                plan,
+                current=everyone - {(doc.sha1, "extraction")},
+                baseline=baseline,
+                sizes={doc.sha1: extraction.size} if extraction.size else {},
             )["extraction"]
-            calls.estimated += max(0, counted.calls - known_first * len(group))
-            calls.estimated_documents += len(group)
+            tally = extraction.tally
+            keyed = tally.chunk_hits + tally.chunk_misses
+            if extraction.estimated == WHOLE:
+                count = counted.calls
+            elif counted.measured:
+                count = counted.calls - tally.first_turns - keyed
+            else:
+                count = counted.calls - 1 - keyed
+            calls.estimated += max(0, count)
+            calls.estimated_documents += 1
             calls.measured += counted.measured
 
     def _baseline(self, needed: set[tuple[str, str]]) -> dict:
-        """(document SHA-1, stage) -> the calls the latest run to finish
-        the stage made for it (llm.run_calls), from the newest run in the
-        runs directory back, until every pair in `needed` has its count.
-        A stage counts only from a run that finished it, whose count is
+        """(document SHA-1, stage) -> the calls the latest invocation to
+        finish the stage made for it (llm.run_calls, over that
+        invocation's events), from the newest run in the runs directory
+        back, until every pair in `needed` has its count. A stage counts
+        only as an invocation that finished it made it, so a later
+        invocation cut short in it, a refresh's say, leaves the measure
         whole."""
         measured: dict[tuple[str, str], int] = {}
         for run in reversed(runs_in(self.state_dir.parent)):
             if needed <= measured.keys():
                 break
-            events = RunDir(run).events()
-            done = {
-                (event.get("subject"), event.get("stage"))
-                for event in events
-                if event.get("event") == "done"
-            }
-            for pair, count in llm.run_calls(events).items():
-                if pair in done:
-                    measured.setdefault(pair, count)
+            invocations: dict[Any, list[dict]] = {}
+            for event in RunDir(run).events():
+                invocations.setdefault(event.get("invocation"), []).append(
+                    event
+                )
+            finished: dict[tuple[str, str], int] = {}
+            for events in invocations.values():
+                done = {
+                    (event.get("subject"), event.get("stage"))
+                    for event in events
+                    if event.get("event") == "done"
+                }
+                for pair, count in llm.run_calls(events).items():
+                    if pair in done:
+                        finished[pair] = count
+            for pair, count in finished.items():
+                measured.setdefault(pair, count)
         return measured
 
 
@@ -844,7 +878,12 @@ def scratch_estimate(
 ) -> Estimate:
     """`yizkr scratch estimate`: the calls of the invocation `yizkr
     scratch run` with the same options would make now (choose_run,
-    Estimator), with the runs directory neither held nor written."""
+    Estimator), with the runs directory neither held nor written. A runs
+    directory the run refuses (runs_refusal) is refused here too
+    (ScratchRefused)."""
+    refusal = runs_refusal(runs)
+    if refusal is not None:
+        raise ScratchRefused(refusal)
     run_dir = choose_run(runs, resume=resume, new=new)
     return estimator(folder, run_dir, **options).estimate()
 
@@ -897,7 +936,7 @@ def describe(estimate: Estimate) -> list[str]:
         f"{total.estimated} estimated"
     )
     if total.more:
-        summary += f", and at most {total.more} more"
+        summary += f", and up to {total.more} more"
     lines += ["", summary + "."]
     lines.append(
         "- Known: keyed as the run keys them, from the same prompts, "
@@ -913,11 +952,16 @@ def describe(estimate: Estimate) -> list[str]:
         )
     if total.more:
         lines.append(
-            f"- At most {total.more} more: an entity manifest the engine "
-            "answers may be refused, and then its second attempt and the "
-            "segmentation's two are asked (at most 3 for an extraction); a "
-            "replayed conversation that answers differently asks its forks "
-            "again."
+            f"- Up to {total.more} more, where only the engine's answers "
+            "decide: an entity manifest the engine answers may be refused, "
+            "and then its second attempt and the segmentation's two are "
+            "asked (3 more for an extraction at most); a replayed "
+            "conversation that answers differently starts its extraction "
+            "over, asks its forks the cache answered too, and can make a "
+            "number of chunks of its own. The chunks an entity manifest "
+            "makes follow its entities, which a text's length only "
+            "approaches, so a dense document can take more still: an "
+            "estimate, not a ceiling."
         )
     lines.append(
         "- Not counted: calls asked again after an engine error or after a "
@@ -947,8 +991,17 @@ def _estimated(estimate: Estimate) -> list[str]:
             how = "by the mean for their kind in the latest run, or by their "
             how += "text's length"
         parts.append(
-            f"{_plural(extraction.estimated, 'extraction call')} for "
-            f"{_plural(documents, 'document')}, {how}"
+            _plural(
+                extraction.estimated - extraction.replay_calls,
+                "extraction call",
+            )
+            + f" for {_plural(documents, 'document')}, {how}"
+        )
+    if extraction.replays:
+        parts.append(
+            f"{_plural(extraction.replay_calls, 'chunk call')} after "
+            f"{_plural(extraction.replays, 'replayed conversation')}, those "
+            "the cache's chunks leave unanswered"
         )
     critique = estimate.stages.get("critique", StageCalls())
     if critique.estimated:
@@ -990,6 +1043,7 @@ def _notes(estimate: Estimate) -> list[str]:
     if estimate.preflight:
         notes.append(
             "- The run's preflight would refuse it now: "
-            + "; ".join(estimate.preflight)
+            + "; ".join(problem.rstrip(".") for problem in estimate.preflight)
+            + "."
         )
     return notes

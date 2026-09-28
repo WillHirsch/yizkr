@@ -391,6 +391,60 @@ def tracked_by_git(path: Path) -> Path | None:
     return tree
 
 
+def runs_refusal(runs: Path) -> str | None:
+    """Why `runs` cannot be the runs directory, as hold refuses it, found
+    without making or changing anything; None when it can be.
+
+    Its runs hold corpus content, so it must be private (a runs directory
+    that exists and is open to other users is refused, and its mode left
+    alone) and never one a git work tree would track. And it must be a
+    directory it can write to, or one it can make: a path that is a file,
+    or lies under one, is refused, and so is a folder it cannot write in."""
+    runs = Path(runs)
+    tree = tracked_by_git(runs)
+    if tree is not None:
+        return (
+            f"{runs} is in the git work tree {tree}, which does not ignore "
+            "it: a run directory holds corpus content, which is never "
+            "committed (docs/AGENT_PROTOCOL.md §6). Name a runs directory "
+            "git ignores, such as var/scratch, or one outside the work tree."
+        )
+    try:
+        if runs.exists():
+            if not runs.is_dir():
+                return (
+                    f"{runs} cannot be the runs directory: it is not a "
+                    "directory"
+                )
+            mode = stat.S_IMODE(runs.stat().st_mode)
+            if mode & 0o077:
+                return (
+                    f"the runs directory {runs} is open to other users "
+                    f"(mode {mode:o}), and its runs hold corpus content: "
+                    "make it private (chmod 700), or name another"
+                )
+            folder = runs
+        else:
+            # the nearest folder that exists, which the runs directory is
+            # to be made in
+            folder = Path(os.path.abspath(runs)).parent
+            while not folder.exists() and folder != folder.parent:
+                folder = folder.parent
+            if not folder.is_dir():
+                return (
+                    f"{runs} cannot be the runs directory: {folder} is not "
+                    "a directory"
+                )
+        if not os.access(folder, os.W_OK | os.X_OK):
+            return (
+                f"{runs} cannot be the runs directory: {folder} cannot be "
+                "written"
+            )
+    except OSError as exc:
+        return f"{runs} cannot be the runs directory: {exc}"
+    return None
+
+
 @contextlib.contextmanager
 def hold(runs: Path) -> Iterator[None]:
     """Hold the runs directory for as long as the block runs: one driver
@@ -401,34 +455,17 @@ def hold(runs: Path) -> Iterator[None]:
     (ScratchRunInUse).
 
     Its runs hold corpus content, so the runs directory is private: made
-    so (mode 700) when it is made here, and refused when it exists and is
-    open to other users, whose mode is left alone. So is one a git work
-    tree would track, and one that cannot be made, read or written
-    (ScratchRefused)."""
+    so (mode 700) when it is made here. A runs directory runs_refusal
+    refuses is refused (ScratchRefused), and so is one that cannot be
+    made, read or written when it comes to it."""
     runs = Path(runs)
-    tree = tracked_by_git(runs)
-    if tree is not None:
-        raise ScratchRefused(
-            f"{runs} is in the git work tree {tree}, which does not ignore "
-            "it: a run directory holds corpus content, which is never "
-            "committed (docs/AGENT_PROTOCOL.md §6). Name a runs directory "
-            "git ignores, such as var/scratch, or one outside the work tree."
-        )
+    refusal = runs_refusal(runs)
+    if refusal is not None:
+        raise ScratchRefused(refusal)
     try:
         if not runs.exists():
             runs.mkdir(parents=True, mode=0o700)
             os.chmod(runs, 0o700)
-        elif not runs.is_dir():
-            raise ScratchRefused(
-                f"{runs} cannot be the runs directory: it is not a directory"
-            )
-        mode = stat.S_IMODE(runs.stat().st_mode)
-        if mode & 0o077:
-            raise ScratchRefused(
-                f"the runs directory {runs} is open to other users (mode "
-                f"{mode:o}), and its runs hold corpus content: make it "
-                "private (chmod 700), or name another"
-            )
         fd = os.open(runs / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError as exc:
         raise ScratchRefused(
@@ -813,15 +850,20 @@ class ScratchDriver(Orchestrator):
             )
         return problems
 
+    def _pacing_problems(self) -> list[str]:
+        """What is wrong with the engine's pacing settings: a value the
+        engine would refuse as its client starts."""
+        try:
+            self._pacing()
+        except ValueError as exc:
+            return [str(exc)]
+        return []
+
     def _preflight_host(self) -> None:
         """Everything that needs no document: the models, the pacing, the
         engine and its login, disk space, and the wiki when a stage to run
         touches it. PreflightFailed lists every problem."""
-        problems = self._model_problems()
-        try:
-            self._pacing()
-        except ValueError as exc:
-            problems.append(str(exc))
+        problems = self._model_problems() + self._pacing_problems()
         problems += self._engine_problems()
         problems += self._disk_problems()
         problems += self._wiki_problems()

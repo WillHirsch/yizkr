@@ -62,18 +62,25 @@ cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
     answers it from the cache alone. So it knows each call the cache
     answers and each it cannot, a kept answer the run would reject and
     ask again (a reading the transcription check fails, a critique cut
-    off) and the replay of a conversation whose session was not kept
-    included;
+    off) included, and a call another document asks earlier in the run
+    counts once. The replay of a conversation whose session was not
+    kept, for its forks, is a known call too;
   - **estimated**: a call whose key waits on an answer the engine is yet
     to give: the extraction after a reading the engine makes, the chunks
-    after an entity manifest it answers, and the critique of a batch
-    with chunks it answers. An extraction is counted as the latest run
-    to make the same document measured it, else by the mean for its kind
-    there, else by its text's length; a critique as one call;
-  - **at most more**: an entity manifest the engine answers may be
-    refused, and then its second attempt and the segmentation's two are
-    asked (up to 3 for an extraction); a replayed conversation that
-    answers differently asks its forks again;
+    after an entity manifest it answers, the forks after a replay, and
+    the critique of a batch with chunks it answers. An extraction is
+    counted as the latest run to make the same document measured it,
+    else by the mean for its kind there, else by its text's length; the
+    forks after a replay as the chunks the cache kept leave them
+    unanswered; a critique as one call;
+  - **up to more**: an entity manifest the engine answers, a replay's
+    among them, may be refused, and then its second attempt and the
+    segmentation's two are asked (3 more for an extraction at most); a
+    replayed conversation that answers differently starts its extraction
+    over and asks its forks again, the ones the cache answered too, and
+    their number can change. These are estimates, not ceilings: the
+    chunks an entity manifest makes follow its entities, which a text's
+    length only approaches, so a dense document can take more;
   - **not counted**: calls asked again after an engine error or a chunk
     answer cut off (up to 2 for a chunk), and waits for the
     subscription, which make no call. A slice the anomaly checks pause
@@ -84,13 +91,20 @@ cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
   counting what the run and the cache hold as it reads them, and names
   who holds the runs directory and the cache. It makes no model call and
   asks the wiki nothing. It refuses what the run would refuse before its
-  first call (no never-ingest list, a model that is no full id, a PDF
-  without the renderer, other settings or another claude CLI for a run
-  invoked again) and lists what the run's preflight would still refuse
-  (the login, the pacing, disk space); a stage that touches the wiki is
-  left to the run's own preflight. Like the driver, it runs
-  `claude --version`, for the CLI version every key names. How the LLM
-  cache keys a call, and what a run's events count: docs/LLM_CACHE.md.
+  first call: no never-ingest list, a runs directory the driver refuses
+  (open to others, tracked by git, a file, one it cannot write), a model
+  that is no full id, a pacing setting the engine refuses, a PDF without
+  the renderer, and other settings or another claude CLI for a run
+  invoked again. It lists what the run's preflight would still refuse
+  (the login, disk space); a stage that touches the wiki is left to the
+  run's own preflight. A corpus with no document is no call, whatever the
+  settings, as it is to the run. Like the driver, it starts a role's
+  engine client when the role's first stale stage needs it, which for
+  the claude CLI runs `claude --version`, for the version every key
+  names: a client that cannot start, or pauses as it starts, stops the
+  estimate as it would stop the run, and nothing stale starts none. How
+  the LLM cache keys a call, and what a run's events count:
+  docs/LLM_CACHE.md.
 
 ## Run
 

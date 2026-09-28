@@ -289,10 +289,14 @@ again, or is refused if another process has taken it meanwhile.
 **Reading a cache as it is.** `llm.read_cache` gives the entries a run
 would be served, without opening the cache: it takes no lock, makes no
 folder and writes nothing, and what calls made through it change (an
-answer rejected, one stored) stays in memory. The call estimate reads
-the cache so, beside a run that holds it (docs/runbooks/scratch-run.md,
-Before a run). `llm.cache_holder` names the process that holds a cache,
-from its lock file's record, without taking the lock.
+answer rejected, one stored) stays in memory (ADR-0032 §3). A kept
+session comes back as the names of its files only, with no bytes, read
+through its folder opened once, so one replaced meanwhile by renames is
+never read torn, and looked for again a moment later while it is
+missing. The call estimate reads the cache so, beside a run that holds
+it (docs/runbooks/scratch-run.md, Before a run). `llm.cache_holder` names
+the process that holds a cache, from its lock file's record, without
+taking the lock.
 
 Why one process: several session paths assume it. A resumed claude-code
 session's transcript sits under its original id in the CLI's projects
@@ -743,9 +747,10 @@ counted without their keys. `yizkr scratch estimate`
 (docs/runbooks/scratch-run.md, Before a run) counts a planned scratch
 run's calls by their keys: it takes each stale stage through the
 pipeline's own code with the cache as it is (`llm.read_cache`), so each
-call the cache answers, and each it cannot, is known, and it counts by
-`llm.estimate_calls` only the calls whose keys wait on an answer the
-engine has yet to give.
+call the cache answers, and each it cannot, is known. It estimates only
+the calls whose keys wait on an answer the engine has yet to give: by
+`llm.estimate_calls`, or, for the forks after a conversation it replays,
+by the chunks the cache kept.
 
 ## Checks once per run
 

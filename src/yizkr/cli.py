@@ -1582,6 +1582,17 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "stage: those the LLM cache cannot answer, counted without a model "
         "call or a wiki read, and without holding what a running driver "
         "holds. Takes the options of `scratch run`",
+        description="Plans the run `yizkr scratch run` with the same "
+        "options would make now, a new one or the one it would invoke "
+        "again, and counts the engine calls it would make, per stage and "
+        "in all: the calls whose views do not stand that the LLM cache "
+        "cannot answer. Known counts are keyed as the run keys its calls; "
+        "the calls after an answer the engine has yet to give are "
+        "estimated, with a bound for what only its answers decide. It "
+        "makes no model call, reads no wiki, writes nothing and takes no "
+        "lock, so it runs beside a running driver "
+        "(docs/runbooks/scratch-run.md, Before a run). Takes the options "
+        "of `scratch run`.",
     )
     _scratch_plan_options(p, effort_choices, runs_help)
     p.set_defaults(func=cmd_scratch_estimate)

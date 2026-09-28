@@ -686,7 +686,12 @@ class CacheAsIs(EngineCache):
     reading of an entry, from EngineCache, but none of its opening, which
     makes the root and holds its lock. A kept session is given by its
     files' names, without their bytes: whether they can resume a
-    conversation is all a reader of it asks."""
+    conversation is all a reader of it asks. A kept session is read
+    through its folder, opened once, so a process that replaces it
+    meanwhile (keep_session: the old folder renamed aside, the new one
+    renamed in) never tears the listing, and a folder missing where
+    another is kept under the key is read again a moment later, as it is
+    while one replaces it."""
 
     def __init__(
         self,
@@ -754,13 +759,38 @@ class CacheAsIs(EngineCache):
 
     def kept_session(self, key: str, opening: str) -> dict[str, bytes]:
         folder = self._session_dir(key, opening)
-        if not folder.is_dir():
+        if not folder.parent.is_dir():
+            # nothing kept for any answer under the key
             return {}
+        for attempt in range(_HOLDER_READS):
+            if attempt:
+                time.sleep(_HOLDER_WAIT)
+            try:
+                return _file_names(folder)
+            except OSError:
+                continue
+        return {}
+
+
+def _file_names(folder: Path) -> dict[str, bytes]:
+    """The files under `folder`, by their paths relative to it, with no
+    bytes, listed through the folder opened once. OSError when it cannot
+    be opened (missing, say) or read."""
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+    try:
         return {
-            path.relative_to(folder).as_posix(): b""
-            for path in sorted(folder.rglob("*"))
-            if path.is_file()
+            Path(os.path.normpath(os.path.join(top, name))).as_posix(): b""
+            for top, _dirs, files, _fd in os.fwalk(
+                ".", dir_fd=fd, onerror=fail
+            )
+            for name in sorted(files)
         }
+    finally:
+        os.close(fd)
 
 
 def held_by(root: str | os.PathLike[str]) -> str | None:

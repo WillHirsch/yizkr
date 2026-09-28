@@ -26,6 +26,10 @@ Amended by #127 (2026-09-28): no prompt cites an artifact QID; the
 extraction prompts and the transcription view name the artifact by the
 SHA-1 of its media, so a reset changes no key (§2).
 
+Amended by #101 (2026-09-28): a reader that only reads a cache, the call
+estimate's, takes no lock and writes nothing, so it reads beside the
+process that holds the cache (§3).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -208,6 +212,14 @@ an artifact a new QID changes no key.
   process shares, so one process's release could pull it from under
   another's forks, and a session held after a replay (§6) is known only
   to its process.
+- A reader that only reads a cache holds no lock (`llm.read_cache`): the
+  call estimate reads the entries a run would be served, and the names of
+  the session files kept, beside the process that holds the cache,
+  without making a folder or writing anything. It holds nothing that
+  process needs. What its own calls would change it keeps in memory; the
+  entries it reads are whole, as every reader's are, and a kept session's
+  folder, which its keeper replaces by renames, is listed through the
+  folder opened once, and looked for again a moment later while missing.
 
 ### 4. Rejection
 
