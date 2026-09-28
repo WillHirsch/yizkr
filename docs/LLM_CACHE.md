@@ -492,15 +492,18 @@ start and end.
 
 ### `events.jsonl`
 
-Every line has `at` (UTC), `event` and `invocation` (one per run of `ingest
-run`). Events about a document add `subject` (its media SHA-1) and `kind`;
-`document-failed` and a directory's `set-aside` also add `file`, the
-source's file name, which names a document whose source could not be
-read and so has no `subject`; stage events add `stage` (`transcription`,
-`extraction`, `critique` or `gedcom`; in a scratch run, a corpus stage's
-`started`, `done`, `failed` and `held` name the corpus stage, and no
-document); cache events add `role` and `key`,
-and all of them but `cache-reject` and `cache-adopt` the kind of call
+Every line has `at` (UTC), `event` and `invocation` (one per run of
+`ingest run`; one per recheck of the anomaly checks, `recheck-<hex>`;
+and one for the anomaly checks' pause watch in a run's process,
+`watch-<hex>`, whose only events are its failed looks' `anomaly-error`;
+docs/ANOMALIES.md). Events about a document add `subject` (its media
+SHA-1) and `kind`; `document-failed` and a directory's `set-aside` also
+add `file`, the source's file name, which names a document whose source
+could not be read and so has no `subject`; stage events add `stage`
+(`transcription`, `extraction`, `critique` or `gedcom`; in a scratch
+run, a corpus stage's `started`, `done`, `failed` and `held` name the
+corpus stage, and no document); cache events add `role` and `key`, and
+all of them but `cache-reject` and `cache-adopt` the kind of call
 (`call`); call events add `role`, the `stage` the role's calls are made
 in, and the kind of call:
 
@@ -524,6 +527,8 @@ in, and the kind of call:
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
 | `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears) |
 | `alert` | an anomaly alert was appended | `check`, `status` |
+| `anomaly-recheck` | a recheck of the stored outputs began (docs/ANOMALIES.md) | `config` (the thresholds' digest), `documents` |
+| `anomaly-error` | an anomaly check raised; nothing failed with it | `error` (the exception's name, never its message), `hook` |
 | `run-end` | the invocation ended, other than by Ctrl-C | `outcome` and `reason` as `run.json` records them for the invocation (docs/RUN_MANIFEST.md: `finished`, `stopped`, `paused`, `refused` or `failed`), `statuses` (documents per status) |
 | `run-interrupted` | the invocation was interrupted (Ctrl-C) | `outcome` (`interrupted`), `statuses` |
 
@@ -543,23 +548,26 @@ not events.
 
 One alert per line: `at`, `stage`, `check`, `subject` (a SHA-1 prefix),
 `value` (the measured value), and `status`: `new` on an output the engine
-answered in this run, `carried` on one made from cached answers. Each
-alert also appends an `alert` event.
+answered in this run, or one its stage makes without a call, `carried` on
+one made from cached answers or reused whole. Each alert also appends an
+`alert` event. The checks, and the fields each adds, are in
+[docs/ANOMALIES.md](ANOMALIES.md).
 
 ### `control.jsonl`
 
 Requests `{at, action, scope, by, reason}`: `action` is `pause`,
 `resume` or `abort`; `scope` is `run`, `stage:<name>` or `kind:<name>`.
-The driver folds them in order: a pause holds until a resume, and an
-abort holds for the rest of the invocation. A new invocation writes
-`{action: "start"}`, after which earlier requests no longer apply: that
-is how an aborted run resumes. A stopped scope stops dispatch only:
-in-flight calls finish, every completed call is already in the cache, and
-a view that stands is reused, which dispatches nothing. `ingest run`
-honours run and kind requests between documents: a document it does not
-dispatch keeps its status. It honours stage requests before every stage:
-a document whose stage is held is `paused`. Either resumes on the next
-run.
+A fail-fast anomaly check's requests say `by: "anomaly"` and name their
+`check` (docs/ANOMALIES.md). The driver folds them in order: a pause
+holds until a resume, and an abort holds for the rest of the invocation.
+A new invocation writes `{action: "start"}`, after which earlier
+requests no longer apply: that is how an aborted run resumes. A stopped
+scope stops dispatch only: in-flight calls finish, every completed call
+is already in the cache, and a view that stands is reused, which
+dispatches nothing. `ingest run` honours run and kind requests between
+documents: a document it does not dispatch keeps its status. It honours
+stage requests before every stage: a document whose stage is held is
+`paused`. Either resumes on the next run.
 
 The scratch driver (docs/runbooks/scratch-run.md) honours every request
 before each stage of each document and before each corpus stage, with a
