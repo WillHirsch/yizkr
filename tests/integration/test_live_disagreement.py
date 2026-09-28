@@ -212,7 +212,10 @@ def write_fixture(
     of the fixture with other values would otherwise write onto an
     earlier version's items and see its old values beside the new ones.
     With the marker it writes items of its own, and a re-run of one
-    version finds its own items again. Returns each batch's result."""
+    version finds its own items again. The curator ranks the test sets
+    afterwards are not in the marker, so an edit that moves only a rank
+    must change a claim too, or it reuses the earlier version's items.
+    Returns each batch's result."""
     content = [
         [
             {
