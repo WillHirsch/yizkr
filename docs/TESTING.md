@@ -50,9 +50,13 @@ itself in its own `--help`.
   `uv run pytest -m live tests/integration/test_live_chunked.py -s`, where
   `-s` shows their cache events.
 
-A change to a stage before write is checked by a whole-corpus scratch run
-and its diff, not by a test: there is no gold set or synthetic eval
-(ADR-0025, AGENT_PROTOCOL §5).
+A change to a stage before write that already runs is checked by a
+whole-corpus scratch run and its diff, not by a test: there is no gold
+set or synthetic eval (ADR-0025, AGENT_PROTOCOL §5). Until the first
+whole-corpus scratch run (#145) starts, there is no run to diff against:
+a PR that changes a stage carries only its `stage:*` label, and the first
+run's baseline includes the change (the pre-baseline exception,
+AGENT_PROTOCOL §2).
 
 ## Targeted and full runs
 
@@ -65,13 +69,14 @@ uv run pytest -q tests/unit -k <expression>          # tests by name
 uv run pytest -q --lf                                # the last failures
 ```
 
-The full suite, `uv run pytest -q`, runs once, before the final push
-(AGENT_PROTOCOL §4). It takes under a minute on an idle machine and far
-longer under load (#252), so full runs repeated by many agents slow every
-one of them. CI runs it on every push, and a reviewer reads CI's result
-for the commit under review instead of running it again. Ruff is quick:
-`uv run ruff check .` and `uv run ruff format --check .` pass before every
-push, and the pre-commit hook (`make hooks`) runs ruff on every commit.
+The full suite, `uv run pytest -q`, runs once before the push that opens
+the PR for review, and once per fix round (AGENT_PROTOCOL §4). It takes
+under a minute on an idle machine and far longer under load (#252), so
+full runs repeated by many agents slow every one of them. CI runs it on
+every push, and a reviewer reads CI's result for the commit under review
+instead of running it again. Ruff is quick: `uv run ruff check .` and
+`uv run ruff format --check .` pass before every push, and the pre-commit
+hook (`make hooks`) runs ruff on every commit.
 
 ## Parallel runs (pytest-xdist)
 
@@ -140,13 +145,20 @@ tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
   run the old code. The harness deletes the module's bytecode before
   each run and runs pytest with `PYTHONDONTWRITEBYTECODE=1`, which is why
   a script of your own is no substitute.
+- **Non-live tests only.** `pyproject.toml`'s `-m 'not live'` deselects
+  even a live test that `tests` names, `tests` takes no pytest options,
+  and pytest runs without `PYTEST_ADDOPTS`, so the harness runs non-live
+  tests only. For a new or changed live test, the PR names under
+  Mutation evidence the regression the test guards, and the central live
+  run (AGENT_PROTOCOL §5) is where the test is shown to fail under it.
 - **Stop what a test detaches.** Each pytest run has a process group of
   its own, killed when the run ends or outlives `--timeout` (default
   300 s). A process that leaves the group escapes, and can hold a lock or
   a port that makes later mutants look killed, so tests stop what they
   detach, in a fixture's teardown.
-- **Results.** The run stops at the first survivor or error unless
-  `--keep-going`. It prints a Markdown table, ready for the PR, and
+- **Results.** The run stops at the first error unless `--keep-going`,
+  and at the first survivor unless `--keep-going` or `--allow-survivors`.
+  It prints a Markdown table, ready for the PR, and
   `--json PATH` also writes a report. The exit status is 0 when every
   mutant was killed (or survived under `--allow-survivors`), 1 for a
   survivor, 2 for a refusal or an error, and 128 + N after signal N.
@@ -180,18 +192,26 @@ make wdqs-sandbox-down  # or: uv run python scripts/wdqs_sandbox.py down
   containment chains, residences, spouses, ranks and redirects.
 - **Isolated.** `up` starts a `wikibase/wdqs:2` container with no
   network, no ports and no volumes, capped at 768 MB and one CPU. The
-  sandbox never touches the deployed stack, so it takes no lock, and it
-  acts only on a container that carries its label and name prefix.
+  sandbox never touches the deployed stack, so it takes no live-stack
+  lock, and it acts only on a container that carries its label and name
+  prefix.
 - **One per checkout.** Its state file and container name are keyed on
   the checkout's top directory, so worktrees never share or remove each
-  other's sandbox. One command at a time uses a sandbox; a second one
-  waits.
+  other's sandbox. One command at a time uses a sandbox, under a lock of
+  its own beside the state file; a second one says it is waiting.
 - **Queries.** `query` renders a template as `yizkr publish-queries`
   does, through the vocabulary map beside the graph loaded last
   (`--vocab` names another; `--raw` sends a finished query as it is). It
   prints the rows as tab-separated values and the engine's wall time.
-  `load` and `query` stop at `--timeout` (default 100 s), and Ctrl-C
-  cancels the engine's running work.
+  `query` stops at `--timeout` (default 100 s) and `load` at its own
+  (default 90 s), so that a command ends within two minutes.
+- **Stopping.** Every query the sandbox sends carries a marker, so
+  Ctrl-C or SIGTERM during a query cancels that query in the engine, and
+  nothing else, and kills its curl. During a load, or the emptying of
+  `load --replace`, it kills only the curl and gives the engine up to
+  20 s to finish or abort the write itself: cancelling a write would
+  leave the engine unable to take another until the sandbox restarts.
+  The engine commits a load whole or not at all.
 - **Timings are indicative.** One CPU makes them noisy: compare variants
   in one session with `--repeat 3` and their medians, or start the
   sandbox with `up --cpus 2`. The sandbox compares queries; it does not
@@ -209,13 +229,14 @@ fixture in `tests/integration/conftest.py` takes the `live_stack_lock`
 fixture, and `tests/integration/live_lock.py` holds the code. Unit runs
 never take the lock, and nor do the real-model tests, which need only the
 claude CLI. The default path is per user, not per worktree, so every
-worktree on the machine shares it; `$YIZKR_LIVE_LOCK` must be an absolute
-path.
+worktree on the machine shares it. `$YIZKR_LIVE_LOCK` must be an absolute
+path, though a leading `~` is expanded.
 
 - **Waiting.** A session that finds the lock held says once who holds it
   (pid, command, working directory and start time), and waits. After
-  `$YIZKR_LIVE_LOCK_TIMEOUT` seconds (default 7200) it gives up: its
-  tests that use the stack error at setup, with that message shown once.
+  `$YIZKR_LIVE_LOCK_TIMEOUT` seconds (default 7200) it gives up, once for
+  the session, and every test that uses the stack then errors at setup
+  with that message.
 - **Crashes.** The lock is a flock, which the kernel releases when its
   holder ends, however it ends, so a crashed or killed session blocks
   nothing. The holder records itself in the lock file and empties the

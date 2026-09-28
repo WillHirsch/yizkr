@@ -27,11 +27,14 @@ bump), §4 (the LLM cache takes the stage store's place in `var/`) and §7
 Amended by #249 (2026-09-28), for the owner-approved review of the
 2026-09-27 agent workload: §3 (the machine the agents share: waves keep
 test-heavy agents to a moderate number at once, and live test sessions
-take turns on the live-stack lock, #253). Matching edit: §2 (the
-pre-baseline exception for `needs:scratch-diff`, until the first
-scratch run, #145). The review's operational rules are in
-[`docs/AGENT_PROTOCOL.md`](../AGENT_PROTOCOL.md): the pre-review
+take turns on the live-stack lock, #253). The review's operational rules
+are in [`docs/AGENT_PROTOCOL.md`](../AGENT_PROTOCOL.md): the pre-review
 self-check and the review rules in §4, central live tests in §5.
+
+Also amended by #249 (2026-09-28): §2 (the pre-baseline exception: until
+the first whole-corpus scratch run, #145, starts, a PR that changes a
+stage carries its `stage:*` label but not `needs:scratch-diff`, as #228,
+#247 and #273 did).
 
 ## Context
 
@@ -112,10 +115,11 @@ now, cloud sessions later. Four things had to change together.
   or its parameters) carries `needs:scratch-diff`: a local session posts
   the aggregate report of a whole-corpus scratch run and its diff against
   the latest run on main, read by the owner or a local reviewer agent
-  (ADR-0025 §4). Until the first whole-corpus scratch run exists (#145),
+  (ADR-0025 §4). Until the first whole-corpus scratch run (#145) starts,
   there is no run to diff against: such a PR carries its `stage:*` label
   but not `needs:scratch-diff`, and the first run's baseline includes the
-  change.
+  change. A stage PR still open when that run starts gets the label, and
+  is diffed against that run.
 
 ### 3. Dispatch: a standing go-ahead, limited by non-interference
 

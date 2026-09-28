@@ -21,10 +21,11 @@ people by QID, and give metrics as aggregates only.
 <!--
 Commands run and their results, aggregates only:
 - `uv run ruff check .`, `uv run ruff format --check .`, and the full
-  `uv run pytest -q` once, before the final push (docs/TESTING.md)
+  `uv run pytest -q` once before the push that opens the PR for review,
+  and once per fix round (docs/TESTING.md)
 - needs:live-test: `make test-live` results from the central live run,
-  started when the draft opened, and how it cleared the instance-contents
-  key (docs/AGENT_PROTOCOL.md §5)
+  started when the draft opened, the commit it ran at, and how it cleared
+  the instance-contents key (docs/AGENT_PROTOCOL.md §5)
 -->
 
 **Mutation evidence:**
@@ -32,8 +33,10 @@ Commands run and their results, aggregates only:
 For each new or changed test: the regression it guards, and the Markdown
 table from `uv run python scripts/mutate.py SPEC` showing its mutant
 killed, with the TOML spec in a collapsed <details> block so a reviewer
-can re-run it (docs/TESTING.md). Explain any survivor. Or write "no new
-or changed tests".
+can re-run it (docs/TESTING.md). Explain any survivor. The harness runs
+non-live tests only: for a new or changed live test, name the regression
+it guards, and the central live run (docs/AGENT_PROTOCOL.md §5) shows it.
+Or write "no new or changed tests".
 -->
 
 **Edge cases:**
@@ -60,6 +63,14 @@ only: never paste report.html, report.json or the detailed diff.
 Write "not applicable" if the PR has no needs:scratch-diff label.
 -->
 
+## Owner actions
+
+<!--
+Everything the owner must run or decide, in one place, each with what to
+run or decide (docs/AGENT_PROTOCOL.md §9): a CLAUDE.md change's proposed
+wording, a merge order, a decision the merge accepts. Or write "none".
+-->
+
 ## Self-check
 
 <!--
@@ -70,10 +81,12 @@ what its own commits change.
 
 - [ ] Docs move with code (ADRs, MODELING.md, READMEs, docs/). A
   CLAUDE.md change needs the owner's approval, so its proposed wording
-  goes under owner actions, not into the diff.
+  goes under Owner actions, not into the diff.
 - [ ] **Tests fail under their regressions.** Each new or changed test
   is shown, with `scripts/mutate.py`, to fail under the regression it
-  guards (Mutation evidence above).
+  guards (Mutation evidence above). The harness runs non-live tests
+  only: a new or changed live test's regression is named above, and the
+  central live run shows it.
 - [ ] The edge cases considered are listed above.
 - [ ] **Current with main.** If origin/main had moved on, it is merged
   in: a merge commit, never a rebase.
@@ -88,14 +101,16 @@ what its own commits change.
   can change them (its code, a prompt, the manifest, a model, effort or
   parameters), and this PR and its issue carry the matching `stage:*`
   label, plus `needs:scratch-diff` if the stage already runs. Until the
-  first whole-corpus scratch run exists (#145), no PR carries
+  first whole-corpus scratch run (#145) starts, no PR carries
   `needs:scratch-diff` (the pre-baseline exception,
   docs/AGENT_PROTOCOL.md §2).
 - [ ] **Test runs.** Targeted tests while iterating, then the full
-  `uv run pytest -q` once, before the final push.
+  `uv run pytest -q` once before the push that opens the PR for review,
+  and once per fix round.
 - [ ] **No real data (self-reviewed, docs/AGENT_PROTOCOL.md §7).** I
   re-read the whole commit range (`git log -p origin/main..HEAD`) and
   this text. Nothing quotes, paraphrases or identifies corpus content.
   Issues are cited by #number and decisions by ADR number, with no
   plan-internal codes.
-- [ ] Owner actions, if any, are listed in one place above.
+- [ ] Owner actions, if any, are listed in one place, under Owner
+  actions above.
