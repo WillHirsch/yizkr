@@ -92,8 +92,19 @@ own, and without PYTEST_ADDOPTS. When a run outlives --timeout, or a
 signal stops the harness, the whole group gets SIGINT, so pytest can
 tear its fixtures down. Once pytest has exited, or after --grace
 seconds, the group gets SIGKILL. It gets SIGKILL when pytest exits on
-its own too, so nothing a test started, such as a shell's background
-job, outlives the run to hold a lock or a port against the next one.
+its own too, so what a test started in the group, such as a shell's
+background job, dies with the run.
+
+A process that leaves the group escapes that kill: one started with
+setsid or start_new_session=True, with setpgid or process_group=0, or a
+daemon that detaches itself. Left running, it can hold a lock or a port
+and make later mutants look killed. Tests must stop what they detach
+themselves, in a fixture's teardown say, which pytest runs even when
+the test fails.
+
+The harness resets SIGCHLD to its default before it starts pytest. A
+SIGCHLD ignored by whatever started the harness would let the kernel
+reap pytest at once, and every run would then read as passing.
 
 Results
 -------
@@ -1119,6 +1130,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # An ignored SIGCHLD survives exec. With it, the kernel reaps pytest
+    # as soon as it exits, and its exit status reads as 0: every run,
+    # however its tests fail, would pass.
+    if hasattr(signal, "SIGCHLD"):
+        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     args = parse_args(argv)
     harness = Harness(args)
     with stopping_on_signals(harness.on_signal):

@@ -751,6 +751,45 @@ def test_sigint_stops_the_tests_even_if_they_ignore_it_and_restores(
         kill_leftovers(pidfile)
 
 
+# Runs the harness in a fresh interpreter that inherits an ignored
+# SIGCHLD, as one started by a careless parent would: Linux keeps the
+# ignore across exec.
+IGNORING_SIGCHLD = """\
+import os, signal, sys
+signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+"""
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGCHLD"), reason="no SIGCHLD")
+def test_an_inherited_sigchld_ignore_cannot_hide_a_failing_baseline(
+    repo, tmp_path
+):
+    """With SIGCHLD ignored, the kernel would reap pytest itself, and its
+    exit status would read as 0. Then this baseline, in which one test
+    passes and one fails, would pass, and the mutant would survive."""
+    spec = tmp_path / "spec.toml"
+    spec.write_text(
+        mutation(
+            "sum becomes difference",
+            "a + b",
+            "a - b",
+            ["test_calc.py::test_add", "test_b.py"],
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", IGNORING_SIGCHLD, str(SCRIPT), str(spec)],
+        cwd=repo,
+        env=environment(),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "fail unmutated (1 failed, 1 passed)" in result.stderr
+    assert result.stdout == ""
+
+
 def test_sigint_sigterm_and_sighup_reach_the_handler_unless_ignored():
     def handler(signum, frame):
         pass
