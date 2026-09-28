@@ -88,12 +88,27 @@ HOME = (
 )
 ADDRESS_IN_TOWN = "wohnhaft in Flörburg, Brunnenring 35"
 
-# the disagreement report's containment filters, found by their path
-CONTAINMENT_FILTER = re.compile(
-    r"FILTER NOT EXISTS \{[^\n]*?"
-    + re.escape("(wdt:{P:location}|wdt:{P:part_of})+")
-    + r"[^\n]*?\}"
-)
+# a NOT EXISTS block of the query template: its body may span lines and
+# hold {P:key} placeholders, so braces nest one level
+NOT_EXISTS = re.compile(r"FILTER NOT EXISTS \{(?:[^{}]|\{[PQ]:\w+\})*\}")
+# the disagreement report's containment filters follow this path
+CONTAINMENT_PATH = "wdt:{P:location}|wdt:{P:part_of}"
+
+
+def without_containment(template: str) -> tuple[str, int]:
+    """The template without its containment filters, and how many it
+    removed."""
+    removed = 0
+
+    def strip(match: re.Match) -> str:
+        nonlocal removed
+        if CONTAINMENT_PATH not in match.group(0):
+            return match.group(0)
+        removed += 1
+        return ""
+
+    return NOT_EXISTS.sub(strip, template), removed
+
 
 RUN = {
     "model_identifier": "integration-test",
@@ -378,8 +393,8 @@ def test_inconsistencies_suppress_recorded_containment(site, client, config):
     # ... and only its containment filters leave the pair out: the same
     # query without them lists the two birthplaces, so the report does
     # compare the places
-    template, filters = CONTAINMENT_FILTER.subn(
-        "", load_templates()["disagreement-report"]
+    template, filters = without_containment(
+        load_templates()["disagreement-report"]
     )
     assert filters == 2, "the report's containment filters have changed"
     properties, items = client.vocabulary()
