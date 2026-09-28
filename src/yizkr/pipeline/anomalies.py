@@ -1414,9 +1414,10 @@ class AnomalyChecks:
         reset: Callable[[], None],
     ) -> str | None:
         """Ask for a pause of the slice (a stage or a kind) for a fail-fast
-        check, and start the timer that aborts it: the slice's scope, or
-        None when the check is not fail-fast or the slice is stopped
-        already."""
+        check, and watch it: the slice's scope, or None when the check is
+        not fail-fast or the slice is stopped already. The pause is asked
+        for while the run's events are read, and the look at the slices
+        that follows starts the timer that aborts it (_watch_slices)."""
         if not settings.fail_fast:
             return None
         what, name = slice_
@@ -1429,8 +1430,6 @@ class AnomalyChecks:
             PAUSE, by=BY, reason=reason, check=check, **{what: name}
         )
         self._paused[scope] = (check, reset)
-        if self.config.pause_timeout_s is not None:
-            self._arm(scope, self.config.pause_timeout_s)
         return scope
 
     def _control(self) -> list[dict]:
