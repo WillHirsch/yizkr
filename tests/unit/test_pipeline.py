@@ -6,6 +6,7 @@ import hashlib
 import itertools
 import json
 import subprocess
+import unicodedata
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1307,6 +1308,10 @@ class DetachedItems(FakeItems):
     an edit sent from a stale read does on an instance: an edit sends the
     item's aliases whole, and its statements as that copy holds them.
 
+    As an instance does, the store keeps every `string` snak in Unicode
+    NFC, the form Wikibase normalizes a string value to, and monolingual
+    text as it was sent (#335).
+
     Unlike an instance, the store's round trip through `get_json` and
     `from_json` ignores WikibaseIntegrator's `remove` flags: a statement
     or alias removed through a copy stays. The writer removes nothing."""
@@ -1335,9 +1340,32 @@ class DetachedItems(FakeItems):
 
         data = item.get_json()
         data["lastrevid"] = self.writes
-        # an instance hashes every reference block it stores
         for statements in data.get("claims", {}).values():
             for statement in statements:
+                # an instance stores a `string` snak in NFC, wherever it is
+                snaks = [
+                    statement["mainsnak"],
+                    *(
+                        snak
+                        for snaks in statement.get("qualifiers", {}).values()
+                        for snak in snaks
+                    ),
+                    *(
+                        snak
+                        for block in statement.get("references", [])
+                        for snaks in block["snaks"].values()
+                        for snak in snaks
+                    ),
+                ]
+                for snak in snaks:
+                    if snak.get("datatype") == "string" and snak.get(
+                        "datavalue"
+                    ):
+                        value = snak["datavalue"]["value"]
+                        snak["datavalue"]["value"] = unicodedata.normalize(
+                            "NFC", value
+                        )
+                # an instance hashes every reference block it stores
                 for block in statement.get("references", []):
                     block.setdefault(
                         "hash",
@@ -2866,7 +2894,8 @@ class TestWriterPlaces:
     it: the statement keeps every locator and excerpt, beside the run's
     block (rules 1 and 2, ADR-0003). A re-run adds nothing, and no block
     is changed or removed (rule 3). The instance serves every read as a
-    copy (DetachedItems), so the blocks compared are those it stores."""
+    copy of what it stores, its string snaks in NFC (DetachedItems), so
+    the blocks a claim's block is compared with are in the stored form."""
 
     @pytest.mark.parametrize(
         ("first", "second"), PLACES.values(), ids=PLACES.keys()
@@ -2907,6 +2936,30 @@ class TestWriterPlaces:
             0,
             1,
         )
+
+    def test_a_page_the_instance_stores_in_nfc_is_found_again(self):
+        # (here) the margin note is on the certificate's back, a page its
+        # extraction names in decomposed form (NFD); the instance stores a
+        # page number in NFC, which is the form the writer sends it in
+        back = unicodedata.normalize("NFD", "Rückseite")
+        stored = unicodedata.normalize("NFC", back)
+        assert back != stored
+        note = {"page_number": back, "transcription_excerpt": _excerpt(MARGIN)}
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        batch = _births(note, note)
+
+        first = BatchWriter(wiki).write_batch(batch)
+
+        sebastian = first.created_items["e01"]
+        (born,) = _statements(wiki, sebastian, "date_of_birth")
+        assert _places(born) == [("Q23", stored, None, MARGIN)]
+        assert _sources(born) == [(["Q23"], []), ([], [first.run_qid])]
+        assert (first.written, first.referenced, first.skipped) == (1, 0, 1)
+        # and a re-run finds the place there
+        before = _snapshot(wiki, sebastian)
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
+        assert _snapshot(wiki, sebastian) == before
 
     @pytest.mark.parametrize(
         "run", [RUN, LATER_RUN], ids=["same run", "later run"]

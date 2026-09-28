@@ -50,7 +50,10 @@ Per batch, the writer:
    place where one source asserts the value (R2 records who asserts a
    fact, and where, not just the fact). The claim's source block,
    `stated in` with its page number, region and excerpt, is compared
-   whole with the statement's reference blocks:
+   whole with the statement's reference blocks as the instance stores
+   them. So its page number and region are sent in Unicode NFC, the
+   form the instance stores a string in (it stores monolingual text,
+   such as the excerpt, as sent):
    * the statement already carries that block: the claim is skipped
      (safe re-run);
    * otherwise the claim's blocks are APPENDED to the statement, each
@@ -59,11 +62,12 @@ Per batch, the writer:
      again. The same artifact under another page, region or excerpt
      thus adds a block of its own beside the first, as another artifact
      does. No block the statement carries is changed or removed.
-   A curated statement (one with no extraction-run reference, or whose
-   rank a curator changed) is compared by artifact alone: the claim is
-   skipped when any of the statement's blocks cites the claim's
-   artifact, under whatever locator, and otherwise its blocks are
-   appended as above. Same value but different qualifiers is a
+   A curated statement, one with no extraction-run reference (a
+   curator's own write, until a machine claim's blocks join it) or
+   whose rank a curator changed, is compared by artifact alone: the
+   claim is skipped when any of the statement's blocks cites the
+   claim's artifact, under whatever locator, and otherwise its blocks
+   are appended as above. Same value but different qualifiers is a
    different assertion and coexists as its own statement (ADR-0002);
 5. after the claims, records what the batch says of every item that
    existed before it and that one of its claims mentions: the kind and
@@ -220,6 +224,16 @@ def normalized_type_hint(text: str) -> str:
     compatibility forms, letter case and runs of whitespace do not
     make two hints different."""
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def _stored_string(text: str) -> str:
+    """`text` in the form the instance stores a `string` snak in: Unicode
+    NFC, to which Wikibase normalizes a string value it is sent (it
+    stores monolingual text, such as an excerpt, as sent). A reference
+    block's page number and region are sent in this form, so that the
+    block the writer builds for a claim is equal to the block the
+    instance gives back for it (step 4 of the module docstring)."""
+    return unicodedata.normalize("NFC", text)
 
 
 class BatchWriter:
@@ -528,14 +542,16 @@ class BatchWriter:
             source_ref.add(
                 String(
                     prop_nr=self.properties["page_number"],
-                    value=claim.source.page_number,
+                    value=_stored_string(claim.source.page_number),
                 )
             )
         if claim is not None and claim.source.region:
             source_ref.add(
                 String(
                     prop_nr=self.properties["relative_position_within_image"],
-                    value=claim.source.region.as_wikibase_string(),
+                    value=_stored_string(
+                        claim.source.region.as_wikibase_string()
+                    ),
                 )
             )
         if claim is not None and claim.source.transcription_excerpt:

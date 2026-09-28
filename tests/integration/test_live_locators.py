@@ -2,12 +2,16 @@
 (#335; ADR-0003, docs/MODELING.md "Reference pattern").
 
 A fictional fixture writes one person's birth as one source gives it
-twice, on its first page and on its second, each with an excerpt of its
+twice, on its first page and on its back, each with an excerpt of its
 own, and reads the statement back through the API:
 
 * the person has one date-of-birth statement, and it carries a reference
   block for each page, each with its page number and excerpt, and the
   run's block once (rules 1 and 2);
+* the back's page number, given in decomposed form (NFD), is stored in
+  NFC, the form the writer sends a string in, and the note's words, also
+  given in NFD, are stored as sent: Wikibase normalizes a string value
+  to NFC and keeps monolingual text as it is sent;
 * writing the batch again adds nothing, and nor does a later run's batch
   that finds the same two places: not even that run's block.
 
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -42,10 +47,13 @@ PERSON = {
 }
 # the source gives the person's birth twice, in the words of the 1905
 # marriage certificate: in the particulars on its first page, and (here)
-# in the registrar's note on its second
+# in the registrar's note on its back, whose page number and words are
+# given in decomposed form (NFD)
+FRONT = "1"
+BACK = unicodedata.normalize("NFD", "Rückseite")
 EXCERPTS = {
-    "1": "geboren am 15. Februar 1862 zu Flörburg",
-    "2": "geb. 15.2.1862 in Flörburg",
+    FRONT: "geboren am 15. Februar 1862 zu Flörburg",
+    BACK: unicodedata.normalize("NFD", "geb. 15.2.1862 in Flörburg"),
 }
 # the fixture's run, and a later one that finds the same places
 RUNS = ("2026-09-28T09:00:00Z", "2026-09-28T10:00:00Z")
@@ -76,9 +84,9 @@ def fixture_batch(artifact: ArtifactRef, started_at: str) -> ClaimBatch:
     version of the fixture with other claims would otherwise write onto an
     earlier version's person and see its statements beside its own. The
     writer's source is hashed too, so that each version of the writer
-    meets the fixture as a first write does: one that drops the second
-    page's block (a mutant of the harness, say) cannot pass by finding the
-    block an earlier version wrote. A re-run of one version finds its own
+    meets the fixture as a first write does: one that drops the back's
+    block (a mutant of the harness, say) cannot pass by finding the block
+    an earlier version wrote. A re-run of one version finds its own
     person again, and a run started at the same time its own run item."""
     claims = [claim(artifact, page) for page in EXCERPTS]
     content = [
@@ -161,7 +169,7 @@ def blocks(client, statement: dict) -> list[dict]:
 
 def test_each_page_is_a_reference_block_of_its_own(client, fixture_graph):
     registered, written = fixture_graph
-    # the first write of this version adds the second page's block to the
+    # the first write of this version adds the back's block to the
     # statement the first page's claim wrote; a later session's write
     # finds both there
     assert (written.written, written.referenced, written.skipped) in (
@@ -173,17 +181,19 @@ def test_each_page_is_a_reference_block_of_its_own(client, fixture_graph):
         "+1862-02-15T00:00:00Z"
     )
     assert born["rank"] == "normal"
+    # the back's page number is stored in NFC, its excerpt as sent
+    assert unicodedata.normalize("NFC", BACK) != BACK
     assert blocks(client, born) == [
         {
             "stated_in": [registered.qid],
-            "page_number": ["1"],
-            "transcription_excerpt": [EXCERPTS["1"]],
+            "page_number": [FRONT],
+            "transcription_excerpt": [EXCERPTS[FRONT]],
         },
         {"inferred_from_extraction_run": [written.run_qid]},
         {
             "stated_in": [registered.qid],
-            "page_number": ["2"],
-            "transcription_excerpt": [EXCERPTS["2"]],
+            "page_number": [unicodedata.normalize("NFC", BACK)],
+            "transcription_excerpt": [EXCERPTS[BACK]],
         },
     ]
 
