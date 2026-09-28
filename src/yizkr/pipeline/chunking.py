@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from yizkr.claims import ArtifactRef, ClaimBatch, EntityRecord, load_vocabulary
 from yizkr.pipeline.extract import (
     cite_artifact,
+    claim_schema_prompt_text,
     entity_kind_prompt_lines,
     run_metadata,
     salvage_valid_claims,
@@ -1023,7 +1024,7 @@ class ChunkedClaimExtractor:
             property_keys=property_keys,
             item_keys=item_keys,
             assignment_block=assignment_block,
-            schema=json.dumps(ClaimBatch.model_json_schema(), indent=2),
+            schema=claim_schema_prompt_text(),
             document_block=self._document_block(
                 transcription, artifact_qid, inline_document
             ),

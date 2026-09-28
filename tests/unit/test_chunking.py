@@ -30,6 +30,7 @@ from yizkr.pipeline.chunking import (
     prefix_local_ids,
     unit_text,
 )
+from yizkr.pipeline.extract import LlmClaimExtractor
 from yizkr.pipeline.llm import ConversationChanged
 from yizkr.pipeline.orchestrate import FAILED
 from yizkr.pipeline.rundir import NEEDS_ATTENTION, StageState, run_state
@@ -2140,3 +2141,79 @@ class TestExtractFalseRule:
         stated, pointer = comment.split(" The entity-manifest prompt ", 1)
         assert stated == rule
         assert "ENTITY_MANIFEST_PROMPT" in pointer
+
+
+class TestTheClaimSchemaInPrompts:
+    """Each claim line must match the "Claim" definition of the claim JSON
+    Schema, so every prompt that asks for claims carries the whole schema.
+    Building it costs milliseconds and a document can have a hundred
+    chunks, so every prompt carries one text, built once (#254)."""
+
+    SCHEMA = json.dumps(ClaimBatch.model_json_schema(), indent=2)
+
+    def chunk_prompts(self, tier: str, tmp_path) -> list[str]:
+        """The chunk prompts of an extraction on the entity-first tier (two
+        chunks) or on the line-range tier it falls back to (one chunk)."""
+        if tier == "entity":
+            answers = [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Hildegard", 1876)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+            ]
+            budget = LINE_LENGTH
+        else:
+            answers = [
+                "no manifest here",
+                json.dumps({"entities": [{"id": "x"}]}),
+                segmentation_json(),
+                ndjson([claim("p1", "Hildegard Löbig", 1876)]),
+            ]
+            budget = 10_000
+        llm = ScriptedLlm(answers)
+        ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=budget
+        ).extract(transcription(), DOC_REF, artifact_qid="Q23")
+        return [prompt for method, prompt in llm.calls if method == "fork"]
+
+    @pytest.mark.parametrize(
+        "tier, chunks", [("entity", 2), ("line", 1)], ids=["entity", "line"]
+    )
+    def test_every_chunk_prompt_carries_the_schema(
+        self, tmp_path, tier, chunks
+    ):
+        prompts = self.chunk_prompts(tier, tmp_path)
+        assert len(prompts) == chunks
+        assert all(self.SCHEMA in prompt for prompt in prompts)
+
+    def test_the_single_call_prompt_carries_it_too(self):
+        llm = ScriptedLlm([ndjson([claim("p1", "Hildegard Löbig", 1876)])])
+        LlmClaimExtractor(llm).extract(
+            transcription(), DOC_REF, artifact_qid="Q23"
+        )
+        ((method, prompt),) = llm.calls
+        assert method == "complete" and self.SCHEMA in prompt
+
+    def test_it_is_built_at_most_once(self, tmp_path, monkeypatch):
+        """At most: an earlier test may have built it already. Each kind
+        of prompt is asked twice, so a prompt that built its own schema
+        would build it at least twice."""
+        builds = []
+        real_build = ClaimBatch.model_json_schema
+
+        def build(cls, *args, **kwargs):
+            builds.append(cls)
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(
+            ClaimBatch, "model_json_schema", classmethod(build)
+        )
+        prompts = self.chunk_prompts("entity", tmp_path)
+        for _ in range(2):
+            llm = ScriptedLlm([ndjson([claim("p1", "Hildegard Löbig", 1876)])])
+            LlmClaimExtractor(llm).extract(
+                transcription(), DOC_REF, artifact_qid="Q23"
+            )
+            prompts.append(llm.calls[0][1])
+        assert len(prompts) == 4
+        assert all(self.SCHEMA in prompt for prompt in prompts)
+        assert len(builds) <= 1

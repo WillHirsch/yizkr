@@ -26,7 +26,8 @@ From them it builds a summary (RunMonitor.summary):
 * the documents that failed in the latest invocation, by kind and reason;
 * the latest alerts, tagged new or carried;
 * the state of each slice (the run, each stage, each document kind):
-  active, paused or aborted, with the request that stopped it.
+  active, paused or aborted, with the request that stopped it, or unknown
+  while control.jsonl cannot be read.
 
 It shows the summary in two views: a terminal view refreshed in place,
 in plain ANSI (`watch`), and a status page, index.html in the `status`
@@ -52,8 +53,10 @@ From the terminal view the operator asks for a pause, resume or abort of
 the run or of one slice; the monitor appends the request to
 control.jsonl through RunDir.request, and the driver honours it. The
 monitor reads control.jsonl as the driver does (rundir's reader and
-fold), so a slice it shows as stopped is one the driver stops. It writes
-nothing else but the status page.
+fold), so a slice it shows as stopped is one the driver stops; while the
+file itself cannot be read, by the driver either, every slice's state is
+unknown, and the file is tried again at every refresh. It writes nothing
+else but the status page.
 
 Reading is incremental: each refresh parses only the lines appended to
 events.jsonl and alerts.jsonl since the last one, and a line not yet
@@ -148,10 +151,14 @@ OTHER = "other"
 # so does a replay of a conversation's opening turn
 _ENGINE_EVENTS = ("cache-miss", "cache-replay")
 
-# slice states
+# slice states: every slice's is unknown while the control file cannot be
+# read, by the driver either
 ACTIVE = "active"
 PAUSED = "paused"
 ABORTED = "aborted"
+UNKNOWN = "unknown"
+# why a slice's state cannot be told, as the views and the commands say it
+CONTROL_UNREADABLE = "the control file cannot be read"
 
 # the status page reloads itself this often (seconds), and is written at
 # most this often while events arrive, and at least this often otherwise
@@ -548,7 +555,9 @@ class AlertLine:
 @dataclass(frozen=True)
 class SliceState:
     """A slice ('run', 'stage:<name>' or 'kind:<name>') and whether the
-    control file stops it, since when, and who stopped it and why."""
+    control file stops it, since when, and who stopped it and why. Its
+    state is active, paused or aborted, or unknown, with nothing more,
+    while the control file cannot be read."""
 
     scope: str
     state: str
@@ -638,6 +647,9 @@ class Summary:
     alert_counts: Counter = field(default_factory=Counter)
     alert_checks: Counter = field(default_factory=Counter)
     slices: list[SliceState] = field(default_factory=list)
+    # the control file could not be read at the latest refresh, by the
+    # driver either: every slice's state is unknown
+    control_unreadable: bool = False
     # the slices the plan and the events know, as requests name them
     known_scopes: set[str] = field(default_factory=set)
     set_aside: int = 0
@@ -650,10 +662,15 @@ class Summary:
         raise KeyError(name)
 
     def slice(self, scope: str) -> SliceState:
+        """`scope`'s state as the slices give it; a scope they do not list
+        is one no current request names: active, or unknown while the
+        control file cannot be read."""
         for state in self.slices:
             if state.scope == scope:
                 return state
-        return SliceState(scope, ACTIVE)
+        return SliceState(
+            scope, UNKNOWN if self.control_unreadable else ACTIVE
+        )
 
 
 # -- following a run ----------------------------------------------------------
@@ -814,8 +831,9 @@ class RunMonitor:
     def _reset(self) -> None:
         self._events = _Tail(self.path / EVENTS)
         self._alerts = _Tail(self.path / ALERTS)
-        self._control_key: tuple | None = None
-        self._requests: list[dict] = []
+        # the control file's requests as the latest refresh read them: None
+        # while the file cannot be read
+        self._requests: list[dict] | None = []
         self._control_skipped = 0
         self._manifest_key: tuple | None = None
         self._manifest: dict = {}
@@ -899,26 +917,24 @@ class RunMonitor:
         return manifest
 
     def _read_control(self) -> bool:
-        """control.jsonl, as the driver reads it (rundir's reader), when it
-        has changed; whether it had. A request the driver's fold does not
+        """control.jsonl, read whole at every refresh as the driver reads it
+        (rundir's reader) before each stage it dispatches; whether the
+        requests it gives changed. A request the driver's fold does not
         take as it is written (_foldable) is left out and counted as
-        skipped."""
-        path = self.path / CONTROL
+        skipped.
+
+        When the file itself cannot be read, the driver cannot read it
+        either (RunDir.control raises), so its requests are unknown (None),
+        not the last ones read, and so is every slice's state, until a
+        refresh reads the file again. A change of its mode or owner shows
+        in no size or modification time, which is why every refresh reads
+        it."""
         try:
-            status = os.stat(path)
-            key = (status.st_ino, status.st_size, status.st_mtime_ns)
-        except OSError:
-            key = None
-        if key == self._control_key:
-            return False
-        try:
-            requests = read_jsonl(path) if key is not None else []
+            requests = read_jsonl(self.path / CONTROL)
         except (OSError, ValueError):
-            # the file itself cannot be read, by the driver either: tried
-            # again next time
-            self._control_skipped = 1
-            return False
-        self._control_key = key
+            changed = self._requests is not None
+            self._requests, self._control_skipped = None, 0
+            return changed
         kept = [request for request in requests if _foldable(request)]
         self._control_skipped = len(requests) - len(kept)
         changed = kept != self._requests
@@ -1153,6 +1169,7 @@ class RunMonitor:
         summary.skipped_lines = (
             self._events.skipped + self._alerts.skipped + self._control_skipped
         )
+        summary.control_unreadable = self._requests is None
         summary.last_event_at = self._last_event_at
         summary.set_aside = self._set_aside
         if not summary.found:
@@ -1424,22 +1441,28 @@ class RunMonitor:
         invocation's start marker finds since when each stopped scope has
         been stopped, and who stopped it and why: a pause stops a scope
         until a resume, and another pause meanwhile gives a new reason, not
-        a new start; an abort stops it for good."""
-        state = fold_control(self._requests).scopes
+        a new start; an abort stops it for good. While the control file
+        cannot be read, every slice the run knows is unknown."""
+        scopes: dict[str, None] = {"run": None}
+        scopes.update(dict.fromkeys(f"stage:{stage}" for stage in stages))
+        scopes.update(dict.fromkeys(f"kind:{kind}" for kind in kinds))
+        requests = self._requests
+        if requests is None:
+            return [
+                SliceState(_scope_shown(scope), UNKNOWN) for scope in scopes
+            ]
+        state = fold_control(requests).scopes
         start = max(
             (
                 index
-                for index, request in enumerate(self._requests)
+                for index, request in enumerate(requests)
                 if request.get("action") == "start"
             ),
             default=-1,
         )
-        scopes: dict[str, None] = {"run": None}
-        scopes.update(dict.fromkeys(f"stage:{stage}" for stage in stages))
-        scopes.update(dict.fromkeys(f"kind:{kind}" for kind in kinds))
         stopped: dict[str, str] = {}
         causes: dict[str, tuple] = {}
-        for request in self._requests[start + 1 :]:
+        for request in requests[start + 1 :]:
             scope = request.get("scope") or "run"
             scopes.setdefault(scope)
             if stopped.get(scope) == ABORTED:
@@ -1571,7 +1594,9 @@ def _header(summary: Summary) -> list[tuple[str, str]]:
         title += ")"
     state = summary.state + (f": {summary.reason}" if summary.reason else "")
     run = summary.slice("run")
-    if run.state != ACTIVE:
+    if run.state == UNKNOWN:
+        state += "; run state unknown"
+    elif run.state != ACTIVE:
         state += f"; run {run.state}"
     parts = [state]
     if summary.invocations:
@@ -1793,6 +1818,11 @@ def _in_flight_rows(summary: Summary, limit: int) -> list[tuple[str, str]]:
 
 
 def _slice_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
+    """The stopped slices, one per line, and the active ones in one; or,
+    while the control file cannot be read, one line that says every
+    slice's state is unknown."""
+    if summary.control_unreadable:
+        return [(f"slices     state unknown: {CONTROL_UNREADABLE}", "warn")]
     stopped = [item for item in summary.slices if item.state != ACTIVE]
     active = [item.scope for item in summary.slices if item.state == ACTIVE]
     if not stopped:
@@ -2062,6 +2092,10 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
         parts.append('<p class="muted">Nothing is running.</p>')
 
     parts.append("<h2>Slices</h2>")
+    if summary.control_unreadable:
+        parts.append(
+            f'<p class="warn">State unknown: {_e(CONTROL_UNREADABLE)}.</p>'
+        )
     parts.append(
         _table(
             ["slice", "state", "since", "by", "reason"],
@@ -2372,7 +2406,7 @@ def state_now(path: Path | str, scope: str) -> str:
     that it cannot be told when the file cannot be read."""
     state = _control_state(Path(path))
     if state is None:
-        return "its state unknown: the control file cannot be read"
+        return f"its state unknown: {CONTROL_UNREADABLE}"
     return f"now {state.get(scope, ACTIVE)}"
 
 

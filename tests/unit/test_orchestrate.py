@@ -2038,16 +2038,16 @@ class TestUnrecordedDirectory:
             raise error
 
         orchestrator = make_run(tmp_path)
-        monkeypatch.setattr(orchestrate.Derivations, "begin", refuse)
-        if isinstance(error, KeyboardInterrupt):
-            with pytest.raises(KeyboardInterrupt):
-                orchestrator.run()
-        else:
-            assert orchestrator.run() == 1
-        (doc,) = orchestrator.documents()
-        assert not doc.state_path.exists()
-        assert not doc.unrecorded
-        monkeypatch.undo()
+        with monkeypatch.context() as patch:
+            patch.setattr(orchestrate.Derivations, "begin", refuse)
+            if isinstance(error, KeyboardInterrupt):
+                with pytest.raises(KeyboardInterrupt):
+                    orchestrator.run()
+            else:
+                assert orchestrator.run() == 1
+            (doc,) = orchestrator.documents()
+            assert not doc.state_path.exists()
+            assert not doc.unrecorded
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES
