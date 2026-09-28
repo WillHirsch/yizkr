@@ -24,6 +24,17 @@ SOURCES = {source.key: source for source in u.SOURCES}
 
 PERSECUTION_KINDS = ("event", "imprisonment", "release", "deportation")
 
+# Kinship words in the universe's two languages, to spot a kinship term
+# inside an appellation (ADR-0018).
+KINSHIP_WORDS = {
+    "aunt", "brother", "cousin", "dad", "daughter", "father", "grandfather",
+    "grandma", "grandmother", "grandpa", "husband", "mama", "mother", "mum",
+    "nana", "nephew", "niece", "papa", "sister", "son", "uncle", "wife",
+    "bruder", "großmutter", "großvater", "mutter", "mutti", "neffe",
+    "nichte", "oma", "onkel", "opa", "schwester", "sohn", "tante",
+    "tochter", "vater", "vati", "vetter",
+}  # fmt: skip
+
 
 def values(subject: str, prop: str) -> list:
     return [assertion.value for assertion in u.about(subject, prop)]
@@ -214,14 +225,38 @@ class TestNames:
             for a in u.ASSERTIONS
             if a.property in kin and "maisie-cutmore" in (a.subject, a.value)
         ]
-        # the same source's literal kinship term is a relation
+        # the same source's literal kinship term is a relation, with the
+        # aunt as subject and the ego who calls her so as object
         (aunt,) = [
             a
-            for a in u.about("nicholas-lobig", "relative")
-            if a.value == "klara-loebig"
+            for a in u.about("klara-loebig", "relative")
+            if a.value == "nicholas-lobig"
         ]
         assert aunt.source == called.source
         assert dict(aunt.qualifiers) == {"kinship_type": "aunt"}
+
+    def test_a_kinship_term_is_never_an_appellation(self):
+        # ADR-0018 Ruling 2: a literal kinship term is recorded as the
+        # kinship (`relative` + `kinship_type`, or an ADR-0014 primitive
+        # such as `father`), and `referred_to_as` is kept for appellations
+        # that are not kinship.  A kinship word in one makes it a courtesy
+        # title: the referent is no relation of the ego.
+        edges = {"father", "mother", "child", "sibling", "spouse", "relative"}
+        related = {
+            frozenset((a.subject, a.value))
+            for a in u.ASSERTIONS
+            if a.property in edges
+        }
+        appellations = [
+            a for a in u.ASSERTIONS if a.property == "referred_to_as"
+        ]
+        courtesy = []
+        for a in appellations:
+            if set(re.findall(r"\w+", a.value.lower())) & KINSHIP_WORDS:
+                ego = dict(a.qualifiers).get("perspective")
+                assert frozenset((a.subject, ego)) not in related, a
+                courtesy.append(a.value)
+        assert courtesy == ["Nana Maisie"]
 
 
 class TestFamily:
@@ -238,6 +273,49 @@ class TestFamily:
                 child = PEOPLE[assertion.subject]
                 parent = PEOPLE[assertion.value]
                 assert child.generation == parent.generation + 1, assertion
+
+    def test_kinship_terms_run_from_the_referent_to_the_ego(self):
+        # ADR-0018: `relative` + `kinship_type` has the referent as subject
+        # and the ego as object, so the term is what the subject is to the
+        # object.  The universe's parent edges bear out each one.
+        parents: dict[str, set[str]] = {}
+        for a in u.ASSERTIONS:
+            if a.property in {"father", "mother"}:
+                parents.setdefault(a.subject, set()).add(a.value)
+
+        def children(of: set[str]) -> set[str]:
+            return {key for key, theirs in parents.items() if theirs & of}
+
+        def aunts_and_uncles(ego: str) -> set[str]:
+            mine = parents.get(ego, set())
+            grandparents = set().union(*(parents.get(p, set()) for p in mine))
+            return children(grandparents) - mine
+
+        derived = {
+            "aunt": lambda ego: {
+                key
+                for key in aunts_and_uncles(ego)
+                if PEOPLE[key].sex == "female"
+            },
+            "cousin": lambda ego: children(aunts_and_uncles(ego)),
+        }
+        kinship = [a for a in u.ASSERTIONS if a.property == "relative"]
+        assert kinship
+        for assertion in kinship:
+            term = dict(assertion.qualifiers)["kinship_type"]
+            assert assertion.subject in derived[term](assertion.value), (
+                assertion
+            )
+        # a cousin is a cousin both ways, so pin who each term names: the
+        # subject is the referent ("Aunt Pünktchen" is Klara, "Dad's cousin
+        # Leopold" is Leopold) and the object is the ego
+        assert {
+            (a.subject, a.value, dict(a.qualifiers)["kinship_type"])
+            for a in kinship
+        } == {
+            ("klara-loebig", "nicholas-lobig", "aunt"),
+            ("leopold-loebig", "gustav-loebig", "cousin"),
+        }
 
     def test_spouses_in_three_generations(self):
         couples = {

@@ -60,54 +60,64 @@ never auto-confirmed and no claim reaches the graph without an explicit
 
 **Reading a run.** Each document prints a status — `awaiting equivalences
 review` (Gate 1), `awaiting claim review` (Gate 2), `written` (done),
-`held: unrecorded outputs` (a directory from before the stage store; see
-below), or `failed` (errored; just re-run to retry). The exit code
-summarises the batch: `0` all written, `2` something awaits you, `1`
-something failed. Re-running is always safe: finished work is skipped, and
-a corrected upstream file re-does only what depends on it (make-style, by
-content hash; modification times are read only once, when
-`--rederive-unrecorded` adopts a document directory that has no
-`derivations.json`, as docs/STAGE_STORE.md describes).
+`paused` (the run's control file held one of its stages), or `failed`
+(errored; just re-run to retry). The exit code summarises the batch: `0`
+all written, `2` something awaits you, `1` something failed. Re-running
+is always safe: finished work is skipped, and a corrected upstream file
+re-does only what depends on it (make-style, by content hash;
+modification times are never read).
 
 A transcription that fails the transcription check (below), such as a
 tool-failure message or a refusal instead of the page's text, fails its
 document the same way: the reason is recorded as the `error` in the
-document's `state.json` and in the transcription stage's failure log, no
-transcription is stored, and the next run transcribes the document
-again. The check runs when the vision or text-file method computes a
-transcription. Slide text from a deck and a curator's correction are
-computed, stored and reused without it. A vision or text-file
-transcription the stage store reuses passed the check as it stood when
-it was made, and is not checked again. `--recompute transcription`
-transcribes the run's documents again, which checks the vision and
-text-file ones.
+document's `state.json` and in the run's events, and no transcription is
+kept. The check runs on every vision and text-file transcription a run
+makes, whether its answer comes from the engine or from the LLM cache,
+and again on every one it reuses (below), so a stricter check applies to
+every transcription, the stored ones included. A stored transcription
+it now fails is moved aside as `transcription.superseded-<n>.json`, with
+a `set-aside` event, and made again in the same run. An answer the cache
+kept that fails it is rejected in the cache and asked for once more in
+the same run, as the engine would have been asked without the cache; an
+answer of the engine's that fails it fails the document, and the next
+run asks again. Slide text from a deck and a curator's correction are
+not checked.
 
-Every stage before the gates reads and writes through the stage store
-(`var/stages`, `--store`): each output is keyed by its input content and
-everything that shapes it, so a re-run reuses what is unchanged and
-recomputes only what a change reaches; `--recompute <stage>` forces one.
-State for each document lives in `var/runs/<folder>/<doc>/`: plain-file
-views of the stage outputs (`transcription.json`, `batch.json`,
-`critique.json`) and the files the later steps derive from them. To correct
-a transcription, save the corrected text as `transcription.corrected.txt`
+State for each document lives in `var/runs/<folder>/<doc>/`: its views
+(`transcription.json`, `batch.json`, `critique.json`, and the extractor's
+coverage, rejects and gaps under `extraction/`) and the files the later
+steps derive from them. A view persists and is reused while the inputs it
+was made from are unchanged (the transcription is made from the source,
+or a curator's correction; the batch from the transcription's content;
+the critique from the batch's), so a re-run asks the engine nothing for a
+document that has not changed, with or without a cache. A change to a
+prompt, a model or the code does not make a view stale by itself (the
+transcription check aside, above): `--refresh ROLE` makes a role's views
+again, in place, and a scratch run starts from fresh state directories.
+The model calls a view is made with go through the LLM cache
+(`var/llm-cache`, `--cache`; ADR-0032): a call made before with the same
+key (built from what the call sends: its prompt
+text, the files it reads, and the engine, model, effort and configuration)
+is answered from the cache, while parsing, merging and the transcription
+check run whenever the view is made. So a fix to them costs no model call,
+and a change to a prompt, a model or anything else a call sends asks the
+engine again for exactly the calls it changes. `--epoch ROLE=N` samples a
+role afresh under new keys (with `--refresh`, for views that stand), and
+`--no-cache` runs without the cache: views are reused all the same, and a
+view made again calls the engine for everything. To correct a
+transcription, save the corrected text as `transcription.corrected.txt`
 there. `var/runs/<folder>/` is also the run directory, with an event for
-every stage reuse, store and failure. Every document directory the run
-makes has a `derivations.json` from its first run. One from before the
-stage store (a `state.json` or stage outputs such as `batch.json`, but no
-`derivations.json`) is **held**, whatever the shared store holds: deriving
-its stages again would call the engine and, if the batch came out
-different, move its reviewed CSVs aside. Nothing in it changes but its
-`state.json`, which records the hold; the run also says so in an event and
-an alert, and exits `2`. Pass `--rederive-unrecorded` to derive such
-documents again: it first keeps a copy of each stage output
-(`batch.superseded-<n>.json` and so on). A document whose source bytes
-changed is a different artifact (ADR-0010), so it is not held: its
-directory, recorded or not, is moved aside whole as
-`.<doc>.superseded-<n>`, with nothing in it deleted, and the new bytes are
-ingested in a fresh one. See
-[docs/STAGE_STORE.md](../../../docs/STAGE_STORE.md) for keys, reuse, the
-stage-version registry (`yizkr stages check`), the run directory, these
-held directories and changed sources.
+every stage started, done, reused or failed and every answer the cache
+gives or cannot give; `yizkr stages state var/runs/<folder>` sums them up.
+Every document directory the run makes has a `derivations.json` from its
+first run. A directory without one (from before the records, or one that
+lost its record), one whose views have lost their `state.json`, and one
+whose document's source bytes changed (a different artifact, ADR-0010),
+is moved aside whole as `.<doc>.superseded-<n>`, with nothing in it
+deleted, and the document is ingested afresh in a new one. See
+[docs/LLM_CACHE.md](../../../docs/LLM_CACHE.md) for the views, keys,
+rejection, forks, the switches, the run directory and these set-aside
+directories.
 GEDCOM (`.ged`) files take a deterministic adapter in place of
 transcribe/extract; the gates, resolve, and write are identical.
 
@@ -135,8 +145,12 @@ The machine that runs `ingest run` needs, besides the stack in `deploy/`:
   them with `pdfinfo`. Install it with
   `sudo apt-get install poppler-utils` (Debian/Ubuntu) or
   `brew install poppler` (macOS), and check it with `pdftoppm -v`.
-  Without it, transcribing a PDF by vision fails at once with that
-  instruction, before any engine call. Images need no renderer.
+  Without it, `ingest run` refuses to start when the folder holds a
+  PDF, with that instruction, before any document is touched: it checks
+  once per run, since a PDF needs the renderer even when its
+  transcription comes from the LLM cache, and `pdfinfo` even when its
+  transcription is a view the run reuses and checks again. Images need
+  no renderer.
 
 ## The corpus and the never-ingest list
 
@@ -180,9 +194,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
   before anything uses it, in `ingest run` and `ingest transcribe`
   alike; slide text and a curator's correction are not checked. It is
   `yizkr.pipeline.transcription_check`, a step with its own version,
-  apart from the transcription's: changing the check never forces
-  transcriptions to be redone, and re-checks none the stage store holds
-  (docs/STAGE_STORE.md). It fails the document when the output
+  apart from the transcription's. It runs on every transcription a run
+  makes, from the engine or the LLM cache, and on every transcription
+  view a run reuses, so a changed check applies to every transcription
+  without asking the engine again for one it passes. A stored view it
+  now fails is moved aside and made again, and a cached answer it fails
+  is rejected in the cache and asked for once more (docs/LLM_CACHE.md).
+  It fails the document when the output
   matches a tool-failure or refusal signature (the PDF renderer missing,
   a CLI or API error, "I can't transcribe this document"), or when a
   document of two or more pages yields fewer than 3 letters or digits per
@@ -263,15 +281,16 @@ that gap:
   and prior run). You review the proposals like an equivalences CSV;
   approved pairs are executed by you — a wiki item merge, or a referenced
   `said to be the same as` statement (identity of two existing items is a
-  contestable judgement, ADR-0007). This is how "the Donald from the census"
-  and "the Donald from the letter" become one item under the default flow:
-  run it **after** a folder ingest to consolidate cross-artifact duplicates.
+  contestable judgement, ADR-0007). This is how "the Gustav from the birth
+  register" and "the Gustav from the naturalisation" become one item under
+  the default flow: run it **after** a folder ingest to consolidate
+  cross-artifact duplicates.
 
 - **`yizkr ingest run --serial`** (ADR-0019) — processes artifacts one at a
   time, most-connective first (a greedy overlap of their entity names, so a
   family tree or GEDCOM leads), each **fully written before the next
-  reconciles**. A later artifact's "Donald" then matches the earlier,
-  already-rich "Donald Bennett Hirsch" at its *own* Gate 1 — resolved once,
+  reconciles**. A later artifact's "Gustav" then matches the earlier,
+  already-rich "Gustav Löbig" at its *own* Gate 1 — resolved once,
   in context, with no duplicate to merge later. This removes the routine
   need for `reconcile-graph`; keep that command for occasional cleanup
   (pre-existing dups, cross-run dups, and within-artifact dups the
@@ -459,9 +478,11 @@ Two Anthropic-backed providers, differing in how usage is billed:
   The client's `effective_config` lists what the engine sets for a call:
   the flags (the pinned settings among them), the working directory, the
   variables it sets and the names of the variables passed, never their
-  values. `config_hash` fingerprints it for the run record. It follows
-  the working directory, and so `TMPDIR`, but not the login, the
-  server's account data, managed settings or the machine.
+  values. `config_hash` fingerprints it for the run record and for the
+  LLM cache's keys (ADR-0032). It follows the working directory, and so
+  `TMPDIR`, but not the login, the server's account data, managed
+  settings or the machine: a run with another `TMPDIR` asks the engine
+  again, and a change the server makes is not seen by the cache.
 
   **Transcripts.** The CLI stores each session under
   `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`); sessions

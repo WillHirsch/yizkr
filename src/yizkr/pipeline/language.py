@@ -1,11 +1,12 @@
 """Per-document language detection for transcriptions.
 
 `yizkr ingest run` walks a whole folder, but a family archive mixes
-languages — German scans beside English memoirs beside a Spanish emigre
-letter. A single run-wide ``--language`` therefore mis-tags every
-document that isn't in that language, and the tag is real graph data: it
-is the BCP-47 language of the ``transcription_excerpt`` monolingual
-values written as references (ADR-0003).
+languages — German register entries and letters beside English
+naturalisation papers and interviews. A single run-wide ``--language``
+therefore mis-tags every document that isn't in that language, and the
+tag is real graph data: it is the BCP-47 language of the
+``transcription_excerpt`` monolingual values written as references
+(ADR-0003).
 
 So ``--language`` defaults to ``auto``: each document's language is
 detected from its *full* transcription text — offline and
@@ -17,8 +18,9 @@ short or ambiguous to identify with confidence fall back to
 (rule 5), only defaulted to a code the curator chose.
 
 The extraction model still tags each *excerpt* in its own language (a
-German quote inside an English memoir keeps its ``de`` tag); this module
-sets the document-level default the model is hinted with, not a ceiling.
+German phrase quoted in an English interview keeps its ``de`` tag); this
+module sets the document-level default the model is hinted with, not a
+ceiling.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ AUTO = "auto"
 LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(-[a-z0-9-]+)?$")
 
 # Full-document text identifies at ~1.0 (see tests); the floor only bites on
-# very short inputs — a one-line receipt, a bare name — where a wrong guess
+# very short inputs — a postmark, a bare name — where a wrong guess
 # is worse than an honest fallback.
 CONFIDENCE_FLOOR = 0.5
 

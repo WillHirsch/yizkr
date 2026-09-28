@@ -6,7 +6,8 @@
     yizkr claims           claim-contract utilities (JSON schema, validate)
     yizkr ingest <step>    pipeline steps; every step reads/writes plain
                            files so runs pause for review and resume
-    yizkr stages <action>  the stage store: version registry, run state
+    yizkr stages state     what a run did, from its run directory
+    yizkr stages manifest  what shapes a run, from its run.json
 
 Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 --env-file); see deploy/README.md.
@@ -23,9 +24,10 @@ from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS
 from yizkr.core.wiki import WikiClient
-from yizkr.pipeline.stageversions import STAGES
+from yizkr.pipeline.orchestrate import MODEL_ROLES
 
-STAGE_NAMES = sorted(name for name, stage in STAGES.items() if stage.stored)
+# where `ingest run` keeps the LLM cache unless told otherwise
+DEFAULT_CACHE = Path("var/llm-cache")
 
 
 def _client(args) -> WikiClient:
@@ -255,8 +257,16 @@ def cmd_transcribe(args) -> int:
         )
     elif args.engine == "llm":
         from yizkr.pipeline.llm import make_client
-        from yizkr.pipeline.transcribe import LlmVisionTranscriber
+        from yizkr.pipeline.transcribe import (
+            LlmVisionTranscriber,
+            MissingPrerequisite,
+            preflight_vision_transcription,
+        )
 
+        try:
+            preflight_vision_transcription([args.file])
+        except MissingPrerequisite as exc:
+            sys.exit(str(exc))
         transcriber = LlmVisionTranscriber(
             make_client(args.llm),
             language=args.language,
@@ -296,26 +306,30 @@ def cmd_extract(args) -> int:
             ChunkedClaimExtractor,
         )
         from yizkr.pipeline.extract import LlmClaimExtractor
-        from yizkr.pipeline.llm import make_client
+        from yizkr.pipeline.llm import cached_client, make_client, open_cache
 
+        client = make_client(args.llm)
+        if args.cache is not None:
+            client = cached_client(
+                client, open_cache(args.cache), role="extract"
+            )
         chunked = args.strategy == "chunked" or (
             args.strategy == "auto"
             and len(transcription.text) > AUTO_CHUNK_THRESHOLD
         )
         if chunked:
             extractor = ChunkedClaimExtractor(
-                make_client(args.llm),
-                state_dir=args.out.with_name(args.out.name + ".stages"),
+                client,
+                state_dir=args.out.with_name(args.out.name + ".chunks"),
                 budget=args.chunk_budget,
                 retries=args.chunk_retries,
-                resume=args.resume,
                 concurrency=args.chunk_concurrency,
             )
         else:
             raw_dump = args.out.with_name(args.out.name + ".raw.txt")
             rejects_dump = args.out.with_name(args.out.name + ".rejected.json")
             extractor = LlmClaimExtractor(
-                make_client(args.llm),
+                client,
                 raw_dump=raw_dump,
                 rejects_dump=rejects_dump,
             )
@@ -335,8 +349,9 @@ def cmd_extract(args) -> int:
     if failed:
         print(
             f"warning: {len(failed)} chunks failed after retries "
-            f"({', '.join(failed)}); batch is PARTIAL — re-run with "
-            f"--resume to retry only those chunks",
+            f"({', '.join(failed)}); batch is PARTIAL — re-run to retry "
+            f"them (with --cache DIR, the calls that completed are "
+            f"answered from the cache)",
             file=sys.stderr,
         )
         return 3
@@ -536,7 +551,15 @@ def cmd_write(args) -> int:
 def cmd_run(args) -> int:
     from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
     from yizkr.pipeline.orchestrate import Orchestrator
+    from yizkr.pipeline.rundir import ModelAliasRefused
+    from yizkr.pipeline.transcribe import MissingPrerequisite
 
+    if args.no_cache and (args.refresh or args.epoch):
+        sys.exit(
+            "--refresh and --epoch act through the LLM cache, and --no-cache "
+            "runs without one: drop --no-cache (a refreshed role's calls "
+            "then go to the engine whatever the cache holds)"
+        )
     # fail closed: no never-ingest list, no run, before any file is
     # read. An empty list file is an explicit, allowed configuration.
     exclusions = load_exclusions(required=True, env_file=args.env_file)
@@ -549,7 +572,7 @@ def cmd_run(args) -> int:
     if not folder.is_dir():
         sys.exit(f"{folder} is not a directory")
     state_dir = args.state or Path("var/runs") / folder.resolve().name
-    return Orchestrator(
+    orchestrator = Orchestrator(
         folder,
         state_dir,
         llm=args.llm,
@@ -567,78 +590,73 @@ def cmd_run(args) -> int:
         extract_concurrency=args.extract_concurrency,
         env_file=args.env_file,
         exclusions=exclusions,
-        store_dir=args.store,
-        recompute=args.recompute or (),
-        rederive_unrecorded=args.rederive_unrecorded,
-    ).run()
-
-
-def cmd_stages_check(args) -> int:
-    from yizkr.pipeline.stageversions import check_versions
-
-    problems = check_versions()
-    for problem in problems:
-        print(problem, file=sys.stderr)
-    if not problems:
-        print("every stage and method matches its recorded version")
-    return 1 if problems else 0
-
-
-def cmd_stages_lock(args) -> int:
-    from yizkr.pipeline.stageversions import (
-        entries,
-        load_lock,
-        lock_versions,
-        save_lock,
+        cache_dir=None if args.no_cache else args.cache,
+        refresh=args.refresh or (),
+        epochs=dict(args.epoch or ()),
     )
-
-    lock = load_lock()
-    names = args.names or sorted(set(entries()) | set(lock))
     try:
-        lock = lock_versions(names, neutral=args.neutral, lock=lock)
-    except ValueError as exc:
+        return orchestrator.run()
+    except (MissingPrerequisite, ModelAliasRefused) as exc:
         sys.exit(str(exc))
-    save_lock(lock)
-    print(f"recorded {', '.join(names)}")
-    return 0
+
+
+def _role_epoch(value: str) -> tuple[str, int]:
+    """`ROLE=N` -> (role, N), for --epoch."""
+    role, _, epoch = value.partition("=")
+    if role not in MODEL_ROLES or not epoch.isdigit():
+        raise argparse.ArgumentTypeError(
+            f"expected ROLE=N with ROLE one of {', '.join(MODEL_ROLES)} and "
+            f"N a whole number, not {value!r}"
+        )
+    return role, int(epoch)
 
 
 def cmd_stages_state(args) -> int:
-    from yizkr.pipeline.rundir import REUSED, RunDir, run_state
-    from yizkr.pipeline.stages import StageStore
+    from yizkr.pipeline.rundir import RunDir, cache_counts, run_state
 
     run = RunDir(args.run)
-    store_root = args.store or run.manifest().get("store")
-    if not store_root:
-        sys.exit(f"{args.run}: no run.json naming a store; pass --store")
-    states = run_state(run, StageStore(Path(store_root)))
-    ordered = sorted(states.items(), key=lambda pair: str(pair[0]))
+    if not run.manifest():
+        sys.exit(f"{args.run}: no run.json; is it a run directory?")
+    states = run_state(run)
+    ordered = sorted(states.items())
+    cache = cache_counts(run)
     if args.json:
         rows = [
             {
                 "subject": subject,
                 "stage": stage,
-                "item": item,
                 "status": state.status,
                 "reason": state.reason,
-                "key": state.key,
             }
-            for (subject, stage, item), state in ordered
+            for (subject, stage), state in ordered
         ]
-        print(json.dumps(rows, indent=2))
+        print(json.dumps({"stages": rows, "cache": cache}, indent=2))
         return 0
     summary: dict[str, dict[str, int]] = {}
-    for (_subject, stage, _item), state in ordered:
-        label = state.status
-        if state.status == REUSED and state.reason:
-            label += f" ({state.reason})"
+    for (_subject, stage), state in ordered:
         counts = summary.setdefault(stage, {})
-        counts[label] = counts.get(label, 0) + 1
+        counts[state.status] = counts.get(state.status, 0) + 1
     for stage, counts in summary.items():
         rendered = ", ".join(
             f"{count} {label}" for label, count in sorted(counts.items())
         )
         print(f"{stage:16} {rendered}")
+    for role, counts in sorted(cache.items()):
+        rendered = ", ".join(
+            f"{count} {label}" for label, count in sorted(counts.items())
+        )
+        print(f"cache {role:10} {rendered} (all invocations)")
+    return 0
+
+
+def cmd_stages_manifest(args) -> int:
+    from yizkr.pipeline.rundir import RunDir, describe_manifest
+
+    manifest = RunDir(args.run).manifest()
+    if not manifest:
+        sys.exit(f"{args.run}: no run.json; is it a run directory?")
+    for line in describe_manifest(manifest):
+        print(line)
     return 0
 
 
@@ -916,7 +934,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "single", "chunked"],
         default="auto",
         help="chunked extraction (ADR-0006): auto picks chunked for "
-        "large transcriptions; its stage store lives in <out>.stages/",
+        "large transcriptions; its coverage report, rejects and gaps go "
+        "to <out>.chunks/",
     )
     p.add_argument("--chunk-budget", type=int, default=2000, metavar="CHARS")
     p.add_argument("--chunk-retries", type=int, default=2, metavar="N")
@@ -929,12 +948,14 @@ def build_parser() -> argparse.ArgumentParser:
         "independent; default 1 = sequential)",
     )
     p.add_argument(
-        "--resume",
-        action="store_true",
-        help="reuse stage outputs from a previous run whose keys still "
-        "match; only missing or failed chunks are re-run (a failed "
-        "chunk's logged response is re-parsed before re-invoking the "
-        "model). Without it every extraction stage is recomputed",
+        "--cache",
+        type=Path,
+        metavar="DIR",
+        help="answer each model call from this LLM cache when the same "
+        "call was answered before, and keep every new answer there "
+        "(ADR-0032; `ingest run` uses var/llm-cache), so a re-run asks "
+        "the engine only for what did not complete. Without it every "
+        "call goes to the engine",
     )
     p.set_defaults(func=cmd_extract)
 
@@ -1103,7 +1124,9 @@ def build_parser() -> argparse.ArgumentParser:
         "model ($YIZKR_LLM_MODEL) still drives transcription and the "
         "judgment steps. Default claude-sonnet-5 — extraction rewards "
         "source discipline over raw capability (ADR-0016). Pass 'inherit' "
-        "to use the run's main model for extraction too",
+        "to use the run's main model for extraction too. Either is a full "
+        "model id: the run refuses an alias such as 'sonnet' or "
+        "'...-latest' (docs/RUN_MANIFEST.md)",
     )
     p.add_argument(
         "--serial",
@@ -1114,39 +1137,48 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile-graph pass (ADR-0019). Advance by re-running after each "
         "review; ~2 re-runs per artifact",
     )
-    p.add_argument(
-        "--store",
+    cache = p.add_mutually_exclusive_group()
+    cache.add_argument(
+        "--cache",
         type=Path,
-        default=Path("var/stages"),
-        help="stage store shared across runs (default var/stages): every "
-        "stage output before the review gates, keyed by what it was "
-        "computed from, so a re-run recomputes only what changed",
+        default=DEFAULT_CACHE,
+        metavar="DIR",
+        help="the LLM cache, shared across runs (default var/llm-cache; "
+        "ADR-0032): when a view is made again, each model call it makes is "
+        "answered from the cache if the same call, keyed on what it sends, "
+        "was answered before, and every new answer is kept there. It only "
+        "saves engine calls: a document's views persist in its state "
+        "directory and are reused while their inputs are unchanged, with "
+        "or without it",
     )
-    p.add_argument(
-        "--recompute",
-        action="append",
-        choices=STAGE_NAMES,
-        metavar="STAGE",
-        help="recompute this stage even where its key matches (repeatable; "
-        f"one of {', '.join(STAGE_NAMES)})",
-    )
-    p.add_argument(
-        "--rederive-unrecorded",
+    cache.add_argument(
+        "--no-cache",
         action="store_true",
-        help="adopt a document directory that has files but no "
-        "derivations.json, and derive its stages again. A copy of each "
-        "stage output (transcription.json, batch.json, critique.json) is "
-        "kept first, as batch.superseded-<n>.json and so on; stages the "
-        "store does not hold under their current keys are then computed, "
-        "calling the engine for all but a GEDCOM file, and the views are "
-        "replaced. Unless the new batch has the same content as "
-        "batch.json, the reviewed CSVs are moved aside. Without it such a "
-        "document is held, whatever the store holds, and nothing in its "
-        "directory changes but the state.json that records the hold. A "
-        "document whose source bytes changed since its state.json was "
-        "saved is not held: its directory is moved aside whole, as "
-        ".<name>.superseded-<n> beside it, and the new bytes are ingested "
-        "in a fresh one",
+        help="run without the LLM cache: a view that is made again calls "
+        "the engine for every call, and no answer is read or kept. Views "
+        "persist and are reused as with the cache, so the run is otherwise "
+        "the same",
+    )
+    p.add_argument(
+        "--refresh",
+        action="append",
+        choices=MODEL_ROLES,
+        metavar="ROLE",
+        help="make this role's views again in this run, in place, current "
+        "or not, asking the engine afresh for each call even where the "
+        "cache holds an answer, which the new one replaces (repeatable; "
+        f"one of {', '.join(MODEL_ROLES)}; extract includes the GEDCOM "
+        "adapter's batches)",
+    )
+    p.add_argument(
+        "--epoch",
+        action="append",
+        type=_role_epoch,
+        metavar="ROLE=N",
+        help="key this role's calls under epoch N (default 0), so that a "
+        "view made again samples the role afresh while the answers of "
+        "other epochs stay in the cache; current views stand, so combine "
+        "it with --refresh to re-sample them (repeatable)",
     )
     p.set_defaults(func=cmd_run)
 
@@ -1207,49 +1239,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     stages = sub.add_parser(
         "stages",
-        help="the stage store: version registry and derived run state",
+        help="what a run did to each document's stages, and what shapes "
+        "the run, from its run directory",
     )
     ssub = stages.add_subparsers(dest="action", required=True)
 
     p = ssub.add_parser(
-        "check",
-        help="compare every stage's sources with its recorded version",
-    )
-    p.set_defaults(func=cmd_stages_check)
-
-    p = ssub.add_parser(
-        "lock",
-        help="record the current sources of stages after a version bump, "
-        "or as functionally neutral with --neutral",
-    )
-    p.add_argument(
-        "names",
-        nargs="*",
-        metavar="STAGE[:METHOD]",
-        help="stages or methods to record (default: all)",
-    )
-    p.add_argument(
-        "--neutral",
-        metavar="WHY",
-        help="record the change as functionally neutral for the current "
-        "version, with this reason",
-    )
-    p.set_defaults(func=cmd_stages_lock)
-
-    p = ssub.add_parser(
         "state",
-        help="per-stage run state derived from a run directory and the store",
+        help="per-stage run state, and what the LLM cache did for each "
+        "role, derived from a run directory's events; the cache counts are "
+        "totals over every invocation the run directory has seen",
     )
     p.add_argument("run", type=Path, help="run directory (with run.json)")
     p.add_argument(
-        "--store", type=Path, help="stage store (default: from run.json)"
-    )
-    p.add_argument(
         "--json",
         action="store_true",
-        help="every document and stage, with reason and key",
+        help="every document and stage, with its reason, and the cache "
+        "counts per role",
     )
     p.set_defaults(func=cmd_stages_state)
+
+    p = ssub.add_parser(
+        "manifest",
+        help="what shapes a run, from its run.json (docs/RUN_MANIFEST.md): "
+        "mode and project stage, engine and CLI version, each role's "
+        "model, effort, epoch and client configuration hash, the cache, "
+        "the corpus and its never-ingest list's hash, the code version, "
+        "and when it started and ended",
+    )
+    p.add_argument("run", type=Path, help="run directory (with run.json)")
+    p.set_defaults(func=cmd_stages_manifest)
 
     return parser
 

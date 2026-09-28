@@ -12,11 +12,15 @@ applied to extraction, and it is what catches the "MOTHER as a name" and
 
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, ConfigDict, computed_field
 
 from yizkr.claims import ClaimBatch, ItemValue
 from yizkr.pipeline.extract import scan_json_objects
-from yizkr.pipeline.llm import LlmClient
+from yizkr.pipeline.llm import LlmClient, reject_response
+
+logger = logging.getLogger(__name__)
 
 
 def axis_of(target: str) -> str | None:
@@ -127,7 +131,13 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
 
     Advisory only — a malformed or missing sentinel never raises (unlike
     chunk extraction): the critic must never block the pipeline, only
-    inform the reviewer.
+    inform the reviewer. A response without its terminal sentinel (a
+    refusal, an answer cut off, a usage-limit notice) still gives the
+    findings it holds, and is rejected through the client
+    (llm.reject_response), so that a client that keeps answers asks the
+    critic again next time rather than serving it. One the client kept
+    from an earlier call is asked for once more, and the engine's answer
+    is used in its place, as it would be without the cache.
     """
     if not batch.entities and not batch.claims:
         return []
@@ -136,13 +146,41 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
         claims_block=_claims_block(batch) or "(none)",
     )
     response = client.complete(prompt)
+    findings, finished = _parse_critique(response)
+    if not finished and _reject(client, response):
+        response = client.complete(prompt)
+        findings, finished = _parse_critique(response)
+        if not finished:
+            _reject(client, response)
+    return findings
+
+
+def _parse_critique(response: str) -> tuple[list[Finding], bool]:
+    """(the findings a critique answer holds, whether it has its terminal
+    sentinel)."""
     findings: list[Finding] = []
+    finished = False
     for obj in scan_json_objects(response):
         if obj.get("done") is True:
+            finished = True
             continue
         if "target" in obj and "issue" in obj:
             try:
                 findings.append(Finding.model_validate(obj))
             except Exception:
                 continue
-    return findings
+    return findings, finished
+
+
+def _reject(client: LlmClient, response: str) -> bool:
+    """Reject a critique answer without its sentinel; True when it was one
+    the client kept from an earlier call (llm.reject_response). A
+    rejection that fails is only a warning: the critic never blocks the
+    pipeline."""
+    try:
+        return reject_response(
+            client, response, "critique: no terminal sentinel"
+        )
+    except Exception as exc:
+        logger.warning("could not reject a critique answer: %s", exc)
+        return False

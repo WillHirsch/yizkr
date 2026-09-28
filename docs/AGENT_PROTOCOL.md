@@ -34,7 +34,7 @@ short form.
 | `exec:owner` | An owner action or decision; never dispatched |
 | `needs:live-test` | The PR needs `make test-live` evidence from a local session before merge (§5) |
 | `needs:scratch-diff` | The PR is checked by a whole-corpus scratch run and a run diff before merge; several waiting PRs may share one run (§5) |
-| `stage:*` | The stage before write whose key the issue or PR changes: `stage:transcription`, `stage:extraction`, `stage:clustering`, `stage:flags` |
+| `stage:*` | The stage before write whose outputs the issue or PR can change: `stage:transcription`, `stage:extraction`, `stage:clustering`, `stage:flags` |
 | `area:*` | The part of the repository the issue edits; used by the conflict rule (§3) |
 | `kind:*` | bug, feature, decision, adr, experiment, chore, ingestion-pass, docs, research, review (of run output or evidence) |
 | `req:*` | The requirements an epic serves; on epics only, never on their issues |
@@ -42,17 +42,16 @@ short form.
 | `gate:cloud-dispatch` | Marks #34 |
 | `epic` | A parent issue grouping sub-issues |
 
-**Stage labels.** Every issue or PR that changes a key component of a stage
-before write carries the matching `stage:*` label. The key components are
-the stage's source (a change that bumps the version of the stage or of one
-of its methods in the stage-version registry), a prompt template it uses,
-the manifest, and the model, effort or parameters it runs with (ADR-0025
-§2). A PR that changes the key of a stage that already runs also carries
-`needs:scratch-diff` (§5). A source edit recorded as functionally neutral
-changes no key and needs neither label; the review checks that it is
-neutral. New stages get their own `stage:*` label as they join the
-registry. The convergence report (#155) lists the open issues under each
-`stage:*` label and flags merged PRs that changed a stage without one.
+**Stage labels.** Every issue or PR that can change what a stage before
+write produces carries the matching `stage:*` label: a change to the
+stage's code, a prompt template it uses, the manifest, or the model,
+effort or parameters it runs with (ADR-0025 §2, ADR-0032). A PR that
+changes a stage that already runs also carries `needs:scratch-diff` (§5).
+An edit that cannot change any output (a comment, a rename, a refactor)
+needs neither label; the review checks that it is neutral. New stages get
+their own `stage:*` label as they are added. The convergence report
+(#155) lists the open issues under each `stage:*` label and flags merged
+PRs that changed a stage without one.
 
 ## 3. Dispatch and claiming
 
@@ -148,13 +147,14 @@ feature, decision, ingestion pass). An agent that files an issue with
   the latest scratch run, so that no scratch run mistakes the instance for
   one it wrote (#199). Once the instance is kept, live tests wait for
   #159's decision on where they run.
-- **`needs:scratch-diff`** goes on any PR that changes the key of a stage
-  before write that already runs (§2). The procedure:
+- **`needs:scratch-diff`** goes on any PR that changes a stage before
+  write that already runs (§2). The procedure:
   1. **Run.** A local session runs a whole-corpus scratch run at the PR's
      head, or at a local, never-pushed merge of several waiting PRs onto
-     current main. Batching is allowed (owner, 2026-09-27). The run reuses
-     every stage output of the baseline, the latest completed run on main,
-     whose key the change leaves unaffected. It holds the subscription
+     current main. Batching is allowed (owner, 2026-09-27). The run starts
+     from fresh state directories, and the LLM cache answers every model
+     call the change leaves the same as in the baseline, the latest
+     completed run on main (ADR-0032). It holds the subscription
      (§3). In the development stage it may go on through write, resetting
      the instance and holding the live stack for its write-side stages;
      once the instance is kept, it stops `--until` the last stage before
@@ -187,11 +187,12 @@ issue whose work reads them is `exec:local-agent`:
 
 - the corpus: `import/`, or the directory `YIZKR_CORPUS_DIR` names once
   #29 moves it out of the tree;
-- `var/` and `bundle/`. `var/` holds the stage store, run directories
-  (events, alerts, control files), live status pages, `report.html` and
-  `report.json`, detailed run diffs, batches, review sheets, galleries and
-  plan state. Only a run's aggregate `report.md` and diff summary may
-  leave the machine (§7);
+- `var/` and `bundle/`. `var/` holds the LLM cache (model responses and
+  session transcripts), run directories (events, alerts, control files,
+  document views), live status pages, `report.html` and `report.json`,
+  detailed run diffs, batches, review sheets, galleries and plan state.
+  Only a run's aggregate `report.md` and diff summary may leave the
+  machine (§7);
 - `~/yizkr-private/` and everything in it: the archives, the private audit
   inventory, and private experiment outputs;
 - backups (`yizkr backup` output and stack archives) and the exclusion

@@ -2,14 +2,15 @@
 
 Status: accepted (implemented: `pipeline/chunking.py` entity path,
 `pipeline/reconcile.py`, writer alias handling; validated live — the
-travel notes' entity manifest unified aliases and even disambiguated
-the document's two Davids unaided; document-side reconciliation
-proposed the correct family-tree items for Rosa/Alex/Samuel at
-0.75–0.95 on relational evidence, flagging the trial's duplicate items
-as duplicates; the graph-side pass proposed all four known duplicate
-pairs and correctly rejected the two-Davids trap as different
-generations; approved equivalences applied through
+interview's entity manifest unified aliases unaided; document-side
+reconciliation proposed the correct family-tree items for
+Pünktchen/Gus/Leopold at 0.75–0.95 on relational evidence, flagging the
+trial's duplicate items as duplicates; the graph-side pass proposed all
+four known duplicate pairs and correctly rejected the two-Ursulas trap
+as different generations; approved equivalences applied through
 `resolve --equivalences` end to end)
+Amended by #225 (2026-09-27): the entity manifest's state moves from
+the stage store to the LLM cache of ADR-0032 (State and CLI).
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
@@ -23,18 +24,17 @@ Two identity problems surfaced in the first trial and the ADR-0006
 acceptance run:
 
 1. **Within a document**, entities are referred to by multiple aliases
-   ("Rosa Genserowski" in a tree entry; "Rosa", "our great
+   ("Cäcilie Löbig" in a tree entry; "Cäcilie", "our great
    grandmother" in narrative) and sources themselves vary spellings
-   ("Berlin, Germany" / "Berlin, Berlin, Deutschland"). Line-range
+   ("Floerburg, Germany" / "Flörburg, Hessen, Deutschland"). Line-range
    chunking preserves whatever form each chunk happens to see; label
    consistency across chunks is luck, mitigated but not guaranteed by
    full-document context.
 2. **Across documents**, exact-label resolve creates duplicates: the
-   trial wrote "Samuel Genserowski" (travel notes) alongside "Samuel
-   Moses Genserowski" (family tree) as distinct people. Every further
-   document re-mentions the same core family under variant names, so
-   bulk ingestion without reconciliation makes the graph worse per
-   document ingested.
+   trial wrote "Leopold" (interview) alongside "Leopold Löbig" (family
+   tree) as distinct people. Every further document re-mentions the
+   same core family under variant names, so bulk ingestion without
+   reconciliation makes the graph worse per document ingested.
 
 Line-range chunking also made claim *ownership* ambiguous — the
 ADR-0006 acceptance run dropped 22 parent-child claims whose evidence
@@ -43,9 +43,9 @@ assignment makes ownership structural instead of prompted.
 
 String matching (OpenRefine-style) is the wrong primary tool here:
 the decisive identity evidence in genealogical material is
-**relational** — "Rosa" whose spouse is "Salomon Rothholz" and "Rosa
-Genserowski" whose spouse is "Salomon Isaac Rothholz" are the same
-person by structure, not by edit distance. Adjudicating that is
+**relational** — "Hilde" whose spouse is "Sebastian Löbig" and
+"Hildegard Laudler" whose spouse is "Sebastian 'Wastl' Löbig" are the
+same person by structure, not by edit distance. Adjudicating that is
 exactly what an LLM pass is good at, and exactly what must never be
 auto-confirmed (R3/ADR-0005: identity errors corrupt every downstream
 attribution; a human approves every equivalence).
@@ -127,6 +127,26 @@ convention — so explicit instance_of claims become redundant rather
 than required. Alias accumulation is append-only and idempotent; every
 ingested document improves the next one's matching.
 
+Amended by #88 (2026-09-27): the `instance of` and `type hint` the
+writer writes when it mints an item carry, beside `stated in` → the
+artifact that mentions the entity, `inferred from extraction run` → the
+batch's run item (ADR-0003 §2). The kind is the extraction's proposal, a
+machine write, so it takes both references rather than the registrar's
+single one.
+
+Amended by #233 (2026-09-27): kinds accumulate across sources, as
+aliases do. When a later batch's manifest names an entity whose item
+already exists (found by exact label, by the writer or the resolve
+step, or named by an approved equivalence) and one of its claims
+mentions the entity, the writer records the kind and type hint that
+batch gives it, citing the artifact of the first such claim and the
+batch's run. A matching `instance of` or `type hint` (a type hint
+compared as free text) gains those two references; a different value
+becomes a statement of its own, coexisting with the others at normal
+rank (ADR-0002). A curated statement, one with no run reference or a
+rank a curator set, is never altered: a source that agrees with it gets
+a statement of its own beside it. A re-run adds nothing.
+
 Coverage report: in place of ADR-0006's line audit, `coverage.json`
 flags transcription lines that mention no manifest entity (heuristic:
 capitalized-token match against labels/aliases) plus manifest entities
@@ -163,7 +183,7 @@ A separate pipeline step between extract and resolve:
    as today.
 
 **Graph-side reconciliation** (cleaning duplicates that already
-exist, e.g. the trial's two Samuels): the same blocking + adjudication
+exist, e.g. the trial's two Leopolds): the same blocking + adjudication
 run over roster × roster, proposing pairs. A curator resolves each
 approved pair by MediaWiki item merge (true duplicate) or — when
 equivalence is itself a contestable, source-attributed judgement — a
@@ -184,13 +204,18 @@ recorded fallback (`manifest-fallback.txt`). `--resume` semantics are
 unchanged. Reconciliation artifacts (`roster.json`, `candidates.json`,
 `equivalences.csv`) live beside the batch, runtime-state as always.
 
-Amended by #87 (2026-09-27): the entity manifest, or its recorded
-line-range fallback, is the `entity_manifest` stage in the stage store
-(ADR-0006 §5, docs/STAGE_STORE.md); a fallback is an attention reason on
-its record rather than a `manifest-fallback.txt` file. An
-`entity-manifest.json` or `manifest-fallback.txt` from before the store
-is not read; `ingest run` holds a document directory without
-`derivations.json` until `--rederive-unrecorded` (ADR-0006 §5).
+Amended by #87 (2026-09-27), which made the entity manifest a stage of
+the stage store, and by #225 (2026-09-27), which replaced the store with
+the LLM cache of ADR-0032: the manifest call, like every call, is answered
+from the cache when it was made before (ADR-0006 §5, docs/LLM_CACHE.md).
+A manifest the extractor refuses is asked once more, as a second attempt
+keyed apart in the cache; both answers are kept, so a later run takes the
+same path (ADR-0032 §5). A fallback to line-range segmentation is an
+attention reason on the extraction stage's `done` event and a `fallback`
+entry in `coverage.json`, rather than a `manifest-fallback.txt` file. An
+`entity-manifest.json` or `manifest-fallback.txt` from before the store is
+not read; `ingest run` sets aside a document directory without
+`derivations.json` and starts it afresh (ADR-0006 §5).
 
 ### Testing
 
@@ -199,11 +224,12 @@ entity packing by mentions and by count; unknown-manifest-id rejection;
 label normalization to canonical; alias flow into `ClaimBatch.entities`
 and the writer; blocking produces expected candidate sets; proposal
 CSV round-trip into resolve. Live acceptance uses the answer key the
-trial already produced: extracting the travel notes entity-first must
-manifest Rosa/Alex/Samuel with aliases; reconciling against the
+trial already produced: extracting the interview entity-first must
+manifest Pünktchen/Gus/Leopold with aliases; reconciling against the
 existing graph must propose `same` for exactly those three against
-their family-tree items (relational evidence: shared spouse, parents);
-and `reconcile-graph` must propose the two existing Samuels as a pair.
+their family-tree items (relational evidence: kinship to the narrator
+and to each other); and `reconcile-graph` must propose the two existing
+Leopolds as a pair.
 
 ## Consequences
 

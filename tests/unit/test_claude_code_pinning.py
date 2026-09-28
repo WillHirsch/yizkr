@@ -4,7 +4,9 @@ A fake ``claude`` executable stands in for the CLI. It answers
 ``--version``, stores each session's transcript under a temporary
 $CLAUDE_CONFIG_DIR the way the real CLI does, refuses to fork a session
 whose transcript is gone, and prints a stream-json event stream whose
-init event reports the CLI version and the tools offered to the model.
+init event reports the CLI version and the tools offered to the model,
+followed by any tool calls and results a test gives it (``read_events``,
+in the shape CLI 2.1.237 prints them) and the answer.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import os
 import pwd
 import subprocess
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,17 +27,24 @@ import pytest
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import llm
 from yizkr.pipeline.llm import (
+    FILE_ERROR,
+    REQUEST_ERROR,
+    UNCLASSIFIED,
     ClaudeCodeClient,
     CliConfigEnvironment,
     CliHomeRelative,
     CliToolsMismatch,
     CliVersionMismatch,
+    EngineToolError,
     PassPaused,
+    ToolFailure,
     claude_config_dir,
     claude_global_config_path,
     make_client,
     pinned_cli_version,
+    read_error,
     release_transcripts,
+    tool_failures,
     transcript_destination,
 )
 from yizkr.pipeline.orchestrate import FAILED, REGISTERED, Orchestrator
@@ -60,6 +70,12 @@ class FakeCli:
         # the tools the init event reports offering the model (None: no
         # tools key, as in older streams)
         self.tools: list[str] | None = ["Read"]
+        # the model the init event reports answering (None: no model key)
+        self.model: str | None = None
+        # the answer's text, and the tool calls and results the stream
+        # reports before it (read_events)
+        self.answer = "answer"
+        self.tool_events: list[dict] = []
         self.returncode = 0
         self.timeout = False
         self.probes: list[dict] = []  # kwargs of each --version probe
@@ -108,14 +124,19 @@ class FakeCli:
         }
         if self.tools is not None:
             init["tools"] = self.tools
+        if self.model is not None:
+            init["model"] = self.model
         events = [
             init,
+            *({**event, "session_id": session} for event in self.tool_events),
             {
                 "type": "assistant",
                 "session_id": session,
-                "message": {"content": [{"type": "text", "text": "answer"}]},
+                "message": {
+                    "content": [{"type": "text", "text": self.answer}]
+                },
             },
-            {"type": "result", "session_id": session, "result": "answer"},
+            {"type": "result", "session_id": session, "result": self.answer},
         ]
         stream = "\n".join(json.dumps(event) for event in events)
         if self.timeout:
@@ -129,8 +150,9 @@ class FakeCli:
         )
 
 
-@pytest.fixture
-def cli(monkeypatch, tmp_path) -> FakeCli:
+def install_fake_cli(monkeypatch, tmp_path) -> FakeCli:
+    """The fake CLI in place of the real one, for a fresh pass with a
+    config directory and a temporary directory of its own."""
     config = tmp_path / "claude-config"
     fake = FakeCli(config / "projects")
     monkeypatch.setattr(llm.subprocess, "run", fake)
@@ -142,6 +164,194 @@ def cli(monkeypatch, tmp_path) -> FakeCli:
     for name in ("YIZKR_LLM_MODEL", "YIZKR_LLM_EFFORT", llm.TRANSCRIPTS_ENV):
         monkeypatch.delenv(name, raising=False)
     return fake
+
+
+@pytest.fixture
+def cli(monkeypatch, tmp_path) -> FakeCli:
+    return install_fake_cli(monkeypatch, tmp_path)
+
+
+def read_events(
+    path, *, error: str | None = None, pages: str | None = None, content=None
+) -> list[dict]:
+    """A Read of `path` and its result as CLI 2.1.237's stream reports them
+    (#213): an assistant event with the tool_use block, then a user event
+    with the tool_result. With `error`, the result has is_error and the
+    error's text as its content (or `content`, when given); without, it is
+    an image."""
+    call_id = f"toolu_{uuid.uuid4().hex[:24]}"
+    arguments = {"file_path": str(path)}
+    if pages is not None:
+        arguments["pages"] = pages
+    use = {
+        "type": "tool_use",
+        "id": call_id,
+        "name": "Read",
+        "input": arguments,
+        "caller": {"type": "direct"},
+    }
+    if error is None:
+        result = {
+            "tool_use_id": call_id,
+            "type": "tool_result",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgo=",
+                    },
+                }
+            ],
+        }
+        reported = {"type": "image"}
+    else:
+        result = {
+            "type": "tool_result",
+            "content": error if content is None else content,
+            "is_error": True,
+            "tool_use_id": call_id,
+        }
+        reported = f"Error: {error}"
+    return [
+        {
+            "type": "assistant",
+            "parent_tool_use_id": None,
+            "message": {"content": [use]},
+        },
+        {
+            "type": "user",
+            "parent_tool_use_id": None,
+            "message": {"role": "user", "content": [result]},
+            "tool_use_result": reported,
+        },
+    ]
+
+
+# a neutral placeholder path, as the CLI's messages quote the file's
+PLACEHOLDER = "/srv/intake/scan-0001.pdf"
+# The Read tool's errors, worded as CLI 2.1.237 words them: (message, the
+# class it is named by, its kind)
+READ_ERRORS = [
+    (
+        "This PDF has 34 pages, which is too many to read at once. Use the "
+        'pages parameter to read specific page ranges (e.g., pages: "1-5"). '
+        "Maximum 20 pages per request.",
+        "too-many-pages",
+        REQUEST_ERROR,
+    ),
+    (
+        "Requested pages 21-40 is outside the document (PDF has 34 pages). "
+        "Use a range within 1-34, maximum 20 pages per request (e.g. pages: "
+        '"1-20").',
+        "page-out-of-range",
+        REQUEST_ERROR,
+    ),
+    (
+        'Page range "1-30" exceeds maximum of 20 pages per request. Please '
+        "use a smaller range.",
+        "page-range-too-long",
+        REQUEST_ERROR,
+    ),
+    (
+        'Invalid pages parameter: "first". Use formats like "1-5", "3", or '
+        '"10-20". Pages are 1-indexed.',
+        "invalid-page-range",
+        REQUEST_ERROR,
+    ),
+    (
+        "Reading full PDFs is not supported with this model. Use a newer "
+        "model (Sonnet 3.5 v2 or later), or use the pages parameter to read "
+        'specific page ranges (e.g., pages: "1-5", maximum 20 pages per '
+        "request). Page extraction requires poppler-utils: install with "
+        "`brew install poppler` on macOS or `apt-get install poppler-utils` "
+        "on Debian/Ubuntu.",
+        "whole-pdf-unsupported",
+        REQUEST_ERROR,
+    ),
+    (
+        "File content (41200 tokens) exceeds maximum allowed tokens (25000). "
+        "Use offset and limit parameters to read specific portions of the "
+        "file, or search for specific content instead of reading the whole "
+        "file.",
+        "too-many-tokens",
+        REQUEST_ERROR,
+    ),
+    (
+        "<tool_use_error>InputValidationError: Read failed due to the "
+        "following issue:\nThe required parameter `file_path` is missing"
+        "</tool_use_error>",
+        "invalid-input",
+        REQUEST_ERROR,
+    ),
+    (
+        "pdftoppm is not installed. Install poppler-utils (e.g. `brew "
+        "install poppler` or `apt-get install poppler-utils`) to enable PDF "
+        "page rendering.",
+        "pdf-renderer-missing",
+        FILE_ERROR,
+    ),
+    (
+        "<tool_use_error>File does not exist. Note: your current working "
+        "directory is /tmp/yizkr-claude-code.</tool_use_error>",
+        "missing",
+        FILE_ERROR,
+    ),
+    (
+        "File is in a directory that is denied by your permission settings.",
+        "permission-denied",
+        FILE_ERROR,
+    ),
+    (f"PDF file is empty: {PLACEHOLDER}", "empty", FILE_ERROR),
+    ("Image file is empty: /srv/intake/scan-0001.png", "empty", FILE_ERROR),
+    (
+        "PDF file exceeds maximum allowed size of 20MB.",
+        "too-large",
+        FILE_ERROR,
+    ),
+    (
+        "PDF is password-protected. Please provide an unprotected version.",
+        "password-protected",
+        FILE_ERROR,
+    ),
+    (
+        "This tool cannot read binary files. The file appears to be a binary "
+        ".tif file. Please use appropriate tools for binary file analysis.",
+        "unsupported-format",
+        FILE_ERROR,
+    ),
+    (
+        f"File is not a valid PDF (missing %PDF- header): {PLACEHOLDER}",
+        "corrupt",
+        FILE_ERROR,
+    ),
+    (
+        "File has an image extension but its content is not a valid "
+        "PNG/JPEG/GIF/WebP. Detected: unknown.",
+        "corrupt",
+        FILE_ERROR,
+    ),
+    ("PDF file is corrupted or invalid.", "corrupt", FILE_ERROR),
+    (
+        "pdftoppm produced no output pages. The PDF may be invalid.",
+        "corrupt",
+        FILE_ERROR,
+    ),
+    (
+        f"Could not render PDF: I/O Error: Couldn't open file '{PLACEHOLDER}'",
+        "render-failed",
+        FILE_ERROR,
+    ),
+    (
+        "pdftoppm failed: Syntax Warning: unexpected operator",
+        "render-failed",
+        FILE_ERROR,
+    ),
+    ("An error no CLI words yet.", UNCLASSIFIED, FILE_ERROR),
+]
+RENDERER_MISSING = READ_ERRORS[7][0]
+TOO_MANY_PAGES = READ_ERRORS[0][0]
 
 
 class TestIsolation:
@@ -540,6 +750,58 @@ class TestEffectiveConfig:
         )
 
 
+class TestWhatACallSends:
+    """What the LLM cache keys a call on and records with its answer
+    (#225, ADR-0032): the text the CLI is sent, the system prompt every
+    call appends, and what a call's stream reports."""
+
+    def test_call_text_is_what_the_cli_receives(self, cli, tmp_path):
+        image = tmp_path / "scan.png"
+        image.write_bytes(b"png")
+        client = ClaudeCodeClient()
+        client.complete("Transcribe.", [image])
+        _, kwargs = cli.calls[0]
+        assert kwargs["input"] == client.call_text("Transcribe.", [image])
+        assert str(image.resolve()) in kwargs["input"]
+        assert client.call_text("Transcribe.") == "Transcribe."
+
+    def test_the_system_prompt_is_what_every_call_appends(self, cli):
+        client = ClaudeCodeClient()
+        client.complete("transcribe")
+        command, _ = cli.calls[0]
+        appended = command[command.index("--append-system-prompt") + 1]
+        assert appended == client.system_prompt
+        assert client.system_prompt in client.effective_config["arguments"]
+
+    def test_a_call_reports_its_model_and_version(self, cli):
+        cli.model = "claude-sonnet-5-20260901"
+        client = ClaudeCodeClient(model="claude-sonnet-5")
+        assert client.last_report() == {}
+        client.complete("transcribe")
+        report = client.last_report()
+        assert report["model"] == "claude-sonnet-5-20260901"
+        assert report["cli_version"] == PINNED
+        assert uuid.UUID(report["session_id"])
+
+    def test_a_report_is_its_threads_and_a_failed_call_makes_none(self, cli):
+        client = ClaudeCodeClient()
+        seen = []
+
+        def call():
+            client.complete("transcribe")
+            seen.append(client.last_report())
+
+        thread = threading.Thread(target=call)
+        thread.start()
+        thread.join()
+        assert seen[0]["cli_version"] == PINNED
+        assert client.last_report() == {}  # another thread's call
+        cli.returncode = 1
+        with pytest.raises(RuntimeError):
+            client.complete("transcribe")
+        assert client.last_report() == {}
+
+
 class TestVersionPin:
     def test_first_client_pins_the_installed_version(self, cli):
         assert pinned_cli_version() is None
@@ -670,6 +932,65 @@ class TestTranscripts:
         assert cli.transcripts() == set()
         assert (record / f"{handle}.jsonl").exists()
 
+    def test_a_kept_conversation_resumes_exactly(self, cli):
+        """The LLM cache keeps an open conversation's session files beside
+        its opening turn (#225). Put back by a later client, they let it
+        fork the conversation as it was opened, with no call to open it
+        again, and are released as an opened conversation's are."""
+        first = ClaudeCodeClient()
+        _, handle = first.open_conversation("list the entities")
+        kept = first.keep_conversation(handle)
+        assert set(kept) == {f"{PROJECT}/{handle}.jsonl"}
+        first.close_conversation(handle)
+        assert cli.transcripts() == set()
+        calls = len(cli.calls)
+        second = ClaudeCodeClient()
+        session = second.resume_conversation(
+            "list the entities", "answer", kept
+        )
+        assert session == handle
+        assert len(cli.calls) == calls
+        transcript = cli.projects / PROJECT / f"{handle}.jsonl"
+        assert transcript.read_bytes() == kept[f"{PROJECT}/{handle}.jsonl"]
+        assert second.fork(session, "chunk 1") == "answer"
+        command, _ = cli.calls[-1]
+        assert command[command.index("--resume") + 1] == handle
+        assert "--fork-session" in command
+        second.close_conversation(session)
+        assert not transcript.exists()
+
+    @pytest.mark.parametrize(
+        "names",
+        [
+            [],
+            [
+                f"{PROJECT}/{uuid.uuid4()}.jsonl",
+                f"{PROJECT}/{uuid.uuid4()}.jsonl",
+            ],
+            [f"{PROJECT}/not-a-session.jsonl"],
+            [f"../elsewhere/{uuid.uuid4()}.jsonl"],
+        ],
+        ids=["nothing", "two", "not-a-uuid", "outside"],
+    )
+    def test_unusable_kept_files_are_refused(self, cli, tmp_path, names):
+        with pytest.raises(ValueError):
+            ClaudeCodeClient().resume_conversation(
+                "list the entities", "answer", dict.fromkeys(names, b"{}\n")
+            )
+        assert not (tmp_path / "claude-config" / "elsewhere").exists()
+
+    def test_a_conversation_open_already_is_not_resumed(self, cli):
+        """Resuming a session the client holds open would let the second
+        holder's release pull the transcript from under the first."""
+        client = ClaudeCodeClient()
+        _, handle = client.open_conversation("list the entities")
+        kept = client.keep_conversation(handle)
+        with pytest.raises(ValueError, match="open already"):
+            client.resume_conversation("list the entities", "answer", kept)
+        assert cli.transcripts() == {f"{handle}.jsonl"}
+        client.close_conversation(handle)
+        assert cli.transcripts() == set()
+
     def test_close_releases_open_conversations(self, cli):
         with ClaudeCodeClient() as client:
             client.open_conversation("list the entities")
@@ -797,3 +1118,252 @@ class TestReleaseTranscripts:
         assert transcript_destination() is None
         monkeypatch.chdir(tmp_path)
         assert transcript_destination("record") == tmp_path / "record"
+
+
+def a_scan(tmp_path: Path, name: str = "scan.pdf") -> Path:
+    path = tmp_path / name
+    path.write_bytes(b"%PDF-1.4 placeholder")
+    return path
+
+
+class TestToolErrors:
+    """A one-shot call's stream reports each Read and its result (#213). A
+    Read that failed on a file the call was given fails the call, whatever
+    the answer says, unless the tool only refused the form of the request
+    and another Read of the same file succeeded."""
+
+    def test_a_failed_read_of_the_input_fails_the_call(self, cli, tmp_path):
+        scan = a_scan(tmp_path)
+        cli.tool_events = read_events(scan, error=RENDERER_MISSING)
+        cli.answer = "Text that reads like a transcription."
+        with pytest.raises(EngineToolError) as caught:
+            ClaudeCodeClient().complete("Transcribe.", [scan])
+        failure = ToolFailure("Read", "pdf-renderer-missing", 0)
+        assert caught.value.failures == (failure,)
+        # the tool and the class of its error, never the error's text, the
+        # file's path or the answer
+        assert str(caught.value) == (
+            "the engine's stream reports a tool failing on the call's "
+            "input: Read (pdf-renderer-missing)"
+        )
+        assert caught.value.response == cli.answer
+
+    def test_the_recorded_stream_shape(self, cli, tmp_path):
+        """The shape a real call printed (CLI 2.1.237, two invented inputs:
+        a blank PNG the Read tool read, and a file that is not a PDF, which
+        it could not): the result event says nothing of the error, and the
+        answer says nothing either."""
+        image = tmp_path / "blank.png"
+        image.write_bytes(b"\x89PNG placeholder")
+        scan = a_scan(tmp_path, "not-a-pdf.pdf")
+        scan.write_text("placeholder\n")
+        cli.tool_events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "thinking", "thinking": ""}]},
+            },
+            *read_events(image),
+            *read_events(
+                scan,
+                error="File is not a valid PDF (missing %PDF- header): "
+                f"{scan}",
+            ),
+        ]
+        cli.answer = "done."
+        with pytest.raises(EngineToolError) as caught:
+            ClaudeCodeClient().complete("Reply: done.", [image, scan])
+        assert caught.value.failures == (ToolFailure("Read", "corrupt", 1),)
+
+    def test_a_read_that_succeeds_passes(self, cli, tmp_path):
+        scan = a_scan(tmp_path)
+        cli.tool_events = read_events(scan)
+        client = ClaudeCodeClient()
+        assert client.complete("Transcribe.", [scan]) == "answer"
+        assert client.last_report()["cli_version"] == PINNED
+
+    @pytest.mark.parametrize(("message", "name", "kind"), READ_ERRORS)
+    def test_read_errors_are_classed(self, message, name, kind):
+        assert read_error(message) == (name, kind)
+
+    def test_every_class_has_an_example(self):
+        classes = {name for name, _, _ in llm._READ_ERRORS} | {UNCLASSIFIED}
+        assert {name for _, name, _ in READ_ERRORS} == classes
+
+    @pytest.mark.parametrize(
+        "message",
+        [message for message, _, kind in READ_ERRORS if kind == REQUEST_ERROR],
+    )
+    def test_a_refused_request_is_made_up_for_by_a_read_of_the_file(
+        self, cli, tmp_path, message
+    ):
+        """The tool refuses to read a PDF of more than 10 pages without a
+        page range, and says so as an error: a Read of a range that
+        succeeds, before or after it (reads may run side by side), means
+        the file was read."""
+        scan = a_scan(tmp_path)
+        client = ClaudeCodeClient()
+        cli.tool_events = read_events(scan, error=message) + read_events(
+            scan, pages="1-20"
+        )
+        assert client.complete("Transcribe.", [scan]) == "answer"
+        cli.tool_events = read_events(scan, pages="1-20") + read_events(
+            scan, error=message
+        )
+        assert client.complete("Transcribe.", [scan]) == "answer"
+
+    def test_a_refused_request_and_no_read_of_the_file_fails(
+        self, cli, tmp_path
+    ):
+        scan = a_scan(tmp_path)
+        other = a_scan(tmp_path, "other.pdf")
+        client = ClaudeCodeClient()
+        cli.tool_events = read_events(scan, error=TOO_MANY_PAGES)
+        with pytest.raises(EngineToolError) as caught:
+            client.complete("Transcribe.", [scan])
+        assert caught.value.failures == (
+            ToolFailure("Read", "too-many-pages", 0),
+        )
+        # a Read of another input makes up for nothing
+        cli.tool_events = read_events(other) + read_events(
+            scan, error=TOO_MANY_PAGES
+        )
+        with pytest.raises(EngineToolError) as caught:
+            client.complete("Transcribe.", [scan, other])
+        assert caught.value.failures == (
+            ToolFailure("Read", "too-many-pages", 0),
+        )
+
+    @pytest.mark.parametrize(
+        "message",
+        [message for message, _, kind in READ_ERRORS if kind == FILE_ERROR],
+    )
+    def test_a_file_error_is_never_made_up_for(self, cli, tmp_path, message):
+        """Pages 4-6 that could not be rendered are missing from the
+        answer, however well pages 1-3 and 7-9 were read."""
+        scan = a_scan(tmp_path)
+        cli.tool_events = (
+            read_events(scan, pages="1-3")
+            + read_events(scan, pages="4-6", error=message)
+            + read_events(scan, pages="7-9")
+        )
+        with pytest.raises(EngineToolError) as caught:
+            ClaudeCodeClient().complete("Transcribe.", [scan])
+        assert caught.value.failures == (
+            ToolFailure("Read", read_error(message)[0], 0),
+        )
+
+    def test_reads_of_other_files_are_not_the_input(self, cli, tmp_path):
+        scan = a_scan(tmp_path)
+        cli.tool_events = read_events(
+            tmp_path / "elsewhere.pdf", error=RENDERER_MISSING
+        ) + read_events(scan)
+        assert ClaudeCodeClient().complete("Transcribe.", [scan]) == "answer"
+
+    def test_other_tools_are_not_the_input(self, cli, tmp_path):
+        """A call of a tool the model is not offered is refused before it
+        touches anything; the tool check deals with tools offered."""
+        scan = a_scan(tmp_path)
+        events = read_events(scan, error="Error: No such tool available: X")
+        events[0]["message"]["content"][0]["name"] = "Bash"
+        cli.tool_events = events + read_events(scan)
+        assert ClaudeCodeClient().complete("Transcribe.", [scan]) == "answer"
+
+    def test_the_input_is_known_by_any_spelling(
+        self, cli, tmp_path, monkeypatch
+    ):
+        scan = a_scan(tmp_path)
+        link = tmp_path / "link.pdf"
+        link.symlink_to(scan)
+        monkeypatch.chdir(tmp_path)
+        client = ClaudeCodeClient()
+        spellings = [
+            (Path("scan.pdf"), scan),
+            (link, scan),
+            (scan, link),
+            (scan, f"{tmp_path}/./scan.pdf"),
+        ]
+        for given, reported in spellings:
+            cli.tool_events = read_events(reported, error=RENDERER_MISSING)
+            with pytest.raises(EngineToolError):
+                client.complete("Transcribe.", [given])
+
+    def test_error_text_in_blocks(self, cli, tmp_path):
+        scan = a_scan(tmp_path)
+        cli.tool_events = read_events(
+            scan,
+            error="missing",
+            content=[
+                {
+                    "type": "text",
+                    "text": "<tool_use_error>File does not exist."
+                    "</tool_use_error>",
+                }
+            ],
+        )
+        with pytest.raises(EngineToolError) as caught:
+            ClaudeCodeClient().complete("Transcribe.", [scan])
+        assert caught.value.failures == (ToolFailure("Read", "missing", 0),)
+
+    def test_each_failure_is_named_once(self, cli, tmp_path):
+        scan = a_scan(tmp_path)
+        cli.tool_events = (
+            read_events(scan, error=RENDERER_MISSING)
+            + read_events(scan, error=RENDERER_MISSING)
+            + read_events(scan, pages="1-5", error="PDF file is empty: x")
+        )
+        with pytest.raises(EngineToolError) as caught:
+            ClaudeCodeClient().complete("Transcribe.", [scan])
+        assert caught.value.failures == (
+            ToolFailure("Read", "pdf-renderer-missing", 0),
+            ToolFailure("Read", "empty", 0),
+        )
+        assert str(caught.value).endswith(
+            "Read (pdf-renderer-missing), Read (empty)"
+        )
+
+    def test_a_call_without_inputs_is_not_judged(self, cli, tmp_path):
+        """Only a one-shot call is given files; a Read in a call that was
+        given none is not about its input."""
+        cli.tool_events = read_events(
+            tmp_path / "scan.pdf", error=RENDERER_MISSING
+        )
+        client = ClaudeCodeClient()
+        assert client.complete("Extract.") == "answer"
+        response, handle = client.open_conversation("List the entities.")
+        assert response == "answer"
+        assert client.fork(handle, "Chunk 1.") == "answer"
+
+    def test_a_tool_error_is_an_ordinary_failure(self, cli, tmp_path):
+        """It fails the call, not the pass: the transcript is released, no
+        report is made, and the next call goes ahead."""
+        assert issubclass(EngineToolError, RuntimeError)
+        assert not issubclass(EngineToolError, PassPaused)
+        scan = a_scan(tmp_path)
+        client = ClaudeCodeClient()
+        cli.tool_events = read_events(scan, error=RENDERER_MISSING)
+        with pytest.raises(EngineToolError):
+            client.complete("Transcribe.", [scan])
+        assert cli.transcripts() == set()
+        assert client.last_report() == {}
+        cli.tool_events = read_events(scan)
+        assert client.complete("Transcribe.", [scan]) == "answer"
+
+    def test_a_pause_comes_first(self, cli, tmp_path):
+        scan = a_scan(tmp_path)
+        client = ClaudeCodeClient()
+        cli.tool_events = read_events(scan, error=RENDERER_MISSING)
+        cli.reports = "2.1.240"
+        with pytest.raises(CliVersionMismatch):
+            client.complete("Transcribe.", [scan])
+
+    def test_the_function_reads_a_stream(self, tmp_path):
+        scan = a_scan(tmp_path)
+        stream = "\n".join(
+            json.dumps(event)
+            for event in read_events(scan, error=TOO_MANY_PAGES)
+        )
+        assert tool_failures(stream, [scan]) == [
+            ToolFailure("Read", "too-many-pages", 0)
+        ]
+        assert tool_failures(stream, []) == []
+        assert tool_failures("not json\n{}\n[]", [scan]) == []

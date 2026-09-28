@@ -22,6 +22,13 @@ Two Anthropic-backed engines, differing in how usage is billed:
   ``ClaudeCodeClient``).
 
 Pick the model for either engine with $YIZKR_LLM_MODEL.
+
+This module is also the client factory, and the only code that imports
+the LLM cache (yizkr.pipeline.llmcache, ADR-0032): `open_cache` opens
+one, and `cached_client` wraps an engine's client so that a call made
+before with the same key is answered from it. The pipeline is written
+against the client protocols below and never against the cache, so
+without the wrapper it runs unchanged, calling the engine directly.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -40,7 +48,8 @@ import threading
 import time
 import uuid
 import weakref
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -76,8 +85,102 @@ class ConversationalLlmClient(Protocol):
     def fork(self, handle: Any, prompt: str) -> str: ...
 
 
+@runtime_checkable
+class RejectingLlmClient(Protocol):
+    """Optional capability: a caller rejects a response it cannot use.
+
+    A transcription that fails the transcription check, or an answer cut
+    off before its terminal sentinel (a chunk's, the critic's, a
+    single-call extraction's), is rejected, so that the next identical
+    call asks the engine again rather than being answered with the same
+    text. Only a client that keeps responses has anything to reject; see
+    `reject_response`.
+
+    `reject` returns whether the response was one the client kept from an
+    earlier call, rather than the engine's answer to this one. The engine
+    has then not answered the call in this run: a caller that asks once
+    more gets the engine's answer, as it would have without the keeping
+    client, and every rejector does so once.
+    """
+
+    def reject(self, response: str, reason: str) -> bool: ...
+
+
+def reject_response(client: Any, response: str, reason: str) -> bool:
+    """Reject `response`, which `client` returned, when the client can
+    take a rejection (the LLM cache's client can); an engine's own client
+    keeps nothing, so there is nothing to do. Returns whether the response
+    was a kept answer, which the engine has not given in this run: the
+    caller then asks once more (RejectingLlmClient)."""
+    if isinstance(client, RejectingLlmClient):
+        return bool(client.reject(response, reason))
+    return False
+
+
+@runtime_checkable
+class AttemptingLlmClient(Protocol):
+    """Optional capability: a client that keeps answers tells one attempt
+    at a call from another, so that each attempt keeps its own answer and
+    a later run replays the attempts in the same order; see
+    `for_attempt`."""
+
+    def attempt(self, number: int) -> Any: ...
+
+
+def for_attempt(client: Any, number: int) -> Any:
+    """The client to make attempt `number` (from 0) of the same call with.
+
+    A caller that asks again when it cannot use an answer, and falls back
+    to something else after the last attempt, asks through this: behind
+    the LLM cache each attempt is then answered, and kept, on its own, so
+    the whole sequence, fallback included, replays as it went. Any other
+    client makes every attempt itself."""
+    if number and isinstance(client, AttemptingLlmClient):
+        return client.attempt(number)
+    return client
+
+
+@runtime_checkable
+class ResumableLlmClient(Protocol):
+    """Optional capability: a conversation (ConversationalLlmClient) can be
+    kept after it is opened, and resumed later exactly as it was opened,
+    without asking the engine again. `keep_conversation` gives the files
+    that hold a conversation's session, by path relative to where the
+    engine keeps them (none, for an engine that needs only the turns);
+    `resume_conversation` returns a handle to fork from, rebuilt from the
+    opening turn and those files, and raises when they cannot give one."""
+
+    def keep_conversation(self, handle: Any) -> dict[str, bytes]: ...
+
+    def resume_conversation(
+        self, prompt: str, response: str, files: Mapping[str, bytes]
+    ) -> Any: ...
+
+
+class ConversationChanged(Exception):
+    """A conversation had to be opened again and its opening turn came
+    back different from the answer the caller built on. Every turn made
+    from the old answer is void: the caller starts over from the opening
+    turn, which now gives the new answer."""
+
+
+def _config_hash(config: dict[str, Any]) -> str:
+    """SHA-256 of an engine's effective configuration in canonical JSON."""
+    canonical = json.dumps(
+        config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 class AnthropicClient:
     """Anthropic API client (vision-capable). Explicit opt-in only."""
+
+    engine = "anthropic"
+    # the output budget every request asks for
+    MAX_TOKENS = 4096
+    # the API calls carry no system prompt and take no effort setting
+    system_prompt: str | None = None
+    effort: str | None = None
 
     def __init__(self, model: str | None = None) -> None:
         try:
@@ -98,6 +201,37 @@ class AnthropicClient:
         self.model_identifier = model or os.environ.get(
             "YIZKR_LLM_MODEL", "claude-sonnet-5"
         )
+        # what the API reported about the calling thread's last request
+        self._reports = threading.local()
+
+    @property
+    def model(self) -> str:
+        """The model every request names."""
+        return self.model_identifier
+
+    @property
+    def effective_config(self) -> dict[str, Any]:
+        """What this client sets for its requests besides the prompt."""
+        return {
+            "engine": self.engine,
+            "model": self.model_identifier,
+            "max_tokens": self.MAX_TOKENS,
+        }
+
+    @property
+    def config_hash(self) -> str:
+        """SHA-256 of ``effective_config`` in canonical JSON."""
+        return _config_hash(self.effective_config)
+
+    def call_text(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
+        """The text a one-shot call sends: the prompt itself, since the
+        images travel as blocks of their own."""
+        return prompt
+
+    def last_report(self) -> dict[str, Any]:
+        """What the API reported about the calling thread's last
+        successful request: the model that answered it."""
+        return dict(getattr(self._reports, "value", {}))
 
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
         content: list[dict] = []
@@ -119,28 +253,42 @@ class AnthropicClient:
     def _create(self, messages: list[dict]) -> str:
         response = self._client.messages.create(
             model=self.model_identifier,
-            max_tokens=4096,
+            max_tokens=self.MAX_TOKENS,
             messages=messages,
         )
-        return "".join(
+        text = "".join(
             block.text for block in response.content if block.type == "text"
         )
+        if not text.strip():
+            raise RuntimeError("the Anthropic API returned no text")
+        self._reports.value = {"model": getattr(response, "model", None)}
+        return text
 
-    def open_conversation(self, prompt: str) -> tuple[str, Any]:
-        """Stateless conversations: the handle IS the message prefix."""
-        first_turn = {
-            "role": "user",
-            "content": [{"type": "text", "text": prompt}],
-        }
-        response = self._create([first_turn])
-        handle = [
-            first_turn,
+    @staticmethod
+    def _conversation(prompt: str, response: str) -> list[dict]:
+        return [
+            {"role": "user", "content": [{"type": "text", "text": prompt}]},
             {
                 "role": "assistant",
                 "content": [{"type": "text", "text": response}],
             },
         ]
-        return response, handle
+
+    def open_conversation(self, prompt: str) -> tuple[str, Any]:
+        """Stateless conversations: the handle IS the message prefix."""
+        response = self._create(self._conversation(prompt, "")[:1])
+        return response, self._conversation(prompt, response)
+
+    def keep_conversation(self, handle: Any) -> dict[str, bytes]:
+        """Nothing beyond the opening turn: the handle is its messages."""
+        return {}
+
+    def resume_conversation(
+        self, prompt: str, response: str, files: Mapping[str, bytes]
+    ) -> Any:
+        """The conversation's messages, rebuilt from its opening turn: the
+        same handle `open_conversation` gave, with no request."""
+        return self._conversation(prompt, response)
 
     def fork(self, handle: Any, prompt: str) -> str:
         """Replay the shared prefix with a cache breakpoint, add one turn.
@@ -576,6 +724,226 @@ def _as_text(output: str | bytes | None) -> str:
     return output or ""
 
 
+# -- tool errors ------------------------------------------------------------
+# A claude-code call's stream reports each tool call the model makes (a
+# tool_use block of an assistant event: its id, the tool's name and its
+# arguments) and each call's result (a tool_result block of a user event:
+# the call's id, is_error when the tool failed, and the error's text as its
+# content). The engine reads that record for the files a call is given, so
+# that a Read that could not open or render one of them is found whatever
+# the model then writes (ClaudeCodeClient.complete).
+
+# the one tool the claude-code engine offers the model
+READ_TOOL = "Read"
+
+# The two kinds of error a Read reports. A request error refuses the form
+# of the request before anything is read: the tool asks for a page range,
+# a shorter one or one within the document, so another Read of the same
+# file that succeeds makes up for it. A file error says that the file
+# could not be found, opened or rendered, and nothing makes up for it.
+REQUEST_ERROR = "request"
+FILE_ERROR = "file"
+# the class of an error no pattern below recognises, taken as a file error
+UNCLASSIFIED = "unclassified"
+
+# The Read tool's errors, recognised by the words of the claude CLI's own
+# messages (as CLI 2.1.237 words them), each with the class a failure is
+# named by and its kind. The first pattern that matches gives the class,
+# so the request errors come first: the message refusing to read a whole
+# PDF also names the PDF renderer. A request error the CLI words
+# differently is unclassified, and fails the call until its words are
+# added here: a stricter reading, never a looser one.
+_READ_ERRORS: tuple[tuple[str, str, re.Pattern[str]], ...] = tuple(
+    (name, kind, re.compile(pattern, re.IGNORECASE))
+    for name, kind, pattern in (
+        # a PDF of more pages than one Read takes, asked for without a range
+        ("too-many-pages", REQUEST_ERROR, r"too many to read at once"),
+        # a range that runs past the document's last page
+        ("page-out-of-range", REQUEST_ERROR, r"is outside the document"),
+        # a range longer than one Read takes
+        (
+            "page-range-too-long",
+            REQUEST_ERROR,
+            r"exceeds maximum of \d+ pages per request",
+        ),
+        ("invalid-page-range", REQUEST_ERROR, r"Invalid pages parameter"),
+        # a whole PDF, which the model cannot take as a document; a range is
+        # rendered page by page instead
+        (
+            "whole-pdf-unsupported",
+            REQUEST_ERROR,
+            r"Reading full PDFs is not supported",
+        ),
+        # a text too long for one Read, which the tool offers in parts
+        ("too-many-tokens", REQUEST_ERROR, r"exceeds maximum allowed tokens"),
+        # arguments that do not fit the tool's schema
+        ("invalid-input", REQUEST_ERROR, r"InputValidationError"),
+        (
+            "pdf-renderer-missing",
+            FILE_ERROR,
+            r"pdftoppm is not installed|requires poppler-utils",
+        ),
+        ("missing", FILE_ERROR, r"File does not exist|No such file|ENOENT"),
+        ("permission-denied", FILE_ERROR, r"permission|EACCES|EPERM"),
+        ("empty", FILE_ERROR, r"\bis empty\b"),
+        ("too-large", FILE_ERROR, r"exceeds maximum allowed size"),
+        ("password-protected", FILE_ERROR, r"password-protected"),
+        # a format the tool does not read (TIFF, say), or a device file
+        (
+            "unsupported-format",
+            FILE_ERROR,
+            r"cannot read binary files|would block or produce infinite output",
+        ),
+        (
+            "corrupt",
+            FILE_ERROR,
+            r"not a valid|corrupted or invalid|reports 0 pages"
+            r"|produced no output pages|not a regular file",
+        ),
+        (
+            "render-failed",
+            FILE_ERROR,
+            r"Could not render PDF|pdftoppm failed|PDF extraction"
+            r"|extracted PDF page",
+        ),
+    )
+)
+
+
+def read_error(message: str) -> tuple[str, str]:
+    """The class and the kind (REQUEST_ERROR or FILE_ERROR) of an error the
+    Read tool reported in `message`."""
+    for name, kind, pattern in _READ_ERRORS:
+        if pattern.search(message):
+            return name, kind
+    return UNCLASSIFIED, FILE_ERROR
+
+
+@dataclass(frozen=True)
+class ToolFailure:
+    """A tool the engine's stream reports failing on one of a call's input
+    files, with nothing making up for it: the tool's name, the class of its
+    error (see read_error) and the input's position among the files the
+    call was given. Nothing of the error's own text is kept: a class says
+    what failed, and the text can name paths."""
+
+    tool: str
+    error: str
+    input: int
+
+
+def describe_tool_failures(failures: Iterable[ToolFailure]) -> str:
+    """Each distinct tool and error class, as "Read (corrupt)"."""
+    return ", ".join(dict.fromkeys(f"{f.tool} ({f.error})" for f in failures))
+
+
+class EngineToolError(RuntimeError):
+    """The engine's stream reports that a tool failed on a file the call
+    gave it (`failures`), with nothing making up for it. The answer is then
+    not a reading of that file, whatever it says, so the call fails rather
+    than return it. `response` is that answer, for a caller that records
+    what it held. The message names the tools and the classes of their
+    errors, never a path, an error's text or the answer."""
+
+    def __init__(self, failures: Sequence[ToolFailure], response: str) -> None:
+        self.failures = tuple(failures)
+        self.response = response
+        super().__init__(
+            "the engine's stream reports a tool failing on the call's "
+            f"input: {describe_tool_failures(self.failures)}"
+        )
+
+
+def _path_forms(path: str | os.PathLike[str]) -> set[str]:
+    """The absolute spellings of a file's path a tool call may use."""
+    return {os.path.abspath(path), str(Path(path).resolve())}
+
+
+def _named_input(arguments: Any, inputs: Mapping[str, int]) -> int | None:
+    """The input a tool call's arguments name by its absolute path, if
+    any."""
+    if not isinstance(arguments, dict):
+        return None
+    for value in arguments.values():
+        if isinstance(value, str) and os.path.isabs(value):
+            for form in (os.path.normpath(value), str(Path(value).resolve())):
+                if form in inputs:
+                    return inputs[form]
+    return None
+
+
+def _result_text(content: Any) -> str:
+    """The text of a tool result's content: a string, or text blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        )
+    return ""
+
+
+def tool_failures(
+    stdout: str, inputs: Sequence[str | os.PathLike[str]]
+) -> list[ToolFailure]:
+    """The Read tool's failures on the files a call was given (`inputs`),
+    as the call's stream-json output `stdout` reports them.
+
+    A Read that names one of the files by its path and whose result is an
+    error is a failure, unless its error is a request error (read_error)
+    and another Read of the same file succeeded: the tool refused the form
+    of one request, and the file was read. Reads of other files, and calls
+    of other tools, are not about the call's input and are left out. Each
+    distinct failure is listed once, in the order of the stream."""
+    targets: dict[str, int] = {}
+    for index, path in enumerate(inputs):
+        for form in _path_forms(path):
+            targets.setdefault(form, index)
+    calls: dict[str, int] = {}
+    outcomes: list[tuple[int, tuple[str, str] | None]] = []
+    for event in _stream_events(stdout):
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            call_id = block.get("id")
+            result_of = block.get("tool_use_id")
+            if (
+                event.get("type") == "assistant"
+                and block.get("type") == "tool_use"
+                and block.get("name") == READ_TOOL
+                and isinstance(call_id, str)
+            ):
+                target = _named_input(block.get("input"), targets)
+                if target is not None:
+                    calls[call_id] = target
+            elif (
+                event.get("type") == "user"
+                and block.get("type") == "tool_result"
+                and isinstance(result_of, str)
+                and result_of in calls
+            ):
+                error = (
+                    read_error(_result_text(block.get("content")))
+                    if block.get("is_error") is True
+                    else None
+                )
+                outcomes.append((calls[result_of], error))
+    read = {target for target, error in outcomes if error is None}
+    failures = [
+        ToolFailure(READ_TOOL, error[0], target)
+        for target, error in outcomes
+        if error is not None
+        and not (error[1] == REQUEST_ERROR and target in read)
+    ]
+    return list(dict.fromkeys(failures))
+
+
 class ClaudeCodeClient:
     """Claude Code CLI client (headless ``claude -p``); subscription billing.
 
@@ -597,6 +965,19 @@ class ClaudeCodeClient:
     when a call's stream reports offering the model any tool but Read
     (``CliToolsMismatch``).
 
+    **Tool errors.** A one-shot call's stream reports every Read the model
+    makes and its result. When a Read of a file the call was given fails,
+    and no other Read of it makes up for the failure (only a refusal of
+    the request's form, such as a PDF read without a page range, can be
+    made up for; see ``tool_failures``), the model has not read that file,
+    whatever its answer says: the call raises ``EngineToolError``, naming
+    the tool and the class of its error, and returns nothing. It is an
+    error like any other, so the LLM cache keeps nothing for it and the
+    next call asks again (ADR-0032), unless the call was a refresh
+    (``--refresh transcribe``): a refreshed call that raises replaces
+    nothing, so the answer the cache kept and the transcription view stay,
+    and the next run reuses them (yizkr.pipeline.transcription_check).
+
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit only the environment variables
     on an allowlist (``_PASSED_VARIABLES``: what runs the CLI, locates its
@@ -616,7 +997,9 @@ class ClaudeCodeClient:
     the system-prompt text, the default model and the auto-compact
     windows. ``effective_config`` lists what the engine sets for a call
     besides the prompt, and ``config_hash`` fingerprints it for the run
-    record.
+    record and for the LLM cache's keys (ADR-0032), beside the text a call
+    sends (``call_text``, ``system_prompt``). ``last_report`` gives what a
+    call's stream reported: the model that answered and the CLI version.
 
     **Transcripts.** The CLI stores every session under its projects
     directory, and forks resume from there, so sessions stay persistent
@@ -625,13 +1008,30 @@ class ClaudeCodeClient:
     a fork's as soon as the call returns, a conversation's when
     ``close_conversation`` or ``close`` is called, or at the latest when
     the client is garbage-collected or the process exits.
+    ``keep_conversation`` gives an open conversation's session files, for
+    the LLM cache to keep beside the conversation's opening turn
+    (ADR-0032), and ``resume_conversation`` puts them back under the
+    projects directory, so that a later run forks the conversation
+    exactly as it was opened; a resumed conversation is released as one
+    opened here is.
     """
 
+    engine = "claude-code"
     # Only file reading is permitted — the engine must never execute
     # commands or write files on behalf of model output. It is the only
     # tool the model is offered (--tools) and the only one approved
     # (--allowedTools).
-    ALLOWED_TOOLS = "Read"
+    ALLOWED_TOOLS = READ_TOOL
+    # Appended to the CLI's own system prompt for every call. Denied tool
+    # calls still consume turns in -p mode, and a planning tool grabbed
+    # mid-extraction can burn the whole cap, so everything is forbidden
+    # except reading the files a prompt names.
+    SYSTEM_PROMPT = (
+        "You are running non-interactively inside a data pipeline. "
+        "Do not use any tools except Read, and only on files named in "
+        "the prompt. No TodoWrite, no task tracking, no searching. "
+        "Produce the requested output directly in a single response."
+    )
     # The directory calls run in, under the system temporary directory:
     # it holds nothing, and the CLI files these sessions under a project
     # of their own.
@@ -703,6 +1103,8 @@ class ClaudeCodeClient:
         self.model_identifier = f"claude-code/{self.cli_version}" + (
             f":{self.model}" if self.model else ""
         )
+        # what the stream reported about the calling thread's last call
+        self._reports = threading.local()
         # open conversations: sessions that forks resume, so their
         # transcripts stay in place until the conversation is closed
         self._conversations: set[str] = set()
@@ -748,14 +1150,8 @@ class ClaudeCodeClient:
             json.dumps(
                 _PINNED_SETTINGS, sort_keys=True, separators=(",", ":")
             ),
-            # Denied tool calls still consume turns in -p mode; a planning
-            # tool grabbed mid-extraction can burn the whole cap. Forbid
-            # everything except reading the files we point at.
             "--append-system-prompt",
-            "You are running non-interactively inside a data pipeline. "
-            "Do not use any tools except Read, and only on files named in "
-            "the prompt. No TodoWrite, no task tracking, no searching. "
-            "Produce the requested output directly in a single response.",
+            self.SYSTEM_PROMPT,
         ]
         if self.model:
             command += ["--model", self.model]
@@ -804,26 +1200,42 @@ class ClaudeCodeClient:
     def config_hash(self) -> str:
         """SHA-256 of ``effective_config`` in canonical JSON: one value
         that changes whenever anything in it does."""
-        canonical = json.dumps(
-            self.effective_config,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
+        return _config_hash(self.effective_config)
+
+    @property
+    def system_prompt(self) -> str:
+        """What every call appends to the CLI's own system prompt."""
+        return self.SYSTEM_PROMPT
+
+    def call_text(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
+        """The text a one-shot call sends the CLI: the prompt, after a line
+        that points the Read tool at each image by its absolute path."""
+        if not image_paths:
+            return prompt
+        listing = "\n".join(str(Path(p).resolve()) for p in image_paths)
+        return (
+            "First use the Read tool to examine these image files:\n"
+            f"{listing}\n\n{prompt}"
         )
-        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    def last_report(self) -> dict[str, Any]:
+        """What the stream reported about the calling thread's last
+        successful call: the model that answered it, the CLI version and
+        the session."""
+        return dict(getattr(self._reports, "value", {}))
 
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
-        full_prompt = prompt
-        if image_paths:
-            listing = "\n".join(str(Path(p).resolve()) for p in image_paths)
-            full_prompt = (
-                "First use the Read tool to examine these image files:\n"
-                f"{listing}\n\n{prompt}"
-            )
+        """The answer to a one-shot call that reads `image_paths`. Raises
+        EngineToolError when the call's stream reports that the Read tool
+        failed on one of them (tool_failures)."""
         # An explicit fresh session id names the call's transcript, so it
         # is released even when the call fails before its stream reports
         # the id.
-        return self._run(["--session-id", str(uuid.uuid4())], full_prompt)
+        return self._run(
+            ["--session-id", str(uuid.uuid4())],
+            self.call_text(prompt, image_paths),
+            inputs=image_paths,
+        )
 
     def open_conversation(self, prompt: str) -> tuple[str, Any]:
         """First turn of a forkable session; the handle is its session id.
@@ -839,6 +1251,60 @@ class ClaudeCodeClient:
         session is never mutated, so every fork branches from the same
         prefix and forks never see each other's turns."""
         return self._run(["--resume", str(handle), "--fork-session"], prompt)
+
+    def keep_conversation(self, handle: Any) -> dict[str, bytes]:
+        """The files of a conversation's session, by path under the CLI's
+        projects directory: its transcript, and the directory beside it
+        when there is one. Empty when the session is no longer stored."""
+        try:
+            name = str(uuid.UUID(str(handle)))
+        except ValueError:
+            return {}
+        projects = claude_projects_dir(self.config_dir)
+        paths = sorted(projects.glob(f"*/{name}.jsonl"))
+        for directory in sorted(projects.glob(f"*/{name}")):
+            if directory.is_dir() and not directory.is_symlink():
+                paths += sorted(p for p in directory.rglob("*") if p.is_file())
+        return {
+            path.relative_to(projects).as_posix(): path.read_bytes()
+            for path in paths
+        }
+
+    def resume_conversation(
+        self, prompt: str, response: str, files: Mapping[str, bytes]
+    ) -> Any:
+        """Resume a kept conversation exactly: its session's files go back
+        under the CLI's projects directory, from which forks resume it, and
+        the session is held like one opened here, until
+        ``close_conversation`` or ``close`` releases its transcript. Raises
+        ValueError when the files hold no single session transcript, name
+        a path outside the projects directory, or belong to a session this
+        client holds open already (whose release would pull its transcript
+        from under the other holder)."""
+        transcripts = [name for name in files if name.endswith(".jsonl")]
+        if len(transcripts) != 1:
+            raise ValueError("the kept files hold no single transcript")
+        session_id = str(uuid.UUID(Path(transcripts[0]).stem))
+        projects = claude_projects_dir(self.config_dir).resolve()
+        targets = {}
+        for name in files:
+            target = (projects / name).resolve()
+            if not target.is_relative_to(projects) or target == projects:
+                raise ValueError(f"a kept file outside the projects: {name}")
+            targets[name] = target
+        with self._conversations_lock:
+            if session_id in self._conversations:
+                raise ValueError(f"the session {session_id} is open already")
+            self._conversations.add(session_id)
+        try:
+            for name, target in targets.items():
+                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                target.write_bytes(files[name])
+        except BaseException:
+            with self._conversations_lock:
+                self._conversations.discard(session_id)
+            raise
+        return session_id
 
     def close_conversation(self, handle: Any) -> None:
         """Release a conversation's transcript once it will not be forked
@@ -863,11 +1329,18 @@ class ClaudeCodeClient:
         self.close()
 
     def _run(
-        self, extra_args: list[str], prompt: str, *, hold: bool = False
+        self,
+        extra_args: list[str],
+        prompt: str,
+        *,
+        hold: bool = False,
+        inputs: Sequence[Path] = (),
     ) -> str:
         """One CLI invocation. Its sessions' transcripts are released when
         it ends, unless ``hold`` keeps a successful call's session open
-        for forking."""
+        for forking. A call whose stream reports the Read tool failing on
+        one of its ``inputs`` raises EngineToolError, after the version
+        and tool checks."""
         self._pin.raise_if_paused()
         check_global_config(self.config_dir)
         self.workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -895,6 +1368,7 @@ class ClaudeCodeClient:
                     f"{detail or 'no output'}"
                     " (not logged in? run `claude` interactively once)"
                 )
+            report: dict[str, Any] = {"cli_version": self.cli_version}
             for event in _stream_events(stdout):
                 if (
                     event.get("type") == "system"
@@ -906,9 +1380,19 @@ class ClaudeCodeClient:
                     self._pin.check_tools(
                         event.get("tools"), self.ALLOWED_TOOLS
                     )
+                    report = {
+                        "model": event.get("model"),
+                        "cli_version": event.get("claude_code_version")
+                        or self.cli_version,
+                        "session_id": event.get("session_id"),
+                    }
             text = self._assemble_stream(stdout)
+            failures = tool_failures(stdout, inputs) if inputs else []
+            if failures:
+                raise EngineToolError(failures, text)
             if not text.strip():
                 raise RuntimeError("claude CLI returned no output")
+            self._reports.value = report
             held = hold
             return text
         finally:
@@ -993,3 +1477,41 @@ def make_client(
         f"token billing), claude-code (CLI login, subscription billing) — "
         f"self-hosted adapters welcome: implement LlmClient"
     )
+
+
+def open_cache(
+    root: str | os.PathLike[str],
+    *,
+    refresh: Iterable[str] = (),
+    epochs: Mapping[str, int] | None = None,
+) -> Any:
+    """The LLM cache under ``root``, for one run (ADR-0032).
+
+    ``refresh`` names roles whose calls go to the engine once per key in
+    this run even where the cache holds an answer, which then replaces
+    it; ``epochs`` gives a role an epoch other than 0, so that its calls
+    are keyed, and answered, afresh. Nothing is written until a call is
+    answered."""
+    from yizkr.pipeline.llmcache import EngineCache
+
+    return EngineCache(root, refresh=refresh, epochs=epochs)
+
+
+def cached_client(
+    client: LlmClient,
+    cache: Any,
+    *,
+    role: str,
+    events: Callable[..., Any] | None = None,
+) -> LlmClient:
+    """``client`` with every call answered from ``cache`` (an `open_cache`
+    result) when the same call was answered before, and otherwise made
+    and kept. ``role`` names the pipeline step whose calls these are
+    (transcribe, extract, critique): its epoch and refresh setting apply.
+    ``events``, when given, receives an event for every hit, miss,
+    resume, replay, rejection and adoption. The wrapper presents the
+    conversational capability exactly when ``client`` has it, and adds
+    `reject` (RejectingLlmClient) and `attempt` (AttemptingLlmClient)."""
+    from yizkr.pipeline.llmcache import wrap
+
+    return wrap(client, cache, role=role, events=events)

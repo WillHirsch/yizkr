@@ -147,7 +147,11 @@ class TestTypedNameEvidence:
         adjudicate(
             llm, entities(), block_candidates(entities(), roster()), source
         )
-        assert "Hildegard Laudler" in llm.prompts[0]
+        # The bare name is not enough: Q40's roster label already puts it
+        # in the candidates block (#223). Only the batch facts line renders
+        # the typed claim as "birth_name: ..." (roster facts say
+        # "birth name: ...").
+        assert "birth_name: Hildegard Laudler" in llm.prompts[0]
 
 
 class TestBlocking:

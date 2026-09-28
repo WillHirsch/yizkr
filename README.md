@@ -18,8 +18,10 @@ Start here:
   how real data stays out of the repository and GitHub
 - `docs/REQUIREMENTS.md` – the six requirements (acceptance criteria)
 - `docs/adr/` – architecture decisions and their rationale; ADR-0025
-  says how the pipeline is developed: whole-corpus scratch runs, stage
-  reuse, and run reports and diffs in place of a synthetic eval
+  says how the pipeline is developed: whole-corpus scratch runs, reuse of
+  unchanged work, and run reports and diffs in place of a synthetic eval;
+  ADR-0032 says how work is reused: persisted views, and a cache of model
+  responses
 - `docs/MODELING.md` – Wikibase modeling conventions
 - `docs/EXAMPLES.md` – the one fictional example universe every example
   comes from
@@ -48,7 +50,7 @@ make test-live           # integration tests against the running stack
 
 [uv]: https://docs.astral.sh/uv/
 
-Pipeline outputs (the stage store, scratch-run directories, run reports
+Pipeline outputs (the LLM cache, scratch-run directories, run reports
 and diffs, claim batches, review CSVs, face galleries) are runtime state,
 not code — keep them under `var/` (gitignored) or outside the repo. They
 hold corpus content, so they stay on the machine; only a run's aggregate

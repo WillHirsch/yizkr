@@ -1,5 +1,16 @@
 """Writer step: approved ClaimBatch -> Wikibase statements (ADR-0003).
 
+Before anything else, the writer refuses a batch that holds a `depicts`
+claim no curator approved on its own review-sheet row (ADR-0005): each
+depicts claim must carry the row approval `apply_review` records on it,
+for the claim and the entity-manifest records its local refs resolve
+through as they now read, and no other ref in the batch may change the
+item one of its unrecorded local refs becomes (`unapproved_depicts` in
+yizkr.pipeline.review). The refusal (UnapprovedDepictsError) names
+every such claim by its review-sheet id, and comes before `write_batch`
+reads from or writes to the instance, in a dry run too. A batch without
+depicts claims is not affected.
+
 Per batch, the writer:
 
 0. resolves every artifact the batch cites, by the SHA-1 of its media,
@@ -13,7 +24,11 @@ Per batch, the writer:
    themselves; statements stay reserved for source-attributed claims;
 2. creates items for unresolved `local` subjects/values (reusing an
    existing item on exact label match, so re-runs never duplicate
-   people), writing their `instance of` with the artifact as source;
+   people), writing each minted item's `instance of`, and an
+   unclassified entity's `type hint`, with two references: stated in ->
+   the artifact that mentions the entity, and inferred from extraction
+   run -> the run item. An entity's kind is the extraction's proposal,
+   a machine write like any claim (ADR-0003);
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / region / excerpt
@@ -26,10 +41,30 @@ Per batch, the writer:
    just the fact); if the artifact reference is already present the
    claim is skipped (safe re-run). Same value but different
    qualifiers is a different assertion and coexists as its own
-   statement (ADR-0002).
+   statement (ADR-0002);
+5. after the claims, records the manifest's kind and type hint for
+   every entity whose item existed before this batch — found by exact
+   label here or by the resolve step, or named by an approved
+   equivalence — and that one of the batch's claims mentions. The
+   source is the artifact of the first claim that mentions the entity,
+   as for a minted item. A kind or type hint is compared with the
+   item's unqualified statements on the same property (a type hint as
+   free text, ignoring case, Unicode form and spacing):
+   * a matching statement already referenced to that artifact: nothing
+     to add (safe re-run);
+   * a matching machine statement at normal rank: it gains this
+     source's two reference blocks, each only if not already there;
+   * otherwise (a different value, or a same value held only by curated
+     statements): a new statement at normal rank with both references,
+     coexisting with the others (ADR-0002).
+   A curated statement (one with no extraction-run reference, or whose
+   rank a curator changed) is never altered. The claims come first so
+   that an explicit `instance of` claim keeps its own locator and
+   excerpt.
 
 Nothing here auto-approves: the writer expects the output of
-`apply_review` and trusts the human decision that produced it.
+`apply_review` and trusts the human decisions that produced it, except
+for depicts, whose per-row approval it checks, as above.
 """
 
 from __future__ import annotations
@@ -37,6 +72,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -59,6 +95,28 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline.review import unapproved_depicts
+
+
+class UnapprovedDepictsError(ValueError):
+    """A batch holds depicts claims that no curator approved on their own
+    review-sheet row (ADR-0005)."""
+
+    def __init__(self, claim_ids: list[str]) -> None:
+        self.claim_ids = claim_ids
+        named = ", ".join(f"claim {cid}" for cid in claim_ids)
+        super().__init__(
+            f"{len(claim_ids)} depicts claim(s) carry no per-row human "
+            f"approval of the item they would depict: {named}. A depicts "
+            f"claim is written only after a curator approves it on its own "
+            f"row of a review sheet and apply-review records that approval "
+            f"(ADR-0005). The record holds while the claim and the entity-"
+            f"manifest records its local refs resolve through read as they "
+            f"did then, and while no other ref in the batch to one of its "
+            f"local ids without a record differs from its own. Export-review "
+            f"this batch, decide these rows by hand, apply-review, and write "
+            f"the batch apply-review writes. Nothing was written."
+        )
 
 
 class UnregisteredArtifactError(LookupError):
@@ -85,11 +143,23 @@ class WriteResult:
     created_items: dict[str, str] = field(
         default_factory=dict
     )  # local_id -> QID
+    # `instance of` and `type hint` statements of items this batch found
+    # rather than minted: new statements written, and existing ones that
+    # gained this batch's source (step 5 of the module docstring)
+    type_statements_written: int = 0
+    type_statements_referenced: int = 0
 
 
 def batch_fingerprint(batch: ClaimBatch) -> str:
     canonical = json.dumps(batch.model_dump(mode="json"), sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:10]
+
+
+def normalized_type_hint(text: str) -> str:
+    """A type hint's comparison form: free text, so Unicode
+    compatibility forms, letter case and runs of whitespace do not
+    make two hints different."""
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
 class BatchWriter:
@@ -115,6 +185,10 @@ class BatchWriter:
         }
         # the instance's lag-free media SHA-1 index, read on first need
         self._media_sha1_index: dict[str, str] | None = None
+        # per write_batch call: item QID -> artifact QID of the first
+        # claim that mentions the item, and the items the batch minted
+        self._mentions: dict[str, str] = {}
+        self._minted: set[str] = set()
 
     # -- artifact resolution (content-addressed sources) -------------------
 
@@ -164,13 +238,19 @@ class BatchWriter:
         result: WriteResult,
         source_artifact_qid: str | None,
     ) -> str:
-        if isinstance(ref, QidRef):
-            return ref.qid
         if isinstance(ref, VocabRef):
             return self.items[ref.key]
-        if isinstance(ref, LocalRef):
-            return self._materialize_local(ref, result, source_artifact_qid)
-        raise TypeError(f"unknown ref {ref!r}")
+        if isinstance(ref, QidRef):
+            qid = ref.qid
+        elif isinstance(ref, LocalRef):
+            qid = self._materialize_local(ref, result, source_artifact_qid)
+        else:
+            raise TypeError(f"unknown ref {ref!r}")
+        if source_artifact_qid:
+            # the source an existing item's manifest kind is attributed
+            # to, as a minted item's is (step 5 of the module docstring)
+            self._mentions.setdefault(qid, source_artifact_qid)
+        return qid
 
     def _materialize_local(
         self,
@@ -219,12 +299,16 @@ class BatchWriter:
             item.aliases.set("en", aliases)
         item = item.write(summary="ingest: entity proposed by extraction")
         qid = item.id
+        self._minted.add(qid)
+        # The kind and type hint come from the extraction, never from
+        # review, so they carry the run reference even when the claim
+        # that mentions the entity is a curated one (ADR-0003).
         if instance_of and source_artifact_qid:
             claim = self._item_claim(
                 self.properties["instance_of"], self.items[instance_of]
             )
             claim.references = self._references(
-                artifact_qid=source_artifact_qid
+                artifact_qid=source_artifact_qid, run_qid=result.run_qid
             )
             self._append(item, claim)
             item.write(summary="ingest: instance of")
@@ -238,7 +322,7 @@ class BatchWriter:
                 prop_nr=self.properties["type_hint"], value=type_hint
             )
             hint.references = self._references(
-                artifact_qid=source_artifact_qid
+                artifact_qid=source_artifact_qid, run_qid=result.run_qid
             )
             self._append(item, hint)
             item.write(summary="ingest: type hint (unclassified entity)")
@@ -270,7 +354,7 @@ class BatchWriter:
     # -- WBI datavalue construction -----------------------------------------
 
     @staticmethod
-    def _append(entity, claim) -> None:
+    def _append(entity, claim, beside_equal: bool = False) -> None:
         """Add a claim WITHOUT touching existing ones.
 
         WikibaseIntegrator's claims.add() defaults to REPLACE_ALL, which
@@ -278,11 +362,20 @@ class BatchWriter:
         coexistence violation (ADR-0002): a source-attributed statement
         must never be overwritten.
         Every add in the pipeline must go through here.
+
+        `beside_equal` adds the claim as a statement of its own even when
+        a statement with the same value and qualifiers exists (a curated
+        one the caller must leave as it is): APPEND_OR_REPLACE would
+        instead replace that statement's references and rank with the
+        new claim's.
         """
         from wikibaseintegrator.wbi_enums import ActionIfExists
 
         entity.claims.add(
-            claim, action_if_exists=ActionIfExists.APPEND_OR_REPLACE
+            claim,
+            action_if_exists=ActionIfExists.FORCE_APPEND
+            if beside_equal
+            else ActionIfExists.APPEND_OR_REPLACE,
         )
 
     @staticmethod
@@ -440,6 +533,12 @@ class BatchWriter:
 
     # -- statement existence check -------------------------------------------
 
+    def _entity(self, qid: str):
+        """The item as last read or written by this writer."""
+        if qid not in self._entity_cache:
+            self._entity_cache[qid] = self.client.wbi.item.get(qid)
+        return self._entity_cache[qid]
+
     def _find_matching_statement(self, subject_qid: str, wbi_claim):
         """The existing statement equal to this claim, or None.
 
@@ -451,11 +550,7 @@ class BatchWriter:
         """
         if subject_qid.startswith("(new:"):
             return None
-        if subject_qid not in self._entity_cache:
-            self._entity_cache[subject_qid] = self.client.wbi.item.get(
-                subject_qid
-            )
-        entity = self._entity_cache[subject_qid]
+        entity = self._entity(subject_qid)
         prop = wbi_claim.mainsnak.property_number
         new_value = wbi_claim.mainsnak.datavalue.get("value")
         new_qualifiers = self._qualifier_snapshot(wbi_claim)
@@ -516,11 +611,151 @@ class BatchWriter:
                     return True
         return False
 
+    # -- type statements of items the batch did not mint ---------------------
+
+    def _found_entities(
+        self, batch: ClaimBatch, result: WriteResult
+    ) -> list[tuple[str, EntityRecord]]:
+        """(item QID, manifest record) for every record whose item existed
+        before this batch and one of its claims mentions.
+
+        A record names its item by an approved equivalence (`qid`), by
+        the exact-label match that materialized its local refs here, or,
+        once the resolve step has replaced those refs with the item's
+        QID, by the item's English label being the record's label: the
+        match the resolve step made.
+        """
+        found: list[tuple[str, EntityRecord]] = []
+        by_label: dict[str, list[EntityRecord]] = {}
+        for record in batch.entities:
+            qid = record.qid or result.created_items.get(record.id)
+            if qid is None:
+                by_label.setdefault(record.label, []).append(record)
+            elif qid not in self._minted:
+                found.append((qid, record))
+        if by_label:
+            for qid in self._mentions:
+                if qid in self._minted:
+                    continue
+                label = str(self._entity(qid).labels.get("en") or "")
+                for record in by_label.get(label, []):
+                    found.append((qid, record))
+        return [(qid, rec) for qid, rec in found if qid in self._mentions]
+
+    def _is_curated(self, statement) -> bool:
+        """A human write (no extraction-run reference, ADR-0003) or a
+        statement whose rank a curator changed."""
+        from wikibaseintegrator.wbi_enums import WikibaseRank
+
+        run = self.properties["inferred_from_extraction_run"]
+        machine = any(
+            reference.snaks.get(run)
+            for reference in statement.references.references
+        )
+        return not machine or statement.rank != WikibaseRank.NORMAL
+
+    @classmethod
+    def _reference_key(cls, reference) -> frozenset:
+        """A reference block's snaks, independent of hashes and order."""
+        return frozenset(
+            (
+                prop,
+                json.dumps(
+                    cls._value_key((snak.datavalue or {}).get("value")),
+                    sort_keys=True,
+                ),
+            )
+            for prop, snaks in reference.snaks.snaks.items()
+            for snak in snaks
+        )
+
+    @staticmethod
+    def _type_value(statement):
+        """What a type statement says: the item of an `instance of`, the
+        normalized text of a `type hint`."""
+        value = (statement.mainsnak.datavalue or {}).get("value")
+        if isinstance(value, dict):
+            return value.get("id")
+        if isinstance(value, str):
+            return normalized_type_hint(value)
+        return None
+
+    def _record_type_statement(
+        self, qid: str, claim, artifact_qid: str, result: WriteResult
+    ) -> None:
+        """Record that `artifact_qid` gives the item `claim`'s kind or
+        type hint (step 5 of the module docstring)."""
+        entity = self._entity(qid)
+        value = self._type_value(claim)
+        same = [
+            statement
+            for statement in entity.claims.get(claim.mainsnak.property_number)
+            or []
+            if self._type_value(statement) == value
+            and not self._qualifier_snapshot(statement)
+        ]
+        if any(self._has_artifact_reference(s, artifact_qid) for s in same):
+            return
+        references = self._references(
+            artifact_qid=artifact_qid, run_qid=result.run_qid
+        )
+        target = next((s for s in same if not self._is_curated(s)), None)
+        if target is not None:
+            present = {
+                self._reference_key(reference)
+                for reference in target.references.references
+            }
+            for reference in references.references:
+                if self._reference_key(reference) not in present:
+                    target.references.add(reference)
+            entity.write(
+                summary="ingest: additional source for existing type statement"
+            )
+            result.type_statements_referenced += 1
+        else:
+            claim.references = references
+            self._append(entity, claim, beside_equal=True)
+            entity.write(summary="ingest: type statement from another source")
+            result.type_statements_written += 1
+        self._entity_cache[qid] = self.client.wbi.item.get(qid)
+
+    def _record_found_types(
+        self, batch: ClaimBatch, result: WriteResult
+    ) -> None:
+        from wikibaseintegrator.datatypes import String
+
+        for qid, record in self._found_entities(batch, result):
+            artifact_qid = self._mentions[qid]
+            self._record_type_statement(
+                qid,
+                self._item_claim(
+                    self.properties["instance_of"], self.items[record.kind]
+                ),
+                artifact_qid,
+                result,
+            )
+            if record.type_hint:
+                self._record_type_statement(
+                    qid,
+                    String(
+                        prop_nr=self.properties["type_hint"],
+                        value=record.type_hint,
+                    ),
+                    artifact_qid,
+                    result,
+                )
+
     # -- main entry ----------------------------------------------------------
 
     def write_batch(
         self, batch: ClaimBatch, bulk_accepted: bool = False
     ) -> WriteResult:
+        """Write `batch`. Raises UnapprovedDepictsError, before reading
+        from or writing to the instance, when a depicts claim in it lacks
+        its row approval (the module docstring), in a dry run too."""
+        unapproved = unapproved_depicts(batch)
+        if unapproved:
+            raise UnapprovedDepictsError(unapproved)
         # a bulk-accepted batch (whole-sheet accept-all, ADR-0023) gets a
         # distinct edit summary so MediaWiki history is the low-scrutiny
         # reappraisal queue — no graph flag, no staleness.
@@ -532,6 +767,8 @@ class BatchWriter:
         # every cited artifact must resolve before the first write
         self.resolve_artifacts(batch)
         self._entity_records = {record.id: record for record in batch.entities}
+        self._mentions = {}
+        self._minted = set()
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
         # contribute the document's aliases to the existing items here
@@ -606,4 +843,6 @@ class BatchWriter:
                     subject_qid
                 )
             result.written += 1
+        if not self.dry_run:
+            self._record_found_types(batch, result)
         return result

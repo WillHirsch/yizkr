@@ -35,7 +35,7 @@ def source(**overrides) -> dict:
         "artifact": {"kind": "artifact", "sha1": MEDIA_SHA1},
         "page_number": "1",
         "region": {"x": 10, "y": 42.5, "width": 60, "height": 8},
-        "transcription_excerpt": {"text": "married 1933", "language": "en"},
+        "transcription_excerpt": {"text": "married 1905", "language": "en"},
     }
     base.update(overrides)
     return base
@@ -61,7 +61,7 @@ def spouse_claim(**overrides) -> dict:
         "qualifiers": [
             {
                 "property": "point_in_time",
-                "value": {"type": "time", "year": 1933},
+                "value": {"type": "time", "year": 1905},
             },
             {
                 "property": "sourcing_circumstances",
@@ -352,20 +352,20 @@ class TestManifestValidation:
 
     def test_referred_to_as_appellation_with_perspective_is_valid(self):
         # ADR-0018: a perspectival appellation is a monolingual statement on
-        # the referent, qualified by the ego (a person/family item). On the
-        # universe's postcard Sebastian signs himself "Dein Vater": how he
-        # is referred to from his daughter Klara's perspective.
+        # the referent, qualified by the ego (a person/family item). In the
+        # universe's interview Nicholas calls a neighbour who is no relation
+        # "Nana Maisie": a courtesy title, from his perspective.
         appellation = {
             "subject": {
                 "kind": "local",
                 "local_id": "person-1",
-                "label": "Sebastian Löbig",
+                "label": "Maisie Cutmore",
                 "instance_of": "human",
             },
             "property": "referred_to_as",
             "value": {
                 "type": "monolingual",
-                "value": {"text": "Dein Vater", "language": "de"},
+                "value": {"text": "Nana Maisie", "language": "en"},
             },
             "qualifiers": [
                 {
