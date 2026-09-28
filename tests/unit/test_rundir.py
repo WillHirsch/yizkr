@@ -78,11 +78,22 @@ class TestRunDir:
 # the first bytes of a record whose writer died mid-write
 TORN = b'{"event": "sta'
 
+# a line nested past Python's recursion limit: `json.loads` raises
+# RecursionError decoding it, never produced by a writer here
+NESTED = b"[" * 100_000
+
 
 def tear(log, fragment=TORN):
     """End `log` in a torn line, as a writer that died mid-write leaves it."""
     with open(log, "ab") as handle:
         handle.write(fragment)
+
+
+def nest(log):
+    """Append a complete line nested too deep for `json.loads` to decode,
+    between the record before it and whatever is appended after."""
+    with open(log, "ab") as handle:
+        handle.write(NESTED + b"\n")
 
 
 def names(path):
@@ -244,6 +255,63 @@ class TestAppendAfterATornLine:
         data = (tmp_path / "events.jsonl").read_bytes()
         assert data.startswith(TORN + b"\n{") and data.count(b"\n\n") == 1
         assert names(tmp_path) == ["run-start", "done"]
+
+
+class TestDeeplyNestedLines:
+    """A line nested past Python's recursion limit makes `json.loads`
+    raise RecursionError, never produced by a writer here but read like
+    any other line a reader cannot decode: skipped, with the records
+    around it read whole (#285)."""
+
+    def test_events_around_it_set_the_state(self, tmp_path):
+        run = RunDir(tmp_path)
+        run.update_manifest(
+            documents=[
+                {"sha1": DOC_A, "kind": "text", "stages": ["transcription"]}
+            ]
+        )
+        run.emit("started", subject=DOC_A, kind="text", stage="transcription")
+        nest(tmp_path / "events.jsonl")
+        run.emit("done", subject=DOC_A, kind="text", stage="transcription")
+        assert run_state(run)[(DOC_A, "transcription")].status == DONE
+
+    def test_cache_events_around_it_are_counted(self, tmp_path):
+        run = RunDir(tmp_path)
+        run.emit("cache-miss", role="extract", reason="absent", key="k")
+        nest(tmp_path / "events.jsonl")
+        run.emit("cache-hit", role="extract", reason="key match", key="k")
+        assert cache_counts(run) == {
+            "extract": {"miss: absent": 1, "hit: key match": 1}
+        }
+
+    def test_alerts_around_it_are_kept(self, tmp_path):
+        run = RunDir(tmp_path)
+        run.alert(
+            stage="transcription",
+            check="tool-failure text",
+            subject=DOC_A[:10],
+            value=1,
+            carried=False,
+        )
+        nest(tmp_path / "alerts.jsonl")
+        run.alert(
+            stage="extraction",
+            check="tool-failure text",
+            subject=DOC_B[:10],
+            value=1,
+            carried=True,
+        )
+        assert [a["subject"] for a in run.alerts()] == [
+            DOC_A[:10],
+            DOC_B[:10],
+        ]
+
+    def test_control_requests_around_it_fold(self, tmp_path):
+        run = RunDir(tmp_path)
+        run.request("pause", reason="before the deep nesting")
+        nest(tmp_path / "control.jsonl")
+        run.request("resume")
+        assert run.control().scopes == {}
 
 
 # another process's writer: it takes the log's lock, says so, and on a line

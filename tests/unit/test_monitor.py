@@ -1686,6 +1686,22 @@ class TestLogsThatCannotBeRead:
         assert not restarted
         assert [entry["event"] for entry in entries] == ["done", "started"]
 
+    def test_a_deeply_nested_line_is_skipped_by_the_tail(self, tmp_path):
+        """A line nested past Python's recursion limit makes `json.loads`
+        raise RecursionError while the tail decodes it: `read` skips the
+        line, as it does one that raises ValueError, rather than
+        propagating the error, and the entries around it come back
+        whole (#285)."""
+        log = tmp_path / "events.jsonl"
+        started = json.dumps(stage("started", 1, CERT, "transcription")[1])
+        done = json.dumps(stage("done", 2, CERT, "transcription")[1])
+        log.write_bytes(f"{started}\n{'[' * 100_000}\n{done}\n".encode())
+        tail = monitor._Tail(log)
+        entries, restarted = tail.read()
+        assert not restarted
+        assert [entry["event"] for entry in entries] == ["started", "done"]
+        assert tail.skipped == 1
+
     @pytest.mark.parametrize("name", ["events.jsonl", "alerts.jsonl"])
     def test_a_log_that_fails_partway_is_unknown_until_it_is_read_whole(
         self, run, name, monkeypatch
@@ -1889,6 +1905,20 @@ class TestIncrementalReading:
         summary = summarise_run(path, NOW)
         assert summary.skipped_lines == 1
         assert summary.stage("transcription").running == 1
+
+    def test_a_deeply_nested_line_is_skipped_and_counted(self, tmp_path):
+        """A line nested past Python's recursion limit makes `json.loads`
+        raise RecursionError, not ValueError: the tail skips it like any
+        other line it cannot decode, and the events around it are read
+        (#285). No writer here produces such a line."""
+        path = record(tmp_path / "run", upto=0)
+        append(path, [stage("started", 301, CERT, "transcription")])
+        with open(path / "events.jsonl", "a") as handle:
+            handle.write("[" * 100_000 + "\n")
+        append(path, [stage("done", 302, CERT, "transcription")])
+        summary = summarise_run(path, NOW)
+        assert summary.skipped_lines == 1
+        assert summary.stage("transcription").done == 1
 
     def test_each_refresh_reads_only_what_was_appended(self, run, monkeypatch):
         folded = []

@@ -53,3 +53,15 @@ def test_a_whole_record_that_is_not_utf8_is_skipped_alone(tmp_path):
         b'{"event": "c"}\n'
     )
     assert read_jsonl(log) == [{"event": "a"}, {"event": "c"}]
+
+
+def test_a_deeply_nested_line_is_skipped_alone(tmp_path):
+    """A line nested past Python's recursion limit makes `json.loads`
+    raise RecursionError, not ValueError: it is skipped like any other
+    line that cannot be decoded, and the records around it are kept
+    (#285). No writer here produces such a line."""
+    log = tmp_path / "events.jsonl"
+    log.write_bytes(
+        b'{"event": "a"}\n' + b"[" * 100_000 + b'\n{"event": "c"}\n'
+    )
+    assert read_jsonl(log) == [{"event": "a"}, {"event": "c"}]
