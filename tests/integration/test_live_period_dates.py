@@ -17,8 +17,10 @@ through the stack:
   1947 lies inside it, and an end "between 1956 and 1957" and one in 1955
   disagree, while 2 January 1957 lies inside it.
 
-Like every live test it writes fictional data to the one instance, so the
-session that runs it ends by clearing the recorded instance-contents key
+Each source is registered with a fictional PNG of its own
+(register_fictional), which its claims cite by SHA-1 (#102). Like every
+live test it writes fictional data to the one instance, so the session
+that runs it ends by clearing the recorded instance-contents key
 (docs/AGENT_PROTOCOL.md §5).
 """
 
@@ -30,13 +32,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import disagreements
-from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
-from .conftest import run_sparql, wait_for_query_service
+from .conftest import register_fictional, run_sparql, wait_for_query_service
 
 pytestmark = pytest.mark.live
 
@@ -65,7 +66,7 @@ def date(year: int, month: int | None = None, day: int | None = None):
 
 
 def claim(
-    subject: dict, prop: str, value: dict, artifact_qid: str, qualifiers
+    subject: dict, prop: str, value: dict, artifact: ArtifactRef, qualifiers
 ) -> dict:
     return {
         "subject": subject,
@@ -76,7 +77,7 @@ def claim(
             for key, qualifier in qualifiers
         ],
         "source": {
-            "artifact": {"kind": "qid", "qid": artifact_qid},
+            "artifact": artifact.model_dump(mode="json"),
             "page_number": "1",
             "transcription_excerpt": {
                 "text": "fictional period fixture",
@@ -86,32 +87,37 @@ def claim(
     }
 
 
-def married(artifact_qid: str, *qualifiers) -> dict:
+def married(artifact: ArtifactRef, *qualifiers) -> dict:
     return claim(
         PERSON,
         "spouse",
         {"type": "item", "value": SPOUSE},
-        artifact_qid,
+        artifact,
         qualifiers,
     )
 
 
 def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
     """Write the fixture's claims under item labels that carry a marker:
-    six hex digits of a hash over the claims, each artifact named by its
-    letter in `artifacts`, as test_live_disagreement.py's write_fixture
-    marks its own. The writer finds a local item by its label, so a
-    version of the fixture with other claims would otherwise write onto an
-    earlier version's items and see their statements beside its own. With
-    the marker each version writes items of its own, and a re-run of one
-    version finds its own items again. Returns the write's result and the
-    marker."""
+    six hex digits of a hash over the claims, each cited SHA-1 replaced by
+    its artifact's letter in `artifacts`, as test_live_disagreement.py's
+    write_fixture marks its own. The writer finds a local item by its
+    label, so a version of the fixture with other claims would otherwise
+    write onto an earlier version's items and see their statements beside
+    its own. With the marker each version writes items of its own, and a
+    re-run of one version finds its own items again. The hash keeps each
+    reference's kind, so the marker is not the one the fixture had when
+    its claims cited their sources by QID. Returns the write's result and
+    the marker."""
     content = [
         {
             **claim,
             "source": {
                 **claim["source"],
-                "artifact": artifacts[claim["source"]["artifact"]["qid"]],
+                "artifact": {
+                    **claim["source"]["artifact"],
+                    "sha1": artifacts[claim["source"]["artifact"]["sha1"]],
+                },
             },
         }
         for claim in claims
@@ -151,19 +157,16 @@ def fixture_graph(client, config):
     idempotent: re-runs reuse and skip everything) and wait until the
     query service holds the person's latest revision. Returns (QIDs by
     role, source QIDs by letter, the marked labels by role)."""
-    source = {
-        letter: register_artifact(
-            client,
-            media_path=None,
-            artifact_type="certificate",
-            title=f"Period fixture source {letter}",
-            description="written by tests/integration; safe to delete",
-        ).artifact_qid
+    registered = {
+        letter: register_fictional(
+            client, f"Period fixture source {letter}", "certificate"
+        )
         for letter in "ABC"
     }
+    source = {letter: registered[letter].ref for letter in "ABC"}
     written, marker = write_fixture(
         client,
-        {qid: letter for letter, qid in source.items()},
+        {ref.sha1: letter for letter, ref in source.items()},
         [
             # per A: married between 1946 and 1947, the marriage over
             # between 1956 and 1957, and observed in 1950
@@ -212,7 +215,7 @@ def fixture_graph(client, config):
         for role, ref in (("spouse", SPOUSE), ("town", TOWN))
     }
     wait_for_query_service(config, client, [qids["person"]])
-    return qids, source, labels
+    return qids, {letter: registered[letter].qid for letter in "ABC"}, labels
 
 
 def day(value: str) -> str:
