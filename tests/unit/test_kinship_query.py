@@ -6,12 +6,20 @@ kinship term a source asserts is stored with the person the term names as
 the statement's subject and the ego as its value (ADR-0018): the
 universe's interview records "Aunt Pünktchen" as ``Klara —relative→
 Nicholas ; kinship_type = "aunt"`` (docs/EXAMPLES.md), so that statement
-is Nicholas's row, with Klara as the relative (#229).
-tests/integration/test_live_kinship.py checks the same rows on the
-running stack.
+is Nicholas's row, with Klara as the relative (#229), and Klara gets the
+inverse row, with Nicholas as her nephew (#276).
+
+The query is a chain of the query service's named subqueries (``WITH {
+... } AS %name``, ``INCLUDE %name``). These tests read that structure:
+which statements each set reads and at which ranks, how the sets join,
+and which relation each path of steps gives. No offline engine runs the
+query, so tests/integration/test_live_kinship.py checks its rows on a
+universe fixture on the running stack.
 """
 
+import itertools
 import re
+from collections import Counter
 
 import pytest
 
@@ -34,23 +42,428 @@ def edges(query: str, predicate: str) -> list[tuple[str, str]]:
     return re.findall(rf"(\?\w+)\s+{re.escape(predicate)}\s+(\?\w+)", query)
 
 
-class TestAssertedKinship:
-    """The `relative` + `kinship_type` arm: the query's reading of a
-    kinship term that a source asserts."""
+def closing(text: str, start: int) -> int:
+    """The index of the brace that closes the one at ``start``."""
+    depth = 0
+    for index in range(start, len(text)):
+        depth += {"{": 1, "}": -1}.get(text[index], 0)
+        if depth == 0:
+            return index
+    raise ValueError("unbalanced braces")
 
-    def test_the_named_person_is_the_relative_and_the_ego_the_subject(self, q):
+
+def groups(text: str) -> list[str]:
+    """The top-level ``{ ... }`` groups of ``text``, without their braces
+    (the arms of a UNION)."""
+    found, index = [], text.find("{")
+    while index != -1:
+        end = closing(text, index)
+        found.append(text[index + 1 : end])
+        index = text.find("{", end)
+    return found
+
+
+def named_sets(query: str) -> dict[str, str]:
+    """Each named subquery's body (``WITH { body } AS %name``), by name."""
+    sets = {}
+    for match in re.finditer(r"\bWITH\s*\{", query):
+        end = closing(query, match.end() - 1)
+        (name,) = re.match(r"\s*AS\s+%(\w+)", query[end + 1 :]).groups()
+        sets[name] = query[match.end() : end]
+    return sets
+
+
+@pytest.fixture(scope="module")
+def sets(q) -> dict[str, str]:
+    return named_sets(q)
+
+
+@pytest.fixture(scope="module")
+def main(q) -> str:
+    """The main WHERE group, after the last named set."""
+    return q[q.rindex("} AS %") :]
+
+
+def includes(text: str) -> list[str]:
+    return re.findall(r"INCLUDE\s+%(\w+)", text)
+
+
+def kin_arms(sets: dict[str, str]) -> list[str]:
+    """The arms of the UNION that makes the rows (``%kin``)."""
+    body = sets["kin"]
+    (where,) = groups(body[body.index("WHERE") :])
+    return groups(where)
+
+
+# a cousin has one term, whatever the cousin's sex
+UNGENDERED = {"cousin"}
+
+
+def gender_map(q: str) -> dict[str, tuple[str, str, str]]:
+    """Each gendered base relation's (male, female, neutral) terms."""
+    return {
+        base: forms
+        for base, *forms in re.findall(
+            r'IF\(\?base = "([\w-]+)", IF\(\?g = "m", "([\w -]+)", '
+            r'IF\(\?g = "f", "([\w -]+)", "([\w -]+)"\)\)',
+            q,
+        )
+    }
+
+
+def inverse_table(q: str) -> dict[str, str]:
+    """The inverse arm's table: a term (lower case) -> its inverse base."""
+    (body,) = re.findall(r"VALUES \(\?key \?inverse\) \{(.*?)\}", q, re.S)
+    table = dict(re.findall(r'\("([^"]+)" "([^"]+)"\)', body))
+    assert len(table) == body.count("("), "a term is listed twice"
+    return table
+
+
+class TestAssertedKinship:
+    """The `relative` + `kinship_type` arms: the query's reading of a
+    kinship term that a source asserts, and its inverse."""
+
+    def test_the_named_person_is_the_relative_and_the_ego_the_subject(
+        self, q, sets
+    ):
         ((named, statement),) = edges(q, "p:{P:relative}")
         ((valued, ego),) = edges(q, "ps:{P:relative}")
         # one statement: its subject is the person the term names, and its
         # value is the ego
         assert valued == statement
-        assert (named, ego) == ("?relative", "?subject")
+        assert (named, ego) == ("?named", "?ego")
+        (forward,) = [a for a in kin_arms(sets) if "(?term AS ?base)" in a]
+        assert "SELECT (?ego AS ?subject) (?named AS ?relative)" in forward
+
+    def test_the_named_relative_gets_the_inverse_row(self, sets):
+        # the ego is the named relative's relative, so the inverse term is
+        # gendered by the ego's sex
+        (inverse,) = [a for a in kin_arms(sets) if "?inverse" in a]
+        assert includes(inverse) == ["asserted"]
+        assert "SELECT (?named AS ?subject) (?ego AS ?relative)" in inverse
 
     def test_the_term_is_that_statements_kinship_type(self, q):
         ((_, statement),) = edges(q, "p:{P:relative}")
         ((qualified, term),) = edges(q, "pq:{P:kinship_type}")
         assert qualified == statement
-        assert f'BIND(COALESCE({term}, "relative") AS ?base)' in q
+        assert f'BIND(COALESCE(STR({term}), "relative") AS ?term)' in q
 
     def test_a_term_is_gendered_by_the_person_it_names(self, q):
-        assert edges(q, "wdt:{P:sex_or_gender}") == [("?relative", "?sex")]
+        ((person, statement),) = edges(q, "p:{P:sex_or_gender}")
+        assert person == "?relative"
+        assert edges(q, "ps:{P:sex_or_gender}") == [(statement, "?sex")]
+
+
+class TestInverseTerms:
+    """ADR-0018: the inverse of an asserted term is derived, not stored."""
+
+    def test_every_term_the_query_gives_has_its_inverse(self, q):
+        # father, mother and parent all invert to child, whose terms invert
+        # back to parent: the table and the gendered terms agree
+        table, terms = inverse_table(q), gender_map(q)
+        assert set(table.values()) <= set(terms) | UNGENDERED
+        for base, forms in terms.items():
+            (inverse,) = {table[form] for form in forms}
+            assert {table[form] for form in terms[inverse]} == {base}
+
+    @pytest.mark.parametrize(
+        ("term", "inverse", "degree"),
+        [
+            ("aunt", "nibling", ""),
+            ("Great-Aunt", "nibling", "great-"),
+            ("great great grandmother", "grandchild", "great-great-"),
+            ("maternal aunt", "nibling", ""),
+            ("Paternal Uncle", "nibling", ""),
+            ("Oma", "grandchild", ""),
+            ("Urgroßmutter", "grandchild", "great-"),
+            ("Tante", "nibling", ""),
+            (" aunt ", "nibling", ""),
+            ("Schwiegermutter", "child-in-law", ""),
+            ("second cousin", "second cousin", ""),
+            ("Vetter", "cousin", ""),
+            ("great-father", "relative", ""),
+            ("godmother", "relative", ""),
+            ("stepmother", "relative", ""),
+        ],
+    )
+    def test_a_term_is_read_as_the_inverse_arm_reads_it(
+        self, q, term, inverse, degree
+    ):
+        """The arm's own patterns, applied as its BINDs apply them: a
+        side is dropped, a "great-" (or "Ur-") degree is kept on a
+        grand-, aunt or uncle, niece or nephew term, an unknown cousin
+        term is its own inverse, and any other unknown term gives
+        "relative"."""
+
+        def pattern(literal: str) -> str:
+            return literal.replace("\\\\", "\\")
+
+        (trim,) = re.findall(
+            r'BIND\(REPLACE\(LCASE\(\?term\), "(.+?)", ""\)', q
+        )
+        (side,) = re.findall(r'BIND\(REPLACE\(\?said, "(.+?)", ""\)', q)
+        (greats,) = re.findall(
+            r'BIND\(REPLACE\(\?unsided, "(.+?)", "\$1"\) AS \?greats\)', q
+        )
+        (kept,) = re.findall(r"\?inverse IN \(([^)]*)\)", q)
+        (step,) = re.findall(r'REPLACE\(\?greats, "(.+?)", "great-"\)', q)
+        said = re.sub(pattern(trim), "", term.lower())
+        unsided = re.sub(pattern(side), "", said)
+        prefix = re.sub(pattern(greats), r"\1", unsided)
+        found = inverse_table(q).get(unsided[len(prefix) :])
+        known = found is not None and (
+            prefix == "" or f'"{found}"' in kept.split(", ")
+        )
+        if known:
+            degrees = re.sub(pattern(step), "great-", prefix)
+            assert (found, degrees) == (inverse, degree)
+        else:
+            fallback = unsided if "cousin" in unsided else "relative"
+            assert (fallback, "") == (inverse, degree)
+
+
+class TestRanks:
+    """Rules 4 and 6: every non-deprecated value is read, and no
+    preferred value is required."""
+
+    def test_no_truthy_triple_is_read(self, q):
+        # a truthy triple holds only the best-ranked values, so a preferred
+        # father would hide a normal-rank one
+        assert "wdt:" not in q
+
+    def test_no_value_needs_a_preferred_rank(self, q):
+        assert "PreferredRank" not in q
+        assert "BestRank" not in q
+
+    def test_every_statement_read_skips_deprecated_ones(self, sets, main):
+        read = 0
+        for name, body in {**sets, "main": main}.items():
+            for _, key, statement in re.findall(
+                r"(\?\w+)\s+p:\{P:(\w+)\}\s+(\?\w+)", body
+            ):
+                read += 1
+                (rank,) = set(
+                    re.findall(
+                        rf"{re.escape(statement)}\s+"
+                        r"(?:ps:\{P:\w+\}\s+\S+\s*;\s*)?"
+                        r"wikibase:rank\s+(\?\w+)",
+                        body,
+                    )
+                )
+                assert f"FILTER({rank} != wikibase:DeprecatedRank)" in body, (
+                    f"{name} reads a deprecated {key} statement"
+                )
+        # parents (3), spouses (2), siblings (2), asserted terms, humans
+        # and the relative's sex
+        assert read == 10
+
+
+class TestSteps:
+    """ADR-0014's primitive steps, each read from every side a source
+    may state it on."""
+
+    def test_a_parent_is_read_from_either_side(self, sets):
+        parents = sets["parents"]
+        # father or mother on the child, or child on the parent
+        for key in ("father", "mother"):
+            assert edges(parents, f"p:{{P:{key}}}") == [("?child", "?st")]
+            assert edges(parents, f"ps:{{P:{key}}}") == [("?st", "?parent")]
+        assert edges(parents, "p:{P:child}") == [("?parent", "?st")]
+        assert edges(parents, "ps:{P:child}") == [("?st", "?child")]
+
+    @pytest.mark.parametrize(
+        ("key", "name"), [("spouse", "spouses"), ("sibling", "siblings")]
+    )
+    def test_spouse_and_sibling_statements_are_read_both_ways(
+        self, sets, key, name
+    ):
+        body = sets[name]
+        stated = edges(body, f"p:{{P:{key}}}")
+        valued = edges(body, f"ps:{{P:{key}}}")
+        # ?b is ?a's spouse or sibling whichever of them the statement is on
+        assert list(zip(stated, valued, strict=True)) == [
+            (("?a", "?st"), ("?st", "?b")),
+            (("?b", "?st"), ("?st", "?a")),
+        ]
+
+    def test_two_children_of_one_parent_are_siblings(self, sets):
+        assert includes(sets["siblings"]) == ["childA", "childB"]
+        for name, child in (("childA", "?a"), ("childB", "?b")):
+            assert f"SELECT (?child AS {child}) ?parent" in sets[name]
+            assert includes(sets[name]) == ["parents"]
+        assert "FILTER(?a != ?b)" in sets["siblings"]
+
+
+# A path's relation, as ADR-0014 composes it from the primitive steps.
+RELATIONS = {
+    "parent": "parent",
+    "child": "child",
+    "spouse": "spouse",
+    "sibling": "sibling",
+    "parent/parent": "grandparent",
+    "child/child": "grandchild",
+    "parent/sibling": "pibling",
+    "sibling/child": "nibling",
+    "parent/sibling/child": "cousin",
+    # an aunt or uncle by marriage, and its inverse
+    "parent/sibling/spouse": "pibling",
+    "spouse/sibling/child": "nibling",
+    "spouse/parent": "parent-in-law",
+    "child/spouse": "child-in-law",
+    "sibling/spouse": "sibling-in-law",
+    "spouse/sibling": "sibling-in-law",
+}
+
+# the sets that read statements: ?to is ?from's step
+STEPS = {
+    "parents": ("?child", "parent", "?parent"),
+    "spouses": ("?a", "spouse", "?b"),
+    "siblings": ("?a", "sibling", "?b"),
+}
+BACKWARDS = {"parent": "child", "spouse": "spouse", "sibling": "sibling"}
+FILTERED = re.compile(r'FILTER\((\?\w+) = "(\w+)"\)')
+PROJECTED = re.compile(r"\(((?:[^()]|\([^()]*\))*?)\s+AS\s+(\?\w+)\)|(\?\w+)")
+
+
+class Paths:
+    """Evaluates the path sets over symbolic people: a row binds each
+    variable to a person (a number) or a string, and carries the steps
+    between its people. Joining two rows makes a variable they share one
+    person."""
+
+    def __init__(self, sets: dict[str, str]):
+        self.sets = sets
+        self.people = itertools.count()
+
+    def rows(self, name: str) -> list[tuple[dict, tuple]]:
+        if name in STEPS:
+            start, step, end = STEPS[name]
+            a, b = next(self.people), next(self.people)
+            return [({start: a, end: b}, ((a, step, b),))]
+        return self.select(self.sets[name])
+
+    def select(self, text: str) -> list[tuple[dict, tuple]]:
+        projection, group = re.fullmatch(
+            r"\s*SELECT\s+(?:DISTINCT\s+)?(.*?)\s+WHERE\s*\{(.*)\}\s*",
+            text,
+            re.S,
+        ).groups()
+        if group.strip().startswith("{"):
+            rows = [row for arm in groups(group) for row in self.select(arm)]
+        else:
+            rows = [({}, ())]
+            for name in includes(group):
+                rows = [
+                    joined
+                    for left in rows
+                    for right in self.rows(name)
+                    if (joined := self.join(left, right))
+                ]
+            for var, value in re.findall(FILTERED, group):
+                rows = [row for row in rows if row[0][var] == value]
+        return [(self.project(projection, b), steps) for b, steps in rows]
+
+    @staticmethod
+    def join(left, right):
+        (bound, steps), (other, more) = left, right
+        same = {}
+        for var in bound.keys() & other.keys():
+            if isinstance(bound[var], int) and isinstance(other[var], int):
+                same[other[var]] = bound[var]
+            elif bound[var] != other[var]:
+                return None
+
+        def person(value):
+            return same.get(value, value) if isinstance(value, int) else value
+
+        return (
+            {**{v: person(x) for v, x in other.items()}, **bound},
+            steps + tuple((person(a), s, person(b)) for a, s, b in more),
+        )
+
+    @staticmethod
+    def project(projection: str, bound: dict) -> dict:
+        out = {}
+        for expression, alias, plain in PROJECTED.findall(projection):
+            if plain:
+                out[plain] = bound.get(plain)
+            elif expression.startswith("?"):
+                out[alias] = bound[expression]
+            elif constant := re.fullmatch(r'"([\w-]+)"', expression):
+                out[alias] = constant.group(1)
+            else:
+                var, value, then, other = re.fullmatch(
+                    r'IF\((\?\w+) = "(\w+)", "([\w-]+)", "([\w-]+)"\)',
+                    expression,
+                ).groups()
+                out[alias] = then if bound[var] == value else other
+        return out
+
+
+def path(subject: int, relative: int, steps: tuple) -> str:
+    """The steps from the subject to the relative, as "parent/sibling"."""
+    words, here, left = [], subject, list(steps)
+    while left:
+        for step in left:
+            start, word, end = step
+            if here in (start, end):
+                words.append(word if here == start else BACKWARDS[word])
+                here = end if here == start else start
+                left.remove(step)
+                break
+        else:
+            raise AssertionError(f"steps {steps} do not start at {subject}")
+    assert here == relative
+    return "/".join(words)
+
+
+@pytest.fixture(scope="module")
+def derived(sets) -> set[tuple[str, str]]:
+    """(path, base relation) for each row the derived arms can give."""
+    paths = Paths(sets)
+    found = set()
+    for arm in kin_arms(sets):
+        if "%asserted" in arm:
+            continue
+        for bound, steps in paths.select(arm):
+            found.add(
+                (
+                    path(bound["?subject"], bound["?relative"], steps),
+                    bound["?base"],
+                )
+            )
+    return found
+
+
+class TestPaths:
+    """Each path of steps gives the relation ADR-0014 defines for it."""
+
+    def test_each_path_gives_its_relation(self, derived):
+        assert derived == set(RELATIONS.items())
+
+    def test_each_relation_has_gendered_terms(self, q, derived):
+        assert {base for _, base in derived} <= set(gender_map(q)) | UNGENDERED
+
+
+class TestJoins:
+    """How the named sets join, which decides whether the engine can run
+    the query in time, or at all."""
+
+    def test_every_set_is_included(self, q, sets):
+        # the engine refuses a query with a set it never includes
+        assert set(sets) - set(includes(q)) == set()
+
+    def test_sets_rename_in_their_select_line(self, q):
+        # a variable a BIND renames joins without a hash index, comparing
+        # every row with every row
+        assert not re.search(r"BIND\(\s*\?\w+\s+AS\s+\?\w+\s*\)", q)
+
+    def test_a_set_takes_part_in_one_join_at_most(self, q):
+        # the engine fails a query in which one set starts two joins
+        joined = [
+            name
+            for group in re.findall(r"(?:INCLUDE\s+%\w+\s+){2,}", q + " ")
+            for name in includes(group)
+        ]
+        assert joined
+        assert [n for n, c in Counter(joined).items() if c > 1] == []
