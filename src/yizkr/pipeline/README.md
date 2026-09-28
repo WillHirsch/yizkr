@@ -41,7 +41,10 @@ save the reviewed CSV, then continues on the next `ingest run`.
   place in this document the same as one already in the graph?* Fill the
   `decision` column of `<doc>/equivalences.csv` and save it as
   `equivalences.reviewed.csv`. A document with nothing to match skips this
-  gate.
+  gate, and in `ingest run` no document has anything to match: its
+  reconcile step reads no roster from the graph (see **reconcile** below).
+  An `equivalences.csv` with rows from an earlier run is still reviewed
+  here.
 - **Gate 2 — claims** (`awaiting claim review`): *are these extracted facts
   correct?* Fill `<doc>/review.csv` and save as `review.reviewed.csv`. The
   `critique_notes` column surfaces the extraction critic's concerns
@@ -186,6 +189,15 @@ re-running one step in isolation — but for a normal ingest you only ever run
   fragments (`part of` + page qualifier). Statement provenance:
   `stated in → the artifact itself` (see docs/MODELING.md, "Artifacts
   and registration"). Runs before extraction so claims can cite QIDs.
+  It is the one step before the gates that uses the wiki, until
+  write-time registration (#103) takes its place.
+- **derived media** (decks) — records the images a deck embeds in the
+  deck's state directory, not on the wiki: `derived-media.json` keys each
+  distinct image by the SHA-1 of its bytes (ADR-0010), with its names in
+  the deck, the slides it is on and the deck's own SHA-1, and
+  `derived-media/` keeps its bytes. Registering and uploading them
+  (ADR-0008) is left to write-time registration (#103). Media other than
+  images are counted and reported, not recorded.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (Transkribus-style platform adapter, stub for now).
@@ -223,13 +235,20 @@ re-running one step in isolation — but for a normal ingest you only ever run
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
   same validation).
-- **reconcile** — blocks the document's entities against a roster of the
+- **reconcile** — in `ingest run`, proposes nothing. A proposal matches
+  one of the document's entities to an entity of a roster, and a stage
+  before the write reads nothing from the wiki (ADR-0025 §2), so no roster
+  of the graph, nor its place containment, reaches the step. It writes an
+  `equivalences.csv` with no rows, and **Gate 1** has nothing to review.
+  Matching against a kept graph's roster comes back as an explicit, keyed
+  input (#130); across a scratch run's corpus, identity is corpus
+  clustering's (#105). The standalone `yizkr ingest reconcile` step still
+  reads the graph: it blocks a batch's entities against a roster of the
   whole graph (shared kind + name token, minus pairs a graph fact proves
   cannot match, ADR-0017), then an LLM adjudicates each candidate as
-  same / uncertain / distinct. The proposals are **Gate 1**
-  (`equivalences.csv`); only your `approve` rows take effect, because a
-  wrong merge corrupts every downstream attribution (identity is never
-  auto-confirmed, ADR-0007). A document with no proposals skips the gate.
+  same / uncertain / distinct. Only your `approve` rows of its CSV take
+  effect, because a wrong merge corrupts every downstream attribution
+  (identity is never auto-confirmed, ADR-0007).
 - **resolve** — applies the approved equivalences, then replaces remaining
   `local` refs whose label exactly matches an existing item; anything
   fuzzier is left for the reviewer, who sees `NEW:<local_id>` vs a QID in
@@ -268,13 +287,16 @@ re-running one step in isolation — but for a normal ingest you only ever run
 
 ## Resolving entities across artifacts
 
-Reconcile (Gate 1) matches a document's entities against **everything
-already in the graph**, so it resolves the new document against artifacts
-from *earlier* runs. What it does **not** see, by default, are the other
-documents in the *same* folder run: the loop takes every document to Gate 1
-in one pass, before any is written, so siblings are invisible to each other
-and two artifacts naming one person land as two items. Two mechanisms close
-that gap:
+In `ingest run`, reconcile matches a document's entities against nothing
+(above), so no Gate 1 row ties an entity to an item already in the graph.
+**Resolve** still does, by exact label: it replaces a `local` ref whose
+label exactly matches an existing item's, so a document meets the
+artifacts written before it under the same names only. By default the
+loop takes every document to the gates in one pass, before any is
+written, so siblings in one folder run are invisible to each other, and
+two artifacts naming one person land as two items. A scratch run leaves
+identity to corpus clustering (#105), and #119 removes this per-document
+path; until then, two mechanisms remain:
 
 - **`yizkr reconcile-graph`** — a separate, curator-run pass that proposes
   duplicate *pairs among items already in the graph* (across every artifact
@@ -289,12 +311,12 @@ that gap:
 - **`yizkr ingest run --serial`** (ADR-0019) — processes artifacts one at a
   time, most-connective first (a greedy overlap of their entity names, so a
   family tree or GEDCOM leads), each **fully written before the next
-  reconciles**. A later artifact's "Gustav" then matches the earlier,
-  already-rich "Gustav Löbig" at its *own* Gate 1 — resolved once,
-  in context, with no duplicate to merge later. This removes the routine
-  need for `reconcile-graph`; keep that command for occasional cleanup
-  (pre-existing dups, cross-run dups, and within-artifact dups the
-  extraction manifest missed — serial is a *cross*-artifact fix).
+  reconciles**. A later artifact's "Gustav Löbig" then resolves to the
+  item an earlier artifact wrote under that label. A variant name
+  ("Gustl") is not matched at Gate 1, since reconcile reads no roster, so
+  `reconcile-graph` stays the way to consolidate such pairs, as well as
+  pre-existing dups, cross-run dups, and within-artifact dups the
+  extraction manifest missed (serial is a *cross*-artifact fix).
 
   ```mermaid
   flowchart LR
@@ -304,13 +326,13 @@ that gap:
       a2 --> a3["artifact 3 …<br/>each sees the prior"]
   ```
 
-  The trade is rhythm, not decisions: because each artifact must be written
-  before the next reconciles, a serial run advances **one artifact per pass**
-  — clear its two gates, re-run, next artifact. That is more re-invocations
-  than the default's ~3, but **fewer review decisions** (no cross-artifact
-  duplicate is ever reviewed twice). **Advancing the process = re-running
-  `ingest run`** after you save a reviewed CSV; a future frontend (or a
-  `--watch` mode) will drive those re-runs for you.
+  The trade is rhythm: because each artifact must be written before the
+  next reconciles, a serial run advances **one artifact per pass** — clear
+  its gates, re-run, next artifact. That is more re-invocations than the
+  default's ~3, and in return each artifact resolves against what the
+  earlier ones wrote. **Advancing the process = re-running `ingest run`**
+  after you save a reviewed CSV; a future frontend (or a `--watch` mode)
+  will drive those re-runs for you.
 
   Serial extracts every artifact up front (the sequencer needs all the
   manifests). That phase is parallelisable: `--extract-concurrency N`

@@ -6,6 +6,12 @@ the `pipeline/README.md` rework). Strict serial, two gates per artifact,
 stateless re-run advances. Supersedes an earlier draft that batched the
 claim gate — see §3 for why that and a combined single gate were both
 rejected.
+Amended by #128 (2026-09-28): the per-artifact reconcile step reads no
+roster from the graph (ADR-0025 §2, ADR-0007 as amended), so under
+`--serial` a later artifact meets the items its predecessors wrote only
+through resolve's exact-label match, and its identity gate carries no
+cross-artifact rows. §2 and §3 describe the mode as designed; #119
+removes it.
 
 ## Context
 

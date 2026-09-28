@@ -40,6 +40,14 @@ events in the run directory. The transcription is routed per document
 The PDF renderer the vision engine and the transcription check need is
 checked once, before any document.
 
+Three steps use the wiki: registration, which runs first; resolve, which
+matches labels to the graph's items; and the write. Everything else
+reads nothing from it and writes nothing to it (ADR-0025 §2): the stages
+before the gates; a deck's derived media, which are recorded in its
+directory (`derived-media.json`) and not registered; and the reconcile
+step, which has no roster to match a document's entities against, so it
+proposes nothing and the first gate has nothing to review.
+
 Dependencies are make-style by content hash (`derivations.json`): the
 transcription is made from the correction, when there is one; the batch
 from the transcription; the critique from the batch; and the later
@@ -548,8 +556,8 @@ class Orchestrator:
         # how many documents to extract (transcribe + chunked extract) at
         # once during serial mode's up-front extract-all phase. Multiplies
         # with chunk_concurrency, so keep the product sane for the engine's
-        # rate/usage limits. Wiki writes (register/derive) are serialised by
-        # a lock, so only the LLM-heavy extraction actually overlaps.
+        # rate/usage limits. Registration, a wiki write, is serialised by a
+        # lock, so only the LLM-heavy extraction actually overlaps.
         self.extract_concurrency = max(1, extract_concurrency)
         self._wiki_lock = threading.Lock()
         self.env_file = env_file
@@ -889,7 +897,14 @@ class Orchestrator:
         return self._presentation_cache[key]
 
     def _step_derive_media(self, doc: DocumentRun) -> dict[str, str]:
-        from yizkr.pipeline.presentation import register_derived_media
+        """Record the images the deck embeds in the document's directory
+        (presentation.record_derived_media): each by the SHA-1 of its
+        bytes, with the deck's own SHA-1 and the slides it is on, and its
+        bytes kept beside the record. Nothing is read from the wiki or
+        written to it (ADR-0025 §2): registering the images and uploading
+        their bytes is left to the write side. Returns {media name ->
+        SHA-1}."""
+        from yizkr.pipeline.presentation import record_derived_media
 
         content = self._presentation(doc)
         for suffix, count in content.skipped_media.items():
@@ -898,13 +913,14 @@ class Orchestrator:
                 f"skipped (image media only in W1)",
                 file=sys.stderr,
             )
-        return register_derived_media(
-            self.client,
-            deck_qid=doc.state.artifact_qid,
-            deck_title=doc.state.title,
-            content=content,
-            workdir=doc.dir / "media",
+        record = record_derived_media(
+            content, source_sha1=doc.sha1, directory=doc.dir
         )
+        return {
+            name: sha1
+            for sha1, medium in record.media.items()
+            for name in medium.names
+        }
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
         """Make the document's batch: the GEDCOM adapter's, or extraction
@@ -1142,35 +1158,19 @@ class Orchestrator:
         return batch
 
     def _step_reconcile(self, doc: DocumentRun, batch: ClaimBatch) -> int:
-        from yizkr.pipeline.llm import make_client
-        from yizkr.pipeline.reconcile import (
-            adjudicate,
-            block_candidates,
-            export_equivalences_csv,
-            fetch_place_containment,
-            fetch_roster,
-        )
+        """Write the document's identity proposals, `equivalences.csv`,
+        and return how many there are: none.
 
-        roster = fetch_roster(self.client, self.config)
-        # the transitive place-containment closure lets blocking prune pairs
-        # the graph proves impossible (a camp inside a country is not the
-        # country) before adjudication (ADR-0017)
-        containment = fetch_place_containment(self.client, self.config)
-        candidates = block_candidates(
-            batch.entities, roster, batch=batch, containment=containment
-        )
-        proposals = (
-            adjudicate(
-                make_client(self.llm, effort=self.review_effort),
-                batch.entities,
-                candidates,
-                batch,
-            )
-            if candidates
-            else []
-        )
+        A proposal matches one of the document's entities to an entity
+        of a roster, and a stage before the write reads nothing from the
+        wiki (ADR-0025 §2), so no roster of the graph, nor its place
+        containment, reaches this step, and it has no other roster to
+        match against. The CSV holds its header alone, and the identity
+        gate has nothing to review."""
+        from yizkr.pipeline.reconcile import export_equivalences_csv
+
         return export_equivalences_csv(
-            proposals, batch.entities, roster, doc.equivalences
+            [], batch.entities, [], doc.equivalences
         )
 
     def _step_resolve(self, doc: DocumentRun, batch: ClaimBatch) -> ClaimBatch:
@@ -1520,13 +1520,14 @@ class Orchestrator:
         if doc.source.suffix.lower() in PRESENTATION_SUFFIXES and not (
             doc.state.detail or {}
         ).get("derived_media"):
-            with self._wiki_lock:  # register_derived_media also writes items
-                derived = self._step_derive_media(doc)
+            # recorded in the document's directory, not registered: no
+            # wiki access, so no lock
+            derived = self._step_derive_media(doc)
             doc.state.detail = (doc.state.detail or {}) | {
                 "derived_media": derived
             }
             doc.save()
-            self.log(f"  derived media: {len(derived)} item(s)")
+            self.log(f"  derived media: {len(set(derived.values()))} recorded")
 
         # the views before the gates are brought up to date once in each
         # run
@@ -1540,7 +1541,7 @@ class Orchestrator:
 
         # serial mode extracts every document first (so the sequencer has all
         # the manifests), then processes them in order — stop here on the
-        # extract-only pass, before any reconcile touches the graph.
+        # extract-only pass, before any reconcile.
         if stop_after_extract:
             return doc.state.status
 

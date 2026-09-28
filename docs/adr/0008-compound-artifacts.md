@@ -113,3 +113,15 @@ deck's `part of`. Derived items now follow artifact identity (ADR-0010):
   already holds its bytes; a later deck's label for it becomes an alias
   unless that label is another item's (the case that content-tagged
   the item), since that alias would cross-link two artifacts.
+
+Amended by #128 (2026-09-28): **derived media are recorded before the
+write and registered at write time.** Step 2 of `ingest run` above now
+records the deck's images instead of registering them, since a stage
+before the write reads nothing from the wiki and writes nothing to it
+(ADR-0025 §2). The deck's state directory holds the record,
+`derived-media.json`: each distinct image keyed by the SHA-1 of its bytes
+(ADR-0010), with its names in the archive, the slides it is on and the
+SHA-1 of the deck itself. `derived-media/` beside it keeps the bytes.
+Write-time registration (#103) registers and uploads them, by the rules
+of the #50 amendment above; until it lands, `ingest run` registers no
+derived media.

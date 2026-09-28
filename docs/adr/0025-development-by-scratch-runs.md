@@ -162,7 +162,26 @@ a second store of assertions: the graph stays the system of record.
 - **Stages before write take inputs only from the stage store, the
   corpus and config, and never read the wiki** (#128). The instance is
   reset for every run, so anything read from it is an input that no key
-  can name. A wiki stub that refuses reads and writes proves it.
+  can name. A wiki stub that refuses reads and writes proves it. Amended
+  by #128 (2026-09-28): in the per-document path, registration is the one
+  step before the gates that still uses the wiki, until write-time
+  registration (#103) takes its place. The reconcile step reads no roster
+  and no place containment from the graph: it proposes nothing, so Gate 1
+  has nothing to review (ADR-0007, as amended), and matching against a
+  kept graph's roster comes back as an explicit, keyed input (#130). A
+  deck's derived media are recorded in its state directory, each by the
+  SHA-1 of its bytes with the deck's own SHA-1 and the slides it is on,
+  and their bytes are kept beside the record, for write-time registration
+  to register and upload (#103; ADR-0008, as amended). The resolve step's
+  exact-label read of the graph, after Gate 1, goes with the identity-map
+  writer (#109). The stub is a unit test
+  (`tests/unit/test_no_wiki_before_write.py`): the wiki client and its
+  connection settings refuse every read and write, no other client or
+  settings can be made, and no socket connects. Transcription and its
+  check, extraction (manifest, chunks, critique), the GEDCOM adapter, a
+  deck's slide text and derived media, the reconcile step, and
+  adjudication given a roster ask nothing of it. Corpus clustering and
+  flags have no code yet.
 - **A stage-version registry declares the version of each stage and of
   each method.** A unit test checks the registry against each stage's
   source hash and fails when the source changed without a version bump.
