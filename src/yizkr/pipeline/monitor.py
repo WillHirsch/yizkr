@@ -62,8 +62,11 @@ Reading is incremental: each refresh parses only the lines appended to
 events.jsonl and alerts.jsonl since the last one, and a line not yet
 ended (a writer mid-line) waits for the next refresh, so a monitor keeps
 up with a long run. A log that shrinks, is replaced, or starts with other
-bytes than it did starts the monitor over. docs/MONITOR.md describes the
-views, the commands, the events the monitor reads and serving the page.
+bytes than it did starts the monitor over. A log that cannot be read, by
+the driver's reader either, leaves nothing read from it standing: what
+the views would show from it is unknown, and every refresh tries it
+again, from its start. docs/MONITOR.md describes the views, the commands,
+the events the monitor reads and serving the page.
 """
 
 from __future__ import annotations
@@ -159,6 +162,9 @@ ABORTED = "aborted"
 UNKNOWN = "unknown"
 # why a slice's state cannot be told, as the views and the commands say it
 CONTROL_UNREADABLE = "the control file cannot be read"
+# why what a log holds cannot be told, as the views say it
+EVENTS_UNREADABLE = f"{EVENTS} cannot be read"
+ALERTS_UNREADABLE = f"{ALERTS} cannot be read"
 
 # the status page reloads itself this often (seconds), and is written at
 # most this often while events arrive, and at least this often otherwise
@@ -429,6 +435,12 @@ def _counts(counter: Counter | dict[str, int]) -> str:
 class _Tail:
     """The complete lines appended to a JSON-lines file since the last read.
 
+    The file is looked at as the driver's reader looks at it (read_jsonl):
+    a path that holds no regular file (none yet, a directory, a FIFO) has
+    no entries, and `read` raises OSError where that reader raises, when
+    the file is there but cannot be looked at or read (its mode forbids
+    it, say). A read that raises leaves the tail as it was.
+
     A line not yet ended by its newline is left for the next read, since a
     writer may be mid-line; a complete line that is not a JSON object is
     skipped and counted. A file that shrinks, is replaced, disappears
@@ -453,44 +465,43 @@ class _Tail:
 
     def read(self) -> tuple[list[dict], bool]:
         """(the new entries, whether the file restarted)."""
-        try:
-            status = os.stat(self.path)
-        except OSError:
+        if not self.path.is_file():
             if self._identity is None:
                 return [], False
             return self._restart()
-        identity = (status.st_dev, status.st_ino)
-        if self._identity is not None and (
-            identity != self._identity or status.st_size < self.offset
-        ):
-            return self._restart()
-        self._identity = identity
-        entries: list[dict] = []
-        try:
-            with open(self.path, "rb") as handle:
-                if self._head and handle.read(len(self._head)) != self._head:
-                    return self._restart()
-                if status.st_size == self.offset:
-                    return [], False
-                handle.seek(self.offset)
-                for line in handle:
-                    if not line.endswith(b"\n"):
-                        break
-                    if not self.offset:
-                        self._head = line[: self.HEAD]
-                    self.offset += len(line)
-                    if not line.strip():
-                        continue
-                    try:
-                        entry = json.loads(line.decode("utf-8"))
-                    except ValueError:
-                        entry = None
-                    if isinstance(entry, dict):
-                        entries.append(entry)
-                    else:
-                        self.skipped += 1
-        except OSError:
-            pass
+        with open(self.path, "rb") as handle:
+            status = os.fstat(handle.fileno())
+            identity = (status.st_dev, status.st_ino)
+            if self._identity is not None and (
+                identity != self._identity or status.st_size < self.offset
+            ):
+                return self._restart()
+            if self._head and handle.read(len(self._head)) != self._head:
+                return self._restart()
+            if status.st_size == self.offset:
+                self._identity = identity
+                return [], False
+            handle.seek(self.offset)
+            offset, head, skipped = self.offset, self._head, 0
+            entries: list[dict] = []
+            for line in handle:
+                if not line.endswith(b"\n"):
+                    break
+                if not offset:
+                    head = line[: self.HEAD]
+                offset += len(line)
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line.decode("utf-8"))
+                except ValueError:
+                    entry = None
+                if isinstance(entry, dict):
+                    entries.append(entry)
+                else:
+                    skipped += 1
+        self._identity, self.offset, self._head = identity, offset, head
+        self.skipped += skipped
         return entries, False
 
 
@@ -650,6 +661,11 @@ class Summary:
     # the control file could not be read at the latest refresh, by the
     # driver either: every slice's state is unknown
     control_unreadable: bool = False
+    # the log could not be read at the latest refresh, by the driver's
+    # reader either: nothing is read from it, and what would come from it
+    # is unknown, not empty
+    events_unreadable: bool = False
+    alerts_unreadable: bool = False
     # the slices the plan and the events know, as requests name them
     known_scopes: set[str] = field(default_factory=set)
     set_aside: int = 0
@@ -829,8 +845,10 @@ class RunMonitor:
         self._reset()
 
     def _reset(self) -> None:
-        self._events = _Tail(self.path / EVENTS)
-        self._alerts = _Tail(self.path / ALERTS)
+        self._reset_events()
+        self._reset_alerts()
+        # the logs the latest refresh could not read
+        self._unreadable: set[str] = set()
         # the control file's requests as the latest refresh read them: None
         # while the file cannot be read
         self._requests: list[dict] | None = []
@@ -838,6 +856,11 @@ class RunMonitor:
         self._manifest_key: tuple | None = None
         self._manifest: dict = {}
         self._plan = _Plan()
+
+    def _reset_events(self) -> None:
+        """Forget everything read from events.jsonl: the next read starts
+        from its beginning."""
+        self._events = _Tail(self.path / EVENTS)
         self._attempts: dict[tuple[str, str], _Attempt] = {}
         # the stage each document is in, while one runs: the cache's
         # events name the document and the role, not the stage
@@ -851,9 +874,6 @@ class RunMonitor:
         self._stage_calls: dict[str, Counter] = {}
         self._calls = CallCounts()
         self._pause_invocation: str | None = None
-        self._latest_alerts: deque[dict] = deque(maxlen=LATEST_ALERTS)
-        self._alert_counts: Counter = Counter()
-        self._alert_checks: Counter = Counter()
         self._last_event_at: datetime | None = None
         self._last_at: dict[str, datetime] = {}
         self._marker: str | None = None
@@ -865,16 +885,41 @@ class RunMonitor:
         self._failure_invocation: str | None = None
         self._set_aside = 0
 
+    def _reset_alerts(self) -> None:
+        """Forget everything read from alerts.jsonl: the next read starts
+        from its beginning."""
+        self._alerts = _Tail(self.path / ALERTS)
+        self._latest_alerts: deque[dict] = deque(maxlen=LATEST_ALERTS)
+        self._alert_counts: Counter = Counter()
+        self._alert_checks: Counter = Counter()
+
     def refresh(self) -> bool:
         """Read what the run directory gained since the last refresh, and
         whether it gained anything. The logs are read before run.json: an
-        invocation records itself there before its first event."""
+        invocation records itself there before its first event.
+
+        A log that cannot be read, by the driver's reader either (_Tail),
+        leaves nothing read from it standing, since the driver has no last
+        good read of it: what was read of it is forgotten, and every
+        refresh tries it again, from its beginning, so no record in it is
+        skipped or counted twice once it can be read. The refresh at which
+        it becomes unreadable, or readable again, counts as a change."""
         changed = False
-        for tail, fold in (
-            (self._events, self._fold_event),
-            (self._alerts, self._fold_alert),
+        for name, tail, fold, forget in (
+            (EVENTS, self._events, self._fold_event, self._reset_events),
+            (ALERTS, self._alerts, self._fold_alert, self._reset_alerts),
         ):
-            entries, restarted = tail.read()
+            try:
+                entries, restarted = tail.read()
+            except OSError:
+                if name not in self._unreadable:
+                    forget()
+                    self._unreadable.add(name)
+                    changed = True
+                continue
+            if name in self._unreadable:
+                self._unreadable.discard(name)
+                changed = True
             if restarted:
                 return self._start_over()
             for entry in entries:
@@ -1165,7 +1210,15 @@ class RunMonitor:
         now = now or datetime.now(UTC)
         manifest, plan = self._manifest, self._plan
         summary = Summary(path=self.path, now=now)
-        summary.found = bool(manifest) or self._events.offset > 0
+        summary.events_unreadable = EVENTS in self._unreadable
+        summary.alerts_unreadable = ALERTS in self._unreadable
+        # a run is there once run.json or events are read, or while its
+        # event log cannot be read
+        summary.found = (
+            bool(manifest)
+            or self._events.offset > 0
+            or summary.events_unreadable
+        )
         summary.skipped_lines = (
             self._events.skipped + self._alerts.skipped + self._control_skipped
         )
@@ -1238,18 +1291,21 @@ class RunMonitor:
             else:
                 counts.reused[attempt.how] += 1
 
-        for sha1, (_kind, planned) in plan.documents.items():
-            for stage in planned:
-                count(
-                    sha1,
-                    stage,
-                    self._attempts.get((sha1, stage), _NOT_STARTED),
-                )
-        for (sha1, stage), attempt in self._attempts.items():
-            planned_stages = plan.documents.get(sha1, (None, ()))[1]
-            if stage not in planned_stages:
-                count(sha1, stage, attempt)
-        summary.stages = list(stages.values())
+        # while events.jsonl cannot be read, no stage is counted: its counts
+        # are unknown, not the plan's stages all pending
+        if not summary.events_unreadable:
+            for sha1, (_kind, planned) in plan.documents.items():
+                for stage in planned:
+                    count(
+                        sha1,
+                        stage,
+                        self._attempts.get((sha1, stage), _NOT_STARTED),
+                    )
+            for (sha1, stage), attempt in self._attempts.items():
+                planned_stages = plan.documents.get(sha1, (None, ()))[1]
+                if stage not in planned_stages:
+                    count(sha1, stage, attempt)
+            summary.stages = list(stages.values())
         summary.in_flight.sort(
             key=lambda item: (item.since or now, item.stage, item.sha1)
         )
@@ -1280,7 +1336,10 @@ class RunMonitor:
     ) -> tuple[str | None, bool]:
         """Fill in the run's state and times; (the latest invocation's id,
         whether it has ended). An invocation has ended when run.json
-        records its end, or its closing event says how it ended."""
+        records its end, or its closing event says how it ended. What only
+        the events can tell is unknown while events.jsonl cannot be read:
+        the state of a run.json without invocations, and the time the run
+        has been running when an invocation was killed."""
         manifest = self._manifest
         invocations = _invocations(manifest)
         summary.invocations = len(invocations)
@@ -1290,15 +1349,18 @@ class RunMonitor:
             # start or close event says whether the run is going
             latest = self._marker_invocation
             closing = self._closing.get(latest)
-            summary.state = {
-                RUN_START: "running",
-                RUN_END: "finished",
-                RUN_INTERRUPTED: "interrupted",
-            }.get(self._marker or "", "not started")
+            if EVENTS in self._unreadable:
+                summary.state = UNKNOWN
+            else:
+                summary.state = {
+                    RUN_START: "running",
+                    RUN_END: "finished",
+                    RUN_INTERRUPTED: "interrupted",
+                }.get(self._marker or "", "not started")
             if closing is not None and self._marker != RUN_START:
                 self._closed(summary, closing)
             return latest, self._marker in (RUN_END, RUN_INTERRUPTED)
-        total = 0.0
+        total: float | None = 0.0
         for index, entry in enumerate(invocations):
             start = _time(entry.get("started_at"))
             if start is None:
@@ -1306,11 +1368,17 @@ class RunMonitor:
             end = _time(entry.get("ended_at"))
             if end is None and index == len(invocations) - 1:
                 end = now
+            elif end is None and EVENTS in self._unreadable:
+                # killed: how far it ran is in its events, which cannot be
+                # read, so the run's time is unknown
+                total = None
+                continue
             elif end is None:
                 # killed: its last event is as far as it is known to have run
                 end = self._last_at.get(str(entry.get("invocation"))) or start
             span = max(0.0, (end - start).total_seconds())
-            total += span
+            if total is not None:
+                total += span
             if index == len(invocations) - 1:
                 summary.invocation_elapsed = span
         summary.elapsed = total
@@ -1601,14 +1669,17 @@ def _header(summary: Summary) -> list[tuple[str, str]]:
     parts = [state]
     if summary.invocations:
         parts.append(f"invocation {summary.invocations}")
-    if summary.elapsed is not None:
-        elapsed = f"elapsed {_duration(summary.elapsed)}"
+        elapsed = "elapsed unknown"
+        if summary.elapsed is not None:
+            elapsed = f"elapsed {_duration(summary.elapsed)}"
         if summary.invocations > 1:
             elapsed += f" (this one {_duration(summary.invocation_elapsed)})"
         parts.append(elapsed)
     if summary.last_event_at is not None:
         age = (summary.now - summary.last_event_at).total_seconds()
         parts.append(f"last event {_duration(age)} ago")
+    elif summary.events_unreadable:
+        parts.append("last event unknown")
     kinds = _counts(summary.kinds)
     plan = (
         f"started {_stamp(summary.started_at)} | "
@@ -1639,6 +1710,10 @@ def _stage_values(stage: StageCounts) -> tuple[int, ...]:
 
 
 def _stage_rows(summary: Summary) -> list[tuple[str, str]]:
+    """The stage table; or, while events.jsonl cannot be read, one line
+    that says its counts are unknown."""
+    if summary.events_unreadable:
+        return [(f"stages     counts unknown: {EVENTS_UNREADABLE}", "warn")]
     if not summary.stages:
         return [("no stages planned or seen yet", "dim")]
     width = max(14, *(len(stage.name) + 1 for stage in summary.stages))
@@ -1724,6 +1799,10 @@ def _to_go(summary: Summary) -> str | None:
 
 
 def _call_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
+    """The calls and the work to go; or, while events.jsonl cannot be read,
+    one line that says they are unknown."""
+    if summary.events_unreadable:
+        return [(f"calls      unknown: {EVENTS_UNREADABLE}", "warn")]
     calls = summary.calls
     rows: list[tuple[str, str]] = []
     engine = calls.to_engine
@@ -1797,6 +1876,8 @@ def _call_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
 
 
 def _in_flight_rows(summary: Summary, limit: int) -> list[tuple[str, str]]:
+    if summary.events_unreadable:
+        return [(f"in flight  unknown: {EVENTS_UNREADABLE}", "warn")]
     rows = [(f"in flight  {_n(len(summary.in_flight))}", "head")]
     for item in summary.in_flight[:limit]:
         age = (
@@ -1845,6 +1926,8 @@ def _slice_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
 
 
 def _alert_rows(summary: Summary, limit: int) -> list[tuple[str, str]]:
+    if summary.alerts_unreadable:
+        return [(f"alerts     unknown: {ALERTS_UNREADABLE}", "warn")]
     counts = summary.alert_counts
     if not counts:
         return [("alerts     none", "")]
@@ -2033,7 +2116,11 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
         for stage in summary.stages
     ]
     parts.append("<h2>Stages</h2>")
-    if rows:
+    if summary.events_unreadable:
+        parts.append(
+            f'<p class="warn">Counts unknown: {_e(EVENTS_UNREADABLE)}.</p>'
+        )
+    elif rows:
         parts.append(
             _table(
                 ["stage", *(name for name, _ in _COLUMNS)],
@@ -2066,8 +2153,13 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
         for text, style in _call_rows(summary, detail=True)
     ]
 
-    parts.append(f"<h2>In flight ({_e(_n(len(summary.in_flight)))})</h2>")
-    if summary.in_flight:
+    heading = "In flight"
+    if not summary.events_unreadable:
+        heading += f" ({_n(len(summary.in_flight))})"
+    parts.append(f"<h2>{_e(heading)}</h2>")
+    if summary.events_unreadable:
+        parts.append(f'<p class="warn">Unknown: {_e(EVENTS_UNREADABLE)}.</p>')
+    elif summary.in_flight:
         parts.append(
             _table(
                 ["document", "kind", "stage", "for"],
@@ -2120,7 +2212,9 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
     )
 
     parts.append("<h2>Alerts</h2>")
-    if summary.alert_counts:
+    if summary.alerts_unreadable:
+        parts.append(f'<p class="warn">Unknown: {_e(ALERTS_UNREADABLE)}.</p>')
+    elif summary.alert_counts:
         head = _counts(summary.alert_counts)
         if summary.alert_checks:
             head += f"; by check: {_counts(summary.alert_checks)}"
