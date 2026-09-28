@@ -54,6 +54,7 @@ from yizkr.pipeline.monitor import (
     render_lines,
     render_terminal,
     request,
+    state_now,
     summarise_run,
     watch,
     write_status_page,
@@ -2261,10 +2262,11 @@ class TestCommands:
                 json.dumps({"action": "pause", "scope": ["x"]}).encode(),
                 ("now paused", "now active", "now aborted"),
             ),
-            # not UTF-8: the driver cannot read the file either
+            # not UTF-8: skipped, as the driver's reader skips a line it
+            # cannot decode
             (
                 b'{"action": "pause", "reason": "Fl\xf6rburg"}',
-                ("its state unknown: the control file cannot be read",) * 3,
+                ("now paused", "now active", "now aborted"),
             ),
         ],
         ids=["unhashable-scope", "not-utf8"],
@@ -2276,6 +2278,8 @@ class TestCommands:
         stands without failing on the control file's other lines."""
         with open(run / "control.jsonl", "ab") as handle:
             handle.write(line + b"\n")
+        assert state_now(run, "run") == "now active"
+        assert summarise_run(run, NOW).slice("run").state == ACTIVE
         keys = ScriptedKeys(
             [":", ":", "q"], lines=["pause stage extraction", "resume"]
         )
@@ -2290,6 +2294,48 @@ class TestCommands:
         assert capsys.readouterr().out.strip() == (
             f"abort requested for kind:text: {state[2]}"
         )
+        # the view reads the control file as the driver does
+        view = {
+            item.scope: item.state
+            for item in summarise_run(run, NOW).slices
+            if item.state != ACTIVE
+        }
+        assert view and view == monitor._control_state(run)
+
+    def test_a_control_file_that_cannot_be_read(self, run, monkeypatch):
+        """Where the control file itself cannot be read, a command that has
+        just written its request, and state_now, say the state cannot be
+        told rather than guessing it."""
+        probe = run.parent / "mode-probe"
+        probe.write_text("x")
+        probe.chmod(0)
+        try:
+            probe.read_text()
+        except PermissionError:
+            pass
+        else:
+            pytest.skip("this process reads a file whatever its mode")
+        finally:
+            probe.chmod(0o600)
+            probe.unlink()
+        control = run / "control.jsonl"
+        mode = control.stat().st_mode & 0o777
+        written = monitor.request
+
+        def then_unreadable(*args, **kwargs):
+            entry = written(*args, **kwargs)
+            control.chmod(0)
+            return entry
+
+        monkeypatch.setattr(monitor, "request", then_unreadable)
+        unknown = "its state unknown: the control file cannot be read"
+        try:
+            result = handle_command(run, "pause stage extraction")
+            assert result.requested is not None
+            assert result.message.endswith(unknown)
+            assert state_now(run, "run") == unknown
+        finally:
+            control.chmod(mode)
 
     def test_help_quit_and_nonsense(self, run):
         assert handle_command(run, "help").message.startswith("commands:")
