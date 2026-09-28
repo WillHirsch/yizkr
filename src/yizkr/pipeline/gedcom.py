@@ -13,7 +13,18 @@ Source-first conventions carry over unchanged:
   SHA-1 of its bytes (ADR-0010; the writer resolves it to the artifact
   item), with the record's verbatim GEDCOM lines as the transcription
   excerpt — the human reviewer sees exactly the lines that assert the
-  claim;
+  claim. Of a family record, a pair of spouse claims holds the lines
+  that give it: the family's own line, its HUSB and WIFE, its own
+  citations, and the MARR and DIV that date the pair. A person's image
+  claim holds the object's lines, after those of the person's OBJE link
+  when the link holds any beneath it. An excerpt holds at most 400
+  characters, as a Wikibase text value does: a longer one keeps every
+  line of the citations folded into its claim (below) and the titles
+  they resolve to, and as many of its other lines, from the first, as
+  fit, marking each run it leaves out with `…`, and it ends with
+  `clipped, sha1` and the first 12 hex digits of the whole excerpt's
+  SHA-1, so that clipping never makes one claim of two that the whole
+  excerpts keep apart, such as two citations of one fact;
 * GEDCOM's own uncertainty vocabulary maps to the archive's structural
   uncertainty (docs/MODELING.md): ABT/EST/CAL -> `circa` sourcing
   circumstances; BEF -> `latest date`; AFT -> `earliest date`;
@@ -52,13 +63,12 @@ the death with no date, place or cause (`1 DEAT Y`) still gives a
 `death` event (below), beside what another DEAT gives. An event that
 restates another line for line, its citation included, gives the same
 claim, which the batch holds once; the same value under another citation
-is a claim of its own, save a family's spouse claims: they cite the
-family record, so a MARR or DIV that restates another's date and place
-gives no pair of its own, whatever its citation. Some tags are still read
-once: a family's HUSB and WIFE (a further one is counted, below), and,
-within the SOUR citations and OBJE objects that the adapter incorporates
-wholesale, a citation's PAGE, a source record's TITL, and an object's
-FILE and TITL.
+is a claim of its own. So a MARR or DIV that restates another's date and
+place under the same citations gives no pair of spouse claims of its
+own, and under other citations gives a pair of its own, which cites
+them. A family's HUSB and WIFE are still read once, and so is an
+object's FILE: a further one is counted (below). Every PAGE of a
+citation, and every TITL of a source record or of an object, is read.
 
 Supported (the fields family-tree exports actually carry):
 individuals (names -> label + aliases, a NAME without a value read from
@@ -76,13 +86,19 @@ the record is), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
 when the record is), parent-child relations, marriages (the spouse
 statements' start time and place) and divorces (their end time). Source
-citations (SOUR) are folded into each
-claim's reference (ADR-0021): the PAGE locator becomes the reference's
-page number and the cited source's own title is surfaced in the excerpt
-— the upstream source is resolved, never fetched. Multimedia objects
-(OBJE) become lightweight un-held media items (an `artifact`) linked to
-the person with `image`; the bytes are referenced, never downloaded from
-a third party (privacy rule 7). Sibling relations are deliberately NOT
+citations (SOUR) are folded into the reference of each claim that the
+record they stand beneath gives (ADR-0021): the event, fact or NAME a
+claim cites; the family record, for its parent and spouse claims, and,
+for a pair of spouse claims, the MARR and DIV that date it; the object,
+for its image claims, and the person's OBJE link to it. Each PAGE of a
+citation is a locator of the reference's page number, and the cited
+source's title, each TITL it gives, is surfaced in the excerpt — the
+upstream source is resolved, never fetched. Multimedia objects (OBJE) of
+an individual become lightweight un-held media items (an `artifact`)
+linked to the person with `image`, each standing for the object's first
+FILE and labelled by the object's first title, its other titles being
+aliases; the bytes are referenced, never downloaded from a third party
+(privacy rule 7). Sibling relations are deliberately NOT
 derived from shared parents: the export asserts parentage, not
 siblinghood (docs/MODELING.md — never derive). Dates accept the
 GEDCOM-standard English abbreviations plus what hand-maintained trees
@@ -97,7 +113,16 @@ handled or already-dropped subtree unitemised (ADR-0021). Whether a tag
 is mapped depends on where it stands: a PLAC is read under a marriage
 but not under a divorce, and a TYPE under a NAME but not under a MARR,
 so such a tag is named with its parent's tag where it goes unread
-(DIV.PLAC, MARR.TYPE). A DIV without a DATE is counted as DIV: it says a
+(DIV.PLAC, MARR.TYPE). A SOUR that the adapter folds into no claim's
+reference is counted so too: one directly beneath a person (INDI.SOUR),
+beneath a DATE, PLAC, CHIL or FAMC (DATE.SOUR, CHIL.SOUR), or beneath
+an event or a NAME that gives no claim (BIRT.SOUR, NAME.SOUR). So is an
+OBJE that it maps to no media item, beneath a family or an event
+(FAM.OBJE, DEAT.OBJE), save a person's link to an object the export
+lacks, which is counted as OBJE, as a level-0 OBJE record that no image
+claim cites is. A level-0 SOUR record that no folded citation cites is
+counted as SOUR, and each FILE of an object after its first as
+OBJE.FILE. A DIV without a DATE is counted as DIV: it says a
 marriage ended at an unknown time, and a claim has no unknown value to
 state that with. A family has one husband and one wife, so the adapter
 reads a family's first HUSB and first WIFE alone, and a further one is
@@ -118,9 +143,11 @@ warning, and the family links that name them give no claim.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from collections.abc import Callable
+import unicodedata
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
@@ -168,13 +195,25 @@ class Record:
         child = self.first(tag)
         return child.value if child else ""
 
-    def lines(self) -> str:
-        """The record's verbatim GEDCOM lines (for excerpts)."""
+    def own_line(self) -> str:
+        """The record's own verbatim GEDCOM line, without the records
+        beneath it; a CONT or CONC continuation stays in its value."""
         own = f"{self.level}"
         own += f" {self.xref}" if self.xref else ""
         own += f" {self.tag}"
         own += f" {self.value}" if self.value else ""
-        return "\n".join([own, *(child.lines() for child in self.children)])
+        return own
+
+    def walk(self) -> list[Record]:
+        """The record and every record beneath it, in the file's order."""
+        return [
+            self,
+            *(node for child in self.children for node in child.walk()),
+        ]
+
+    def lines(self) -> str:
+        """The record's verbatim GEDCOM lines (for excerpts)."""
+        return "\n".join(node.own_line() for node in self.walk())
 
 
 _LINE = re.compile(r"^(\d+)\s+(?:(@[^@]+@)\s+)?(\w+)(?:\s(.*))?$")
@@ -420,30 +459,113 @@ def _source_title(record: Record) -> str:
 
     Resolves the opaque ``@S..@`` pointer a citation carries to the name
     of the upstream source the tree relied on ("Adressbuch der Stadt
-    Flörburg 1912"). Whitespace-collapsed; never fetched.
+    Flörburg 1912"). GEDCOM gives a source one TITL: a record that gives
+    several names the one source each way, so each distinct one is read,
+    joined by " / " ("Adressbuch der Stadt Flörburg 1912 / Flörburg
+    address book 1912"). Whitespace-collapsed; never fetched.
     """
-    title = record.text("TITL").strip() or record.value.strip()
-    return " ".join(title.split())
+    titles = dict.fromkeys(
+        title
+        for tag in record.all("TITL")
+        if (title := " ".join(tag.value.split()))
+    )
+    return " / ".join(titles) or " ".join(record.value.split())
 
 
-def _media_label(obje: Record) -> str:
-    """A GEDCOM multimedia object's display label.
+def _media_names(obje: Record) -> tuple[str, list[str]]:
+    """A GEDCOM multimedia object's display label, and its aliases.
 
-    Prefers the object's title (TITL, which real exports nest under
-    FILE), then its file name/URL, then a generic fallback — labels must
-    be non-empty (EntityRecord.label).
+    The object's media item stands for its first FILE: GEDCOM 5.5.1
+    allows several, grouping files of one context (a photograph and a
+    sound clip, say), and each further one is a medium of its own, which
+    the census counts (OBJE.FILE). The label is the object's first title:
+    each TITL of that FILE, where real exports nest it, then each of the
+    object's own; every other distinct title is an alias, as a person's
+    further NAME is. An object with no title is labelled by its first
+    file's name or URL, then its own value, then a generic fallback —
+    labels must be non-empty (EntityRecord.label).
     """
-    file_record = obje.first("FILE")
-    for candidate in (
-        file_record.text("TITL") if file_record else "",
-        obje.text("TITL"),
-        file_record.value if file_record else "",
-        obje.value,
-    ):
-        cleaned = " ".join(candidate.split()) if candidate else ""
-        if cleaned:
-            return cleaned
-    return "media object"
+    files = obje.all("FILE")
+    first = files[0] if files else None
+    titles = list(
+        dict.fromkeys(
+            cleaned
+            for title in [
+                *(first.all("TITL") if first else []),
+                *obje.all("TITL"),
+            ]
+            if (cleaned := " ".join(title.value.split()))
+        )
+    )
+    if titles:
+        return titles[0], titles[1:]
+    for candidate in (first.value if first else "", obje.value):
+        if cleaned := " ".join(candidate.split()):
+            return cleaned, []
+    return "media object", []
+
+
+# Wikibase caps a text value, the transcription excerpt among them, at 400
+# characters
+EXCERPT_LIMIT = 400
+# the mark of a run of lines an excerpt leaves out
+ELIDED = "…"
+
+
+def _excerpt(segments: list[tuple[str, bool]], cited: str) -> str:
+    """A claim's transcription excerpt from its GEDCOM lines, `segments`,
+    each a line (or a CONT line within one) with whether it belongs to a
+    citation folded into the claim, and `cited`, the titles those
+    citations resolve to (" | cited: ..."), or "".
+
+    The lines are joined by " | ", as monolingual text forbids newlines,
+    with `cited` after them. An excerpt longer than EXCERPT_LIMIT keeps
+    every line of the folded citations and `cited`, and as many of the
+    other lines, from the first, as fit; each run of lines it leaves out
+    is marked ELIDED. Should the citations not fit whole, it keeps as many
+    of all its lines, from the first, as fit. Either way it ends with
+    "clipped, sha1" and the first 12 hex digits of the SHA-1 of the whole
+    excerpt, in NFC: two claims the whole excerpts keep apart stay apart
+    once clipped, so two citations of one fact are never one claim, while
+    a claim restated line for line is the same claim.
+    """
+    whole = " | ".join(text for text, _ in segments) + cited
+    if len(whole) <= EXCERPT_LIMIT:
+        return whole
+    digest = hashlib.sha1(
+        unicodedata.normalize("NFC", whole).encode()
+    ).hexdigest()[:12]
+    tail = f" | clipped, sha1 {digest}"
+    room = EXCERPT_LIMIT - len(tail)
+    others = sum(1 for _, citing in segments if not citing)
+    if others < len(segments):
+        # the most of the other lines that fit beside the citations
+        for keep in range(others - 1, -1, -1):
+            text = _kept(segments, keep) + cited
+            if len(text) <= room:
+                return text + tail
+    cut = whole[: room - len(f" | {ELIDED}")]
+    if " | " in cut:
+        cut = cut.rsplit(" | ", 1)[0]
+    return f"{cut} | {ELIDED}{tail}"
+
+
+def _kept(segments: list[tuple[str, bool]], keep: int) -> str:
+    """`segments` joined by " | ", with every citation line and the first
+    `keep` other lines, and each run of lines left out marked ELIDED."""
+    out: list[str] = []
+    others = 0
+    eliding = False
+    for text, citing in segments:
+        if citing or others < keep:
+            out.append(text)
+            eliding = False
+        elif not eliding:
+            out.append(ELIDED)
+            eliding = True
+        if not citing:
+            others += 1
+    return " | ".join(out)
 
 
 # GEDCOM NAME TYPE (5.5.1 §, plus common tool values) -> typed-name
@@ -541,9 +663,18 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # `reads_once`; a tag it maps with nothing read beneath (SEX, FAMC,
     # HUSB, DATE, PLAC...) has no entry. A child read where it stands is
     # descended into, so an unmapped tag nested under a mapped event still
-    # surfaces. `handled` tags the adapter incorporates wholesale — SOUR
-    # (folded into claim references) and OBJE (minted as un-held media
-    # items) — are skipped subtree and all: neither counted nor descended.
+    # surfaces. A SOUR citation folded into a claim's reference, and an
+    # OBJE mapped to a media item, is incorporated wholesale and skipped,
+    # subtree and all: neither counted nor descended (`folded`, `mapped`).
+    # Whether one is depends on where it stands and on what the record it
+    # stands beneath gives, so the census runs once the claims are made: a
+    # SOUR directly beneath a person, beneath a DATE, PLAC, CHIL or FAMC,
+    # or beneath an event that gives no claim, is folded into none, and an
+    # OBJE beneath a family or an event is mapped to no media item, and
+    # each is counted. So is a level-0 SOUR record that no folded citation
+    # cites, a level-0 OBJE record that no image claim cites, and each FILE
+    # of an object after its first, which its media item does not stand
+    # for.
     # The envelope is structure, not data. Everything else is counted once
     # and its subtree left untouched, so an already-dropped branch is not
     # itemised down to its PAGE/_APID leaves. What remains reported is the
@@ -573,8 +704,23 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     for parent, tags in reads.items():
         for tag in tags:
             read_beneath.setdefault(tag, set()).add(parent)
-    handled = {"SOUR", "OBJE"}  # incorporated wholesale (ADR-0021)
+    # a SOUR is folded beneath the records that claims cite and the events
+    # that date a family's spouse claims, and an OBJE is mapped beneath a
+    # person alone, so one that is not is named with its parent's tag
+    # (DATE.SOUR, FAM.OBJE) where the other tags hold it
+    read_beneath["SOUR"] = {
+        "NAME", "_MARNM", "SEX", "BIRT", "DEAT", "BURI", "OCCU", "NCHI",
+        "RESI", "OBJE", "FAM", "MARR", "DIV",
+    }  # fmt: skip
+    read_beneath["OBJE"] = {"INDI"}
     envelope = {"HEAD", "TRLR"}  # GEDCOM structure, not genealogy
+    # the line numbers of the SOUR citations folded into a claim's
+    # reference and of the OBJE mapped to a media item (a person's link,
+    # and the object it points to), and the xrefs of the level-0 SOUR
+    # records a folded citation cites: what the census takes as read
+    folded: set[int] = set()
+    mapped: set[int] = set()
+    resolved: set[str] = set()
 
     def count(tag: str) -> None:
         unsupported[tag] = unsupported.get(tag, 0) + 1
@@ -624,10 +770,22 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         # has no unknown value to name them with
         return child.tag in ("MARR", "DIV") and not coupled(parent)
 
+    def further_files(obje: Record) -> None:
+        """Count each FILE of an object after its first, which its media
+        item does not stand for (_media_names)."""
+        for _ in obje.all("FILE")[1:]:
+            count("OBJE.FILE")
+
     def census(record: Record) -> None:
         seen: set[str] = set()
         for child in record.children:
-            if child.tag in handled or child.tag in envelope:
+            if child.tag == "SOUR" and child.line_number in folded:
+                continue
+            if child.tag == "OBJE" and child.line_number in mapped:
+                # an object embedded beneath the person, rather than a link
+                # to a level-0 one, has its further files counted here
+                if not child.value.strip().startswith("@"):
+                    further_files(child)
                 continue
             # only a family's first HUSB and first WIFE are read
             further = child.tag in seen and child.tag in reads_once.get(
@@ -650,53 +808,81 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             else:
                 count(child.tag)
 
-    for root in roots:
-        if root.tag in handled or root.tag in envelope:
-            continue
-        if root.tag in ("INDI", "FAM"):
-            census(root)
-        else:
-            count(root.tag)
-
     entities: list[dict] = []
     claims: list[dict] = []
     place_ids: dict[str, str] = {}
     occupation_ids: dict[str, str] = {}
     media_ids: dict[str, str] = {}
 
-    def cited_sources(record: Record) -> tuple[list[str], list[str]]:
-        """(PAGE locators, resolved upstream-source titles) from a
-        record's own SOUR citations — ADR-0021 step A.
+    def cited_sources(
+        citations: Sequence[Record],
+    ) -> tuple[list[str], list[str]]:
+        """(PAGE locators, resolved upstream-source titles) from the SOUR
+        citations folded into one claim — ADR-0021 step A.
 
-        A GEDCOM SOUR child names the upstream source the tree relied on;
-        we fold it into the claim's existing reference rather than drop
-        it. The upstream @S..@ is resolved to its title, never fetched.
+        A GEDCOM SOUR names the upstream source the tree relied on; we
+        fold it into the claim's existing reference rather than drop it.
+        Each PAGE of a citation is a locator. The upstream @S..@ is
+        resolved to its title, never fetched.
         """
         pages: list[str] = []
         titles: list[str] = []
-        for citation in record.all("SOUR"):
-            page = citation.text("PAGE").strip()
-            if page:
-                pages.append(page)
-            target = sources.get(citation.value.strip())
-            if target and (title := _source_title(target)):
-                titles.append(title)
+        for citation in citations:
+            folded.add(citation.line_number)
+            pages += [
+                page
+                for tag in citation.all("PAGE")
+                if (page := tag.value.strip())
+            ]
+            pointer = citation.value.strip()
+            target = sources.get(pointer)
+            if target is not None:
+                resolved.add(pointer)
+                if title := _source_title(target):
+                    titles.append(title)
         return pages, titles
 
-    def source(record: Record) -> dict:
-        # monolingual text values forbid newlines; keep each GEDCOM line
-        # verbatim and join visibly
-        excerpt = record.lines().replace("\n", " | ")
-        pages, titles = cited_sources(record)
-        if titles:
-            # the verbatim lines carry only the @S..@ pointer; name the
-            # cited source(s) so the reviewer can read the citation
-            excerpt += " | cited: " + "; ".join(dict.fromkeys(titles))
-        if len(excerpt) > 400:
-            excerpt = excerpt[:397].rsplit(" | ", 1)[0] + " | …"
+    def source(
+        record: Record,
+        passage: Sequence[Record] | None = None,
+        events: Sequence[Record] = (),
+    ) -> dict:
+        """The reference of a claim that `record` gives: the export, with
+        the lines of `passage` (by default `record` and every line beneath
+        it) as the excerpt, and the SOUR citations directly beneath
+        `record` or one of `events` folded in. Only a citation that the
+        passage holds is folded in, so that the excerpt, which keeps the
+        lines of the folded citations before any other (_excerpt), shows
+        it."""
+        passage = record.walk() if passage is None else passage
+        folding = {
+            id(citation)
+            for holder in (record, *events)
+            for citation in holder.all("SOUR")
+        }
+        citations = [node for node in passage if id(node) in folding]
+        citing = {
+            id(node) for citation in citations for node in citation.walk()
+        }
+        # monolingual text values forbid newlines: each GEDCOM line, and
+        # each CONT line within one, is kept verbatim and joined visibly
+        segments = [
+            (text, id(node) in citing)
+            for node in passage
+            for text in node.own_line().split("\n")
+        ]
+        pages, titles = cited_sources(citations)
+        # the verbatim lines carry only the @S..@ pointer; name the cited
+        # source(s) so the reviewer can read the citation
+        cited = (
+            " | cited: " + "; ".join(dict.fromkeys(titles)) if titles else ""
+        )
         reference: dict = {
             "artifact": artifact.model_dump(mode="json"),
-            "transcription_excerpt": {"text": excerpt, "language": "en"},
+            "transcription_excerpt": {
+                "text": _excerpt(segments, cited),
+                "language": "en",
+            },
         }
         if pages:
             # the citation's PAGE is the reference's locator (ADR-0003)
@@ -744,10 +930,12 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         key = obje.xref or f"@inline{obje.line_number}@"
         if key not in media_ids:
             media_ids[key] = f"md{len(media_ids) + 1}"
+            label, aliases = _media_names(obje)
             entities.append(
                 {
                     "id": media_ids[key],
-                    "label": _media_label(obje),
+                    "label": label,
+                    "aliases": aliases,
                     "kind": "artifact",
                     "summary": (
                         "media referenced from the GEDCOM export; bytes not "
@@ -772,20 +960,27 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # that restates another line for line, its citation included, gives
     # the same claim again, which is not added twice, while the same value
     # under another citation has a source of its own, and so is a claim of
-    # its own (a family's spouse claims cite the family record, so a MARR
-    # or DIV that restates another's date and place gives none of its own;
-    # see spouse_qualifiers)
+    # its own (a MARR or DIV that restates another's date and place under
+    # the same citations gives no pair of spouse claims of its own; see
+    # spouse_pairs)
     made: set[str] = set()
 
     def claim(
-        subject_id: str, prop: str, value: dict, record: Record, quals=()
+        subject_id: str,
+        prop: str,
+        value: dict,
+        record: Record,
+        quals=(),
+        passage: Sequence[Record] | None = None,
+        events: Sequence[Record] = (),
     ):
+        """A claim that `record` gives, cited as `source` has it."""
         new = {
             "subject": local(subject_id),
             "property": prop,
             "value": value,
             "qualifiers": list(quals),
-            "source": source(record),
+            "source": source(record, passage, events),
             "confidence": 1.0,
         }
         key = json.dumps(new, sort_keys=True)
@@ -988,11 +1183,13 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     marnm,
                 )
 
-    def spouse_qualifiers(fam: Record) -> list[list[dict]]:
-        """The qualifiers of a family's spouse claims, a list for each pair
-        of claims. A MARR's date is the claims' start time and its place
-        their location, and a DIV's date is their end time (docs/MODELING.md,
-        "Marriages, residences and other periods").
+    def spouse_pairs(fam: Record) -> list[tuple[list[dict], list[Record]]]:
+        """The pairs of a family's spouse claims, each as its qualifiers and
+        the MARRs and DIVs that give them. A MARR's date is the claims'
+        start time and its place their location, and a DIV's date is their
+        end time (docs/MODELING.md, "Marriages, residences and other
+        periods"); the SOUR citations of the MARRs and DIVs that give a
+        pair are folded into its claims' reference.
 
         Each MARR gives a start for each of its dates with each of its
         places, and each DIV an end for each of its dates. The family's
@@ -1001,29 +1198,57 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         states, and dates a pair of its own, with its own circa (ADR-0002).
         A MARR that neither dates nor places anything, or a DIV that dates
         nothing, gives no start or end, and so no pair beside one that
-        does: the family's claims state the marriage already. A start or
-        an end that restates another gives none either."""
-        starts: list[list[dict]] = []
+        does: the family's claims state the marriage already, and its
+        citations are folded into none. When no MARR or DIV gives one, each
+        MARR gives the family's one pair, which none dates. A start or an
+        end that restates another under the same citations, line for line,
+        gives no pair of its own, and its MARR or DIV joins the other's;
+        under other citations, it is a pair of its own, citing them, since
+        the same value under another citation is a claim of its own."""
+
+        def cites(event: Record) -> str:
+            """An event's SOUR citations, line for line."""
+            return "\n".join(c.lines() for c in event.all("SOUR"))
+
+        def given(
+            found: list[tuple[list[dict], str, list[Record]]],
+            quals: list[dict],
+            event: Record,
+        ) -> None:
+            """Note that `event` gives the start or end `quals`."""
+            for known, citing, events in found:
+                if known == quals and citing == cites(event):
+                    if not any(other is event for other in events):
+                        events.append(event)
+                    return
+            found.append((quals, cites(event), [event]))
+
+        starts: list[tuple[list[dict], str, list[Record]]] = []
         for marriage in fam.all("MARR"):
             dates = each_date(marriage, dated_end, "start_time", "marriage")
             locations = [[located(place)] for place in places(marriage)]
             for location in locations or [[]]:
                 for quals in dates:
-                    start = quals + location
-                    if start and start not in starts:
-                        starts.append(start)
-        ends: list[list[dict]] = []
+                    if start := quals + location:
+                        given(starts, start, marriage)
+        ends: list[tuple[list[dict], str, list[Record]]] = []
         for divorce in fam.all("DIV"):
             for end in each_date(divorce, dated_end, "end_time", "divorce"):
-                if end and end not in ends:
-                    ends.append(end)
-        first = starts[0] if starts else []
-        # a circa the marriage's date gave the statement already stands for
-        # the divorce's too
-        first = first + [
-            q for q in (ends[0] if ends else []) if q not in first
+                if end:
+                    given(ends, end, divorce)
+        if not starts and not ends:
+            return [([], fam.all("MARR"))]
+        first, events = (starts[0][0], starts[0][2]) if starts else ([], [])
+        if ends:
+            # a circa the marriage's date gave the statement already stands
+            # for the divorce's too
+            first = first + [q for q in ends[0][0] if q not in first]
+            events = [*events, *ends[0][2]]
+        return [
+            (first, events),
+            *((quals, given_by) for quals, _, given_by in starts[1:]),
+            *((quals, given_by) for quals, _, given_by in ends[1:]),
         ]
-        return [first, *starts[1:], *ends[1:]]
 
     # individuals -> entities + birth/death claims
     for xref, record in individuals.items():
@@ -1177,6 +1402,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         # the object inline. Reference the media, never fetch its bytes.
         for obje_ptr in record.all("OBJE"):
             target = obje_ptr.value.strip()
+            # the object's lines are the excerpt, and its citations are
+            # folded in; a link that holds lines of its own (a citation of
+            # the link, say) gives its lines ahead of the object's, and its
+            # citations are folded in too
+            link: list[Record] = []
             if target.startswith("@"):
                 obje = media_records.get(target)
                 if obje is None:
@@ -1185,11 +1415,23 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         f"object {target!r} — no media claim emitted"
                     )
                     continue
+                if obje_ptr.children:
+                    link = [obje_ptr]
             else:
                 obje = obje_ptr  # media embedded inline under the person
+            mapped.update({obje_ptr.line_number, obje.line_number})
             media = {"type": "item", "value": local(media_entity(obje))}
+            passage = [node for held in (*link, obje) for node in held.walk()]
             for quals in each_date(obje, dated_qualifiers, "media"):
-                claim(person_id(xref), "image", media, obje, quals)
+                claim(
+                    person_id(xref),
+                    "image",
+                    media,
+                    obje,
+                    quals,
+                    passage=passage,
+                    events=link,
+                )
 
     # families -> parentage and spouse claims, between people the batch
     # holds: a HUSB, WIFE or CHIL that names no one it holds gives none
@@ -1211,7 +1453,23 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         # a family with one partner or none gives no spouse claims, and the
         # census counts its MARR and DIV
         if coupled(fam):
-            for quals in spouse_qualifiers(fam):
+            partners = (fam.first("HUSB"), fam.first("WIFE"))
+            for quals, events in spouse_pairs(fam):
+                # of the family record, a pair's excerpt holds the lines
+                # that give it: the family's own, its HUSB and WIFE, its
+                # own citations, and the MARRs and DIVs that give the pair,
+                # each whole. Another pair's MARR, with its citations,
+                # would blur which citations are this pair's
+                passage = [
+                    fam,
+                    *(
+                        node
+                        for part in fam.children
+                        if part.tag == "SOUR"
+                        or any(part is held for held in (*partners, *events))
+                        for node in part.walk()
+                    ),
+                ]
                 for subject, other in ((husband, wife), (wife, husband)):
                     claim(
                         person_id(subject),
@@ -1219,7 +1477,23 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         {"type": "item", "value": local(person_id(other))},
                         fam,
                         quals,
+                        passage=passage,
+                        events=events,
                     )
+
+    # the census, once the claims show which citations are folded and
+    # which objects mapped
+    for root in roots:
+        if root.tag in envelope:
+            continue
+        if root.tag in ("INDI", "FAM"):
+            census(root)
+        elif root.tag == "SOUR" and root.xref in resolved:
+            continue  # a cited source, resolved to its title (ADR-0021)
+        elif root.tag == "OBJE" and root.line_number in mapped:
+            further_files(root)
+        else:
+            count(root.tag)
 
     # ADR-0022 §4: the same alias hygiene the LLM path runs — GEDCOM's
     # structured NAME/TYPE tags already do the typing; this only drops

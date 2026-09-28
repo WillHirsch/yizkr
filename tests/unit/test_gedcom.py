@@ -2104,11 +2104,17 @@ class TestUndatedDeath:
     @pytest.mark.parametrize(
         ("lines", "excerpt", "counted"),
         [
-            (["1 DEAT Y"], "1 DEAT Y", {}),
-            (["1 DEAT y"], "1 DEAT y", {}),
+            # the burial register's record, which no claim cites, is
+            # counted (#324)
+            (["1 DEAT Y"], "1 DEAT Y", {"SOUR": 1}),
+            (["1 DEAT y"], "1 DEAT y", {"SOUR": 1}),
             # Eugen died aged 73 per the burial register: (here) the export
             # gives that age beside the Y, and the census counts it
-            (["1 DEAT Y", "2 AGE 73"], "1 DEAT Y | 2 AGE 73", {"AGE": 1}),
+            (
+                ["1 DEAT Y", "2 AGE 73"],
+                "1 DEAT Y | 2 AGE 73",
+                {"AGE": 1, "SOUR": 1},
+            ),
             # (here) the export cites the burial register beside the Y
             (
                 ["1 DEAT Y", "2 SOUR @S1@"],
@@ -2333,11 +2339,12 @@ class TestUndatedDeath:
         # written on its own line asserts nothing. Neither a death event
         # nor a cause of death is claimed, since either would mark Eugen
         # as not possibly living; the census counts the DEAT, which
-        # stands for all beneath it
+        # stands for all beneath it, and the burial register's record,
+        # which no claim cites (#324)
         result = adapt_gedcom(
             cited(BURIAL_REGISTER) + eugen(*lines), artifact=EXPORT
         )
-        assert result.unsupported_tags == {"DEAT": 1}
+        assert result.unsupported_tags == {"DEAT": 1, "SOUR": 1}
         assert result.warnings == []
         assert death_events(result.batch) == []
         assert participations(result.batch) == []
