@@ -530,6 +530,18 @@ class TestTurtle:
         text = 'a "quoted" back\\slash\nnewline\ttab'
         assert re.fullmatch(STRING, sg.literal(text))
 
+    def test_a_century_is_its_first_year_as_wikibase_counts_it(self):
+        # the 19th century runs from 1801 to 1900 (#241): a date drawn in
+        # it, at its first or its last year too, is stored as 1801, and
+        # 1800 falls in the 18th
+        for year in (1801, 1836, 1900):
+            assert sg.when(year, precision=sg.CENTURY) == sg.Time(
+                "1801-01-01", sg.CENTURY
+            )
+        assert sg.when(1800, precision=sg.CENTURY).date == "1701-01-01"
+        stored = sg.when(1836, precision=sg.CENTURY)
+        assert sg.years_of(stored) == (1801, 1900)
+
 
 def difference(a: str, b: str) -> str:
     """Where two texts first differ, '' when they are equal: a short

@@ -167,6 +167,28 @@ artifact a new QID, changes neither.
 ## Uncertainty and time
 
 - Use Wikibase time precision (year / month / day / decade / century).
+- Centuries and millennia are counted as Wikibase and Wikidata count
+  them, from year 1: the nth century runs from year 100(n−1)+1 to year
+  100n, so a date at century precision stored as any year from 1801 to
+  1900 is the 19th century, and one stored as 1800 is the 18th. The nth
+  millennium runs from year 1000(n−1)+1 to year 1000n (the 2nd
+  millennium is 1001–2000). Before the common era the count runs back
+  from 1 BCE: −1800 to −1701 is the 18th century BCE, which runs from
+  1800 to 1701 BCE.
+- A claim gives a century by its first year (the 19th century as 1801),
+  as it gives a decade by its first year (the 1890s as 1890), and the
+  writer stores that year as it is: the wiki shows it as "19. century". A
+  claim at century precision whose year is not the first year of its
+  century is refused, so the 19th century given as 1800, which Wikibase
+  counts as the 18th, is reported and never written. Claims have no
+  millennium precision. The readers count as the wiki does, whichever
+  year of a century is stored (a curator who types "19. century" into
+  the wiki stores 1900): the static site shows a century-precision date
+  stored as 1801 or 1900 as the 19th century, and the disagreement
+  report gives it the span 1801–1900 ("Contradictions").
+- "The 1800s", meaning 1800–1899, is not a century in that count, and
+  is stated as a range, earliest date 1800 and latest date 1899, never
+  rounded to the 19th century.
 - Ranges and vagueness: earliest date / latest date qualifiers. On a
   statement dated as a period (a marriage, a residence), each end has its
   own pair: see "Marriages, residences and other periods". The static
@@ -559,14 +581,17 @@ not a signal to grow the schema on.
 - A date whose span lies inside another's and a place the graph records
   inside the other differ in resolution, not substance, and are not
   reported. A date's span is the whole period its precision names (a
-  month, a year, a decade, a century, stored as its first year), or the
-  range its source states with `earliest date` and `latest date`,
-  open-ended when only one is given: 1909 and 16 March 1909 agree, as do
-  "between 1938 and 1939" and either 22 June 1938 or 3 September 1939,
-  and "before 1926" and 1912, while "after 1945" and 1941 disagree. A
-  stated range is never widened back to its precision (rule 5): 1939
-  stated "between September 1939 and 1 October 1939" and August 1939
-  disagree. A precision coarser than a century names no span. A range
+  month, a year, a decade, or a century as Wikibase counts it, which
+  holds 1900 in the 19th century and 1800 in the 18th: "Uncertainty and
+  time"), or the range its source states with `earliest date` and
+  `latest date`, open-ended when only one is given: 1909 and 16 March
+  1909 agree, as do "between 1938 and 1939" and either 22 June 1938 or
+  3 September 1939, and "before 1926" and 1912, while "after 1945" and
+  1941 disagree. The 19th century agrees with 1900 and with the 1890s,
+  and disagrees with 1800 and with the decade 1900–1909, which reaches
+  past it. A stated range is never widened back to its precision (rule
+  5): 1939 stated "between September 1939 and 1 October 1939" and August
+  1939 disagree. A precision coarser than a century names no span. A range
   dates only a time: on any other value, such as a place, a person or a
   name, it sets nothing apart. Two dates stored alike are compared
   through the ranges their statements state: "before 1945" and "after

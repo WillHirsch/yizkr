@@ -37,6 +37,7 @@ from functools import cached_property
 from pathlib import Path
 
 from yizkr import disagreement
+from yizkr.claims import century_of
 from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.core.privacy import (
@@ -281,7 +282,11 @@ def page(title: str, body: str, root: str = "") -> str:
 
 
 def format_time(value: str, precision: str) -> str:
-    """Wikibase dateTime + precision -> what the source actually said."""
+    """Wikibase dateTime + precision -> what the source actually said. A
+    century is the one Wikibase counts for the stored year (century_of):
+    at century precision, 1801 to 1900 are each the 19th century. The
+    query service gives a century's year as stored, so a century before
+    the common era counts back the same way: -1800 is the 18th."""
     date = value[1:] if value.startswith(("+", "-")) else value
     date = date.split("T")[0]
     year, _, rest = date.partition("-")
@@ -289,7 +294,7 @@ def format_time(value: str, precision: str) -> str:
     sign = "−" if value.startswith("-") else ""
     p = int(precision) if precision else 11
     if p <= 7:
-        return f"{sign}{int(year) // 100 + 1}th century"
+        return f"{sign}{century_of(int(year))}th century"
     if p == 8:
         return f"{sign}{int(year) // 10 * 10}s"
     if p == 9:

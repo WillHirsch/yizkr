@@ -228,7 +228,8 @@ class Item:
 @dataclass(frozen=True)
 class Time:
     """A time value as the RDF stores it: parts finer than the precision
-    are 01, a decade or century is its first year."""
+    are 01, a decade or century is its first year, a century counted as
+    Wikibase counts it (the 19th is 1801 to 1900)."""
 
     date: str
     precision: int
@@ -257,7 +258,7 @@ class Coordinate:
 
 def when(year: int, month: int = 1, day: int = 1, precision=DAY) -> Time:
     if precision == CENTURY:
-        year, month, day = year - year % 100, 1, 1
+        year, month, day = year - (year - 1) % 100, 1, 1
     elif precision == DECADE:
         year, month, day = year - year % 10, 1, 1
     elif precision == YEAR:
@@ -1034,7 +1035,7 @@ class Builder:
             stated = precision or self.scenario(f"{slot}_precision")
             base = when(year, month, day, stated)
         # a contradicting value lies outside the whole period the value
-        # names (a year beside "the 1800s" inside it differs only in
+        # names (a year beside the 19th century inside it differs only in
         # resolution); a third one lies on the other side
         low, high = years_of(base) if base else (year, year)
         away = self.rng.randint(1, 3)
