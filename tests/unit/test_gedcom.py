@@ -2338,8 +2338,8 @@ class TestNameParts:
             (["1 NAME", "2 GIVN Rudolf"], "Rudolf"),
             (["1 NAME", "2 SURN Löbig"], "Löbig"),
             # each part in the order GEDCOM writes a name, whatever the
-            # order of its lines, and each of a part's comma-separated
-            # pieces in turn
+            # order of its lines, each line of a part in turn, and each of
+            # its comma-separated pieces in turn
             (
                 [
                     "1 NAME",
@@ -2348,8 +2348,9 @@ class TestNameParts:
                     "2 SPFX c1, c2",
                     "2 GIVN b1,b2",
                     "2 NPFX a",
+                    "2 GIVN b3",
                 ],
-                "a b1 b2 c1 c2 d e",
+                "a b1 b2 b3 c1 c2 d e",
             ),
         ],
         ids=["given-and-surname", "slashes", "given", "surname", "every-part"],
