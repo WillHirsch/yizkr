@@ -21,6 +21,8 @@ import os
 import re
 import shutil
 import stat
+import subprocess
+import sys
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -49,7 +51,6 @@ from yizkr import cli
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline import estimate, llm, scratch
 from yizkr.pipeline.estimate import FIRST_TURNS, Estimator, StageCalls
-from yizkr.pipeline.llmcache import EngineCache
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import (
     EXIT_FAILED,
@@ -186,7 +187,7 @@ class Engine:
         pass
 
     def close(self):
-        pass
+        self.fakes.closed += 1
 
 
 @pytest.fixture
@@ -201,6 +202,7 @@ def engine(request, monkeypatch):
     fake.refuse = False
     fake.same_claims = False
     fake.answers = itertools.count(1)
+    fake.closed = 0
 
     def make_client(engine, *, effort=None, model=None, **kwargs):
         return Engine(fake, effort=effort, model=model)
@@ -392,6 +394,9 @@ class TestCounts:
         assert counted.total().hits == 0
         # every extraction as the run before measured it
         assert counted.stages["extraction"].measured == 4
+        assert "each as the latest run to make it measured it" in "\n".join(
+            estimate.describe(counted)
+        )
         assert per_stage(counted, "engine_calls") == first
         assert run(tmp_path, corpus, engine, new=True) == first
 
@@ -430,6 +435,8 @@ class TestCounts:
         extraction = counted.stages["extraction"]
         assert (extraction.hits, extraction.known) == (2, 1)
         assert (extraction.estimated, extraction.more) == (0, 0)
+        # the batch holds a chunk the engine answers: its critique waits
+        assert counted.stages["critique"].estimated == 1
         made = run(tmp_path, corpus, engine)
         assert made == {"extraction": 1, "critique": 1}
         assert per_stage(counted, "engine_calls") == made
@@ -600,28 +607,76 @@ class TestCounts:
         self, tmp_path, engine
     ):
         """A transcription view the check fails is not reused: the run
-        makes it again, from the reading the cache kept."""
+        makes it again, from the reading the cache kept, and the batch
+        made from that reading stands."""
         corpus = small(tmp_path)
-        run(tmp_path, corpus, engine, until="transcription")
+        run(tmp_path, corpus, engine)
         (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
         view = run_dir / "b-studio-photo-1890s" / "transcription.json"
         failing = json.loads(view.read_text())
         failing["text"] = "As an AI model I cannot read this."
         view.write_text(json.dumps(failing))
-        counted = estimate_of(tmp_path, corpus, engine, until="transcription")
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         transcription = counted.stages["transcription"]
         assert (transcription.made, transcription.reused) == (1, 3)
         assert (transcription.hits, transcription.known) == (1, 0)
+        assert per_stage(counted, "reused") == {
+            "transcription": 3,
+            "extraction": 4,
+            "critique": 4,
+        }
+
+    def test_a_correction_makes_the_reading_and_what_follows_again(
+        self, tmp_path, engine
+    ):
+        """A curator's correction: the transcription is made from it, with
+        no call, and the batch made from the old reading no longer
+        stands, so its entity manifest is a known call."""
+        corpus = small(tmp_path)
+        run(tmp_path, corpus, engine)
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        corrected = run_dir / "b-studio-photo-1890s"
+        (corrected / "transcription.corrected.txt").write_text(
+            u.SOURCES[0].text + "\nPeiltal"
+        )
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        transcription = counted.stages["transcription"]
+        assert (transcription.made, transcription.engine_calls) == (1, 0)
+        extraction = counted.stages["extraction"]
+        assert (extraction.made, extraction.known) == (1, 1)
+        made = run(tmp_path, corpus, engine, resume=LATEST)
+        assert made == {"extraction": 2, "critique": 1}
+        assert per_stage(counted, "engine_calls") == made
+
+    def test_a_batch_made_again_the_same_keeps_its_critique(
+        self, tmp_path, engine
+    ):
+        """A batch view gone, and made again from the cache's answers
+        with the same content: the critique made from it stands."""
+        corpus = small(tmp_path)
+        run(tmp_path, corpus, engine)
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        (run_dir / "c-marriage-cert-1905" / "batch.json").unlink()
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        extraction = counted.stages["extraction"]
+        assert (extraction.made, extraction.hits) == (1, 2)
+        assert per_stage(counted, "reused")["critique"] == 4
+        assert counted.total().engine_calls == 0
 
     def test_a_changed_source_is_made_afresh(self, tmp_path, engine):
         """A source whose bytes changed has its directory set aside by the
-        run, so none of its views stands."""
+        run, and so has one whose records are gone, so none of their
+        views stands."""
         corpus = small(tmp_path)
         run(tmp_path, corpus, engine, until="transcription")
         corpus.text(LETTER, "directory-1912")
+        # and a directory whose state.json is gone: nothing names the
+        # artifact its files were made for
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        (run_dir / "a-postcard-1938" / "state.json").unlink()
         counted = estimate_of(tmp_path, corpus, engine, until="transcription")
         transcription = counted.stages["transcription"]
-        assert (transcription.made, transcription.reused) == (1, 3)
+        assert (transcription.made, transcription.reused) == (2, 2)
 
     def test_a_stage_that_fails_as_the_cache_answers_it(
         self, tmp_path, engine
@@ -638,6 +693,73 @@ class TestCounts:
         assert "as the cache answers it: 1 transcription." in "\n".join(
             estimate.describe(counted)
         )
+
+    def test_a_stage_a_run_did_not_finish_measures_nothing(
+        self, tmp_path, engine
+    ):
+        """Ctrl-C at the entity manifest: the stage cut short made one
+        call, which is not its measure. Its chunks are counted by the
+        letter's length, as the run then makes them."""
+
+        def hook(what, name):
+            if what == "manifest":
+                raise KeyboardInterrupt
+
+        engine.hook, engine.corpus = hook, one_letter(tmp_path)
+        corpus = engine.corpus
+        with pytest.raises(KeyboardInterrupt):
+            scratch.scratch_run(
+                corpus.folder,
+                runs=runs_dir(tmp_path),
+                driver=Driver,
+                cache_dir=tmp_path / "cache",
+            )
+        engine.hook = None
+        counted = estimate_of(tmp_path, corpus, engine)
+        extraction = counted.stages["extraction"]
+        assert (extraction.known, extraction.estimated) == (1, 1)
+        assert extraction.measured == 0
+        made = run(tmp_path, corpus, engine)
+        assert made["extraction"] == 2
+
+    def test_chunks_asked_inline_are_known_too(self, tmp_path, request):
+        """An engine that holds no conversations asks each chunk with the
+        document inline (test_scratch.py's): a chunk the cache lost is a
+        known call, and the chunks after it are keyed too."""
+        plain = request.getfixturevalue("fakes")
+        corpus = small(tmp_path)
+        plain.corpus = corpus
+        driver_calls = len(plain.calls)
+        assert (
+            scratch.scratch_run(
+                corpus.folder,
+                runs=runs_dir(tmp_path),
+                driver=Driver,
+                cache_dir=tmp_path / "cache",
+            )
+            == EXIT_OK
+        )
+        assert len(plain.calls) > driver_calls
+        for path in entries(tmp_path / "cache", role="extract"):
+            if '"entities"' not in json.loads(path.read_text())["response"]:
+                path.unlink()
+        counted = estimate_of(tmp_path, corpus, plain, new=True)
+        extraction = counted.stages["extraction"]
+        assert (extraction.hits, extraction.known) == (4, 4)
+        assert extraction.estimated == 0
+        before = len(plain.calls)
+        assert (
+            scratch.scratch_run(
+                corpus.folder,
+                runs=runs_dir(tmp_path),
+                driver=Driver,
+                cache_dir=tmp_path / "cache",
+                new=True,
+            )
+            == EXIT_OK
+        )
+        chunks = [call for call in plain.calls[before:] if call[0] == "chunk"]
+        assert len(chunks) == extraction.known
 
     def test_a_gedcom_batch_stands_unless_refreshed(self, tmp_path, engine):
         corpus = one_letter(tmp_path)
@@ -679,36 +801,46 @@ def cut_short(tmp_path, corpus, fake) -> Path:
 
 
 class TestNothingTouched:
-    def test_it_writes_nothing_asks_nothing_and_holds_nothing(
+    def test_it_writes_nothing_and_asks_nothing(
         self, tmp_path, engine, request
     ):
-        """Beside a driver that holds the runs directory and a process
-        that holds the cache, the estimate reads both and writes neither,
-        asks the engine and the wiki nothing, and says who holds them."""
+        """After a run cut short, the estimate reads the run and the cache
+        and writes neither, and asks the engine and the wiki nothing. It
+        makes the run's engine clients, for what their keys name, and
+        closes them."""
         asked = request.getfixturevalue("refusals")
         engine.people = 12
         corpus = one_letter(tmp_path)
         cut_short(tmp_path, corpus, engine)
         runs, cache = runs_dir(tmp_path), tmp_path / "cache"
         before, calls = tree(runs, cache), len(engine.calls)
-        with scratch.hold(runs):
-            EngineCache(cache)
-            held = tree(runs, cache)
-            counted = estimate_of(tmp_path, corpus, engine)
-            assert tree(runs, cache) == held
+        closed = engine.closed
+        counted = estimate_of(tmp_path, corpus, engine)
+        assert tree(runs, cache) == before
         assert counted.stages["extraction"].known == 1
         assert len(engine.calls) == calls
         assert asked.asked == []
+        assert engine.closed - closed == 3
+
+    def test_it_holds_nothing_a_running_driver_holds(
+        self, tmp_path, engine, holder
+    ):
+        """A process of its own holds the runs directory and the cache, as
+        a running driver does: a driver would be refused, and the
+        estimate counts all the same, naming the holder."""
+        runs, cache = runs_dir(tmp_path), tmp_path / "cache"
+        for folder in (runs, cache):
+            folder.mkdir(mode=0o700)
+        pid = holder(runs / scratch.LOCK_FILE, cache / ".lock")
+        with pytest.raises(scratch.ScratchRunInUse), scratch.hold(runs):
+            pass
+        counted = estimate_of(tmp_path, small(tmp_path), engine)
+        assert counted.total().engine_calls == 14
         assert [line.split(" by ")[0] for line in counted.holders] == [
             f"the runs directory {runs}",
             f"the LLM cache {cache}",
         ]
-        assert all(str(os.getpid()) in line for line in counted.holders)
-        # the holds changed only their own lock files' records
-        changed = {
-            path.name for path in before if before[path] != held.get(path)
-        }
-        assert changed <= {".lock"}
+        assert all(f"process {pid} " in line for line in counted.holders)
 
     def test_a_new_run_makes_no_directory(self, tmp_path, engine):
         corpus = small(tmp_path)
@@ -717,6 +849,47 @@ class TestNothingTouched:
         assert not (tmp_path / "cache").exists()
         assert counted.run.parent == runs_dir(tmp_path)
         assert counted.holders == []
+
+
+# a process that holds lock files as a scratch driver and the LLM cache do:
+# flock's lock on each, and a record of itself in it
+HOLD = """
+import fcntl, json, os, socket, sys, time
+held = []
+for path in sys.argv[1:]:
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    record = {"pid": os.getpid(), "host": socket.gethostname(),
+              "command": "a fictional driver", "since": "2026-09-28T09:00"}
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, (json.dumps(record) + "\\n").encode(), 0)
+    held.append(fd)
+print("held", flush=True)
+time.sleep(600)
+"""
+
+
+@pytest.fixture
+def holder():
+    """Start a process that holds the lock files given, until the test
+    ends, and return its pid."""
+    started = []
+
+    def hold(*locks: Path) -> int:
+        process = subprocess.Popen(
+            [sys.executable, "-c", HOLD, *map(str, locks)],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        started.append(process)
+        assert process.stdout.readline().strip() == "held"
+        return process.pid
+
+    yield hold
+    for process in started:
+        process.kill()
+        process.wait()
+        process.stdout.close()
 
 
 # -- refusals -----------------------------------------------------------------
@@ -765,6 +938,15 @@ class TestRefusals:
             estimate_of(
                 tmp_path, corpus, engine, resume=LATEST, refresh=["extract"]
             )
+
+    def test_a_pdf_without_the_renderer(self, tmp_path, engine, monkeypatch):
+        from yizkr.pipeline import transcribe
+
+        corpus = small(tmp_path)
+        (corpus.folder / "e-card-1945.pdf").write_bytes(b"%PDF-1.4")
+        monkeypatch.setattr(transcribe.shutil, "which", lambda tool: None)
+        with pytest.raises(PreflightFailed, match="poppler"):
+            estimate_of(tmp_path, corpus, engine)
 
     def test_an_engine_client_that_cannot_start(
         self, tmp_path, engine, monkeypatch
@@ -826,13 +1008,16 @@ class TestReport:
             cache=tmp_path / "cache",
             stages={"transcription": StageCalls(made=2, failing=1)},
             duplicates=2,
+            unreadable=1,
+            corpus_stages=["clusters"],
             holders=["the runs directory x by process 7"],
             preflight=["the claude CLI has no login"],
         )
         text = "\n".join(estimate.describe(counted))
         assert f"run r in {tmp_path / 'runs'}, invoked again" in text
         assert "as the cache answers it: 1 transcription." in text
-        assert "- No stage for 2 duplicates." in text
+        assert "- No stage for 2 duplicates and 1 unreadable." in text
+        assert "- Not estimated: the corpus stages clusters." in text
         assert "- Held now: the runs directory x by process 7." in text
         assert "would refuse it now: the claude CLI has no login" in text
 
