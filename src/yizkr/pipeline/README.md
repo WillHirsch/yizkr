@@ -232,11 +232,7 @@ re-running one step in isolation — but for a normal ingest you only ever run
   and reported, not recorded.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
-  local), `htr` (Transkribus-style platform adapter, stub for now). The
-  transcription names the artifact by the SHA-1 of the media file it is
-  of (`--file`; for `textfile`, the file the text was made from, not
-  the text file), never by QID, so it is the same on any instance and
-  after a reset.
+  local), `htr` (Transkribus-style platform adapter, stub for now).
 - **transcription check** — runs on the output of the `llm` and
   `textfile` engines (in `ingest run`, the vision and text-file methods)
   before anything uses it, in `ingest run` and `ingest transcribe`
@@ -271,9 +267,12 @@ re-running one step in isolation — but for a normal ingest you only ever run
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
   same validation). The `llm` engine sets every claim's source artifact
-  itself, to the key its transcription names (the SHA-1 of the source
-  file's bytes), whatever the model wrote there; the prompts name the
-  artifact by that key, never by QID, and ask each claim to cite it. A
+  itself, to the key its transcription names, whatever the model wrote
+  there: the SHA-1 of the media transcribed (`ingest transcribe
+  --file`, with the `textfile` engine too, never the text file; in
+  `ingest run`, the source file's bytes). The prompts name the artifact
+  by that key, never by QID, and ask each claim to cite it, so neither
+  a transcription nor a prompt changes with the instance or a reset. A
   prepared file's claims cite their artifacts themselves. The GEDCOM
   adapter (`ingest gedcom`) cites the export's own bytes.
 - **reconcile** — in `ingest run`, proposes nothing. A proposal matches
