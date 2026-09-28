@@ -847,14 +847,14 @@ class TestCounts:
         self, tmp_path, engine
     ):
         """The letter's extraction finished (a manifest and two chunks),
-        then a refresh of it was cut short at its first chunk: the
-        measure is the finished one's."""
+        then a refresh of it was cut short at its manifest, one call: the
+        measure is the finished one's, three."""
         engine.people = 12
         corpus = one_letter(tmp_path)
         run(tmp_path, corpus, engine)
 
         def hook(what, name):
-            if what == "chunk":
+            if what == "manifest":
                 raise KeyboardInterrupt
 
         engine.hook = hook
@@ -928,7 +928,9 @@ class TestCounts:
         counted = estimate_of(tmp_path, corpus, plain, new=True)
         extraction = counted.stages["extraction"]
         assert (extraction.hits, extraction.known) == (4, 4)
-        assert extraction.estimated == 0
+        # every chunk is keyed, and the manifests are the cache's: nothing
+        # is estimated, and no fallback is left to bound
+        assert (extraction.estimated, extraction.more) == (0, 0)
         before = len(plain.calls)
         assert (
             scratch.scratch_run(
