@@ -125,8 +125,9 @@ class TestDepictsThroughTheWriteStep:
 
 class TestWriteStepSummary:
     """The step's summary, kept as the document's write.json, and its log
-    line count the type statements of items the batch found rather than
-    minted beside its claims (#240)."""
+    line count the type statements of items a ref or record of the batch
+    found (step 5 of the writer's module docstring), beside its claims
+    (#240)."""
 
     # what the directory gives the firm, which the interview holds as an
     # unclassified entity with the type hint "hat shop" -> (type statements

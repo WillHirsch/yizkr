@@ -678,7 +678,7 @@ class BatchWriter:
                     return True
         return False
 
-    # -- items the batch found rather than minted ----------------------------
+    # -- items a ref or record found rather than minted ----------------------
 
     def _found_entities(self, result: WriteResult) -> list[_FoundEntity]:
         """What the batch says of each item that existed before it and that
