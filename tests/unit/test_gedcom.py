@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.claims import ArtifactRef, validate_against_manifest
+from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
 from yizkr.pipeline.gedcom import (
     ADAPTER_IDENTIFIER,
     adapt_gedcom,
@@ -607,3 +607,26 @@ class TestUnsupportedFormat:
 
     def test_empty_census_is_empty_string(self):
         assert format_unsupported_tags({}) == ""
+
+
+class TestIngestGedcom:
+    def test_the_claims_cite_the_file_by_its_bytes(
+        self, tmp_path, monkeypatch
+    ):
+        """`yizkr ingest gedcom` cites the export it reads by the SHA-1 of
+        its bytes, whatever the file is called; it takes no QID (#102)."""
+        from yizkr.cli import build_parser
+
+        never = tmp_path / "never-ingest.txt"
+        never.write_text("")
+        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
+        export = tmp_path / "another-name.ged"
+        export.write_bytes(FIXTURE.read_bytes())
+        out = tmp_path / "batch.json"
+        args = build_parser().parse_args(
+            ["ingest", "gedcom", "--file", str(export), "--out", str(out)]
+        )
+        assert args.func(args) == 0
+        batch = ClaimBatch.model_validate_json(out.read_text())
+        assert batch.claims
+        assert all(claim.source.artifact == EXPORT for claim in batch.claims)
