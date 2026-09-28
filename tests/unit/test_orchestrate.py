@@ -27,7 +27,7 @@ import pytest
 
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
-from yizkr.pipeline import transcribe
+from yizkr.pipeline import monitor, transcribe
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     AWAITING_EQUIVALENCES,
@@ -1289,7 +1289,7 @@ class TestStateDirectories:
                     "!!!.txt",
                     "---.txt",
                     "run.json.txt",
-                    "status.html.txt",
+                    "status.txt",
                     "note.txt",
                 ]
             )
@@ -1302,15 +1302,26 @@ class TestStateDirectories:
             "events.jsonl",
             "alerts.jsonl",
             "control.jsonl",
-            "status.html",  # the live monitor's page (#195)
+            "status",  # the live monitor's page directory (#195)
         }
         assert not any(name.startswith(".") for name in names.values())
         assert names[Path("note.txt")] == "note"
         assert names[Path("run.json.txt")] == "run.json.txt"
-        assert names[Path("status.html.txt")] == "status.html.txt"
+        assert names[Path("status.txt")] == "status.txt"
         assert names[Path("letter.md")] == "letter.md"
         # the same sources are named the same in every run
         assert directory_names(sources, tmp_path / "state") == names
+
+    @pytest.mark.parametrize("name", [str.lower, str.upper])
+    def test_no_directory_takes_the_monitor_s_page_directory(
+        self, tmp_path, name
+    ):
+        """The run monitor writes its status page into STATUS_DIR in the
+        run directory, which is the driver's state directory (#195): a
+        source whose stem is that name, in any case, takes another."""
+        source = Path(f"{name(monitor.STATUS_DIR)}.txt")
+        names = directory_names([source], tmp_path / "state")
+        assert names[source].casefold() != monitor.STATUS_DIR.casefold()
 
     def test_long_names_stay_within_the_filesystems_limit(self, tmp_path):
         """Two sources whose stems and whole names clash, both at the

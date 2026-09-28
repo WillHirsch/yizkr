@@ -133,7 +133,8 @@ directory whose source has left stays until a source is given its name,
 and when that source's bytes differ, it sets the directory aside as a
 changed source's (above). No directory takes the name of a run file
 (`run.json`, `events.jsonl`, `alerts.jsonl`, `control.jsonl`) or of the
-live monitor's page (`status.html`).
+directory the live monitor writes its page into (`status`,
+docs/MONITOR.md).
 
 A state directory an earlier `ingest run` made may hold one directory
 that two same-stem sources shared: it stays with the source its
