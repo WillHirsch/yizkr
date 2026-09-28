@@ -38,11 +38,14 @@ unless --vocab names another) and prepends PREFIX lines for the map's
 concept URI; --raw sends a finished query as it is. It prints the rows as
 tab-separated values on stdout (IRIs shortened to wd:, wds:, wdref: and
 wdv:, language tags as value@lang) and the engine's wall time on stderr;
---max-rows 0 prints the header only. load and query stop at --timeout
-(100 s by default, so that a command ends within two minutes). Ctrl-C or
-SIGTERM cancels the engine's running queries and loads, and kills the
-command's curl in the container. The engine commits a load whole or not
-at all.
+--max-rows 0 prints the header only. query stops at --timeout (100 s by
+default) and load at its own (90 s), so that a command ends within two
+minutes. Ctrl-C or SIGTERM during a query cancels that query in the
+engine and kills its curl in the container. During a load (or the empty
+of --replace) it kills only the curl and gives the engine up to 20 s to
+finish or abort the write itself: cancelling a write leaves the engine's
+writer unable to take another one until the sandbox restarts. The engine
+commits a load whole or not at all.
 
 Timings are indicative. One CPU makes them noisy, since garbage
 collection and CPU throttling land inside a query's wall time: compare
@@ -60,6 +63,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import html
 import io
 import json
 import os
@@ -101,11 +105,28 @@ FORMATS = {".ttl": "text/turtle", ".nt": "text/plain"}
 TIMING = "time_total="
 # The engine failed to start; waiting longer will not help.
 FATAL_LOG = ("Failed startup of context", "OutOfMemoryError")
-QUERY_ID = re.compile(
-    r"queryId=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+# A running task on the engine's status page: its id and its text (a
+# query as sent, or a write task's name).
+TASK = re.compile(
+    r'name="queryId" value="([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-'
+    r'[0-9a-f]{4}-[0-9a-f]{12})".*?class="query-string">(.*?)</p',
+    re.S,
 )
+# The first line of every query this tool sends, so that an interrupted
+# command cancels its own query and nothing else.
+MARKER = "#yizkr-sandbox:"
 # How long a create that was interrupted may still land on the daemon.
 CREATE_GRACE = 5.0
+# How long a stopped load waits for the engine to finish or abort it.
+SETTLE = 20.0
+# Kills the curl whose pid is in the file "$0", only while that pid's
+# command line carries the token "$1" (the pid may since have gone to
+# another process). dash has kill built in; the image has no kill binary.
+KILL_CURL = (
+    'pid=$(cat "$0" 2>/dev/null) || exit 0; '
+    'case "$(tr "\\0" " " < /proc/$pid/cmdline 2>/dev/null)" in '
+    '*"$1"*) kill "$pid" ;; esac'
+)
 PLACEHOLDER = re.compile(r"\{([PQ]):([a-z][a-z0-9_]*)\}")
 
 
@@ -506,33 +527,54 @@ class Work:
             check=False,
         )  # fmt: skip
 
-    def stop(self) -> list[str]:
-        """Cancel the engine's running queries and loads, kill this
-        command's curl, remove its files; returns the ids cancelled."""
-        page = docker(
+    @property
+    def marker(self) -> str:
+        return f"{MARKER}{self.token}"
+
+    def kill(self) -> None:
+        """Kill this command's curl, if it still runs."""
+        docker(
             "exec", self.box.name,
-            "curl", "-sS", "-m", "10", f"{STATUS}?showQueries",
+            "sh", "-c", KILL_CURL, self.pidfile, self.token,
             check=False,
-        ).stdout.decode(errors="replace")  # fmt: skip
-        cancelled = sorted(set(QUERY_ID.findall(page)))
-        for query_id in cancelled:
+        )  # fmt: skip
+
+    def stop_query(self) -> list[str]:
+        """Cancel this command's query in the engine (the task whose text
+        carries its marker, never another), kill its curl and remove its
+        files; returns the ids cancelled."""
+        mine = [
+            task_id
+            for task_id, text in engine_tasks(self.box) or []
+            if self.marker in text
+        ]
+        for task_id in mine:
             docker(
                 "exec", self.box.name,
                 "curl", "-sS", "-m", "10", "-o", "/dev/null", "-X", "POST",
-                f"{STATUS}?cancelQuery&queryId={query_id}",
+                f"{STATUS}?cancelQuery&queryId={task_id}",
                 check=False,
             )  # fmt: skip
-        kill = (
-            'pid=$(cat "$0" 2>/dev/null) || exit 0; '
-            'case "$(tr "\\0" " " < /proc/$pid/cmdline 2>/dev/null)" in '
-            '*"$1"*) kill "$pid" ;; esac'
-        )
-        docker(
-            "exec", self.box.name, "sh", "-c", kill, self.pidfile, self.token,
-            check=False,
-        )  # fmt: skip
+        self.kill()
         self.clean()
-        return cancelled
+        return mine
+
+    def stop_write(self) -> bool:
+        """Stop this command's load or empty. Its curl is killed and the
+        write is never cancelled: a cancelled write leaves the engine's
+        writer unable to take another until the sandbox restarts, while a
+        write that loses its client is finished or aborted by the engine
+        itself. Waits up to SETTLE seconds for the engine to run nothing;
+        returns whether it did."""
+        self.kill()
+        self.clean()
+        deadline = time.monotonic() + SETTLE
+        while True:
+            if engine_tasks(self.box) == []:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.5)
 
     def clean(self) -> None:
         docker(
@@ -541,6 +583,22 @@ class Work:
             check=False,
         )  # fmt: skip
         self.files.clear()
+
+
+def engine_tasks(box: Sandbox) -> list[tuple[str, str]] | None:
+    """(id, text) of each task the engine is running, from its status
+    page; None when the page cannot be read."""
+    done = docker(
+        "exec", box.name,
+        "curl", "-sS", "-m", "10", f"{STATUS}?showQueries",
+        check=False,
+    )  # fmt: skip
+    if done.returncode != 0:
+        return None
+    page = done.stdout.decode(errors="replace")
+    return [
+        (task_id, html.unescape(text)) for task_id, text in TASK.findall(page)
+    ]
 
 
 def engine_error(done) -> str:
@@ -628,7 +686,7 @@ def cmd_load(args) -> int:
             if args.replace:
                 done = work.curl(
                     "--fail-with-body", "-X", "POST",
-                    "-m", str(int(args.timeout) + 10),
+                    "-m", str(int(args.timeout)),
                     "--data-urlencode", "update=DROP ALL", ENDPOINT,
                 )  # fmt: skip
                 if done.returncode != 0:
@@ -640,12 +698,12 @@ def cmd_load(args) -> int:
                 remote = work.upload(path.read_bytes(), path.suffix)
                 done = work.curl(
                     "--fail-with-body", "-X", "POST",
-                    "-m", str(int(args.timeout) + 10),
+                    "-m", str(int(args.timeout)),
                     "-H", f"Content-Type: {FORMATS[path.suffix]}",
                     "--data-binary", f"@{remote}", ENDPOINT,
                 )  # fmt: skip
                 if done.returncode != 0:
-                    raise failure(done, f"loading {path}")
+                    raise failure(done, "the load")
                 work.clean()
                 body = done.stdout.decode(errors="replace")
                 added = re.search(r'modified="(\d+)"', body)
@@ -655,12 +713,13 @@ def cmd_load(args) -> int:
                     f"triples in "
                     f"{int(millis.group(1)) / 1000 if millis else 0:.1f}s"
                 )
-                loaded.append(str(path.resolve()))
+                resolved = str(path.resolve())
+                loaded = [p for p in loaded if p != resolved] + [resolved]
                 record_loaded(args.state, loaded)
             current = None
         except BaseException as exc:
             with shielded():
-                cancelled = work.stop()
+                settled = work.stop_write()
                 if args.replace:
                     # the store may have been emptied even if DROP ALL
                     # was cut short: record only what this command loaded
@@ -669,10 +728,15 @@ def cmd_load(args) -> int:
                     holds = f"{triple_count(box, 10)} triples"
                 except SandboxError:
                     holds = "an unknown number of triples"
+            engine = (
+                "the engine finished or aborted the write it had under way"
+                if settled
+                else f"the engine was still writing after {SETTLE:.0f}s"
+            )
             detail = (
                 f"{' while loading ' + str(current) if current else ''}; "
-                f"cancelled {len(cancelled)} running engine task(s). A load "
-                f"lands whole or not at all: the store holds {holds}"
+                f"stopped the load's curl and {engine}. A load lands whole "
+                f"or not at all: the store holds {holds}"
             )
             if isinstance(exc, KeyboardInterrupt):
                 raise Stopped(f"interrupted{detail}", signum_of(exc)) from None
@@ -823,7 +887,10 @@ def cmd_query(args) -> int:
         work = Work(box)
         times = []
         try:
-            source = f"query@{work.upload(text.encode(), '.rq')}"
+            # the marker line lets stop_query() find this query, and only
+            # this one, among the engine's tasks
+            sent = f"{work.marker}\n{text}".encode()
+            source = f"query@{work.upload(sent, '.rq')}"
             for _ in range(args.repeat):
                 rows, variables, seconds = engine_query(
                     work, source, args.timeout
@@ -831,11 +898,11 @@ def cmd_query(args) -> int:
                 times.append(seconds)
         except BaseException as exc:
             with shielded():
-                cancelled = work.stop()
+                cancelled = work.stop_query()
             if isinstance(exc, KeyboardInterrupt):
                 raise Stopped(
-                    f"interrupted; cancelled {len(cancelled)} running engine "
-                    f"task(s) and stopped the query's curl",
+                    f"interrupted; cancelled the query in the engine "
+                    f"({len(cancelled)} task) and stopped its curl",
                     signum_of(exc),
                 ) from None
             if (
@@ -936,9 +1003,9 @@ def parser() -> argparse.ArgumentParser:
     load.add_argument(
         "--timeout",
         type=float,
-        default=100,
+        default=90,
         metavar="SECONDS",
-        help="when to stop a load (100)",
+        help="when to stop a load (90)",
     )
     load.set_defaults(handler=cmd_load)
 

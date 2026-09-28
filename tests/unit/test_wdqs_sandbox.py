@@ -2,10 +2,13 @@
 
 A fake `docker` comes first on PATH: its containers and engine state live
 in a JSON world file and it logs every call. DOCKER_HOST names a socket
-that does not exist, so no real daemon is ever reached. The tests check
-that the sandbox acts only on containers it made, that an interrupted or
-failed `up` leaves no container, and that an interrupted load or query
-leaves nothing running in the engine.
+that does not exist, so no real daemon is ever reached. Its engine wedges
+its writer when a write is cancelled, as the real one does (#265 review),
+and aborts a write whose curl is killed. The tests check that the sandbox
+acts only on containers it made, that an interrupted or failed `up`
+leaves no container (even one the daemon makes late), and that an
+interrupted load or query leaves nothing running and the engine writable.
+The pid guard of the curl kill runs against real local processes.
 """
 
 from __future__ import annotations
@@ -33,10 +36,14 @@ _spec.loader.exec_module(ws)
 
 FAKE_DOCKER = r'''
 """A fake docker CLI: containers and the engine live in a JSON world file,
-and every call is logged. It never talks to a daemon."""
-import io, json, os, sys, tarfile, time, uuid
+and every call is logged. It never talks to a daemon. Its engine behaves as
+the real one does where the sandbox depends on it: a write task that is
+cancelled wedges the writer, so that every later write fails, while a write
+whose curl is killed is aborted by the engine itself a moment later."""
+import html, io, json, os, subprocess, sys, tarfile, time, uuid
 
 WORLD = os.environ["FAKE_DOCKER_WORLD"]
+INSERT = "InsertWithBodyTask{namespace=wdq,timestamp=0, isGRSRequired=false}"
 args = sys.argv[1:]
 with open(os.environ["FAKE_DOCKER_LOG"], "a") as log:
     log.write(json.dumps(args) + "\n")
@@ -45,8 +52,10 @@ with open(WORLD) as handle:
 
 
 def save():
-    with open(WORLD, "w") as handle:
+    tmp = f"{WORLD}.{os.getpid()}"
+    with open(tmp, "w") as handle:
         json.dump(world, handle)
+    os.replace(tmp, WORLD)
 
 
 def resolve(ref):
@@ -63,35 +72,76 @@ def no_such(ref):
     sys.exit(1)
 
 
-def hang(kind):
-    """An engine task, or a create, that runs until it is killed."""
-    if kind != "create":
-        world["running"].append(str(uuid.uuid4()))
-        save()
+def busy():
+    """Tell the test the fake is now busy, then run until killed."""
     with open(world["marker"], "w") as handle:
-        handle.write(kind)
+        handle.write("busy")
     time.sleep(30)
     sys.exit(0)
 
 
-def curl(argv):
+def task(kind, text, pidfile, until=None):
+    world["running"].append({
+        "id": str(uuid.uuid4()), "kind": kind, "text": text,
+        "pidfile": pidfile, "until": until,
+    })
+    save()
+
+
+def status_page():
+    """The real page's shape: per task, its id in a cancel form, then its
+    text (a query as sent, or a write task's name)."""
+    now = time.time()
+    world["running"] = [
+        t for t in world["running"] if t["until"] is None or t["until"] > now
+    ]
+    world["status_seen"].append(len(world["running"]))
+    save()
+    parts = []
+    for t in world["running"]:
+        query = t["kind"] == "query"
+        tid, text = t["id"], html.escape(t["text"])
+        parts.append(
+            f'<h1>{"Query" if query else "Task"}</h1>'
+            '<FORM method="POST" action=""><p>'
+            f'<a href="?showQueries=details&amp;queryId={tid}">details</a>'
+            f'</p><p><INPUT type="hidden" name="queryId" value="{tid}">'
+            '<INPUT type="submit" name="cancelQuery" value="Cancel"></p>'
+            f'</FORM><h2>{"SPARQL" if query else "TASK"}</h2>'
+            f'<p class="query-string">{text}</p>'
+        )
+    return "<html>" + "".join(parts) + "</html>"
+
+
+def curl(argv, pidfile=None):
     url = next(a for a in argv if a.startswith("http://"))
+    writes = "--data-binary" in argv or "update=DROP ALL" in argv
     if "query=ASK" in url:
         print("<boolean>true</boolean>")
     elif url.endswith("status?showQueries"):
-        print("".join(
-            f'<a href="?showQueries=details&amp;queryId={q}">details</a>'
-            for q in world["running"]
-        ))
+        print(status_page())
     elif "cancelQuery" in url:
-        query_id = url.rsplit("queryId=", 1)[1]
-        world["cancelled"].append(query_id)
-        if query_id in world["running"]:
-            world["running"].remove(query_id)
+        task_id = url.rsplit("queryId=", 1)[1]
+        world["cancelled"].append(task_id)
+        for t in list(world["running"]):
+            if t["id"] == task_id:
+                world["running"].remove(t)
+                if t["kind"] == "write":
+                    world["wedged"] = True
         save()
+    elif writes and world["wedged"]:
+        print("java.util.concurrent.ExecutionException: "
+              "AccessSemaphoreNotReentrantException")
+        sys.exit(22)
     elif "--data-binary" in argv:
         if world["hang"] == "load":
-            hang("load")
+            task("write", INSERT, pidfile)
+            busy()
+        if world["hang"] == "load_timeout":
+            # curl gives up; the engine goes on with the write a while
+            task("write", INSERT, pidfile, until=time.time() + 3)
+            sys.stderr.write("curl: (28) Operation timed out\n")
+            sys.exit(28)
         world["triples"] += 12
         save()
         print('<?xml version="1.0"?><data modified="12" milliseconds="3"/>')
@@ -109,7 +159,8 @@ def curl(argv):
             rows = [{"n": {"type": "literal", "value": str(world["triples"])}}]
         else:
             if world["hang"] == "query":
-                hang("query")
+                task("query", text, pidfile)
+                busy()
             rows = [{"x": {"type": "literal", "value": "1"}}]
         variables = list(rows[0])
         print(json.dumps(
@@ -135,14 +186,33 @@ elif command == "create":
     labels = dict(
         args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "--label"
     )
-    world["containers"].append({
+    container = {
         "name": name, "id": uuid.uuid4().hex + uuid.uuid4().hex,
         "status": "created", "labels": labels,
-    })
+    }
+    if world["hang"] == "create_late":
+        # the daemon makes the container a second after the client is gone
+        late = (
+            "import json, os, time\n"
+            "time.sleep(1)\n"
+            f"path = {WORLD!r}\n"
+            "world = json.load(open(path))\n"
+            f"world['containers'].append({container!r})\n"
+            "tmp = path + '.late'\n"
+            "json.dump(world, open(tmp, 'w'))\n"
+            "os.replace(tmp, path)\n"
+        )
+        subprocess.Popen(
+            [sys.executable, "-c", late], start_new_session=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        busy()
+    world["containers"].append(container)
     save()
     if world["hang"] == "create":
-        hang("create")
-    print(world["containers"][-1]["id"])
+        busy()
+    print(container["id"])
 elif command == "rm":
     c = resolve(args[-1])
     if c is None:
@@ -189,12 +259,17 @@ elif command == "exec":
         sys.exit(1)
     program = rest[1:]
     if program[:2] == ["sh", "-c"] and "kill" in program[2]:
-        world["killed"].append(program[3])
+        pidfile = program[3]
+        world["killed"].append(pidfile)
+        for t in world["running"]:
+            if t["pidfile"] == pidfile and t["kind"] == "write":
+                # the engine aborts a write that has lost its client
+                t["until"] = time.time() + 0.5
         save()
     elif program[:2] == ["sh", "-c"]:
         world["pidfiles"].append(program[3])
         save()
-        curl(program[4:])
+        curl(program[4:], program[3])
     elif program[0] == "curl":
         curl(program)
     elif program[0] == "rm":
@@ -293,6 +368,8 @@ class FakeDocker:
             "triples": 0,
             "hang": None,
             "cp_garbage": False,
+            "wedged": False,
+            "status_seen": [],
             "marker": str(self.marker),
         }
         world.update(settings)
@@ -329,9 +406,11 @@ class FakeDocker:
         monkeypatch.delenv("YIZKR_WDQS_SANDBOX_STATE", raising=False)
         return ws.main(["--state", str(self.state), *args])
 
-    def interrupt(self, *args: str, signum=signal.SIGINT):
+    def interrupt(self, *args: str, signum=signal.SIGINT, during=None):
         """Start a command, send it `signum` once the fake engine (or
-        daemon) is busy, and wait for it by its pid."""
+        daemon) is busy, and wait for it by its pid. `during` is called
+        while the fake is busy, before the signal; its result is returned
+        last."""
         process = subprocess.Popen(
             self.command(*args),
             env=self.env,
@@ -345,9 +424,10 @@ class FakeDocker:
             assert process.poll() is None, process.communicate()
             assert time.monotonic() < deadline, "the fake never got busy"
             time.sleep(0.05)
+        seen = during() if during else None
         process.send_signal(signum)
         out, err = process.communicate(timeout=60)
-        return process.returncode, out, err
+        return process.returncode, out, err, seen
 
 
 @pytest.fixture
@@ -428,11 +508,25 @@ class TestUpLeavesNoContainer:
     )
     def test_interrupted_during_create(self, fake, signum):
         fake.set_world(hang="create")
-        code, _, err = fake.interrupt("up", signum=signum)
+        code, _, err, _ = fake.interrupt("up", signum=signum)
         assert code == 128 + signum
         assert one_line_error(err) == (
             "wdqs_sandbox up: interrupted; the sandbox was removed"
         )
+        (create,) = [c for c in fake.calls() if c[0] == "create"]
+        name = create[create.index("--name") + 1]
+        assert ["rm", "-fv", name] in fake.calls()
+        assert fake.world()["containers"] == []
+        assert not fake.state.exists()
+
+    def test_a_create_that_lands_after_the_interrupt(self, fake):
+        """The daemon may make the container after the client is killed:
+        up waits for it and removes it."""
+        fake.set_world(hang="create_late")
+        code, _, err, _ = fake.interrupt("up")
+        assert code == 130
+        assert one_line_error(err).endswith("the sandbox was removed")
+        time.sleep(2)  # well past the fake daemon's late create
         (create,) = [c for c in fake.calls() if c[0] == "create"]
         name = create[create.index("--name") + 1]
         assert ["rm", "-fv", name] in fake.calls()
@@ -477,40 +571,86 @@ class TestInterruptedWorkStops:
         "signum", [signal.SIGINT, signal.SIGTERM], ids=["INT", "TERM"]
     )
     def test_query(self, fake, signum):
-        fake.set_world([SANDBOX], hang="query")
+        """An interrupted query cancels its own task and no other: a write
+        that happens to be running is left to the engine."""
+        other_write = {
+            "id": "0e1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+            "kind": "write",
+            "text": "InsertWithBodyTask{namespace=wdq}",
+            "pidfile": None,
+            "until": None,
+        }
+        fake.set_world([SANDBOX], hang="query", running=[other_write])
         fake.record(SANDBOX["name"], loaded=[])
-        code, _, err = fake.interrupt(
+        code, _, err, _ = fake.interrupt(
             "query", "--raw", str(fake.query), signum=signum
         )
         assert code == 128 + signum
-        assert "interrupted; cancelled 1 running engine task" in (
+        assert "interrupted; cancelled the query in the engine" in (
             one_line_error(err)
         )
         world = fake.world()
-        assert world["running"] == []
-        assert len(world["cancelled"]) == 1
+        (cancelled,) = world["cancelled"]
+        assert cancelled != other_write["id"]
+        assert world["running"] == [other_write]
+        assert not world["wedged"]
         assert world["killed"] == world["pidfiles"][:1]
         assert not [path for path in world["files"] if path.endswith(".rq")]
 
     def test_load_replace(self, fake):
-        """An interrupted load --replace cancels the load, records the
-        emptied store, and uploads the file rather than streaming it."""
+        """An interrupted load --replace records the emptied store before
+        it loads, never cancels the write (which would wedge the engine's
+        writer), kills its curl, waits for the engine to abort the write,
+        and leaves the engine writable. The file is uploaded, not
+        streamed."""
         fake.set_world([SANDBOX], hang="load", triples=99)
         fake.record(SANDBOX["name"], loaded=["/elsewhere/old.ttl"])
-        code, _, err = fake.interrupt("load", "--replace", str(fake.graph))
+        code, _, err, loaded_during = fake.interrupt(
+            "load",
+            "--replace",
+            str(fake.graph),
+            during=lambda: json.loads(fake.state.read_text())["loaded"],
+        )
+        assert loaded_during == []
         assert code == 130
         message = one_line_error(err)
         assert f"interrupted while loading {fake.graph}" in message
+        assert "the engine finished or aborted the write" in message
         assert "the store holds 0 triples" in message
         assert json.loads(fake.state.read_text())["loaded"] == []
         world = fake.world()
-        assert world["running"] == []
-        assert len(world["cancelled"]) == 1
+        assert world["cancelled"] == []
+        assert not world["wedged"]
         assert world["killed"]
+        assert world["running"] == []
+        assert world["status_seen"][-1] == 0
         (load,) = [c for c in fake.calls() if "--data-binary" in c]
         body = load[load.index("--data-binary") + 1]
         assert body.startswith("@/tmp/yizkr-sandbox-") and body != "@-"
         assert not [path for path in world["files"] if path.endswith(".ttl")]
+        # the engine still takes writes
+        fake.world_path.write_text(json.dumps({**world, "hang": None}))
+        done = fake.run("load", str(fake.graph))
+        assert done.returncode == 0, done.stderr
+        assert fake.world()["triples"] == 12
+
+    def test_load_past_its_timeout(self, fake):
+        """curl gives up at --timeout while the engine goes on writing: the
+        load waits for the engine to finish, and cancels nothing."""
+        fake.set_world([SANDBOX], hang="load_timeout")
+        fake.record(SANDBOX["name"], loaded=[])
+        done = fake.run("load", "--timeout", "5", str(fake.graph))
+        assert done.returncode == 1
+        message = one_line_error(done.stderr)
+        assert "the load ran past --timeout" in message
+        assert "the engine finished or aborted the write" in message
+        world = fake.world()
+        assert world["cancelled"] == []
+        assert not world["wedged"]
+        # it saw the write still running, and waited until it was gone
+        assert max(world["status_seen"]) >= 1
+        assert world["status_seen"][-1] == 0
+        assert json.loads(fake.state.read_text())["loaded"] == []
 
 
 class TestWork:
@@ -557,6 +697,57 @@ class TestWork:
         assert done.returncode == 2
         assert "--max-rows" in done.stderr
         assert fake.calls() == []
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/cmdline").exists(), reason="needs /proc"
+)
+class TestKillCurl:
+    """The snippet that kills an interrupted command's curl, run here with
+    sh against real processes: it kills the pid in the pid file only while
+    that pid's command line carries the command's token."""
+
+    TOKEN = "c0ffee42"
+
+    def kill(self, pidfile: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", "-c", ws.KILL_CURL, str(pidfile), self.TOKEN],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def test_kills_the_process_that_carries_the_token(self, tmp_path):
+        curl = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import time; time.sleep(30)",
+                f"X-Yizkr-Sandbox: {self.TOKEN}",
+            ]
+        )
+        pidfile = tmp_path / "curl.pid"
+        pidfile.write_text(f"{curl.pid}\n")
+        assert self.kill(pidfile).returncode == 0
+        assert curl.wait(timeout=10) == -signal.SIGTERM
+
+    def test_spares_a_process_that_took_the_pid(self, tmp_path):
+        stranger = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"]
+        )
+        try:
+            pidfile = tmp_path / "curl.pid"
+            pidfile.write_text(f"{stranger.pid}\n")
+            assert self.kill(pidfile).returncode == 0
+            time.sleep(0.3)
+            assert stranger.poll() is None
+        finally:
+            stranger.kill()
+            stranger.wait()
+
+    def test_a_missing_pid_file_is_quiet(self, tmp_path):
+        done = self.kill(tmp_path / "none.pid")
+        assert (done.returncode, done.stderr) == (0, "")
 
 
 class TestStatePerCheckout:
