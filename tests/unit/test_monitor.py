@@ -1090,8 +1090,8 @@ class TestAlerts:
         [
             (CARD, CARD[:10]),  # a whole SHA-1
             (CARD[:7], CARD[:10]),  # a prefix of one document's
-            ("Ebba", "-"),  # a name made of the letters a to f
-            ("ebba", "-"),
+            ("Faded", "-"),  # a word made of the letters a to f
+            ("faded", "-"),
             ("run", "-"),
             (None, "-"),
         ],
