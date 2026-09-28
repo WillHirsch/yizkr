@@ -782,8 +782,9 @@ def _foldable(request: dict) -> bool:
 
 def _control_state(path: Path) -> dict[str, str] | None:
     """The scopes the control file in the run directory `path` stops, and
-    how: the driver's fold of the requests it takes (_foldable). None when
-    the file is not text the driver can read either."""
+    how: the driver's fold of the requests it takes (_foldable), with a
+    line that does not decode skipped as the driver's reader skips it.
+    None when the file itself cannot be read."""
     try:
         requests = read_jsonl(path / CONTROL)
     except (OSError, ValueError):

@@ -54,6 +54,7 @@ from yizkr.pipeline.monitor import (
     render_lines,
     render_terminal,
     request,
+    state_now,
     summarise_run,
     watch,
     write_status_page,
@@ -2261,10 +2262,11 @@ class TestCommands:
                 json.dumps({"action": "pause", "scope": ["x"]}).encode(),
                 ("now paused", "now active", "now aborted"),
             ),
-            # not UTF-8: the driver cannot read the file either
+            # not UTF-8: skipped, as the driver's reader skips a line it
+            # cannot decode
             (
                 b'{"action": "pause", "reason": "Fl\xf6rburg"}',
-                ("its state unknown: the control file cannot be read",) * 3,
+                ("now paused", "now active", "now aborted"),
             ),
         ],
         ids=["unhashable-scope", "not-utf8"],
@@ -2290,6 +2292,22 @@ class TestCommands:
         assert capsys.readouterr().out.strip() == (
             f"abort requested for kind:text: {state[2]}"
         )
+
+    @pytest.mark.skipif(
+        not hasattr(os, "geteuid") or os.geteuid() == 0,
+        reason="root reads a file whatever its mode",
+    )
+    def test_a_control_file_that_cannot_be_read(self, run):
+        """Where the control file itself cannot be read, a command says
+        its state cannot be told rather than guessing it."""
+        control = run / "control.jsonl"
+        control.chmod(0)
+        try:
+            assert state_now(run, "run") == (
+                "its state unknown: the control file cannot be read"
+            )
+        finally:
+            control.chmod(0o644)
 
     def test_help_quit_and_nonsense(self, run):
         assert handle_command(run, "help").message.startswith("commands:")
