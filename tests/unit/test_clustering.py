@@ -1131,6 +1131,16 @@ class TestIdentityMap:
         assert identity["summary"]["documents_without_manifest"] == 1
 
 
+def test_a_corpus_of_no_document_is_an_empty_map():
+    """A run whose every document failed reaches the stage with none: an
+    empty map, and nothing that needs attention."""
+    identity = cluster_corpus([])
+    assert (identity["mentions"], identity["clusters"]) == ({}, {})
+    assert identity["hash"] == identity_hash({})
+    assert identity["summary"]["mentions"] == 0
+    assert attention(identity["summary"]) == []
+
+
 def test_adjudication_keeps_a_clusters_pairs_together():
     # 85 pairs split into 40, 40 and 5; the 10 of another cluster join
     # the 5
