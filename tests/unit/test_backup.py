@@ -1,47 +1,118 @@
-"""Offline tests for backup/export logic. No stack, no docker."""
+"""Offline tests for backup/export logic. No stack, no docker. The
+possibly-living determination itself is tested in test_privacy.py."""
 
+import datetime
 import gzip
 from pathlib import Path
 
+import pytest
+import yaml
+
+from tests.unit.test_privacy import BIRTHS, CASES, CONCEPT, EXCLUDED, uri
 from yizkr.backup import (
+    PERSON_FACTS_QUERY,
+    exclusion_report,
     filter_public_export,
     prune_old_backups,
 )
-from yizkr.core.privacy import is_possibly_living, year_of
-
-CUTOFF = 1926  # as if today were 2026 with the default 100-year window
-
-
-class TestPossiblyLiving:
-    """Runtime determination (ADR-0020): no stored flag, no override —
-    only death evidence or a birth beyond the cutoff includes a person."""
-
-    def test_unknown_means_excluded(self):
-        possibly, reason = is_possibly_living(None, False, CUTOFF)
-        assert possibly
-        assert "unknown means excluded" in reason
-
-    def test_death_evidence_includes(self):
-        # a single boolean; the query decides what counts as evidence
-        # (date/place/cause of death, burial place, or a death event)
-        assert is_possibly_living(None, True, CUTOFF)[0] is False
-        assert is_possibly_living(1980, True, CUTOFF)[0] is False
-
-    def test_birth_beyond_cutoff_includes(self):
-        assert is_possibly_living(1900, False, CUTOFF)[0] is False
-
-    def test_recent_birth_without_death_excludes(self):
-        assert is_possibly_living(1950, False, CUTOFF)[0] is True
+from yizkr.core.config import Config
+from yizkr.core.privacy import BIRTHS_QUERY
+from yizkr.model.schema import read_manifest_data
+from yizkr.queries.publish import prefix_block
 
 
-class TestYearOf:
-    def test_plain_and_signed_years(self):
-        assert year_of("1900-01-01T00:00:00Z") == 1900
-        assert year_of("+1862-02-15T00:00:00Z") == 1862
+@pytest.fixture(scope="module")
+def vocabulary():
+    raw = yaml.safe_load(read_manifest_data())
+    properties = {key: f"P{n}" for n, key in enumerate(raw["properties"], 1)}
+    items = {key: f"Q{n}" for n, key in enumerate(raw["items"], 1)}
+    return properties, items
 
-    def test_missing_or_malformed_is_none(self):
-        assert year_of("") is None
-        assert year_of("not-a-date") is None
+
+def config() -> Config:
+    return Config(
+        wikibase_url=CONCEPT,
+        concept_uri=CONCEPT,
+        wdqs_url="http://query.example",
+        sparql_url="http://query.example/sparql",
+        admin_name="x",
+        admin_pass="x",
+        env_file=None,
+    )
+
+
+# One row per person of CASES, as PERSON_FACTS_QUERY gives it: a sampled
+# date of death for those with death evidence, nothing for the others.
+FACTS = [
+    {"person": uri(qid)}
+    | (
+        {
+            "death": {
+                "type": "literal",
+                "datatype": "http://www.w3.org/2001/XMLSchema#dateTime",
+                "value": "1995-01-01T00:00:00Z",
+            }
+        }
+        if has_death
+        else {}
+    )
+    for qid, (_, _, has_death, _) in CASES.items()
+]
+
+
+class TestExclusionReport:
+    """The public export's call (ADR-0020): every person the facts query
+    lists, with the births the privacy module's query reads (#334)."""
+
+    def report(self, vocabulary, facts=FACTS, births=BIRTHS, **options):
+        calls = []
+
+        def run(query: str) -> list[dict]:
+            calls.append(query)
+            if "SAMPLE(?deathDate)" in query:
+                return facts
+            if 'BIND("value" AS ?bound)' in query:
+                return births
+            raise AssertionError(f"unexpected query: {query}")
+
+        found = exclusion_report(
+            config(), run=run, vocabulary=vocabulary, **options
+        )
+        return found, calls
+
+    def test_every_birth_is_read_at_the_latest_year_it_allows(
+        self, vocabulary
+    ):
+        found, _ = self.report(vocabulary)
+        assert found.excluded == EXCLUDED
+        assert found.included == set(CASES) - EXCLUDED
+
+    def test_each_person_gives_a_reason(self, vocabulary):
+        found, _ = self.report(vocabulary)
+        assert found.reasons["Q304"] == (
+            "born as late as 1990, with no death evidence"
+        )
+        assert found.reasons["Q312"] == "death recorded"
+        assert "unknown means excluded" in found.reasons["Q311"]
+
+    def test_the_cutoff_moves_with_cutoff_years(self, vocabulary):
+        # a cutoff in 1990 releases the births of 1990 and before
+        years = datetime.datetime.now(datetime.UTC).year - 1990
+        found, _ = self.report(vocabulary, cutoff_years=years)
+        assert {"Q303", "Q304", "Q308"} & found.excluded == {"Q303"}
+
+    def test_births_are_read_with_the_privacy_modules_query(self, vocabulary):
+        properties, _ = vocabulary
+        _, calls = self.report(vocabulary)
+        assert len(calls) == 2
+        assert prefix_block(CONCEPT) + BIRTHS_QUERY.format(**properties) in (
+            calls
+        )
+
+    def test_the_facts_query_reads_no_birth(self):
+        # births are read statement by statement, never sampled here
+        assert "SAMPLE(?birthDate)" not in PERSON_FACTS_QUERY
+        assert "date_of_birth" not in PERSON_FACTS_QUERY
 
 
 REF_DEAD = "a" * 40  # reference used only by the excluded person
