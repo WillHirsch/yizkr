@@ -372,13 +372,16 @@ class UsageLimitReached(PassPaused):
     have tried again — None when no time is known at all (``OVERAGE``: the
     subscription does not say when it clears). No call is refused for
     good, so no document fails for it: the pass unwinds, and is run again
-    after `resumes_at`, or once the subscription is off usage credits.
+    after `resumes_at`, or for ``OVERAGE``, once the operator has
+    confirmed that extra usage is off on the account, since nothing local
+    says when that clears.
 
     Once one call latches a pause (raises this from `_Pacer.admit`), every
     later call to `admit`, from any thread, raises the same pause at once,
-    before any further hold or wait of its own: a pass that has paused
-    makes no further calls, even from a pool with more than one already
-    queued."""
+    before any further hold or wait of its own, for as long as it holds
+    (until its own `resumes_at`, or forever within the process for
+    ``OVERAGE``): a pass that has paused makes no further calls, even
+    from a pool with more than one already queued."""
 
     def __init__(
         self,
