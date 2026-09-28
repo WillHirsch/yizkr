@@ -9,8 +9,8 @@ tests share runs where they can, and check the rules that pick results,
 exit statuses and the mutations to run in-process. The module is
 neutral arithmetic, and nothing touches the network or the live stack.
 
-The repository has a live test too, which stands in for one that uses
-the stack, and a copy of the live-stack lock's module
+The repository has live tests too, which stand in for ones that use the
+stack, and a copy of the live-stack lock's module
 (tests/integration/live_lock.py). Every harness here uses a scratch
 lock, never the real one.
 """
@@ -250,6 +250,39 @@ def test_add_on_the_stack(live_stack_lock):
 
 LIVE = "tests/integration/test_stack.py"
 
+# Live tests whose first starts a shell's background job, which outlives
+# the run, before any test uses the stack: os.system passes the job every
+# inheritable descriptor. The second uses the stack, and holds the run
+# until the file that $RUN_GO names appears. Each notes a pid in the file
+# that $JOB_PID or $RUN_PID names.
+EARLY_JOB = """\
+import os
+import shlex
+import time
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.live
+
+
+def test_start_a_job_before_the_stack():
+    pidfile = shlex.quote(os.environ["JOB_PID"])
+    assert os.system(f"sleep 60 >/dev/null 2>&1 & echo $! >{pidfile}") == 0
+
+
+def test_hold_the_stack(live_stack_lock):
+    noted = Path(os.environ["RUN_PID"] + ".tmp")
+    noted.write_text(str(os.getpid()))
+    noted.replace(os.environ["RUN_PID"])
+    deadline = time.monotonic() + 60
+    while not Path(os.environ["RUN_GO"]).exists():
+        assert time.monotonic() < deadline, "never told to end"
+        time.sleep(0.02)
+"""
+
+EARLY = "tests/integration/test_early_job.py"
+
 
 def mutation(name, old, new, tests=("test_calc.py::test_add",), **extra):
     """One [[mutation]] table, of calc.py unless `extra` names a file.
@@ -317,6 +350,7 @@ def template(tmp_path_factory):
         "tests/integration/conftest.py": LIVE_CONFTEST,
         "tests/integration/live_lock.py": lock_module.read_text(),
         LIVE: LIVE_TEST,
+        EARLY: EARLY_JOB,
     }
     for name, text in files.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
@@ -1174,9 +1208,11 @@ def test_the_harness_holds_the_lock_through_every_live_run(live_run):
     found it held, recorded as the harness's own, with the same record.
     Each session's live_stack_lock fixture shared that hold rather than
     taking the lock itself, which would record the session instead, or
-    waiting for it, which would give up. Sharing it, the fixture made the
-    descriptor close-on-exec: a program the test started with exec, such
-    as a shell's background job, would not keep the lock after the run."""
+    waiting for it, which would give up. The descriptor was close-on-exec
+    by then, as the lock's module makes it once the run's conftest
+    imports it, and the fixture again as it shares the hold: a program
+    the test started with exec, such as a shell's background job, would
+    not keep the lock after the run."""
     assert len(live_run.notes) == 2
     for note in live_run.notes:
         assert note["held"]
@@ -1362,6 +1398,75 @@ def test_a_signal_ends_the_wait_for_the_lock_at_once(repo, tmp_path, holder):
             process.communicate()
 
 
+def test_a_killed_harness_leaves_the_lock_to_its_run_until_the_run_ends(
+    repo, tmp_path, monkeypatch
+):
+    """The harness is killed outright (SIGKILL) while its live run holds
+    the lock. The run goes on, and holds the lock through its copy of the
+    descriptor, while a waiting session names the harness and says that
+    it has ended. Before any test of the run used the stack, one started a
+    shell's background job. The lock's module made the descriptor
+    close-on-exec as the run's conftest imported it, so the job shares no
+    hold: once the run ends, the lock is free, though the job runs on
+    (#314)."""
+    monkeypatch.setattr(live_lock, "RECORD_INTERVAL", 0)
+    lock = tmp_path / "live-stack.lock"
+    job_pid, run_pid, go = (tmp_path / name for name in ("job", "run", "go"))
+    spec = tmp_path / "spec.toml"
+    spec.write_text(mutation("live sum", "a + b", "a - b", [EARLY], live=True))
+    env = environment(
+        JOB_PID=str(job_pid),
+        RUN_PID=str(run_pid),
+        RUN_GO=str(go),
+        **{
+            LOCK_ENV: str(lock),
+            TIMEOUT_ENV: "5",
+            ENV_FILE: str(stack_settings(tmp_path)),
+        },
+    )
+    output = tmp_path / "output"
+    with output.open("w") as out:
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPT), str(spec)],
+            cwd=repo,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+        )
+    pids = []
+    try:
+        # the baseline's run: the job has started, and the stack test runs
+        wait_until(lambda: run_pid.exists() or process.poll() is not None)
+        assert run_pid.exists(), output.read_text()
+        run, job = int(run_pid.read_text()), int(job_pid.read_text())
+        pids = [run, job]
+        process.kill()
+        process.wait(timeout=30)
+        with (
+            pytest.raises(live_lock.LiveStackBusy) as waited,
+            live_lock.hold(lock, timeout=0, announce=lambda _: None),
+        ):
+            pytest.fail("took the lock while the run held it")
+        assert f"held by pid {process.pid} since " in str(waited.value)
+        assert (
+            f"  pid {process.pid} has ended; the lock is held by a process "
+            "with no record of its own" in str(waited.value)
+        )
+        go.touch()
+        wait_until(lambda: not running(run))
+        assert running(job)
+        assert not taken(lock)
+    finally:
+        go.touch()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        for pid in pids:
+            if running(pid):
+                os.kill(pid, signal.SIGKILL)
+
+
 def test_a_process_given_the_holders_descriptor_shares_its_hold(
     tmp_path, monkeypatch
 ):
@@ -1387,6 +1492,74 @@ def test_a_process_given_the_holders_descriptor_shares_its_hold(
     assert lock.read_text() == ""
 
 
+LOCK_MODULE = REPO / "tests" / "integration" / "live_lock.py"
+
+
+def test_the_import_makes_a_named_descriptor_of_the_lock_close_on_exec(
+    tmp_path, monkeypatch
+):
+    """What each live run of the harness does as its conftest imports the
+    lock's module, before any test runs: the descriptor that the variable
+    names, open on the lock file, becomes close-on-exec, so that no
+    program a test starts shares the hold, however early (#314). The
+    import neither locks nor records anything: here the lock is free, and
+    stays so."""
+    lock = tmp_path / "live-stack.lock"
+    lock.write_text("")
+    fd = os.open(lock, os.O_RDWR)
+    try:
+        # as the run inherits it through pass_fds
+        os.set_inheritable(fd, True)
+        monkeypatch.setenv(LOCK_ENV, str(lock))
+        monkeypatch.setenv(SHARED_ENV, str(fd))
+        load(LOCK_MODULE)
+        assert not os.get_inheritable(fd)
+        assert not taken(lock)
+        assert lock.read_text() == ""
+    finally:
+        os.close(fd)
+
+
+def test_the_import_leaves_another_files_descriptor_as_it_was(
+    tmp_path, monkeypatch
+):
+    """A stray variable naming a descriptor of another file, such as
+    stdout, which a program the run starts should inherit, leaves it
+    inheritable."""
+    lock = tmp_path / "live-stack.lock"
+    lock.write_text("")
+    other = os.open(tmp_path / "other", os.O_RDWR | os.O_CREAT)
+    try:
+        os.set_inheritable(other, True)
+        monkeypatch.setenv(LOCK_ENV, str(lock))
+        monkeypatch.setenv(SHARED_ENV, str(other))
+        load(LOCK_MODULE)
+        assert os.get_inheritable(other)
+    finally:
+        os.close(other)
+
+
+@pytest.mark.parametrize(
+    "setting",
+    ["relative/live-stack.lock", "~no-such-user/live-stack.lock"],
+    ids=["relative", "unknown-home"],
+)
+def test_a_lock_path_that_cannot_be_used_does_not_break_the_import(
+    tmp_path, monkeypatch, setting
+):
+    """The import runs in every session that collects tests/integration,
+    a default run's included, so it must not fail on the lock's settings:
+    a session that uses the stack fails on them only as it takes the
+    lock."""
+    other = os.open(tmp_path / "other", os.O_RDWR | os.O_CREAT)
+    try:
+        monkeypatch.setenv(LOCK_ENV, setting)
+        monkeypatch.setenv(SHARED_ENV, str(other))
+        load(LOCK_MODULE)
+    finally:
+        os.close(other)
+
+
 @pytest.mark.parametrize(
     "named",
     ["", "soon", "-1", str(2**70), "a closed descriptor", "another file"],
@@ -1396,11 +1569,15 @@ def test_a_variable_that_names_no_descriptor_of_the_lock_is_ignored(
 ):
     """hold() then takes the lock itself: it records itself, and empties
     the record as it releases the lock. The lock file exists, as it does
-    once any session has held the lock."""
+    once any session has held the lock. The other file's descriptor is
+    inheritable, as one passed down open across exec is, and stays so:
+    hold() makes no descriptor close-on-exec but one of the lock file
+    (#314)."""
     lock = tmp_path / "live-stack.lock"
     lock.write_text("")
     other = os.open(tmp_path / "other", os.O_RDWR | os.O_CREAT)
     try:
+        os.set_inheritable(other, True)
         if named == "another file":
             named = str(other)
         elif named == "a closed descriptor":
@@ -1412,6 +1589,7 @@ def test_a_variable_that_names_no_descriptor_of_the_lock_is_ignored(
             assert json.loads(lock.read_text())["pid"] == os.getpid()
         assert lock.read_text() == ""
         assert not taken(lock)
+        assert os.get_inheritable(other)
     finally:
         os.close(other)
 
@@ -1442,13 +1620,16 @@ def test_a_descriptor_of_the_lock_that_does_not_hold_it_gets_nobody_in(
             os.close(stray)
 
 
-def test_a_waiter_names_a_holder_that_ended_while_its_hold_is_shared(
+def test_a_waiter_names_a_recorded_holder_that_has_ended(
     tmp_path, monkeypatch
 ):
-    """The lock is held, but the process that the record names has ended,
-    as when a killed harness's live run holds it still. A waiting process
+    """The lock is held, but the process that the record names has ended:
+    a killed harness's live run may hold it, or a new holder that has yet
+    to write its record over one that a crash left. A waiting process
     names the recorded holder, with the working directory it ran in, and
-    says that it has ended, rather than that nothing is recorded."""
+    says that it has ended, rather than that nothing is recorded, and that
+    the lock is held by a process with no record of its own, without
+    claiming that this process shares the recorded one's hold (#314)."""
     monkeypatch.setattr(live_lock, "RECORD_INTERVAL", 0)
     ended = subprocess.run(
         [sys.executable, "-c", "import os; print(os.getpid())"],
@@ -1473,8 +1654,9 @@ def test_a_waiter_names_a_holder_that_ended_while_its_hold_is_shared(
         assert f"held by pid {pid} since {record['started']}\n" in message
         assert f"  cwd: {record['cwd']}\n" in message
         assert (
-            f"  pid {pid} has ended, and a process that shares its hold "
-            "holds the lock" in message
+            f"  pid {pid} has ended; the lock is held by a process with no "
+            "record of its own, such as a killed mutation harness's live run"
+            in message
         )
     assert len(announced) == 1
 

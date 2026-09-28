@@ -29,14 +29,25 @@ open file description holds the lock or nothing does. Otherwise the
 process takes the lock as any other does. So even a stray or stale
 variable never lets two sessions hold the lock at once.
 
-As the child's hold() finds the descriptor, it makes it close-on-exec,
-as the one that hold() opens is, so that no program the child starts
-from then on shares the hold in turn; a process it forks without exec
-does, as with any holder's descriptor. A holder killed while a child
-shares its hold leaves the lock held until the child ends: a killed
-harness's live run keeps it until the run ends. A waiting process then
-names the holder from its record, and says that it has ended and that a
-process sharing its hold holds the lock.
+The child makes the descriptor close-on-exec, as the one that hold()
+opens is, as it imports this module; conftest.py imports it before any
+test runs. So no program that the child starts shares the hold in turn,
+not even one that a test starts before any test uses the stack; a
+process that the child forks without exec does, as with any holder's
+descriptor. The import does
+nothing else: it locks nothing, and it leaves the descriptor alone
+unless it is open on the lock file itself, so a stray variable naming
+another descriptor, such as stdout, changes nothing. hold() makes the
+shared descriptor close-on-exec too, for a process that imported the
+module before the variable was set.
+
+A holder killed while a child shares its hold leaves the lock held until
+the child, and every process that it forked without exec, has ended. For
+a killed harness, that is its live run's pytest process, which nothing
+then stops at the harness's --timeout, and any process that a test
+forked from it. A waiting process names the holder from its record, and
+says that it has ended and that the lock is held by a process with no
+record of its own.
 
 Never delete the lock file. A session that then found no file would
 create and lock a new one, while the session still holding the old one
@@ -222,15 +233,10 @@ def _shared(path: Path) -> int | None:
     The descriptor is then made close-on-exec, as the one that hold()
     opens is, so that a program this process starts (os.system, a shell's
     background job, a subprocess with close_fds=False) does not share the
-    hold and keep the lock after this process ends."""
-    try:
-        fd = int(os.environ.get(SHARED_ENV, ""))
-        inherited = os.fstat(fd)
-        lock = os.stat(path)
-    except (ValueError, OverflowError, OSError):
-        return None
-    # A descriptor of any other file would lock that file instead.
-    if (inherited.st_dev, inherited.st_ino) != (lock.st_dev, lock.st_ino):
+    hold and keep the lock after this process ends. The import of this
+    module has done so already, unless the variable was set after it."""
+    fd = _named(path)
+    if fd is None:
         return None
     # On the description that holds the lock this changes nothing, and on
     # any other it fails while that one holds the lock. A free lock is
@@ -239,9 +245,39 @@ def _shared(path: Path) -> int | None:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         return None
-    # The holder passed it down open across exec, so it is inheritable.
     os.set_inheritable(fd, False)
     return fd
+
+
+def _named(path: Path) -> int | None:
+    """The descriptor that $YIZKR_LIVE_LOCK_FD names, when it is open in
+    this process on the lock file at `path`. Otherwise None."""
+    try:
+        fd = int(os.environ.get(SHARED_ENV, ""))
+        inherited = os.fstat(fd)
+        lock = os.stat(path)
+    except (ValueError, OverflowError, OSError):
+        return None
+    # A descriptor of any other file would lock that file instead, or, made
+    # close-on-exec, be kept from programs that inherit it, stdout say.
+    if (inherited.st_dev, inherited.st_ino) != (lock.st_dev, lock.st_ino):
+        return None
+    return fd
+
+
+def _close_on_exec() -> None:
+    """Make the descriptor that $YIZKR_LIVE_LOCK_FD names close-on-exec,
+    when it is open on the lock file: run as this module is imported
+    (module docstring). A holder passes its descriptor down open across
+    exec, so it is inheritable until then. Nothing is locked, and a lock
+    path that lock_path() refuses or cannot expand is left for hold() to
+    raise, as a session takes the lock."""
+    try:
+        fd = _named(lock_path())
+    except (ValueError, RuntimeError):  # RuntimeError: no home folder
+        return
+    if fd is not None:
+        os.set_inheritable(fd, False)
 
 
 def _record(fd: int) -> None:
@@ -300,12 +336,16 @@ def _describe(record: dict[str, Any] | None) -> str:
         f"  cwd: {record.get('cwd')}"
     )
     if not _running(pid):
-        # The recorded holder has ended, yet the lock is held: a process
-        # that shared its hold holds it.
+        # The recorded holder has ended, yet the lock is held, by a
+        # process that has not recorded itself: one that shared the hold
+        # of a holder killed since, one that has taken the lock and not
+        # yet written its record over one left by a crash, or one that
+        # took the lock through a descriptor named in $YIZKR_LIVE_LOCK_FD
+        # while it was free.
         described += (
-            f"\n  pid {pid} has ended, and a process that shares its hold "
-            "holds the lock: a killed mutation harness's live run, say, "
-            "which keeps it until the run ends"
+            f"\n  pid {pid} has ended; the lock is held by a process with "
+            "no record of its own, such as a killed mutation harness's "
+            "live run"
         )
     return described
 
@@ -334,3 +374,7 @@ def _terminal(pytest_config: pytest.Config) -> Callable[[str], None]:
 
 def _print_to_stderr(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+# In a live session, before any test runs: conftest.py imports this module.
+_close_on_exec()
