@@ -37,7 +37,9 @@ an extraction. A replayed conversation that answers differently starts
 its extraction over, and asks the forks the cache answered too. Not
 counted at all: a call asked again after an engine error, or after a
 chunk answer cut off (up to 2 a chunk), and the waits for the
-subscription, which are no calls.
+subscription, which are no calls. Nor is a slice the anomaly checks
+pause as the run unfolds (docs/ANOMALIES.md): it makes fewer calls than
+counted.
 
 **Nothing written, held or asked.** The estimate reads the corpus, the
 runs directory and the cache, and writes none of them. It takes no lock,
@@ -1010,7 +1012,8 @@ def describe(estimate: Estimate) -> list[str]:
     lines.append(
         "- Not counted: calls asked again after an engine error or after a "
         "chunk answer cut off (at most 2 for a chunk), and the waits for "
-        "the subscription, which are no calls."
+        "the subscription, which are no calls. A slice the anomaly checks "
+        "pause makes fewer calls than counted."
     )
     return lines + _notes(estimate)
 

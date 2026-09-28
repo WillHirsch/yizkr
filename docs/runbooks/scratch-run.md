@@ -76,7 +76,9 @@ cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
     answers differently asks its forks again;
   - **not counted**: calls asked again after an engine error or a chunk
     answer cut off (up to 2 for a chunk), and waits for the
-    subscription, which make no call.
+    subscription, which make no call. A slice the anomaly checks pause
+    as the run unfolds (docs/ANOMALIES.md) makes fewer calls than
+    counted.
 
   It writes nothing, and takes no lock: it runs beside a running driver,
   counting what the run and the cache hold as it reads them, and names
