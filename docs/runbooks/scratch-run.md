@@ -166,8 +166,9 @@ cache user can start; Ctrl-C or `yizkr scratch abort` ends the wait. A
 pause with no such time ends the driver, which prints the engine's
 reason and what to do: a call reported to have run on usage credits
 (turn extra usage off on the account, then run the command again), a
-claude CLI that changed during the run, or an LLM cache another process
-holds.
+claude CLI that changed during the run, an LLM cache another process
+holds, or a cache folder the LLM cache refuses (What stays local,
+below).
 
 ## Resume
 
@@ -232,6 +233,11 @@ Nothing from them goes into the repository, GitHub or a cloud session.
   a runs directory inside a git work tree unless git ignores it, as this
   repository ignores `var/`: `--runs .`, or any other path git would
   track, is refused before anything is written.
+- **So is the LLM cache's folder.** The cache makes its folders mode
+  700. As it opens, before any call, it refuses a `--cache` folder a git
+  work tree would track, one there already that is open to other users,
+  whose mode it leaves alone, and one this user cannot write in
+  (docs/LLM_CACHE.md, The cache folder).
 
 ## Not yet
 
