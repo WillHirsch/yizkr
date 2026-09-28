@@ -470,6 +470,33 @@ def skip_unless_modes_hold(where: Path) -> None:
         probe.unlink()
 
 
+def skip_unless_unsearchable_directories_raise(where: Path) -> None:
+    """Skip the test where Path.is_file does not raise for a link into a
+    directory that cannot be searched, as on Python 3.14 and later, where
+    it returns False: read_jsonl then finds no entries there, as for a
+    missing file, so nothing is unreadable. A probe in `where` must
+    raise."""
+    folder = where / "search-probe"
+    folder.mkdir()
+    (folder / "probe").write_text("x")
+    link = where / "search-probe-link"
+    link.symlink_to(folder / "probe")
+    folder.chmod(0)
+    try:
+        link.is_file()
+    except PermissionError:
+        pass
+    else:
+        pytest.skip(
+            "Path.is_file does not raise for a directory that cannot be "
+            "searched"
+        )
+    finally:
+        folder.chmod(0o700)
+        link.unlink()
+        shutil.rmtree(folder)
+
+
 # what makes a run's file (its control file, events.jsonl, alerts.jsonl)
 # unreadable, to the driver too: its own mode, or its directory's, as a
 # link into a directory that cannot be searched, so that not even its size
@@ -482,8 +509,11 @@ def unreadable_file(run: Path, name: str, by: str):
     """The run's file `name`, unreadable for the block (UNREADABLE_BY),
     then readable again, with its own mode or its directory's put back,
     unless the block removed it. Skipped where this process reads a file
-    whatever its mode."""
+    whatever its mode, and, by its directory, where Path.is_file does not
+    raise for it."""
     skip_unless_modes_hold(run.parent)
+    if by == "its directory":
+        skip_unless_unsearchable_directories_raise(run.parent)
     path = run / name
     target = path
     if by == "its directory":
@@ -1519,8 +1549,8 @@ class TestLogsThatCannotBeRead:
             "cannot be read.</p>" in page
         )
         assert (
-            '<h2>Calls</h2>\n<p class="warn">calls unknown: events.jsonl '
-            "cannot be read</p>" in page
+            '<h2>Calls</h2>\n<p class="warn">Unknown: events.jsonl cannot be '
+            "read.</p>" in page
         )
         assert (
             '<h2>In flight</h2>\n<p class="warn">Unknown: events.jsonl '
@@ -1656,6 +1686,84 @@ class TestLogsThatCannotBeRead:
         assert not restarted
         assert [entry["event"] for entry in entries] == ["done", "started"]
 
+    @pytest.mark.parametrize("name", ["events.jsonl", "alerts.jsonl"])
+    def test_a_log_that_fails_partway_is_unknown_until_it_is_read_whole(
+        self, run, name, monkeypatch
+    ):
+        """An I/O error partway through a followed log's new lines makes it
+        unknown, as any error the driver's reader raises does, and so does
+        the same error at the next refresh, which reads it from its start:
+        no change then. A line skipped before the error is not counted
+        meanwhile; once the log is read whole, it counts once, and the
+        monitor shows what one reading the run afresh shows."""
+        watcher = RunMonitor(run)
+        watcher.refresh()
+        append(run, [(name, "not an object"), *self.APPENDED[name]])
+        real_open = open
+
+        class Failing(io.BufferedReader):
+            """The log as the tail opens it: every line but the last, then
+            an I/O error."""
+
+            def __iter__(self):
+                lines = list(iter(self.readline, b""))
+                yield from lines[:-1]
+                raise OSError(errno.EIO, "Input/output error")
+
+        def failing(path, mode):
+            if Path(path).name == name:
+                return Failing(io.FileIO(path, "r"))
+            return real_open(path, mode)
+
+        monkeypatch.setattr(monitor, "open", failing, raising=False)
+        assert watcher.refresh()
+        unknown = watcher.summary(NOW)
+        assert (unknown.events_unreadable, unknown.alerts_unreadable) == (
+            name == "events.jsonl",
+            name == "alerts.jsonl",
+        )
+        assert unknown.skipped_lines == 0
+        # read again from its start, and failing partway again
+        assert not watcher.refresh()
+        assert watcher.summary(NOW).skipped_lines == 0
+        monkeypatch.undo()
+        assert watcher.refresh()
+        followed = watcher.summary(NOW)
+        assert followed == summarise_run(run, NOW)
+        assert followed.skipped_lines == 1
+        assert disagreement(run, followed) is None
+
+    @pytest.mark.parametrize("by", UNREADABLE_BY)
+    def test_the_page_notes_lines_skipped_in_the_other_logs(self, run, by):
+        """While events.jsonl cannot be read, the page still says how many
+        lines of the other logs were skipped, as the terminal view does,
+        though it has no stage table to note them under."""
+        append(run, [("alerts.jsonl", "not an object")])
+        with unreadable_file(run, "events.jsonl", by):
+            summary = summarise_run(run, NOW)
+        assert summary.skipped_lines == 1
+        note = "unreadable log lines skipped: 1"
+        assert note in render_terminal(summary, width=200)
+        assert f'<li class="muted">{note}</li>' in render_html(summary)
+
+    def test_every_unknown_line_is_a_warning(self, run):
+        """On a terminal with colour, each line that says what cannot be
+        told is in the warning style, the control file's as the logs'."""
+        with contextlib.ExitStack() as stack:
+            for name in ("events.jsonl", "alerts.jsonl", "control.jsonl"):
+                stack.enter_context(unreadable_file(run, name, "its mode"))
+            summary = summarise_run(run, NOW)
+        lines = render_lines(summary, width=200, color=True)
+        for start in (
+            "stages     counts unknown: events.jsonl",
+            "calls      unknown: events.jsonl",
+            "in flight  unknown: events.jsonl",
+            "slices     state unknown: the control file",
+            "alerts     unknown: alerts.jsonl",
+        ):
+            (line,) = [line for line in lines if start in line]
+            assert line.startswith(monitor._STYLES["warn"] + start)
+
     @pytest.mark.parametrize("by", UNREADABLE_BY)
     @pytest.mark.parametrize("name", ["events.jsonl", "alerts.jsonl"])
     def test_an_empty_log_that_can_be_read_again_is_a_change(
@@ -1669,6 +1777,10 @@ class TestLogsThatCannotBeRead:
         watcher.refresh()
         with unreadable_file(run, name, by):
             assert watcher.refresh()
+            # no event yet: the last one is unknown only while events.jsonl
+            # cannot be read
+            view = render_terminal(watcher.summary(NOW), width=200)
+            assert ("last event unknown" in view) == (name == "events.jsonl")
             assert not watcher.refresh()
         assert watcher.refresh()
         summary = watcher.summary(NOW)
@@ -1843,6 +1955,37 @@ class TestIncrementalReading:
         assert disagreement(run, summary) is None
         assert summary.stage("extraction").failed == 0
         assert summary.skipped_lines == 0
+
+    def test_a_log_rewritten_in_place_after_a_later_read_starts_over(
+        self, run
+    ):
+        """The first line a log was read with is kept over the reads that
+        go on from where the last ended, so a rewrite in place, as long as
+        before at least, starts the monitor over however many reads came
+        before it."""
+        watcher = RunMonitor(run)
+        watcher.refresh()
+        append(run, [stage("done", 500, POSTCARD, "critique")])
+        watcher.refresh()
+        events = run / "events.jsonl"
+        line = json.dumps(stage("started", 301, CERT, "transcription")[1])
+        longer = (line + "\n") * (events.stat().st_size // len(line) + 2)
+        with open(events, "r+") as handle:
+            handle.write(longer)
+        watcher.refresh()
+        summary = watcher.summary(NOW)
+        assert summary == summarise_run(run, NOW)
+        assert disagreement(run, summary) is None
+
+    def test_the_lines_skipped_add_up_over_the_reads(self, run):
+        """A line skipped at one refresh stays counted when another is
+        skipped at the next."""
+        watcher = RunMonitor(run)
+        for _ in range(2):
+            append(run, [("events.jsonl", "not an object")])
+            watcher.refresh()
+        assert watcher.summary(NOW).skipped_lines == 2
+        assert summarise_run(run, NOW).skipped_lines == 2
 
     def test_a_summary_stays_as_it_was_taken(self, run):
         watcher = RunMonitor(run)
@@ -2194,6 +2337,19 @@ class TestEmptyRuns:
         assert "none recorded yet" in view
         assert "all active" in view
         assert write_status_page(path, summary) == page_of(path)
+
+    def test_a_run_with_no_stages_notes_its_skipped_lines(self, tmp_path):
+        """On the page as in the terminal view, though there is no stage
+        table to note them under."""
+        path = tmp_path / "run"
+        path.mkdir()
+        (path / "run.json").write_text(json.dumps({"run_id": RUN_ID}))
+        append(path, [("control.jsonl", {"action": "pause", "scope": ["x"]})])
+        summary = summarise_run(path, NOW)
+        assert summary.stages == [] and summary.skipped_lines == 1
+        note = "unreadable log lines skipped: 1"
+        assert note in render_terminal(summary, width=200)
+        assert f'<li class="muted">{note}</li>' in render_html(summary)
 
     def test_a_run_json_without_invocations_goes_by_its_events(self, tmp_path):
         path = tmp_path / "run"

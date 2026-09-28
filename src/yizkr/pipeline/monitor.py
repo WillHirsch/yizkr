@@ -898,12 +898,13 @@ class RunMonitor:
         whether it gained anything. The logs are read before run.json: an
         invocation records itself there before its first event.
 
-        A log that cannot be read, by the driver's reader either (_Tail),
-        leaves nothing read from it standing, since the driver has no last
-        good read of it: what was read of it is forgotten, and every
-        refresh tries it again, from its beginning, so no record in it is
-        skipped or counted twice once it can be read. The refresh at which
-        it becomes unreadable, or readable again, counts as a change."""
+        A log that cannot be read (_Tail.read raises OSError, where the
+        driver's reader, read_jsonl, raises too) leaves nothing read from it
+        standing, since the driver has no last good read of it: what was
+        read of it is forgotten, and every refresh tries it again, from its
+        beginning, so no record in it is skipped or counted twice once it
+        can be read. The refresh at which it becomes unreadable, or
+        readable again, counts as a change."""
         changed = False
         for name, tail, fold, forget in (
             (EVENTS, self._events, self._fold_event, self._reset_events),
@@ -2116,6 +2117,7 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
         for stage in summary.stages
     ]
     parts.append("<h2>Stages</h2>")
+    notes: list[str] = []
     if summary.events_unreadable:
         parts.append(
             f'<p class="warn">Counts unknown: {_e(EVENTS_UNREADABLE)}.</p>'
@@ -2137,21 +2139,27 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
                 '<li class="muted">set aside to be made again (set-aside '
                 f"events): {_e(_n(summary.set_aside))}</li>"
             )
-        if summary.skipped_lines:
-            notes.append(
-                '<li class="muted">unreadable log lines skipped: '
-                f"{_e(_n(summary.skipped_lines))}</li>"
-            )
-        if notes:
-            parts.append(f"<ul>{''.join(notes)}</ul>")
     else:
         parts.append('<p class="muted">No stages planned or seen yet.</p>')
+    # lines are skipped in any of the logs, not only in events.jsonl: they
+    # are noted whether or not there are stage counts to show, as the
+    # terminal view notes them
+    if summary.skipped_lines:
+        notes.append(
+            '<li class="muted">unreadable log lines skipped: '
+            f"{_e(_n(summary.skipped_lines))}</li>"
+        )
+    if notes:
+        parts.append(f"<ul>{''.join(notes)}</ul>")
 
     parts.append("<h2>Calls</h2>")
-    parts += [
-        f'<p class="{_e(style)}">{_e(text)}</p>'
-        for text, style in _call_rows(summary, detail=True)
-    ]
+    if summary.events_unreadable:
+        parts.append(f'<p class="warn">Unknown: {_e(EVENTS_UNREADABLE)}.</p>')
+    else:
+        parts += [
+            f'<p class="{_e(style)}">{_e(text)}</p>'
+            for text, style in _call_rows(summary, detail=True)
+        ]
 
     heading = "In flight"
     if not summary.events_unreadable:

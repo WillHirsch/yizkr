@@ -219,10 +219,11 @@ place), starts the monitor over: it is read again from its start.
 A log is looked at as the driver's reader looks at it (`read_jsonl`). A
 path that holds no regular file (none yet, a directory, a FIFO) holds no
 entries, and is never opened. One that cannot be read, by that reader
-either (the file is there, but its mode forbids reading it, say),
-leaves nothing read from it standing, since the driver has no last good
-read of it: what the monitor read of it is forgotten, and what would
-come from it is unknown (A log that cannot be read, above). Every
+either (the file is there, but its mode forbids reading it, or an I/O
+error cuts a read short, say), leaves nothing read from it standing,
+since the driver has no last good read of it: what the monitor read of
+it is forgotten, and what would come from it is unknown (A log that
+cannot be read, above). A read cut short takes none of its lines. Every
 refresh tries it again, and the one that can read it reads it from its
 start, so no record appended meanwhile is skipped and none read before
 counts twice. The refresh at which a log cannot be read, and the one at
