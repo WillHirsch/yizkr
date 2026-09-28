@@ -26,9 +26,9 @@ yet to give: an extraction after a transcription the engine makes, the
 chunks after an entity manifest it answers, and the critique of a batch
 that holds chunks it answers. Each such call is counted as the engine's,
 since a new answer changes the keys after it: an extraction as the
-latest run that made the document's measured it (llm.run_calls), else
-by the mean for its kind there, else by its text's length
-(llm.estimate_calls), and a critique as one call.
+latest run to make it measured it (llm.run_calls), else by the mean for
+its kind there, else by its text's length (llm.estimate_calls), and a
+critique as one call.
 
 **At most more.** What only the engine's answers decide is counted as a
 bound. An entity manifest the engine answers can be refused, and then its
@@ -42,12 +42,12 @@ pause as the run unfolds (docs/ANOMALIES.md): it makes fewer calls than
 counted.
 
 **Nothing written, held or asked.** The estimate reads the corpus, the
-runs directory and the cache, and writes none of them. It takes no lock,
-neither the runs directory's nor the cache's, so it runs while a driver
-runs, counting what they hold at that moment, and it says who holds
-them. It makes no model call and asks the wiki nothing (ADR-0025 §2).
-What the keys name, it reads from the engine's clients, made as the
-driver makes them: for the claude-code engine that runs
+runs directory and the cache (llm.read_cache), and writes none of them.
+It takes no lock, neither the runs directory's nor the cache's, so it
+runs while a driver runs, counting what they hold at that moment, and it
+says who holds them. It makes no model call and asks the wiki nothing
+(ADR-0025 §2). What the keys name, it reads from the engine's clients,
+made as the driver makes them: for the claude-code engine that runs
 `claude --version`, which calls no model.
 """
 
