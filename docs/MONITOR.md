@@ -286,9 +286,18 @@ would serve every document's views, transcriptions and claims included.
 
 Serving on `127.0.0.1` keeps the page on the machine; an address on the
 LAN shows it to every device there, which is the operator's choice to
-make (CLAUDE.md, rule 7). The responses carry `Cache-Control: no-store`
-and a content security policy that allows nothing but the page's inline
-style.
+make (CLAUDE.md, rule 7).
+
+Every response, the page's and an error's alike (a 404 for another path
+or a missing page, a 501 for another method), carries four headers:
+`Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer` and a content security policy that allows
+nothing but the page's inline style (`default-src 'none'; style-src
+'unsafe-inline'`). The one exception is the standard library's own: a
+request it reads as HTTP/0.9 (no version, a version it cannot read or
+does not serve, a request line it cannot parse) is answered with a body
+alone, without a status line or any header. No browser sends such a
+request.
 
 ## Limits
 

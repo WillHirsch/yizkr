@@ -2183,7 +2183,8 @@ class _PageHandler(http.server.BaseHTTPRequestHandler):
     the page, read from the `status` directory without following a
     symbolic link, neither the directory's nor the page's; every other
     path, and a page that is not there or is a link, is not found. No
-    directory is ever listed."""
+    directory is ever listed. Every response with headers, an error's
+    as well as the page's, carries the headers end_headers adds."""
 
     status_dir: Path
     server_version = "yizkr-monitor"
@@ -2204,6 +2205,19 @@ class _PageHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(page)))
+        self.end_headers()
+        if body:
+            self.wfile.write(page)
+
+    def end_headers(self) -> None:
+        """End the headers of any response, the standard library's error
+        pages (404, 501 and the like) included, with these: nothing keeps
+        a copy, nothing reads the body as another type, no referrer is
+        sent, and nothing may load but inline style. A request the
+        standard library reads as HTTP/0.9 (no version, a version it
+        cannot read or does not serve, a request line it cannot parse)
+        is answered with a body alone, without a status line or any
+        header."""
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -2211,9 +2225,7 @@ class _PageHandler(http.server.BaseHTTPRequestHandler):
             "Content-Security-Policy",
             "default-src 'none'; style-src 'unsafe-inline'",
         )
-        self.end_headers()
-        if body:
-            self.wfile.write(page)
+        super().end_headers()
 
     def _page(self) -> bytes | None:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)

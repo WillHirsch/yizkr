@@ -2011,6 +2011,16 @@ class TestServing:
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read(), dict(exc.headers)
 
+    # what every response of the server carries, an error's included
+    HEADERS = {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'"
+        ),
+    }
+
     def test_the_page_is_served(self, served):
         run, url = served
         for path in ("", "index.html", "?reload=1"):
@@ -2018,9 +2028,34 @@ class TestServing:
             assert status == 200
             assert body == page_of(run).read_bytes()
             assert headers["Content-Type"] == "text/html; charset=utf-8"
-            assert headers["Cache-Control"] == "no-store"
-        status, body, _ = self.fetch(url, method="HEAD")
+            assert headers | self.HEADERS == headers
+        status, body, headers = self.fetch(url, method="HEAD")
         assert (status, body) == (200, b"")
+        assert headers | self.HEADERS == headers
+
+    @pytest.mark.parametrize(
+        ("method", "path", "code"),
+        [
+            ("GET", "run.json", 404),
+            ("HEAD", "nope", 404),
+            ("POST", "", 501),
+            ("PUT", "index.html", 501),
+        ],
+    )
+    def test_an_error_carries_the_same_headers(
+        self, served, method, path, code
+    ):
+        run, url = served
+        status, _, headers = self.fetch(url + path, method=method)
+        assert status == code
+        assert headers | self.HEADERS == headers
+
+    def test_a_missing_page_carries_the_same_headers(self, served):
+        run, url = served
+        page_of(run).unlink()
+        status, _, headers = self.fetch(url)
+        assert status == 404
+        assert headers | self.HEADERS == headers
 
     @pytest.mark.parametrize(
         "path",
