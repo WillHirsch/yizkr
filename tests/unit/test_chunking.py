@@ -11,11 +11,12 @@ import threading
 
 import pytest
 
-from yizkr.claims import EntityRecord
+from yizkr.claims import ClaimBatch, EntityRecord
 from yizkr.pipeline.chunking import (
     ChunkedClaimExtractor,
     ChunkIncomplete,
     DocumentSegmentation,
+    ExtractionFailed,
     SegmentationUnit,
     normalize_to_manifest,
     pack_entities,
@@ -26,6 +27,8 @@ from yizkr.pipeline.chunking import (
     unit_text,
 )
 from yizkr.pipeline.llm import ConversationChanged
+from yizkr.pipeline.orchestrate import FAILED
+from yizkr.pipeline.rundir import NEEDS_ATTENTION, StageState, run_state
 from yizkr.pipeline.transcribe import Transcription
 
 # a two-person document: one claimable line per person, one logistics line
@@ -255,6 +258,58 @@ def placeholder_claims(*ids: str) -> str:
     """A complete chunk response with one claim per manifest id, labelled
     by the id itself: the merge takes each label from the manifest."""
     return ndjson([claim(local_id, local_id, 1917) for local_id in ids])
+
+
+# the back of a certificate, bearing only the stamp of the civil registry
+# office that issued it: its one entity is boilerplate (extract=false)
+STAMP = "Standesamt Flörburg"
+# a page no one can read, which names nothing
+ILLEGIBLE = "[illegible]"
+# a manifest naming no entity at all
+NO_ENTITIES = json.dumps({"entities": []})
+# what an unusable manifest or segmentation is refused for
+NO_MANIFEST = "no JSON object with an 'entities' array"
+NO_SEGMENTATION = "no JSON object with a 'units' array"
+
+
+def stamp_manifest_json() -> str:
+    return json.dumps(
+        {
+            "entities": [
+                {
+                    "id": "e1",
+                    "label": "Standesamt Flörburg",
+                    "kind": "organization",
+                    "summary": "the civil registry office that issued it",
+                    "mention_lines": [1],
+                    "extract": False,
+                }
+            ]
+        }
+    )
+
+
+def whole_page_segmentation_json(last_line: int, extract: bool) -> str:
+    """A segmentation into one unit that covers the whole page."""
+    return json.dumps(
+        {
+            "units": [
+                {
+                    "id": "u1",
+                    "label": "the whole page",
+                    "kind": "page",
+                    "first_line": 1,
+                    "last_line": last_line,
+                    "context": "",
+                    "extract": extract,
+                }
+            ]
+        }
+    )
+
+
+def page(text: str) -> Transcription:
+    return Transcription(text=text, engine="test", artifact_qid="Q23")
 
 
 class TestSegmentationModel:
@@ -1073,6 +1128,9 @@ class TestFallbackLadder:
         )
         coverage = side_output(tmp_path, "coverage.json")
         assert set(coverage["fallback"]) == {"manifest"}
+        # with the extraction's health, as on the entity-first tier (#45)
+        assert (coverage["chunks"], coverage["claims"]) == (1, 2)
+        assert coverage["rejected_claims"] == 0
 
     def test_refused_tiers_are_attempted_apart_and_kept(self, tmp_path):
         """The manifest and the segmentation are each asked in two
@@ -1156,9 +1214,334 @@ class TestFallbackLadder:
             for reason in extractor.attention
         )
 
-    def test_a_batch_without_claims_needs_attention(self, tmp_path):
+
+class TestExtractionsWithoutClaims:
+    """An extraction that ends with no claims either fails, raising
+    ExtractionFailed with every cause, or is claim-free: its batch is
+    returned, and its attention says why it is empty (#45). It is
+    claim-free only on the word of answers the extractor accepted; a
+    fallback tier that stands in for a refused entity manifest and
+    extracts nothing is a failure, never an empty batch that reads as a
+    claim-free document's."""
+
+    def extractor(self, llm, tmp_path, **kwargs):
+        return ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", **kwargs
+        )
+
+    def failure(self, extractor, document: Transcription) -> str:
+        """The reason the extraction fails with. A failed extraction
+        writes no side output: they describe a batch, and there is none."""
+        with pytest.raises(ExtractionFailed) as failed:
+            extractor.extract(document, "Q23")
+        assert list(extractor.state_dir.glob("*")) == []
+        return str(failed.value)
+
+    # -- claim-free --------------------------------------------------------
+
+    def test_chunks_that_answer_with_none_leave_a_claim_free_batch(
+        self, tmp_path
+    ):
         llm = ScriptedLlm([entity_manifest_json(), ndjson([]), ndjson([])])
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         batch = extractor.extract(transcription(), "Q23")
         assert batch.claims == []
-        assert extractor.attention == ["no claims extracted"]
+        assert extractor.attention == [
+            "no claims extracted: 2 chunks answered with none"
+        ]
+        coverage = side_output(tmp_path, "coverage.json")
+        assert (coverage["chunks"], coverage["claims"]) == (2, 0)
+
+    def test_a_manifest_marking_every_entity_extract_false_is_claim_free(
+        self, tmp_path
+    ):
+        """No chunk is asked, and the batch keeps its manifest."""
+        llm = ScriptedLlm([stamp_manifest_json()])
+        extractor = self.extractor(llm, tmp_path)
+        batch = extractor.extract(page(STAMP), "Q23")
+        assert [method for method, _ in llm.calls] == ["open"]
+        assert batch.claims == []
+        assert [entity.id for entity in batch.entities] == ["e1"]
+        assert extractor.attention == [
+            "no claims extracted: every entity in the manifest is "
+            "extract=false"
+        ]
+        coverage = side_output(tmp_path, "coverage.json")
+        assert coverage["chunks"] == 0
+        assert coverage["entities_not_extracted"] == ["e1"]
+
+    @pytest.mark.parametrize(
+        ("tier", "why"),
+        [
+            (
+                [whole_page_segmentation_json(1, extract=False)],
+                "every unit in the segmentation is extract=false",
+            ),
+            (
+                [whole_page_segmentation_json(1, extract=True), ndjson([])],
+                "1 chunk answered with none",
+            ),
+        ],
+        ids=["no-unit-to-extract", "chunk-answered-none"],
+    )
+    def test_a_manifest_that_named_nothing_leaves_a_claim_free_batch(
+        self, tmp_path, tier, why
+    ):
+        """Every manifest attempt was answered with no entity at all: the
+        engine says the page names nothing. The line-range tier looks
+        again, and when it finds nothing either the page is claim-free."""
+        llm = ScriptedLlm([NO_ENTITIES, NO_ENTITIES, *tier])
+        extractor = self.extractor(llm, tmp_path)
+        batch = extractor.extract(page(ILLEGIBLE), "Q23")
+        assert batch.claims == []
+        assert extractor.attention == [
+            "entity manifest fell back to line-range segmentation: empty "
+            "entity list",
+            f"no claims extracted: {why}",
+        ]
+
+    # -- failed ------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        ("tier", "why"),
+        [
+            (
+                [whole_page_segmentation_json(4, extract=False)],
+                "every unit in the segmentation is extract=false",
+            ),
+            ([segmentation_json(), ndjson([])], "1 chunk answered with none"),
+        ],
+        ids=["no-unit-to-extract", "chunk-answered-none"],
+    )
+    def test_a_fallback_for_a_refused_manifest_that_extracts_nothing_fails(
+        self, tmp_path, tier, why
+    ):
+        llm = ScriptedLlm(["no manifest here", "still no manifest", *tier])
+        extractor = self.extractor(llm, tmp_path, budget=10_000)
+        assert self.failure(extractor, transcription()) == (
+            "no claims extracted: the entity manifest fell back to "
+            f"line-range segmentation ({NO_MANIFEST}), where {why}"
+        )
+
+    def test_line_windows_that_extract_nothing_fail(self, tmp_path):
+        llm = ScriptedLlm(["junk", "junk", "junk", "junk", ndjson([])])
+        extractor = self.extractor(llm, tmp_path, budget=10_000)
+        assert self.failure(extractor, transcription()) == (
+            "no claims extracted: the entity manifest fell back to "
+            f"line-range segmentation ({NO_MANIFEST}), and the segmentation "
+            f"to line windows ({NO_SEGMENTATION}), where 1 chunk answered "
+            "with none"
+        )
+
+    @pytest.mark.parametrize(
+        ("manifests", "reason"),
+        [
+            ([NO_ENTITIES, "no manifest here"], NO_MANIFEST),
+            (["no manifest here", NO_ENTITIES], "empty entity list"),
+            (
+                [NO_ENTITIES, RuntimeError("engine down")],
+                "RuntimeError: engine down",
+            ),
+            (
+                [RuntimeError("engine down"), NO_ENTITIES],
+                "empty entity list",
+            ),
+        ],
+        ids=["then-unusable", "after-unusable", "then-down", "after-down"],
+    )
+    def test_a_manifest_named_nothing_only_when_every_attempt_says_so(
+        self, tmp_path, manifests, reason
+    ):
+        """One attempt that named nothing is not the engine's word on the
+        page when the other was unusable, or the engine never answered it:
+        the extraction fails, and names the last attempt's reason."""
+        llm = ScriptedLlm(
+            [*manifests, whole_page_segmentation_json(1, extract=False)]
+        )
+        extractor = self.extractor(llm, tmp_path)
+        assert self.failure(extractor, page(ILLEGIBLE)) == (
+            "no claims extracted: the entity manifest fell back to "
+            f"line-range segmentation ({reason}), where every unit in the "
+            "segmentation is extract=false"
+        )
+
+    def test_chunks_that_all_fail_fail_the_extraction(self, tmp_path):
+        llm = PlainLlm(
+            [
+                entity_manifest_json(),
+                RuntimeError("engine down"),  # c001
+                RuntimeError("engine down"),  # c002
+            ]
+        )
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=0
+        )
+        assert self.failure(extractor, transcription()) == (
+            "no claims extracted: 2 of 2 chunks failed (c001: RuntimeError: "
+            "engine down)"
+        )
+
+    def test_claims_that_all_fail_validation_fail_the_extraction(
+        self, tmp_path
+    ):
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([dict(claim("e1", "e1", 1917), property="shoe_size")]),
+                ndjson([dict(claim("e2", "e2", 1917), property="shoe_size")]),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
+        assert self.failure(extractor, transcription()) == (
+            "no claims extracted: validation rejected every claim (2)"
+        )
+
+    def test_every_cause_is_named(self, tmp_path):
+        """A failed chunk on the fallback tier: both causes are given, and
+        the chunk's failure says what the tier came to."""
+        llm = PlainLlm(
+            [
+                "no manifest here",
+                "still no manifest",
+                segmentation_json(),
+                RuntimeError("engine down"),  # c001
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000, retries=0)
+        assert self.failure(extractor, transcription()) == (
+            "no claims extracted: 1 of 1 chunks failed (c001: RuntimeError: "
+            "engine down); the entity manifest fell back to line-range "
+            f"segmentation ({NO_MANIFEST})"
+        )
+
+    # -- the extraction's health ------------------------------------------
+
+    def test_coverage_records_the_extractions_health(self, tmp_path):
+        """What the checks that read a stored batch need, on either tier:
+        its chunks, its claims, the claims validation rejected, and the
+        fallback tiers it took (the line-range tier's are in
+        TestFallbackLadder)."""
+        bad = dict(claim("e1", "e1", 1917), property="shoe_size")
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "e1", 1917), bad]),
+                placeholder_claims("e2"),
+            ]
+        )
+        self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
+            transcription(), "Q23"
+        )
+        coverage = side_output(tmp_path, "coverage.json")
+        assert {
+            key: coverage[key]
+            for key in (
+                "chunks",
+                "failed_chunks",
+                "claims",
+                "rejected_claims",
+                "fallback",
+            )
+        } == {
+            "chunks": 2,
+            "failed_chunks": [],
+            "claims": 2,
+            "rejected_claims": 1,
+            "fallback": {},
+        }
+
+
+class TestTheExtractionStage:
+    """Under `ingest run`, with tests/unit/test_orchestrate.py's scripted
+    orchestrator: an extraction that fails for want of a usable answer
+    fails its stage, with a `failed` event that gives the reason, and the
+    document fails; a claim-free one is done and needs attention, and a
+    later run that reuses its view reports it the same (#45)."""
+
+    @staticmethod
+    def orchestrator(tmp_path, text: str, answers: dict[str, str]):
+        from tests.unit.test_orchestrate import (
+            ScriptedModel,
+            ScriptedOrchestrator,
+            quiet,
+        )
+
+        class Model(ScriptedModel):
+            """Answers the manifest and the segmentation from `answers`."""
+
+            def complete(self, prompt, image_paths=()):
+                if "manifest of EVERY distinct entity" in prompt:
+                    role = "manifest"
+                elif prompt.startswith("You segment a document"):
+                    role = "segmentation"
+                else:
+                    return super().complete(prompt, image_paths)
+                self.calls.append(f"{role}:{self.name}")
+                return answers[role]
+
+        class Orchestrator(ScriptedOrchestrator):
+            def _llm(self, role, doc):
+                return Model(self.calls, doc.source.name)
+
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "page.txt").write_text(text)
+        return Orchestrator(folder, tmp_path / "state", log=quiet)
+
+    def test_a_failed_extraction_fails_the_stage_in_every_run(self, tmp_path):
+        from tests.unit.test_orchestrate import this_run
+
+        orchestrator = self.orchestrator(
+            tmp_path,
+            DOC,
+            {
+                "manifest": "no manifest here",
+                "segmentation": whole_page_segmentation_json(4, extract=False),
+            },
+        )
+        # the same answers, as the LLM cache replays them, fail it again
+        for _run in range(2):
+            assert orchestrator.run() == 1
+            (doc,) = orchestrator.documents()
+            assert doc.state.status == FAILED
+            assert doc.state.error == (
+                "ExtractionFailed: no claims extracted: the entity manifest "
+                f"fell back to line-range segmentation ({NO_MANIFEST}), "
+                "where every unit in the segmentation is extract=false"
+            )
+            (failed,) = this_run(orchestrator, "failed")
+            assert failed["stage"] == "extraction"
+            assert failed["reason"] == doc.state.error
+            extraction = run_state(orchestrator.rundir)[
+                (doc.sha1, "extraction")
+            ]
+            assert extraction == StageState("failed", doc.state.error)
+            assert not doc.batch.exists()
+
+    def test_a_claim_free_extraction_needs_attention_in_every_run(
+        self, tmp_path
+    ):
+        from tests.unit.test_orchestrate import this_run
+
+        orchestrator = self.orchestrator(
+            tmp_path, STAMP, {"manifest": stamp_manifest_json()}
+        )
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        assert doc.state.status != FAILED
+        batch = ClaimBatch.model_validate_json(doc.batch.read_text())
+        assert batch.claims == []
+        why = "no claims extracted: every entity in the manifest is "
+        why += "extract=false"
+        extraction = run_state(orchestrator.rundir)[(doc.sha1, "extraction")]
+        assert extraction == StageState(NEEDS_ATTENTION, why)
+        # a later run reuses the view, and reports it as it was made
+        orchestrator.run()
+        (reused,) = [
+            event
+            for event in this_run(orchestrator, "reused")
+            if event["stage"] == "extraction"
+        ]
+        assert reused["attention"] == [why]
+        again = run_state(orchestrator.rundir)[(doc.sha1, "extraction")]
+        assert again == extraction

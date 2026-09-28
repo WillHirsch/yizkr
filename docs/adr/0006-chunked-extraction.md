@@ -8,6 +8,9 @@ correctly downgraded to year precision instead of silently guessed).
 Amended by #87 (2026-09-27): chunk state lives in the stage store (§5).
 Amended by #225 (2026-09-27): the stage store gives way to the LLM cache
 of ADR-0032, and `--cache` replaces `--resume` (§5, §7).
+Amended by #45 (2026-09-28): an extraction that ends with no claims
+either fails or is claim-free (§5), and `coverage.json` records the
+extraction's health on either tier (§6).
 
 ## Context
 
@@ -209,9 +212,25 @@ answer the cache kept from an earlier call spends no retry: the engine is
 asked once more (ADR-0032 §4). A fallback tier is taken only when the
 engine answered: an outage fails the extraction, to be retried. Per-chunk
 progress is the log, and the chunks that failed, with the first reason,
-are the extraction's error. Coverage, rejects and gaps are side outputs in
-the extractor's state directory (`<doc>/extraction/` under `ingest run`,
-`<out>.chunks/` for `ingest extract`), written for a complete extraction.
+are the extraction's error. An extraction that ends with no claims fails
+(amended by #45, 2026-09-28), its error naming each cause, when chunks
+failed, when validation rejected every claim, or when the entity manifest
+was refused and the line-range tier that stood in for it extracted
+nothing: a degraded tier's silence says nothing about the document, so
+its empty batch is no view to keep. A manifest refused in every attempt
+only for naming no entity is no failed pass: the engine said the
+document names nothing, and the line-range tier looked again. Otherwise
+the empty batch is claim-free, on the word of the answers the extractor
+accepted: the stage is done with an attention reason that says why
+(every entity or unit is `extract: false`, or the chunks answered with
+none), and every run that reuses the view reports it (ADR-0032 §1, §8).
+Behind the cache the refused manifest replays (ADR-0032 §5), so an
+extraction that failed this way fails again, the same way, in every run
+until `--refresh extract` or a new epoch asks afresh, or a change to the
+manifest's prompt or parser yields a usable one. Coverage, rejects and
+gaps are side outputs in the extractor's state directory
+(`<doc>/extraction/` under `ingest run`, `<out>.chunks/` for `ingest
+extract`), written for a complete extraction that did not fail.
 Sidecar state from before the store is never read. `yizkr ingest run` sets
 aside whole a document directory without `derivations.json`, and starts it
 afresh, as it does one whose source bytes changed (ADR-0010); nothing in
@@ -257,6 +276,14 @@ After merge, a `coverage.json` in the state dir lists: units with
 the diff between segmentation unit labels and distinct subject labels
 in the batch. Advisory and curator-facing — no automatic re-extraction
 loop in v1.
+
+Amended by #45 (2026-09-28): on either tier, `coverage.json` also records
+the extraction's health: how many chunks it asked (`chunks`), its claims
+(`claims`) and the claims validation rejected (`rejected_claims`), and
+each fallback tier it took, with the reason (`fallback`). It is written
+with the batch it describes, so the anomaly checks (#196) and the flag
+framework (#112) can read it beside a stored batch, a reused one
+included.
 
 ### 7. Strategy selection and CLI surface
 
