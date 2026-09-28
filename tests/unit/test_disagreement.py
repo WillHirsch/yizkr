@@ -1027,104 +1027,170 @@ class TestStoredAlike:
         assert len(listed(first, second)) == 1
 
 
-class TestComparedAsStated:
-    """compared_as_stated: a residence's or a spouse's earliest and latest
-    dates may date either end of it."""
+class TestEachEndItsOwnRange:
+    """dated_times: a residence's or a spouse's start and end are dates like
+    any other, each with the range its statement states for that end
+    (MODELING.md, "Marriages, residences and other periods"): a start runs
+    from its earliest date to its latest start date, an end from its
+    earliest end date to its latest date, as on Wikidata's spouse (P26)."""
 
-    def residence(self, source_key: str, start: Time, **bounds) -> Statement:
+    @staticmethod
+    def marriage(source_key: str, **dates) -> Statement:
+        """Leopold's marriage to Agnes, dated as `source_key` dates it."""
         return said(
-            "klara-loebig",
-            "residence",
-            "juniper-street-31",
+            "leopold-loebig", "spouse", "agnes-loebig", source_key, **dates
+        )
+
+    @staticmethod
+    def row(qualifier: str, a: str, b: str) -> tuple:
+        return ("Leopold Löbig", "spouse", "Agnes Löbig", qualifier, a, b)
+
+    def test_a_start_between_two_dates_holds_a_day_inside_them(self):
+        # married on 8 February 1947 per the judgment, and (here) "between
+        # 1946 and 1947" per the tree: the day refines the range
+        ranged = self.marriage(
+            TREE,
+            start=at(u.Date(1946)),
+            earliest=at(u.Date(1946)),
+            latest_start=at(u.Date(1947)),
+        )
+        day = self.marriage(JUDGMENT, start=at(u.Date(1947, 2, 8)))
+        assert listed(ranged, day) == []
+        # without its range, 1946 disagrees with the day
+        bare = replace(ranged, earliest=frozenset(), latest_start=frozenset())
+        assert listed(bare, day) == [
+            self.row("start_time", "1946-01-01/9", "1947-02-08/11")
+        ]
+
+    def test_an_end_between_two_dates_holds_a_day_inside_them(self):
+        # divorced on 2 January 1957 per the judgment, and (here) "between
+        # 1956 and 1957" per the tree
+        ranged = self.marriage(
+            TREE,
+            end=at(u.Date(1956)),
+            earliest_end=at(u.Date(1956)),
+            latest=at(u.Date(1957)),
+        )
+        day = self.marriage(JUDGMENT, end=at(u.Date(1957, 1, 2)))
+        assert listed(ranged, day) == []
+        bare = replace(ranged, earliest_end=frozenset(), latest=frozenset())
+        assert listed(bare, day) == [
+            self.row("end_time", "1956-01-01/9", "1957-01-02/11")
+        ]
+
+    def test_a_latest_date_bounds_the_end_never_the_start(self):
+        # (here) the tree has them married in 1946 and the marriage over by
+        # 1957: its latest date sets no range for the start, which
+        # disagrees with the judgment's 8 February 1947
+        tree = self.marriage(
+            TREE, start=at(u.Date(1946)), latest=at(u.Date(1957))
+        )
+        judgment = self.marriage(JUDGMENT, start=at(u.Date(1947, 2, 8)))
+        assert listed(tree, judgment) == [
+            self.row("start_time", "1946-01-01/9", "1947-02-08/11")
+        ]
+
+    def test_an_earliest_date_bounds_the_start_never_the_end(self):
+        # (here) the tree has the marriage begun no earlier than 1946 and
+        # ended in 1956: its earliest date sets no range for the end, which
+        # disagrees with the judgment's 2 January 1957
+        tree = self.marriage(
+            TREE, end=at(u.Date(1956)), earliest=at(u.Date(1946))
+        )
+        judgment = self.marriage(JUDGMENT, end=at(u.Date(1957, 1, 2)))
+        assert listed(tree, judgment) == [
+            self.row("end_time", "1956-01-01/9", "1957-01-02/11")
+        ]
+
+    def test_a_row_shows_the_range_of_the_end_it_compares(self):
+        # (here) the tree dates the marriage "between 1948 and 1949" and has
+        # it over by 1957 at the latest: the start row shows the start's own
+        # range, beside the judgment's 8 February 1947
+        tree = self.marriage(
+            TREE,
+            start=at(u.Date(1948)),
+            earliest=at(u.Date(1948)),
+            latest_start=at(u.Date(1949)),
+            latest=at(u.Date(1957)),
+        )
+        judgment = self.marriage(JUDGMENT, start=at(u.Date(1947, 2, 8)))
+        (row,) = compare((tree, judgment), NOTHING)
+        assert row.qualifier == "start_time"
+        assert row.b.sources == (source(TREE),)
+        assert row.b.value.earliest == at(u.Date(1948))
+        assert row.b.value.latest == at(u.Date(1949))
+        assert disagreement.BOUNDS["start_time"] == (
+            "earliest_date",
+            "latest_start_date",
+        )
+        assert disagreement.BOUNDS["end_time"] == (
+            "earliest_end_date",
+            "latest_date",
+        )
+
+    @staticmethod
+    def dated(prop: str, source_key: str, stored: Time, low, high):
+        """A start (on the spouse statement) or a date of birth, stored as
+        `stored` and bounded by `low` and `high`."""
+        bounds = {}
+        if low is not None:
+            bounds["earliest"] = low
+        if high is not None:
+            bounds["latest_start" if prop == "spouse" else "latest"] = high
+        if prop == "spouse":
+            return said(
+                "leopold-loebig",
+                "spouse",
+                "agnes-loebig",
+                source_key,
+                start=stored,
+                **bounds,
+            )
+        term = Term("literal", stored.value, XSD_DATETIME)
+        return said(
+            "leopold-loebig",
+            "date_of_birth",
+            term,
             source_key,
-            start=start,
+            precision=stored.precision,
             **bounds,
         )
 
-    def test_a_start_beside_a_range_is_compared_as_stated(self):
-        # a start in 1938 on a statement whose earliest and latest dates are
-        # 1938 and 1939, and a start on 22 June 1938
-        ranged = self.residence(
-            INTERVIEW,
-            at(u.Date(1938)),
-            earliest=at(u.Date(1938)),
-            latest=at(u.Date(1939)),
-        )
-        day = self.residence(POSTCARD, at(u.Date(1938, 6, 22)))
-        assert listed(ranged, day) == [
+    @pytest.mark.parametrize(
+        ("first", "second"),
+        [
+            # "before 1947" and "after 1947", both stored as 1947
             (
-                "Klara Löbig",
-                "residence",
-                "31 Juniper Street",
-                "start_time",
-                "1938-01-01/9",
-                "1938-06-22/11",
-            )
-        ]
-        # with no range on either, the day refines the year
-        plain = self.residence(INTERVIEW, at(u.Date(1938)))
-        assert listed(plain, day) == []
-
-    def test_times_stored_alike_at_two_precisions_are_compared_as_stated(
-        self,
-    ):
-        # released from prison on 1 October 1939 per the card and (here) in
-        # October 1939 per the interview, both stored as 1939-10-01: beside
-        # a range they are listed, and without one the day refines the
-        # month
-        day = said(
-            "leopold-loebig",
-            "residence",
-            "peiltal-court-prison",
-            CARD,
-            end=at(u.Date(1939, 10, 1)),
-            earliest=at(u.Date(1939, 9, 3)),
-        )
-        month = said(
-            "leopold-loebig",
-            "residence",
-            "peiltal-court-prison",
-            INTERVIEW,
-            end=at(u.Date(1939, 10)),
-        )
-        assert listed(day, month) == [
+                (at(u.Date(1947)), None, at(u.Date(1947))),
+                (at(u.Date(1947)), at(u.Date(1947)), None),
+            ),
+            # (here) a day and its month, stored alike
             (
-                "Leopold Löbig",
-                "residence",
-                "Gerichtsgefängnis Peiltal",
-                "end_time",
-                "1939-10-01/10",
-                "1939-10-01/11",
-            )
-        ]
-        unranged = said(
-            "leopold-loebig",
-            "residence",
-            "peiltal-court-prison",
-            CARD,
-            end=at(u.Date(1939, 10, 1)),
-        )
-        assert listed(unranged, month) == []
-
-    def test_one_time_stated_alike_is_one_value_whatever_the_range(self):
-        # married in 1947 per the tree and (here) "before 1947" per the
-        # interview: the start times are stated alike
-        bounded = said(
-            "leopold-loebig",
-            "spouse",
-            "agnes-loebig",
-            INTERVIEW,
-            start=at(u.Date(1947)),
-            latest=at(u.Date(1947)),
-        )
-        plain = said(
-            "leopold-loebig",
-            "spouse",
-            "agnes-loebig",
-            TREE,
-            start=at(u.Date(1947)),
-        )
-        assert listed(bounded, plain) == []
+                (at(u.Date(1947, 2, 1)), None, None),
+                (at(u.Date(1947, 2)), None, None),
+            ),
+            # (here) the century and the millennium, stored alike as 1800
+            (
+                (Time("1800-01-01T00:00:00Z", CENTURY), None, None),
+                (Time("1800-01-01T00:00:00Z", MILLENNIUM), None, None),
+            ),
+        ],
+        ids=["before-and-after", "day-and-month", "century-and-millennium"],
+    )
+    def test_dates_stored_alike_compare_as_any_date_does(self, first, second):
+        # a start stored alike with another is told apart by the ranges
+        # both statements state, exactly as two dates of birth are
+        rows = {
+            prop: [
+                row[4:]
+                for row in listed(
+                    self.dated(prop, TREE, *first),
+                    self.dated(prop, JUDGMENT, *second),
+                )
+            ]
+            for prop in ("spouse", "date_of_birth")
+        }
+        assert rows["spouse"] == rows["date_of_birth"]
 
     def test_a_marriage_dated_by_year_and_by_day_is_a_refinement(self):
         # the judgment's 8 February 1947 and 2 January 1957, the tree's
@@ -1312,6 +1378,8 @@ def plain(value) -> dict:
 FETCHED_TIMES = {
     "earliest": "earliest",
     "latest": "latest",
+    "latest_start": "latestStart",
+    "earliest_end": "earliestEnd",
     "start": "start",
     "end": "end",
     "point_in_time": "pointInTime",
@@ -1396,6 +1464,10 @@ class TestReading:
                 start=[at(u.Date(1947, 2, 8)), at(u.Date(1947))],
                 end=at(u.Date(1957, 1, 2)),
                 point_in_time=at(u.Date(1947, 2, 8)),
+                earliest=at(u.Date(1946)),
+                latest_start=at(u.Date(1947)),
+                earliest_end=at(u.Date(1956)),
+                latest=at(u.Date(1957)),
             ),
             said(
                 "emigration-1938",

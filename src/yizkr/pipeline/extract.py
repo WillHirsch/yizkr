@@ -62,6 +62,17 @@ Rules — these mirror the archive's non-negotiable conventions:
 {property_keys}
 - Vocabulary item keys available for "vocab" references:
 {item_keys}
+- Dating a marriage, a residence or any other period: a marriage's date
+  is `start_time` on the `spouse` claim, and the date the source gives
+  for its end (a divorce, an annulment, widowhood) is its `end_time`; a
+  move in and a move out date a `residence` the same way. `point_in_time`
+  on a spouse or residence claim only records a date at which the source
+  shows the marriage or the residence holding (a census, a directory
+  entry), never a wedding date. A range bounds one end: a start takes
+  `earliest_date` and `latest_start_date`, an end takes
+  `earliest_end_date` and `latest_date`. Married "between X and Y" is
+  start_time X with earliest_date X and latest_start_date Y; divorced
+  "before Z" is end_time Z with latest_date Z.
 - Set confidence (0-1) per claim: how certain you are the source asserts it.
 
 Output NDJSON: one complete claim JSON object per line — no wrapper

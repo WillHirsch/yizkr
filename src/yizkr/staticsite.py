@@ -786,10 +786,10 @@ class SiteBuilder:
             "not listed: a date whose span lies inside another's (the period "
             "its precision names, or the range its source states with "
             "earliest and latest dates), or a place the graph records as "
-            "contained in the other. When either of two residence or spouse "
-            "statements carries earliest or latest dates, their start and "
-            "end times are compared as stated, so a difference of "
-            "resolution between them is listed.</p>",
+            "contained in the other. A residence's or a spouse's start and "
+            "end each have a range of their own: a start runs from its "
+            "earliest date to its latest start date, an end from its "
+            "earliest end date to its latest date.</p>",
             "<table><tr><th>Who/what</th><th>Property</th>"
             "<th>Value A</th><th>per</th><th>Value B</th><th>per</th></tr>",
         ]
@@ -806,17 +806,18 @@ class SiteBuilder:
             return text
 
         def stated_range(row: Disagreement, side: Side) -> str:
-            """The earliest and latest dates a statement gives its value,
-            as the person page shows qualifiers. A residence or spouse row
-            compares a start or end time, which those dates need not
-            bound, so it shows none."""
-            if row.qualifier:
-                return ""
+            """The range a statement gives the date compared, as the person
+            page shows qualifiers: for a value its earliest and latest
+            dates, and for a residence's or a spouse's start or end the
+            bounds of that end (disagreement.BOUNDS)."""
+            labels = disagreement.property_labels()
+            low, high = disagreement.BOUNDS[row.qualifier]
             bounds = [
-                f"{name} date: " + format_time(time.value, str(time.precision))
-                for name, time in (
-                    ("earliest", side.value.earliest),
-                    ("latest", side.value.latest),
+                f"{labels[key]}: "
+                + format_time(time.value, str(time.precision))
+                for key, time in (
+                    (low, side.value.earliest),
+                    (high, side.value.latest),
                 )
                 if time is not None
             ]

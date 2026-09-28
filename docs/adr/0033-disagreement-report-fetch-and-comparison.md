@@ -5,6 +5,11 @@ decision of 2026-09-28 to land #227 as reviewed and then split the report.
 Cites ADR-0002 (coexistence), ADR-0004 (the exploration tier), ADR-0009
 (the place hierarchy) and ADR-0023 §4 (coexistence is cross-source only),
 which points here.
+Amended by #231 (2026-09-28): the open question of which qualifier carries
+a marriage date is settled (MODELING.md, "Marriages, residences and other
+periods"), so a residence's or a spouse's start and end each have a range
+of their own, the fetch lists the two bounds that are new, and
+`compared_as_stated` is gone (§1, §2, §5).
 
 ## Context
 
@@ -50,8 +55,10 @@ anything, so each costs time in proportion to what it lists.
   statement and rank; the value with its precision (an item with the label
   of the item a merge redirect resolves to); the earliest and latest dates
   its source gives, each with its precision; the start time, end time and
-  point in time it carries as qualifiers; and each stated-in source with
-  the artifact it belongs to (a page fragment resolves to its artifact).
+  point in time it carries as qualifiers, and the latest start date and
+  earliest end date that bound a residence's or a spouse's start and end
+  (amended by #231); and each stated-in source with the artifact it
+  belongs to (a page fragment resolves to its artifact).
   It filters nothing, not even by rank: rank is an overlay the comparison
   reads, and a statement with no stated-in source is listed with none.
 - **`place-containment.rq`** lists every location and part-of edge (the
@@ -77,12 +84,11 @@ tests on the fictional universe (`tests/unit/test_disagreement.py`):
 |---|---|
 | a deprecated statement is left out; a preferred one is compared like any other | `in_contention` |
 | a statement with no stated-in source takes no part | `attributed` |
-| single-valued properties compare their values, a time once per stated range and any other value once, with no range; residence and spouse compare the times `dated_times` names | `compared_values`, `dated_times` |
+| single-valued properties compare their values, a time once per stated range and any other value once, with no range; residence and spouse compare the times `dated_times` names, each end with its own range: a start from its earliest date to its latest start date, an end from its earliest end date to its latest date (amended by #231) | `compared_values`, `dated_times` |
 | a name compares as text, letter case and language tag aside; an item through its merge redirect | `comparison_key` |
 | a date's span: the stated range, open-ended when one bound is given, or the period its precision names | `span`, `period`, `century` |
 | a precision coarser than a century names no span; a span inside the other's differs in resolution | `named`, `spans_nest` |
 | two dates stored alike are compared through their stated ranges | `stored_alike_order`, `paired` |
-| residence and spouse times beside a range are compared as stated | `compared_as_stated` |
 | a place recorded inside the other differs in resolution | `place_within` |
 | two readings of one artifact are not two sources, nor are two readings of one statement's value, however many artifacts it cites | `from_different_artifacts`, `one_claim` |
 
@@ -94,6 +100,21 @@ convention for display. #231 (which qualifier carries a marriage date) is
 `dated_times`, which compares a spouse's start and end times and not its
 point in time. The fetch already lists the point in time, so either answer
 changes that function alone.
+
+Amended by #231 (2026-09-28): #231 settled that question, and with it
+which end a residence's or a spouse's earliest and latest dates bound
+(MODELING.md, "Marriages, residences and other periods"). A marriage's
+date is the spouse statement's start time and its end the end time, and
+a point in time dates an observation, which is still not compared. Each
+end has a range of its own, as on Wikidata's spouse (P26): a start from
+its earliest date to its latest start date, an end from its earliest end
+date to its latest date. So the answer reached beyond `dated_times`: the
+fetch lists the latest start date and the earliest end date, and with
+each end's range known, a residence's or a spouse's start and end are
+compared like any other date, through `span`, `stored_alike_order` and
+`paired` as they stand, and `compared_as_stated`, which kept every
+difference of resolution beside such dates while their end was unknown,
+is gone.
 
 ### 3. The published query page lists attributed values
 
@@ -140,7 +161,10 @@ comparison follows the documentation:
   October 1939 would have been. Without them the day still refines the
   month. A time stored alike at a precision coarser than a century, which
   names no span, is listed beside a finer one with or without such dates,
-  as two such dates of a single-valued property are.
+  as two such dates of a single-valued property are. Amended by #231
+  (2026-09-28): those dates now bound one end each, so two start or end
+  times stored alike are told apart by the ranges stated for that end,
+  as two dates of a single-valued property are (§2).
 - **Letter case.** The query lowercased names. "Differ only in letter
   case" is Unicode case folding, which also makes a sharp s and SS one
   value, and a long s (ſ) and s.

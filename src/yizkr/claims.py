@@ -179,10 +179,13 @@ class TimeValue(StrictModel):
     the declared precision are rejected: stating "month precision" while
     supplying a day means the claim narrows or pads what the source
     says; both are forbidden (docs/MODELING.md, "Uncertainty and
-    time"). For decades use the first year (1920s -> year=1920,
+    time"). For decades use the first year (1890s -> year=1890,
     precision=decade); same for centuries (1800).
-    Ranges ("between 1930 and 1935") are NOT a precision problem: use
-    earliest_date/latest_date qualifiers on the claim.
+    Ranges ("between 1938 and 1939") are NOT a precision problem: use
+    earliest_date/latest_date qualifiers on the claim, or for the start
+    or end of a period (a marriage, a residence) that end's own bounds:
+    earliest_date/latest_start_date for a start, earliest_end_date/
+    latest_date for an end.
     """
 
     type: Literal["time"] = "time"

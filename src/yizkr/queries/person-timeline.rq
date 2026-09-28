@@ -2,48 +2,107 @@
 # source that asserts it. Plural-by-default (R6): when sources disagree
 # about a date, ALL attributed values appear as separate rows, labeled by
 # source — nothing is silently picked.
-# Covers: dated statements on the person (birth, death, ...), dated
-# qualifiers on the person's statements (e.g. spouse with point in time),
-# and dated events the person participated in.
+# Covers: dated statements on the person (birth, death), the dates the
+# person's statements carry as qualifiers, and dated events the person
+# participated in. A qualifier's row names the statement's property, its
+# value and the qualifier: a marriage is dated by the start time of its
+# spouse statement and ends at its end time, and a point in time on a
+# spouse or residence statement dates an observation, never the wedding
+# or the move (docs/MODELING.md, "Marriages, residences and other
+# periods").
+# Each row carries the range its source states for that date, each bound
+# at its stated precision: a date value's or a point in time's earliest
+# and latest date, a start's earliest date and latest start date, and an
+# end's earliest end date and latest date. A point in time beside a start
+# or end time takes none, since there those dates bound the start and the
+# end.
 # For a single person, append e.g.: FILTER(?person = wd:Q26)
 #defaultView:Timeline
-SELECT DISTINCT ?person ?personLabel ?what ?date ?precision ?source ?sourceLabel
+SELECT DISTINCT ?person ?personLabel ?what ?date ?precision
+       ?earliest ?earliestPrecision ?latest ?latestPrecision
+       ?source ?sourceLabel
 WHERE {
   ?person wdt:{P:instance_of} wd:{Q:human} .
+  # each arm names the date's property (?dated) and the qualifiers that
+  # bound it (?low, ?high)
   {
-    BIND("date of birth"@en AS ?what)
+    VALUES (?what ?dated ?low ?high) {
+      ("date of birth"@en wd:{P:date_of_birth}
+       wd:{P:earliest_date} wd:{P:latest_date})
+    }
     ?person p:{P:date_of_birth} ?st .
-    ?st ps:{P:date_of_birth} ?date .
   } UNION {
-    BIND("date of death"@en AS ?what)
+    VALUES (?what ?dated ?low ?high) {
+      ("date of death"@en wd:{P:date_of_death}
+       wd:{P:earliest_date} wd:{P:latest_date})
+    }
     ?person p:{P:date_of_death} ?st .
-    ?st ps:{P:date_of_death} ?date .
   } UNION {
-    # dated qualifiers: an instant (point in time) or the start/end of a
-    # state (marriage start, residence end, ...)
-    VALUES ?dateQualifier {
-      pq:{P:point_in_time} pq:{P:start_time} pq:{P:end_time}
+    # a date one of the person's statements carries: the start or the end
+    # of what it states (a marriage, a residence, an occupation), or a
+    # point in time at which a source shows it holding
+    VALUES (?qualifier ?dated ?low ?high) {
+      (pq:{P:start_time} wd:{P:start_time}
+       wd:{P:earliest_date} wd:{P:latest_start_date})
+      (pq:{P:end_time} wd:{P:end_time}
+       wd:{P:earliest_end_date} wd:{P:latest_date})
+      (pq:{P:point_in_time} wd:{P:point_in_time}
+       wd:{P:earliest_date} wd:{P:latest_date})
     }
     ?person ?p ?st .
-    ?st ?dateQualifier ?date .
+    ?st ?qualifier ?stamp .
     ?claimProperty wikibase:claim ?p ;
-                   rdfs:label ?what .
-    FILTER(LANG(?what) = "en")
+                   wikibase:statementProperty ?ps ;
+                   rdfs:label ?propertyName .
+    FILTER(LANG(?propertyName) = "en")
+    ?dated rdfs:label ?qualifierName .
+    FILTER(LANG(?qualifierName) = "en")
+    # the value the statement states (the spouse, the place), by its label
+    OPTIONAL { ?st ?ps ?value .
+               OPTIONAL { ?value rdfs:label ?valueName .
+                          FILTER(LANG(?valueName) = "en") } }
+    BIND(COALESCE(?valueName,
+                  IF(isIRI(?value), REPLACE(STR(?value), "^.*/", ""),
+                     STR(?value)))
+         AS ?shown)
+    BIND(COALESCE(CONCAT(?propertyName, ": ", ?shown,
+                         " (", ?qualifierName, ")"),
+                  CONCAT(?propertyName, " (", ?qualifierName, ")"))
+         AS ?what)
   } UNION {
+    VALUES (?dated ?low ?high) {
+      (wd:{P:point_in_time} wd:{P:earliest_date} wd:{P:latest_date})
+    }
     ?event wdt:{P:participant} ?person ;
            wdt:{P:instance_of} ?eventType ;
            p:{P:point_in_time} ?st .
-    ?st ps:{P:point_in_time} ?date .
     ?eventType rdfs:label ?what .
     FILTER(LANG(?what) = "en")
   }
-  # the date's stated precision (works for statement and qualifier value
-  # nodes alike): display must never pad what a source said
-  OPTIONAL {
-    ?st ?anyValuePredicate ?valueNode .
-    ?valueNode wikibase:timeValue ?date ;
-               wikibase:timePrecision ?precision .
-  }
+  # the date at its stated precision (display must never pad what a
+  # source said): the value node of the statement's own date, or of its
+  # qualifier, whichever the statement carries for ?dated
+  { ?dated wikibase:statementValue ?dateLink . }
+  UNION
+  { ?dated wikibase:qualifierValue ?dateLink . }
+  ?st ?dateLink ?dateNode .
+  ?dateNode wikibase:timeValue ?date ;
+            wikibase:timePrecision ?precision .
+  # a point in time beside a start or end time takes no range: there the
+  # earliest and latest dates bound the start and the end
+  BIND(?dated != wd:{P:point_in_time}
+       || NOT EXISTS { ?st pq:{P:start_time}|pq:{P:end_time} [] }
+       AS ?ranged)
+  OPTIONAL { ?low wikibase:qualifierValue ?lowLink .
+             ?st ?lowLink ?lowNode .
+             ?lowNode wikibase:timeValue ?earliest ;
+                      wikibase:timePrecision ?earliestPrecision .
+             FILTER(?ranged) }
+  OPTIONAL { ?high wikibase:qualifierValue ?highLink .
+             ?st ?highLink ?highNode .
+             ?highNode wikibase:timeValue ?latest ;
+                       wikibase:timePrecision ?latestPrecision .
+             FILTER(?ranged) }
   OPTIONAL { ?st prov:wasDerivedFrom/pr:{P:stated_in} ?source . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
 }

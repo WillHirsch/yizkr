@@ -288,8 +288,8 @@ DISAGREEING = [
     said(
         "gustav-loebig", "place_of_birth", "floerburg", "naturalisation-1952"
     ),
-    # a residence statement's own range may date either end of it, so the
-    # start-time row does not show it
+    # the tree's latest date bounds the residence's end, not its start, so
+    # the start-time row does not show it
     said(
         "gustav-loebig",
         "residence",
@@ -529,8 +529,8 @@ class TestInconsistencies:
             "latest date: 1939)</span></td>"
         ) in text
         assert "<td>1942-08-21</td>" in text
-        # a residence or spouse row compares a start or end time, which
-        # the statement's range need not bound: it is not shown there
+        # the residence's latest date bounds its end, which no source
+        # dates, so the start-time row does not show it
         assert "latest date: 1952" not in text
 
     def test_dates_stored_alike_show_the_ranges_that_set_them_apart(
@@ -555,6 +555,57 @@ class TestInconsistencies:
         assert "<td>birth name</td>" in text
         assert "<td>Cäcilie Tarle</td>" in text
         assert "<td>Cäcilie Löbig</td>" in text
+
+    def test_a_marriage_row_shows_the_range_of_the_end_it_compares(
+        self, tmp_path, vocabulary
+    ):
+        # (here) the tree has Leopold and Agnes married "between 1948 and
+        # 1949" and divorced "between 1958 and 1959", beside the
+        # judgment's 8 February 1947 and 2 January 1957: each row shows the
+        # bounds of its own end (MODELING.md, "Marriages, residences and
+        # other periods")
+        statements = [
+            said(
+                "leopold-loebig",
+                "spouse",
+                "agnes-loebig",
+                "divorce-judgment-1957",
+                start=at(u.Date(1947, 2, 8)),
+                end=at(u.Date(1957, 1, 2)),
+            ),
+            said(
+                "leopold-loebig",
+                "spouse",
+                "agnes-loebig",
+                "family-tree-1984",
+                start=at(u.Date(1948)),
+                earliest=at(u.Date(1948)),
+                latest_start=at(u.Date(1949)),
+                end=at(u.Date(1958)),
+                earliest_end=at(u.Date(1958)),
+                latest=at(u.Date(1959)),
+            ),
+        ]
+        fetched = [
+            row for statement in statements for row in rows_of(statement)
+        ]
+        site, summary = build(
+            tmp_path,
+            vocabulary,
+            {**RESPONSES, "wikibase:rank ?rank": fetched},
+        )
+        assert summary["inconsistencies"] == 2
+        text = (site / "inconsistencies.html").read_text()
+        assert "<td>spouse (Agnes Löbig), start time</td>" in text
+        assert (
+            '<td>1948 <span class="qualifiers">(earliest date: 1948; '
+            "latest start date: 1949)</span></td>"
+        ) in text
+        assert "<td>spouse (Agnes Löbig), end time</td>" in text
+        assert (
+            '<td>1958 <span class="qualifiers">(earliest end date: 1958; '
+            "latest date: 1959)</span></td>"
+        ) in text
 
 
 class TestTimeFormatting:

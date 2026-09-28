@@ -19,6 +19,11 @@ Each rule of MODELING.md "Contradictions" is one function here:
 * ``compared_values``: what a statement puts up for comparison, its own
   value for a property that holds one true value per subject, or for a
   residence or a spouse the times ``dated_times`` names;
+* ``dated_times``: a residence's or a marriage's start and end times,
+  each with the range its statement states for that end: a start runs
+  from its earliest date to its latest start date, an end from its
+  earliest end date to its latest date (MODELING.md, "Marriages,
+  residences and other periods");
 * ``comparison_key``: a name compares as text, letter case and language
   tag aside, and an item through its merge redirect;
 * ``span``: the period a date names, which is the range its source states
@@ -27,9 +32,6 @@ Each rule of MODELING.md "Contradictions" is one function here:
   date whose span lies inside the other's;
 * ``stored_alike_order``: two dates stored alike are compared through the
   ranges their statements state;
-* ``compared_as_stated``: a residence's or a marriage's earliest and latest
-  dates may date either end of it, so beside them its start and end times
-  are compared as stated;
 * ``place_within``: a place the graph records inside the other differs
   only in resolution;
 * ``from_different_artifacts``: two readings of one artifact are not two
@@ -154,9 +156,10 @@ class Source:
 @dataclass(frozen=True)
 class Statement:
     """One statement of a compared property, as the fetch lists it: its
-    value as stated, the earliest and latest dates its source gives, the
-    start and end times and points in time it carries as qualifiers, and
-    its stated-in sources."""
+    value as stated, the earliest and latest dates its source gives (and
+    on a residence or a spouse, the latest start and earliest end dates
+    that bound its ends), the start and end times and points in time it
+    carries as qualifiers, and its stated-in sources."""
 
     iri: str
     entity: str
@@ -168,6 +171,8 @@ class Statement:
     precision: int | None = None
     earliest: frozenset[Time] = frozenset()
     latest: frozenset[Time] = frozenset()
+    latest_start: frozenset[Time] = frozenset()
+    earliest_end: frozenset[Time] = frozenset()
     start: frozenset[Time] = frozenset()
     end: frozenset[Time] = frozenset()
     point_in_time: frozenset[Time] = frozenset()
@@ -241,6 +246,8 @@ def _time(row: Mapping[str, dict], name: str) -> Time | None:
 TIME_COLUMNS = {
     "earliest": "earliest",
     "latest": "latest",
+    "latest_start": "latestStart",
+    "earliest_end": "earliestEnd",
     "start": "start",
     "end": "end",
     "point_in_time": "pointInTime",
@@ -344,8 +351,9 @@ class Aspect:
 @dataclass(frozen=True)
 class Value:
     """A value as its source states it: the stored term, an item's label,
-    a time's precision, and for a time the earliest and latest dates its
-    statement gives."""
+    a time's precision, and for a time the range its statement states for
+    it, from an earliest to a latest date: for a residence's or a spouse's
+    start or end, the bounds of that end (``dated_times``)."""
 
     term: Term
     label: str = ""
@@ -363,11 +371,52 @@ class Reading:
     value: Value
 
 
-def dated_times(statement: Statement) -> dict[str, frozenset[Time]]:
-    """The dates a residence or a spouse statement is compared by: its
-    start and end times. A point in time on it dates an observation, not
-    the residence or the marriage, and is not compared."""
-    return {"start_time": statement.start, "end_time": statement.end}
+@dataclass(frozen=True)
+class Dated:
+    """One date of a residence or a spouse statement: the times it
+    carries, and the earliest and latest dates that bound them."""
+
+    times: frozenset[Time]
+    earliest: frozenset[Time]
+    latest: frozenset[Time]
+
+
+# The qualifiers that bound each date compared (MODELING.md, "Marriages,
+# residences and other periods"): a time value's earliest and latest date,
+# and on a residence or a spouse statement each end's own pair, as on
+# Wikidata's spouse (P26): a start runs from its earliest date to its
+# latest start date, an end from its earliest end date to its latest date.
+BOUNDS = {
+    "": ("earliest_date", "latest_date"),
+    "start_time": ("earliest_date", "latest_start_date"),
+    "end_time": ("earliest_end_date", "latest_date"),
+}
+
+
+def dated_times(statement: Statement) -> dict[str, Dated]:
+    """The dates a residence or a spouse statement is compared by, each
+    with the range its source states for that date (``BOUNDS``): its start
+    time, between its earliest date and its latest start date, and its end
+    time, between its earliest end date and its latest date. The earliest
+    date of a marriage never bounds its end, nor its latest date its start.
+    A point in time on it dates an observation, not the residence or the
+    marriage, and is not compared."""
+    return {
+        "start_time": Dated(
+            statement.start, statement.earliest, statement.latest_start
+        ),
+        "end_time": Dated(
+            statement.end, statement.earliest_end, statement.latest
+        ),
+    }
+
+
+def _ranges(
+    earliest: frozenset[Time], latest: frozenset[Time]
+) -> list[tuple[Time | None, Time | None]]:
+    """Each earliest date with each latest date, and None for a bound
+    the statement does not state."""
+    return list(product(sorted(earliest) or [None], sorted(latest) or [None]))
 
 
 def compared_values(
@@ -380,22 +429,19 @@ def compared_values(
     does, so they compare the times ``dated_times`` names, per place or
     spouse through merge redirects. Other properties compare nothing.
 
-    A time is put up once for each earliest date its statement carries
-    with each latest date, so a statement that carries two earliest dates
-    puts its time up twice. A range dates a time only: an item, a name
-    or any other value is put up once, with no range, so the earliest or
-    latest date on its statement never sets it apart from the same value
-    another source states."""
-    ranges = list(
-        product(
-            sorted(statement.earliest) or [None],
-            sorted(statement.latest) or [None],
-        )
-    )
+    A time is put up once for each earliest date that bounds it with each
+    latest date, so a statement that carries two earliest dates puts its
+    time up twice. A range dates a time only: an item, a name or any other
+    value is put up once, with no range, so the earliest or latest date on
+    its statement never sets it apart from the same value another source
+    states."""
     if statement.property in SINGLE_VALUED:
         aspect = Aspect(statement.entity, statement.property)
-        if not statement.value.is_time:
-            ranges = [(None, None)]
+        ranges = (
+            _ranges(statement.earliest, statement.latest)
+            if statement.value.is_time
+            else [(None, None)]
+        )
         for earliest, latest in ranges:
             value = Value(
                 statement.value,
@@ -407,11 +453,12 @@ def compared_values(
             yield Reading(statement, aspect, value)
     elif statement.property in DATED:
         shared = containment.canonical(statement.value.value)
-        for qualifier, times in dated_times(statement).items():
+        for qualifier, dated in dated_times(statement).items():
             aspect = Aspect(
                 statement.entity, statement.property, shared, qualifier
             )
-            for time in sorted(times):
+            ranges = _ranges(dated.earliest, dated.latest)
+            for time in sorted(dated.times):
                 term = Term("literal", time.value, XSD_DATETIME)
                 for earliest, latest in ranges:
                     value = Value(term, "", time.precision, earliest, latest)
@@ -476,13 +523,12 @@ def span(reading: Reading) -> Span | None:
     replaces that period and is never widened back to it (rule 5): the
     year 1938 stated "between 1938 and 1939" spans both years, and a
     decade stated with a narrower range spans only the range. A
-    residence's or a spouse's earliest and latest dates need not bound the
-    start or end time compared (``compared_as_stated``), so such a time
-    spans its precision's period. None for a value that is not a time."""
+    residence's or a spouse's start or end takes the range stated for that
+    end (``dated_times``). None for a value that is not a time."""
     value = reading.value
     if not value.term.is_time or value.precision is None:
         return None
-    if not reading.aspect.qualifier and (value.earliest or value.latest):
+    if value.earliest or value.latest:
         first = period(value.earliest)[0] if value.earliest else -math.inf
         last = period(value.latest)[1] if value.latest else math.inf
         return first, last
@@ -506,18 +552,6 @@ def spans_nest(a: Span, b: Span) -> bool:
     return (a[0] <= b[0] and b[1] <= a[1]) or (b[0] <= a[0] and a[1] <= b[1])
 
 
-def compared_as_stated(x: Reading, y: Reading) -> bool:
-    """A residence's or a spouse's earliest and latest dates may date either
-    end of it. When either statement carries them, their start and end
-    times are compared as stated, and no difference of resolution between
-    them is set aside: a start in 1938, on a statement whose earliest and
-    latest dates are 1938 and 1939, is listed beside a start on 22 June
-    1938."""
-    return bool(x.aspect.qualifier) and any(
-        reading.value.earliest or reading.value.latest for reading in (x, y)
-    )
-
-
 def stored_alike_order(reading: Reading) -> tuple | None:
     """How two dates stored alike are told apart and put in order. The
     GEDCOM adapter stores "before 1926" as 1926, with 1926 as its latest
@@ -526,13 +560,11 @@ def stored_alike_order(reading: Reading) -> tuple | None:
     statements state: they are ordered by their spans, then by which
     bounds each states and at what precision (below a century no span is
     named, so the bounds count there), and with the same span and bounds
-    they are one value. A residence's or a spouse's start or end time is
-    compared as stated: by its span, then its precision."""
+    they are one value. A residence's or a spouse's start or end is
+    ordered alike, by the range stated for that end."""
     extent = span(reading)
     if extent is None:
         return None
-    if reading.aspect.qualifier:
-        return extent, reading.value.precision
     value = reading.value
     bounds = tuple(
         time.precision if time is not None else -1
@@ -562,17 +594,13 @@ def from_different_artifacts(a: Iterable[Source], b: Iterable[Source]) -> bool:
 
 def paired(x: Reading, y: Reading) -> bool:
     """Whether two readings of one aspect are compared at all: two values
-    that differ, and two dates of a single-valued property stored alike,
-    which the ranges their statements state may set apart. A residence's
-    or a spouse's times stored alike are compared as stated, so they pair
-    when their precisions differ. Two readings of one statement (one that
+    that differ, and two dates stored alike, which the ranges their
+    statements state may set apart. Two readings of one statement (one that
     carries two earliest dates, say) pair like any others, so beside
     another statement's reading each keeps its sources; alone they are
     ``one_claim`` and are never listed."""
     if x.value.term != y.value.term:
         return True
-    if x.aspect.qualifier:
-        return x.value.precision != y.value.precision
     return x.value.term.is_time
 
 
@@ -616,8 +644,6 @@ def differ_in_resolution(
     if a is None or b is None:
         return False
     if not (named(x.value) and named(y.value)):
-        return False
-    if compared_as_stated(x, y):
         return False
     return spans_nest(a, b)
 
