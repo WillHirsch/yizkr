@@ -1561,6 +1561,39 @@ def test_a_lock_path_that_cannot_be_used_does_not_break_the_import(
         os.close(other)
 
 
+# Opens the lock file named in argv[1], inheritable as a live run inherits
+# the harness's descriptor, names it in the variable, loads the integration
+# conftest, and prints whether the descriptor is still inheritable.
+LOAD_CONFTEST = f"""\
+import os, sys
+fd = os.open(sys.argv[1], os.O_RDWR)
+os.set_inheritable(fd, True)
+os.environ["{SHARED_ENV}"] = str(fd)
+import tests.integration.conftest
+print(os.get_inheritable(fd))
+"""
+
+
+def test_the_integration_conftest_closes_the_window_as_it_loads(tmp_path):
+    """pytest loads tests/integration/conftest.py before any test runs, and
+    the conftest imports the lock's module as it loads, not when its
+    fixture first runs: so in every live run, the descriptor is
+    close-on-exec before any test can start a program (#314). The
+    harness's tests above use a copy of the conftest's fixture; this is
+    the real conftest."""
+    lock = tmp_path / "live-stack.lock"
+    lock.write_text("")
+    loaded = subprocess.run(
+        [sys.executable, "-c", LOAD_CONFTEST, str(lock)],
+        cwd=REPO,
+        env=environment(PYTHONPATH=str(REPO), **{LOCK_ENV: str(lock)}),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert loaded.stdout == "False\n", loaded.stdout + loaded.stderr
+
+
 @pytest.mark.parametrize(
     "named",
     ["", "soon", "-1", str(2**70), "a closed descriptor", "another file"],
