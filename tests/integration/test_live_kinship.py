@@ -48,12 +48,11 @@ import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.fixtures import example_universe as u
-from yizkr.claims import ClaimBatch
-from yizkr.pipeline.registrar import register_artifact
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
-from .conftest import run_sparql, wait_for_query_service
+from .conftest import register_fictional, run_sparql, wait_for_query_service
 
 pytestmark = pytest.mark.live
 
@@ -170,9 +169,11 @@ def person(key: str) -> dict:
     }
 
 
-def claim(source: str, subject: str, prop: str, value: dict, excerpt=None):
+def claim(
+    source: ArtifactRef, subject: str, prop: str, value: dict, excerpt=None
+):
     reference = {
-        "artifact": {"kind": "qid", "qid": source},
+        "artifact": source.model_dump(mode="json"),
         "page_number": "1",
     }
     if excerpt:
@@ -220,13 +221,9 @@ def fixture_graph(client, config) -> dict[str, str]:
     """Write the fixture (idempotent: re-runs reuse and skip everything),
     apply the curator's ranks, and wait until the query service holds
     every person's latest revision. Returns their QIDs by universe key."""
-    source = register_artifact(
-        client,
-        media_path=None,
-        artifact_type="artifact",
-        title="Kinship fixture source",
-        description="written by tests/integration; safe to delete",
-    ).artifact_qid
+    source = register_fictional(
+        client, "Kinship fixture source", "artifact"
+    ).ref
     claims = [
         claim(
             source,

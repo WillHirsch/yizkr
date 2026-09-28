@@ -114,7 +114,6 @@ from yizkr.claims import (
     MonolingualValue,
     QidRef,
     QuantityValue,
-    SourceArtifactRef,
     StringValue,
     TimeValue,
     VocabRef,
@@ -252,13 +251,7 @@ class BatchWriter:
         supplied by the caller nor in the index read earlier, the index
         is read afresh, so media registered since then still resolves.
         """
-        wanted = sorted(
-            {
-                claim.source.artifact.sha1
-                for claim in batch.claims
-                if isinstance(claim.source.artifact, ArtifactRef)
-            }
-        )
+        wanted = sorted({claim.source.artifact.sha1 for claim in batch.claims})
         cached = self._media_sha1_index or {}
         if any(
             sha1 not in self._artifact_qids and sha1 not in cached
@@ -276,9 +269,7 @@ class BatchWriter:
             raise UnregisteredArtifactError(missing)
         return {sha1: self._artifact_qids[sha1] for sha1 in wanted}
 
-    def _source_artifact_qid(self, ref: SourceArtifactRef) -> str:
-        if isinstance(ref, QidRef):
-            return ref.qid
+    def _source_artifact_qid(self, ref: ArtifactRef) -> str:
         return self._artifact_qids[ref.sha1]
 
     # -- reference resolution ---------------------------------------------

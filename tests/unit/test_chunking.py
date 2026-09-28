@@ -13,7 +13,7 @@ import threading
 
 import pytest
 
-from yizkr.claims import ClaimBatch, EntityRecord
+from yizkr.claims import ArtifactRef, ClaimBatch, EntityRecord
 from yizkr.pipeline.chunking import (
     ENTITY_MANIFEST_PROMPT,
     ChunkedClaimExtractor,
@@ -30,6 +30,7 @@ from yizkr.pipeline.chunking import (
     prefix_local_ids,
     unit_text,
 )
+from yizkr.pipeline.extract import LlmClaimExtractor
 from yizkr.pipeline.llm import ConversationChanged
 from yizkr.pipeline.orchestrate import FAILED
 from yizkr.pipeline.rundir import NEEDS_ATTENTION, StageState, run_state
@@ -45,6 +46,9 @@ DOC = "\n".join(
     ]
 )
 LINE_LENGTH = len(DOC.splitlines()[1])  # per-entity evidence size
+# the document's content key, which every claim extracted from it cites
+# (#102); the scripted answers cite its item by QID, as the prompt asks
+DOC_REF = ArtifactRef.from_bytes(DOC.encode())
 
 
 def claim(local_id: str, label: str, year: int) -> dict:
@@ -625,7 +629,7 @@ class TestGapChannel:
         )
         ChunkedClaimExtractor(
             llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
-        ).extract(transcription(), "Q23")
+        ).extract(transcription(), DOC_REF, artifact_qid="Q23")
         chunk_prompt = llm.calls[1][1]
 
         assert "Persecution and displacement are EVENTS" in chunk_prompt
@@ -720,6 +724,122 @@ class TestLocalRefRewrites:
         assert "instance_of" not in fixed["subject"]
 
 
+def citing(source_artifact: dict, *args) -> dict:
+    """`claim(*args)` as a chunk answer that cites `source_artifact`."""
+    answered = claim(*args)
+    answered["source"] = {**answered["source"], "artifact": source_artifact}
+    return answered
+
+
+class TestClaimsCiteTheirDocument:
+    """Every claim the chunked extractor gives cites the document's
+    content key, whatever the chunk answers wrote there, on either tier
+    (#102): the extractor names the source itself."""
+
+    OTHER = ArtifactRef.from_bytes(b"fictional scan: another page")
+
+    def test_entity_tier(self):
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Hildegard", 1876)]),  # cites Q23
+                ndjson(
+                    [
+                        citing(
+                            {"kind": "artifact", "sha1": self.OTHER.sha1},
+                            "e2",
+                            "Sebastian Löbig",
+                            1862,
+                        )
+                    ]
+                ),
+            ]
+        )
+        batch = ChunkedClaimExtractor(llm, budget=LINE_LENGTH).extract(
+            transcription(), DOC_REF, artifact_qid="Q23"
+        )
+        assert [claim.source.artifact for claim in batch.claims] == [
+            DOC_REF,
+            DOC_REF,
+        ]
+        # the rest of each source is the model's
+        assert [
+            claim.source.transcription_excerpt.text for claim in batch.claims
+        ] == ["b. 1876", "b. 1862"]
+
+    def test_line_range_tier(self):
+        llm = ScriptedLlm(
+            [
+                "no manifest here",
+                "no manifest here either",
+                segmentation_json(),
+                ndjson(
+                    [
+                        claim("p1", "Hildegard Löbig", 1876),
+                        citing(
+                            {"kind": "local", "local_id": "p9"},
+                            "p2",
+                            "Sebastian Löbig",
+                            1862,
+                        ),
+                    ]
+                ),
+            ]
+        )
+        extractor = ChunkedClaimExtractor(llm, budget=10_000)
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
+        assert extractor.used_fallback_manifest
+        assert [claim.source.artifact for claim in batch.claims] == [
+            DOC_REF,
+            DOC_REF,
+        ]
+
+    def test_a_claim_answered_twice_under_two_keys_is_kept_once(self):
+        """Chunk answers that give one claim, citing the document by two
+        keys, give it once: it is one claim of one document."""
+        twice = [
+            claim("e1", "Hildegard", 1876),
+            citing(
+                {"kind": "artifact", "sha1": self.OTHER.sha1},
+                "e1",
+                "Hildegard",
+                1876,
+            ),
+        ]
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson(twice),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+            ]
+        )
+        batch = ChunkedClaimExtractor(llm, budget=LINE_LENGTH).extract(
+            transcription(), DOC_REF, artifact_qid="Q23"
+        )
+        assert [claim.subject.local_id for claim in batch.claims] == [
+            "e1",
+            "e2",
+        ]
+
+    def test_a_claim_a_chunk_marks_curated_is_a_machine_claim(self):
+        """A chunk's answer that marks a claim `curated`, which the schema
+        in the prompt shows, gives a machine claim all the same: the
+        writer references it to its extraction run (CLAUDE.md rule 2)."""
+        curated = claim("e1", "Hildegard", 1876)
+        curated["curated"] = True
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                ndjson([curated]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+            ]
+        )
+        batch = ChunkedClaimExtractor(llm, budget=LINE_LENGTH).extract(
+            transcription(), DOC_REF, artifact_qid="Q23"
+        )
+        assert [claim.curated for claim in batch.claims] == [False, False]
+
+
 class TestEntityFirstExtractor:
     def extractor(self, llm, tmp_path, **kwargs):
         return ChunkedClaimExtractor(
@@ -740,7 +860,7 @@ class TestEntityFirstExtractor:
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
 
         assert [call[0] for call in llm.calls] == ["open", "fork", "fork"]
         assert extractor.failed_chunks == []
@@ -775,7 +895,7 @@ class TestEntityFirstExtractor:
             ]
         )
         self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
-            transcription(), "Q23"
+            transcription(), DOC_REF, artifact_qid="Q23"
         )
 
         manifest_prompt = llm.calls[0][1]
@@ -821,7 +941,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(
             llm, tmp_path, budget=LINE_LENGTH, log=logs.append
         )
-        extractor.extract(transcription(), "Q23")
+        extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
 
         assert any("scanning document for entities" in line for line in logs)
         assert any("extract: 2 entities, 2 chunk(s)" in line for line in logs)
@@ -846,7 +966,7 @@ class TestEntityFirstExtractor:
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=10_000)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(batch.claims) == 2
         assert "Full transcription" in llm.calls[1][1]
         assert "1: Family record" in llm.calls[1][1]
@@ -867,7 +987,7 @@ class TestEntityFirstExtractor:
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert {c.subject.local_id for c in batch.claims} == {"e1", "e2"}
         rejects = side_output(tmp_path, "rejects.json")
         assert len(rejects) == 1
@@ -890,7 +1010,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(
             llm, tmp_path, budget=LINE_LENGTH, retries=1
         )
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(batch.claims) == 2
         assert extractor.failed_chunks == []
 
@@ -912,7 +1032,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(
             llm, tmp_path, budget=LINE_LENGTH, retries=1
         )
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(batch.claims) == 2
         ((response, reason),) = llm.rejected
         assert response == cut
@@ -945,7 +1065,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(
             llm, tmp_path, budget=LINE_LENGTH, retries=0
         )
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         if kept == 1:
             assert len(batch.claims) == 2
             assert extractor.failed_chunks == []
@@ -968,7 +1088,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(
             llm, tmp_path, budget=LINE_LENGTH, retries=1
         )
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert extractor.failed_chunks == []
         assert {c.subject.label for c in batch.claims} == {
             "Hildegard Löbig",
@@ -992,7 +1112,7 @@ class TestEntityFirstExtractor:
         extractor = self.extractor(
             llm, tmp_path, budget=LINE_LENGTH, retries=1
         )
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert extractor.failed_chunks == ["c001"]
         assert [c.subject.label for c in batch.claims] == ["Sebastian Löbig"]
         assert "engine down" in extractor.failure_reasons["c001"]
@@ -1014,7 +1134,7 @@ class TestEntityFirstExtractor:
             ),
             tmp_path,
             budget=LINE_LENGTH,
-        ).extract(transcription(), "Q23")
+        ).extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(side_output(tmp_path, "rejects.json")) == 1
         self.extractor(
             ScriptedLlm(
@@ -1026,7 +1146,7 @@ class TestEntityFirstExtractor:
             ),
             tmp_path,
             budget=LINE_LENGTH,
-        ).extract(transcription(), "Q23")
+        ).extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert side_output(tmp_path, "rejects.json") is None
         assert side_output(tmp_path, "coverage.json")["entities_total"] == 2
 
@@ -1039,7 +1159,7 @@ class TestEntityFirstExtractor:
             ]
         )
         ChunkedClaimExtractor(llm, budget=LINE_LENGTH).extract(
-            transcription(), "Q23"
+            transcription(), DOC_REF, artifact_qid="Q23"
         )
         assert list(tmp_path.iterdir()) == []
 
@@ -1054,7 +1174,7 @@ class TestEntityFirstExtractor:
             )
         )
         self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
-            transcription(), "Q23"
+            transcription(), DOC_REF, artifact_qid="Q23"
         )
         assert llm.closed == ["session-abc"]
         assert llm.rejected == []
@@ -1065,7 +1185,7 @@ class TestEntityFirstExtractor:
         llm = ScriptedLlm([RuntimeError("down"), RuntimeError("down")])
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
         with pytest.raises(RuntimeError, match="no engine response"):
-            extractor.extract(transcription(), "Q23")
+            extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert [call[0] for call in llm.calls] == ["open", "open"]
         assert side_output(tmp_path, "coverage.json") is None
 
@@ -1085,7 +1205,7 @@ class TestEntityFirstExtractor:
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(batch.claims) == 2
 
     def test_invalid_claims_land_in_rejects(self, tmp_path):
@@ -1098,7 +1218,7 @@ class TestEntityFirstExtractor:
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(batch.claims) == 2
         rejects = side_output(tmp_path, "rejects.json")
         assert len(rejects) == 1
@@ -1118,7 +1238,7 @@ class TestEntityFirstExtractor:
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(batch.claims) == 2
         assert len(side_output(tmp_path, "rejects.json")) == 1
 
@@ -1186,7 +1306,7 @@ class TestParallelChunks:
             budget=LINE_LENGTH,  # -> one chunk per entity
             concurrency=2,
         )
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert extractor.failed_chunks == []
         # claims arrive in chunk order regardless of completion order
         assert [c.subject.local_id for c in batch.claims] == ["e1", "e2"]
@@ -1220,7 +1340,7 @@ class TestParallelChunks:
         extractor = ChunkedClaimExtractor(
             llm, state_dir=tmp_path / "state", budget=LINE_LENGTH
         )
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(opened) == 2
         assert extractor.failed_chunks == []
         assert [c.subject.local_id for c in batch.claims] == ["e1", "e2"]
@@ -1243,7 +1363,7 @@ class TestParallelChunks:
             retries=1,
             concurrency=2,
         )
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert extractor.failed_chunks == ["c001"]
         assert [c.subject.label for c in batch.claims] == ["Sebastian Löbig"]
 
@@ -1271,7 +1391,7 @@ class TestFallbackLadder:
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=10_000)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert extractor.used_fallback_manifest
         assert not extractor.used_fallback_segmentation
         assert batch.entities == []
@@ -1309,7 +1429,7 @@ class TestFallbackLadder:
             )
         )
         extractor = self.extractor(llm, tmp_path, budget=10_000)
-        extractor.extract(transcription(), "Q23")
+        extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert extractor.used_fallback_segmentation
         assert llm.asked == [
             ("open", 0),
@@ -1335,7 +1455,7 @@ class TestFallbackLadder:
             ]
         )
         self.extractor(llm, tmp_path, budget=10_000).extract(
-            transcription(), "Q23"
+            transcription(), DOC_REF, artifact_qid="Q23"
         )
 
         chunk_prompt = llm.calls[-1][1]
@@ -1361,7 +1481,7 @@ class TestFallbackLadder:
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=10_000)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert extractor.used_fallback_manifest
         assert extractor.used_fallback_segmentation
         assert len(batch.claims) == 2
@@ -1415,7 +1535,7 @@ class TestExtractionsWithoutClaims:
         """The reason the extraction fails with. A failed extraction
         writes no side output: they describe a batch, and there is none."""
         with pytest.raises(ExtractionFailed) as failed:
-            extractor.extract(document, "Q23")
+            extractor.extract(document, DOC_REF, artifact_qid="Q23")
         assert list(extractor.state_dir.glob("*")) == []
         return str(failed.value)
 
@@ -1426,7 +1546,7 @@ class TestExtractionsWithoutClaims:
     ):
         llm = ScriptedLlm([entity_manifest_json(), ndjson([]), ndjson([])])
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert batch.claims == []
         assert extractor.attention == [
             "no claims extracted: 2 chunks answered with none"
@@ -1489,7 +1609,7 @@ class TestExtractionsWithoutClaims:
         answer = "\n".join(json.dumps(obj) for obj in (extra, sentinel))
         llm = ScriptedLlm([entity_manifest_json(), answer, answer])
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert batch.claims == []
         assert extractor.attention == [
             "no claims extracted: 2 chunks answered with none"
@@ -1502,7 +1622,7 @@ class TestExtractionsWithoutClaims:
         """No chunk is asked, and the batch keeps its manifest."""
         llm = ScriptedLlm([stamp_manifest_json()])
         extractor = self.extractor(llm, tmp_path)
-        batch = extractor.extract(page(STAMP), "Q23")
+        batch = extractor.extract(page(STAMP), DOC_REF, artifact_qid="Q23")
         assert [method for method, _ in llm.calls] == ["open"]
         assert batch.claims == []
         assert [entity.id for entity in batch.entities] == ["e1"]
@@ -1575,7 +1695,7 @@ class TestExtractionsWithoutClaims:
         same failure from the cache in every run."""
         llm = ScriptedLlm(answers)
         extractor = self.extractor(llm, tmp_path, budget=10_000)
-        batch = extractor.extract(page(document), "Q23")
+        batch = extractor.extract(page(document), DOC_REF, artifact_qid="Q23")
         assert batch.claims == []
         assert extractor.attention == [
             f"entity manifest fell back to line-range segmentation: {refused}",
@@ -1591,7 +1711,7 @@ class TestExtractionsWithoutClaims:
     ):
         llm = ScriptedLlm(["junk", "junk", "junk", "junk", ndjson([])])
         extractor = self.extractor(llm, tmp_path, budget=10_000)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert batch.claims == []
         assert extractor.attention == [
             "entity manifest fell back to line-range segmentation: "
@@ -1697,7 +1817,7 @@ class TestExtractionsWithoutClaims:
             [entity_manifest_json(), mixed, placeholder_claims("e2")]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(batch.claims) == 2
         assert extractor.attention == []
         assert side_output(tmp_path, "coverage.json")["unread_objects"] == 1
@@ -1719,7 +1839,7 @@ class TestExtractionsWithoutClaims:
             [entity_manifest_json(), answer, placeholder_claims("e2")]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
-        batch = extractor.extract(transcription(), "Q23")
+        batch = extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert len(batch.claims) == 2
         assert side_output(tmp_path, "coverage.json")["unread_objects"] == 1
 
@@ -1825,7 +1945,7 @@ class TestExtractionsWithoutClaims:
             ]
         )
         self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
-            transcription(), "Q23"
+            transcription(), DOC_REF, artifact_qid="Q23"
         )
         coverage = side_output(tmp_path, "coverage.json")
         assert {
@@ -2021,3 +2141,79 @@ class TestExtractFalseRule:
         stated, pointer = comment.split(" The entity-manifest prompt ", 1)
         assert stated == rule
         assert "ENTITY_MANIFEST_PROMPT" in pointer
+
+
+class TestTheClaimSchemaInPrompts:
+    """Each claim line must match the "Claim" definition of the claim JSON
+    Schema, so every prompt that asks for claims carries the whole schema.
+    Building it costs milliseconds and a document can have a hundred
+    chunks, so every prompt carries one text, built once (#254)."""
+
+    SCHEMA = json.dumps(ClaimBatch.model_json_schema(), indent=2)
+
+    def chunk_prompts(self, tier: str, tmp_path) -> list[str]:
+        """The chunk prompts of an extraction on the entity-first tier (two
+        chunks) or on the line-range tier it falls back to (one chunk)."""
+        if tier == "entity":
+            answers = [
+                entity_manifest_json(),
+                ndjson([claim("e1", "Hildegard", 1876)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+            ]
+            budget = LINE_LENGTH
+        else:
+            answers = [
+                "no manifest here",
+                json.dumps({"entities": [{"id": "x"}]}),
+                segmentation_json(),
+                ndjson([claim("p1", "Hildegard Löbig", 1876)]),
+            ]
+            budget = 10_000
+        llm = ScriptedLlm(answers)
+        ChunkedClaimExtractor(
+            llm, state_dir=tmp_path / "state", budget=budget
+        ).extract(transcription(), DOC_REF, artifact_qid="Q23")
+        return [prompt for method, prompt in llm.calls if method == "fork"]
+
+    @pytest.mark.parametrize(
+        "tier, chunks", [("entity", 2), ("line", 1)], ids=["entity", "line"]
+    )
+    def test_every_chunk_prompt_carries_the_schema(
+        self, tmp_path, tier, chunks
+    ):
+        prompts = self.chunk_prompts(tier, tmp_path)
+        assert len(prompts) == chunks
+        assert all(self.SCHEMA in prompt for prompt in prompts)
+
+    def test_the_single_call_prompt_carries_it_too(self):
+        llm = ScriptedLlm([ndjson([claim("p1", "Hildegard Löbig", 1876)])])
+        LlmClaimExtractor(llm).extract(
+            transcription(), DOC_REF, artifact_qid="Q23"
+        )
+        ((method, prompt),) = llm.calls
+        assert method == "complete" and self.SCHEMA in prompt
+
+    def test_it_is_built_at_most_once(self, tmp_path, monkeypatch):
+        """At most: an earlier test may have built it already. Each kind
+        of prompt is asked twice, so a prompt that built its own schema
+        would build it at least twice."""
+        builds = []
+        real_build = ClaimBatch.model_json_schema
+
+        def build(cls, *args, **kwargs):
+            builds.append(cls)
+            return real_build(*args, **kwargs)
+
+        monkeypatch.setattr(
+            ClaimBatch, "model_json_schema", classmethod(build)
+        )
+        prompts = self.chunk_prompts("entity", tmp_path)
+        for _ in range(2):
+            llm = ScriptedLlm([ndjson([claim("p1", "Hildegard Löbig", 1876)])])
+            LlmClaimExtractor(llm).extract(
+                transcription(), DOC_REF, artifact_qid="Q23"
+            )
+            prompts.append(llm.calls[0][1])
+        assert len(prompts) == 4
+        assert all(self.SCHEMA in prompt for prompt in prompts)
+        assert len(builds) <= 1

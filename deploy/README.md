@@ -147,9 +147,10 @@ The list is a UTF-8 text file, one entry per line:
   comment.
 - A listed document is dropped before any step reads it: no artifact, no
   transcription, no state under `var/runs/`.
-- The single-file steps (`ingest register`, `transcribe`, `gedcom`,
-  `detect-faces`) are debugging tools and run without a list, but once one
-  is configured they refuse a listed file.
+- The single-file steps (`ingest register`, `transcribe`, `extract`,
+  `gedcom`, `detect-faces`) are debugging tools and run without a list, but
+  once one is configured they refuse a listed file (for `extract`, the
+  media file `--media` names).
 
 In the containerised CLI (`docker-compose.localhost.yml`), a set path that
 does not exist stops the container from starting; nothing is created in

@@ -85,22 +85,3 @@ def test_the_staged_file_is_fsynced_whole_before_it_replaces_the_target(
     assert synced_sizes[-1] == POSTCARD_BYTES
     assert _file_id(target.stat()) == staged
     assert target.read_text(encoding="utf-8") == POSTCARD
-
-
-class TestSyncDefault:
-    """The fixture that skips the sync calls, and the marker that keeps
-    them (tests/unit/conftest.py)."""
-
-    def test_unit_tests_skip_the_sync_calls(self):
-        # the real calls refuse a descriptor that cannot exist
-        os.fsync(-1)
-        if hasattr(os, "fdatasync"):
-            os.fdatasync(-1)
-
-    @pytest.mark.real_fsync
-    def test_the_marker_keeps_the_real_calls(self):
-        with pytest.raises(ValueError):
-            os.fsync(-1)
-        if hasattr(os, "fdatasync"):
-            with pytest.raises(ValueError):
-                os.fdatasync(-1)

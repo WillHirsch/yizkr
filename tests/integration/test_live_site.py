@@ -38,7 +38,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.disagreement import (
     CONTAINMENT,
     FETCH,
@@ -152,9 +152,10 @@ def time_value(date: u.Date) -> dict:
     return {"type": "time", **{k: v for k, v in parts.items() if v}}
 
 
-def birth_batch(sources: dict[str, str]) -> ClaimBatch:
+def birth_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     """The two sources' claims about the birth, and the extract's
-    placing of the address in the town."""
+    placing of the address in the town, each citing its source by the
+    SHA-1 of its media (#102)."""
     person = local("person", PERSON, "human")
     address = local("address", ADDRESS, "place")
     street = local("street", STREET, "place")
@@ -166,7 +167,7 @@ def birth_batch(sources: dict[str, str]) -> ClaimBatch:
             "property": prop,
             "value": value,
             "source": {
-                "artifact": {"kind": "qid", "qid": sources[source]},
+                "artifact": sources[source].model_dump(mode="json"),
                 "page_number": "1",
                 "transcription_excerpt": {
                     "text": excerpt,
@@ -224,7 +225,7 @@ def site(client, config, tmp_path_factory):
     for text in (HOME, ADDRESS_IN_TOWN):
         assert text in UNIVERSE[EXTRACT].text  # quoted, never paraphrased
     media = tmp_path_factory.mktemp("media")
-    registered = {}
+    registered, cited = {}, {}
     for key, kind in (
         (EXTRACT, "certificate"),
         (NATURALISATION, "certificate"),
@@ -232,6 +233,7 @@ def site(client, config, tmp_path_factory):
     ):
         path = media / f"site-test-{key}.png"
         path.write_bytes(png(f"yizkr live site test: {key}"))
+        cited[key] = ArtifactRef.from_path(path)
         registered[key] = register_artifact(
             client,
             media_path=path,
@@ -240,7 +242,7 @@ def site(client, config, tmp_path_factory):
             description="written by tests/integration; safe to delete",
         )
     sources = {key: r.artifact_qid for key, r in registered.items()}
-    written = BatchWriter(client).write_batch(birth_batch(sources))
+    written = BatchWriter(client).write_batch(birth_batch(cited))
     seeded = [
         written.created_items[local_id]
         for local_id in ("person", "address", "street", "town")

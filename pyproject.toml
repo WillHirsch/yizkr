@@ -47,7 +47,10 @@ packages = ["src/yizkr"]
 testpaths = ["tests"]
 # Live tests need the deploy/ stack running; opt in with `pytest -m live`
 # (see Makefile: make test-live).
-markers = ["live: requires a running Wikibase Suite stack and deploy/.env"]
+markers = [
+    "live: requires a running Wikibase Suite stack and deploy/.env",
+    "real_fsync: keep the real os.fsync, os.fdatasync and os.sync, which the unit tests otherwise skip (tests/unit/conftest.py)",
+]
 addopts = "-m 'not live'"
 
 [tool.ruff]

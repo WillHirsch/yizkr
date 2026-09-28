@@ -2,10 +2,11 @@
 
 A face proposal is an ordinary claim — ``depicts`` on the photograph
 item, the person as value, a ``relative position within image``
-qualifier, and the photograph as its own source (an artifact asserts
-whom it depicts; docs/MODELING.md) — so proposals ride the SAME review
-flow as extracted claims: export-review -> human decision ->
-apply-review -> write. Detection output never touches the graph
+qualifier, and the photograph as its own source, cited by the SHA-1 of
+its bytes as every source is (an artifact asserts whom it depicts;
+docs/MODELING.md) — so proposals ride the SAME review flow as
+extracted claims: export-review -> human decision -> apply-review ->
+write. Detection output never touches the graph
 directly; only human-confirmed rows become statements, with dual
 provenance (stated in -> photograph + region; inferred from extraction
 run -> the detection run).
@@ -34,9 +35,10 @@ import math
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from yizkr.claims import (
+    ArtifactRef,
     Claim,
     ClaimBatch,
     ItemValue,
@@ -73,7 +75,13 @@ class DetectedFace(StrictModel):
 
 
 class DetectionResult(StrictModel):
+    """The faces a detector found on one photograph. `artifact_qid` is the
+    photograph's item, the subject of its depicts claims; `photo_sha1` is
+    the SHA-1 of the photograph's bytes, by which those claims cite it as
+    their source."""
+
     photo_file: str
+    photo_sha1: str = Field(pattern=r"^[0-9a-f]{40}$")
     artifact_qid: str = Field(pattern=r"^Q[1-9]\d*$")
     image_width: int = Field(gt=0)
     image_height: int = Field(gt=0)
@@ -210,7 +218,7 @@ def proposals_to_batch(
                     )
                 ],
                 source=SourceReference(
-                    artifact=QidRef(qid=detection.artifact_qid),
+                    artifact=ArtifactRef(sha1=detection.photo_sha1),
                     region=region,
                 ),
                 confidence=round(min(max(score, 0.0), 1.0), 3),
@@ -287,6 +295,7 @@ class InsightFaceDetector:
             )
         return DetectionResult(
             photo_file=photo.name,
+            photo_sha1=ArtifactRef.from_path(photo).sha1,
             artifact_qid=artifact_qid,
             image_width=width,
             image_height=height,
@@ -306,8 +315,28 @@ def make_detector(engine: str) -> FaceDetector:
 # ---------------------------------------------------------------------------
 
 
+class UnkeyedDetections(ValueError):
+    """A saved detections file that names no `photo_sha1`: its faces'
+    depicts claims would have no source to cite."""
+
+
 def load_detections(path: Path) -> DetectionResult:
-    return DetectionResult.model_validate_json(path.read_text())
+    """The detections saved at `path`. A file that names no `photo_sha1`,
+    the SHA-1 of the photograph's bytes, raises UnkeyedDetections, which
+    says to run detect-faces on the photograph again."""
+    try:
+        return DetectionResult.model_validate_json(path.read_text())
+    except ValidationError as exc:
+        if any(
+            error["type"] == "missing" and error["loc"] == ("photo_sha1",)
+            for error in exc.errors()
+        ):
+            raise UnkeyedDetections(
+                f"{path} names no photo_sha1, the SHA-1 of the photograph's "
+                f"bytes, by which its faces' depicts claims cite the "
+                f"photograph: run detect-faces on the photograph again"
+            ) from None
+        raise
 
 
 def enroll_from_detections(

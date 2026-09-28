@@ -15,7 +15,12 @@ identical treatment.
 
 Every batch records extraction-run metadata (ADR-0003). Subjects the
 model proposes are `local` refs; resolution to existing items happens
-in the resolve step, never inside extraction.
+in the resolve step, never inside extraction. The model-driven
+extractors, this module's and yizkr.pipeline.chunking's, set every
+claim's source artifact themselves, to the content key of the document
+they read, whatever the model wrote there, and keep no review state the
+model wrote (`cite_artifact`); a prepared claims file's claims cite
+their artifacts themselves.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -30,6 +36,7 @@ from typing import Any
 
 import yizkr
 from yizkr.claims import (
+    ArtifactRef,
     ClaimBatch,
     ExtractionRunMetadata,
     load_vocabulary,
@@ -80,25 +87,53 @@ Transcription of artifact {artifact_qid} (language: {language}):
 
 
 def run_metadata(model_identifier: str) -> ExtractionRunMetadata:
-    try:
-        commit = (
-            subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=Path(__file__).parent,
-            ).stdout.strip()
-            or None
-        )
-    except OSError:
-        commit = None
     return ExtractionRunMetadata(
         model_identifier=model_identifier,
         pipeline_version=yizkr.__version__,
-        software_commit=commit,
+        software_commit=_software_commit(),
         started_at=datetime.now(UTC),
     )
+
+
+# The commit git gave for this code's checkout, once it has given one.
+_commit: str | None = None
+
+
+def _software_commit() -> str | None:
+    """The short commit of the git checkout this code runs from, or None
+    when git gives none (see _ask_git_for_commit).
+
+    Every batch asks git until it answers, so a failed ask costs only its
+    own batch the commit. The first answer is kept for the process, and
+    later batches name the same commit without starting git; batches that
+    ask at the same moment as the first may each start git."""
+    global _commit
+    if _commit is None:
+        commit = _ask_git_for_commit()
+        if commit is None:
+            return None
+        _commit = commit
+    return _commit
+
+
+def _ask_git_for_commit() -> str | None:
+    """git's short commit for the checkout this code runs from, or None
+    when git cannot be started (it is missing, say, or the process is out
+    of processes or descriptors), exits with an error (outside a checkout)
+    or prints no commit. A git that runs past the timeout raises
+    subprocess.TimeoutExpired."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=Path(__file__).parent,
+        )
+    except OSError:
+        return None
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and commit else None
 
 
 def scan_json_objects(response: str) -> list[dict]:
@@ -160,6 +195,47 @@ def _parse_response(response: str) -> dict:
         if claim not in deduped:
             deduped.append(claim)
     return {"claims": deduped}
+
+
+# The claim fields that record a curator's review, never the machine's
+# extraction: `curated` (a person stated the claim, so it carries no
+# extraction-run reference) and `row_approval` (a curator approved the
+# claim on its own review-sheet row). The JSON Schema the prompts carry
+# shows `curated` with the rest of a claim.
+REVIEW_STATE = ("curated", "row_approval")
+
+
+def cite_artifact(claims: Iterable, artifact: ArtifactRef) -> list:
+    """The claims read from one document, as the machine extracted them:
+    every claim's `source.artifact` becomes `artifact`, the document's
+    content key, whatever the model wrote there; the review-state fields
+    (REVIEW_STATE) are dropped, so every claim is a machine claim, which
+    the writer references to its extraction run (ADR-0003); and claims
+    that are then the same are kept once, in the order first given.
+
+    An extractor reads one document's transcription, so every claim it
+    gives is an assertion of that document, and the extractor, handed the
+    document's key, names the source itself: no claim cites another
+    artifact through a key the model copied wrongly, or through a form of
+    reference the claim contract does not have. A claim whose source is
+    not an object keeps it, for validation to reject, as a claim without
+    its source is."""
+    cited: list = []
+    for claim in claims:
+        if isinstance(claim, dict):
+            claim = {
+                key: value
+                for key, value in claim.items()
+                if key not in REVIEW_STATE
+            }
+            if isinstance(claim.get("source"), dict):
+                claim["source"] = {
+                    **claim["source"],
+                    "artifact": artifact.model_dump(mode="json"),
+                }
+        if claim not in cited:
+            cited.append(claim)
+    return cited
 
 
 def _normalize_claim_shape(claim: dict) -> dict:
@@ -275,9 +351,12 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
-# The renderers below run per chunk and parse + validate the whole
-# manifest, which ships as package data and cannot change mid-run.
-# Cached so a hundred-chunk document pays for it once.
+# The renderers below run for every extraction prompt, chunk prompts
+# included, and what they render cannot change mid-run: the manifest
+# ships as package data, and the claim schema is built from the claim
+# models. Rendering parses and validates the whole manifest, or builds
+# the whole schema, so each is cached and a hundred-chunk document pays
+# for it once.
 
 
 @lru_cache(maxsize=1)
@@ -327,6 +406,13 @@ def entity_kind_prompt_lines() -> tuple[str, str]:
     )
 
 
+@lru_cache(maxsize=1)
+def claim_schema_prompt_text() -> str:
+    """The claim JSON Schema, as the single-call and chunk prompts carry
+    it."""
+    return json.dumps(ClaimBatch.model_json_schema(), indent=2)
+
+
 class LlmClaimExtractor:
     """Single-call extraction: one prompt, one NDJSON answer.
 
@@ -350,12 +436,18 @@ class LlmClaimExtractor:
         self.rejects_dump = rejects_dump
 
     def extract(
-        self, transcription: Transcription, artifact_qid: str
+        self,
+        transcription: Transcription,
+        artifact: ArtifactRef,
+        *,
+        artifact_qid: str,
     ) -> ClaimBatch:
-        schema = json.dumps(ClaimBatch.model_json_schema(), indent=2)
+        """The batch the transcription's document asserts. Every claim
+        cites `artifact`, the document's content key (cite_artifact);
+        `artifact_qid` is the artifact's item, which the prompt names."""
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
-            schema=schema,
+            schema=claim_schema_prompt_text(),
             property_keys=property_keys,
             item_keys=item_keys,
             kinds=entity_kind_prompt_lines()[0],
@@ -364,14 +456,17 @@ class LlmClaimExtractor:
             text=transcription.text,
         )
         try:
-            return self._extract(prompt)
+            return self._extract(prompt, artifact)
         except _KeptAnswerRejected:
-            return self._extract(prompt, again=True)
+            return self._extract(prompt, artifact, again=True)
 
-    def _extract(self, prompt: str, again: bool = False) -> ClaimBatch:
-        """The batch one answer gives. A rejected answer the client kept
-        from an earlier call raises _KeptAnswerRejected, unless this is
-        the call made `again` after one."""
+    def _extract(
+        self, prompt: str, artifact: ArtifactRef, again: bool = False
+    ) -> ClaimBatch:
+        """The batch one answer gives, each claim citing `artifact`. A
+        rejected answer the client kept from an earlier call raises
+        _KeptAnswerRejected, unless this is the call made `again` after
+        one."""
 
         def reject_answer(response: str, reason: str) -> None:
             if reject_response(self.client, response, reason) and not again:
@@ -393,7 +488,7 @@ class LlmClaimExtractor:
             obj.get("done") is True for obj in scan_json_objects(response)
         )
         batch, rejects = salvage_valid_claims(
-            payload.get("claims", []),
+            cite_artifact(payload.get("claims", []), artifact),
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
         )
         if self.rejects_dump is not None:
@@ -427,7 +522,10 @@ class ClaimFileExtractor:
     """Validate a prepared claims file into a batch (manual/offline flows).
 
     The file holds either a full ClaimBatch or a bare {"claims": [...]}
-    object; in the latter case run metadata is generated here.
+    object; in the latter case run metadata is generated here. Its claims
+    cite their artifacts themselves, by content key, and are validated as
+    they are: `extract` takes the same arguments as the other extractors
+    and uses none of them.
     """
 
     def __init__(
@@ -437,7 +535,11 @@ class ClaimFileExtractor:
         self.model_identifier = model_identifier
 
     def extract(
-        self, transcription: Transcription, artifact_qid: str
+        self,
+        transcription: Transcription,
+        artifact: ArtifactRef,
+        *,
+        artifact_qid: str,
     ) -> ClaimBatch:
         payload = json.loads(self.claims_file.read_text())
         if "extraction_run" not in payload:

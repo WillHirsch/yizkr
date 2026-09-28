@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from yizkr.claims import ArtifactRef
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.llm import ClaudeCodeClient, cached_client, open_cache
 from yizkr.pipeline.rundir import RunDir
@@ -38,6 +39,8 @@ Eugen Löbig, b. Bad Flörburg 1836, d. Flörburg 16 Mar 1909, aged 73.
 
 Note to readers: coffee and biscuits are served in the reading room.
 """
+# the document's key, which every claim extracted from it cites (#102)
+DOC_REF = ArtifactRef.from_bytes(DOC.encode())
 
 CACHE = Path(
     os.environ.get("YIZKR_LIVE_CACHE")
@@ -90,7 +93,9 @@ def extract(client, state_dir=None):
         budget=120,  # force at least two chunks for this tiny document
     )
     transcription = Transcription(text=DOC, engine="test", artifact_qid="Q23")
-    return extractor, extractor.extract(transcription, artifact_qid="Q23")
+    return extractor, extractor.extract(
+        transcription, DOC_REF, artifact_qid="Q23"
+    )
 
 
 def cache_events(run: RunDir) -> dict[str, int]:
@@ -125,8 +130,9 @@ def test_chunked_extraction_end_to_end(tmp_path):
     assert any("Sebastian" in label for label in labels)
     # the entity manifest travels with the batch (ADR-0007)
     assert any("Eugen" in entity.label for entity in batch.entities)
-    # every claim carries its source (pydantic enforces; belt and braces)
-    assert all(claim.source.artifact for claim in batch.claims)
+    # every claim cites the document it was read from, whatever the model
+    # wrote there
+    assert all(claim.source.artifact == DOC_REF for claim in batch.claims)
     # the coverage report is written beside the batch
     assert (tmp_path / "chunks" / "coverage.json").exists()
     # every call was answered from the cache or asked of the engine

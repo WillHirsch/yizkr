@@ -39,9 +39,8 @@ def _resolve_claim(claim: Claim, label_to_qid: dict[str, str]) -> Claim:
         else q
         for q in claim.qualifiers
     ]
-    updates["source"] = claim.source.model_copy(
-        update={"artifact": _resolve_ref(claim.source.artifact, label_to_qid)}
-    )
+    # the source cites its artifact by content, which resolves only at
+    # write time
     return claim.model_copy(update=updates)
 
 
