@@ -860,18 +860,19 @@ class TestStoredAlike:
         )
         assert len(listed(bare, bounded)) == 1
 
-    def test_one_statement_is_never_paired_with_itself(self):
+    def test_each_reading_of_one_statement_keeps_its_sources(self):
         # a statement that carries two earliest dates puts up a reading of
         # its value for each; given (here) to the millennium, no reading
-        # refines another
+        # refines another. Alone, its readings come from one artifact.
         stored = Term("literal", "1836-01-01T00:00:00Z", XSD_DATETIME)
+        century_bound = Time(stored.value, CENTURY)
         twice = said(
             "eugen-loebig",
             "date_of_birth",
             stored,
             TREE,
             precision=MILLENNIUM,
-            earliest=[Time(stored.value, CENTURY), at(u.Date(1909))],
+            earliest=[century_bound, at(u.Date(1909))],
         )
         assert listed(twice) == []
         # beside another statement stored alike, each reading is compared
@@ -883,6 +884,20 @@ class TestStoredAlike:
             precision=MILLENNIUM,
         )
         assert len(listed(twice, other)) == 2
+        # and beside a statement that states one of its readings, that
+        # value is listed with every source that states it: the tree too
+        alike = said(
+            "eugen-loebig",
+            "date_of_birth",
+            stored,
+            GRAVESTONE,
+            precision=MILLENNIUM,
+            earliest=century_bound,
+        )
+        (row,) = compare([twice, alike], NOTHING)
+        assert row.a.value.earliest == century_bound
+        assert set(row.a.sources) == {source(GRAVESTONE), source(TREE)}
+        assert row.b.sources == (source(TREE),)
 
 
 class TestComparedAsStated:
@@ -1166,6 +1181,16 @@ def plain(value) -> dict:
     return {"type": "literal", "value": str(value)}
 
 
+# the fetch's time columns (disagreement-report.rq), by Statement field
+FETCHED_TIMES = {
+    "earliest": "earliest",
+    "latest": "latest",
+    "start": "start",
+    "end": "end",
+    "point_in_time": "pointInTime",
+}
+
+
 def rows_of(statement: Statement, properties=PROPERTIES) -> list[dict]:
     """A statement as the fetch lists it: a row per stated-in source and
     per further value of a qualifier it carries twice."""
@@ -1187,7 +1212,7 @@ def rows_of(statement: Statement, properties=PROPERTIES) -> list[dict]:
     if statement.precision is not None:
         row["precision"] = plain(statement.precision)
     columns = []
-    for name, column in disagreement.TIME_COLUMNS.items():
+    for name, column in FETCHED_TIMES.items():
         times = sorted(getattr(statement, name))
         columns.append(
             [

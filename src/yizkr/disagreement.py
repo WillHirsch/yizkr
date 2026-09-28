@@ -551,15 +551,18 @@ def from_different_artifacts(a: Iterable[Source], b: Iterable[Source]) -> bool:
 
 def paired(x: Reading, y: Reading) -> bool:
     """Whether two readings of one aspect are compared at all: two values
-    that differ, and two dates of a single-valued property stored alike by
-    two statements, which the ranges they state may set apart. A
-    residence's or a spouse's times stored alike are compared as stated,
-    so they pair when their precisions differ."""
+    that differ, and two dates of a single-valued property stored alike,
+    which the ranges their statements state may set apart. A residence's
+    or a spouse's times stored alike are compared as stated, so they pair
+    when their precisions differ. Two readings of one statement (one that
+    carries two earliest dates, say) pair like any others; alone they come
+    from one artifact, and beside another statement's reading each keeps
+    its sources."""
     if x.value.term != y.value.term:
         return True
     if x.aspect.qualifier:
         return x.value.precision != y.value.precision
-    return x.value.term.is_time and x.statement.iri != y.statement.iri
+    return x.value.term.is_time
 
 
 def in_order(
