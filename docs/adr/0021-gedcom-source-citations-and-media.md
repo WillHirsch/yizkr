@@ -20,6 +20,12 @@ no claim, not even its cause, and is counted; a family with one partner
 or none has its MARR and DIV counted; a NAME without a value is read from
 its parts; and a nickname that several NAMEs give is a claim of each: see
 Amendments.
+Amended by #324 and #350 (2026-09-29): a SOUR beneath a MARR or DIV is
+folded into the spouse claims it dates; a SOUR that no claim folds, an
+OBJE that no image claim maps, a level-0 SOUR or OBJE record that nothing
+the adapter maps cites, and an object's further FILE are counted; every
+PAGE and TITL is read; and a clipped excerpt keeps its citations and ends
+with a key of its whole text: see Amendments.
 
 ## Context
 
@@ -164,8 +170,10 @@ since the model has no property that fits it:
 - a MARR's TYPE (civil, religious) names a kind of marriage, and the model
   has no property for one.
 
-The spouse claims' verbatim excerpt still shows their lines, within its
-400 characters.
+The excerpt of the spouse claims that a MARR or a DIV dates still shows
+its lines, a TYPE or a PLAC among them, within its 400 characters; an
+undated DIV dates no pair, and its lines are in no spouse claim's excerpt
+(#324).
 
 Amended by #322 (2026-09-28): **every repeated event and detail is read
 or counted.** The census took every occurrence of a tag it descends into
@@ -193,8 +201,10 @@ with its own date, place and circa, so that the alternatives coexist
   date one pair of spouse claims, as a family's only MARR and DIV do, and
   every other marriage or divorce dates a pair of its own (docs/MODELING.md,
   "Marriages, residences and other periods"), save one that restates
-  another's date and place: spouse claims cite the family record, so it
-  gives no pair of its own, whatever its citation. Pairing only the first
+  another's date and place under the same citations, which gives no pair
+  of its own (#324 has one under other citations give a pair of its own,
+  since the spouse claims now fold a MARR's and a DIV's citations).
+  Pairing only the first
   keeps each MARR's and each DIV's date on one pair of claims, rather than
   pairing every marriage with every divorce;
 - what gives nothing to claim (`1 BIRT Y`, `1 MARR Y`, a date the
@@ -212,10 +222,10 @@ mean. A further one is counted, named with its parent's tag (`FAM.HUSB`,
 `FAM.WIFE`), since the adapter reads the first beneath the same tag.
 
 Within the SOUR citations and OBJE objects that the adapter incorporates
-wholesale (Decision above), some tags are still read once: a citation's
-PAGE, a SOUR record's TITL, and an OBJE's FILE and TITL. The census does
-not look inside SOUR or OBJE, so a second one of these goes uncounted;
-#324 tracks it.
+wholesale (Decision above), some tags were still read once: a citation's
+PAGE, a SOUR record's TITL, and an OBJE's FILE and TITL. The census did
+not look inside SOUR or OBJE, so a second one of these went uncounted.
+#324 reads each PAGE and TITL, and counts a further FILE (below).
 
 Amended by #323 (2026-09-28): **an undated death, a family with one
 partner, a NAME without a value and a repeated nickname are mapped or
@@ -311,3 +321,118 @@ gave its cause of death all the same:
   it, citing that NAME, as another repeated value is (above). One NAME
   that gives it twice, by a NICK and inline, gives one claim, as a claim
   restated line for line does.
+
+Amended by #324 and #350 (2026-09-29): **every citation and object is
+folded, mapped or counted, and a clipped excerpt keeps citations apart.**
+The census skipped every SOUR and OBJE, wherever it stood, as
+incorporated wholesale, while the adapter folded only the SOURs directly
+beneath the record a claim cites and mapped only a person's own OBJE, so
+the rest were dropped silently. And an excerpt was cut at its end to its
+400 characters, which could cut off the lines that told two citations
+apart:
+
+- **A SOUR beneath a MARR or a DIV is folded into the spouse claims it
+  gives.** A family's spouse claims cite the family record, whose own
+  SOURs they folded, but a MARR's or a DIV's they did not. Each pair of
+  spouse claims now folds the citations of the MARRs and DIVs that give
+  it: those that give its start and its end, and, when no MARR or DIV
+  dates the family's one pair, each MARR (`1 MARR Y` with a SOUR beneath
+  it). Of the family record, a pair's excerpt holds the lines that give
+  it: the family's own line, its HUSB and WIFE, its own SOURs, and those
+  MARRs and DIVs, each with every line beneath it. It held the whole
+  record, so every pair of a family held every MARR's and DIV's
+  citations, and two pairs dated alike by two citations whose titles and
+  pages agree would have been one claim. The family's parent claims hold
+  the whole record, as before, and fold only its own citations: a MARR's
+  citation attests the marriage, not the children's parents.
+- **A MARR or DIV that restates another's date and place under other
+  citations gives a pair of its own.** The #322 amendment had it give
+  none, whatever its citation, as the spouse claims cited the family
+  record alone. Now that they fold a MARR's citations, a second citation
+  of the same wedding gives a pair of its own, citing it and dated by its
+  own start, as every marriage but the first is, so that the citation is
+  kept (CLAUDE.md rule 1), as the same value under another citation is a
+  claim of its own elsewhere. One that restates another under the same
+  citations, line for line, gives none, and its lines join the other's
+  pair.
+- **A person's OBJE link that holds lines of its own**, such as a SOUR
+  citing the link, gives them ahead of the object's in the image claim's
+  excerpt, and its SOURs are folded into the claim, as the object's own
+  are. A bare link gives the object's lines alone, as before.
+- **The census counts every SOUR that no claim folds and every OBJE that
+  no image claim maps.** It runs once the claims are made, and skips a
+  SOUR only where a claim's reference folds it, and an OBJE only where an
+  image claim maps it: a person's link, and the object it points to. Any
+  other is counted where it stands, named with its parent's tag, since
+  the adapter folds a SOUR beneath other tags:
+  - a SOUR directly beneath an INDI (`INDI.SOUR`): the person's own
+    citation, which no one claim holds;
+  - a SOUR beneath a DATE, PLAC, HUSB, WIFE, CHIL, FAMC or FAMS
+    (`DATE.SOUR`, `CHIL.SOUR`), where GEDCOM 5.5.1 gives no citation;
+  - a SOUR beneath an event or a fact that gives no claim: `BIRT.SOUR`
+    beneath `1 BIRT Y`, `NAME.SOUR` beneath an untyped NAME, which gives a
+    label and no claim, `MARR.SOUR` beneath an undated MARR when another
+    MARR or a DIV dates the family's pairs, `DIV.SOUR` beneath a DIV whose
+    date the grammar cannot parse. A person the adapter skips, having no name, gives no claim,
+    so their citations and objects are counted too;
+  - an OBJE beneath a FAM or an event (`FAM.OBJE`, `DEAT.OBJE` beneath
+    `1 DEAT Y`). A person's link to an object the export lacks, which the
+    adapter warns of, is counted as `OBJE`, as is a level-0 OBJE record
+    that no image claim cites;
+  - a level-0 SOUR record that no folded citation cites, counted as
+    `SOUR`, beside any counted citation of it.
+
+  A counted tag stands for its branch, as ever, so a DEAT that states no
+  death, an undated DIV and a one-partner family's MARR stand for the
+  SOURs beneath them. Ruling 4 holds where a SOUR is folded or an OBJE
+  mapped. Each of these is counted rather than folded, since no claim
+  states just what it cites: the person's own citation is the tree's
+  source for the person as a whole, and folding it into each of their
+  claims would cite it for facts it need not state. A citation of a DATE
+  or a PLAC cites that detail alone, and folding it into the event's
+  claims would cite it for the event's other claims, a place claim for a
+  date's citation. A citation of a HUSB, WIFE, CHIL or FAMC line may
+  cite the link or the person it names, which GEDCOM does not say. An
+  undated MARR beside a dated pair attests the marriage and not its
+  dates: folded into the dated pair, its citation would be cited for
+  dates it does not give, and a pair of its own would state the marriage
+  twice (#322).
+  Promoting cited sources to items of their own (step B, #168) would
+  carry each.
+- **Every PAGE and TITL is read, and a further FILE is counted.** Each
+  PAGE of a citation is a locator of the reference's page number, joined
+  with ` ; ` as the pages of several citations are. Each distinct TITL of
+  a source record names it, joined with ` / `: GEDCOM gives a source one
+  title, and a record that gives two names one source two ways. An
+  object's media item stands for its first FILE. GEDCOM 5.5.1 allows
+  several, grouping files of one context, such as a photograph and a
+  sound clip, and a further FILE is another medium, which the adapter
+  maps to no item of its own, so it is counted, as `OBJE.FILE`, standing
+  for its FORM and TITL. Each TITL of the first FILE and of the object is
+  read: the first labels the item, as before, and each other distinct
+  one is an alias of it, as a person's further NAME is.
+- **A clipped excerpt keeps its citations, and a key of its whole text.**
+  An excerpt is given in NFC, the form the instance stores text in and in
+  which the writer counts its own cap (#335), and holds at most 400
+  characters, as a Wikibase text value does. A longer one was cut at its
+  end, so a citation's lines and its resolved title could be cut off,
+  and two citations of one fact with no PAGE, beneath one long NOTE, were
+  one claim, the second citation lost. Now a longer excerpt keeps every
+  line of the citations folded into its claim, and their titles, and as
+  many of its other lines, from the first, as fit, marking each run it
+  leaves out with `…`. When even the citations do not fit whole, it keeps
+  as many of all its lines, from the first, as fit. Either way it ends
+  with `clipped, sha1` and the first 12 hex digits of the SHA-1 of the
+  whole excerpt, so that clipping never makes one claim of two that the
+  whole excerpts keep apart: two citations of one fact, or two places of
+  the export that differ only past the clip, each of which the writer
+  keeps as a reference block of its own (#335). A claim restated line
+  for line is still one.
+
+The example fixture gives the same 127 claims, each with its one
+reference, and the same census: it carries no citation, and its one
+object is linked from people alone. Only the excerpts of the eight spouse
+claims whose families list children change, losing their CHIL lines. The
+live GEDCOM test's batch changes too, each of its two pairs of spouse
+claims holding the lines of its own MARR and DIV alone, and so does its
+marker.

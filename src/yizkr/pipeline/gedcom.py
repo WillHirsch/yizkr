@@ -17,8 +17,9 @@ Source-first conventions carry over unchanged:
   that give it: the family's own line, its HUSB and WIFE, its own
   citations, and the MARR and DIV that date the pair. A person's image
   claim holds the object's lines, after those of the person's OBJE link
-  when the link holds any beneath it. An excerpt holds at most 400
-  characters, as a Wikibase text value does: a longer one keeps every
+  when the link holds any beneath it. An excerpt is given in NFC, the
+  form the instance stores text in, and holds at most 400 characters,
+  as a Wikibase text value does: a longer one keeps every
   line of the citations folded into its claim (below) and the titles
   they resolve to, and as many of its other lines, from the first, as
   fit, marking each run it leaves out with `…`, and it ends with
@@ -115,8 +116,9 @@ but not under a divorce, and a TYPE under a NAME but not under a MARR,
 so such a tag is named with its parent's tag where it goes unread
 (DIV.PLAC, MARR.TYPE). A SOUR that the adapter folds into no claim's
 reference is counted so too: one directly beneath a person (INDI.SOUR),
-beneath a DATE, PLAC, CHIL or FAMC (DATE.SOUR, CHIL.SOUR), or beneath
-an event or a NAME that gives no claim (BIRT.SOUR, NAME.SOUR). So is an
+beneath a DATE, PLAC, HUSB, WIFE, CHIL, FAMC or FAMS (DATE.SOUR,
+CHIL.SOUR), or beneath an event or a NAME that gives no claim
+(BIRT.SOUR, NAME.SOUR). So is an
 OBJE that it maps to no media item, beneath a family or an event
 (FAM.OBJE, DEAT.OBJE), save a person's link to an object the export
 lacks, which is counted as OBJE, as a level-0 OBJE record that no image
@@ -519,22 +521,27 @@ def _excerpt(segments: list[tuple[str, bool]], cited: str) -> str:
     citations resolve to (" | cited: ..."), or "".
 
     The lines are joined by " | ", as monolingual text forbids newlines,
-    with `cited` after them. An excerpt longer than EXCERPT_LIMIT keeps
-    every line of the folded citations and `cited`, and as many of the
-    other lines, from the first, as fit; each run of lines it leaves out
-    is marked ELIDED. Should the citations not fit whole, it keeps as many
-    of all its lines, from the first, as fit. Either way it ends with
-    "clipped, sha1" and the first 12 hex digits of the SHA-1 of the whole
-    excerpt, in NFC: two claims the whole excerpts keep apart stay apart
-    once clipped, so two citations of one fact are never one claim, while
-    a claim restated line for line is the same claim.
+    with `cited` after them, in NFC, the form the instance stores text in,
+    so that the length counted here is the length the writer counts. An
+    excerpt longer than EXCERPT_LIMIT keeps every line of the folded
+    citations and `cited`, and as many of the other lines, from the
+    first, as fit; each run of lines it leaves out is marked ELIDED.
+    Should the citations not fit whole, it keeps as many of all its lines,
+    from the first, as fit. Either way it ends with "clipped, sha1" and
+    the first 12 hex digits of the SHA-1 of the whole excerpt: two claims
+    the whole excerpts keep apart stay apart once clipped, so two
+    citations of one fact are never one claim, while a claim restated line
+    for line is the same claim.
     """
+    segments = [
+        (unicodedata.normalize("NFC", text), citing)
+        for text, citing in segments
+    ]
+    cited = unicodedata.normalize("NFC", cited)
     whole = " | ".join(text for text, _ in segments) + cited
     if len(whole) <= EXCERPT_LIMIT:
         return whole
-    digest = hashlib.sha1(
-        unicodedata.normalize("NFC", whole).encode()
-    ).hexdigest()[:12]
+    digest = hashlib.sha1(whole.encode()).hexdigest()[:12]
     tail = f" | clipped, sha1 {digest}"
     room = EXCERPT_LIMIT - len(tail)
     others = sum(1 for _, citing in segments if not citing)
@@ -668,13 +675,13 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # subtree and all: neither counted nor descended (`folded`, `mapped`).
     # Whether one is depends on where it stands and on what the record it
     # stands beneath gives, so the census runs once the claims are made: a
-    # SOUR directly beneath a person, beneath a DATE, PLAC, CHIL or FAMC,
-    # or beneath an event that gives no claim, is folded into none, and an
-    # OBJE beneath a family or an event is mapped to no media item, and
-    # each is counted. So is a level-0 SOUR record that no folded citation
-    # cites, a level-0 OBJE record that no image claim cites, and each FILE
-    # of an object after its first, which its media item does not stand
-    # for.
+    # SOUR directly beneath a person, beneath a DATE, PLAC, HUSB, WIFE,
+    # CHIL, FAMC or FAMS, or beneath an event that gives no claim, is
+    # folded into none, and an OBJE beneath a family or an event is mapped
+    # to no media item, and each is counted. So is a level-0 SOUR record
+    # that no folded citation cites, a level-0 OBJE record that no image
+    # claim cites, and each FILE of an object after its first, which its
+    # media item does not stand for.
     # The envelope is structure, not data. Everything else is counted once
     # and its subtree left untouched, so an already-dropped branch is not
     # itemised down to its PAGE/_APID leaves. What remains reported is the
