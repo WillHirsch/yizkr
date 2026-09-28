@@ -887,6 +887,16 @@ class TestNothingTouched:
         assert not runs_dir(tmp_path).exists()
         assert engine.calls == []
 
+    def test_it_counts_the_cache_s_own_events(self):
+        """The events the estimate counts are the cache's, by name."""
+        from yizkr.pipeline import llmcache
+
+        assert (estimate.HIT, estimate.MISS, estimate.REPLAY) == (
+            llmcache.HIT,
+            llmcache.MISS,
+            llmcache.REPLAY,
+        )
+
     def test_a_new_run_makes_no_directory(self, tmp_path, engine):
         corpus = small(tmp_path)
         counted = estimate_of(tmp_path, corpus, engine)

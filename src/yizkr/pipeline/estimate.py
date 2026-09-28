@@ -55,7 +55,6 @@ from __future__ import annotations
 
 import contextlib
 import functools
-import threading
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -67,16 +66,6 @@ from yizkr.core.corpus import MISSING_LIST, ExclusionConfigError
 from yizkr.pipeline import llm
 from yizkr.pipeline.chunking import ChunkedClaimExtractor, ExtractionFailed
 from yizkr.pipeline.critique import run_critique
-from yizkr.pipeline.llmcache import (
-    HIT,
-    MISS,
-    REPLAY,
-    EngineCache,
-    _describe,
-    _parse_record,
-    _running,
-)
-from yizkr.pipeline.llmcache import LOCK_FILE as CACHE_LOCK
 from yizkr.pipeline.orchestrate import (
     BATCH_VOLATILE,
     DOCUMENT_STAGES,
@@ -94,17 +83,21 @@ from yizkr.pipeline.rundir import (
 )
 from yizkr.pipeline.scratch import (
     DEFAULT_RUNS,
-    LOCK_FILE,
     PHASES,
     PreflightFailed,
     ScratchDriver,
     ScratchRefused,
     choose_run,
+    runs_holder,
     runs_in,
 )
 from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.transcribe import Transcription
 
+# the LLM cache's events the estimate counts (rundir.CACHE_EVENTS): an
+# answer it gives, a call it cannot answer, and the replay of an opening
+# turn for a fork
+HIT, MISS, REPLAY = "cache-hit", "cache-miss", "cache-replay"
 # how a stale stage's calls are counted without their keys: an
 # extraction after a transcription the engine makes, the chunks of one
 # after an entity manifest it answers, and a critique of a batch that
@@ -253,86 +246,7 @@ class Estimate:
         return total
 
 
-# -- the cache as it is, and an engine that answers nothing -------------------
-
-
-class _CacheAsIs(EngineCache):
-    """The LLM cache's entries as a run is served them, read as they are:
-    without the cache's lock, which a running driver may hold, and without
-    writing anything. What the estimate's own calls change (an answer
-    rejected, a chunk answered empty, a key refreshed) it keeps in memory.
-
-    It takes the cache's layout, and its reading of an entry, from
-    EngineCache, but none of its making: opening a cache makes its folders
-    and holds its lock."""
-
-    def __init__(
-        self,
-        root: Path,
-        *,
-        refresh: Iterable[str] = (),
-        epochs: dict[str, int] | None = None,
-    ) -> None:
-        self.root = Path(root)
-        self.refresh = frozenset(refresh)
-        self.epochs = {
-            role: int(epoch) for role, epoch in (epochs or {}).items()
-        }
-        self._lock = threading.Lock()
-        self._refreshed: set[str] = set()
-        self._answered: dict[str, dict] = {}
-        self._rejected: set[str] = set()
-
-    def warn_unpinned(self, role: str) -> None:
-        """Nothing to say: the estimate refuses a role without a model."""
-
-    def remember_session(self, *args: Any) -> None:
-        """No session is made, so none is held."""
-
-    def take_session(self, key: str, client: Any) -> None:
-        return None
-
-    def get(self, key: str) -> dict | None:
-        if key in self._answered:
-            return self._answered[key]
-        if key in self._rejected:
-            return None
-        return super().get(key)
-
-    def rejected(self, key: str) -> list[Path]:
-        if key in self._rejected:
-            return [self.path(key)]
-        return super().rejected(key)
-
-    def put(self, key: str, entry: Any) -> None:
-        self._answered[key] = dict(entry)
-
-    def reject(self, key: str, response: str, reason: str, **fields) -> bool:
-        entry = self.get(key)
-        if entry is None or entry.get("response") != response:
-            return False
-        self._answered.pop(key, None)
-        self._rejected.add(key)
-        return True
-
-    def seed(self, *args: Any, **kwargs: Any) -> bool:
-        return False
-
-    def keep_session(self, *args: Any) -> None:
-        """No session is made, so none is kept."""
-
-    def kept_session(self, key: str, opening: str) -> dict[str, bytes]:
-        """The names of the session files kept for the conversation, with
-        none of their bytes: whether they can resume it is all that
-        counts."""
-        folder = self._session_dir(key, opening)
-        if not folder.is_dir():
-            return {}
-        return {
-            path.relative_to(folder).as_posix(): b""
-            for path in sorted(folder.rglob("*"))
-            if path.is_file()
-        }
+# -- an engine that answers nothing -------------------------------------------
 
 
 class _Keyed:
@@ -481,7 +395,8 @@ class Estimator(ScratchDriver):
         # stand-in behind the cache, which answers nothing
         self._clients: dict[str, Any] = {}
         self._keyed: dict[str, _Keyed] = {}
-        self._as_is: _CacheAsIs | None = None
+        # the LLM cache as it is (llm.read_cache)
+        self._as_is: Any = None
         # the roles whose clients the planned stale work starts
         self._used: set[str] = set()
         # the keys the engine is asked in the planned run, so far
@@ -565,8 +480,8 @@ class Estimator(ScratchDriver):
                 next(iter(self._clients.values())), "cli_version"
             )
             self._refreshed = self._refreshes_made()
-            self._as_is = _CacheAsIs(
-                Path(self.cache_dir), refresh=self.refresh, epochs=self.epochs
+            self._as_is = llm.read_cache(
+                self.cache_dir, refresh=self.refresh, epochs=self.epochs
             )
             made = {doc: self._count(doc) for doc in taken}
             self._refuse_other_clients(recorded)
@@ -909,17 +824,12 @@ def _holders(runs: Path, cache: Path) -> list[str]:
     """Who holds the runs directory and the LLM cache now, as their lock
     files record it, read without taking either lock."""
     held = []
-    for what, lock in (
-        ("the runs directory", runs / LOCK_FILE),
-        ("the LLM cache", cache / CACHE_LOCK),
+    for what, where, holder in (
+        ("the runs directory", runs, runs_holder(runs)),
+        ("the LLM cache", cache, llm.cache_holder(cache)),
     ):
-        try:
-            text = lock.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        record = _parse_record(text.strip())
-        if record is not None and _running(record):
-            held.append(f"{what} {lock.parent} by {_describe(record)}")
+        if holder is not None:
+            held.append(f"{what} {where} by {holder}")
     return held
 
 

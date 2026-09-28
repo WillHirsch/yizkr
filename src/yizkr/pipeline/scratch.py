@@ -463,6 +463,38 @@ def hold(runs: Path) -> Iterator[None]:
         os.close(fd)
 
 
+def runs_holder(runs: Path) -> str | None:
+    """The driver that holds the runs directory now, described, as the
+    record in its LOCK_FILE says (hold), read without taking the lock;
+    None when the record names no running process, or there is none. A
+    process on another host is taken to run, since this one cannot see
+    it."""
+    try:
+        record = json.loads((Path(runs) / LOCK_FILE).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    pid, host = record.get("pid"), record.get("host")
+    if host == socket.gethostname():
+        if not isinstance(pid, int) or pid <= 0:
+            return None
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return None
+        except PermissionError:
+            pass
+    held = f"process {pid}"
+    if host != socket.gethostname():
+        held += f" on {host}"
+    if record.get("command"):
+        held += f" ({record['command']})"
+    if record.get("since"):
+        held += f", since {record['since']}"
+    return held
+
+
 def new_run_id(runs: Path) -> str:
     """A new run's id, the name of its directory in `runs`: the UTC time
     it starts, to the second, then the microsecond in six hex digits, so

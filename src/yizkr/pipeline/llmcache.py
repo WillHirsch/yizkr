@@ -677,6 +677,108 @@ class EngineCache:
         return True
 
 
+class CacheAsIs(EngineCache):
+    """The entries under one cache root as a run would be served them,
+    read as they are: without the cache's lock, which a running pass may
+    hold, and with nothing written, the folders included. What calls made
+    through it change (an answer rejected, one stored, a key refreshed) it
+    keeps in memory, for as long as it lives. It takes the layout, and the
+    reading of an entry, from EngineCache, but none of its opening, which
+    makes the root and holds its lock. A kept session is given by its
+    files' names, without their bytes: whether they can resume a
+    conversation is all a reader of it asks."""
+
+    def __init__(
+        self,
+        root: str | os.PathLike[str],
+        *,
+        refresh: Iterable[str] = (),
+        epochs: Mapping[str, int] | None = None,
+    ) -> None:
+        self.root = Path(root)
+        self.refresh = frozenset(refresh)
+        self.epochs = {
+            role: int(epoch) for role, epoch in (epochs or {}).items()
+        }
+        self._lock = threading.Lock()
+        self._refreshed: set[str] = set()
+        self._warned: set[str] = set()
+        self._sessions: dict[str, tuple[Any, Any, str]] = {}
+        # answers stored, and keys rejected, through this view
+        self._stored: dict[str, dict] = {}
+        self._rejected: set[str] = set()
+
+    def warn_unpinned(self, role: str) -> None:
+        """Nothing is written, and nothing is said."""
+
+    def remember_session(
+        self, key: str, client: Any, session: Any, opening: str
+    ) -> None:
+        """No session is made through this view, so none is held."""
+
+    def take_session(self, key: str, client: Any) -> None:
+        return None
+
+    def get(self, key: str) -> dict | None:
+        if key in self._stored:
+            return self._stored[key]
+        if key in self._rejected:
+            return None
+        return super().get(key)
+
+    def rejected(self, key: str) -> list[Path]:
+        if key in self._rejected:
+            return [self.path(key)]
+        return super().rejected(key)
+
+    def put(self, key: str, entry: Mapping[str, Any]) -> None:
+        self._stored[key] = dict(entry)
+
+    def reject(
+        self, key: str, response: str, reason: str, **fields: Any
+    ) -> bool:
+        entry = self.get(key)
+        if entry is None or entry["response"] != response:
+            return False
+        self._stored.pop(key, None)
+        self._rejected.add(key)
+        return True
+
+    def seed(self, *args: Any, **kwargs: Any) -> bool:
+        return False
+
+    def keep_session(
+        self, key: str, opening: str, files: Mapping[str, bytes]
+    ) -> None:
+        """No session is made through this view, so none is kept."""
+
+    def kept_session(self, key: str, opening: str) -> dict[str, bytes]:
+        folder = self._session_dir(key, opening)
+        if not folder.is_dir():
+            return {}
+        return {
+            path.relative_to(folder).as_posix(): b""
+            for path in sorted(folder.rglob("*"))
+            if path.is_file()
+        }
+
+
+def held_by(root: str | os.PathLike[str]) -> str | None:
+    """The process that holds the cache under `root` now, described, as
+    its lock file records it, read without taking the lock; None when the
+    record names no running process, or there is none."""
+    try:
+        text = (Path(root) / LOCK_FILE).read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return None
+    record = _parse_record(text.strip())
+    if record is None or not _running(record):
+        return None
+    return _describe(record)
+
+
 def _release(client: Any, session: Any) -> None:
     """Release `session` through the engine client that holds it, when the
     engine holds sessions."""
