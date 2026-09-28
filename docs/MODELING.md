@@ -416,7 +416,9 @@ spouse (P26):
   Each partner's spouse statement carries the dates its source gives, and
   the GEDCOM adapter writes a family's `MARR` date as the start time of
   both partners' statements and its `DIV` date as their end time. A move
-  in and a move out date a residence the same way.
+  in and a move out date a residence the same way, and the adapter reads
+  a residence's or an occupation's date period (`FROM 1939 TO 1952`) as
+  its start and end time, each with the range its own date gives.
 - **`point_in_time` on a spouse or residence statement dates an
   observation**: a date at which the source presents the marriage or the
   residence as holding (a directory's listing, a census) without dating

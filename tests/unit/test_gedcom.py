@@ -531,6 +531,40 @@ class TestUnsupportedCensus:
         assert "HEAD" not in tags and "TRLR" not in tags
         assert "CHAR" not in tags
 
+    def test_the_fixture_counts_only_its_unmapped_tail(self):
+        # its typed NAMEs, its MARR places and its dated DIV are all read:
+        # only the EDUC and the NOTE go unmapped
+        assert fixture_result().unsupported_tags == {"EDUC": 1, "NOTE": 1}
+
+    @pytest.mark.parametrize(
+        ("lines", "expected"),
+        [
+            # a NICK is read beneath a NAME, not beside it
+            (["1 NICK Muckel"], {"INDI.NICK": 1}),
+            # a DATE is read beneath a BIRT or a DEAT, not beneath a NAME
+            (["2 DATE 1836"], {"NAME.DATE": 1}),
+            # a CAUS is read beneath a DEAT, not beneath a BURI
+            (
+                [
+                    "1 BURI",
+                    "2 PLAC Friedhof Flörburg, Hesse, Germany",
+                    "2 CAUS Dropsy",
+                ],
+                {"BURI.CAUS": 1},
+            ),
+            # an AGE is read nowhere, so it is named by its tag alone
+            (["1 DEAT", "2 DATE 16 MAR 1909", "2 AGE 73"], {"AGE": 1}),
+        ],
+    )
+    def test_a_tag_is_counted_where_it_goes_unread(self, lines, expected):
+        # Eugen's record, with (here) a line the adapter does not read
+        # where it stands; a tag it reads beneath other tags is named with
+        # its parent's tag (#308)
+        text = "\n".join(
+            ["0 @I1@ INDI", "1 NAME Eugen /Löbig/", *lines, "0 TRLR", ""]
+        )
+        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == expected
+
 
 class TestSourceCitations:
     """SOUR citations fold into the claim's reference (ADR-0021 step A)."""
@@ -618,23 +652,33 @@ class TestUnsupportedFormat:
         assert format_unsupported_tags({}) == ""
 
 
+def family(*lines: str) -> str:
+    """Leopold and Agnes's family record, ending (here) with `lines`."""
+    return "\n".join(
+        [
+            "0 @I11@ INDI",
+            "1 NAME Leopold /Löbig/",
+            "0 @I17@ INDI",
+            "1 NAME Agnes /Löbig/",
+            "0 @F5@ FAM",
+            "1 HUSB @I11@",
+            "1 WIFE @I17@",
+            *lines,
+            "0 TRLR",
+            "",
+        ]
+    )
+
+
 def couple(marriage: str | None = None, divorce: str | None = None) -> str:
     """Leopold and Agnes's family record, its marriage and divorce dated
     (here) as given."""
-    lines = [
-        "0 @I11@ INDI",
-        "1 NAME Leopold /Löbig/",
-        "0 @I17@ INDI",
-        "1 NAME Agnes /Löbig/",
-        "0 @F5@ FAM",
-        "1 HUSB @I11@",
-        "1 WIFE @I17@",
-    ]
+    lines = []
     if marriage is not None:
         lines += ["1 MARR", f"2 DATE {marriage}"]
     if divorce is not None:
         lines += ["1 DIV", f"2 DATE {divorce}"]
-    return "\n".join([*lines, "0 TRLR", ""])
+    return family(*lines)
 
 
 def shown(value) -> tuple | str:
@@ -819,6 +863,324 @@ class TestMarriageDates:
         )
         (spouse,) = claims_for(result.batch, "i11", "spouse")
         assert spouse.qualifiers == []
+
+
+class TestMarriageAndDivorceTags:
+    """What a family's MARR or DIV says that the model has no property for
+    is counted by the unsupported-tag census, never dropped silently
+    (ADR-0021, #308): a divorce's place, an undated divorce and the kind of
+    marriage a MARR's TYPE names."""
+
+    def test_a_divorce_place_is_counted_and_is_no_location(self):
+        # (here) the family record places the divorce in Rekau, where the
+        # Landgericht Rekau gave its judgment: the spouse statement's
+        # location is the wedding's place alone
+        result = adapt_gedcom(
+            family(
+                "1 MARR",
+                "2 DATE 8 FEB 1947",
+                "2 PLAC Flörburg, Hesse, Germany",
+                "1 DIV",
+                "2 DATE 2 JAN 1957",
+                "2 PLAC Rekau, Hesse, Germany",
+            ),
+            artifact=EXPORT,
+        )
+        assert result.unsupported_tags == {"DIV.PLAC": 1}
+        assert result.warnings == []
+        labels = {e.id: e.label for e in result.batch.entities}
+        assert "Rekau, Hesse, Germany" not in labels.values()
+        for subject in ("i11", "i17"):
+            (spouse,) = claims_for(result.batch, subject, "spouse")
+            assert [
+                labels[q.value.value.local_id]
+                for q in spouse.qualifiers
+                if q.property == "location"
+            ] == ["Flörburg, Hesse, Germany"]
+            (end,) = [q for q in spouse.qualifiers if q.property == "end_time"]
+            assert shown(end.value) == (1957, 1, 2, "day")
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["1 DIV Y"],
+            ["1 DIV"],
+            ["1 DIV", "2 PLAC Rekau, Hesse, Germany"],
+        ],
+    )
+    def test_an_undated_divorce_is_counted_whole(self, lines):
+        # (here) the family record says that Leopold and Agnes divorced,
+        # and at most where, but not when: the marriage ended at a time
+        # no claim can state, so the census counts the DIV, which stands
+        # for its PLAC too
+        result = adapt_gedcom(family(*lines), artifact=EXPORT)
+        assert result.unsupported_tags == {"DIV": 1}
+        assert result.warnings == []
+        for subject in ("i11", "i17"):
+            (spouse,) = claims_for(result.batch, subject, "spouse")
+            assert spouse.qualifiers == []
+
+    def test_a_dated_divorce_leaves_nothing_uncounted(self):
+        result = adapt_gedcom(couple(divorce="2 JAN 1957"), artifact=EXPORT)
+        assert result.unsupported_tags == {}
+
+    def test_an_unparsed_divorce_date_warns_and_its_place_is_counted(self):
+        result = adapt_gedcom(
+            family(
+                "1 DIV", "2 DATE NEVER EVER", "2 PLAC Rekau, Hesse, Germany"
+            ),
+            artifact=EXPORT,
+        )
+        assert result.warnings == [
+            "line 9: unparsed divorce date 'NEVER EVER' — end_time omitted"
+        ]
+        assert result.unsupported_tags == {"DIV.PLAC": 1}
+
+    def test_a_marriage_type_is_counted(self):
+        # the judgment has the marriage concluded before the registrar in
+        # Flörburg; (here) the family record calls it civil
+        result = adapt_gedcom(
+            family(
+                "1 MARR",
+                "2 TYPE Civil",
+                "2 DATE 8 FEB 1947",
+                "2 PLAC Flörburg, Hesse, Germany",
+            ),
+            artifact=EXPORT,
+        )
+        assert result.unsupported_tags == {"MARR.TYPE": 1}
+        # the marriage's date and place are read as ever
+        for subject in ("i11", "i17"):
+            (spouse,) = claims_for(result.batch, subject, "spouse")
+            assert sorted(q.property for q in spouse.qualifiers) == [
+                "location",
+                "start_time",
+            ]
+
+
+def gustav(tag: str, date: str) -> str:
+    """Gustav's record: his residence at 8 Hawthorn Road (RESI) or his
+    occupation, hatter (OCCU), dated (here) as given."""
+    event = {
+        "RESI": [
+            "1 RESI",
+            f"2 DATE {date}",
+            "2 PLAC 8 Hawthorn Road, Stupfield, Victoria, Australia",
+        ],
+        "OCCU": ["1 OCCU Hatter", f"2 DATE {date}"],
+    }[tag]
+    return "\n".join(
+        ["0 @I8@ INDI", "1 NAME Gustav /Löbig/", *event, "0 TRLR", ""]
+    )
+
+
+# the property each event gives, which its warnings name too
+HELD = {"RESI": "residence", "OCCU": "occupation"}
+
+
+def held_qualifiers(tag: str, date: str) -> list[tuple]:
+    """The qualifiers of Gustav's one residence or occupation claim, as
+    (property, value) pairs in property order."""
+    batch = adapt_gedcom(gustav(tag, date), artifact=EXPORT).batch
+    (held,) = claims_for(batch, "i8", HELD[tag])
+    return sorted((q.property, shown(q.value)) for q in held.qualifiers)
+
+
+CIRCA = ("sourcing_circumstances", "circa")
+
+
+@pytest.mark.parametrize("tag", ["RESI", "OCCU"])
+class TestPeriods:
+    """A residence's or an occupation's date period (FROM x TO y, FROM x,
+    TO y) is its statement's start and end time, each with the range its
+    own phrase states, as a marriage's date is a spouse statement's start
+    and a divorce's its end; any other date is a point in time
+    (docs/MODELING.md, "Marriages, residences and other periods"; #308)."""
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            (
+                "FROM 1939 TO 1952",
+                [("end_time", year(1952)), ("start_time", year(1939))],
+            ),
+            (
+                "from 1939 to 1952",
+                [("end_time", year(1952)), ("start_time", year(1939))],
+            ),
+            ("FROM 1939", [("start_time", year(1939))]),
+            ("TO 1952", [("end_time", year(1952))]),
+        ],
+    )
+    def test_a_period_is_a_start_and_an_end(self, tag, date, expected):
+        # never a point in time, nor one date's range
+        assert held_qualifiers(tag, date) == expected
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            (
+                "FROM BEF 1940 TO 1952",
+                [
+                    ("end_time", year(1952)),
+                    ("latest_start_date", year(1940)),
+                    ("start_time", year(1940)),
+                ],
+            ),
+            (
+                "FROM AFT 1939 TO 1952",
+                [
+                    ("earliest_date", year(1939)),
+                    ("end_time", year(1952)),
+                    ("start_time", year(1939)),
+                ],
+            ),
+            (
+                "FROM BET 1939 AND 1940 TO 1952",
+                [
+                    ("earliest_date", year(1939)),
+                    ("end_time", year(1952)),
+                    ("latest_start_date", year(1940)),
+                    ("start_time", year(1939)),
+                ],
+            ),
+            (
+                "FROM 1939 TO BEF 1953",
+                [
+                    ("end_time", year(1953)),
+                    ("latest_date", year(1953)),
+                    ("start_time", year(1939)),
+                ],
+            ),
+            (
+                "FROM 1939 TO AFT 1952",
+                [
+                    ("earliest_end_date", year(1952)),
+                    ("end_time", year(1952)),
+                    ("start_time", year(1939)),
+                ],
+            ),
+            (
+                "FROM 1939 TO BET 1952 AND 1953",
+                [
+                    ("earliest_end_date", year(1952)),
+                    ("end_time", year(1952)),
+                    ("latest_date", year(1953)),
+                    ("start_time", year(1939)),
+                ],
+            ),
+            (
+                "FROM BET 1939 AND 1940 TO BET 1952 AND 1953",
+                [
+                    ("earliest_date", year(1939)),
+                    ("earliest_end_date", year(1952)),
+                    ("end_time", year(1952)),
+                    ("latest_date", year(1953)),
+                    ("latest_start_date", year(1940)),
+                    ("start_time", year(1939)),
+                ],
+            ),
+            (
+                "FROM BEF 1940",
+                [
+                    ("latest_start_date", year(1940)),
+                    ("start_time", year(1940)),
+                ],
+            ),
+            (
+                "TO AFT 1952",
+                [
+                    ("earliest_end_date", year(1952)),
+                    ("end_time", year(1952)),
+                ],
+            ),
+        ],
+    )
+    def test_each_end_takes_the_range_its_phrase_states(
+        self, tag, date, expected
+    ):
+        # a start runs from its earliest date to its latest start date, an
+        # end from its earliest end date to its latest date: no bound of
+        # one end is read as the other's
+        assert held_qualifiers(tag, date) == expected
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            (
+                "FROM ABT 1939 TO 1952",
+                [("end_time", year(1952)), CIRCA, ("start_time", year(1939))],
+            ),
+            (
+                "FROM 1939 TO CAL 1952",
+                [("end_time", year(1952)), CIRCA, ("start_time", year(1939))],
+            ),
+            # one circa stands for both ends
+            (
+                "FROM EST 1939 TO ABT 1952",
+                [("end_time", year(1952)), CIRCA, ("start_time", year(1939))],
+            ),
+            (
+                "FROM AUG 1939 TO 14 MAR 1952",
+                [
+                    ("end_time", (1952, 3, 14, "day")),
+                    ("start_time", (1939, 8, None, "month")),
+                ],
+            ),
+            (
+                "FROM ABT AUG 1939",
+                [CIRCA, ("start_time", (1939, 8, None, "month"))],
+            ),
+        ],
+    )
+    def test_circa_and_precision_are_kept_as_stated(self, tag, date, expected):
+        assert held_qualifiers(tag, date) == expected
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            ("1952", [("point_in_time", year(1952))]),
+            # a range bounds one date: the observation's
+            (
+                "BET 1939 AND 1940",
+                [
+                    ("earliest_date", year(1939)),
+                    ("latest_date", year(1940)),
+                    ("point_in_time", year(1939)),
+                ],
+            ),
+        ],
+    )
+    def test_any_other_date_is_a_point_in_time(self, tag, date, expected):
+        assert held_qualifiers(tag, date) == expected
+
+    @pytest.mark.parametrize(
+        ("date", "omitted", "expected"),
+        [
+            (
+                "FROM SOMEDAY TO 1952",
+                ["start_time"],
+                [("end_time", year(1952))],
+            ),
+            ("FROM 1939 TO NEVER", ["end_time"], [("start_time", year(1939))]),
+            ("FROM SOMEDAY TO NEVER", ["start_time", "end_time"], []),
+            ("FROM", ["start_time"], []),
+            ("TO", ["end_time"], []),
+            ("FROM 1939 TO", ["end_time"], [("start_time", year(1939))]),
+            # a period within a period is no date
+            ("TO FROM 1950 TO 1952", ["end_time"], []),
+            ("FROM FROM 1939 AND 1940", ["start_time"], []),
+        ],
+    )
+    def test_an_unparsed_end_warns_and_is_omitted(
+        self, tag, date, omitted, expected
+    ):
+        result = adapt_gedcom(gustav(tag, date), artifact=EXPORT)
+        assert result.warnings == [
+            f"line 4: unparsed {HELD[tag]} date {date!r} — {end} omitted"
+            for end in omitted
+        ]
+        assert held_qualifiers(tag, date) == expected
 
 
 class TestIngestGedcom:
