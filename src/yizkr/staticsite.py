@@ -49,12 +49,21 @@ from yizkr.queries.publish import load_templates, prefix_block, render
 
 def sparql_runner(config: Config):
     def run(query: str) -> list[dict]:
-        url = (
-            config.sparql_url
-            + "?"
-            + urllib.parse.urlencode({"query": query, "format": "json"})
+        # the query travels in the request body: the query service refuses
+        # a request line longer than about 8 KB, and the disagreement
+        # report's query is longer than that
+        request = urllib.request.Request(
+            config.sparql_url,
+            data=urllib.parse.urlencode(
+                {"query": query, "format": "json"}
+            ).encode(),
+            headers={
+                "Accept": "application/sparql-results+json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
         )
-        with urllib.request.urlopen(url, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=120) as response:
             return json.load(response)["results"]["bindings"]
 
     return run

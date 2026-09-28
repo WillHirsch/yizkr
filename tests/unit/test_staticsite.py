@@ -6,11 +6,14 @@ without an instance; fixtures are fictional.
 
 from __future__ import annotations
 
+import io
 import json
+import urllib.parse
 
 import pytest
 import yaml
 
+from yizkr import staticsite
 from yizkr.core.config import Config
 from yizkr.model.schema import read_manifest_data
 from yizkr.staticsite import SiteBuilder, format_time
@@ -34,6 +37,24 @@ def config() -> Config:
         admin_pass="x",
         env_file=None,
     )
+
+
+def test_the_sparql_runner_sends_the_query_in_the_request_body(monkeypatch):
+    # the query service refuses a request line longer than about 8 KB, and
+    # the disagreement report's query is longer than that
+    sent = []
+
+    def urlopen(request, timeout):
+        sent.append(request)
+        return io.BytesIO(b'{"results": {"bindings": []}}')
+
+    monkeypatch.setattr(staticsite.urllib.request, "urlopen", urlopen)
+    query = "SELECT ?x WHERE {}\n#" + "x" * 10_000
+    assert staticsite.sparql_runner(config())(query) == []
+    (request,) = sent
+    assert request.get_method() == "POST"
+    assert request.full_url == "http://query.example/sparql"
+    assert urllib.parse.parse_qs(request.data.decode())["query"] == [query]
 
 
 def uri(qid: str) -> dict:
