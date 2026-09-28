@@ -11,8 +11,6 @@ as different generations; approved equivalences applied through
 `resolve --equivalences` end to end)
 Amended by #225 (2026-09-27): the entity manifest's state moves from
 the stage store to the LLM cache of ADR-0032 (State and CLI).
-Amended by #240 (2026-09-28): aliases and kinds reach an item however
-the writer found it (Phase 2).
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with

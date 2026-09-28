@@ -8,7 +8,9 @@ exact statements the API holds:
   listed — even beside a coexisting machine value from another source
   (machine siblings are not witnesses; ADR-0002 coexistence stays visible);
 * the subject's type statement, which the writer wrote when it minted the
-  subject, is such a machine statement and is listed (#88);
+  subject, is such a machine statement (#88), but the second batch, which
+  has no entity manifest, gives the same kind on its local ref: the
+  statement gains source B as a witness and is not listed (#240);
 * an agreeing second source (the writer's appended reference) takes a
   statement OUT of the queue;
 * a curator (run-reference-free) sibling on the same subject+property takes
@@ -138,6 +140,8 @@ def fixture_graph(client, config):
             ]
         )
     )
+    # source B's batch: its refs to the subject also give the subject's
+    # kind, which the writer records beside source A's (#240)
     BatchWriter(client).write_batch(
         batch(
             [
@@ -227,17 +231,23 @@ def pick(client, subject, prop_key, value) -> dict:
 def test_queue_lists_exactly_the_under_witnessed_machine_statements(
     client, config, fixture_graph
 ):
-    subject, _, _ = fixture_graph
+    subject, source_a, source_b = fixture_graph
     rows = queue_rows(client, config, subject)
 
     residences = statements(client, subject, "residence")
     assert len(residences) == 2  # the fixture's two distinct assertions
-    # the kind the writer wrote when it minted the subject
+    # the kind the writer wrote when it minted the subject, from source A,
+    # and that the second batch's ref gave from source B (#240)
     (kind,) = statements(client, subject, "instance_of")
+    properties, _ = client.vocabulary()
+    assert [
+        snak["datavalue"]["value"]["id"]
+        for block in kind["references"]
+        for snak in block["snaks"].get(properties["stated_in"], [])
+    ] == [source_a, source_b]
     expected = {
         statement_uri(config, s["id"])
         for s in [
-            kind,
             pick(client, subject, "date_of_birth", "1911"),
             pick(client, subject, "date_of_birth", "1912"),
             pick(client, subject, "married_name", "Queue Fixture Wedded"),
@@ -249,6 +259,7 @@ def test_queue_lists_exactly_the_under_witnessed_machine_statements(
 
     # and, spelled out, what the queue must leave out
     excluded = {
+        "a kind a later source's ref witnesses": kind,
         "agreeing second source": pick(
             client, subject, "date_of_death", "1970"
         ),
