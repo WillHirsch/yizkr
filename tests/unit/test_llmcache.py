@@ -830,6 +830,7 @@ class TestTheCacheFolder:
             0o770,  # the user's, and group-writable
             0o701,  # others pass through it
         ],
+        ids=oct,
     )
     def test_a_folder_open_to_others_is_refused_and_left_alone(
         self, tmp_path, mode
@@ -864,7 +865,7 @@ class TestTheCacheFolder:
         assert mode_of(root) == 0o1700
         assert mode_of(shard) == 0o755
 
-    @pytest.mark.parametrize("mask", [0o000, 0o277])
+    @pytest.mark.parametrize("mask", [0o000, 0o277], ids=oct)
     def test_the_folders_it_makes_are_private_whatever_the_umask(
         self, tmp_path, mask
     ):
@@ -2644,6 +2645,36 @@ class TestThePipeline:
             cache.chmod(0o700)
         assert orchestrator.run() == 2
         assert engine.calls
+
+    def test_a_scratch_run_whose_cache_git_would_track_stops_before_a_call(
+        self, tmp_path, monkeypatch
+    ):
+        """The scratch driver opens the cache as the orchestrator does: a
+        folder git would track stops the run at its first stage that needs
+        the engine, as a pause, with the engine never asked (#305)."""
+        from yizkr.core.corpus import ExclusionList
+        from yizkr.pipeline.scratch import ScratchDriver
+
+        engine = Engine(pipeline_answers)
+
+        class Driver(ScratchDriver):
+            def _engine(self, role):
+                return engine
+
+        repo = a_repository(tmp_path)
+        monkeypatch.setenv("YIZKR_LLM_MODEL", "claude-opus-5-5")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "fictional")
+        driver = Driver(
+            folder_of_three(tmp_path), tmp_path / "runs" / "run-1",
+            llm="anthropic", cache_dir=repo / "cache",
+            exclusions=ExclusionList(), min_free=0, log=quiet,
+        )  # fmt: skip
+        with pytest.raises(CacheRefused, match="git work tree"):
+            driver.run()
+        assert engine.calls == []
+        assert not (repo / "cache").exists()
+        last = driver.rundir.manifest()["invocations"][-1]
+        assert (last["outcome"], last["reason"]) == ("paused", "CacheRefused")
 
 
 class TestRoleClient:
