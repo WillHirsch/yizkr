@@ -51,9 +51,8 @@ Per batch, the writer:
    fact, and where, not just the fact). The claim's source block,
    `stated in` with its page number, region and excerpt, is compared
    whole with the statement's reference blocks as the instance stores
-   them. So its page number and region are sent in Unicode NFC, the
-   form the instance stores a string in (it stores monolingual text,
-   such as the excerpt, as sent):
+   them. So its page number, region and excerpt are sent in Unicode
+   NFC, the form the instance stores text in:
    * the statement already carries that block: the claim is skipped
      (safe re-run);
    * otherwise the claim's blocks are APPENDED to the statement, each
@@ -227,12 +226,12 @@ def normalized_type_hint(text: str) -> str:
 
 
 def _stored_string(text: str) -> str:
-    """`text` in the form the instance stores a `string` snak in: Unicode
-    NFC, to which Wikibase normalizes a string value it is sent (it
-    stores monolingual text, such as an excerpt, as sent). A reference
-    block's page number and region are sent in this form, so that the
-    block the writer builds for a claim is equal to the block the
-    instance gives back for it (step 4 of the module docstring)."""
+    """`text` in the form the instance stores text in: Unicode NFC, to
+    which Wikibase normalizes the text of a string or monolingual text
+    value it is sent. A reference block's page number, region and
+    excerpt are sent in this form, so that the block the writer builds
+    for a claim is equal to the block the instance gives back for it
+    (step 4 of the module docstring)."""
     return unicodedata.normalize("NFC", text)
 
 
@@ -558,8 +557,9 @@ class BatchWriter:
             excerpt = claim.source.transcription_excerpt
             # excerpts are verification aids: Wikibase caps text values
             # at 400 chars and forbids newlines in monolingual text —
-            # normalize visibly, never fail the write
-            text = excerpt.text.replace("\n", " | ")
+            # normalize visibly, never fail the write. The cap counts the
+            # characters of the form the instance stores (_stored_string)
+            text = _stored_string(excerpt.text).replace("\n", " | ")
             if len(text) > 400:
                 text = text[:397].rsplit(" ", 1)[0] + "…"
             source_ref.add(

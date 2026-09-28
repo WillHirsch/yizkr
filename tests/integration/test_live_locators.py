@@ -8,10 +8,10 @@ own, and reads the statement back through the API:
 * the person has one date-of-birth statement, and it carries a reference
   block for each page, each with its page number and excerpt, and the
   run's block once (rules 1 and 2);
-* the back's page number, given in decomposed form (NFD), is stored in
-  NFC, the form the writer sends a string in, and the note's words, also
-  given in NFD, are stored as sent: Wikibase normalizes a string value
-  to NFC and keeps monolingual text as it is sent;
+* the back's page number and the note's words, both given in
+  decomposed form (NFD), are stored in NFC: Wikibase normalizes the text
+  of a string and of a monolingual text to NFC, which is the form the
+  writer sends a reference's text in;
 * writing the batch again adds nothing, and nor does a later run's batch
   that finds the same two places: not even that run's block.
 
@@ -181,8 +181,9 @@ def test_each_page_is_a_reference_block_of_its_own(client, fixture_graph):
         "+1862-02-15T00:00:00Z"
     )
     assert born["rank"] == "normal"
-    # the back's page number is stored in NFC, its excerpt as sent
+    # the back's page number and excerpt are stored in NFC
     assert unicodedata.normalize("NFC", BACK) != BACK
+    assert unicodedata.normalize("NFC", EXCERPTS[BACK]) != EXCERPTS[BACK]
     assert blocks(client, born) == [
         {
             "stated_in": [registered.qid],
@@ -193,7 +194,9 @@ def test_each_page_is_a_reference_block_of_its_own(client, fixture_graph):
         {
             "stated_in": [registered.qid],
             "page_number": [unicodedata.normalize("NFC", BACK)],
-            "transcription_excerpt": [EXCERPTS[BACK]],
+            "transcription_excerpt": [
+                unicodedata.normalize("NFC", EXCERPTS[BACK])
+            ],
         },
     ]
 

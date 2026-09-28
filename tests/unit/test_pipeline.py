@@ -1308,9 +1308,9 @@ class DetachedItems(FakeItems):
     an edit sent from a stale read does on an instance: an edit sends the
     item's aliases whole, and its statements as that copy holds them.
 
-    As an instance does, the store keeps every `string` snak in Unicode
-    NFC, the form Wikibase normalizes a string value to, and monolingual
-    text as it was sent (#335).
+    As an instance does, the store keeps the text of every `string` and
+    monolingual text snak in Unicode NFC, the form Wikibase normalizes
+    text to (#335).
 
     Unlike an instance, the store's round trip through `get_json` and
     `from_json` ignores WikibaseIntegrator's `remove` flags: a statement
@@ -1342,7 +1342,7 @@ class DetachedItems(FakeItems):
         data["lastrevid"] = self.writes
         for statements in data.get("claims", {}).values():
             for statement in statements:
-                # an instance stores a `string` snak in NFC, wherever it is
+                # an instance stores text in NFC, wherever it is
                 snaks = [
                     statement["mainsnak"],
                     *(
@@ -1358,12 +1358,17 @@ class DetachedItems(FakeItems):
                     ),
                 ]
                 for snak in snaks:
-                    if snak.get("datatype") == "string" and snak.get(
-                        "datavalue"
-                    ):
-                        value = snak["datavalue"]["value"]
-                        snak["datavalue"]["value"] = unicodedata.normalize(
-                            "NFC", value
+                    datavalue = snak.get("datavalue")
+                    if not datavalue:
+                        continue
+                    if snak.get("datatype") == "string":
+                        datavalue["value"] = unicodedata.normalize(
+                            "NFC", datavalue["value"]
+                        )
+                    elif snak.get("datatype") == "monolingualtext":
+                        text = datavalue["value"]["text"]
+                        datavalue["value"]["text"] = unicodedata.normalize(
+                            "NFC", text
                         )
                 # an instance hashes every reference block it stores
                 for block in statement.get("references", []):
@@ -2894,8 +2899,8 @@ class TestWriterPlaces:
     it: the statement keeps every locator and excerpt, beside the run's
     block (rules 1 and 2, ADR-0003). A re-run adds nothing, and no block
     is changed or removed (rule 3). The instance serves every read as a
-    copy of what it stores, its string snaks in NFC (DetachedItems), so
-    the blocks a claim's block is compared with are in the stored form."""
+    copy of what it stores, its text in NFC (DetachedItems), so the
+    blocks a claim's block is compared with are in the stored form."""
 
     @pytest.mark.parametrize(
         ("first", "second"), PLACES.values(), ids=PLACES.keys()
@@ -2937,22 +2942,40 @@ class TestWriterPlaces:
             1,
         )
 
-    def test_a_page_the_instance_stores_in_nfc_is_found_again(self):
-        # (here) the margin note is on the certificate's back, a page its
-        # extraction names in decomposed form (NFD); the instance stores a
-        # page number in NFC, which is the form the writer sends it in
-        back = unicodedata.normalize("NFD", "Rückseite")
-        stored = unicodedata.normalize("NFC", back)
-        assert back != stored
-        note = {"page_number": back, "transcription_excerpt": _excerpt(MARGIN)}
+    # a place its extraction gives in decomposed form (NFD), which the
+    # instance stores in NFC: (here) the margin note on the certificate's
+    # back, named by its page, or the groom's particulars, quoted
+    DECOMPOSED = {
+        "page number": {
+            "page_number": unicodedata.normalize("NFD", "Rückseite"),
+            "transcription_excerpt": _excerpt(MARGIN),
+        },
+        "excerpt": {
+            "transcription_excerpt": _excerpt(
+                unicodedata.normalize("NFD", GROOM)
+            ),
+        },
+    }
+
+    @pytest.mark.parametrize(
+        "place", DECOMPOSED.values(), ids=DECOMPOSED.keys()
+    )
+    def test_a_place_given_in_nfd_is_found_again(self, place):
+        # the writer sends the place's text in NFC, the form the instance
+        # stores and gives back
+        stored = tuple(
+            unicodedata.normalize("NFC", part) if part else part
+            for part in _place(place)
+        )
+        assert stored != _place(place)
         wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
-        batch = _births(note, note)
+        batch = _births(place, place)
 
         first = BatchWriter(wiki).write_batch(batch)
 
         sebastian = first.created_items["e01"]
         (born,) = _statements(wiki, sebastian, "date_of_birth")
-        assert _places(born) == [("Q23", stored, None, MARGIN)]
+        assert _places(born) == [stored]
         assert _sources(born) == [(["Q23"], []), ([], [first.run_qid])]
         assert (first.written, first.referenced, first.skipped) == (1, 0, 1)
         # and a re-run finds the place there
