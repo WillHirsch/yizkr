@@ -647,3 +647,18 @@ class TestStagesStateCommand:
         args = build_parser().parse_args(["stages", "state", str(tmp_path)])
         with pytest.raises(SystemExit, match="no run.json"):
             args.func(args)
+
+    def test_a_deeply_nested_run_json_is_refused_like_a_missing_one(
+        self, tmp_path
+    ):
+        """A run.json nested past Python's recursion limit makes
+        `json.loads` raise RecursionError, not ValueError:
+        `RunDir.manifest()` treats it like any other run.json it cannot
+        read, and returns {}, so the command gives its friendly refusal
+        rather than a traceback (#285)."""
+        from yizkr.cli import build_parser
+
+        (tmp_path / "run.json").write_bytes(b"[" * 100_000)
+        args = build_parser().parse_args(["stages", "state", str(tmp_path)])
+        with pytest.raises(SystemExit, match="no run.json"):
+            args.func(args)

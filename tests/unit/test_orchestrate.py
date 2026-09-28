@@ -723,6 +723,7 @@ class TestUnreadableDocuments:
             "a foreign field",
             "a field of another type",
             "no permission",
+            "deeply nested",
         ],
     )
     def test_an_unreadable_state_json_fails_only_its_document(
@@ -747,6 +748,9 @@ class TestUnreadableDocuments:
                     json.loads(text) | {"status": 5}
                 ),
                 "no permission": text,
+                # json.loads raises RecursionError, not ValueError, past
+                # Python's recursion limit (#285)
+                "deeply nested": "[" * 100_000,
             }[damage]
         )
         before = snapshot(doc.dir, skip=())

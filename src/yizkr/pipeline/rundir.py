@@ -575,7 +575,7 @@ class RunDir:
     def manifest(self) -> dict:
         try:
             return json.loads((self.path / MANIFEST).read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return {}
 
     def _write_manifest(self, manifest: dict) -> None:

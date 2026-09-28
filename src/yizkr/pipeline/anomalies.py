@@ -1716,7 +1716,7 @@ def _excerpt_language(claim: Any) -> Any:
 def _read_json(path: Any) -> Any:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, RecursionError):
         return None
 
 

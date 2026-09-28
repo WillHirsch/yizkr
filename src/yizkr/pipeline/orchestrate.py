@@ -315,7 +315,7 @@ class Derivations:
     def _load(self) -> dict:
         try:
             data = json.loads(self.path.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             data = {}
         for section in ("derived", "reviews", "content"):
             data.setdefault(section, {})
@@ -426,7 +426,7 @@ def _records(directory: Path, source: Path) -> bool:
     that names the source's file?"""
     try:
         state = DocumentState.load(directory / "state.json")
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, RecursionError):
         return False
     return Path(state.file).name == source.name
 
@@ -438,7 +438,7 @@ def _damaged(directory: Path) -> bool:
         DocumentState.load(directory / "state.json")
     except (FileNotFoundError, NotADirectoryError):
         return False
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, RecursionError):
         return True
     return False
 
@@ -606,7 +606,7 @@ class DocumentRun:
         try:
             if self.state_path.exists():
                 self.state = DocumentState.load(self.state_path)
-        except (OSError, TypeError, ValueError) as exc:
+        except (OSError, TypeError, ValueError, RecursionError) as exc:
             self.unreadable = (
                 f"its state.json cannot be read ({_why(exc)}); repair it, or "
                 f"remove it and the document starts afresh"
@@ -1071,7 +1071,7 @@ class Orchestrator:
             return None
         try:
             loaded = load(view.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return None
         failure = recheck(loaded) if recheck is not None else None
         if failure is not None:
@@ -1965,7 +1965,12 @@ class Orchestrator:
                 if not state_file.exists():
                     continue
                 state = DocumentState.load(state_file)
-            except (OSError, TypeError, ValueError):  # unreadable or foreign
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                RecursionError,
+            ):  # unreadable or foreign
                 continue
             if (
                 sub.name in current

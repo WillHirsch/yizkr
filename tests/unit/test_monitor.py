@@ -2058,6 +2058,20 @@ class TestIncrementalReading:
         watcher.refresh()
         assert watcher.summary(NOW).run_id == RUN_ID
 
+    def test_a_deeply_nested_run_json_leaves_the_last_good_one(self, run):
+        """run.json nested past Python's recursion limit makes
+        `json.loads` raise RecursionError, not ValueError:
+        `RunDir.manifest()` treats it like any other run.json it cannot
+        read, so the monitor keeps the last good manifest instead of
+        raising (#285)."""
+        watcher = RunMonitor(run)
+        watcher.refresh()
+        (run / "run.json").write_bytes(b"[" * 100_000)
+        watcher.refresh()
+        summary = watcher.summary(NOW)
+        assert summary.run_id == RUN_ID
+        assert summary.documents == 6
+
     def test_run_json_is_parsed_again_only_when_it_changes(
         self, run, monkeypatch
     ):
