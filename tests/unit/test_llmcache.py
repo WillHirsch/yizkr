@@ -58,6 +58,7 @@ from yizkr.pipeline.llmcache import (
     OPEN,
     CachedResponse,
     CacheInUse,
+    CacheRefused,
     CachingClient,
     EngineCache,
     call_key,
@@ -689,17 +690,6 @@ class TestStorage:
         for directory in (tmp_path / "cache", entry.parent):
             assert stat.S_IMODE(directory.stat().st_mode) == 0o700
 
-    def test_an_existing_cache_folder_is_made_private(self, tmp_path):
-        caching = client(tmp_path, Engine())
-        root = tmp_path / "cache"
-        shard = caching.cache.path(caching.complete_key("Read it.")).parent
-        shard.mkdir(parents=True)
-        for directory in (root, shard):
-            os.chmod(directory, 0o755)
-        caching.complete("Read it.")
-        for directory in (root, shard):
-            assert stat.S_IMODE(directory.stat().st_mode) == 0o700
-
     def test_a_response_copies_and_pickles_with_its_key(self, tmp_path):
         client(tmp_path, Engine()).complete("Read it.")
         response = client(tmp_path, Engine()).complete("Read it.")
@@ -723,6 +713,289 @@ class TestStorage:
         assert os.listdir(root) == [LOCK_FILE]
         assert stat.S_IMODE(root.stat().st_mode) == 0o700
         assert stat.S_IMODE((root / LOCK_FILE).stat().st_mode) == 0o600
+
+
+# -- the cache folder -----------------------------------------------------
+
+
+def a_repository(tmp_path: Path, monkeypatch) -> Path:
+    """A git work tree, which ignores var/; the test is skipped where
+    there is no git. For the rest of the test, git reads no global or
+    system configuration and no global excludes, whose rules could ignore
+    what the test needs tracked, and no repository the environment
+    names."""
+    if shutil.which("git") is None:
+        pytest.skip("no git")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # core.excludesFile defaults to $XDG_CONFIG_HOME/git/ignore
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / ".gitignore").write_text("var/\n")
+    return repo
+
+
+def private_folder(path: Path, mode: int = 0o700) -> Path:
+    path.mkdir()
+    path.chmod(mode)
+    return path
+
+
+def mode_of(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+@contextlib.contextmanager
+def umask(mask: int):
+    old = os.umask(mask)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+class TestTheCacheFolder:
+    """The entries hold corpus content, which is never committed or shared
+    (#305, docs/AGENT_PROTOCOL.md §6). A cache folder a git work tree
+    would track, or one there already that is open to other users, is
+    refused as the cache opens, before any call, in one line; the folders
+    the cache makes are private, and it changes the mode of no folder it
+    did not make."""
+
+    def test_a_folder_git_would_track_is_refused(self, tmp_path, monkeypatch):
+        repo = a_repository(tmp_path, monkeypatch)
+        private = private_folder(repo / "private")
+        target = private_folder(repo / "target")
+        linked = tmp_path / "linked"
+        linked.symlink_to(target, target_is_directory=True)
+        monkeypatch.chdir(repo)
+        roots = [
+            Path("."),  # the tree itself
+            Path("cache"),  # not made yet
+            repo / "cache" / "deeper",
+            private,  # private, and made already
+            linked,  # outside the tree, onto a folder in it
+        ]
+        for root in roots:
+            with pytest.raises(CacheRefused) as refused:
+                open_cache(root)
+            message = str(refused.value)
+            assert message.startswith(f"the LLM cache {root} is in the git ")
+            assert f"work tree {repo.resolve()}, which does not" in message
+            assert "\n" not in message
+            # a pause of the pass, which no per-document isolation catches
+            assert isinstance(refused.value, PassPaused)
+            assert not isinstance(refused.value, Exception)
+        # refused before anything was made in the tree
+        assert sorted(path.name for path in repo.iterdir()) == [
+            ".git",
+            ".gitignore",
+            "private",
+            "target",
+        ]
+        assert list(private.iterdir()) == list(target.iterdir()) == []
+
+    def test_a_folder_git_ignores_holds_the_cache(self, tmp_path, monkeypatch):
+        """An ignored folder in the work tree, made with any folder above it
+        that is missing, private; and git has nothing to add after an
+        answer is stored there."""
+        repo = a_repository(tmp_path, monkeypatch)
+        monkeypatch.chdir(repo)
+        caching = wrap(
+            Engine(), open_cache(Path("var/llm-cache")), role="extract"
+        )
+        key = caching.complete("Read it.").key
+        assert caching.cache.get(key)["response"] == ".ti daeR"
+        cache = repo / "var" / "llm-cache"
+        assert (cache / LOCK_FILE).is_file()
+        assert mode_of(repo / "var") == mode_of(cache) == 0o700
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert status.stdout.splitlines() == ["?? .gitignore"]
+
+    def test_with_no_git_to_ask_the_folder_is_not_refused_for_git(
+        self, tmp_path, monkeypatch
+    ):
+        """Where no git can be run, none can track the folder either: the
+        cache opens there, private."""
+        repo = a_repository(tmp_path, monkeypatch)
+        monkeypatch.setenv("PATH", str(tmp_path / "no-git-here"))
+        open_cache(repo / "cache")
+        assert (repo / "cache" / LOCK_FILE).is_file()
+        assert mode_of(repo / "cache") == 0o700
+
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            0o755,  # a home directory, say
+            0o750,  # its group reads it
+            0o770,  # the user's, and group-writable
+            0o701,  # others pass through it
+        ],
+        ids=oct,
+    )
+    def test_a_folder_open_to_others_is_refused_and_left_alone(
+        self, tmp_path, mode
+    ):
+        shared = private_folder(tmp_path / "shared", mode)
+        linked = tmp_path / "linked"
+        linked.symlink_to(shared, target_is_directory=True)
+        for root in (shared, linked):
+            with pytest.raises(CacheRefused) as refused:
+                open_cache(root)
+            message = str(refused.value)
+            assert message.startswith(
+                f"the LLM cache {root} is open to other users "
+                f"(mode {mode:o}), "
+            )
+            assert "\n" not in message
+            assert mode_of(shared) == mode
+            assert list(shared.iterdir()) == []
+
+    def test_no_folder_it_did_not_make_changes_mode(self, tmp_path):
+        """A private root there already keeps its mode, sticky bit and all,
+        whichever path names it, as the cache makes a key's folder in it;
+        so does a folder under it that the cache did not make, which the
+        private root keeps from other users."""
+        root = private_folder(tmp_path / "cache", 0o1700)
+        linked = tmp_path / "linked"
+        linked.symlink_to(root, target_is_directory=True)
+        cache = open_cache(linked)
+        caching = wrap(Engine(), cache, role="extract")
+        shard = cache.path(caching.complete_key("Read it.")).parent
+        private_folder(shard, 0o755)
+        assert caching.complete("Read it.") == ".ti daeR"
+        other = ("00" if shard.name != "00" else "11") + "0" * 62
+        cache.put(other, {"key": other, "response": "another answer"})
+        assert mode_of(root / other[:2]) == 0o700
+        assert mode_of(root) == 0o1700
+        assert mode_of(shard) == 0o755
+
+    def test_a_folder_another_process_makes_first_keeps_its_mode(
+        self, tmp_path, monkeypatch
+    ):
+        """Another process that makes a key's folder between the cache's
+        look and its own mkdir made that folder, not the cache: the cache
+        stores its entry there and leaves the folder's mode alone."""
+        cache = open_cache(tmp_path / "cache")
+        caching = wrap(Engine(), cache, role="extract")
+        shard = cache.path(caching.complete_key("Read it.")).parent
+        mkdir = os.mkdir
+
+        def made_first(path, mode=0o777, **kwargs):
+            if Path(path) == shard:
+                mkdir(path, 0o750)
+                os.chmod(path, 0o750)
+                raise FileExistsError(f"another process made {path}")
+            return mkdir(path, mode, **kwargs)
+
+        monkeypatch.setattr(llmcache.os, "mkdir", made_first)
+        assert caching.complete("Read it.") == ".ti daeR"
+        assert caching.cache.get(caching.complete_key("Read it."))
+        assert mode_of(shard) == 0o750
+
+    @pytest.mark.parametrize("mask", [0o000, 0o277], ids=oct)
+    def test_the_folders_it_makes_are_private_whatever_the_umask(
+        self, tmp_path, mask
+    ):
+        """The root and the missing folders above it, a key's folder for an
+        answer and for an adoption, and a kept session's folders however
+        deep: each exactly mode 700, under a umask that leaves them open to
+        all, or one that would take the owner's own rights. The folder
+        there already above them keeps its mode."""
+        above = private_folder(tmp_path / "above", 0o750)
+        made = above / "made"
+        root = made / "for" / "cache"
+        with umask(mask):
+            cache = open_cache(root)
+            caching = wrap(Engine(), cache, role="extract")
+            key = caching.complete("Read it.").key
+            adopted = ("00" if key[:2] != "00" else "11") + "0" * 62
+            assert cache.seed(adopted, "an archived answer", {"by": "test"})
+            cache.keep_session(key, "cd" + "1" * 62, {"p/q/s.jsonl": b"a"})
+        folders = [made, *(path for path in made.rglob("*") if path.is_dir())]
+        assert {folder.name for folder in folders} >= {
+            "made",
+            "for",
+            "cache",
+            key[:2],
+            adopted[:2],
+            f"{key}.session",
+            "p",
+            "q",
+        }
+        assert {mode_of(folder) for folder in folders} == {0o700}
+        assert mode_of(above) == 0o750
+
+    @pytest.mark.parametrize("mode", [0o500, 0o600, 0o000, 0o100], ids=oct)
+    def test_a_private_folder_it_cannot_write_in_is_refused_and_left_alone(
+        self, tmp_path, mode
+    ):
+        """A root there already that only its owner may use, but that this
+        user cannot write in or pass through, is refused in one line
+        before anything is written, and keeps its mode, a lock file an
+        earlier cache left in it included."""
+        root = private_folder(tmp_path / "cache")
+        (root / LOCK_FILE).write_text("")
+        root.chmod(mode)
+        try:
+            if os.access(root, os.W_OK | os.X_OK):
+                pytest.skip("this user writes to any folder")
+            with pytest.raises(CacheRefused) as refused:
+                open_cache(root)
+            message = str(refused.value)
+            assert message.startswith(f"{root} cannot be the LLM cache: ")
+            assert "\n" not in message
+            assert mode_of(root) == mode
+        finally:
+            root.chmod(0o700)
+        assert os.listdir(root) == [LOCK_FILE]
+        assert (root / LOCK_FILE).read_text() == ""
+
+    def test_a_lock_file_it_cannot_open_is_refused(self, tmp_path):
+        root = private_folder(tmp_path / "cache")
+        (root / LOCK_FILE).mkdir()
+        with pytest.raises(CacheRefused) as refused:
+            open_cache(root)
+        message = str(refused.value)
+        assert message.startswith(f"{root} cannot be the LLM cache: ")
+        assert "\n" not in message
+        assert list((root / LOCK_FILE).iterdir()) == []
+
+    def test_a_folder_it_cannot_use_is_refused(self, tmp_path):
+        a_file = tmp_path / "a-file"
+        a_file.write_text("")
+        a_file.chmod(0o600)
+        with pytest.raises(CacheRefused, match="it is not a folder"):
+            open_cache(a_file)
+        with pytest.raises(CacheRefused, match="cannot be the LLM cache"):
+            open_cache(a_file / "cache")
+        # one it cannot write in, and one it cannot even look into
+        closed = private_folder(tmp_path / "closed", 0o500)
+        sealed = private_folder(tmp_path / "sealed", 0o000)
+        try:
+            if os.access(closed, os.W_OK) or os.access(sealed, os.X_OK):
+                pytest.skip("this user writes to any folder")
+            for root in (closed / "cache", sealed / "cache"):
+                with pytest.raises(
+                    CacheRefused, match="cannot be the LLM cache"
+                ):
+                    open_cache(root)
+        finally:
+            closed.chmod(0o700)
+            sealed.chmod(0o700)
 
 
 # -- one process per cache -----------------------------------------------
@@ -2425,6 +2698,72 @@ class TestThePipeline:
         assert orchestrator.run() == 2
         assert engine.calls
 
+    @pytest.mark.parametrize("why", ["git work tree", "open to other users"])
+    def test_a_run_whose_cache_folder_is_refused_stops_before_any_call(
+        self, tmp_path, monkeypatch, why
+    ):
+        """A run opens its cache when a stage first needs the engine: a
+        folder git would track, or one open to other users, is refused
+        there, and the run stops as a pause does. No document fails for
+        it, and the engine is never asked (#305)."""
+        folder = folder_of_three(tmp_path)
+        if why == "git work tree":
+            repo = a_repository(tmp_path, monkeypatch)
+            cache = repo / "cache"
+        else:
+            cache = private_folder(tmp_path / "cache", 0o750)
+        engine = Engine(pipeline_answers)
+        orchestrator = CachedRun(
+            folder, tmp_path / "state", engine=engine, cache_dir=cache,
+            log=quiet,
+        )  # fmt: skip
+        with pytest.raises(CacheRefused, match=why):
+            orchestrator.run()
+        assert engine.calls == []
+        assert this_run(orchestrator, "failed") == []
+        assert FAILED not in {
+            doc.state.status for doc in orchestrator.documents()
+        }
+        last = orchestrator.rundir.manifest()["invocations"][-1]
+        assert (last["outcome"], last["reason"]) == ("paused", "CacheRefused")
+        # once the folder can hold the cache, the run goes on
+        if why == "git work tree":
+            (repo / ".gitignore").write_text("var/\ncache/\n")
+        else:
+            cache.chmod(0o700)
+        assert orchestrator.run() == 2
+        assert engine.calls
+
+    def test_a_scratch_run_whose_cache_git_would_track_stops_before_a_call(
+        self, tmp_path, monkeypatch
+    ):
+        """The scratch driver opens the cache as the orchestrator does: a
+        folder git would track stops the run at its first stage that needs
+        the engine, as a pause, with the engine never asked (#305)."""
+        from yizkr.core.corpus import ExclusionList
+        from yizkr.pipeline.scratch import ScratchDriver
+
+        engine = Engine(pipeline_answers)
+
+        class Driver(ScratchDriver):
+            def _engine(self, role):
+                return engine
+
+        repo = a_repository(tmp_path, monkeypatch)
+        monkeypatch.setenv("YIZKR_LLM_MODEL", "claude-opus-5-5")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "fictional")
+        driver = Driver(
+            folder_of_three(tmp_path), tmp_path / "runs" / "run-1",
+            llm="anthropic", cache_dir=repo / "cache",
+            exclusions=ExclusionList(), min_free=0, log=quiet,
+        )  # fmt: skip
+        with pytest.raises(CacheRefused, match="git work tree"):
+            driver.run()
+        assert engine.calls == []
+        assert not (repo / "cache").exists()
+        last = driver.rundir.manifest()["invocations"][-1]
+        assert (last["outcome"], last["reason"]) == ("paused", "CacheRefused")
+
 
 class TestRoleClient:
     """The helper a tool that adopts answers for a run's calls takes its
@@ -2984,6 +3323,38 @@ class TestTheSingleCallExtractor:
             batches.append(ClaimBatch.model_validate_json(out.read_text()))
         assert batches[1].claims == batches[0].claims
         assert len(live_entries(tmp_path)) == 1
+
+    def test_ingest_extract_refuses_a_cache_git_would_track(
+        self, tmp_path, monkeypatch
+    ):
+        """The command opens its cache before its first call, where a
+        folder git would track is refused: the engine is never asked, and
+        nothing is made in the work tree (#305)."""
+        from yizkr.cli import build_parser
+
+        repo = a_repository(tmp_path, monkeypatch)
+        transcription = tmp_path / "transcription.json"
+        transcription.write_text(
+            Transcription(
+                artifact=LETTER_REF, text="Klara Löbig b. 1917", engine="test"
+            ).model_dump_json()
+        )
+        monkeypatch.setattr(llm, "make_client", lambda *a, **k: Refusing())
+        out = tmp_path / "batch.json"
+        args = build_parser().parse_args(
+            [
+                "ingest", "extract", "--transcription", str(transcription),
+                "--engine", "llm", "--strategy", "single",
+                "--cache", str(repo / "cache"), "--out", str(out),
+            ]
+        )  # fmt: skip
+        with pytest.raises(CacheRefused, match="git work tree"):
+            args.func(args)
+        assert not out.exists()
+        assert sorted(path.name for path in repo.iterdir()) == [
+            ".git",
+            ".gitignore",
+        ]
 
 
 def test_the_cache_root_holds_only_entries(tmp_path):

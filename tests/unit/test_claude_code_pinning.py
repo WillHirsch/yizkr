@@ -51,6 +51,8 @@ from yizkr.pipeline.orchestrate import FAILED, REGISTERED, Orchestrator
 
 PINNED = "2.1.237"
 PROJECT = "-tmp-yizkr-claude-code"
+# the real subprocess.run, for the git the fake CLI lets through
+RUN = subprocess.run
 
 
 class Completed:
@@ -61,7 +63,9 @@ class Completed:
 
 
 class FakeCli:
-    """Stands in for the claude executable (subprocess.run)."""
+    """Stands in for the claude executable (subprocess.run). git runs as
+    it would: the LLM cache asks it whether a work tree would track its
+    folder (#305)."""
 
     def __init__(self, projects: Path) -> None:
         self.projects = projects  # where the fixture's config files them
@@ -96,6 +100,8 @@ class FakeCli:
         return Path(home) / ".claude" / "projects"
 
     def __call__(self, command, **kwargs):
+        if command[0] == "git":
+            return RUN(command, **kwargs)
         if command[1:] == ["--version"]:
             self.probes.append(kwargs)
             return Completed(stdout=f"{self.installed} (Claude Code)\n")
