@@ -1096,10 +1096,17 @@ class TestSubscription:
 
     def test_a_pause_of_the_run_holds_it_past_the_time(self, tmp_path, fakes):
         corpus = small(tmp_path)
+        resumed_in: list[int] = []
+
+        def resume():
+            invocations = RunDir(driver.state_dir).manifest()["invocations"]
+            resumed_in.append(len(invocations))
+            request(driver.state_dir, "resume")
+
         waits = Waits(
             lambda: request(driver.state_dir, "pause"),
             *[None] * 3,
-            lambda: request(driver.state_dir, "resume"),
+            resume,
             *[None] * 3,
         )
         limited = []
@@ -1112,8 +1119,10 @@ class TestSubscription:
         fakes.hook = hook
         driver = a_run(tmp_path, corpus, fakes, waits=waits, poll=60)
         assert driver.run() == EXIT_OK
-        # the pause held it well past the minute the limit asked for
+        # the pause held it well past the minute the limit asked for, and
+        # no invocation started while the run was paused
         assert waits.now > datetime(2026, 9, 28, 9, 4, tzinfo=UTC)
+        assert resumed_in == [1]
         assert len(RunDir(driver.state_dir).manifest()["invocations"]) == 2
 
     def test_a_pause_with_no_time_to_go_on_ends_the_driver(
