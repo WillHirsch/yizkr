@@ -205,7 +205,7 @@ def test_every_source_kind_is_scanned():
         '"""GEDCOM adapter (item 13)."""\n',
         'def f():\n    """Formats the census (issue #8)."""\n',
         'class C:\n    x: int = 0\n    """Set by #45\'s fix."""\n',
-        "# -- corrections (ROADMAP item 11) --\n",
+        "# -- corrections (ROADMAP, item 11) --\n",
         "# https://github.com/owner/repo/pull/7\n",
         'CHUNK_PROMPT = """Extract claims (#12)."""\n',
     ],
@@ -291,7 +291,7 @@ def test_planted_violation_fails_the_tree_and_readmes_are_exempt(tmp_path):
 
     target = tree / "pipeline" / "places.py"
     target.write_text(
-        target.read_text() + "\n\n# fixed in #189 (ROADMAP item 18)\n"
+        target.read_text() + "\n\n# fixed in #189 (ROADMAP, item 18)\n"
     )
     problems = tree_violations(tree)
     assert len(problems) == 3
