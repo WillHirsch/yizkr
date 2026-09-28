@@ -47,11 +47,17 @@ write produces carries the matching `stage:*` label: a change to the
 stage's code, a prompt template it uses, the manifest, or the model,
 effort or parameters it runs with (ADR-0025 §2, ADR-0032). A PR that
 changes a stage that already runs also carries `needs:scratch-diff` (§5).
-An edit that cannot change any output (a comment, a rename, a refactor)
-needs neither label; the review checks that it is neutral. New stages get
-their own `stage:*` label as they are added. The convergence report
-(#155) lists the open issues under each `stage:*` label and flags merged
-PRs that changed a stage without one.
+**The pre-baseline exception:** until the first whole-corpus scratch run
+(#145) starts, there is no baseline to diff against, so a PR that changes
+a stage before write carries its `stage:*` label but not
+`needs:scratch-diff`, and the first run's baseline includes the change
+(as on #228, #247 and #273). The exception ends when that run starts: a
+stage PR still open then gets `needs:scratch-diff`, and is diffed
+against that run. An edit that cannot change any output (a comment, a
+rename, a refactor) needs neither label; the review checks that it is
+neutral. New stages get their own `stage:*` label as they are
+added. The convergence report (#155) lists the open issues under each
+`stage:*` label and flags merged PRs that changed a stage without one.
 
 ## 3. Dispatch and claiming
 
@@ -64,17 +70,24 @@ PRs that changed a stage without one.
 - **Standing go-ahead, no WIP ceiling** (owner, 2026-09-27). Every ready
   issue is dispatched without asking, however wide the total active
   surface gets, as long as it does not interfere with work in flight under
-  the two rules below.
+  the rules below.
 - **Conflict rule.** At most one in-flight issue that edits the repository
   per `area:*` label; an issue with several area labels holds each of them.
   Tasks that edit nothing in the repository (audits, experiments that only
   report, spot-checks) don't count.
 - **Shared resources.** One agent at a time uses the live Wikibase stack
-  (live tests, the scratch reset, bootstrap, anything that writes to it).
-  One LLM-heavy task at a time runs on the claude-code subscription. A
+  (live tests, the scratch reset, bootstrap, anything that writes to it);
+  live test sessions also serialise on the live-stack lock (§5). One
+  LLM-heavy task at a time runs on the claude-code subscription. A
   scratch run holds the subscription for its LLM stages, and holds the live
   stack only while its reset, register, write, place-reconcile and site
   stages run; its stages before write never touch the stack.
+- **Waves.** Agents also share the machine. The orchestrating session
+  dispatches in waves that keep test-heavy agents (implementers, fixers
+  and reviewers that run tests, mutation specs or the query-engine
+  sandbox) to a moderate number at once, because contention slows every
+  test run and causes timing flakes (#249). Waves pace the agents that
+  run at once; there is still no ceiling on open draft PRs.
 - **Claiming.** Set the issue's Project Status to *In progress* and add a
   dated comment naming the kind of session that took it (local or cloud).
   Every agent acts as the owner's GitHub account, so the assignee carries
@@ -93,9 +106,10 @@ diff: scratch runs, the keeper run and reviews of their output.
    `<issue-number>-<slug>` from `origin/main`.
 2. **Stay in scope.** Change only the files and GitHub entities your task
    names. Docs move with code.
-3. **Check.** Before pushing, `uv run ruff check .`,
-   `uv run ruff format --check .` and `uv run pytest -q` pass. Then do the
-   self-review (§7).
+3. **Self-check.** Before the first push for review, work through the
+   pre-review self-check (below). Before every push, `uv run ruff check .`
+   and `uv run ruff format --check .` pass, and the self-review (§7) comes
+   last.
 4. **Push only your branch.** Never push to main, force-push, rewrite
    pushed history or push to another task's branch. Once a PR has merged,
    its branch is finished: pushing to it would recreate the deleted branch
@@ -104,16 +118,17 @@ diff: scratch runs, the keeper run and reviews of their output.
    existing PR's branch.
 5. **Open a draft PR** with `gh pr create --draft --base main`, following
    the PR template: the body starts `Closes #n`, names the exec label and
-   the requirement, and gives the evidence. Move the issue's Status to
-   *In review*.
-6. **Review.** The PR gets an adversarial review, and required fixes are
-   pushed to the same branch. Alongside correctness, scope and real data
-   (§7), the review checks that comments and docstrings in `src/yizkr/`
-   describe how the code works now and carry no development history such
-   as issue or PR numbers; ADR references are fine (CLAUDE.md, Engineering
-   conventions). The verdict names the commit it reviewed; any commit
-   pushed after that is re-checked by the reviewer before the PR is marked
-   ready.
+   the requirement, and gives the evidence and the self-check. Move the
+   issue's Status to *In review*.
+6. **Review.** The PR gets an adversarial review, under the rules in
+   *Reviews* below, and required fixes are pushed to the same branch.
+   Alongside correctness, scope and real data (§7), the review checks
+   that comments and docstrings in `src/yizkr/` describe how the code
+   works now and carry no development history such as issue or PR
+   numbers; ADR references are fine (CLAUDE.md, Engineering conventions).
+   The verdict names the commit it reviewed; every commit pushed after
+   that, merges of main included, is re-checked by the reviewer, in a
+   bounded re-review (below), before the PR is marked ready.
 7. **Mark it ready.** The orchestrating session runs `gh pr ready` once
    the verdict is in and the fixes are checked. Until then the PR stays a
    draft. This is the standard for all agentic work: a draft means "not
@@ -121,6 +136,82 @@ diff: scratch runs, the keeper run and reviews of their output.
 8. **The owner merges** PRs marked ready, by the method of their choice.
    Nothing may depend on branch SHAs surviving a merge, so cite issue and
    PR numbers instead.
+
+**The pre-review self-check.** On 2026-09-27 roughly 40% of agent time
+went to second and later review or fix rounds (#249). So that a first
+review finds only what needs a second reader, the implementer works
+through the reviewer's usual checklist before the first push for review,
+and records it in the PR template's self-check:
+
+1. **Docs moved with the code.** Every doc the change makes untrue is
+   updated in the same PR (CLAUDE.md, Engineering conventions), except
+   CLAUDE.md itself, which changes only with the owner's approval: the PR
+   proposes its new wording under Owner actions instead.
+2. **Each new or changed test fails under the regression it guards.**
+   Show it with the mutation harness, `scripts/mutate.py` (#250,
+   docs/TESTING.md): a mutation that puts the bug back, or takes the
+   behaviour out, is killed by the test. The PR gives the harness's table
+   and the spec it ran. A test whose mutant survives does not guard that
+   regression: fix the test before review. The harness runs non-live
+   tests only: for a new or changed live test, the PR names under
+   Mutation evidence the regression the test guards, and the central
+   live run (§5) is where the test is shown to fail under it.
+3. **Edge cases.** The PR lists the edge cases considered, each with the
+   test that covers it or the reason none is needed.
+4. **Current with main.** After `git fetch origin`, if
+   `git log --oneline HEAD..origin/main` lists any commit, run
+   `git merge origin/main`: a merge commit, never a rebase, so that no
+   commit a reviewer has seen or a verdict names drops out of the branch.
+   Merge before running the full suite.
+5. **Fictional examples only** (§7, docs/EXAMPLES.md), in code, tests,
+   docs, commit messages and the PR text.
+6. **Comments and docstrings in `src/yizkr/` describe current behaviour
+   only**: no issue or PR numbers, "previously" notes or bug-hunt
+   accounts; ADR references are fine. `tests/unit/test_comment_standard.py`
+   catches the numbers; narration needs a read.
+7. **Targeted tests while iterating, then the full suite once per
+   round.** While iterating, run only the tests that cover the change;
+   run the full `uv run pytest -q` before the push that opens the PR for
+   review, and once per fix round (docs/TESTING.md).
+8. **The self-review (§7)**, last.
+
+A fix round runs the same checklist over what its own commits change,
+with the full suite once before its push.
+
+**Reviews.**
+
+- **A strict required-fix boundary.** A first review requires a fix only
+  for a rule violation (CLAUDE.md, an accepted ADR or this protocol), a
+  correctness bug, a regression, a vacuous or broken test, or an
+  inaccurate claim in the code, docs, commit messages or PR text.
+  Everything else, such as naming, structure, extra coverage or ideas for
+  later, goes in the verdict as a note or a proposed follow-up, and the
+  orchestrating session files the follow-ups as issues. A demand that new
+  code match the speed of what it replaces is a note too, unless the
+  change breaks a real budget, such as the 120 s that the site build and
+  the live tests give each query.
+- **Bounded re-review.** After a fix round, the re-review (step 6) covers
+  every commit pushed since the verdict, merges of main included, and
+  judges them under the same boundary: whether the required fixes landed,
+  and any regressions those commits caused. It does not review the PR
+  afresh.
+- **CI runs the full suite; the reviewer doesn't run it again.** The
+  reviewer relies on CI's result for the commit under review:
+  `gh pr checks <n>` while that commit is the PR's head (`--watch` waits
+  for a run in progress), or, once it isn't,
+  `gh run list --commit $(git rev-parse <sha>)`, since the filter matches
+  only the full 40-character SHA. It runs targeted tests and its own
+  probes instead: the tests the PR adds or changes, the PR's mutation
+  spec or one of its own, and edge cases the PR doesn't list. If CI fails
+  for that commit, the failure is a required fix. CI never runs live
+  tests; they run centrally (§5).
+- **Resume, don't restart.** Where the orchestrating session can, every
+  fix round on a PR resumes the same fixer, and every re-review the same
+  reviewer, rather than starting a new agent, so their context carries
+  over from round to round. Where it can, it keeps the implementer's and
+  the reviewer's worktrees until the PR merges, so that both can be
+  resumed; a workflow harness may remove a reviewer's worktree that holds
+  no changes.
 
 **Hooks.** `make hooks` installs the pre-commit hook (ruff) and the
 pre-push hook (`scripts/git-hooks/pre-push`). The pre-push hook refuses
@@ -147,6 +238,25 @@ feature, decision, ingestion pass). An agent that files an issue with
   the latest scratch run, so that no scratch run mistakes the instance for
   one it wrote (#199). Once the instance is kept, live tests wait for
   #159's decision on where they run.
+- **Live tests run centrally, as soon as the draft opens.** The
+  orchestrating session runs them for a PR that needs them, or hands the
+  run to one session, in parallel with the first review rather than after
+  the review rounds; no other agent starts live tests of its own. The
+  results name the commit they ran at, and a fix round that changes a
+  write path gets another central run. The run also shows each new or
+  changed live test failing under the regression its PR names, since
+  the mutation harness runs non-live tests only (§4, docs/TESTING.md).
+  #227 went through six agents and about 11.5 agent-hours before its
+  first live run, which failed at once: HTTP 414, because the query
+  service refuses a GET request line longer than about 8 KB, so long
+  SPARQL must be POSTed.
+- **Live sessions take turns by themselves.** A session takes the
+  live-stack lock (#253, docs/TESTING.md) when its first test that uses
+  the stack sets up, and holds it to the end; a second session waits,
+  saying who holds the lock. No one checks by hand for another live
+  session. Only live test sessions take the lock, so the scratch reset,
+  bootstrap and other writers still get the stack from the orchestrating
+  session (§3).
 - **`needs:scratch-diff`** goes on any PR that changes a stage before
   write that already runs (§2). The procedure:
   1. **Run.** A local session runs a whole-corpus scratch run at the PR's
@@ -173,8 +283,12 @@ feature, decision, ingestion pass). An agent that files an issue with
   5. **Fix.** A regression is fixed in the pipeline on the PR's branch and
      run again. Nothing is repaired in the graph.
 
-  Until the scratch driver, report and diff land (#194, #124, #198), no
-  scratch-diff evidence exists, and PRs with the label wait.
+  Until the first whole-corpus scratch run (#145) starts, the
+  pre-baseline exception applies (§2): a PR that changes a stage carries
+  its `stage:*` label but not this one, and the first run's baseline
+  includes the change. Until the scratch driver, report and diff land
+  (#194, #124, #198), no scratch-diff evidence exists, and PRs with the
+  label wait.
 - While a PR waits for this evidence, its Project Status is *Needs local
   verify*. Cloud agents never provide the evidence; they leave the label
   for a local session.
@@ -254,7 +368,7 @@ handled real data, before every push and every post:
 3. confirms that none of it quotes, paraphrases or identifies anything
    from the corpus, that it contains no plan-internal codes, and that
    issues are cited by #number;
-4. records that it did so, in the PR checklist or its report.
+4. records that it did so, in the PR's self-check or its report.
 
 If real data turns up in a commit that is not yet pushed, fix the commit
 before pushing. If it is already pushed or posted, stop and tell the owner.
