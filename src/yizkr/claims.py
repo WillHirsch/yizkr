@@ -472,10 +472,23 @@ class EntityRecord(StrictModel):
     kind: ManifestKey
     summary: str = ""
     mention_lines: list[int] = []
-    # False = recorded for audit but NOT extracted: entities appearing
-    # only in non-assertive context (logistics, boilerplate) or whose
-    # claims the archive does not want (contemporary living people in
-    # incidental roles). Mirrors SegmentationUnit.extract.
+    # extract=false for entities that appear ONLY in non-assertive context:
+    # travel or event logistics (schedules, bookings, contact lists), people
+    # taking part in present-day travel or events, boilerplate. They are
+    # recorded for audit but no claims are extracted about them. Entities
+    # the document asserts historical/genealogical facts about get
+    # extract=true. On official certificates and registers the
+    # administrative apparatus is boilerplate: the registrar, officiant, or
+    # witness who certifies the record; the issuing authority (e.g. a civil
+    # registry office such as a Standesamt); and the register or
+    # certificate the document cites as its own source are all
+    # extract=false. They attest the record — they are not its
+    # genealogical subject. (A witness or officiant who is ALSO a relative
+    # of the subject is the exception: extract=true for the relationship.)
+    # The entity-manifest prompt (ENTITY_MANIFEST_PROMPT in
+    # pipeline/chunking.py) gives the model this rule in the same words;
+    # SegmentationUnit.extract is the line-range fallback's flag for a
+    # region.
     extract: bool = True
     # open-schema escape hatch (ADR-0013): free-text note of what an
     # entity actually is when kind is `unclassified_entity` (no modelled

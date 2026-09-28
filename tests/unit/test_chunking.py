@@ -6,13 +6,16 @@ outputs in its state directory. tests/unit/test_llmcache.py takes the
 extractor through the cache (#225).
 """
 
+import inspect
 import json
+import re
 import threading
 
 import pytest
 
 from yizkr.claims import ClaimBatch, EntityRecord
 from yizkr.pipeline.chunking import (
+    ENTITY_MANIFEST_PROMPT,
     ChunkedClaimExtractor,
     ChunkIncomplete,
     DocumentSegmentation,
@@ -1545,3 +1548,30 @@ class TestTheExtractionStage:
         assert reused["attention"] == [why]
         again = run_state(orchestrator.rundir)[(doc.sha1, "extraction")]
         assert again == extraction
+
+
+class TestExtractFalseRule:
+    def test_the_entity_record_states_the_manifest_prompts_rule(self):
+        """One definition of extract=false (#259): the comment on
+        EntityRecord.extract states the entity-manifest prompt's rule in
+        the prompt's own words, so that neither drifts from the other."""
+        start = ENTITY_MANIFEST_PROMPT.index("- extract=false for entities")
+        end = ENTITY_MANIFEST_PROMPT.index("- summary is evidence")
+        bullets = ENTITY_MANIFEST_PROMPT[start:end]
+        rule = " ".join(re.sub(r"^- ", "", bullets, flags=re.M).split())
+
+        source = inspect.getsource(EntityRecord).splitlines()
+        field = next(
+            number
+            for number, line in enumerate(source)
+            if line.strip().startswith("extract: bool")
+        )
+        first = field
+        while source[first - 1].strip().startswith("#"):
+            first -= 1
+        comment = " ".join(
+            " ".join(line.strip()[1:] for line in source[first:field]).split()
+        )
+        stated, pointer = comment.split(" The entity-manifest prompt ", 1)
+        assert stated == rule
+        assert "ENTITY_MANIFEST_PROMPT" in pointer
