@@ -1164,7 +1164,7 @@ class Builder:
 
     def residence(self, subject: str, year: int) -> None:
         """A dated residence; sometimes redated by another source, returned
-        to later, named through a redirect or given a range."""
+        to later, named through a redirect or given a range on each end."""
         kind = self.scenario("residence")
         place = self.rng.choice(self.towns + self.addresses)
         start = self.moment(year, self.rng.choice((DAY, MONTH, YEAR)))
@@ -1177,10 +1177,19 @@ class Builder:
         if self.chance(0.15):
             qualifiers.append(("point_in_time", self.moment(year + 1, YEAR)))
         if kind == "range":
-            low = int(start.date[:4])
+            # Each end has a range of its own (MODELING.md, "Marriages,
+            # residences and other periods"): the start runs from
+            # earliest_date to latest_start_date, the end from
+            # earliest_end_date to latest_date. Both pairs contain the
+            # value they bound: earliest_date is the start's own year and
+            # latest_date the end's own year, each the tight bound.
+            start_year = int(start.date[:4])
+            end_year = int(end.date[:4])
             qualifiers += [
-                ("earliest_date", when(low, precision=YEAR)),
-                ("latest_date", when(low + 2, precision=YEAR)),
+                ("earliest_date", when(start_year, precision=YEAR)),
+                ("latest_start_date", when(start_year + 2, precision=YEAR)),
+                ("earliest_end_date", when(end_year - 2, precision=YEAR)),
+                ("latest_date", when(end_year, precision=YEAR)),
             ]
         first = self.claim(
             subject, "residence", Item(place), qualifiers=qualifiers
