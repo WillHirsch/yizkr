@@ -95,6 +95,12 @@ class TestSyncCalls:
             assert call(pipe) is None
         assert os.sync is not posix.sync
 
+    def test_the_stand_in_for_os_sync_takes_no_argument(self, pipe):
+        """As the real call takes none."""
+        assert os.sync() is None
+        with pytest.raises(TypeError):
+            os.sync(pipe)
+
     def test_a_descriptor_that_is_not_open_still_fails(self):
         read, write = os.pipe()
         os.close(read)

@@ -1,6 +1,7 @@
 """Offline tests for pipeline steps (pytest; no instance, no LLM)."""
 
 import csv
+import errno
 import hashlib
 import itertools
 import json
@@ -309,9 +310,29 @@ class TestExtract:
         assert result.extraction_run.model_identifier == "manual"
 
 
+@pytest.fixture(scope="module")
+def head() -> str:
+    """The short commit of the checkout the package runs from, asked of
+    git before any test's patches."""
+    return subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=Path(extract.__file__).parent,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
 class TestRunMetadata:
-    """Every batch names the short commit of the checkout that made it,
-    asked of git once per process (#254)."""
+    """Every batch names the short commit of the checkout that made it.
+    Each batch asks git until it answers, and the answer is kept for the
+    process (#254)."""
+
+    @pytest.fixture(autouse=True)
+    def unanswered(self, monkeypatch):
+        """git has not answered in this process yet; the answer the
+        process kept comes back after the test."""
+        monkeypatch.setattr(extract, "_commit", None)
 
     @pytest.fixture
     def asked(self, monkeypatch):
@@ -326,36 +347,25 @@ class TestRunMetadata:
         monkeypatch.setattr(subprocess, "run", run)
         return commands
 
-    @pytest.fixture
-    def fresh(self):
-        """No commit asked for in this process yet, and none left behind
-        for the tests after."""
-        extract._software_commit.cache_clear()
-        yield
-        extract._software_commit.cache_clear()
-
-    def test_it_is_the_short_head_of_the_checkout(self):
-        head = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=Path(extract.__file__).parent,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
+    def test_it_is_the_short_head_of_the_checkout(
+        self, head, monkeypatch, tmp_path
+    ):
+        # git is asked in the package's checkout, whatever the working
+        # directory
+        monkeypatch.chdir(tmp_path)
         assert extract.run_metadata("fake-model").software_commit == head
 
-    def test_git_is_asked_at_most_once(self, asked):
-        """At most: an earlier test may have asked already."""
-        commits = {
+    def test_git_is_asked_once_it_has_answered(self, head, asked):
+        commits = [
             extract.run_metadata("fake-model").software_commit
             for _ in range(3)
-        }
-        assert len(asked) <= 1
-        assert len(commits) == 1
+        ]
+        assert commits == [head] * 3
+        assert len(asked) == 1
 
     @pytest.mark.parametrize("without", ["git", "a checkout"])
-    def test_no_commit_without_git_or_a_checkout(
-        self, fresh, asked, monkeypatch, tmp_path, without
+    def test_without_git_or_a_checkout_each_batch_asks_again(
+        self, asked, monkeypatch, tmp_path, without
     ):
         if without == "git":
             monkeypatch.setenv("PATH", str(tmp_path))  # no git to be found
@@ -363,7 +373,43 @@ class TestRunMetadata:
             monkeypatch.setenv("GIT_DIR", str(tmp_path / "no-repository"))
         for _ in range(2):
             assert extract.run_metadata("fake-model").software_commit is None
-        assert len(asked) == 1
+        assert len(asked) == 2
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            "git cannot start",
+            "git exits with an error",
+            "an error exit prints a line",
+        ],
+    )
+    def test_a_failed_ask_costs_only_its_own_batch(
+        self, head, asked, monkeypatch, tmp_path, failure
+    ):
+        """The next batch asks again, and keeps the answer it gets."""
+        with monkeypatch.context() as patch:
+            if failure == "git exits with an error":
+                patch.setenv("GIT_DIR", str(tmp_path / "no-repository"))
+            else:
+
+                def run(args, *more, **options):
+                    if failure == "git cannot start":
+                        raise OSError(errno.EAGAIN, "no process to be had")
+                    # as `git rev-parse HEAD` does in a repository with no
+                    # commit yet
+                    return subprocess.CompletedProcess(
+                        args, 128, stdout="HEAD\n", stderr="fatal: HEAD\n"
+                    )
+
+                patch.setattr(subprocess, "run", run)
+            assert extract.run_metadata("fake-model").software_commit is None
+        failed = len(asked)
+        later = [
+            extract.run_metadata("fake-model").software_commit
+            for _ in range(2)
+        ]
+        assert later == [head, head]
+        assert len(asked) == failed + 1
 
 
 class TestResolve:

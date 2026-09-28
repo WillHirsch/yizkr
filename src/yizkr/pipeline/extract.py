@@ -88,25 +88,45 @@ def run_metadata(model_identifier: str) -> ExtractionRunMetadata:
     )
 
 
-@lru_cache(maxsize=1)
+# The commit git gave for this code's checkout, once it has given one.
+_commit: str | None = None
+
+
 def _software_commit() -> str | None:
     """The short commit of the git checkout this code runs from, or None
-    outside a checkout or without git.
+    when git gives none (see _ask_git_for_commit).
 
-    Asked once per process, as the run manifest's code version is
-    (rundir.code_version): git is started once rather than for every
-    batch, and every batch a process makes names the same commit."""
+    Every batch asks git until it answers, so a failed ask costs only its
+    own batch the commit. The first answer is kept for the process, and
+    later batches name the same commit without starting git; batches that
+    ask at the same moment as the first may each start git."""
+    global _commit
+    if _commit is None:
+        commit = _ask_git_for_commit()
+        if commit is None:
+            return None
+        _commit = commit
+    return _commit
+
+
+def _ask_git_for_commit() -> str | None:
+    """git's short commit for the checkout this code runs from, or None
+    when git cannot be started (it is missing, say, or the process is out
+    of processes or descriptors), exits with an error (outside a checkout)
+    or prints no commit. A git that runs past the timeout raises
+    subprocess.TimeoutExpired."""
     try:
-        commit = subprocess.run(
+        result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True,
             text=True,
             timeout=10,
             cwd=Path(__file__).parent,
-        ).stdout.strip()
+        )
     except OSError:
         return None
-    return commit or None
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and commit else None
 
 
 def scan_json_objects(response: str) -> list[dict]:
