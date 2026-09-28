@@ -171,10 +171,15 @@ compound-artifact pattern keeps them apart.
   deterministic encoder, and its SHA-1 names those bytes, so every run
   finds the same item. A change to how images are written out changes
   their SHA-1s, and with them the identity of every excerpt: it is a
-  stage change, checked by a scratch diff (ADR-0025 §4).
+  stage change, checked by a scratch diff (ADR-0025 §4). A library
+  upgrade that changes the encoder's output re-keys the excerpts just
+  the same, so before the keeper run (#159) the encoding is frozen, or a
+  test holds its output byte for byte; otherwise an upgrade would mint a
+  second item for every excerpt already kept.
 - An image that is a whole page, as each page of a scanned PDF is (with
   or without a text layer over it), is that page of the compilation, not
-  an embedded medium, and nothing is derived from it.
+  an embedded medium, and nothing is derived from it. How to tell such
+  an image deterministically is left to follow-up A (question 7 below).
 - Its label is `"<compilation title> — page <n>, image <k>"`: the first
   page it is on, and its place among that page's images, since a PDF's
   own names for its images mean nothing to a reader. The label is the
@@ -184,8 +189,11 @@ compound-artifact pattern keeps them apart.
 - Nothing here depends on a class for the compilation. The pipeline goes
   by what the file holds, and cannot tell a compilation from any other
   PDF that places images in its pages (a report with a photograph in
-  it), so every such PDF takes this shape: the scrapbook-PDF case that
-  the Consequences above foresaw.
+  it), so every such PDF takes this shape. That generalisation is this
+  amendment's inference, not #178's ruling, which is about compilations.
+  It is the scrapbook-PDF case that the Consequences above foresaw, so it
+  fires the "More compound artifact types" entry of the
+  deferred-on-trigger register (#171); follow-up A takes it up.
 
 **How claims cite each witness.** A claim cites the witness that
 asserts it (CLAUDE.md rule 1, ADR-0003), by the SHA-1 of that witness's
@@ -193,13 +201,15 @@ media (MODELING.md, "Reference pattern"):
 
 - a claim read from the compilation's own text cites the compilation,
   with the `page number` of the page that says it and a transcription
-  excerpt in the compilation's language;
+  excerpt in the language it is written in: a retyped transcription is
+  in the original's language, though it is the compilation's text;
 - a claim read from an excerpt cites the excerpt, with no page number,
   since it is one image, optionally a `region` within it, and a
   transcription excerpt in the original's language;
 - what the compilation says about an excerpt, such as a caption naming
   who wrote it, to whom and when, is the compilation's assertion, and a
-  claim it gives cites the compilation.
+  claim it gives cites the compilation. A claim whose subject is the
+  excerpt itself cannot be expressed yet (question 6 below).
 
 Each witness has its own transcription and its own batch: the
 compilation's transcription holds its own text only, and an excerpt's
@@ -268,19 +278,23 @@ Still to do, each keeping the two witnesses separable:
   without text gives no claims.
 - **The transcription seed (#144).** An archived transcription read its
   PDF whole, excerpts included, into one text. #144 already leaves out
-  the two that the spot-check flagged (#92), which are transcribed afresh
-  once #176 and this ruling land. After #176, a PDF whose pages are read
-  from their text layer makes its views again and adopts no seed entry,
-  so no archived reading stands as a born-digital compilation's view; a
-  scanned PDF, read by vision, keeps its entry (a scanned compilation is
-  left open below).
+  the two that the spot-check flagged (#92); one of them waits on #176
+  and this ruling to be transcribed afresh. A scratch run after #176
+  starts from fresh state directories (ADR-0032 §1), so a PDF whose pages
+  are read from their text layer has its views made afresh and uses no
+  seed entry, and no archived reading stands as a born-digital
+  compilation's view; a scanned PDF, read by vision, keeps its entry (a
+  scanned compilation is left open below). Outside a scratch run, a view
+  made before #176 stands until `--refresh transcribe` makes it again,
+  since a change of code does not by itself make a view stale (ADR-0032
+  §1).
 - **Excerpts as documents (follow-up A, or part of #176).** Each image
   that a PDF places within a page is recorded before the write as a
   deck's derived media are, the record generalised to any container.
   Before any step reads it, the never-ingest list is checked against its
   SHA-1, and content dedup applies to it: bytes that another document or
   excerpt already brought are not transcribed or extracted again
-  (ADR-0010).
+  (ADR-0010). Question 7 below lists what else it must settle.
 - **Extraction.** Each witness's transcription is extracted into a batch
   of its own, as any document's is: the prompts name the witness by its
   SHA-1 (#127), and `cite_artifact` sets every claim's source to it. The
@@ -291,7 +305,11 @@ Still to do, each keeping the two witnesses separable:
   a compilation's excerpts from their record, as it does a deck's derived
   media, by the rules of the #50 amendment and of ADR-0010's "Media
   files". It does so before any batch that cites them is written, since
-  the writer refuses a batch that cites media no item carries.
+  the writer refuses a batch that cites media no item carries. Where it
+  looks a page fragment up by its `part of` and page, it also matches
+  `instance of artifact fragment`: an excerpt, like a deck's derived
+  media, is `part of` its container with a page qualifier too, and must
+  never be taken for that page's fragment.
 - **Writing.** The writer needs no change. It resolves each claim's
   SHA-1 to the compilation's item or to the excerpt's, and writes the
   marker as it writes circa.
@@ -327,23 +345,35 @@ Still to do, each keeping the two witnesses separable:
 
 1. Who sets the marker: the extractor, claim by claim, from the
    compilation's statement about its preparation; or one step per
-   document (that statement read once, or a curator's declaration),
-   whose marker the pipeline puts on every claim read from the
-   compilation's own text.
+   document, whose marker the pipeline puts on every claim read from the
+   compilation's own text, with that statement read once or pointed to
+   by a curator. A curator's part is only to point to where the
+   compilation says so: a marker set on a curator's own knowledge would
+   be the curator's assertion, cited to the compilation, which never
+   made it (CLAUDE.md rule 1).
 2. Context across witnesses. As this amendment has it, an excerpt's
    extraction reads the excerpt only, so what only the compilation says
    (a caption's writer or year) stays the compilation's claim, and a date
    in the excerpt that gives no year gives no claim. Should the
    excerpt's extraction also read the compilation's caption, to resolve
-   who and when, its claims still citing the excerpt?
+   who and when, its claims still citing the excerpt? A "yes" would put
+   the caption's year into a claim cited to the excerpt, which never
+   states it (CLAUDE.md rules 1 and 5). Only who a person is could come
+   from the caption safely, since that is identity, which reconciliation
+   decides (ADR-0007), not a value the excerpt is cited for.
 3. An original that a compilation reproduces only as a whole page, or as
    part of a scanned page. An image that fills a page has bytes of its
    own, but so does each page of a scanned PDF, so telling an original
    reproduced whole from the compilation's own page needs a rule; a
    region of a scanned page has no bytes of its own, and would have to
    be cropped deterministically. Until this is settled, such a page is
-   read as the compilation's page, and the claims read from it cite the
-   compilation.
+   read as the compilation's page: the claims read from it cite the
+   compilation and carry the marker as its other claims do, whenever the
+   compilation's statement covers that page. So a claim that comes from
+   an original's text, whether the original is reproduced as a whole
+   page or read with its translation in a scanned compilation's one
+   transcription, carries a marker that the original's text never
+   earned.
 4. A compilation's images: whether they take the Decision's `photograph`
    for a raster image, which puts them in the photo gallery and within
    reach of the faces flow, or another class; and whether an image that
@@ -352,3 +382,19 @@ Still to do, each keeping the two witnesses separable:
    image.
 5. Whether the under-witnessed queue counts a compilation and an excerpt
    it embeds as one witness where they agree.
+6. Claims about an excerpt itself. A caption's writer, recipient and
+   date are statements whose subject is the excerpt, an artifact named
+   by its SHA-1, but a claim's subject (`EntityRef` in
+   `src/yizkr/claims.py`) is a QID, a vocabulary item or a batch-local
+   entity only. Should the claim schema gain a subject that names an
+   artifact by its SHA-1, resolved at write time as a source is, or do
+   such statements wait? The people and places a caption names are
+   claims about them, and can be made meanwhile.
+7. For follow-up A to settle: where an excerpt's views live, and how its
+   status relates to the compilation's, given that content dedup seeds
+   only from `written` documents (ADR-0010), that each document passes
+   the per-document review gates, and that the scratch driver slices
+   documents by kind and sends the first of each kind through first as
+   its canary; and a deterministic definition of an image that is a
+   whole page, which covers a page stored as strips or tiles, the layers
+   of a mixed raster content (MRC) page, and tiny decorative images.

@@ -200,7 +200,7 @@ artifact a new QID, changes neither.
   1945)".
 - "circa": sourcing circumstances qualifier. A compilation's statement
   that its text was prepared with machine assistance is another
-  sourcing circumstance ("Compound artifacts").
+  sourcing circumstance (planned: "Compound artifacts").
 - Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
   date) are kept verbatim as qualifiers (`age at death`), never derived or
   dropped: sources assert them, so the archive records them.
@@ -322,10 +322,12 @@ and reference the artifact itself or the producing run.
 - A claim cites the witness that asserts it. A claim read from the
   compilation's own text cites the compilation, with its page as the
   locator; a claim read from an excerpt cites the excerpt, with no page
-  number, optionally a region of the image, and a transcription excerpt
-  in the original's language. Each witness has its own transcription and
-  its own batch, and an extractor cites the document it read, so neither
-  witness's claims can cite the other.
+  number and optionally a region of the image. Each transcription excerpt
+  is tagged with the language it is written in, so a retyped
+  transcription in the compilation takes the original's language. Each
+  witness has its own transcription and its own batch, and an extractor
+  cites the document it read, so neither witness's claims can cite the
+  other.
 - **Machine-assisted preparation is a sourcing circumstance.** When a
   compilation states that its text was prepared with machine assistance
   (that its translations are machine translations, say), each claim read
