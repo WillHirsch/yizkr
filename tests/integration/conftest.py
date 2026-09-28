@@ -8,18 +8,31 @@ their entities — that reuse IS part of what they verify.
 A session that uses the stack holds the live-stack lock (live_lock.py)
 from its first stack test to its end, so live sessions take turns on
 the one instance.
+
+A claim cites its artifact by the SHA-1 of the artifact's media (#102),
+so every artifact a test's claims cite is registered with media of its
+own: `register_fictional` gives it a small PNG whose bytes its title
+decides, so a re-run registers the same bytes as the same artifact.
 """
 
 from __future__ import annotations
 
+import re
+import struct
+import tempfile
 import time
+import zlib
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 import requests
 
+from yizkr.claims import ArtifactRef
 from yizkr.core import sparql
 from yizkr.core.config import USER_AGENT, Config
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline.registrar import register_artifact
 
 from .live_lock import hold_for_session
 
@@ -116,3 +129,64 @@ def wait_for_query_service(
                 f"check the wdqs-updater logs"
             )
         time.sleep(2)
+
+
+def fictional_png(marker: str) -> bytes:
+    """A valid 4x4 PNG whose text chunk makes its bytes, and so the
+    content key of the artifact they are registered as (ADR-0010), this
+    marker's alone: the same marker always gives the same bytes."""
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data))
+        )
+
+    pixels = b"".join(b"\x00" + b"\x5c\x7a\x3e" * 4 for _ in range(4))
+    text = marker.encode("ascii", "backslashreplace")
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
+        + chunk(b"tEXt", b"Comment\x00" + text)
+        + chunk(b"IDAT", zlib.compress(pixels))
+        + chunk(b"IEND", b"")
+    )
+
+
+@dataclass(frozen=True)
+class Registered:
+    """A fictional artifact on the instance: its item, and the key its
+    claims cite it by, the SHA-1 of its media."""
+
+    qid: str
+    ref: ArtifactRef
+    fragment_qids: dict[int, str] = field(default_factory=dict)
+
+
+def register_fictional(
+    client: WikiClient, title: str, artifact_type: str, pages: int = 0
+) -> Registered:
+    """Register a fictional artifact titled `title`, with a PNG of its own
+    as its media (fictional_png), and optionally `pages` page fragments.
+    Idempotent: the same title gives the same bytes, and so the same
+    item."""
+    media = fictional_png(f"yizkr live test: {title}")
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", title).strip("-").lower()
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / f"{slug or 'artifact'}.png"
+        path.write_bytes(media)
+        result = register_artifact(
+            client,
+            media_path=path,
+            artifact_type=artifact_type,
+            title=title,
+            description="written by tests/integration; safe to delete",
+            pages=pages,
+        )
+    return Registered(
+        result.artifact_qid,
+        ArtifactRef.from_bytes(media),
+        result.fragment_qids,
+    )

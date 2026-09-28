@@ -53,6 +53,7 @@ RUN = {
 MEDIA = b"fictional scan: an example marriage certificate"
 MEDIA_SHA1 = hashlib.sha1(MEDIA).hexdigest()
 ARTIFACT = {"kind": "artifact", "sha1": MEDIA_SHA1}
+MEDIA_REF = ArtifactRef(sha1=MEDIA_SHA1)
 
 # Person One's dates are Leopold Löbig's in the example universe: born in
 # May 1914 (29 May per the divorce judgment) and married in 1947.
@@ -151,7 +152,9 @@ class TestExtract:
 
     def test_llm_extractor_validates_response(self):
         llm = FakeLlm(json.dumps({"claims": CLAIMS}))
-        result = LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        result = LlmClaimExtractor(llm).extract(
+            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+        )
         assert len(result.claims) == 2
         assert result.extraction_run.model_identifier == "fake-model"
         assert result.extraction_run.started_at.tzinfo is not None
@@ -163,7 +166,9 @@ class TestExtract:
         bad = [dict(CLAIMS[1], property="shoe_size")]
         llm = FakeLlm(json.dumps({"claims": bad}))
         with pytest.raises(ValueError, match="shoe_size"):
-            LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+            LlmClaimExtractor(llm).extract(
+                self.transcription(), MEDIA_REF, artifact_qid="Q23"
+            )
 
     def test_llm_extractor_salvages_valid_claims_around_bad_ones(
         self, tmp_path
@@ -175,7 +180,7 @@ class TestExtract:
         rejects_path = tmp_path / "batch.json.rejected.json"
         llm = FakeLlm(json.dumps({"claims": mixed}))
         batch = LlmClaimExtractor(llm, rejects_dump=rejects_path).extract(
-            self.transcription(), "Q23"
+            self.transcription(), MEDIA_REF, artifact_qid="Q23"
         )
         assert len(batch.claims) == 2
         rejects = json.loads(rejects_path.read_text())
@@ -187,7 +192,9 @@ class TestExtract:
         """The model can only comply with 'use only manifest keys' if the
         prompt actually lists them."""
         llm = FakeLlm(json.dumps({"claims": CLAIMS}))
-        LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        LlmClaimExtractor(llm).extract(
+            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+        )
         assert "date_of_birth: time" in llm.prompts[0]
         assert "place_of_birth: wikibase-item" in llm.prompts[0]
         assert "circa" in llm.prompts[0]
@@ -196,7 +203,9 @@ class TestExtract:
         """Direction and value type live in the manifest description;
         a key and datatype alone leave the model to guess them."""
         llm = FakeLlm(json.dumps({"claims": CLAIMS}))
-        LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        LlmClaimExtractor(llm).extract(
+            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+        )
         assert (
             "employer: wikibase-item — organization the person works or "
             "worked for" in llm.prompts[0]
@@ -209,7 +218,9 @@ class TestExtract:
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")
         with pytest.raises(ValueError, match="no claim JSON"):
-            LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+            LlmClaimExtractor(llm).extract(
+                self.transcription(), MEDIA_REF, artifact_qid="Q23"
+            )
 
     def test_parse_response_tolerates_fences_and_prose(self):
         payload = {"claims": []}
@@ -265,7 +276,9 @@ class TestExtract:
             ],
         )
         llm = FakeLlm(json.dumps({"claims": [nested]}))
-        batch = LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        batch = LlmClaimExtractor(llm).extract(
+            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+        )
         assert batch.claims[0].value.year == 1914
         assert batch.claims[0].qualifiers[0].value.year == 1915
 
@@ -284,7 +297,9 @@ class TestExtract:
             },
         )
         llm = FakeLlm(json.dumps({"claims": [long_claim]}))
-        batch = LlmClaimExtractor(llm).extract(self.transcription(), "Q23")
+        batch = LlmClaimExtractor(llm).extract(
+            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+        )
         text = batch.claims[0].source.transcription_excerpt.text
         assert len(text) <= 400
         assert text.endswith("…")
@@ -296,7 +311,7 @@ class TestExtract:
         llm = FakeLlm("total garbage, no JSON at all")
         with pytest.raises(ValueError):
             LlmClaimExtractor(llm, raw_dump=raw).extract(
-                self.transcription(), "Q23"
+                self.transcription(), MEDIA_REF, artifact_qid="Q23"
             )
         assert raw.read_text() == "total garbage, no JSON at all"
 
@@ -304,10 +319,253 @@ class TestExtract:
         claims_file = tmp_path / "claims.json"
         claims_file.write_text(json.dumps({"claims": CLAIMS}))
         result = ClaimFileExtractor(claims_file).extract(
-            self.transcription(), "Q23"
+            self.transcription(), MEDIA_REF, artifact_qid="Q23"
         )
         assert len(result.claims) == 2
         assert result.extraction_run.model_identifier == "manual"
+
+    def test_file_extractor_keeps_the_artifacts_its_claims_cite(
+        self, tmp_path
+    ):
+        """A prepared file's claims cite their artifacts themselves: the
+        file extractor validates them as they are, so a claim citing its
+        item by QID is refused, never read as the document's (#102)."""
+        by_qid = dict(
+            CLAIMS[1], source={"artifact": {"kind": "qid", "qid": "Q23"}}
+        )
+        claims_file = tmp_path / "claims.json"
+        claims_file.write_text(json.dumps({"claims": [by_qid]}))
+        with pytest.raises(ValueError, match="artifact"):
+            ClaimFileExtractor(claims_file).extract(
+                self.transcription(), MEDIA_REF, artifact_qid="Q23"
+            )
+        other = ArtifactRef.from_bytes(b"fictional scan: another page")
+        cites_other = dict(CLAIMS[1], source={"artifact": other.model_dump()})
+        claims_file.write_text(json.dumps({"claims": [cites_other]}))
+        result = ClaimFileExtractor(claims_file).extract(
+            self.transcription(), MEDIA_REF, artifact_qid="Q23"
+        )
+        assert result.claims[0].source.artifact == other
+
+
+# Person One's birth as one page of a document gives it, in May 1914, in a
+# model's answer that cites the artifact's item as the prompt asks
+BORN = dict(
+    CLAIMS[1],
+    source={
+        "artifact": {"kind": "qid", "qid": "Q23"},
+        "page_number": "1",
+        "region": {"x": 10, "y": 20, "width": 30, "height": 5},
+        "transcription_excerpt": {"text": "b. May 1914", "language": "en"},
+    },
+)
+
+
+def born_restated(**source) -> dict:
+    """BORN, with the fields `source` gives replaced in its source."""
+    return dict(BORN, source={**BORN["source"], **source})
+
+
+class TestExtractedClaimsCiteTheirDocument:
+    """The extractor names each claim's source artifact itself: the
+    document's content key, whatever the model wrote there (#102). The
+    prompt still names the artifact's item, so a model copies that QID
+    into its claims, as these answers do."""
+
+    OTHER = ArtifactRef.from_bytes(b"fictional scan: another page")
+
+    @staticmethod
+    def answered(*claims) -> ClaimBatch:
+        sentinel = {"done": True, "claims_emitted": len(claims)}
+        llm = FakeLlm(
+            "\n".join(json.dumps(line) for line in (*claims, sentinel))
+        )
+        return LlmClaimExtractor(llm).extract(
+            Transcription(text="married 1947", engine="test"),
+            MEDIA_REF,
+            artifact_qid="Q23",
+        )
+
+    def test_a_copied_qid_becomes_the_documents_key(self):
+        by_qid = {
+            "artifact": {"kind": "qid", "qid": "Q23"},
+            "page_number": "1",
+        }
+        batch = self.answered(dict(CLAIMS[1], source=by_qid))
+        (claim,) = batch.claims
+        assert claim.source.artifact == MEDIA_REF
+        # the locators the model gave stay as they are
+        assert claim.source.page_number == "1"
+
+    @pytest.mark.parametrize(
+        "cited",
+        [
+            {"kind": "artifact", "sha1": OTHER.sha1},  # another document's
+            {"kind": "artifact", "sha1": "Q23"},  # a QID where a key goes
+            {"kind": "local", "local_id": "doc-1", "label": "a letter"},
+        ],
+        ids=["another-key", "qid-as-key", "local-ref"],
+    )
+    def test_whatever_the_model_cites_the_claim_cites_the_document(
+        self, cited
+    ):
+        batch = self.answered(dict(CLAIMS[1], source={"artifact": cited}))
+        assert [claim.source.artifact for claim in batch.claims] == [MEDIA_REF]
+
+    def test_a_source_without_an_artifact_cites_the_document(self):
+        batch = self.answered(dict(CLAIMS[1], source={"page_number": "2"}))
+        assert batch.claims[0].source.artifact == MEDIA_REF
+
+    def test_claims_alike_once_they_cite_the_document_are_one(self):
+        cited = [
+            {"artifact": {"kind": "qid", "qid": "Q23"}},
+            {"artifact": {"kind": "qid", "qid": "Q32"}},  # a slip of the pen
+            {"artifact": ARTIFACT},
+        ]
+        batch = self.answered(
+            *(dict(CLAIMS[1], source=source) for source in cited)
+        )
+        assert len(batch.claims) == 1
+
+    @pytest.mark.parametrize(
+        "second",
+        [
+            # 29 May per another line: two values, one property (ADR-0002)
+            dict(
+                BORN,
+                value={"type": "time", "year": 1914, "month": 5, "day": 29},
+            ),
+            born_restated(page_number="2"),
+            born_restated(region={"x": 10, "y": 60, "width": 30, "height": 5}),
+            born_restated(
+                transcription_excerpt={"text": "born 5/1914", "language": "en"}
+            ),
+        ],
+        ids=[
+            "another-value",
+            "another-page",
+            "another-region",
+            "another-excerpt",
+        ],
+    )
+    def test_claims_that_differ_beside_their_artifact_coexist(self, second):
+        """Only claims that are the same once they cite the document are
+        kept once: two values the document gives for one property, or one
+        value it gives in two places, stay two claims (ADR-0002)."""
+        batch = self.answered(BORN, second)
+        assert len(batch.claims) == 2
+        assert [claim.source.artifact for claim in batch.claims] == [
+            MEDIA_REF,
+            MEDIA_REF,
+        ]
+
+    @pytest.mark.parametrize(
+        "source", ["Q23", None, ...], ids=["text", "null", "missing"]
+    )
+    def test_a_claim_without_a_source_object_is_still_refused(self, source):
+        """Only a source the model gave is completed: a claim without one
+        is refused, as any claim without its reference is (ADR-0003), and
+        counted among the rejects, never dropped unseen."""
+        claim = {key: value for key, value in CLAIMS[1].items()}
+        if source is ...:
+            del claim["source"]
+        else:
+            claim["source"] = source
+        with pytest.raises(
+            ValueError,
+            match=r"every extracted claim failed validation \(1 rejects\)",
+        ):
+            self.answered(claim)
+
+    def test_a_claim_the_model_marks_curated_is_a_machine_claim(self):
+        """`curated` marks a claim a person stated, which the writer
+        references to no extraction run, and the schema the prompt
+        carries shows it, so a model can set it. The extractor drops it:
+        every claim it gives is a machine claim, written with its run
+        reference (CLAUDE.md rule 2, ADR-0003)."""
+        batch = self.answered(dict(CLAIMS[1], curated=True))
+        (claim,) = batch.claims
+        assert claim.curated is False
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        result = BatchWriter(wiki).write_batch(batch)
+        person = wiki.wbi.item.get(result.created_items["person-1"])
+        (statement,) = person.claims.get(PROPERTIES["date_of_birth"])
+        assert _cited(statement, "stated_in") == ["Q23"]
+        assert _cited(statement, "inferred_from_extraction_run") == [
+            result.run_qid
+        ]
+
+    def test_a_row_approval_the_model_writes_is_dropped(self):
+        """A depicts claim is written only with the approval a curator
+        gives it on its own review-sheet row (ADR-0005). One the model
+        wrote is dropped, so the writer's gate holds the claim for a
+        curator."""
+        from yizkr.pipeline.review import unapproved_depicts
+
+        depicts = {
+            "subject": {"kind": "qid", "qid": "Q30"},
+            "property": "depicts",
+            "value": {"type": "item", "value": CLAIMS[1]["subject"]},
+            "source": {"artifact": {"kind": "qid", "qid": "Q30"}},
+            "row_approval": "0123456789ab",
+        }
+        batch = self.answered(depicts)
+        (claim,) = batch.claims
+        assert claim.row_approval is None
+        assert unapproved_depicts(batch) == [claim_id(claim)]
+
+
+class TestIngestExtract:
+    """`yizkr ingest extract`: its claims cite the media file `--media`
+    names, by the SHA-1 of its bytes (#102), and a medium on the
+    never-ingest list is refused before the engine is asked anything."""
+
+    def run(self, tmp_path, monkeypatch, excluded: str = ""):
+        from yizkr import cli
+        from yizkr.pipeline import llm
+
+        never = tmp_path / "never-ingest.txt"
+        never.write_text(excluded)
+        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
+        transcription = tmp_path / "transcription.json"
+        transcription.write_text(
+            Transcription(text="married 1947", engine="test").model_dump_json()
+        )
+        scan = tmp_path / "scan.png"
+        scan.write_bytes(MEDIA)
+        # the answer cites the item by QID, as the prompt asks
+        by_qid = dict(
+            CLAIMS[1], source={"artifact": {"kind": "qid", "qid": "Q23"}}
+        )
+        engine = FakeLlm(
+            json.dumps(by_qid) + '\n{"done": true, "claims_emitted": 1}'
+        )
+        monkeypatch.setattr(llm, "make_client", lambda *a, **k: engine)
+        out = tmp_path / "batch.json"
+        args = cli.build_parser().parse_args(
+            [
+                *("ingest", "extract", "--transcription", str(transcription)),
+                *("--media", str(scan), "--artifact", "Q23"),
+                *("--engine", "llm", "--strategy", "single"),
+                *("--out", str(out)),
+            ]
+        )
+        return args.func(args), out, engine
+
+    def test_the_claims_cite_the_media(self, tmp_path, monkeypatch):
+        status, out, engine = self.run(tmp_path, monkeypatch)
+        assert status == 0
+        batch = ClaimBatch.model_validate_json(out.read_text())
+        assert [claim.source.artifact for claim in batch.claims] == [MEDIA_REF]
+        assert len(engine.prompts) == 1
+
+    def test_media_on_the_never_ingest_list_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        with pytest.raises(SystemExit, match="never-ingest"):
+            self.run(tmp_path, monkeypatch, excluded=f"{MEDIA_SHA1}\n")
+        # no answer was dumped, and no batch written
+        assert sorted(path.name for path in tmp_path.glob("batch.json*")) == []
 
 
 @pytest.fixture(scope="module")
@@ -1043,24 +1301,41 @@ class TestWriterArtifactResolution:
         assert resolved == {MEDIA_SHA1: "Q23", OTHER_SHA1: "Q24"}
         assert wiki.index_reads == 2
 
-    def test_qid_source_is_written_as_given(self):
-        qid_batch = ClaimBatch.model_validate(
-            {
-                "extraction_run": RUN,
-                "claims": [
-                    dict(
-                        CLAIMS[1],
-                        source={"artifact": {"kind": "qid", "qid": "Q23"}},
-                    )
-                ],
-            }
+    def test_a_batch_citing_its_artifact_by_qid_writes_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        """No dual format (#102): a batch file whose claim cites its
+        artifact item by QID, as batches made before content addressing
+        did, does not load, so `ingest write` refuses it before it
+        contacts the instance: it reads and writes nothing."""
+        from pydantic import ValidationError
+
+        from yizkr import cli
+
+        batch_json = tmp_path / "batch.json"
+        batch_json.write_text(
+            json.dumps(
+                {
+                    "extraction_run": RUN,
+                    "claims": [
+                        dict(
+                            CLAIMS[1],
+                            source={"artifact": {"kind": "qid", "qid": "Q23"}},
+                        )
+                    ],
+                }
+            )
         )
-        wiki = FakeWiki()
-        result = BatchWriter(wiki).write_batch(qid_batch)
-        assert wiki.index_reads == 0
-        person = wiki.wbi.item.get(result.created_items["person-1"])
-        (statement,) = person.claims.get(PROPERTIES["date_of_birth"])
-        assert _cited(statement, "stated_in") == ["Q23"]
+
+        def no_instance(args):
+            raise AssertionError("ingest write contacted the instance")
+
+        monkeypatch.setattr(cli, "_client", no_instance)
+        args = cli.build_parser().parse_args(
+            ["ingest", "write", "--batch", str(batch_json)]
+        )
+        with pytest.raises(ValidationError, match="artifact"):
+            args.func(args)
 
 
 # -- writer: a minted item's type statements carry both references (#88) ---
@@ -1561,14 +1836,17 @@ class TestWriterLaterSourceTypes:
         # Sebastian Löbig as the 1905 marriage certificate gives him, then
         # as the family's GEDCOM export does: its adapter's local refs
         # carry no label, so the writer finds him by his manifest label
-        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
+        text = (
+            "0 HEAD\n1 CHAR UTF-8\n0 @I3@ INDI\n1 NAME Sebastian /Löbig/\n"
+            "1 BIRT\n2 DATE 15 FEB 1862\n0 TRLR\n"
+        )
+        # the export cites itself by the SHA-1 of its bytes, which the
+        # instance holds as the item Q27's media SHA-1
+        exported = ArtifactRef.from_bytes(text.encode())
+        wiki = FakeWiki({MEDIA_SHA1: "Q23", exported.sha1: "Q27"})
         first = BatchWriter(wiki).write_batch(_certificate_batch())
         person = first.created_items["e01"]
-        export = adapt_gedcom(
-            "0 HEAD\n1 CHAR UTF-8\n0 @I3@ INDI\n1 NAME Sebastian /Löbig/\n"
-            "1 BIRT\n2 DATE 15 FEB 1862\n0 TRLR\n",
-            artifact_qid="Q27",
-        ).batch
+        export = adapt_gedcom(text, artifact=exported).batch
         gedcom = BatchWriter(wiki).write_batch(export)
         assert gedcom.created_items["i3"] == person
         assert gedcom.referenced == 1  # the agreeing birth date

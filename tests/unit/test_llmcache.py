@@ -37,7 +37,7 @@ from tests.unit.test_orchestrate import (
     quiet,
     this_run,
 )
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import llm, llmcache, transcription_check
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.extract import LlmClaimExtractor
@@ -1781,6 +1781,10 @@ class TestFactory:
 # -- the pipeline through the cache -----------------------------------------
 
 LETTER = "Ursula was born in 1911."
+# the key of the document the extractor tests read, which each of its
+# claims cites (#102); the scripted answers cite its item by QID, as
+# the prompt asks
+LETTER_REF = ArtifactRef.from_bytes(b"fictional scan: a Loebig letter")
 
 
 def person(prompt: str) -> tuple[str, int]:
@@ -2457,7 +2461,9 @@ def extract(tmp_path, engine, **options):
         engine="test",
         artifact_qid="Q23",
     )
-    return extractor, extractor.extract(transcription, "Q23")
+    return extractor, extractor.extract(
+        transcription, LETTER_REF, artifact_qid="Q23"
+    )
 
 
 class TestTheExtractor:
@@ -2705,7 +2711,7 @@ class TestTheSingleCallExtractor:
             text="Klara Löbig b. 1917", engine="test", artifact_qid="Q23"
         )
         return LlmClaimExtractor(client(tmp_path, engine)).extract(
-            transcription, "Q23"
+            transcription, LETTER_REF, artifact_qid="Q23"
         )
 
     def rejected(self, tmp_path) -> list[str]:
@@ -2764,7 +2770,9 @@ class TestTheSingleCallExtractor:
         lenient = client(tmp_path, Engine(answering(answer)))
         lenient.reject = lambda response, why: False
         with contextlib.suppress(ValueError):
-            LlmClaimExtractor(lenient).extract(transcription, "Q23")
+            LlmClaimExtractor(lenient).extract(
+                transcription, LETTER_REF, artifact_qid="Q23"
+            )
         assert self.rejected(tmp_path) == []
         engine = Engine(answering(WHOLE))
         batch = self.extract(tmp_path, engine)
@@ -2793,7 +2801,9 @@ class TestTheSingleCallExtractor:
             text="Klara Löbig b. 1917", engine="test", artifact_qid="Q23"
         )
         with pytest.raises(ValueError, match="no claim JSON"):
-            LlmClaimExtractor(engine).extract(transcription, "Q23")
+            LlmClaimExtractor(engine).extract(
+                transcription, LETTER_REF, artifact_qid="Q23"
+            )
         assert engine.asked == 2
 
     def test_a_whole_answer_is_served_again(self, tmp_path):
@@ -2814,6 +2824,8 @@ class TestTheSingleCallExtractor:
                 text="Klara Löbig b. 1917", engine="test", artifact_qid="Q23"
             ).model_dump_json()
         )
+        scan = tmp_path / "letter.png"
+        scan.write_bytes(b"fictional scan: a Loebig letter")
         engines = iter([Engine(answering(WHOLE)), Refusing()])
         monkeypatch.setattr(llm, "make_client", lambda *a, **k: next(engines))
         batches = []
@@ -2825,6 +2837,8 @@ class TestTheSingleCallExtractor:
                     "extract",
                     "--transcription",
                     str(transcription),
+                    "--media",
+                    str(scan),
                     "--artifact",
                     "Q23",
                     "--engine",

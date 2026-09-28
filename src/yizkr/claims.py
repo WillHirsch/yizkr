@@ -35,10 +35,9 @@ only the writer resolves keys to ids, at write time.
 Source artifacts are content-addressed (ADR-0010): a claim's
 `source.artifact` is an ``artifact`` reference holding the SHA-1 of the
 artifact's media bytes, which is the same before registration, after an
-instance reset and on any instance. The writer resolves it to the
-artifact item carrying that `media SHA-1`, at write time. A ``qid``
-reference to an artifact item is accepted there too, and ties the claim
-to that instance.
+instance reset and on any instance. It is the only form a source takes:
+no claim names its artifact by QID. The writer resolves it to the
+artifact item carrying that `media SHA-1`, at write time.
 
 Entity references (subjects and item values) come in three kinds:
 
@@ -359,15 +358,6 @@ class ArtifactRef(StrictModel):
         return f"sha1:{self.sha1}"
 
 
-# The artifact a claim cites. An ``artifact`` reference is the
-# content-addressed form. A ``qid`` reference names an artifact item on
-# the target instance directly, so a claim that carries one is valid on
-# that instance only.
-SourceArtifactRef = Annotated[
-    ArtifactRef | QidRef, Field(discriminator="kind")
-]
-
-
 class SourceReference(StrictModel):
     """Where the artifact asserts the claim (ADR-0003).
 
@@ -377,7 +367,7 @@ class SourceReference(StrictModel):
     image region. The excerpt supports one-click human verification.
     """
 
-    artifact: SourceArtifactRef
+    artifact: ArtifactRef
     page_number: str | None = None
     region: RegionPercent | None = None
     transcription_excerpt: MonolingualText | None = None

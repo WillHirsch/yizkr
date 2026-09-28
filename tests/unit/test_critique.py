@@ -2,8 +2,12 @@
 
 import json
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.critique import Finding, axis_of, run_critique
+
+# the bytes of a fictional scan, which the claims below cite by
+# their SHA-1 (#102)
+SCAN = ArtifactRef.from_bytes(b"fictional scan: a Loebig family document")
 
 RUN = {
     "model_identifier": "fake-model",
@@ -41,7 +45,7 @@ def batch() -> ClaimBatch:
                         "type": "item",
                         "value": {"kind": "local", "local_id": "e04"},
                     },
-                    "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+                    "source": {"artifact": SCAN.model_dump()},
                 }
             ],
             "entities": [

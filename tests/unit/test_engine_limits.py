@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit.test_chunking import (
+    DOC_REF,
     LINE_LENGTH,
     claim,
     entity_manifest_json,
@@ -1302,7 +1303,7 @@ class TestChunks:
         engine = Engine()
         extractor = ChunkedClaimExtractor(engine, budget=LINE_LENGTH)
         with pytest.raises(UsageLimitReached):
-            extractor.extract(transcription(), "Q23")
+            extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert extractor.failed_chunks == []
         assert engine.closed == ["session-1"]
 
@@ -1363,7 +1364,7 @@ class TestChunks:
         engine = PooledEngine(pacer, refusals=[2, 0], max_wait=150.0)
         extractor = ChunkedClaimExtractor(engine, budget=LINE_LENGTH)
         with pytest.raises(UsageLimitReached):
-            extractor.extract(transcription(), "Q23")
+            extractor.extract(transcription(), DOC_REF, artifact_qid="Q23")
         assert engine.calls == []
 
 
@@ -1391,7 +1392,7 @@ def a_batch(label: str, year: int) -> ClaimBatch:
                     },
                     "property": "date_of_birth",
                     "value": {"type": "time", "year": year},
-                    "source": {"artifact": {"kind": "qid", "qid": "Q23"}},
+                    "source": {"artifact": DOC_REF.model_dump()},
                 }
             ],
             "entities": [],
