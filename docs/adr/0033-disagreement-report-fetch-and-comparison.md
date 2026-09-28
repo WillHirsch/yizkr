@@ -77,14 +77,14 @@ tests on the fictional universe (`tests/unit/test_disagreement.py`):
 |---|---|
 | a deprecated statement is left out; a preferred one is compared like any other | `in_contention` |
 | a statement with no stated-in source takes no part | `attributed` |
-| single-valued properties compare their values; residence and spouse compare the times `dated_times` names | `compared_values`, `dated_times` |
+| single-valued properties compare their values, a time once per stated range and any other value once, with no range; residence and spouse compare the times `dated_times` names | `compared_values`, `dated_times` |
 | a name compares as text, letter case and language tag aside; an item through its merge redirect | `comparison_key` |
 | a date's span: the stated range, open-ended when one bound is given, or the period its precision names | `span`, `period`, `century` |
 | a precision coarser than a century names no span; a span inside the other's differs in resolution | `named`, `spans_nest` |
 | two dates stored alike are compared through their stated ranges | `stored_alike_order`, `paired` |
 | residence and spouse times beside a range are compared as stated | `compared_as_stated` |
 | a place recorded inside the other differs in resolution | `place_within` |
-| two readings of one artifact are not two sources | `from_different_artifacts` |
+| two readings of one artifact are not two sources, nor are two readings of one statement's value, however many artifacts it cites | `from_different_artifacts`, `one_claim` |
 
 The two open questions each touch one function, and neither is decided
 here. #241 (which century a century-precision date names) is `century`,
@@ -143,8 +143,9 @@ comparison follows the documentation:
   paired a statement with itself, so when another statement shared one of
   those readings, the row listed that value without the first statement's
   source. Each value is listed with every source that states it, so the
-  comparison pairs any two readings. Two readings of one statement alone
-  still come from one artifact and are never listed.
+  comparison pairs any two readings. Two readings of one statement's
+  value alone are one claim, which every artifact the statement cites
+  states alike, so they are never listed (`one_claim`).
 
 None of the three changes a row of the live tests, whose fixtures hold no
 such case, or of the synthetic graphs, where the two lists match.

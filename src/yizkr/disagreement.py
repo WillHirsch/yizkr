@@ -33,7 +33,9 @@ Each rule of MODELING.md "Contradictions" is one function here:
 * ``place_within``: a place the graph records inside the other differs
   only in resolution;
 * ``from_different_artifacts``: two readings of one artifact are not two
-  sources, and a page fragment counts as its artifact.
+  sources, and a page fragment counts as its artifact; ``one_claim``: nor
+  are two readings of one statement's value, however many artifacts
+  it cites.
 """
 
 from __future__ import annotations
@@ -342,8 +344,8 @@ class Aspect:
 @dataclass(frozen=True)
 class Value:
     """A value as its source states it: the stored term, an item's label,
-    a time's precision, and the earliest and latest dates its statement
-    gives."""
+    a time's precision, and for a time the earliest and latest dates its
+    statement gives."""
 
     term: Term
     label: str = ""
@@ -376,7 +378,14 @@ def compared_values(
     and spouse accumulate values over a life, so their values never
     conflict; the same place or spouse dated differently by another source
     does, so they compare the times ``dated_times`` names, per place or
-    spouse through merge redirects. Other properties compare nothing."""
+    spouse through merge redirects. Other properties compare nothing.
+
+    A time is put up once for each earliest date its statement carries
+    with each latest date, so a statement that carries two earliest dates
+    puts its time up twice. A range dates a time only: an item, a name
+    or any other value is put up once, with no range, so the earliest or
+    latest date on its statement never sets it apart from the same value
+    another source states."""
     ranges = list(
         product(
             sorted(statement.earliest) or [None],
@@ -385,6 +394,8 @@ def compared_values(
     )
     if statement.property in SINGLE_VALUED:
         aspect = Aspect(statement.entity, statement.property)
+        if not statement.value.is_time:
+            ranges = [(None, None)]
         for earliest, latest in ranges:
             value = Value(
                 statement.value,
@@ -555,14 +566,24 @@ def paired(x: Reading, y: Reading) -> bool:
     which the ranges their statements state may set apart. A residence's
     or a spouse's times stored alike are compared as stated, so they pair
     when their precisions differ. Two readings of one statement (one that
-    carries two earliest dates, say) pair like any others; alone they come
-    from one artifact, and beside another statement's reading each keeps
-    its sources."""
+    carries two earliest dates, say) pair like any others, so beside
+    another statement's reading each keeps its sources; alone they are
+    ``one_claim`` and are never listed."""
     if x.value.term != y.value.term:
         return True
     if x.aspect.qualifier:
         return x.value.precision != y.value.precision
     return x.value.term.is_time
+
+
+def one_claim(x: Reading, y: Reading) -> bool:
+    """Two readings of one statement's one value, which only the earliest
+    or latest dates it carries twice set apart. Every artifact the
+    statement cites states that value with all those dates alike, so no
+    source disagrees with another: a row whose every pair is one claim is
+    never listed, however many artifacts cite the statement. Two start
+    times on one residence statement are two values, not one claim."""
+    return x.statement.iri == y.statement.iri and x.value.term == y.value.term
 
 
 def in_order(
@@ -671,7 +692,8 @@ def compare(
 ) -> list[Disagreement]:
     """The report's rows: each pair of values that different artifacts
     attribute to one aspect, listed once, with differences of resolution
-    set aside. Sources that state one value alike are listed together."""
+    and a statement's ``one_claim`` set aside. Sources that state one
+    value alike are listed together."""
     aspects: defaultdict[Aspect, list[Reading]] = defaultdict(list)
     for statement in statements:
         if in_contention(statement) and attributed(statement):
@@ -704,6 +726,8 @@ def compare(
     for (aspect, side_a, side_b), row in rows.items():
         a, b = _side(row.a, containment), _side(row.b, containment)
         if not from_different_artifacts(a.sources, b.sources):
+            continue
+        if all(one_claim(x, y) for x, y in zip(row.a, row.b, strict=True)):
             continue
         first = row.a[0].statement
         disagreement = Disagreement(

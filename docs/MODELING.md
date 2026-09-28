@@ -477,19 +477,24 @@ not a signal to grow the schema on.
   month, a year, a decade, a century, stored as its first year), or the
   range its source states with `earliest date` and `latest date`,
   open-ended when only one is given: 1909 and 16 March 1909 agree, as do
-  "between 1938 and 1939" and 22 June 1938, and "before 1926" and 1912,
-  while "after 1945" and 1941 disagree. A stated range is never widened
-  back to its precision (rule 5): 1939 stated "between September 1939
-  and 1 October 1939" and August 1939 disagree. A precision coarser than
-  a century names no span. Two dates stored alike are compared through
-  the ranges their statements state: "before 1945" and "after 1945", both
-  stored as 1945, disagree; with the same stated ranges, or none, they
-  differ at most in resolution, as do dates stored alike whose spans
-  nest: the 1890s stated as a decade, as "between 1890 and 1899" or as
-  1890, all stored as 1890. The earliest
-  and latest dates of a residence or spouse statement may date either end
-  of it, so when either statement carries them, their start and end
-  times are compared as stated, with no difference of resolution
+  "between 1938 and 1939" and either 22 June 1938 or 3 September 1939,
+  and "before 1926" and 1912, while "after 1945" and 1941 disagree. A
+  stated range is never widened back to its precision (rule 5): 1939
+  stated "between September 1939 and 1 October 1939" and August 1939
+  disagree. A precision coarser than a century names no span. A range
+  dates only a time: on any other value, such as a place, a person or a
+  name, it sets nothing apart. Two dates stored alike are compared
+  through the ranges their statements state: "before 1945" and "after
+  1945", both stored as 1945, disagree; with the same stated ranges, or
+  none, they differ at most in resolution, as do dates stored alike whose
+  spans nest: the 1890s stated as a decade, as "between 1890 and 1899" or
+  as 1890, all stored as 1890. A statement that carries two earliest (or
+  latest) dates states its value once per range, and each is compared
+  with other statements' values; its own readings alone are one claim,
+  never listed against each other, however many artifacts cite it. The
+  earliest and latest dates of a residence or spouse statement may date
+  either end of it, so when either statement carries them, their start
+  and end times are compared as stated, with no difference of resolution
   suppressed: a start in 1938, on a statement whose earliest and latest
   dates are 1938 and 1939, and a start on 22 June 1938 are listed side by
   side, and so are an end on 1 October 1939 and an end in October 1939,

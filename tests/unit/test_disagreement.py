@@ -15,6 +15,7 @@ import itertools
 from collections.abc import Iterable
 from dataclasses import replace
 
+import pytest
 import yaml
 
 from tests.fixtures import example_universe as u
@@ -467,6 +468,78 @@ class TestComparedValues:
         )
         assert listed(*statements) == []
 
+    @pytest.mark.parametrize(
+        ("subject", "prop", "shared", "ranged", "bound", "others"),
+        [
+            # Gustav's father is Sebastian per the extract, whose statement
+            # (here) carries an earliest date of 7 January 1919, and per the
+            # tree; (here) Felix per the naturalisation
+            (
+                "gustav-loebig",
+                "father",
+                "sebastian-loebig",
+                (EXTRACT, TREE),
+                {"earliest": at(u.Date(1919, 1, 7))},
+                ("felix-loebig", NATURALISATION),
+            ),
+            # Eugen died in Flörburg per the register, whose statement
+            # (here) carries a latest date of 16 March 1909, and (here) per
+            # the gravestone; in Peiltal per the tree
+            (
+                "eugen-loebig",
+                "place_of_death",
+                "floerburg",
+                (REGISTER, GRAVESTONE),
+                {"latest": at(u.Date(1909, 3, 16))},
+                ("peiltal", TREE),
+            ),
+        ],
+    )
+    def test_a_range_sets_apart_only_a_time(
+        self, subject, prop, shared, ranged, bound, others
+    ):
+        # a range dates a time: on an item it sets nothing apart, so the
+        # value is listed once, with every source that states it
+        first, second = ranged
+        statements = (
+            said(subject, prop, shared, first, **bound),
+            said(subject, prop, shared, second),
+            said(subject, prop, others[0], others[1]),
+        )
+        (row,) = compare(statements, NOTHING)
+        sides = {shown(side): side for side in (row.a, row.b)}
+        assert set(sides[QIDS[shared]].sources) == {
+            source(first),
+            source(second),
+        }
+        assert sides[QIDS[shared]].value.earliest is None
+        assert sides[QIDS[shared]].value.latest is None
+        assert sides[QIDS[others[0]]].sources == (source(others[1]),)
+
+    def test_two_start_times_on_one_residence_are_two_values(self):
+        # (here) one statement, cited by the naturalisation and the tree,
+        # dates Gustav's residence in Australia from both 1938 and 1939:
+        # its two start times are two values, not one claim, and are
+        # listed as two statements' would be
+        both = said(
+            "gustav-loebig",
+            "residence",
+            "australia",
+            NATURALISATION,
+            TREE,
+            start=[at(u.Date(1938)), at(u.Date(1939))],
+        )
+        assert listed(both) == [
+            (
+                "Gustav Löbig",
+                "residence",
+                "Australia",
+                "start_time",
+                "1938-01-01/9",
+                "1939-01-01/9",
+            )
+        ]
+
     def test_one_place_through_a_merge_redirect_is_one_residence(self):
         # the naturalisation's "Floerburg" was a duplicate item, merged
         # into Flörburg: its residence is the same place
@@ -692,6 +765,12 @@ class TestSpans:
             "emigration-1938", "point_in_time", u.Date(1942, 8, 21), TREE
         )
         assert listed(interview, postcard) == []
+        # a day in the range's second year lies inside it too: (here) 3
+        # September 1939 per the tree
+        second_year = said(
+            "emigration-1938", "point_in_time", u.Date(1939, 9, 3), TREE
+        )
+        assert listed(interview, second_year) == []
         rows = compare([interview, later], NOTHING)
         assert [row_of(row) for row in rows] == [
             (
@@ -780,7 +859,8 @@ class TestSpans:
 
 class TestStoredAlike:
     """stored_alike_order: two dates stored alike are compared through the
-    ranges their statements state."""
+    ranges their statements state; one_claim: the readings of one
+    statement's value alone are never listed."""
 
     def test_before_and_after_one_year_are_listed_once(self):
         # Rahel died "after 1945" per the tree and (here) "before 1945" per
@@ -860,10 +940,11 @@ class TestStoredAlike:
         )
         assert len(listed(bare, bounded)) == 1
 
-    def test_each_reading_of_one_statement_keeps_its_sources(self):
-        # a statement that carries two earliest dates puts up a reading of
-        # its value for each; given (here) to the millennium, no reading
-        # refines another. Alone, its readings come from one artifact.
+    @pytest.mark.parametrize("bound", ["earliest", "latest"])
+    def test_each_reading_of_one_statement_keeps_its_sources(self, bound):
+        # a statement that carries two earliest (or latest) dates puts up a
+        # reading of its value for each; given (here) to the millennium, no
+        # reading refines another. Alone, its readings are one claim.
         stored = Term("literal", "1836-01-01T00:00:00Z", XSD_DATETIME)
         century_bound = Time(stored.value, CENTURY)
         twice = said(
@@ -872,7 +953,7 @@ class TestStoredAlike:
             stored,
             TREE,
             precision=MILLENNIUM,
-            earliest=[century_bound, at(u.Date(1909))],
+            **{bound: [century_bound, at(u.Date(1909))]},
         )
         assert listed(twice) == []
         # beside another statement stored alike, each reading is compared
@@ -892,12 +973,58 @@ class TestStoredAlike:
             stored,
             GRAVESTONE,
             precision=MILLENNIUM,
-            earliest=century_bound,
+            **{bound: century_bound},
         )
         (row,) = compare([twice, alike], NOTHING)
-        assert row.a.value.earliest == century_bound
+        assert getattr(row.a.value, bound) == century_bound
         assert set(row.a.sources) == {source(GRAVESTONE), source(TREE)}
         assert row.b.sources == (source(TREE),)
+
+    @pytest.mark.parametrize("bound", ["earliest", "latest"])
+    def test_one_statement_is_never_listed_against_itself(self, bound):
+        # the statement above, cited (here) by the gravestone too, as the
+        # writer adds a second artifact's reference to a statement with the
+        # same value and qualifiers: both artifacts state every reading
+        stored = Term("literal", "1836-01-01T00:00:00Z", XSD_DATETIME)
+        cited_twice = said(
+            "eugen-loebig",
+            "date_of_birth",
+            stored,
+            TREE,
+            GRAVESTONE,
+            precision=MILLENNIUM,
+            **{bound: [Time(stored.value, CENTURY), at(u.Date(1909))]},
+        )
+        assert listed(cited_twice) == []
+
+    def test_readings_whose_ranges_overlap_are_one_claim(self):
+        # Eugen's death in 1909 per the register and (here) the tree, on
+        # one statement that carries (here) earliest dates of 1900 and 1905
+        # and latest dates of 1910 and 1915: its readings from 1900 to
+        # 1910 and from 1905 to 1915 overlap without nesting
+        ranged = said(
+            "eugen-loebig",
+            "date_of_death",
+            u.Date(1909),
+            REGISTER,
+            TREE,
+            earliest=[at(u.Date(1900)), at(u.Date(1905))],
+            latest=[at(u.Date(1910)), at(u.Date(1915))],
+        )
+        assert listed(ranged) == []
+        # stated by two statements, the two readings disagree
+        first, second = (
+            said(
+                "eugen-loebig",
+                "date_of_death",
+                u.Date(1909),
+                key,
+                earliest=at(u.Date(start)),
+                latest=at(u.Date(end)),
+            )
+            for key, start, end in ((REGISTER, 1900, 1910), (TREE, 1905, 1915))
+        )
+        assert len(listed(first, second)) == 1
 
 
 class TestComparedAsStated:
