@@ -442,7 +442,7 @@ call:
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
 | `cache-reject` | a caller's rejection moved an answer aside | `reason` |
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
-| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s`; when there is something to say, `wait_s` (seconds it waited for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` |
+| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears) |
 | `alert` | an anomaly alert was appended | `check`, `status` |
 | `run-end` | the invocation finished | `statuses` |
 | `run-interrupted` | the invocation was interrupted (Ctrl-C) | |
@@ -505,8 +505,13 @@ stream-json output:
   or `rejected`), the window that binds (`rateLimitType`: `five_hour`,
   `seven_day`, `seven_day_opus`, ...), when it reopens (`resetsAt`, Unix
   seconds), whether the call ran on usage credits (`isUsingOverage`),
-  and, only once the use of the window passes a threshold the CLI warns
-  at, the share of it used (`utilization`, with `surpassedThreshold`);
+  and the share of it used (`utilization`, with `surpassedThreshold`),
+  but only once that share passes one of the CLI's own warning
+  thresholds: for the five-hour window, 90%, and only while at most 72%
+  of the window has elapsed; for the weekly window, 75%, 50% or 25%,
+  early in the week (as CLI 2.1.237's `-p` mode reports them). Short of
+  that threshold, or past its elapsed-time gate, no `utilization` is
+  reported at all;
 - a call the API refuses ends on an API error: an assistant event whose
   `error` is `rate_limit` (`overloaded` for an overload), with the CLI's
   notice as its text ("You've hit your session limit · resets 3pm"), and
@@ -529,7 +534,8 @@ minute up to eight when a refusal gives no reset time, or one the local
 clock has passed already (a skewed clock). A hold that one call meets
 holds every thread's next call, since the windows are the account's. A
 hold that would take a call's wait past `$YIZKR_CLAUDE_MAX_WAIT` (in
-seconds, all told; 15 minutes by default) pauses the pass instead:
+seconds, all told; 16 minutes by default, a margin above the backoff
+sequence's own sum) pauses the pass instead:
 `UsageLimitReached`, a `PassPaused`, with the time the pass can go on
 (`resumes_at`: the reset the CLI reported, else when the engine would
 have asked again). The pause unwinds the invocation as any pause does: no
@@ -539,12 +545,15 @@ stage it cut short counts as running and is made in the next run, and the
 paused call's `call` event gives `resumes_at`. A wait ends early, as a
 pause, when the engine's client is closed.
 
-Waits happen inside the call, on the thread that makes it, where neither
-the control file nor Ctrl-C reaches it until it ends. So a window that
-reopens later than the longest wait pauses the pass rather than hold the
-run's threads for hours: the driver (#194) is to invoke the run again
-after `resumes_at`. Set `$YIZKR_CLAUDE_MAX_WAIT` to 21600 to wait through
-a five-hour window inside the call instead.
+Waits happen inside the call, on the thread that makes it. Ctrl-C
+interrupts a wait on the calling thread as it does any other work there;
+it is only a wait on a chunk pool's worker threads that neither Ctrl-C
+nor the control file reaches until it ends, since a pool's threads are
+not the one Python delivers a signal to. So a window that reopens later
+than the longest wait pauses the pass rather than hold a pool's threads
+for hours: the driver (#194) is to invoke the run again after
+`resumes_at`. Set `$YIZKR_CLAUDE_MAX_WAIT` to 21600 to wait through a
+five-hour window inside the call instead.
 
 **The reserve** (`$YIZKR_CLAUDE_RESERVE`, a share of each window, 0.25 by
 default; 0 keeps none). The engine estimates a window's use from its last
@@ -555,16 +564,32 @@ window reopens (a hold like any other, so one beyond the longest wait
 pauses the pass), and short of the line it is spaced so that what is left
 above the line lasts until the reset: with a share *left* above the line,
 a use *per call* and *T* seconds to the reset, one call every
-*T* × *per call* / *left* seconds. Where the estimate comes from sets its
-limits:
+*T* × *per call* / *left* seconds.
 
-- nothing is reported below the CLI's first warning, so nothing is paced
-  there, and a reserve larger than what is left at the first warning is
-  kept from that report on;
+**What the reserve achieves and what it cannot.** It only ever paces
+from a report the CLI has actually sent, so it inherits exactly the gaps
+above: below the first warning threshold there is no `utilization` to
+pace against, so the reserve gives no protection there at all, whatever
+`$YIZKR_CLAUDE_RESERVE` is set to; and a first warning that arrives late
+— close to 100% already used, or past its elapsed-time gate — can give
+little or none either, since there may be no room left to pace before
+the CLI refuses outright at 100%. What it does achieve is pacing dispatch
+from whichever warning it does get, so that ordinary use across a
+window's many calls keeps what is left above the line spread out to the
+reset rather than spent all at once. The only way to keep headroom below
+the first warning is a local budget that needs no CLI report at all,
+counting a window's own use independently; the owner decided
+(2026-09-28) not to add one, so this reserve is best-effort pacing from
+the CLI's own reports, not a guarantee of headroom. Two more limits:
+
 - the use per call includes what other sessions used meanwhile, which
   makes the pacing stricter, never looser;
-- a window a call is reported to have run on usage credits in is used
-  up, whatever the reserve: the run never runs on usage credits.
+- a report that a call ran on usage credits (`isUsingOverage`) pauses
+  the pass at once, process-wide, whatever the reserve, whatever window
+  the report names or fails to, and whatever else it says or leaves
+  out: the run never runs on usage credits. Nothing local says when
+  that clears, so only a new process resumes; the operator confirms
+  extra usage is off on the account first (docs/RUN_MANIFEST.md).
 
 The reserve and the longest wait decide only when calls are made, never
 what a call sends: they are no part of the engine's `effective_config`,

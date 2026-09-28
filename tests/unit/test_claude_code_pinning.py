@@ -1367,3 +1367,45 @@ class TestToolErrors:
         ]
         assert tool_failures(stream, []) == []
         assert tool_failures("not json\n{}\n[]", [scan]) == []
+
+
+class TestStreamEvents:
+    """The stream-json event stream is one JSON object per line
+    (llm._stream_events, #271)."""
+
+    @pytest.mark.parametrize(
+        "boundary",
+        [" ", " ", "\u0085"],
+        ids=["U+2028", "U+2029", "U+0085"],
+    )
+    def test_a_line_separator_inside_an_event_is_kept_whole(self, boundary):
+        """A model's answer can hold a line-separator character
+        `str.splitlines` treats as a line break but the newline-delimited
+        stream does not: splitting there breaks one line's JSON into two
+        malformed halves, and both fail to parse, dropping the event
+        (possibly the terminal result event itself). Splitting on ``\\n``
+        alone reads it as the single line it is.
+
+        ``ensure_ascii=False`` is needed to get the real character into
+        the line: the default escapes it to six ASCII characters, which
+        splitlines does not treat as a break either way."""
+        answer = f"one{boundary}two"
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": answer}]},
+        }
+        result = {"type": "result", "is_error": False}
+        stream = (
+            f"{json.dumps(event, ensure_ascii=False)}\n"
+            f"{json.dumps(result, ensure_ascii=False)}"
+        )
+        assert llm._stream_events(stream) == [event, result]
+
+    def test_a_trailing_cr_is_still_stripped(self):
+        """CRLF line endings: splitting on ``\\n`` alone leaves a
+        trailing ``\\r`` on each line, which the per-line strip still
+        removes."""
+        event = {"type": "system", "subtype": "init"}
+        result = {"type": "result", "is_error": False}
+        stream = f"{json.dumps(event)}\r\n{json.dumps(result)}\r\n"
+        assert llm._stream_events(stream) == [event, result]

@@ -2,9 +2,9 @@
 (#101): a call the subscription refuses for a limit is asked again once
 the limit lifts, or pauses the pass with the time it can go on, and never
 fails a document; calls are paced to leave a reserve of each usage window
-to development sessions; every call that reaches the engine is an
-`engine-call` event of the run, with or without the LLM cache; and the
-calls a planned run is expected to make are estimated per stage.
+to development sessions; every call that reaches the engine is a `call`
+event of the run, with or without the LLM cache; and the calls a planned
+run is expected to make are estimated per stage.
 
 The fake claude CLI of test_claude_code_pinning stands in for the real
 one. Here it also prints what CLI 2.1.237 prints when the API refuses a
@@ -51,8 +51,10 @@ from yizkr.pipeline.llm import (
     DEFAULT_RESERVE,
     ENGINE_CALL,
     MAX_WAIT_ENV,
+    OVERAGE,
     OVERLOADED,
     RATE_LIMIT,
+    REJECTED,
     RESERVE,
     RESERVE_ENV,
     RESET_MARGIN,
@@ -147,6 +149,15 @@ OVERLOAD = {
     "status": 529,
     "error": "overloaded",
     "text": "API Error: Repeated 529 Overloaded errors",
+}
+# an API error that is not a subscription limit: never a refusal (no
+# limit status, no limit error, no rejected rate_limit_event), and never
+# an answer either, whatever the exit status
+API_ERROR = {
+    "info": None,
+    "status": 500,
+    "error": None,
+    "text": "API Error: Internal server error",
 }
 
 
@@ -319,6 +330,17 @@ class TestRefusal:
         events = [INIT, *refused_events(RATE_LIMITED, "s1")]
         assert refusal(events, 1) == Refusal(RATE_LIMIT)
 
+    def test_a_window_name_that_is_not_a_plain_token_is_unknown(self):
+        """rateLimitType only ever reaches a log line or a call event as
+        a lowercase, underscore-separated token: anything else (an
+        injected newline, say) is read as no window name at all, rather
+        than sit there unescaped."""
+        events = [
+            INIT,
+            *refused_events(usage_window(START + HOUR, "five_hour\n"), "s1"),
+        ]
+        assert refusal(events, 1) == Refusal(RATE_LIMIT)
+
     def test_an_overload(self):
         events = [INIT, *refused_events(OVERLOAD, "s1")]
         assert refusal(events, 1) == Refusal(OVERLOADED)
@@ -383,6 +405,26 @@ class TestRefusal:
         assert refusal([INIT, failed], 1) is None
         assert refusal([INIT], 1) is None
 
+    def test_a_missing_terminal_result_is_never_read_as_an_answer(self):
+        """A stream that ends without its terminal result event (the
+        process was killed, or crashed after the API's own refusal) is
+        never taken for an answer just because the exit status is 0: a
+        zero exit means an answer only once a result event says so."""
+        events = [
+            INIT,
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {
+                    "status": "rejected",
+                    "resetsAt": int(START + HOUR),
+                    "rateLimitType": "five_hour",
+                },
+            },
+        ]
+        assert refusal(events, 0) == Refusal(
+            USAGE_LIMIT, "five_hour", START + HOUR
+        )
+
 
 # -- asking again ------------------------------------------------------------
 
@@ -421,6 +463,17 @@ class TestAskingAgain:
         cli.script = [RATE_LIMITED]
         assert ClaudeCodeClient().complete("Read the letter.") == "answer"
         assert len(cli.calls) == 2
+
+    def test_a_non_limit_error_is_never_an_answer(self, cli, clock):
+        """A result event that reports is_error true for a reason that is
+        not a subscription limit is never assembled and returned as the
+        answer, even when the process exits 0: refusal() correctly finds
+        no limit here, but that is not the same as an answer."""
+        cli.exit_status = 0
+        cli.script = [API_ERROR]
+        with pytest.raises(RuntimeError, match="not a subscription limit"):
+            ClaudeCodeClient().complete("Read the letter.")
+        assert len(cli.calls) == 1
 
     def test_a_window_that_reopens_within_the_wait_is_waited_for(
         self, cli, clock
@@ -514,7 +567,10 @@ class TestAskingAgain:
         client = ClaudeCodeClient()
         with pytest.raises(UsageLimitReached) as paused:
             client.complete("Read the letter.")
-        # 60 + 120 + 240 + 480 s is the 15 minutes a call waits
+        # 60 + 120 + 240 + 480 s is the backoff sequence's own sum, once
+        # every doubling since has been capped (BACKOFF_CAP); the 5th
+        # refusal's backoff (480 s again) is what finally takes the
+        # call's wait past DEFAULT_MAX_WAIT's margin above that sum
         assert clock.slept == [60.0, 120.0, 240.0, 480.0]
         assert len(cli.calls) == 5
         assert paused.value.reason == RATE_LIMIT
@@ -523,7 +579,7 @@ class TestAskingAgain:
             clock.now + BACKOFF_CAP, UTC
         )
         assert client.last_pacing() == {
-            "waited": DEFAULT_MAX_WAIT,
+            "waited": 900.0,
             "refused": 5,
             "held": RATE_LIMIT,
         }
@@ -676,6 +732,25 @@ class TestReserve:
         assert record["waited"] == pytest.approx(240.0)
         assert record["held"] == THROTTLE
 
+    def test_a_throttle_pause_resumes_at_its_own_next_slot(self, pacer, clock):
+        """A throttle hold's own next slot (240 s away, above) is always
+        short of the window's full reset (an hour away here): a pause on
+        it resumes there, never at the window's raw reset, which could be
+        hours away."""
+        resets = START + HOUR
+        calls(
+            pacer,
+            report(0.50, resets_at=resets),
+            *[None] * 9,
+            report(0.60, resets_at=resets),
+        )
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=100.0)
+        assert paused.value.reason == THROTTLE
+        assert paused.value.resumes_at == datetime.fromtimestamp(
+            clock.now + 240.0, UTC
+        )
+
     def test_calls_in_flight_count_against_the_reserve(self, pacer, clock):
         """Five calls' worth is left above the line: each call dispatched
         and not yet answered takes its share, so the five are spread
@@ -721,22 +796,72 @@ class TestReserve:
         assert paused.value.reason == RESERVE
 
     def test_usage_credits_are_never_run_on(self, pacer, clock):
-        """A call reported to have run on usage credits marks its window
-        used up, whatever the reserve."""
+        """A call reported to have run on usage credits pauses the pass at
+        once, whatever the reserve: the subscription does not say when
+        that clears, so the pause is process-wide and holds without end
+        (TestOverage covers this in full)."""
         calls(pacer, report(resets_at=START + HOUR, overage=True))
         with pytest.raises(UsageLimitReached) as paused:
             admit(pacer, reserve=0.0, max_wait=0)
-        assert paused.value.reason == RESERVE
+        assert paused.value.reason == OVERAGE
+        assert paused.value.resumes_at is None
 
-    def test_a_window_reported_below_the_warnings_again_holds_nothing(
+    def test_a_windows_status_and_utilization_are_monotonic_within_it(
         self, pacer, clock
     ):
+        """Reports for one window (the same resetsAt) only ever raise its
+        recorded status and utilization: a later report that says less —
+        a lower status, or utilization at or below what is already
+        recorded, including one with no utilization at all, as a report
+        below the CLI's warning thresholds carries — never undoes what a
+        higher-ranked report already showed. Both reports are taken in
+        before either is admitted against, as two calls' completions
+        would be: admitting between them would sleep through the first
+        report's own hold and pass the window's reset."""
         resets = START + HOUR
         admit(pacer)
         admit(pacer)
         pacer.done([report(0.80, resets_at=resets)])
-        pacer.done([report(resets_at=resets)])
-        admit(pacer, max_wait=0)
+        pacer.done([report(resets_at=resets)])  # now below the warnings
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        assert paused.value.reason == RESERVE
+        assert clock.slept == []
+
+    def test_a_rejected_status_is_never_undone_by_a_later_report(
+        self, pacer, clock
+    ):
+        """A rejected status, once recorded for a window, holds every
+        later call for it until it reopens, whatever a later report of
+        the same window says — even an ``allowed`` one, which a slower
+        call dispatched before the rejection can still deliver after it,
+        since reports are taken in completion order, not dispatch
+        order."""
+        resets = START + HOUR
+        admit(pacer)
+        admit(pacer)
+        pacer.done([report(resets_at=resets, status=REJECTED)])
+        pacer.done([report(resets_at=resets)])  # a stale "allowed" report
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        assert paused.value.reason == USAGE_LIMIT
+        assert clock.slept == []
+
+    def test_a_stale_reports_lower_utilization_is_never_taken(
+        self, pacer, clock
+    ):
+        """A slower call can complete after a faster one's and report the
+        same window's utilization as it stood before the faster call's
+        own report: the pacer keeps the higher, live figure rather than
+        stepping back to the stale, lower one."""
+        resets = START + HOUR
+        admit(pacer)
+        admit(pacer)
+        pacer.done([report(0.80, resets_at=resets)])
+        pacer.done([report(0.70, resets_at=resets)])  # a stale, lower report
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        assert paused.value.reason == RESERVE
         assert clock.slept == []
 
     def test_a_window_the_clock_has_passed_starts_afresh(self, pacer, clock):
@@ -784,6 +909,53 @@ class TestReserve:
         # 2400 s
         assert clock.slept == [pytest.approx(2400.0)]
         assert client.last_pacing()["held"] == THROTTLE
+
+
+class TestOverage:
+    """The pass never runs on usage credits: an isUsingOverage report
+    pauses every call at once, process-wide, whatever else it says or
+    leaves out of the window it names — an allowed status
+    (test_usage_credits_are_never_run_on), no rateLimitType, no
+    resetsAt, or one the clock has already passed. Each is a way a
+    per-window hold alone would have let the report through: _take
+    returns early with no rateLimitType; a window with no resetsAt never
+    gets a hold in _hold; and a window whose resetsAt has passed is
+    deleted there, its use forgotten. The overage latch is checked
+    ahead of all of that (_Pacer._hold)."""
+
+    @pytest.fixture
+    def pacer(self, clock):
+        return llm._Pacer(clock=clock, sleep=clock.sleep)
+
+    def test_no_rate_limit_type(self, pacer, clock):
+        pacer.done([{"isUsingOverage": True}])
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        assert paused.value.reason == OVERAGE
+        assert paused.value.resumes_at is None
+
+    def test_no_resets_at(self, pacer, clock):
+        pacer.done(
+            [
+                {
+                    "isUsingOverage": True,
+                    "rateLimitType": "five_hour",
+                    "status": "rejected",
+                }
+            ]
+        )
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        assert paused.value.reason == OVERAGE
+        assert paused.value.resumes_at is None
+
+    def test_a_resets_at_the_clock_has_already_passed(self, pacer, clock):
+        pacer.done([report(resets_at=START - HOUR, overage=True)])
+        clock.now = START
+        with pytest.raises(UsageLimitReached) as paused:
+            admit(pacer, max_wait=0)
+        assert paused.value.reason == OVERAGE
+        assert paused.value.resumes_at is None
 
 
 # -- engine calls as events ---------------------------------------------------
@@ -1031,6 +1203,66 @@ class TestChunks:
             extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == []
         assert engine.closed == ["session-1"]
+
+    def test_a_pool_makes_no_call_after_the_pass_has_paused(self):
+        """ThreadPoolExecutor's work item catches BaseException, so once
+        one chunk's fork raises UsageLimitReached, the worker moves on to
+        the next queued chunk rather than stop (even at concurrency 1,
+        the default): a fresh call for it starts at waited=0, and would
+        not exceed its own max_wait on the very hold that just paused the
+        first — unless the pacer's cross-call latch (_Pacer._latch)
+        re-raises that pause for it at once, before it ever calls the
+        engine."""
+
+        class PooledEngine:
+            """Forks admit through a real pacer, retrying a scripted
+            count of refusals the way ClaudeCodeClient._run does: enough
+            refusals for the first chunk's own accumulated wait to pause
+            the pass, none for the second, which would otherwise dispatch
+            once it reads the same hold fresh."""
+
+            model_identifier = "fake-model"
+
+            def __init__(self, pacer, refusals, *, max_wait):
+                self._pacer = pacer
+                self._refusals = list(refusals)
+                self._max_wait = max_wait
+                self.calls: list[str] = []
+
+            def open_conversation(self, prompt):
+                return entity_manifest_json(), "session-1"
+
+            def fork(self, handle, prompt):
+                left = self._refusals.pop(0) if self._refusals else 0
+                record = {"waited": 0.0, "refused": 0, "held": None}
+                while True:
+                    self._pacer.admit(
+                        record,
+                        reserve=0.25,
+                        max_wait=self._max_wait,
+                        stop=threading.Event(),
+                    )
+                    if not left:
+                        self.calls.append(prompt)
+                        return ndjson([claim("e1", "Hildegard Löbig", 1876)])
+                    left -= 1
+                    record["refused"] += 1
+                    self._pacer.refused(Refusal(RATE_LIMIT), record["refused"])
+
+            def close_conversation(self, handle):
+                pass
+
+        clock = Clock()
+        pacer = llm._Pacer(clock=clock, sleep=clock.sleep)
+        # two refusals (60 s, then 120 s) push the first chunk's own
+        # accumulated wait (60 + 120 = 180) past 150 s; the second
+        # chunk's fresh call would face the same 120 s hold alone
+        # (well under 150 s) and dispatch, without the latch
+        engine = PooledEngine(pacer, refusals=[2, 0], max_wait=150.0)
+        extractor = ChunkedClaimExtractor(engine, budget=LINE_LENGTH)
+        with pytest.raises(UsageLimitReached):
+            extractor.extract(transcription(), "Q23")
+        assert engine.calls == []
 
 
 # -- the pipeline -------------------------------------------------------------

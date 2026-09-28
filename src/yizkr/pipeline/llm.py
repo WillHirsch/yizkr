@@ -21,8 +21,10 @@ Two Anthropic-backed engines, differing in how usage is billed:
   calls are moved into the run record or deleted (see
   ``ClaudeCodeClient``). A call the subscription refuses for a limit
   never fails: the engine waits for the limit to lift, or pauses the
-  pass (``UsageLimitReached``), and it paces its calls to leave a
-  reserve of each usage window to development sessions (see
+  pass (``UsageLimitReached``), and it paces its calls, from what the
+  CLI reports of each usage window, to leave a reserve of it to
+  development sessions — best-effort, since the CLI itself reports
+  nothing to pace against below its own first warning (see
   "Subscription limits" below).
 
 Pick the model for either engine with $YIZKR_LLM_MODEL.
@@ -357,16 +359,26 @@ class UsageLimitReached(PassPaused):
     """The claude subscription cannot serve the pass's next call within
     the longest wait the engine allows (see "Subscription limits" below):
     a usage window is used up, or used up to the reserve left for
-    development sessions, or the CLI kept refusing calls for a rate limit.
+    development sessions, the CLI kept refusing calls for a rate limit, or
+    a call is reported to have run on usage credits, which the pass never
+    runs on.
 
     `reason` names the hold (``USAGE_LIMIT``, ``RESERVE``, ``THROTTLE``,
-    ``RATE_LIMIT``, ``OVERLOADED`` or ``CLOSED``), `window` the CLI's name
-    for the usage window when one is known (``five_hour``,
+    ``RATE_LIMIT``, ``OVERLOADED``, ``OVERAGE`` or ``CLOSED``), `window`
+    the CLI's name for the usage window when one is known (``five_hour``,
     ``seven_day``, ...), and `resumes_at` (a UTC datetime) when the pass
     can go on: the time the CLI reported that the window reopens, or,
     when it reported none that is still ahead, the time the engine would
-    have tried again. No call is refused for good, so no document fails
-    for it: the pass unwinds, and is run again after `resumes_at`."""
+    have tried again — None when no time is known at all (``OVERAGE``: the
+    subscription does not say when it clears). No call is refused for
+    good, so no document fails for it: the pass unwinds, and is run again
+    after `resumes_at`, or once the subscription is off usage credits.
+
+    Once one call latches a pause (raises this from `_Pacer.admit`), every
+    later call to `admit`, from any thread, raises the same pause at once,
+    before any further hold or wait of its own: a pass that has paused
+    makes no further calls, even from a pool with more than one already
+    queued."""
 
     def __init__(
         self,
@@ -735,9 +747,18 @@ def _release_held(
 
 
 def _stream_events(stdout: str) -> list[dict]:
-    """The JSON objects of a stream-json event stream, one per line."""
+    """The JSON objects of a stream-json event stream, one per line.
+
+    Split on ``\\n`` alone, never `str.splitlines`: a model answer can
+    hold U+2028, U+2029 or U+0085, each a line boundary to `splitlines`
+    but not to the newline-delimited stream, and splitting on one there
+    would break a line's JSON in two, so both halves fail to parse and
+    the event is silently dropped, up to the terminal result event
+    itself. The per-line `strip` still removes an incidental trailing
+    ``\\r`` (CRLF) or leading or trailing space, since it only touches
+    each line's own ends, never a character in its middle."""
     events = []
-    for line in stdout.splitlines():
+    for line in stdout.split("\n"):
         line = line.strip()
         if not line:
             continue
@@ -1001,9 +1022,13 @@ def tool_failures(
 #   rejected), the window that binds (rateLimitType: five_hour,
 #   seven_day, seven_day_opus, ...), when that window reopens (resetsAt,
 #   Unix seconds), whether the call ran on usage credits beyond the
-#   subscription (isUsingOverage), and, only once the use of the window
-#   passes a threshold the CLI warns at, the fraction of it used
-#   (utilization, with surpassedThreshold);
+#   subscription (isUsingOverage), and the fraction of the window used
+#   (utilization, with surpassedThreshold) — but only once that
+#   fraction passes one of the CLI's own warning thresholds: for the
+#   five-hour window, 90%, and only while at most 72% of it has
+#   elapsed; for the weekly window, 75%, 50% or 25%, early in the week.
+#   Short of that threshold, or past its elapsed-time gate, no
+#   utilization is reported at all;
 # * a call the API refuses for a limit ends its turn on an API error: an
 #   assistant event whose error is rate_limit (overloaded, for an
 #   overload) and whose text is the CLI's notice ("You've hit your
@@ -1037,12 +1062,20 @@ def tool_failures(
 #   between the first report in the window and the latest. Dispatch
 #   stops at the reserve line until the window reopens, and short of it
 #   is spaced so that what is left above the line lasts until the reset.
-#   Below the CLI's first warning nothing is reported, so nothing is
-#   paced: a reserve larger than what is left at that warning is kept
-#   from the warning on. The use per call includes what other sessions
-#   used in the same time, which makes the pacing stricter, never looser;
-# * never runs on usage credits: a call reported to have used them marks
-#   its window as used up.
+#   This only ever paces from a report the CLI has actually sent, so it
+#   is best-effort, not a guarantee: below the CLI's first warning there
+#   is nothing to pace against, so the reserve gives no protection
+#   there, and a first warning that arrives late (close to 100% already
+#   used, or past its elapsed-time gate) can give little or none either.
+#   A local budget needing no CLI report is the only way to keep
+#   headroom below the first warning; the pass keeps none. The use per
+#   call includes what other sessions used in the same time, which makes
+#   the pacing stricter, never looser;
+# * never runs on usage credits: a report that a call ran on them pauses
+#   the pass at once, process-wide, whatever the reserve, whatever
+#   window the report names or fails to, and whatever else it says or
+#   leaves out. Nothing local says when that clears, so only a fresh
+#   process resumes.
 #
 # The reserve and the longest wait decide only when calls are made, never
 # what a call sends: they are no part of effective_config, so no cache key
@@ -1062,23 +1095,34 @@ LIMIT_ERRORS = frozenset({"rate_limit", "overloaded"})
 
 # Why a call waited, or its pass paused: a used-up usage window; a window
 # used up to the reserve; dispatch spaced to keep the reserve; a refusal
-# with no reset time the local clock has not passed; an overload; and a
-# wait the client's close ended.
+# with no reset time the local clock has not passed; an overload; a
+# report that a call ran on usage credits (whatever else that report
+# said, or left out, of the window it named); and a wait the client's
+# close ended.
 USAGE_LIMIT = "usage limit"
 RESERVE = "reserve"
 THROTTLE = "throttle"
 RATE_LIMIT = "rate limit"
 OVERLOADED = "overloaded"
+OVERAGE = "usage credits"
 CLOSED = "closed"
 
+# the statuses' severity, for a window's status to move only up it: a
+# later report may raise it (towards a used-up window) but never lower
+# it back down
+_STATUS_RANK = {ALLOWED: 0, ALLOWED_WARNING: 1, REJECTED: 2}
+
 # the settings, and their defaults: a quarter of each window is left to
-# development sessions, and a call waits up to 15 minutes in all, which
+# development sessions, and a call waits up to 16 minutes in all, which
 # covers a backoff and a window that reopens soon; a longer hold pauses
-# the pass
+# the pass. The margin above the backoff sequence's own sum (60 + 120 +
+# 240 + 480 = 900 s) keeps the pause on the schedule's own cap
+# (BACKOFF_CAP, once every doubling since has been capped), never on an
+# accidental equality with the default itself.
 RESERVE_ENV = "YIZKR_CLAUDE_RESERVE"
 MAX_WAIT_ENV = "YIZKR_CLAUDE_MAX_WAIT"
 DEFAULT_RESERVE = 0.25
-DEFAULT_MAX_WAIT = 900.0
+DEFAULT_MAX_WAIT = 960.0
 # the backoff after a refusal with no reset time ahead: a minute, doubled
 # with each refusal of the same call, up to the cap
 BACKOFF = 60.0
@@ -1119,6 +1163,21 @@ def _fraction(value: Any) -> float | None:
     """A share of a window from a stream, or None."""
     number = _number(value)
     return number if number is not None and number >= 0 else None
+
+
+# every rateLimitType CLI 2.1.237 reports (five_hour, seven_day, ...) is
+# a lowercase, underscore-separated token; anything else is unknown,
+# since a window name flows unescaped into log lines and call events
+_WINDOW_NAME = re.compile(r"[a-z0-9_]+")
+
+
+def _window_name(value: Any) -> str | None:
+    """A window name (rateLimitType) from a stream, or None."""
+    return (
+        value
+        if isinstance(value, str) and _WINDOW_NAME.fullmatch(value)
+        else None
+    )
 
 
 def _utc(seconds: float) -> datetime:
@@ -1170,11 +1229,17 @@ def refusal(
     """The limit that refused a call, from the call's stream-json events
     and exit status, or None when no limit refused it.
 
-    A call that did not end in an error (a zero exit, and no result with
-    is_error) was not refused, whatever its stream reported on the way:
-    the CLI retries some refusals itself. One that did was refused for a
-    limit when its result has the API status 429 or 529, an assistant
-    event carries a limit error, or its last rate_limit_event is
+    A call that ended with an explicit non-error result (a zero exit, and
+    a terminal result event that confirms is_error is false) was not
+    refused, whatever its stream reported on the way: the CLI retries
+    some refusals itself. A zero exit whose result event is missing or
+    silent on is_error is never read as that confirmation: the stream was
+    cut off before its terminal event, and falls through to the checks
+    below like any other exit, so a refusal it did carry (a rejected
+    rate_limit_event, a limit error) is still read as one instead of
+    being assembled and cached as the model's answer. One that did was
+    refused for a limit when its result has the API status 429 or 529, an
+    assistant event carries a limit error, or its last rate_limit_event is
     rejected. The refusal is for a used-up window when that event names
     the window and when it reopens; otherwise for an overload (529), or a
     rate limit."""
@@ -1182,7 +1247,7 @@ def refusal(
         (event for event in reversed(events) if event.get("type") == "result"),
         {},
     )
-    if returncode == 0 and result.get("is_error") is not True:
+    if returncode == 0 and result.get("is_error") is False:
         return None
     status = result.get("api_error_status")
     errors = {
@@ -1196,9 +1261,9 @@ def refusal(
     rejected = last.get("status") == REJECTED
     if not (status in LIMIT_STATUSES or errors & LIMIT_ERRORS or rejected):
         return None
-    window = last.get("rateLimitType")
+    window = _window_name(last.get("rateLimitType"))
     resets_at = _epoch(last.get("resetsAt"))
-    if rejected and isinstance(window, str) and window and resets_at:
+    if rejected and window and resets_at:
         return Refusal(USAGE_LIMIT, window, resets_at)
     if status == 529 or "overloaded" in errors:
         return Refusal(OVERLOADED)
@@ -1253,7 +1318,18 @@ class _Pacer:
     client of a process, since the windows are the account's: a hold one
     call meets holds every thread's next call. `clock` gives Unix
     seconds, and `sleep(seconds, stop)` waits, returning False when `stop`
-    was set before or while it waited."""
+    was set before or while it waited.
+
+    A pause latches, as a CLI version mismatch does for `_CliPin`: once
+    one call's admit raises UsageLimitReached, every later call to admit,
+    from any thread, raises the very same pause at once, before it
+    computes any hold or waits for one, for as long as the pause holds
+    (its own `until`) — the overage latch never lifts within the
+    process, since the subscription never says when it clears. Without
+    this, a chunk pool whose executor isolates one work item's exception
+    from the rest (as ThreadPoolExecutor's does) would let an
+    already-queued chunk's call through after the pass has paused, even
+    at concurrency 1."""
 
     def __init__(
         self,
@@ -1267,11 +1343,46 @@ class _Pacer:
         self._windows: dict[str, _Window] = {}
         # the backoff after the latest refusal, until it ends
         self._backoff: _Hold | None = None
+        # latched by any report that a call ran on usage credits,
+        # whatever else that report said or left out: cleared only by a
+        # fresh process, since the subscription never says when it ends
+        self._overage = False
+        # the pause a call latched, once one has, and the Unix time it
+        # holds until (math.inf for the overage latch): re-raised by
+        # every later admit until then; a fresh process starts over
+        self._pause: UsageLimitReached | None = None
+        self._pause_until = 0.0
         self._dispatched = 0
         self._completed = 0
         self._last_dispatch: float | None = None
         # the hold the log last announced
         self._announced: tuple | None = None
+
+    def raise_if_paused(self) -> None:
+        """Re-raise the pause an earlier admit latched, from any thread,
+        for as long as it holds: once the clock passes the time it was
+        raised for, it lifts, and a call computes a hold of its own
+        again."""
+        with self._lock:
+            pause = self._pause
+            if pause is None:
+                return
+            if self._clock() < self._pause_until:
+                raise pause
+            self._pause = None
+            self._pause_until = 0.0
+
+    def _latch(
+        self, pause: UsageLimitReached, until: float
+    ) -> UsageLimitReached:
+        """Latch `pause`, until Unix time `until` (math.inf: never, within
+        the process), unless a pause latched already; returns `pause`
+        either way, so the caller raises what it computed itself."""
+        with self._lock:
+            if self._pause is None:
+                self._pause = pause
+                self._pause_until = until
+        return pause
 
     def admit(
         self,
@@ -1285,7 +1396,11 @@ class _Pacer:
         `record` gathers what the call has waited (`waited`, in seconds)
         and why (`held`) over its attempts. A hold that would take the
         call's wait past `max_wait` raises UsageLimitReached at once,
-        without waiting, and so does a wait that `stop` ends."""
+        without waiting, and so does a wait that `stop` ends; either
+        latches until the hold's own `until`, so every later call to
+        admit raises the same pause at once (`raise_if_paused`), instead
+        of computing a hold of its own, for as long as it lasts."""
+        self.raise_if_paused()
         while True:
             with self._lock:
                 now = self._clock()
@@ -1297,25 +1412,35 @@ class _Pacer:
             delay = hold.until - now
             record["held"] = hold.reason
             if record["waited"] + delay > max_wait:
-                raise _paused(
-                    hold,
-                    now,
-                    reserve=reserve,
-                    max_wait=max_wait,
-                    waited=record["waited"],
+                raise self._latch(
+                    _paused(
+                        hold,
+                        now,
+                        reserve=reserve,
+                        max_wait=max_wait,
+                        waited=record["waited"],
+                    ),
+                    hold.until,
                 )
             self._announce(hold, reserve)
             slept = self._sleep(delay, stop)
             record["waited"] += max(0.0, self._clock() - now)
             if not slept:
-                raise UsageLimitReached(
-                    "the claude-code client was closed while a call waited "
-                    f"for the subscription ({hold.reason}). The pass is "
-                    "paused and makes no further calls; its completed "
-                    "outputs are kept.",
-                    reason=CLOSED,
-                    window=hold.window,
-                    resumes_at=_utc(hold.until),
+                raise self._latch(
+                    UsageLimitReached(
+                        "the claude-code client was closed while a call "
+                        f"waited for the subscription ({hold.reason}). The "
+                        "pass is paused and makes no further calls; its "
+                        "completed outputs are kept.",
+                        reason=CLOSED,
+                        window=hold.window,
+                        resumes_at=(
+                            _utc(hold.until)
+                            if math.isfinite(hold.until)
+                            else None
+                        ),
+                    ),
+                    hold.until,
                 )
 
     def done(self, infos: Iterable[Mapping[str, Any]]) -> None:
@@ -1362,8 +1487,17 @@ class _Pacer:
         return window
 
     def _take(self, info: Mapping[str, Any]) -> None:
-        name = info.get("rateLimitType")
-        if not isinstance(name, str) or not name:
+        """Take in one call's rate_limit_info. A window's status and
+        recorded utilization only move one way within it, towards a
+        used-up window: a later report that says less (a lower status, a
+        lower or missing utilization) never undoes what a higher one
+        already showed, since the window is not less used than it last
+        reported. Overage latches process-wide, ahead of any window, since
+        it names the account, not one window (see _hold)."""
+        if info.get("isUsingOverage") is True:
+            self._overage = True
+        name = _window_name(info.get("rateLimitType"))
+        if name is None:
             return
         status = (
             info.get("status") if info.get("status") in _STATUSES else None
@@ -1372,12 +1506,14 @@ class _Pacer:
         if info.get("isUsingOverage") is True:
             utilization = max(utilization or 0.0, 1.0)
         window = self._window(name, _epoch(info.get("resetsAt")))
-        if status is not None:
+        if status is not None and _STATUS_RANK[status] > _STATUS_RANK.get(
+            window.status, -1
+        ):
             window.status = status
-        if utilization is None:
-            if status == ALLOWED:
-                # below the CLI's warning thresholds: the use is unknown
-                window.utilization = window.anchor = window.per_call = None
+        if utilization is None or (
+            window.utilization is not None
+            and utilization <= window.utilization
+        ):
             return
         anchor = window.anchor
         if anchor is None:
@@ -1402,8 +1538,16 @@ class _Pacer:
 
     def _hold(self, now: float, reserve: float) -> _Hold | None:
         """The latest hold on dispatch at `now`, or None. A window whose
-        reset has passed is forgotten: its use starts afresh."""
+        reset has passed is forgotten: its use starts afresh. Overage is
+        checked ahead of the windows, and holds without end: unlike a
+        window's own hold, it does not depend on a name, a reported reset
+        or the local clock, so none of the ways those can be missing or
+        stale (an overage report with no rateLimitType, no resetsAt, or
+        one the clock has already passed) can let a call on usage credits
+        through."""
         holds = []
+        if self._overage:
+            holds.append(_Hold(math.inf, OVERAGE))
         if self._backoff is not None:
             if self._backoff.until > now:
                 holds.append(self._backoff)
@@ -1454,6 +1598,13 @@ class _Pacer:
             if announced == self._announced:
                 return
             self._announced = announced
+        if hold.reason == OVERAGE:
+            logger.warning(
+                "the claude subscription reports a call ran on usage "
+                "credits, which the pass never runs on: calls wait until "
+                "it says otherwise"
+            )
+            return
         window = f"the claude subscription's {_describe_window(hold.window)}"
         if hold.reason == THROTTLE:
             logger.warning(
@@ -1487,10 +1638,27 @@ def _paused(
 ) -> UsageLimitReached:
     """The pause for a hold that would take a call's wait past
     `max_wait`. It resumes when the window the CLI named reopens, when that
-    is still ahead, else when the engine would have asked again."""
+    is still ahead, else when the engine would have asked again; for a
+    call reported to have run on usage credits, the subscription says no
+    time at all, so `resumes_at` is None rather than a manufactured
+    far-future timestamp (`_stamp` cannot format one). A throttle hold's
+    own `until` is always its own next slot, short of the window's full
+    reset (`_hold`), so it resumes there rather than at the reopen the
+    narrative below still names."""
+    if hold.reason == OVERAGE:
+        return UsageLimitReached(
+            "the claude subscription reports a call ran on usage credits, "
+            "which the pass never runs on. It does not say when that "
+            "clears, so the pass is paused and makes no further calls; "
+            "its completed outputs are kept. Run it again once the "
+            "subscription is off usage credits.",
+            reason=OVERAGE,
+            resumes_at=None,
+        )
     ahead = hold.resets_at is not None and hold.resets_at > now
-    resumes = hold.resets_at if ahead else hold.until
-    when = _stamp(resumes)
+    reopens = hold.resets_at if ahead else hold.until
+    when = _stamp(reopens)
+    resumes = hold.until if hold.reason == THROTTLE else reopens
     window = f"the claude subscription's {_describe_window(hold.window)}"
     reserved = (
         f"the reserve this pass leaves to development sessions "
@@ -1523,9 +1691,10 @@ def _paused(
             + f"), and the engine would ask again at {when}: later than "
             f"{longest}"
         )
+    resumed = when if resumes == reopens else _stamp(resumes)
     return UsageLimitReached(
         f"{what}. The pass is paused and makes no further calls; its "
-        f"completed outputs are kept. Run it again after {when}.",
+        f"completed outputs are kept. Run it again after {resumed}.",
         reason=hold.reason,
         window=hold.window,
         resumes_at=_utc(resumes),
@@ -2052,9 +2221,12 @@ class ClaudeCodeClient:
         windows. Its sessions' transcripts are released when it ends,
         unless ``hold`` keeps a successful call's session open for
         forking. A call the subscription refused for a limit raises
-        _Refused, before any other check. A call whose stream reports the
-        Read tool failing on one of its ``inputs`` raises EngineToolError,
-        after the version and tool checks."""
+        _Refused, before any other check. A call whose terminal result
+        reports an error that is not a limit (refusal already ruled it
+        out) raises RuntimeError, whatever the exit status: it is never
+        assembled and returned as the answer. A call whose stream
+        reports the Read tool failing on one of its ``inputs`` raises
+        EngineToolError, after the version and tool checks."""
         stdout = ""
         held = False
         try:
@@ -2075,7 +2247,8 @@ class ClaudeCodeClient:
                 stdout = _as_text(exc.stdout)
                 raise
             stdout = result.stdout or ""
-            refused = refusal(_stream_events(stdout), result.returncode)
+            events = _stream_events(stdout)
+            refused = refusal(events, result.returncode)
             if refused is not None:
                 raise _Refused(refused)
             if result.returncode != 0:
@@ -2085,8 +2258,18 @@ class ClaudeCodeClient:
                     f"{detail or 'no output'}"
                     " (not logged in? run `claude` interactively once)"
                 )
+            result_event = next(
+                (e for e in reversed(events) if e.get("type") == "result"),
+                {},
+            )
+            if result_event.get("is_error") is True:
+                detail = str(result_event.get("result") or "").strip()[-500:]
+                raise RuntimeError(
+                    "claude CLI reported an error that is not a "
+                    f"subscription limit: {detail or 'no detail'}"
+                )
             report: dict[str, Any] = {"cli_version": self.cli_version}
-            for event in _stream_events(stdout):
+            for event in events:
                 if (
                     event.get("type") == "system"
                     and event.get("subtype") == "init"
@@ -2230,12 +2413,14 @@ class ObservedClient:
     pauses its pass. The fields are the `role`, its `stage`
     (ROLE_STAGES), the kind of `call` (complete, open or fork), the
     `outcome` (ok, error, paused or interrupted), how long the call took
-    (`duration_s`), the `error` it raised (the exception's name, never its
-    message), and, from an engine that paces its calls (`last_pacing`),
-    the seconds it waited for the subscription (`wait_s`), how many of its
-    attempts a limit `refused` and why it was last `held`; a pause for a
-    subscription limit adds its `window` and when the pass can go on
-    (`resumes_at`). A field with nothing to say is left out.
+    end to end (`duration_s`, which includes any time it spent paced —
+    `wait_s` is the part of it that was), the `error` it raised (the
+    exception's name, never its message), and, from an engine that paces
+    its calls (`last_pacing`), the seconds it waited for the subscription
+    (`wait_s`), how many of its attempts a limit `refused` and why it was
+    last `held`; a pause for a subscription limit adds its `window` and
+    when the pass can go on (`resumes_at`). A field with nothing to say
+    is left out.
 
     It wraps the engine's own client, behind the LLM cache when there is
     one, so it reports the calls that reach the engine, the cache's

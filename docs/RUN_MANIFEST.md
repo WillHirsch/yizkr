@@ -269,4 +269,8 @@ otherwise.
   decide only when calls are made, never what they send, and the
   manifest does not record them yet. A pause they cause is the
   invocation's `paused` outcome, and its call event says why and when
-  the run can go on.
+  the run can go on — except a report that a call ran on usage credits,
+  whose call event gives no `resumes_at` at all: the subscription does
+  not say when that clears, so the operator confirms that extra usage is
+  off on the account before invoking the run again, rather than waiting
+  for a time nothing will report.
