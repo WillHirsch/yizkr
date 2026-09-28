@@ -18,9 +18,11 @@ everything needed to rebuild the instance, plus a public export:
 Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
 no stored "living" flag (ADR-0020). A human is excluded unless the graph
 gives positive evidence they are not living: any death evidence (a date,
-place, or cause of death, a place of burial, or a death event), or birth
-more than ``cutoff_years`` (default 100) ago. Unknown means excluded.
-The determination itself lives in ``yizkr.core.privacy``.
+place, or cause of death, a place of burial, or a death event), or births
+that all lie more than ``cutoff_years`` ago (``DEFAULT_CUTOFF_YEARS`` by
+default), every birth statement a curator has not deprecated read at the
+latest year it allows. Unknown means excluded. The determination, and the
+query that reads births for it, live in ``yizkr.core.privacy``.
 
 Scheduling is the host's job (this is a home-server deployment): see
 deploy/README.md for the cron line. Retention: ``--keep N`` prunes the
@@ -35,13 +37,17 @@ import json
 import re
 import shutil
 import subprocess
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from yizkr.core import sparql
 from yizkr.core.config import Config, read_env_file
-from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS
+from yizkr.core.privacy import (
+    BIRTHS_QUERY,
+    DEFAULT_CUTOFF_YEARS,
+    is_possibly_living,
+    latest_births,
+)
 from yizkr.queries.publish import prefix_block
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -160,17 +166,19 @@ def dump_rdf(deploy_dir: Path, out_path: Path, compose_files=None) -> None:
 # ---------------------------------------------------------------------------
 
 
-# One row per human with a boolean per death signal. A death event needs
-# only the person as participant — no date — so an undated death marks a
-# person deceased just like a burial place or a cause of death does.
+# One row per human with a value per death signal, bound when the person
+# has that signal: only whether it is bound counts, so any value sampled
+# does. A death event needs only the person as participant — no date — so
+# an undated death marks a person deceased just like a burial place or a
+# cause of death does. Births are read apart, statement by statement
+# (``yizkr.core.privacy.BIRTHS_QUERY``).
 PERSON_FACTS_QUERY = """\
-SELECT ?person (SAMPLE(?birthDate) AS ?birth)
+SELECT ?person
        (SAMPLE(?deathDate) AS ?death) (SAMPLE(?deathPlace) AS ?deathPlace)
        (SAMPLE(?deathCause) AS ?deathCause) (SAMPLE(?burial) AS ?burial)
        (SAMPLE(?deathEventItem) AS ?deathEvent)
 WHERE {{
   ?person wdt:{instance_of} wd:{human} .
-  OPTIONAL {{ ?person wdt:{date_of_birth} ?birthDate . }}
   OPTIONAL {{ ?person wdt:{date_of_death} ?deathDate . }}
   OPTIONAL {{ ?person wdt:{place_of_death} ?deathPlace . }}
   OPTIONAL {{ ?person wdt:{cause_of_death} ?deathCause . }}
@@ -192,42 +200,45 @@ class ExclusionReport:
 
 
 def exclusion_report(
-    config: Config, cutoff_years: int = DEFAULT_CUTOFF_YEARS
+    config: Config,
+    cutoff_years: int = DEFAULT_CUTOFF_YEARS,
+    run: sparql.Runner | None = None,
+    vocabulary: tuple[dict[str, str], dict[str, str]] | None = None,
 ) -> ExclusionReport:
-    """Which humans the public export must not mention, and why."""
-    from yizkr.core.privacy import is_possibly_living, year_of
-    from yizkr.core.wiki import WikiClient
+    """Which humans the public export must not mention, and why. The
+    queries go to the instance's query service, with its vocabulary,
+    unless `run` and `vocabulary` are given."""
+    if vocabulary is None:
+        from yizkr.core.wiki import WikiClient
 
-    properties, items = WikiClient(config).vocabulary()
-    query = prefix_block(config.concept_uri) + PERSON_FACTS_QUERY.format(
-        instance_of=properties["instance_of"],
-        date_of_birth=properties["date_of_birth"],
-        date_of_death=properties["date_of_death"],
-        place_of_death=properties["place_of_death"],
-        cause_of_death=properties["cause_of_death"],
-        burial_place=properties["burial_place"],
-        participant=properties["participant"],
-        human=items["human"],
-        death=items["death"],
+        vocabulary = WikiClient(config).vocabulary()
+    properties, items = vocabulary
+    run = run or sparql.runner(config)
+    prefixes = prefix_block(config.concept_uri)
+    bindings = run(
+        prefixes
+        + PERSON_FACTS_QUERY.format(
+            instance_of=properties["instance_of"],
+            date_of_death=properties["date_of_death"],
+            place_of_death=properties["place_of_death"],
+            cause_of_death=properties["cause_of_death"],
+            burial_place=properties["burial_place"],
+            participant=properties["participant"],
+            human=items["human"],
+            death=items["death"],
+        )
     )
-    url = (
-        config.sparql_url
-        + "?"
-        + urllib.parse.urlencode({"query": query, "format": "json"})
-    )
-    with urllib.request.urlopen(url, timeout=120) as response:
-        bindings = json.load(response)["results"]["bindings"]
+    births = latest_births(run(prefixes + BIRTHS_QUERY.format(**properties)))
 
     cutoff_year = datetime.datetime.now(datetime.UTC).year - cutoff_years
     report = ExclusionReport()
     for binding in bindings:
         qid = binding["person"]["value"].rsplit("/", 1)[-1]
-        birth_year = year_of(binding.get("birth", {}).get("value", ""))
         has_death = any(
             binding.get(name, {}).get("value") for name in _DEATH_BINDINGS
         )
         possibly_living, reason = is_possibly_living(
-            birth_year, has_death, cutoff_year
+            births.get(qid, []), has_death, cutoff_year
         )
         report.reasons[qid] = reason
         (report.excluded if possibly_living else report.included).add(qid)

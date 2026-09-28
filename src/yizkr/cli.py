@@ -10,6 +10,8 @@
     yizkr stages manifest  what shapes a run, from its run.json
     yizkr scratch run      the whole corpus through every stage, unattended;
                            run it again to resume
+    yizkr scratch estimate the engine calls that run would make, per stage,
+                           counted without making one
     yizkr scratch watch    follow a scratch run; pause|resume|abort ask its
                            driver to stop or go on
 
@@ -723,11 +725,11 @@ def cmd_stages_manifest(args) -> int:
     return 0
 
 
-def cmd_scratch_run(args) -> int:
+def _scratch_plan(args) -> tuple[Path, dict]:
+    """(the corpus folder, the driver's options) for the run a `scratch
+    run` or `scratch estimate` command plans; exits when there is no
+    never-ingest list or no corpus folder."""
     from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
-    from yizkr.pipeline import scratch
-    from yizkr.pipeline.llm import PassPaused
-    from yizkr.pipeline.rundir import RunSettingsConflict
 
     # fail closed: no never-ingest list, no run, before any file is read
     exclusions = load_exclusions(required=True, env_file=args.env_file)
@@ -739,29 +741,37 @@ def cmd_scratch_run(args) -> int:
         )
     if not folder.is_dir():
         sys.exit(f"{folder} is not a directory")
+    return folder, {
+        "runs": args.runs,
+        "resume": args.resume,
+        "new": args.new,
+        "until": args.until,
+        "refresh": args.refresh or (),
+        "cache_dir": args.cache,
+        "env_file": args.env_file,
+        "exclusions": exclusions,
+        "language": args.language,
+        "fallback_language": args.fallback_language,
+        "chunk_concurrency": args.chunk_concurrency,
+        "extract_effort": args.extract_effort,
+        "review_effort": args.review_effort,
+        "extract_model": (
+            None
+            if args.extract_model in ("", "inherit")
+            else args.extract_model
+        ),
+        "min_free": int(args.min_free * 1024**3),
+    }
+
+
+def cmd_scratch_run(args) -> int:
+    from yizkr.pipeline import scratch
+    from yizkr.pipeline.llm import PassPaused
+    from yizkr.pipeline.rundir import RunSettingsConflict
+
+    folder, options = _scratch_plan(args)
     try:
-        return scratch.scratch_run(
-            folder,
-            runs=args.runs,
-            resume=args.resume,
-            new=args.new,
-            until=args.until,
-            refresh=args.refresh or (),
-            cache_dir=args.cache,
-            env_file=args.env_file,
-            exclusions=exclusions,
-            language=args.language,
-            fallback_language=args.fallback_language,
-            chunk_concurrency=args.chunk_concurrency,
-            extract_effort=args.extract_effort,
-            review_effort=args.review_effort,
-            extract_model=(
-                None
-                if args.extract_model in ("", "inherit")
-                else args.extract_model
-            ),
-            min_free=int(args.min_free * 1024**3),
-        )
+        return scratch.scratch_run(folder, **options)
     except RunSettingsConflict as exc:
         print(
             f"{exc}\nA new scratch run: yizkr scratch run --new",
@@ -778,6 +788,33 @@ def cmd_scratch_run(args) -> int:
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return scratch.EXIT_INTERRUPTED
+
+
+def cmd_scratch_estimate(args) -> int:
+    from yizkr.pipeline import estimate, scratch
+    from yizkr.pipeline.llm import PassPaused
+    from yizkr.pipeline.rundir import RunSettingsConflict
+
+    folder, options = _scratch_plan(args)
+    try:
+        counted = estimate.scratch_estimate(folder, **options)
+    except RunSettingsConflict as exc:
+        print(
+            f"{exc}\nThe run would be refused, before any call. Estimate a "
+            "new run instead: yizkr scratch estimate --new",
+            file=sys.stderr,
+        )
+        return scratch.EXIT_FAILED
+    except (PassPaused, scratch.ScratchRefused) as exc:
+        # the engine's own account of what stops it, or the refusal
+        print(str(exc), file=sys.stderr)
+        return scratch.EXIT_FAILED
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return scratch.EXIT_INTERRUPTED
+    for line in estimate.describe(counted):
+        print(line)
+    return scratch.EXIT_OK
 
 
 def _scratch_run_dir(args) -> Path:
@@ -1520,8 +1557,8 @@ def _scratch_parsers(sub, effort_choices) -> None:
 
     group = sub.add_parser(
         "scratch",
-        help="whole-corpus scratch runs: run one, follow it, pause, resume "
-        "or abort it (docs/runbooks/scratch-run.md)",
+        help="whole-corpus scratch runs: estimate one's calls, run it, "
+        "follow it, pause, resume or abort it (docs/runbooks/scratch-run.md)",
     )
     ssub = group.add_subparsers(dest="action", required=True)
     runs_help = (
@@ -1536,6 +1573,82 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "latest run again when it did not go to the end, so the same "
         "command resumes it; a new run otherwise",
     )
+    _scratch_plan_options(p, effort_choices, runs_help)
+    p.set_defaults(func=cmd_scratch_run)
+
+    p = ssub.add_parser(
+        "estimate",
+        help="the engine calls the same `scratch run` would make now, per "
+        "stage: those the LLM cache cannot answer, counted without a model "
+        "call or a wiki read, and without holding what a running driver "
+        "holds. Takes the options of `scratch run`",
+        description="Plans the run `yizkr scratch run` with the same "
+        "options would make now, a new one or the one it would invoke "
+        "again, and counts the engine calls it would make, per stage and "
+        "in all: the calls whose views do not stand that the LLM cache "
+        "cannot answer. Known counts are keyed as the run keys its calls; "
+        "the calls after an answer the engine has yet to give are "
+        "estimated, and what only its answers decide is given as up to so "
+        "many more, an estimate, not a ceiling. It "
+        "makes no model call, reads no wiki, writes nothing and takes no "
+        "lock, so it runs beside a running driver "
+        "(docs/runbooks/scratch-run.md, Before a run). Takes the options "
+        "of `scratch run`.",
+    )
+    _scratch_plan_options(p, effort_choices, runs_help)
+    p.set_defaults(func=cmd_scratch_estimate)
+
+    p = ssub.add_parser(
+        "watch",
+        help="follow a scratch run (the latest by default) in the live "
+        "monitor (docs/MONITOR.md); quitting it never stops the run",
+    )
+    p.add_argument("run", nargs="?", help="a run id or directory")
+    p.add_argument(
+        "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
+    )
+    p.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="seconds between refreshes (default 2)",
+    )
+    p.add_argument("--once", action="store_true", help="print one view")
+    p.add_argument(
+        "--no-page",
+        action="store_true",
+        help="do not write the status page into the run directory",
+    )
+    p.add_argument(
+        "--serve",
+        metavar="ADDRESS:PORT",
+        help="serve the status page, and nothing else, while the monitor "
+        "runs (off by default)",
+    )
+    p.set_defaults(func=cmd_scratch_watch)
+
+    for action in CONTROL_ACTIONS:
+        p = ssub.add_parser(
+            action,
+            help=f"ask a scratch run's driver to {action} the run, or one "
+            "stage or document kind of it, through its control file",
+        )
+        p.add_argument("run", nargs="?", help="a run id or directory")
+        p.add_argument(
+            "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
+        )
+        slice_ = p.add_mutually_exclusive_group()
+        slice_.add_argument("--stage", help="only this stage")
+        slice_.add_argument("--kind", help="only this document kind")
+        p.add_argument("--reason", default="", help="why, for the log")
+        p.set_defaults(func=cmd_scratch_control)
+
+
+def _scratch_plan_options(p, effort_choices, runs_help: str) -> None:
+    """The options of `scratch run`, which `scratch estimate` takes too,
+    so that it plans the same run."""
+    from yizkr.pipeline import scratch
+
     p.add_argument(
         "--corpus",
         type=Path,
@@ -1627,52 +1740,6 @@ def _scratch_parsers(sub, effort_choices) -> None:
         help="the free space, in GiB, the run directory's and the cache's "
         "filesystems must have (default 2)",
     )
-    p.set_defaults(func=cmd_scratch_run)
-
-    p = ssub.add_parser(
-        "watch",
-        help="follow a scratch run (the latest by default) in the live "
-        "monitor (docs/MONITOR.md); quitting it never stops the run",
-    )
-    p.add_argument("run", nargs="?", help="a run id or directory")
-    p.add_argument(
-        "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
-    )
-    p.add_argument(
-        "--interval",
-        type=float,
-        default=2.0,
-        help="seconds between refreshes (default 2)",
-    )
-    p.add_argument("--once", action="store_true", help="print one view")
-    p.add_argument(
-        "--no-page",
-        action="store_true",
-        help="do not write the status page into the run directory",
-    )
-    p.add_argument(
-        "--serve",
-        metavar="ADDRESS:PORT",
-        help="serve the status page, and nothing else, while the monitor "
-        "runs (off by default)",
-    )
-    p.set_defaults(func=cmd_scratch_watch)
-
-    for action in CONTROL_ACTIONS:
-        p = ssub.add_parser(
-            action,
-            help=f"ask a scratch run's driver to {action} the run, or one "
-            "stage or document kind of it, through its control file",
-        )
-        p.add_argument("run", nargs="?", help="a run id or directory")
-        p.add_argument(
-            "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
-        )
-        slice_ = p.add_mutually_exclusive_group()
-        slice_.add_argument("--stage", help="only this stage")
-        slice_.add_argument("--kind", help="only this document kind")
-        p.add_argument("--reason", default="", help="why, for the log")
-        p.set_defaults(func=cmd_scratch_control)
 
 
 def main() -> int:
