@@ -537,21 +537,20 @@ class Orchestrator:
         self.fallback_language = fallback_language
         self.chunk_concurrency = chunk_concurrency
         # reasoning effort per phase: mechanical bulk steps (transcription,
-        # extraction) run low; judgment steps (adjudication, critique) run
-        # high — where the thinking is cheap and the decision matters.
+        # extraction) run low; the judgment step, the critique, runs high
+        # — where the thinking is cheap and the decision matters.
         self.extract_effort = extract_effort
         self.review_effort = review_effort
         # per-phase model: claim extraction is a high-volume, structured
         # task where source discipline (extract only what the source
         # asserts) matters more than raw capability, so it can run a
         # distinct model from the run's main one — which stays on the
-        # judgment steps (adjudication, critique). None inherits the main
-        # model. See docs/adr/0016.
+        # critique. None inherits the main model. See docs/adr/0016.
         self.extract_model = extract_model
         # serial mode (ADR-0019): process artifacts one at a time, in a
         # greedy-overlap sequence, each fully written before the next
-        # reconciles — so cross-artifact identity resolves inline at the
-        # per-artifact gates instead of in a separate reconcile-graph pass.
+        # reconciles — so a later artifact's resolve step finds, by exact
+        # label, the items the earlier ones wrote.
         self.serial = serial
         # how many documents to extract (transcribe + chunked extract) at
         # once during serial mode's up-front extract-all phase. Multiplies
@@ -887,23 +886,37 @@ class Orchestrator:
         return result.artifact_qid
 
     def _presentation(self, doc: DocumentRun):
+        """The deck unpacked, kept by the SHA-1 of its bytes: a deck is
+        unpacked once for each content it has had, so one whose bytes
+        change between two runs of the orchestrator is unpacked again."""
         from yizkr.pipeline.presentation import unpack_pptx
 
         if not hasattr(self, "_presentation_cache"):
             self._presentation_cache: dict[str, object] = {}
-        key = str(doc.source)
-        if key not in self._presentation_cache:
-            self._presentation_cache[key] = unpack_pptx(doc.source)
-        return self._presentation_cache[key]
+        if doc.sha1 not in self._presentation_cache:
+            self._presentation_cache[doc.sha1] = unpack_pptx(doc.source)
+        return self._presentation_cache[doc.sha1]
 
-    def _step_derive_media(self, doc: DocumentRun) -> dict[str, str]:
+    def _derived_media_current(self, doc: DocumentRun) -> bool:
+        """Does the document's directory hold the record of its deck's
+        derived media, whole and for the deck's bytes as they are now,
+        with the bytes of every medium it names
+        (presentation.read_derived_media)? The directory is kept for one
+        source's bytes, so a record made there stays current; a missing
+        or damaged one is made again."""
+        from yizkr.pipeline.presentation import read_derived_media
+
+        record = read_derived_media(doc.dir)
+        return record is not None and record.source_sha1 == doc.sha1
+
+    def _step_derive_media(self, doc: DocumentRun):
         """Record the images the deck embeds in the document's directory
         (presentation.record_derived_media): each by the SHA-1 of its
-        bytes, with the deck's own SHA-1 and the slides it is on, and its
-        bytes kept beside the record. Nothing is read from the wiki or
-        written to it (ADR-0025 §2): registering the images and uploading
-        their bytes is left to the write side. Returns {media name ->
-        SHA-1}."""
+        bytes, with the deck's own SHA-1 and title and the slides it is
+        on, and its bytes kept beside the record. Nothing is read from the
+        wiki or written to it (ADR-0025 §2): registering the images and
+        uploading their bytes is left to the write side. Returns the
+        record."""
         from yizkr.pipeline.presentation import record_derived_media
 
         content = self._presentation(doc)
@@ -913,14 +926,12 @@ class Orchestrator:
                 f"skipped (image media only in W1)",
                 file=sys.stderr,
             )
-        record = record_derived_media(
-            content, source_sha1=doc.sha1, directory=doc.dir
+        return record_derived_media(
+            content,
+            source_sha1=doc.sha1,
+            title=doc.state.title,
+            directory=doc.dir,
         )
-        return {
-            name: sha1
-            for sha1, medium in record.media.items()
-            for name in medium.names
-        }
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
         """Make the document's batch: the GEDCOM adapter's, or extraction
@@ -1117,12 +1128,12 @@ class Orchestrator:
         from yizkr.pipeline.chunking import ChunkedClaimExtractor
 
         # always entity-first (ADR-0007), even for documents that fit a
-        # single call: reconciliation NEEDS the entity manifest, and a
-        # small document without one silently mints duplicates instead
-        # of being adjudicated against the graph — every entity must
-        # reach the adjudicator, however short the document. Chunking a
-        # small document costs a few extra calls and is never incorrect
-        # (ADR-0006 §7).
+        # single call: the batch carries the entity manifest, which the
+        # writer takes each entity's label, aliases and kind from, the
+        # critic and serial mode's sequencer read, and identity matching
+        # blocks on — every entity must be in it, however short the
+        # document. Chunking a small document costs a few extra calls and
+        # is never incorrect (ADR-0006 §7).
         extractors: list[ChunkedClaimExtractor] = []
 
         def extract() -> ClaimBatch:
@@ -1517,17 +1528,12 @@ class Orchestrator:
             doc.save()
             self.log(f"  registered as {doc.state.artifact_qid}")
 
-        if doc.source.suffix.lower() in PRESENTATION_SUFFIXES and not (
-            doc.state.detail or {}
-        ).get("derived_media"):
-            # recorded in the document's directory, not registered: no
-            # wiki access, so no lock
-            derived = self._step_derive_media(doc)
-            doc.state.detail = (doc.state.detail or {}) | {
-                "derived_media": derived
-            }
-            doc.save()
-            self.log(f"  derived media: {len(set(derived.values()))} recorded")
+        # a deck's derived media are recorded in its directory, not
+        # registered: no wiki access, so no lock. The record is current
+        # while it is there whole (_derived_media_current)
+        if doc.kind == "presentation" and not self._derived_media_current(doc):
+            record = self._step_derive_media(doc)
+            self.log(f"  derived media: {len(record.media)} recorded")
 
         # the views before the gates are brought up to date once in each
         # run

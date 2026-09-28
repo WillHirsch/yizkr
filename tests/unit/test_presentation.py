@@ -16,6 +16,7 @@ from yizkr.pipeline.presentation import (
     EmbeddedMedium,
     PresentationContent,
     Slide,
+    read_derived_media,
     register_derived_media,
     slide_transcript,
     unpack_pptx,
@@ -196,8 +197,10 @@ class TestOrchestratorBranch:
                 return Orchestrator._step_batch(self, doc)
 
             def _step_derive_media(self, doc):
+                # the real step, which records the media in the document's
+                # directory (#128)
                 self.calls.append(f"derive:{doc.source.name}")
-                return {"image1.jpeg": "Q501"}
+                return Orchestrator._step_derive_media(self, doc)
 
             def _step_extract(self, doc, transcription):
                 self.calls.append("extract")
@@ -211,8 +214,14 @@ class TestOrchestratorBranch:
         orchestrator.run()
         (doc,) = orchestrator.documents()
         assert "derive:Family Deck.pptx" in orchestrator.calls
-        assert doc.state.detail["derived_media"] == {"image1.jpeg": "Q501"}
-        # derived media are registered exactly once across re-runs
+        record = read_derived_media(doc.dir)
+        image = hashlib.sha1(b"\xff\xd8fakejpeg").hexdigest()
+        assert (record.source_sha1, record.title) == (doc.sha1, "Family Deck")
+        assert {
+            key: (medium.names, medium.slides)
+            for key, medium in record.media.items()
+        } == {image: (["image1.jpeg"], [1, 2])}
+        # derived media are recorded once, and a re-run finds the record
         orchestrator.run()
         assert orchestrator.calls.count("derive:Family Deck.pptx") == 1
 

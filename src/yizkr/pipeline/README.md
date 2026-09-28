@@ -189,15 +189,19 @@ re-running one step in isolation — but for a normal ingest you only ever run
   fragments (`part of` + page qualifier). Statement provenance:
   `stated in → the artifact itself` (see docs/MODELING.md, "Artifacts
   and registration"). Runs before extraction so claims can cite QIDs.
-  It is the one step before the gates that uses the wiki, until
-  write-time registration (#103) takes its place.
+  Registration and resolve (below) are the steps before the write that
+  use the wiki: registration until write-time registration (#103) takes
+  its place, and resolve's label match until the identity-map writer
+  (#109).
 - **derived media** (decks) — records the images a deck embeds in the
   deck's state directory, not on the wiki: `derived-media.json` keys each
   distinct image by the SHA-1 of its bytes (ADR-0010), with its names in
-  the deck, the slides it is on and the deck's own SHA-1, and
-  `derived-media/` keeps its bytes. Registering and uploading them
-  (ADR-0008) is left to write-time registration (#103). Media other than
-  images are counted and reported, not recorded.
+  the deck, the slides it is on, and the deck's own SHA-1 and title, and
+  `derived-media/` keeps its bytes. The record stands while it is there
+  whole, with the bytes of every image it names; one that is missing or
+  damaged is made again. Registering and uploading the images (ADR-0008)
+  is left to write-time registration (#103). Media other than images are
+  counted and reported, not recorded.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (Transkribus-style platform adapter, stub for now).
@@ -244,11 +248,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
   input (#130); across a scratch run's corpus, identity is corpus
   clustering's (#105). The standalone `yizkr ingest reconcile` step still
   reads the graph: it blocks a batch's entities against a roster of the
-  whole graph (shared kind + name token, minus pairs a graph fact proves
-  cannot match, ADR-0017), then an LLM adjudicates each candidate as
-  same / uncertain / distinct. Only your `approve` rows of its CSV take
-  effect, because a wrong merge corrupts every downstream attribution
-  (identity is never auto-confirmed, ADR-0007).
+  whole graph (shared kind + name token), then an LLM adjudicates each
+  candidate as same / uncertain / distinct. It passes the blocking
+  neither the batch's claims nor the place containment, so the
+  impossibility filter (ADR-0017) prunes next to nothing there. Only your
+  `approve` rows of its CSV take effect, because a wrong merge corrupts
+  every downstream attribution (identity is never auto-confirmed,
+  ADR-0007).
 - **resolve** — applies the approved equivalences, then replaces remaining
   `local` refs whose label exactly matches an existing item; anything
   fuzzier is left for the reviewer, who sees `NEW:<local_id>` vs a QID in
@@ -321,18 +327,19 @@ path; until then, two mechanisms remain:
   ```mermaid
   flowchart LR
       x["extract EVERY<br/>artifact"] --> s["sequence<br/>(hubs first)"]
-      s --> a1["artifact 1<br/>· 2 gates · write"]
-      a1 --> a2["artifact 2<br/>· 2 gates · write"]
+      s --> a1["artifact 1<br/>· claim review · write"]
+      a1 --> a2["artifact 2<br/>· claim review · write"]
       a2 --> a3["artifact 3 …<br/>each sees the prior"]
   ```
 
   The trade is rhythm: because each artifact must be written before the
   next reconciles, a serial run advances **one artifact per pass** — clear
-  its gates, re-run, next artifact. That is more re-invocations than the
-  default's ~3, and in return each artifact resolves against what the
-  earlier ones wrote. **Advancing the process = re-running `ingest run`**
-  after you save a reviewed CSV; a future frontend (or a `--watch` mode)
-  will drive those re-runs for you.
+  its claim review, re-run, next artifact: about one re-run per artifact,
+  where the default takes every document to its claim review in one pass
+  and writes them all in the next. In return each artifact resolves
+  against what the earlier ones wrote. **Advancing the process =
+  re-running `ingest run`** after you save a reviewed CSV; a future
+  frontend (or a `--watch` mode) will drive those re-runs for you.
 
   Serial extracts every artifact up front (the sequencer needs all the
   manifests). That phase is parallelisable: `--extract-concurrency N`

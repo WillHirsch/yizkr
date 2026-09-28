@@ -2,23 +2,30 @@
 
 Every step a document takes before the write runs here against a wiki
 that refuses. The orchestrator's wiki client and connection settings are
-stubs that fail on any read or write, no other client or settings can be
-made, and the network is closed, so a query-service request fails too.
-Each refusal is recorded before it raises: the orchestrator isolates a
-document's failure, so the tests assert that nothing was asked of the
-wiki, not only that nothing raised.
+stubs that fail on any read or write; no wiki client can be made and no
+connection settings loaded; every connection setting read from the
+environment names a closed loopback port; and no name lookup or socket
+connect succeeds. So a request to the wiki or its query service is
+refused whether its URL comes from a client, from the settings or from
+a host name, and a request to a host that cannot be resolved is refused
+at its lookup, before it could fail on its own. Each refusal is recorded
+before it raises: the orchestrator isolates a document's failure, and a
+step could swallow one, so the tests assert that nothing was asked of
+the wiki, not only that nothing raised.
 
 The steps are those #128 lists that have code: transcription (by vision,
 from a text file, from slide text and from a curator's correction) and
 its check, extraction (entity manifest, chunks, critique), the GEDCOM
 adapter, a deck's slide text and derived media, the reconcile step, and
-adjudication given a roster. Corpus clustering and flags have no code
-yet. Two steps before the write that are outside that list still use the
-wiki in `ingest run`, and the orchestrator here replaces them:
-registration, which runs first until write-time registration (#103)
-takes its place, and the resolve step's exact-label read, which goes
-with the identity-map writer (#109). A document stops at the
-claim-review gate, so the write itself is never reached.
+the per-document adjudication (`reconcile.adjudicate`) given a roster.
+Corpus clustering, cluster adjudication and flags have no code yet; #105,
+#106 and #112 run them under this refusing wiki. Two steps before the
+write that are outside that list still use the wiki in `ingest run`, and
+the orchestrator here replaces them: registration, which runs first
+until write-time registration (#103) takes its place, and the resolve
+step's exact-label read, which goes with the identity-map writer (#109).
+A document stops at the claim-review gate, so the write itself is never
+reached.
 
 Every document and deck is fictional (docs/EXAMPLES.md).
 """
@@ -30,6 +37,7 @@ import hashlib
 import json
 import shutil
 import socket
+import threading
 import zipfile
 from pathlib import Path
 
@@ -52,6 +60,7 @@ from yizkr.pipeline.orchestrate import (
     BATCHED,
     DOCUMENT_STAGES,
     REUSED,
+    DocumentState,
     Orchestrator,
 )
 from yizkr.pipeline.presentation import (
@@ -60,6 +69,7 @@ from yizkr.pipeline.presentation import (
     DerivedMediaRecord,
     PresentationContent,
     Slide,
+    read_derived_media,
     record_derived_media,
     unpack_pptx,
 )
@@ -109,11 +119,25 @@ class Refusing:
         self._refusals.refuse(f"{self._what}.{name}")
 
 
+# a loopback port nothing listens on (the discard service's)
+CLOSED = "127.0.0.1:9"
+# every connection setting that names the wiki or its query service
+# (yizkr.core.config), set to the closed port; the environment wins over
+# an env file wherever a setting is read
+CLOSED_SETTINGS = {
+    "WIKIBASE_URL": f"http://{CLOSED}",
+    "WDQS_SPARQL_URL": f"http://{CLOSED}/sparql",
+    "WIKIBASE_PUBLIC_HOST": "127.0.0.1",
+    "WDQS_PUBLIC_HOST": "127.0.0.1",
+    "HTTP_PORT": "9",
+    "PUBLIC_SCHEME": "http",
+}
+
+
 @pytest.fixture
 def refusals(monkeypatch) -> Refusals:
-    """The wiki refuses at every layer: no client or connection settings
-    can be made, and no socket connects, so neither the wiki's API nor
-    its query service can be reached."""
+    """The wiki refuses at every layer (the module docstring says how),
+    and every request it refuses is recorded in the returned Refusals."""
     refusals = Refusals()
 
     def refused(request: str):
@@ -122,8 +146,12 @@ def refusals(monkeypatch) -> Refusals:
 
         return refuse
 
+    for name, value in CLOSED_SETTINGS.items():
+        monkeypatch.setenv(name, value)
     monkeypatch.setattr(WikiClient, "__init__", refused("WikiClient()"))
     monkeypatch.setattr(Config, "load", classmethod(refused("Config.load()")))
+    for lookup in ("getaddrinfo", "gethostbyname", "gethostbyname_ex"):
+        monkeypatch.setattr(socket, lookup, refused(f"socket.{lookup}()"))
     monkeypatch.setattr(socket.socket, "connect", refused("socket.connect()"))
     monkeypatch.setattr(
         socket, "create_connection", refused("socket.create_connection()")
@@ -145,17 +173,23 @@ def sha1(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
 
 
-def build_deck(path: Path) -> Path:
-    """A fictional mini deck (ADR-0008) of three slides: the shop front on
-    slides 1 and 2; the studio portrait on slide 2 as image2.png and on
-    slide 3 as image4.png, the same bytes under two names; and on slide 3
-    a film, which is not an image."""
+def build_deck(
+    path: Path,
+    *,
+    shop_front: bytes = SHOP_FRONT,
+    firm: str = "gegr. 1863, Brunnenring 35",
+    media: bool = True,
+) -> Path:
+    """A fictional mini deck (ADR-0008) of three slides. With `media`, the
+    shop front is on slides 1 and 2; the studio portrait is on slide 2 as
+    image2.png and on slide 3 as image4.png, the same bytes under two
+    names; and slide 3 also holds a film, which is not an image."""
     slides = {
-        1: (["Hutmacherei zum Blauen Hut"], ["gegr. 1863, Brunnenring 35"]),
+        1: (["Hutmacherei zum Blauen Hut"], [firm]),
         2: (["Eugen Löbig, Hutmachermeister"], ["1836-1909"]),
         3: (["Photograph Brüsrich, Peiltal"],),
     }
-    media = {
+    names = {
         1: ["image1.png"],
         2: ["image1.png", "image2.png"],
         3: ["image4.png", "clip1.mp4"],
@@ -185,10 +219,14 @@ def build_deck(path: Path) -> Path:
             archive.writestr(
                 f"ppt/slides/slide{n}.xml", slide_xml(*paragraphs)
             )
-            links = [
-                (f"rId{10 + i}", IMAGE_REL, f"../media/{name}")
-                for i, name in enumerate(media[n])
-            ]
+            links = (
+                [
+                    (f"rId{10 + i}", IMAGE_REL, f"../media/{name}")
+                    for i, name in enumerate(names[n])
+                ]
+                if media
+                else []
+            )
             if n == 1:
                 links.append(
                     ("rId20", NOTES_REL, "../notesSlides/notesSlide1.xml")
@@ -200,10 +238,11 @@ def build_deck(path: Path) -> Path:
             "ppt/notesSlides/notesSlide1.xml",
             slide_xml(["Adressbuch der Stadt Flörburg 1912"]),
         )
-        archive.writestr("ppt/media/image1.png", SHOP_FRONT)
-        archive.writestr("ppt/media/image2.png", PORTRAIT)
-        archive.writestr("ppt/media/image4.png", PORTRAIT)
-        archive.writestr("ppt/media/clip1.mp4", FILM)
+        if media:
+            archive.writestr("ppt/media/image1.png", shop_front)
+            archive.writestr("ppt/media/image2.png", PORTRAIT)
+            archive.writestr("ppt/media/image4.png", PORTRAIT)
+            archive.writestr("ppt/media/clip1.mp4", FILM)
     return path
 
 
@@ -216,6 +255,14 @@ def corpus(tmp_path: Path) -> Path:
     (folder / "studio-photo-1890s.png").write_bytes(PORTRAIT)
     shutil.copy(u.GEDCOM_FIXTURE, folder / "example-family.ged")
     build_deck(folder / DECK)
+    return folder
+
+
+def deck_alone(tmp_path: Path, **layout) -> Path:
+    """A folder that holds the deck and nothing else."""
+    folder = tmp_path / "decks"
+    folder.mkdir()
+    build_deck(folder / DECK, **layout)
     return folder
 
 
@@ -277,17 +324,42 @@ def quiet(*args, **kwargs) -> None:
     pass
 
 
+class HeldLock:
+    """The orchestrator's wiki lock, knowing which thread holds it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._holder: int | None = None
+
+    def __enter__(self):
+        self._lock.acquire()
+        self._holder = threading.get_ident()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._holder = None
+        self._lock.release()
+
+    def held_here(self) -> bool:
+        return self._holder == threading.get_ident()
+
+
 class BeforeTheWrite(Orchestrator):
     """`ingest run`'s orchestrator with the wiki refusing and the engine
     scripted. Registration and the resolve step, which use the wiki and
     are not steps #128 covers, are replaced: registration names a fixed
-    artifact item, and resolve leaves the batch as it is."""
+    artifact item, and resolve leaves the batch as it is. Each recording
+    of a deck's derived media is noted, with whether the thread that made
+    it held the wiki lock."""
 
     def __init__(self, folder: Path, state_dir: Path, refusals, **kwargs):
         kwargs.setdefault("exclusions", ExclusionList())
         super().__init__(folder, state_dir, log=quiet, **kwargs)
         self._client = Refusing(refusals, "wiki")
         self._config = Refusing(refusals, "connection settings")
+        self._wiki_lock = HeldLock()
+        # (file name, the wiki lock held) per recording of derived media
+        self.recordings: list[tuple[str, bool]] = []
 
     def _llm(self, role, doc):
         return ScriptedEngine(doc.sha1, *PEOPLE[doc.source.name])
@@ -297,6 +369,10 @@ class BeforeTheWrite(Orchestrator):
 
     def _step_resolve(self, doc, batch):
         return batch
+
+    def _step_derive_media(self, doc):
+        self.recordings.append((doc.source.name, self._wiki_lock.held_here()))
+        return super()._step_derive_media(doc)
 
 
 def this_run(orchestrator: Orchestrator, name: str) -> set[tuple[str, str]]:
@@ -314,7 +390,22 @@ def stages(doc) -> set[tuple[str, str]]:
     return {(doc.sha1, stage) for stage in DOCUMENT_STAGES[doc.kind]}
 
 
-# -- the tests ----------------------------------------------------------------
+def the_deck(orchestrator: Orchestrator):
+    (deck,) = [
+        doc for doc in orchestrator.documents() if doc.kind == "presentation"
+    ]
+    return deck
+
+
+def media_of(record: DerivedMediaRecord) -> dict[str, tuple[list, list]]:
+    """media SHA-1 -> (names, slides)"""
+    return {
+        key: (medium.names, medium.slides)
+        for key, medium in record.media.items()
+    }
+
+
+# -- the steps before the write ----------------------------------------------
 
 
 def test_every_step_before_the_write_leaves_the_wiki_alone(tmp_path, refusals):
@@ -355,6 +446,7 @@ def test_rerunning_reuses_and_rechecks_the_views_without_the_wiki(
     docs = again.documents()
     for doc in docs:
         assert stages(doc) <= this_run(again, REUSED)
+    assert again.recordings == []  # the deck's record stands too
 
     # a curator's correction makes the postcard's transcription again, and
     # its batch from it
@@ -376,7 +468,7 @@ def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     tmp_path, refusals
 ):
     """Serial mode's extract-all pass (ADR-0019) runs documents in
-    parallel; the derived media are recorded without the lock that
+    parallel; a deck's derived media are recorded without the lock that
     registration takes."""
     orchestrator = BeforeTheWrite(
         corpus(tmp_path),
@@ -388,6 +480,7 @@ def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     assert orchestrator.run() == 2
 
     assert refusals.asked == []
+    assert orchestrator.recordings == [(DECK, False)]
     docs = orchestrator.documents()
     states = run_state(orchestrator.rundir)
     for doc in docs:
@@ -401,111 +494,10 @@ def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     ]
 
 
-def test_a_decks_derived_media_are_recorded_by_sha1(tmp_path, refusals):
-    orchestrator = BeforeTheWrite(
-        corpus(tmp_path), tmp_path / "state", refusals
-    )
-    orchestrator.run()
-    assert refusals.asked == []
-
-    docs = orchestrator.documents()
-    (deck,) = [doc for doc in docs if doc.kind == "presentation"]
-    record = DerivedMediaRecord.model_validate_json(
-        (deck.dir / DERIVED_MEDIA).read_text()
-    )
-    # each distinct image once, by its bytes, with every name and slide;
-    # the film is not an image, so it is not recorded
-    assert record.source_sha1 == deck.sha1
-    assert {
-        key: (medium.names, medium.slides)
-        for key, medium in record.media.items()
-    } == {
-        sha1(SHOP_FRONT): (["image1.png"], [1, 2]),
-        sha1(PORTRAIT): (["image2.png", "image4.png"], [2, 3]),
-    }
-    for key, medium in record.media.items():
-        assert sha1((deck.dir / medium.file).read_bytes()) == key
-    assert deck.state.detail["derived_media"] == {
-        "image1.png": sha1(SHOP_FRONT),
-        "image2.png": sha1(PORTRAIT),
-        "image4.png": sha1(PORTRAIT),
-    }
-    # the portrait is also a document of its own: the same key, so the
-    # same artifact when both are registered (ADR-0010)
-    (portrait,) = [doc for doc in docs if doc.kind == "media"]
-    assert portrait.sha1 in record.media
-
-
-class TestRecordDerivedMedia:
-    def test_recording_again_writes_the_same_files(self, tmp_path):
-        deck = build_deck(tmp_path / DECK)
-        content = unpack_pptx(deck)
-        directory = tmp_path / "document"
-
-        def files() -> dict[str, bytes]:
-            return {
-                str(path.relative_to(directory)): path.read_bytes()
-                for path in sorted(directory.rglob("*"))
-                if path.is_file()
-            }
-
-        first = record_derived_media(
-            content, source_sha1=sha1(deck.read_bytes()), directory=directory
-        )
-        kept = files()
-        again = record_derived_media(
-            content, source_sha1=sha1(deck.read_bytes()), directory=directory
-        )
-        assert again == first
-        assert files() == kept
-        assert sorted(kept) == sorted(
-            [DERIVED_MEDIA, *(medium.file for medium in first.media.values())]
-        )
-        assert DerivedMediaRecord.model_validate_json(kept[DERIVED_MEDIA]) == (
-            first
-        )
-
-    def test_a_deck_without_images_records_none(self, tmp_path):
-        content = PresentationContent(
-            slides=[Slide(number=1, text="Hutmacherei zum Blauen Hut")],
-            media=[],
-            skipped_media={".mp4": 1},
-        )
-        record = record_derived_media(
-            content, source_sha1=sha1(b"a deck"), directory=tmp_path
-        )
-        assert record.media == {}
-        assert (
-            DerivedMediaRecord.model_validate_json(
-                (tmp_path / DERIVED_MEDIA).read_text()
-            )
-            == record
-        )
-        assert not (tmp_path / DERIVED_MEDIA_DIR).exists()
-
-
-class ScriptedAdjudicator:
-    """Adjudicates the one pair it is shown as the same person."""
-
-    model_identifier = "scripted-model"
-
-    def complete(self, prompt: str, image_paths=()) -> str:
-        assert prompt.startswith("You adjudicate entity identity")
-        proposal = {
-            "entity_id": "e1",
-            "qid": "Q31",
-            "verdict": "same",
-            "confidence": 0.9,
-            "evidence": "Gustl is Gustav's diminutive; both born in 1919",
-        }
-        return (
-            json.dumps(proposal) + '\n{"done": true, "proposals_emitted": 1}'
-        )
-
-
 def test_adjudication_given_a_roster_asks_nothing_of_the_wiki(refusals):
-    """Blocking and adjudication take the roster as an input: given one,
-    they read nothing from the wiki."""
+    """The per-document blocking and adjudication (reconcile.adjudicate)
+    take the roster as an input: given one, they read nothing from the
+    wiki."""
     batch = ClaimBatch.model_validate(
         {
             "extraction_run": RUN,
@@ -537,3 +529,225 @@ def test_adjudication_given_a_roster_asks_nothing_of_the_wiki(refusals):
         ("e1", "Q31", "same")
     ]
     assert refusals.asked == []
+
+
+class ScriptedAdjudicator:
+    """Adjudicates the one pair it is shown as the same person."""
+
+    model_identifier = "scripted-model"
+
+    def complete(self, prompt: str, image_paths=()) -> str:
+        assert prompt.startswith("You adjudicate entity identity")
+        proposal = {
+            "entity_id": "e1",
+            "qid": "Q31",
+            "verdict": "same",
+            "confidence": 0.9,
+            "evidence": "Gustl is Gustav's diminutive; both born in 1919",
+        }
+        return (
+            json.dumps(proposal) + '\n{"done": true, "proposals_emitted": 1}'
+        )
+
+
+# -- a deck's derived media ---------------------------------------------------
+
+
+def test_a_decks_derived_media_are_recorded_by_sha1(tmp_path, refusals):
+    orchestrator = BeforeTheWrite(
+        corpus(tmp_path), tmp_path / "state", refusals
+    )
+    orchestrator.run()
+    assert refusals.asked == []
+
+    deck = the_deck(orchestrator)
+    record = read_derived_media(deck.dir)
+    # each distinct image once, by its bytes, with every name and slide;
+    # the film is not an image, so it is not recorded
+    assert (record.source_sha1, record.title) == (
+        deck.sha1,
+        "Hutmacherei zum Blauen Hut",
+    )
+    assert media_of(record) == {
+        sha1(SHOP_FRONT): (["image1.png"], [1, 2]),
+        sha1(PORTRAIT): (["image2.png", "image4.png"], [2, 3]),
+    }
+    for key, medium in record.media.items():
+        assert sha1((deck.dir / medium.file).read_bytes()) == key
+    # the portrait is also a document of its own: the same key, so the
+    # same artifact when both are registered (ADR-0010)
+    (portrait,) = [
+        doc for doc in orchestrator.documents() if doc.kind == "media"
+    ]
+    assert portrait.sha1 in record.media
+
+
+def test_a_deck_changed_between_two_runs_is_unpacked_again(tmp_path, refusals):
+    """One orchestrator runs twice, and the deck's bytes change between
+    the runs: the second run records and transcribes the deck as it is
+    now, not as the first run unpacked it."""
+    folder = deck_alone(tmp_path)
+    orchestrator = BeforeTheWrite(folder, tmp_path / "state", refusals)
+    orchestrator.run()
+    first = the_deck(orchestrator).sha1
+
+    retouched = b"\x89PNG synthetic: the shop front, retouched"
+    build_deck(
+        folder / DECK,
+        shop_front=retouched,
+        firm="Inh. Sebastian Löbig, Brunnenring 35",
+    )
+    orchestrator.run()
+
+    deck = the_deck(orchestrator)
+    assert deck.sha1 != first
+    record = read_derived_media(deck.dir)
+    assert record.source_sha1 == deck.sha1
+    assert media_of(record) == {
+        sha1(retouched): (["image1.png"], [1, 2]),
+        sha1(PORTRAIT): (["image2.png", "image4.png"], [2, 3]),
+    }
+    transcription = json.loads(deck.transcription.read_text())["text"]
+    assert "Inh. Sebastian Löbig" in transcription
+    assert "gegr. 1863" not in transcription
+    assert refusals.asked == []
+
+
+class TestTheRecordIsCurrentWhileItIsWhole:
+    """A deck's derived media are recorded again exactly when the record
+    in its directory is missing, damaged, or has lost the bytes of a
+    medium it names; never because of what state.json says."""
+
+    def run_twice(self, tmp_path, refusals, between=None, **layout):
+        folder = deck_alone(tmp_path, **layout)
+        first = BeforeTheWrite(folder, tmp_path / "state", refusals)
+        first.run()
+        deck = the_deck(first)
+        recorded = read_derived_media(deck.dir)
+        assert recorded is not None
+        if between is not None:
+            between(deck)
+        second = BeforeTheWrite(folder, tmp_path / "state", refusals)
+        second.run()
+        assert refusals.asked == []
+        return recorded, second, deck
+
+    def test_a_whole_record_stands(self, tmp_path, refusals):
+        recorded, second, deck = self.run_twice(tmp_path, refusals)
+        assert second.recordings == []
+        assert read_derived_media(deck.dir) == recorded
+
+    def test_a_deleted_record_is_made_again(self, tmp_path, refusals):
+        def delete(deck):
+            (deck.dir / DERIVED_MEDIA).unlink()
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, delete)
+        assert second.recordings == [(DECK, False)]
+        assert read_derived_media(deck.dir) == recorded
+
+    def test_a_record_that_lost_bytes_is_made_again(self, tmp_path, refusals):
+        def lose(deck):
+            (deck.dir / DERIVED_MEDIA_DIR / f"{sha1(PORTRAIT)}.png").unlink()
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, lose)
+        assert second.recordings == [(DECK, False)]
+        assert read_derived_media(deck.dir) == recorded
+
+    def test_a_record_naming_another_file_is_made_again(
+        self, tmp_path, refusals
+    ):
+        # a record whose media point outside its folder, at a file the
+        # write must never upload
+        def redirect(deck):
+            path = deck.dir / DERIVED_MEDIA
+            data = json.loads(path.read_text())
+            for medium in data["media"].values():
+                medium["file"] = "state.json"
+            path.write_text(json.dumps(data))
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, redirect)
+        assert second.recordings == [(DECK, False)]
+        assert read_derived_media(deck.dir) == recorded
+
+    def test_a_damaged_record_is_made_again(self, tmp_path, refusals):
+        def damage(deck):
+            (deck.dir / DERIVED_MEDIA).write_text('{"source_sha1": ')
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, damage)
+        assert second.recordings == [(DECK, False)]
+        assert read_derived_media(deck.dir) == recorded
+
+    def test_a_directory_without_a_record_gets_one(self, tmp_path, refusals):
+        """A deck directory that registered its media and holds no record
+        of them: the media are recorded, whatever its state.json notes."""
+
+        def registered(deck):
+            (deck.dir / DERIVED_MEDIA).unlink()
+            shutil.rmtree(deck.dir / DERIVED_MEDIA_DIR)
+            state = DocumentState.load(deck.state_path)
+            state.detail = (state.detail or {}) | {
+                "derived_media": {"image1.png": "Q501", "image2.png": "Q502"}
+            }
+            state.save(deck.state_path)
+
+        recorded, second, deck = self.run_twice(tmp_path, refusals, registered)
+        assert second.recordings == [(DECK, False)]
+        assert read_derived_media(deck.dir) == recorded
+
+    def test_a_deck_without_images_is_recorded_once(self, tmp_path, refusals):
+        recorded, second, deck = self.run_twice(
+            tmp_path, refusals, media=False
+        )
+        assert recorded.media == {}
+        assert second.recordings == []
+        assert not (deck.dir / DERIVED_MEDIA_DIR).exists()
+
+
+class TestRecordDerivedMedia:
+    def test_recording_again_leaves_every_file_untouched(self, tmp_path):
+        deck = build_deck(tmp_path / DECK)
+        content = unpack_pptx(deck)
+        directory = tmp_path / "document"
+
+        def files() -> dict[str, tuple[int, bytes]]:
+            return {
+                str(path.relative_to(directory)): (
+                    path.stat().st_ino,
+                    path.read_bytes(),
+                )
+                for path in sorted(directory.rglob("*"))
+                if path.is_file()
+            }
+
+        def record() -> DerivedMediaRecord:
+            return record_derived_media(
+                content,
+                source_sha1=sha1(deck.read_bytes()),
+                title="Hutmacherei zum Blauen Hut",
+                directory=directory,
+            )
+
+        first = record()
+        kept = files()
+        assert record() == first
+        assert files() == kept  # the same bytes, and the same files
+        assert sorted(kept) == sorted(
+            [DERIVED_MEDIA, *(medium.file for medium in first.media.values())]
+        )
+        assert read_derived_media(directory) == first
+
+    def test_a_deck_without_images_records_none(self, tmp_path):
+        content = PresentationContent(
+            slides=[Slide(number=1, text="Hutmacherei zum Blauen Hut")],
+            media=[],
+            skipped_media={".mp4": 1},
+        )
+        record = record_derived_media(
+            content,
+            source_sha1=sha1(b"a deck"),
+            title="Hutmacherei zum Blauen Hut",
+            directory=tmp_path,
+        )
+        assert record.media == {}
+        assert read_derived_media(tmp_path) == record
+        assert not (tmp_path / DERIVED_MEDIA_DIR).exists()

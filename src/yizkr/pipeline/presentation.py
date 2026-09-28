@@ -37,7 +37,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from yizkr.pipeline.stages import atomic_write_text, staging_path
+from yizkr.pipeline.stages import staging_path
 
 A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 R_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -204,6 +204,10 @@ DERIVED_MEDIA = "derived-media.json"
 DERIVED_MEDIA_DIR = "derived-media"
 
 Sha1 = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+# a medium's file: its SHA-1 and its suffix, in DERIVED_MEDIA_DIR
+_MEDIUM_FILE = (
+    rf"^{re.escape(DERIVED_MEDIA_DIR)}/[0-9a-f]{{40}}(\.[a-z0-9]+)?$"
+)
 
 
 class DerivedMedium(BaseModel):
@@ -218,8 +222,10 @@ class DerivedMedium(BaseModel):
     # every slide it is on, by its 1-based position in presentation
     # order: the page number of its `part of` the deck (ADR-0008)
     slides: list[int]
-    # the file that keeps its bytes, relative to the record's directory
-    file: str
+    # the file that keeps its bytes, relative to the record's directory:
+    # always in DERIVED_MEDIA_DIR, so a record never names a file outside
+    # it for the write to upload
+    file: str = Field(pattern=_MEDIUM_FILE)
 
 
 class DerivedMediaRecord(BaseModel):
@@ -232,12 +238,19 @@ class DerivedMediaRecord(BaseModel):
 
     # the deck, the artifact the media are part of
     source_sha1: Sha1
+    # the deck's title, which each medium's label begins with:
+    # "<deck title> — <media name>" (ADR-0008)
+    title: str
     # media SHA-1 -> the medium
     media: dict[Sha1, DerivedMedium] = {}
 
 
 def record_derived_media(
-    content: PresentationContent, *, source_sha1: str, directory: Path
+    content: PresentationContent,
+    *,
+    source_sha1: str,
+    title: str,
+    directory: Path,
 ) -> DerivedMediaRecord:
     """Record the media a deck embeds, reading nothing from the wiki and
     writing nothing to it (ADR-0025 §2).
@@ -248,8 +261,8 @@ def record_derived_media(
     it has in the archive and every slide it is on. Its bytes are kept as
     ``<sha1><suffix>`` in `DERIVED_MEDIA_DIR` under `directory`, and the
     record as `DERIVED_MEDIA` there. Each file is written in one step, so
-    a reader sees it whole or not at all, and recording the same deck
-    again writes the same files. Returns the record."""
+    a reader sees it whole or not at all, and one that already holds what
+    it would be written with is left untouched. Returns the record."""
     names: dict[str, set[str]] = {}
     slides: dict[str, set[int]] = {}
     data: dict[str, bytes] = {}
@@ -260,6 +273,7 @@ def record_derived_media(
         data.setdefault(sha1, medium.data)
     record = DerivedMediaRecord(
         source_sha1=source_sha1,
+        title=title,
         media={
             sha1: DerivedMedium(
                 names=sorted(names[sha1]),
@@ -272,14 +286,30 @@ def record_derived_media(
     )
     # the bytes before the record, so a record never names a missing file
     for sha1, medium in record.media.items():
-        _keep_bytes(directory / medium.file, data[sha1])
-    atomic_write_text(
-        directory / DERIVED_MEDIA, record.model_dump_json(indent=2)
+        _keep(directory / medium.file, data[sha1])
+    _keep(
+        directory / DERIVED_MEDIA,
+        record.model_dump_json(indent=2).encode("utf-8"),
     )
     return record
 
 
-def _keep_bytes(path: Path, data: bytes) -> None:
+def read_derived_media(directory: Path) -> DerivedMediaRecord | None:
+    """The record of a deck's derived media kept in `directory`
+    (record_derived_media), when it is there whole and every file of
+    bytes it names is too; None otherwise."""
+    try:
+        record = DerivedMediaRecord.model_validate_json(
+            (directory / DERIVED_MEDIA).read_bytes()
+        )
+    except (OSError, ValueError):
+        return None
+    if not all((directory / m.file).is_file() for m in record.media.values()):
+        return None
+    return record
+
+
+def _keep(path: Path, data: bytes) -> None:
     """Keep `data` at `path`, written in one step, unless the file there
     holds those bytes already."""
     if path.is_file() and path.read_bytes() == data:

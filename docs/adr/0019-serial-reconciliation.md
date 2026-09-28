@@ -7,11 +7,14 @@ stateless re-run advances. Supersedes an earlier draft that batched the
 claim gate — see §3 for why that and a combined single gate were both
 rejected.
 Amended by #128 (2026-09-28): the per-artifact reconcile step reads no
-roster from the graph (ADR-0025 §2, ADR-0007 as amended), so under
-`--serial` a later artifact meets the items its predecessors wrote only
-through resolve's exact-label match, and its identity gate carries no
-cross-artifact rows. §2 and §3 describe the mode as designed; #119
-removes it.
+roster from the graph (ADR-0025 §2, ADR-0007 as amended), so its
+identity gate carries no cross-artifact rows, and under `--serial` a
+later artifact meets the items its predecessors wrote only through
+resolve's exact-label match. §2, §3, §5 and the Consequences describe
+the mode as designed: a serial run now takes about one re-run per
+artifact rather than two, and `reconcile-graph` is again the way to
+consolidate an entity that two artifacts name differently. #119 removes
+the mode.
 
 ## Context
 
