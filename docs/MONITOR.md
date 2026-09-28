@@ -187,8 +187,7 @@ waits for the next refresh. A complete line that is not a JSON object (a
 writer killed mid-line, then another appending after it) is skipped and
 counted. A log that shrinks or is replaced, or whose first line changes
 (one deleted and written afresh on a reused inode, or rewritten in
-place), starts the monitor over, and so does a `run.json` with another
-run id.
+place), starts the monitor over: it is read again from its start.
 
 `run.json` is read after the logs, since an invocation records itself
 there before its first event, and parsed again only when its inode, size

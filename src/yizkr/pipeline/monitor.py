@@ -59,9 +59,8 @@ Reading is incremental: each refresh parses only the lines appended to
 events.jsonl and alerts.jsonl since the last one, and a line not yet
 ended (a writer mid-line) waits for the next refresh, so a monitor keeps
 up with a long run. A log that shrinks, is replaced, or starts with other
-bytes than it did, or a run.json that names another run, starts the
-monitor over. docs/MONITOR.md describes the views, the commands, the
-events the monitor reads and serving the page.
+bytes than it did starts the monitor over. docs/MONITOR.md describes the
+views, the commands, the events the monitor reads and serving the page.
 """
 
 from __future__ import annotations
@@ -835,10 +834,6 @@ class RunMonitor:
         changed = self._read_control() or changed
         manifest = self._read_manifest()
         if manifest is not None:
-            known, named = self._manifest.get("run_id"), manifest.get("run_id")
-            if known and named and known != named:
-                # another run in the directory
-                return self._start_over()
             self._manifest = manifest
             self._plan = _plan(manifest)
             self._known = None

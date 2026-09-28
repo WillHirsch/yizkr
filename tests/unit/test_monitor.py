@@ -1236,7 +1236,9 @@ class TestIncrementalReading:
         "how",
         [
             "truncated",
+            "cut short, its first line kept",
             "replaced by a longer one",
+            "replaced by one that starts alike",
             "rewritten in place, longer",
         ],
     )
@@ -1246,14 +1248,23 @@ class TestIncrementalReading:
         assert watcher.summary(NOW).stage("extraction").failed == 1
         line = json.dumps(stage("started", 301, CERT, "transcription")[1])
         events = run / "events.jsonl"
+        original = events.read_text().splitlines(keepends=True)
         size = events.stat().st_size
         longer = (line + "\n") * (size // len(line) + 2)
+        fresh = run / "events.fresh"
         if how == "truncated":
             # the same file, shorter than what was read of it
             events.write_text(line + "\n")
+        elif how == "cut short, its first line kept":
+            # nothing but its size tells it from the file that was read
+            with open(events, "r+") as handle:
+                handle.truncate(len("".join(original[:3]).encode()))
         elif how == "replaced by a longer one":
-            fresh = run / "events.fresh"
             fresh.write_text(longer)
+            os.replace(fresh, events)
+        elif how == "replaced by one that starts alike":
+            # nothing but its inode tells it from the file that was read
+            fresh.write_text(original[0] + longer)
             os.replace(fresh, events)
         else:
             # the same file, as long as before at least, as a log deleted
@@ -1263,9 +1274,8 @@ class TestIncrementalReading:
                 handle.write(longer)
         watcher.refresh()
         summary = watcher.summary(NOW)
+        assert disagreement(run, summary) is None
         assert summary.stage("extraction").failed == 0
-        assert summary.stage("transcription").running == 1
-        assert summary.calls.engine == 0
         assert summary.skipped_lines == 0
 
     def test_a_summary_stays_as_it_was_taken(self, run):
@@ -1278,21 +1288,20 @@ class TestIncrementalReading:
         assert before.calls.engine == 7
         assert before.calls.roles.get("critique") == {"engine": 1}
 
-    def test_another_run_in_the_directory_starts_the_monitor_over(self, run):
-        """Another run's log written over this one's in place, and run.json
-        naming another run."""
+    def test_a_run_json_for_another_run_is_taken_as_it_comes(self, run):
+        """Its plan and its run id stand at once; the logs, unchanged, say
+        what they said, as they do for run_state."""
         watcher = RunMonitor(run)
         watcher.refresh()
-        assert watcher.summary(NOW).stage("extraction").failed == 1
         replacement = manifest()
         replacement["run_id"] = "20260928T090000Z-0a0b0c"
+        replacement["documents"] = replacement["documents"][:1]
         (run / "run.json").write_text(json.dumps(replacement))
         watcher.refresh()
         summary = watcher.summary(NOW)
         assert summary.run_id == "20260928T090000Z-0a0b0c"
-        # read afresh: the same logs, so the same counts
-        assert summary.stage("extraction").failed == 1
-        assert summary.skipped_lines == 0
+        assert summary.documents == 1
+        assert disagreement(run, summary) is None
 
     def test_an_unreadable_run_json_leaves_the_last_good_one(self, run):
         watcher = RunMonitor(run)
