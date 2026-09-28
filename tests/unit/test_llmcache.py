@@ -589,15 +589,22 @@ class TestStorage:
     def test_parallel_calls_under_one_key_leave_one_whole_entry(
         self, tmp_path
     ):
-        def slow(kind, prompt, opening):
-            time.sleep(0.02)
+        # The engine answers no call until all eight are with it, so all
+        # eight miss the cache and then store at once, however loaded the
+        # machine (a sleep would let a late thread hit the first answer).
+        # Calls kept apart under one key would break the barrier at its
+        # timeout and fail the test.
+        in_flight = threading.Barrier(8, timeout=30)
+
+        def answer(kind, prompt, opening):
+            in_flight.wait()
             return f"answer from {threading.current_thread().name}"
 
         cache = EngineCache(tmp_path / "cache")
         answers = []
 
         def call():
-            answers.append(wrap(Engine(slow), cache, role="r").complete("x"))
+            answers.append(wrap(Engine(answer), cache, role="r").complete("x"))
 
         threads = [threading.Thread(target=call) for _ in range(8)]
         for thread in threads:
