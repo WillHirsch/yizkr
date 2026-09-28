@@ -128,9 +128,11 @@ The owner replaced that plan on 2026-09-27, for four reasons.
 The human gates this bypasses are those of the per-document path:
 ADR-0007's identity gate, ADR-0019's two gates per artifact and
 ADR-0009's review of containment proposals. That path keeps them until
-#119 removes it. From the keeper run on, cluster review and ratification
-(§6) are the human confirmation that R3's review step and CLAUDE.md's
-"do not auto-confirm" rule ask for.
+#119 removes it. Amended by #128 (2026-09-28): ADR-0007's identity gate
+has nothing to review in that path now, since its reconcile step reads
+no roster from the graph (§2). From the keeper run on, cluster review
+and ratification (§6) are the human confirmation that R3's review step
+and CLAUDE.md's "do not auto-confirm" rule ask for.
 
 ### 2. Stage-level reuse
 
@@ -162,7 +164,30 @@ a second store of assertions: the graph stays the system of record.
 - **Stages before write take inputs only from the stage store, the
   corpus and config, and never read the wiki** (#128). The instance is
   reset for every run, so anything read from it is an input that no key
-  can name. A wiki stub that refuses reads and writes proves it.
+  can name. A wiki stub that refuses reads and writes proves it. Amended
+  by #128 (2026-09-28): in the per-document path, two steps before the
+  write still use the wiki: registration, which runs first, until
+  write-time registration (#103) takes its place, and the resolve step's
+  exact-label read of the graph, after Gate 1, until the identity-map
+  writer (#109). The reconcile step reads no roster and no place
+  containment from the graph: it proposes nothing, so Gate 1 has nothing
+  to review (ADR-0007, as amended), and matching against a kept graph's
+  roster comes back as an explicit, keyed input (#130). A deck's derived
+  media are recorded in its state directory, each by the SHA-1 of its
+  bytes with the deck's own SHA-1 and title and the slides it is on, and
+  their bytes are kept beside the record, for write-time registration to
+  register and upload (#103; ADR-0008, as amended). The stub is a unit
+  test (`tests/unit/test_no_wiki_before_write.py`): the orchestrator's
+  wiki client and connection settings refuse every read and write, no
+  wiki client can be made and no connection settings loaded, every
+  connection setting read from the environment names a closed loopback
+  port, and no name lookup or socket connect succeeds. Transcription and
+  its check, extraction (manifest, chunks, critique), the GEDCOM adapter,
+  a deck's slide text and derived media, the reconcile step, and the
+  per-document adjudication (`reconcile.adjudicate`) given a roster ask
+  nothing of it. Corpus clustering, cluster adjudication and flags have
+  no code yet; their issues (#105, #106, #112) require them to run under
+  the same stub.
 - **A stage-version registry declares the version of each stage and of
   each method.** A unit test checks the registry against each stage's
   source hash and fails when the source changed without a version bump.
