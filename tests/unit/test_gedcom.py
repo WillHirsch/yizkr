@@ -1592,15 +1592,24 @@ class TestRepeatedDetails:
             (cemetery, [("point_in_time", day(1909, 3, 20))]),
         ]
 
-    def test_each_date_of_a_burial_dates_a_claim_of_its_own(self):
-        # Eugen was buried on 20 March 1909, and (here) in 1909 too
+    def test_a_burial_pairs_each_date_with_each_place(self):
+        # Eugen was buried on 20 March 1909 in the Friedhof Flörburg, and
+        # (here) in 1909 in Flörburg too
         cemetery = "Friedhof Flörburg, Hesse, Germany"
         text = eugen(
-            "1 BURI", "2 DATE 20 MAR 1909", "2 DATE 1909", f"2 PLAC {cemetery}"
+            "1 BURI",
+            "2 DATE 20 MAR 1909",
+            "2 DATE 1909",
+            f"2 PLAC {cemetery}",
+            f"2 PLAC {FLOERBURG}",
         )
+        on_the_day = [("point_in_time", day(1909, 3, 20))]
+        in_the_year = [("point_in_time", year(1909))]
         assert stated(text, "i1", "burial_place") == [
-            (cemetery, [("point_in_time", day(1909, 3, 20))]),
-            (cemetery, [("point_in_time", year(1909))]),
+            (cemetery, on_the_day),
+            (cemetery, in_the_year),
+            (FLOERBURG, on_the_day),
+            (FLOERBURG, in_the_year),
         ]
 
     def test_a_residence_pairs_each_date_with_each_place(self):
