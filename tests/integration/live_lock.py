@@ -10,8 +10,10 @@ once, and waits. It gives up after ``$YIZKR_LIVE_LOCK_TIMEOUT`` seconds
 The holder records itself in the lock file: its pid, command line,
 working directory and the time it took the lock. The kernel releases a
 flock when the process holding it ends, however it ends, so a holder that
-crashed or was killed blocks nothing. Its record stays behind until the
-next holder writes its own over it.
+crashed or was killed blocks nothing. A holder that releases the lock
+itself empties its record first, so a record in a free lock file was left
+by a holder that crashed or was killed; the next holder writes its own
+over it.
 
 Never delete the lock file. A session that then found no file would
 create and lock a new one, while the session still holding the old one
@@ -31,9 +33,10 @@ import time
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pytest
+if TYPE_CHECKING:
+    import pytest
 
 LOCK_ENV = "YIZKR_LIVE_LOCK"
 TIMEOUT_ENV = "YIZKR_LIVE_LOCK_TIMEOUT"
@@ -96,7 +99,8 @@ def hold(
     stderr) is told who holds it, once, and the lock is tried again every
     POLL_INTERVAL seconds. After `timeout` seconds LiveStackBusy is
     raised, naming the holder. Once this process has the lock, it writes
-    its record over the last holder's."""
+    its record over the one in the file, and it empties the record again
+    as it releases the lock."""
     path = lock_path() if path is None else path
     timeout = lock_timeout() if timeout is None else timeout
     announce = announce or _print_to_stderr
@@ -109,6 +113,8 @@ def hold(
             _record(fd)
             yield
         finally:
+            with contextlib.suppress(OSError):
+                os.ftruncate(fd, 0)
             fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
         os.close(fd)
@@ -120,15 +126,21 @@ def hold_for_session(pytest_config: pytest.Config) -> Iterator[None]:
 
     The fixture runs while the session's first stack test sets up, when
     pytest captures output, so the messages go to the terminal around the
-    capture. If the lock cannot be taken, or the timeout setting is
-    unusable, that test and every later one that uses the stack fail with
-    the message alone: pytest keeps a session fixture's error for the
-    whole session, so the session waits only once."""
+    capture. If the lock cannot be taken in time, or a setting is refused
+    (a relative $YIZKR_LIVE_LOCK, or a $YIZKR_LIVE_LOCK_TIMEOUT that is not
+    a number of seconds), that test and every later one that uses the
+    stack error at setup, with the message alone, shown once. pytest keeps
+    a session fixture's error for the whole session, so the session waits
+    only once."""
+    # imported here, so that processes that only hold the lock need not
+    # load pytest
+    import pytest
+
     with contextlib.ExitStack() as held:
         try:
             held.enter_context(hold(announce=_terminal(pytest_config)))
         except (LiveStackBusy, ValueError) as exc:
-            pytest.fail(str(exc), pytrace=False)
+            raise pytest.fail.Exception(str(exc), pytrace=False) from None
         yield
 
 
