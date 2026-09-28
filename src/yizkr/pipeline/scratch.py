@@ -1013,15 +1013,15 @@ class ScratchDriver(Orchestrator):
             doc, stage = chosen
             outcome = self._dispatch_one(doc, stage)
             if outcome == _HELD:
-                # the stage's own check held it, with its event
+                # the stage's own check held it, with its event: a request
+                # landed between the two checks. A moment passes before the
+                # next round, so that however the checks disagree, the
+                # driver never spins on the stage
                 stop = self.rundir.control().stopped(
                     stage=stage, kind=doc.kind
                 )
                 noted[(doc.sha1, stage)] = stop or ""
-                if stop is None:
-                    # let through again since it was held: a moment first,
-                    # so that no disagreement between the checks spins
-                    self._sleep(self.poll)
+                self._sleep(self.poll)
                 continue
             pending.remove(chosen)
             if outcome == _FAILED_HERE:
