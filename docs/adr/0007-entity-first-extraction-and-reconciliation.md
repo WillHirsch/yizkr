@@ -148,7 +148,8 @@ rank a curator set, is never altered: a source that agrees with it gets
 a statement of its own beside it. A re-run adds nothing.
 
 Amended by #240 (2026-09-28): a document's aliases and kinds reach an
-existing item whichever way the writer finds it.
+existing item on the paths that bring the writer its manifest records
+and local refs.
 
 - **Aliases.** A record whose item the resolve step matched by exact
   label gives the item the document's aliases too, after the claims, as
@@ -160,14 +161,27 @@ existing item whichever way the writer finds it.
   as the line-range tier of ADR-0006 produces, states each entity's kind
   only on its local refs' `instance_of`. When the writer matches such a
   ref to an existing item by exact label, it records that kind as it
-  records a manifest's: the same comparison, the same two references,
-  and curated statements left as they are. A face-proposal batch's
-  sitters are such refs, so a sitter a curator approved and the writer
-  found gains the photograph and the detection run as a source of its
-  kind, as a sitter the writer mints takes its kind from them
-  (ADR-0005). A ref the resolve step replaced with the item's QID brings
-  no kind, since a QID carries none. An item the batch itself minted is
-  left out: it took its kind from the first ref that named it.
+  records a manifest's, with the same comparison and with curated
+  statements left as they are. It cites the artifact of the claim the
+  ref is in, beside the batch's run: a manifest's kind cites the first
+  claim that mentions the item, but a ref states its kind where it
+  stands, so each artifact whose ref gives the kind is a witness of it.
+  A face-proposal batch's sitters are such refs, so a sitter a curator
+  approved and the writer found gains the photograph and the detection
+  run as a source of its kind, as a sitter the writer mints takes its
+  kind from them (ADR-0005). An item the batch itself minted is left
+  out: it took its kind from the first ref that named it. A kind the
+  vocabulary lacks is recorded for no item, and the writer's result
+  warns of each, found before its first write.
+- **Where kinds do not arrive.** A ref the resolve step replaced with
+  the item's QID brings no kind, since a QID carries none. `ingest run`
+  resolves every batch before its write, so there a later source's kind
+  for an item that existed when the resolve step ran does not arrive:
+  only `ingest write` of an unresolved batch, and refs the resolve step
+  left, bring it. #109, whose identity map is to replace exact-label
+  resolution, takes on carrying every ref's kind to its item, including
+  a later ref's to an item minted in the same batch, and kinds that
+  chunks give differently.
 - The orchestrator's write summary (`write.json`) and its log line count
   the type statements written and referenced.
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import csv
 
+import pytest
+
 from tests.unit.test_faces import (
     decide_by_hand,
     depicted,
@@ -21,6 +23,7 @@ from tests.unit.test_faces import (
 )
 from tests.unit.test_pipeline import (
     _directory_batch,
+    _directory_lines_batch,
     _firm_batch,
     _two_sources,
 )
@@ -125,23 +128,50 @@ class TestWriteStepSummary:
     line count the type statements of items the batch found rather than
     minted beside its claims (#240)."""
 
-    def test_type_statements_are_counted(self, tmp_path):
+    # what the directory gives the firm, which the interview holds as an
+    # unclassified entity with the type hint "hat shop" -> (type statements
+    # written, type statements referenced)
+    DIRECTORY_SAYS = {
+        # the interview's kind and hint: both gain the directory's source
+        "agrees": (("unclassified_entity", "Hat Shop"), (0, 2)),
+        # a kind and a hint of its own: two new statements
+        "differs": (("organization", "Hutmacherei"), (2, 0)),
+    }
+
+    @pytest.mark.parametrize(
+        ("says", "counts"), DIRECTORY_SAYS.values(), ids=DIRECTORY_SAYS.keys()
+    )
+    def test_type_statements_are_counted(self, tmp_path, says, counts):
         wiki = _two_sources()
         BatchWriter(wiki).write_batch(_firm_batch())
-        # the directory gives the firm the interview's kind, and a type
-        # hint of its own
-        directory = _directory_batch(
-            "unclassified_entity", type_hint="Hutmacherei"
-        )
+        kind, type_hint = says
+        directory = _directory_batch(kind, type_hint=type_hint)
         step = WriteStep(tmp_path, wiki, "directory.txt")
         step.review(directory, decide=lambda row: "approve")
 
         summary = step.write(directory)
 
+        written, referenced = counts
         assert summary["written"] == 1
-        assert summary["type_statements_referenced"] == 1
-        assert summary["type_statements_written"] == 1
+        assert summary["type_statements_written"] == written
+        assert summary["type_statements_referenced"] == referenced
         assert step.lines[-1] == (
             "  written: 1 new, 0 referenced, 0 skipped; type statements of "
-            "items found: 1 new, 1 referenced"
+            f"items found: {written} new, {referenced} referenced"
         )
+
+    def test_the_writers_warnings_are_logged(self, tmp_path):
+        # the directory's line-range chunk typed the firm by a kind the
+        # vocabulary lacks: the writer records no kind for it, and says so
+        wiki = _two_sources()
+        BatchWriter(wiki).write_batch(_firm_batch())
+        directory = _directory_lines_batch("hat_shop")
+        step = WriteStep(tmp_path, wiki, "directory.txt")
+        step.review(directory, decide=lambda row: "approve")
+
+        step.write(directory)
+
+        assert (
+            "  directory.txt: entity 'firm' has the kind 'hat_shop', which "
+            "the vocabulary lacks: no kind is recorded for it"
+        ) in step.lines

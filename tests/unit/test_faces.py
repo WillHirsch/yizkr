@@ -1222,7 +1222,10 @@ class TestOneEntityRecordLookup:
     through one lookup (`entity_records`, #258): the record a depicts
     claim's approval binds is the record the writer resolves its local
     ref through, however the lookup picks among records that share an
-    id, and a record it does not pick changes neither."""
+    id. A record it does not pick leaves the approval as it is, resolves
+    no local ref, and adds no alias or kind; it is still part of the
+    batch file, which the extraction-run item's fingerprint covers
+    whole."""
 
     @staticmethod
     def two_records_for_the_first_face(tmp_path) -> ClaimBatch:
@@ -1282,7 +1285,9 @@ class TestOneEntityRecordLookup:
                 self.edited(approved, picked, qid="Q27")
             )
 
-    def test_a_record_the_lookup_passes_over_changes_nothing(self, tmp_path):
+    def test_passed_over_record_resolves_no_local_ref_adds_no_alias_or_kind(
+        self, tmp_path
+    ):
         approved = self.two_records_for_the_first_face(tmp_path)
         picked = entity_records(approved)["face-person-0"]
         (passed_over,) = [
@@ -1290,20 +1295,36 @@ class TestOneEntityRecordLookup:
             for record in approved.entities
             if record.id == "face-person-0" and record is not picked
         ]
-        # were it read, it would name Rahel and give her item its aliases
+        # were it read, it would name Rahel, and give her item its aliases
+        # and a kind of its own
         edited = self.edited(
-            approved, passed_over, qid="Q28", aliases=["Muckel"]
+            approved,
+            passed_over,
+            qid="Q28",
+            aliases=["Muckel"],
+            kind="unclassified_entity",
         )
         assert unapproved_depicts(edited) == []
-        written = {}
+        written, run_labels = {}, {}
         for name, batch in (("approved", approved), ("edited", edited)):
             wiki = self.wiki()
-            BatchWriter(wiki).write_batch(batch)
+            result = BatchWriter(wiki).write_batch(batch)
+            rahel = wiki.wbi.item.get("Q28")
             written[name] = (
                 set(depicted(wiki)),
-                wiki.wbi.item.get("Q28").aliases.get("en"),
+                rahel.aliases.get("en"),
+                sorted(
+                    kind.mainsnak.datavalue["value"]["id"]
+                    for kind in rahel.claims.get(PROPERTIES["instance_of"])
+                ),
+            )
+            run_labels[name] = str(
+                wiki.wbi.item.get(result.run_qid).labels.get("en")
             )
         assert written["edited"] == written["approved"]
+        # the run item's label carries the fingerprint of the whole batch
+        # file, the record passed over included
+        assert run_labels["edited"] != run_labels["approved"]
 
 
 class TestIngestWriteRefusesUnapprovedDepicts:

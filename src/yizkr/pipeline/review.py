@@ -164,7 +164,9 @@ def _local_refs(claim: Claim) -> list[LocalRef]:
 def entity_records(batch: ClaimBatch) -> dict[str, EntityRecord]:
     """The batch's entity manifest by id: the record each local ref of that
     id resolves through (ADR-0007). When two records share an id, the last
-    one counts, and nothing reads the other.
+    one counts: the other resolves no local ref, and the writer adds no
+    alias or kind from it. It is still part of the batch file, which the
+    extraction-run item's fingerprint covers whole.
 
     The writer reads the manifest through this lookup alone, and so does
     `approval_digest`: the records a depicts claim's approval binds are the

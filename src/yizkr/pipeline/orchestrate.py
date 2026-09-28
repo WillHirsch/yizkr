@@ -1292,6 +1292,8 @@ class Orchestrator:
         result = BatchWriter(self.client).write_batch(
             approved, bulk_accepted=is_bulk_accepted(doc.review_reviewed)
         )
+        for warning in result.warnings:
+            self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
         self.log(
             f"  written: {result.written} new, {result.referenced} "
             f"referenced, {result.skipped} skipped; type statements of "

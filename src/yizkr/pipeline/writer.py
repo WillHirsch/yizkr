@@ -36,7 +36,9 @@ Per batch, the writer:
    the ref gives its own label, description and kind. The document's
    aliases go onto the item it names, minted or reused, append-only;
    those of an entity an approved equivalence names go on before any
-   claim is written;
+   claim is written. A kind the vocabulary lacks is recorded for no
+   item, minted or found: the result's `warnings` name each entity that
+   gives one, found before the first write;
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / region / excerpt
@@ -59,12 +61,14 @@ Per batch, the writer:
    item minted from it would take). An item the resolve step matched
    gains the record's aliases here too, as the others have by now. A
    local ref the resolve step matched reaches the writer as the item's
-   bare QID: without a record, it brings no kind. The source is the
-   artifact of the first claim that mentions the item, as for a minted
-   item. A kind or type hint is compared with the item's unqualified
-   statements on the same property (a type hint as free text, ignoring
-   case, Unicode form and spacing), so a qualified statement never
-   matches:
+   bare QID: without a record, it brings no kind. A record's kind and
+   type hint cite the artifact of the first claim that mentions the
+   item, as a minted item's do. A ref's kind cites the artifact of the
+   claim the ref is in, so each artifact whose claim gives the kind is a
+   witness of it. A kind or type hint is compared with the item's
+   unqualified statements on the same property (a type hint as free
+   text, ignoring case, Unicode form and spacing), so a qualified
+   statement never matches:
    * a matching statement already referenced to that artifact: nothing
      to add (safe re-run);
    * a matching machine statement at normal rank: it gains this
@@ -163,18 +167,26 @@ class WriteResult:
     # gained this batch's source (step 5 of the module docstring)
     type_statements_written: int = 0
     type_statements_referenced: int = 0
+    # what the writer left out and why, such as a kind the vocabulary
+    # lacks (step 2 of the module docstring)
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class _FoundEntity:
     """What a batch says of an item it found rather than minted (step 5 of
     the module docstring): the kind, and type hint, its source gives, and
-    the document's aliases when no earlier step has appended them."""
+    the document's aliases when no earlier step has appended them.
+
+    `artifact` is the artifact the kind is cited to: for a local ref's
+    kind, that of the claim whose ref gives it. It is None for a manifest
+    record's, which cites the first claim that mentions the item."""
 
     qid: str
     kind: str
     type_hint: str | None = None
     aliases: tuple[str, ...] = ()
+    artifact: str | None = None
 
 
 def batch_fingerprint(batch: ClaimBatch) -> str:
@@ -214,11 +226,12 @@ class BatchWriter:
         self._media_sha1_index: dict[str, str] | None = None
         # per write_batch call: item QID -> artifact QID of the first
         # claim that mentions the item, the items the batch minted, and
-        # item QID -> the kinds that local refs without a manifest record
-        # give the item they were matched to by label
+        # item QID -> (kind, artifact QID) for each kind that a local ref
+        # without a manifest record gives the item it was matched to by
+        # label, on the artifact of the claim the ref is in
         self._mentions: dict[str, str] = {}
         self._minted: set[str] = set()
-        self._ref_kinds: dict[str, list[str]] = {}
+        self._ref_kinds: dict[str, list[tuple[str, str]]] = {}
 
     # -- artifact resolution (content-addressed sources) -------------------
 
@@ -316,12 +329,19 @@ class BatchWriter:
         if existing:
             if aliases:
                 self._ensure_aliases(existing, aliases)
-            if instance_of and record is None:
+            if (
+                record is None
+                and instance_of in self.items
+                and source_artifact_qid
+            ):
                 # a ref without a manifest record gives its kind itself, as
-                # it does to an item minted from it (step 5 records it)
-                kinds = self._ref_kinds.setdefault(existing, [])
-                if instance_of not in kinds:
-                    kinds.append(instance_of)
+                # it does to an item minted from it, on the artifact of the
+                # claim it is in: each such artifact is a witness of the
+                # kind (step 5 records them)
+                witness = (instance_of, source_artifact_qid)
+                witnesses = self._ref_kinds.setdefault(existing, [])
+                if witness not in witnesses:
+                    witnesses.append(witness)
             result.created_items[ref.local_id] = existing
             return existing
         if self.dry_run:
@@ -339,7 +359,7 @@ class BatchWriter:
         # The kind and type hint come from the extraction, never from
         # review, so they carry the run reference even when the claim
         # that mentions the entity is a curated one (ADR-0003).
-        if instance_of and source_artifact_qid:
+        if instance_of in self.items and source_artifact_qid:
             claim = self._item_claim(
                 self.properties["instance_of"], self.items[instance_of]
             )
@@ -667,7 +687,7 @@ class BatchWriter:
         the match the resolve step made. Only in that last case have the
         record's aliases not reached the item yet. A local ref without a
         manifest record that the writer matched by exact label gives the
-        kind on its own `instance_of`.
+        kind on its own `instance_of`, cited to its own claim's artifact.
         """
         found: list[_FoundEntity] = []
         by_label: dict[str, list[EntityRecord]] = {}
@@ -691,8 +711,11 @@ class BatchWriter:
                     )
                     for record in by_label.get(label, [])
                 )
-        for qid, kinds in self._ref_kinds.items():
-            found.extend(_FoundEntity(qid, kind) for kind in kinds)
+        for qid, witnesses in self._ref_kinds.items():
+            found.extend(
+                _FoundEntity(qid, kind, artifact=artifact)
+                for kind, artifact in witnesses
+            )
         return [
             entity
             for entity in found
@@ -782,15 +805,19 @@ class BatchWriter:
         for found in self._found_entities(result):
             if found.aliases:
                 self._ensure_aliases(found.qid, list(found.aliases))
-            artifact_qid = self._mentions[found.qid]
-            self._record_type_statement(
-                found.qid,
-                self._item_claim(
-                    self.properties["instance_of"], self.items[found.kind]
-                ),
-                artifact_qid,
-                result,
-            )
+            artifact_qid = found.artifact or self._mentions[found.qid]
+            # a kind the vocabulary lacks is left out, with the warning
+            # write_batch gave before its first write
+            if found.kind in self.items:
+                self._record_type_statement(
+                    found.qid,
+                    self._item_claim(
+                        self.properties["instance_of"],
+                        self.items[found.kind],
+                    ),
+                    artifact_qid,
+                    result,
+                )
             if found.type_hint:
                 self._record_type_statement(
                     found.qid,
@@ -801,6 +828,34 @@ class BatchWriter:
                     artifact_qid,
                     result,
                 )
+
+    def _unknown_kinds(self, batch: ClaimBatch) -> list[str]:
+        """A warning for each entity whose kind the vocabulary lacks, so
+        that no kind is recorded for it. An entity's kind is its manifest
+        record's or, for a local id without one, that of the first ref to
+        the id, in the order the writer resolves refs: each claim's
+        subject, then its value, then its qualifiers' values."""
+        kinds: dict[str, str | None] = {
+            record.id: record.kind for record in self._entity_records.values()
+        }
+        for claim in batch.claims:
+            refs = [claim.subject]
+            if isinstance(claim.value, ItemValue):
+                refs.append(claim.value.value)
+            refs.extend(
+                qualifier.value.value
+                for qualifier in claim.qualifiers
+                if isinstance(qualifier.value, ItemValue)
+            )
+            for ref in refs:
+                if isinstance(ref, LocalRef):
+                    kinds.setdefault(ref.local_id, ref.instance_of)
+        return [
+            f"entity {local_id!r} has the kind {kind!r}, which the "
+            f"vocabulary lacks: no kind is recorded for it"
+            for local_id, kind in kinds.items()
+            if kind and kind not in self.items
+        ]
 
     # -- main entry ----------------------------------------------------------
 
@@ -828,6 +883,9 @@ class BatchWriter:
         self._mentions = {}
         self._minted = set()
         self._ref_kinds = {}
+        # found before the first write; the kinds are skipped wherever the
+        # writer would record them
+        warnings = self._unknown_kinds(batch)
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
         # contribute the document's aliases to the existing items here
@@ -837,7 +895,9 @@ class BatchWriter:
                     self._ensure_aliases(
                         record.qid, [record.label, *record.aliases]
                     )
-        result = WriteResult(run_qid=self.ensure_run_item(batch))
+        result = WriteResult(
+            run_qid=self.ensure_run_item(batch), warnings=warnings
+        )
         for claim in batch.claims:
             artifact_qid = self._source_artifact_qid(claim.source.artifact)
             subject_qid = self._resolve_ref(

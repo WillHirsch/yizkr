@@ -749,7 +749,11 @@ class DetachedItems(FakeItems):
     item as last written, and a write stores the writing copy whole. So a
     write through a copy read before another write undoes that write, as
     an edit sent from a stale read does on an instance: an edit sends the
-    item's aliases whole, and its statements as that copy holds them."""
+    item's aliases whole, and its statements as that copy holds them.
+
+    Unlike an instance, the store's round trip through `get_json` and
+    `from_json` ignores WikibaseIntegrator's `remove` flags: a statement
+    or alias removed through a copy stays. The writer removes nothing."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -1680,6 +1684,156 @@ class TestWriterLaterSourceTypes:
         assert _snapshot(wiki, firm) == before
         assert directory.type_statements_written == 0
         assert directory.type_statements_referenced == 0
+
+
+def _two_page_lines_batch(
+    page_1_kind: str | None, page_2_kind: str | None
+) -> ClaimBatch:
+    """The directory's batch as the line-range tier gives it for two of
+    its pages (ADR-0006): each page's chunk names the firm by a local id
+    of its own, with the kind it gives (None: none). Page 1 gives the
+    founding year, page 2 the firm's name as written."""
+
+    def firm(local_id: str, kind: str | None) -> dict:
+        ref = {"kind": "local", "local_id": local_id, "label": FIRM_LABEL}
+        if kind:
+            ref["instance_of"] = kind
+        return ref
+
+    def source(sha1: str, excerpt: str) -> dict:
+        return {
+            "artifact": {"kind": "artifact", "sha1": sha1},
+            "transcription_excerpt": {"text": excerpt, "language": "de"},
+        }
+
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": DIRECTORY_RUN,
+            "claims": [
+                {
+                    "subject": firm("c001:firm", page_1_kind),
+                    "property": "start_time",
+                    "value": {"type": "time", "year": 1863},
+                    "source": source(DIRECTORY_SHA1, "gegr. 1863"),
+                },
+                {
+                    "subject": firm("c002:firm", page_2_kind),
+                    "property": "referred_to_as",
+                    "value": {
+                        "type": "monolingual",
+                        "value": {"text": FIRM_LABEL, "language": "de"},
+                    },
+                    "source": source(DIRECTORY_PAGE_2_SHA1, FIRM_LABEL),
+                },
+            ],
+        }
+    )
+
+
+def _three_sources() -> FakeWiki:
+    return FakeWiki(
+        {
+            INTERVIEW_SHA1: "Q25",
+            DIRECTORY_SHA1: "Q26",
+            DIRECTORY_PAGE_2_SHA1: "Q28",
+        }
+    )
+
+
+class TestWriterRefKindWitnesses:
+    """A local ref without a manifest record gives its item's kind on the
+    artifact of the claim the ref is in (#240 review): the kind cites that
+    artifact, not the first one that mentions the item, and every artifact
+    whose ref gives the kind is a witness of it (rule 1)."""
+
+    def test_a_refs_kind_cites_its_own_claims_artifact(self):
+        # page 1's chunk names the firm without a kind; page 2's types it
+        wiki = _three_sources()
+        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        firm = interview.created_items["firm"]
+
+        directory = BatchWriter(wiki).write_batch(
+            _two_page_lines_batch(None, "organization")
+        )
+
+        kinds = _by_value(_statements(wiki, firm, "instance_of"))
+        assert _sources(kinds[ITEMS["organization"]]) == [
+            (["Q28"], []),
+            ([], [directory.run_qid]),
+        ]
+        assert _sources(kinds[ITEMS["unclassified_entity"]]) == [
+            (["Q25"], []),
+            ([], [interview.run_qid]),
+        ]
+        assert directory.type_statements_written == 1
+        assert directory.type_statements_referenced == 0
+
+    def test_every_page_that_gives_the_kind_witnesses_it(self):
+        # both pages' chunks give the kind the interview gave
+        wiki = _three_sources()
+        interview = BatchWriter(wiki).write_batch(_firm_batch())
+        firm = interview.created_items["firm"]
+        batch = _two_page_lines_batch(
+            "unclassified_entity", "unclassified_entity"
+        )
+
+        directory = BatchWriter(wiki).write_batch(batch)
+
+        (kind,) = _statements(wiki, firm, "instance_of")
+        assert _sources(kind) == [
+            (["Q25"], []),
+            ([], [interview.run_qid]),
+            (["Q26"], []),
+            ([], [directory.run_qid]),
+            (["Q28"], []),
+        ]
+        assert directory.type_statements_written == 0
+        assert directory.type_statements_referenced == 2
+        # and a re-run finds both witnesses there
+        before = _snapshot(wiki, firm)
+        again = BatchWriter(wiki).write_batch(batch)
+        assert again.type_statements_referenced == 0
+        assert _snapshot(wiki, firm) == before
+
+    @pytest.mark.parametrize("found", [True, False], ids=["found", "minted"])
+    def test_a_kind_the_vocabulary_lacks_is_skipped_with_a_warning(
+        self, found
+    ):
+        # the directory's chunk typed the firm by the interview's word for
+        # it, which is no kind in the vocabulary
+        wiki = _three_sources()
+
+        def kinds(qid: str) -> list[str]:
+            return [
+                json.dumps(statement.get_json(), sort_keys=True)
+                for statement in _statements(wiki, qid, "instance_of") or []
+            ]
+
+        kinds_before = []
+        if found:
+            firm = (
+                BatchWriter(wiki)
+                .write_batch(_firm_batch())
+                .created_items["firm"]
+            )
+            kinds_before = kinds(firm)
+        batch = _two_page_lines_batch("hat_shop", None)
+        warning = (
+            "entity 'c001:firm' has the kind 'hat_shop', which the "
+            "vocabulary lacks: no kind is recorded for it"
+        )
+        # found before the first write, so a dry run reports it too
+        writes = wiki.wbi.item.writes
+        planned = BatchWriter(wiki, dry_run=True).write_batch(batch)
+        assert planned.warnings == [warning]
+        assert wiki.wbi.item.writes == writes
+
+        directory = BatchWriter(wiki).write_batch(batch)
+
+        assert directory.warnings == [warning]
+        assert directory.written == 2
+        assert kinds(directory.created_items["c001:firm"]) == kinds_before
+        assert directory.type_statements_written == 0
 
 
 # -- writer: a document's aliases reach the item however it was found (#240)

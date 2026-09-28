@@ -94,9 +94,12 @@ through one function, `entity_records` in yizkr.pipeline.review. When two
 records share an id, which manifest validation refuses but a hand-edited
 batch file can hold, the last one counts for both: the approval binds
 the record the writer resolves the local ref through, and the other
-record changes neither the approval nor anything written. A change to
-how the lookup picks a record, such as letting the first win or
-refusing a duplicate id, changes both at once. The rule for a local ref
+record leaves the approval as it is, resolves no local ref, and adds no
+alias or kind. It is still part of the batch file, which the
+extraction-run item's fingerprint covers whole, so editing it gives the
+batch another run item. A change to how the lookup picks a record, such
+as letting the first win or refusing a duplicate id, changes both at
+once. The rule for a local ref
 without a record compares whole refs: another ref to its id that
 differs only in its description or kind voids the approval as one that
 differs in its label does, and a ref that is the value of one of the
