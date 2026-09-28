@@ -342,22 +342,37 @@ class TestRefusal:
         events = [INIT, *refused_events(RATE_LIMITED, "s1")]
         assert refusal(events, 0) == Refusal(RATE_LIMIT)
 
-    def test_an_answered_call_was_not_refused(self):
-        """The CLI retries some refusals itself: a call that answered was
-        not refused, whatever its stream reported on the way."""
+    @pytest.mark.parametrize(
+        "reported",
+        [
+            # the CLI retried a refusal itself, and the window is open again
+            [{"status": "rejected"}, report(resets_at=START + HOUR)],
+            # the call ran on usage credits past its used-up window, which
+            # the CLI reports as rejected
+            [
+                {
+                    "status": "rejected",
+                    "resetsAt": int(START + HOUR),
+                    "rateLimitType": "five_hour",
+                    "overageStatus": "allowed",
+                    "isUsingOverage": True,
+                }
+            ],
+        ],
+        ids=["retried", "on usage credits"],
+    )
+    def test_an_answered_call_was_not_refused(self, reported):
+        """A call that answered was not refused, whatever its stream
+        reported on the way."""
         events = [
             INIT,
-            {
-                "type": "rate_limit_event",
-                "rate_limit_info": {"status": "rejected"},
-            },
+            *(
+                {"type": "rate_limit_event", "rate_limit_info": info}
+                for info in reported
+            ),
             {
                 "type": "assistant",
                 "message": {"content": [{"type": "text", "text": "answer"}]},
-            },
-            {
-                "type": "rate_limit_event",
-                "rate_limit_info": report(resets_at=START + HOUR),
             },
             {"type": "result", "is_error": False, "result": "answer"},
         ]
