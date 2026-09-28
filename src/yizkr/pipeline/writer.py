@@ -329,11 +329,7 @@ class BatchWriter:
         if existing:
             if aliases:
                 self._ensure_aliases(existing, aliases)
-            if (
-                record is None
-                and instance_of in self.items
-                and source_artifact_qid
-            ):
+            if record is None and instance_of and source_artifact_qid:
                 # a ref without a manifest record gives its kind itself, as
                 # it does to an item minted from it, on the artifact of the
                 # claim it is in: each such artifact is a witness of the

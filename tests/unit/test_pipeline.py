@@ -8,7 +8,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from yizkr.claims import ArtifactRef, ClaimBatch, LocalRef, QidRef
+from yizkr.claims import (
+    ArtifactRef,
+    ClaimBatch,
+    EntityRecord,
+    ItemValue,
+    LocalRef,
+    MonolingualText,
+    QidRef,
+)
 from yizkr.pipeline.extract import (
     ClaimFileExtractor,
     LlmClaimExtractor,
@@ -1795,12 +1803,27 @@ class TestWriterRefKindWitnesses:
         assert again.type_statements_referenced == 0
         assert _snapshot(wiki, firm) == before
 
+    # the directory typing the firm by the interview's word for it, which
+    # is no kind in the vocabulary: on a local ref of its line-range batch,
+    # or in its entity manifest -> (the batch, the firm's local id, claims)
+    UNKNOWN_KIND = {
+        "ref": (
+            lambda: _two_page_lines_batch("hat_shop", None),
+            "c001:firm",
+            2,
+        ),
+        "record": (lambda: _directory_batch("hat_shop"), "firm", 1),
+    }
+
+    @pytest.mark.parametrize(
+        ("given", "local_id", "claims"),
+        UNKNOWN_KIND.values(),
+        ids=UNKNOWN_KIND.keys(),
+    )
     @pytest.mark.parametrize("found", [True, False], ids=["found", "minted"])
     def test_a_kind_the_vocabulary_lacks_is_skipped_with_a_warning(
-        self, found
+        self, found, given, local_id, claims
     ):
-        # the directory's chunk typed the firm by the interview's word for
-        # it, which is no kind in the vocabulary
         wiki = _three_sources()
 
         def kinds(qid: str) -> list[str]:
@@ -1817,9 +1840,9 @@ class TestWriterRefKindWitnesses:
                 .created_items["firm"]
             )
             kinds_before = kinds(firm)
-        batch = _two_page_lines_batch("hat_shop", None)
+        batch = given()
         warning = (
-            "entity 'c001:firm' has the kind 'hat_shop', which the "
+            f"entity {local_id!r} has the kind 'hat_shop', which the "
             "vocabulary lacks: no kind is recorded for it"
         )
         # found before the first write, so a dry run reports it too
@@ -1831,8 +1854,8 @@ class TestWriterRefKindWitnesses:
         directory = BatchWriter(wiki).write_batch(batch)
 
         assert directory.warnings == [warning]
-        assert directory.written == 2
-        assert kinds(directory.created_items["c001:firm"]) == kinds_before
+        assert directory.written == claims
+        assert kinds(directory.created_items[local_id]) == kinds_before
         assert directory.type_statements_written == 0
 
 
@@ -1947,6 +1970,65 @@ class TestWriterAliases:
         BatchWriter(wiki).write_batch(tree_batch)
         assert wiki.wbi.item.writes == writes
         assert _aliases(wiki, sebastian) == ["Wastl"]
+
+    def test_aliases_another_writer_put_on_survive_a_reused_writers_edit(
+        self,
+    ):
+        # one writer wrote the certificate and holds its copy of
+        # Sebastian's item; another wrote the tree's birth year and put
+        # "Wastl" on it. The first writer's next batch, the tree's marriage
+        # line, finds the alias already there, and edits from that read
+        wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
+        writer = BatchWriter(wiki)
+        sebastian = writer.write_batch(_certificate_batch()).created_items[
+            "e01"
+        ]
+        BatchWriter(wiki).write_batch(_tree_batch())
+        assert _aliases(wiki, sebastian) == ["Wastl"]
+        tree = _tree_batch()
+        hildegard = {
+            "id": "e04",
+            "label": "Hildegard Laudler",
+            "kind": "human",
+        }
+        married = tree.model_copy(
+            update={
+                "claims": [
+                    tree.claims[0].model_copy(
+                        update={
+                            "property": "spouse",
+                            "value": ItemValue(
+                                value=LocalRef(
+                                    local_id="e04",
+                                    label=hildegard["label"],
+                                    instance_of="human",
+                                )
+                            ),
+                            "source": tree.claims[0].source.model_copy(
+                                update={
+                                    "transcription_excerpt": MonolingualText(
+                                        text="1862–1945 = Hildegard 'Hilde' "
+                                        "Laudler",
+                                        language="en",
+                                    )
+                                }
+                            ),
+                        }
+                    )
+                ],
+                "entities": [
+                    *tree.entities,
+                    EntityRecord.model_validate(hildegard),
+                ],
+            }
+        )
+
+        writer.write_batch(married)
+
+        assert _aliases(wiki, sebastian) == ["Wastl"]
+        assert len(_statements(wiki, sebastian, "spouse")) == 1
+        # the other writer's birth year is there too
+        assert len(_statements(wiki, sebastian, "date_of_birth")) == 2
 
 
 class TestPrivacyDefaults:
