@@ -19,6 +19,13 @@ EXISTING items (`propose_graph_pairs`) — cleanup of duplicates already
 in the graph. Executing those is a curator action: a MediaWiki item
 merge, or a referenced `said to be the same as` statement when the
 equivalence is itself a contestable judgement.
+
+Blocking and adjudication take the roster, and the place containment,
+as inputs. Only `fetch_roster` and `fetch_place_containment` read them
+from the graph, for the commands a curator runs on it (`ingest
+reconcile`, `reconcile-graph`): a stage before the write reads nothing
+from the wiki (ADR-0025 §2), so `ingest run`'s reconcile step has no
+roster to match against.
 """
 
 from __future__ import annotations

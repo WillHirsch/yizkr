@@ -10,21 +10,34 @@ context). This module extracts:
 * per-slide text runs and speaker notes, in document order;
 * embedded media, mapped to the slide(s) that reference them.
 
-Registration of the derived media follows the deck-asserts-its-own-
-composition convention: every statement a deck contributes to a derived
-item is referenced ``stated in -> that presentation`` (MODELING.md;
-ADR-0003). Derived items are keyed on content (ADR-0010), so an image
-shared by several decks is one item that is ``part of`` each of them.
+Before the write, a deck's derived media are only recorded, in its
+document's directory (`record_derived_media`): each distinct image by
+the SHA-1 of its bytes, with the deck it is part of and the slides it is
+on, and its bytes kept beside the record. Nothing is read from the wiki
+or written to it then (ADR-0025 §2).
+
+Registration of the derived media (`register_derived_media`) follows the
+deck-asserts-its-own-composition convention: every statement a deck
+contributes to a derived item is referenced ``stated in -> that
+presentation`` (MODELING.md; ADR-0003). Derived items are keyed on
+content (ADR-0010), so an image shared by several decks is one item that
+is ``part of`` each of them.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from yizkr.pipeline.stages import staging_path
 
 A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 R_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -183,6 +196,156 @@ def slide_transcript(content: PresentationContent) -> str:
             blocks.append(f"[Slide {slide.number} notes]")
             blocks.append(slide.notes)
     return "\n".join(blocks)
+
+
+# The record of a deck's derived media in its document's directory, and
+# the folder beside it that keeps their bytes.
+DERIVED_MEDIA = "derived-media.json"
+DERIVED_MEDIA_DIR = "derived-media"
+
+Sha1 = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+# a medium's file: its SHA-1 and its suffix, in DERIVED_MEDIA_DIR
+_MEDIUM_FILE = (
+    rf"^{re.escape(DERIVED_MEDIA_DIR)}/[0-9a-f]{{40}}(\.[a-z0-9]+)?$"
+)
+
+
+class DerivedMedium(BaseModel):
+    """One distinct medium a deck embeds: its bytes, wherever the deck
+    uses them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # its names inside the deck's archive (image1.jpeg): the same bytes
+    # under several names are one medium
+    names: list[str]
+    # every slide it is on, by its 1-based position in presentation
+    # order: the page number of its `part of` the deck (ADR-0008)
+    slides: list[int]
+    # the file that keeps its bytes, relative to the record's directory:
+    # always in DERIVED_MEDIA_DIR, so a record never names a file outside
+    # it for the write to upload
+    file: str = Field(pattern=_MEDIUM_FILE)
+
+
+class DerivedMediaRecord(BaseModel):
+    """A deck's derived media, recorded before the write for registration
+    at write time: each distinct medium by the SHA-1 of its bytes
+    (ADR-0010), part of the deck that the SHA-1 of the deck's own bytes
+    names. Nothing in it depends on an instance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # the deck, the artifact the media are part of
+    source_sha1: Sha1
+    # the deck's title, which each medium's label begins with:
+    # "<deck title> — <media name>" (ADR-0008)
+    title: str
+    # media SHA-1 -> the medium
+    media: dict[Sha1, DerivedMedium] = {}
+
+
+def record_derived_media(
+    content: PresentationContent,
+    *,
+    source_sha1: str,
+    title: str,
+    directory: Path,
+) -> DerivedMediaRecord:
+    """Record the media a deck embeds, reading nothing from the wiki and
+    writing nothing to it (ADR-0025 §2).
+
+    It records what `content.media` holds: `unpack_pptx` puts the images
+    there, and counts the other media in `content.skipped_media`. Each
+    distinct medium is keyed by the SHA-1 of its bytes, with every name
+    it has in the archive and every slide it is on. Its bytes are kept as
+    ``<sha1><suffix>`` in `DERIVED_MEDIA_DIR` under `directory`, and the
+    record as `DERIVED_MEDIA` there. Each file is written in one step, so
+    a reader sees it whole or not at all, and one that already holds what
+    it would be written with is left untouched. Returns the record."""
+    names: dict[str, set[str]] = {}
+    slides: dict[str, set[int]] = {}
+    data: dict[str, bytes] = {}
+    for medium in content.media:
+        sha1 = hashlib.sha1(medium.data).hexdigest()
+        names.setdefault(sha1, set()).add(medium.name)
+        slides.setdefault(sha1, set()).update(medium.slides)
+        data.setdefault(sha1, medium.data)
+    record = DerivedMediaRecord(
+        source_sha1=source_sha1,
+        title=title,
+        media={
+            sha1: DerivedMedium(
+                names=sorted(names[sha1]),
+                slides=sorted(slides[sha1]),
+                file=f"{DERIVED_MEDIA_DIR}/{sha1}"
+                + PurePosixPath(min(names[sha1])).suffix.lower(),
+            )
+            for sha1 in sorted(data)
+        },
+    )
+    # the bytes before the record, so a record never names a missing file
+    for sha1, medium in record.media.items():
+        _keep(directory / medium.file, data[sha1])
+    _keep(
+        directory / DERIVED_MEDIA,
+        record.model_dump_json(indent=2).encode("utf-8"),
+    )
+    return record
+
+
+def read_derived_media(directory: Path) -> DerivedMediaRecord | None:
+    """The record of a deck's derived media kept in `directory`
+    (record_derived_media), when it is there whole and so is the file of
+    every medium it names: a regular file, not a symlink, named for the
+    medium's SHA-1 and holding the bytes that SHA-1 names. None
+    otherwise, so a record whose files were lost, damaged, swapped or
+    replaced by a link is made again."""
+    try:
+        record = DerivedMediaRecord.model_validate_json(
+            (directory / DERIVED_MEDIA).read_bytes()
+        )
+    except (OSError, ValueError):
+        return None
+    for key, medium in record.media.items():
+        data = _read_regular(directory / medium.file)
+        if (
+            PurePosixPath(medium.file).stem != key
+            or data is None
+            or hashlib.sha1(data).hexdigest() != key
+        ):
+            return None
+    return record
+
+
+def _read_regular(path: Path) -> bytes | None:
+    """The bytes of the regular file at `path`, never read through a
+    symlink; None when there is no such file or it cannot be read."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _keep(path: Path, data: bytes) -> None:
+    """Keep `data` at `path`, written in one step, unless the regular file
+    there holds those bytes already. A symlink there is replaced, never
+    written through."""
+    if _read_regular(path) == data:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = staging_path(path)
+    try:
+        with open(staging, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staging, path)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
 
 
 def register_derived_media(

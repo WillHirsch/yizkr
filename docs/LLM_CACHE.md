@@ -564,6 +564,6 @@ through it, and the transcription check counts its pages with it
 cache, or is a view the run reuses and checks again.
 
 The per-document path goes when the scratch driver has run the corpus
-end to end (#119). Until #128 and #103 land, it still registers the
+end to end (#119). Until #103 lands, it still registers the
 artifact in the wiki before the stages run; the stages themselves read
 and write no wiki.
