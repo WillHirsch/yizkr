@@ -427,8 +427,8 @@ served under.
 The archived-transcription import (`yizkr scratch import-transcriptions`,
 #104) seeds the transcribe role's calls with the vision transcriptions of
 an earlier `ingest run`'s state directory, reading no file outside it
-and following no link. It asks the never-ingest list first, of each
-document's state before its transcription is opened; leaves out the
+and following no link inside it. It asks the never-ingest list first, of
+each document's state before its transcription is opened; leaves out the
 scans the operator names, withdrawing any adoption the cache serves for
 them; adopts only a transcription made with the prompt the run sends (the
 QID format was made with one prompt; the current format names none),

@@ -10,9 +10,11 @@ but those two files of each document folder and, where the archive is a
 run directory, the run's `events.jsonl` in a folder of the archive that
 holds document folders, which gives the time each transcription was made.
 A folder whose name starts with a dot is one a run set aside, and is
-passed over. A file among those that is a symbolic link, or whose path
-resolves outside the archive, is not read: its transcription is skipped
-as unreadable, and such an events file gives no time.
+passed over. A folder inside the archive that is a symbolic link is not
+descended: what it holds is neither counted nor reported. A file among
+those read that is a symbolic link, or whose path resolves outside the
+archive, is not read: its transcription is skipped as unreadable, and
+such an events file gives no time.
 
 **What is adopted.** A scratch run transcribes each scan with one call,
 the transcription prompt and the scan, and every call goes through the
@@ -32,12 +34,13 @@ media's transcriptions, in turn:
   in two passes. The first reads each document's `state.json` alone and
   asks with its file name and media SHA-1; the second opens a
   `transcription.json` only for a document the list leaves in, and asks
-  again with the SHA-1 the transcription names, before anything else is
-  done with it. A media one of whose transcriptions the list excludes is
-  excluded whole. A document with no readable `state.json` is not opened
-  at all: the list cannot be asked for it. Without a list the import
-  refuses to start. The corpus is found as the run finds it, with the
-  list asked of each file there too.
+  again with the SHA-1 the transcription names, before its text is used.
+  A media any of whose states the list excludes is excluded whole: every
+  transcription the archive holds of it. A transcription whose own SHA-1
+  the list names is excluded alone. A document with no readable
+  `state.json` is not opened at all: the list cannot be asked for it.
+  Without a list the import refuses to start. The corpus is found as the
+  run finds it, with the list asked of each file there too.
 * **Left out.** A media whose SHA-1 starts with a prefix the operator
   gives is not adopted, so the next run transcribes it afresh, and any
   adoption the cache serves for its call, whichever archive it came from,
@@ -53,12 +56,13 @@ media's transcriptions, in turn:
   none of them adopted: nothing says which the run should take.
 * **Re-keyed by its media's SHA-1**, which its `state.json` records or its
   transcription names. The call's key needs the scan itself, so the
-  corpus must hold a scan with those bytes that the run would transcribe;
-  the scan is read once for both its SHA-1 and the digest its key names,
-  so no adoption is keyed on bytes other than the archive's media. The
-  QID a transcription in the QID format names its artifact by is dropped:
-  what is adopted is the text alone, and the view the run makes of it
-  names the artifact by the SHA-1.
+  corpus must hold a scan with those bytes that the run would transcribe.
+  Its SHA-1 and SHA-256 come from one reading of the scan, and the call's
+  key is taken only when the digest it names, from a second reading, is
+  that SHA-256, so no adoption is keyed on bytes other than the archive's
+  media. The QID a transcription in the QID format names its artifact by
+  is dropped: what is adopted is the text alone, and the view the run
+  makes of it names the artifact by the SHA-1.
 * **Made with the prompt the run sends.** A vision transcription in the
   QID format (`artifact_qid`: its artifact named by an instance's item)
   was made with the prompt whose SHA-256 is QID_FORMAT_PROMPT, and is
@@ -67,10 +71,11 @@ media's transcriptions, in turn:
 * **Checked**: the transcription check judges it as the run judges an
   answer (yizkr.pipeline.transcription_check), with its scan's page
   count, whatever the cache holds for the call. One it fails is not
-  adopted: it is recorded in the cache as an answer rejected under its
-  call's key, with the check's reason (EngineCache.record_rejected), and
-  an adoption of it the cache serves is moved aside, so that no adoption
-  takes it later.
+  adopted: the entry the cache serves for the call with that text, an
+  adoption or the engine's own answer, is moved aside as rejected with
+  the check's reason; with none, the text is recorded as an answer
+  rejected under the call's key (EngineCache.record_rejected). So no
+  adoption takes it later.
 * **Never over another answer.** An adoption never replaces what the
   cache holds for the call, the engine's answer or another adoption. One
   adopted already with the same text counts as imported, so running the
@@ -654,8 +659,10 @@ class _Adopter:
 
     def _call(self, media: _Media) -> tuple[str, dict[str, Any]] | None:
         """(key, components) of the call the run transcribes the media's
-        scan with, keyed from bytes whose SHA-1 is the media's; None when
-        the scan's bytes are not those, or changed as they were read."""
+        scan with. The scan's SHA-1 and SHA-256 come from one reading of
+        it, and the key is taken only when the digest it names, from a
+        second reading, is that SHA-256. None when the SHA-1 is not the
+        media's, or the scan changed between the two readings."""
         from yizkr.pipeline import transcribe
 
         scan = media.scan
@@ -812,7 +819,7 @@ def import_transcriptions(
         raise ImportRefused(f"the corpus {corpus} is not a folder")
 
     # the never-ingest list, first pass: the states alone. A media any of
-    # whose transcriptions it excludes is excluded whole
+    # whose states it excludes is excluded whole
     records = read_archive(archive)
     excluded = {
         sha1

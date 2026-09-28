@@ -548,14 +548,15 @@ it: `llm-vision:claude-code/<CLI version>[:<model>]` for the claude CLI,
 `correction` for the routes that make no call. Nothing else of the
 archive is read, but for a run directory's `events.jsonl` in a folder of
 the archive that holds document folders, which gives the time each
-transcription was made (its stage's latest `done` event); no folder
-above the archive is looked in. A folder whose name starts with a dot is
-one a run set aside, and is passed over. A `state.json`,
-`transcription.json` or `events.jsonl` that is a symbolic link, or whose
-path resolves outside the archive, is not read: the document is skipped
-as unreadable, and such events give no time. The archive may be named
-through a link: it is resolved once. File modification times are not
-read.
+transcription was made (its stage's latest `done` event); no file above
+the archive is read. A folder whose name starts with a dot is one a run
+set aside, and is passed over. A folder inside the archive that is a
+symbolic link is not descended: what it holds is neither counted nor
+reported. A `state.json`, `transcription.json` or `events.jsonl` that is
+a symbolic link, or whose path resolves outside the archive, is not
+read: the document is skipped as unreadable, and such events give no
+time. The archive may be named through a link: it is resolved once. File
+modification times are not read.
 
 **What is adopted.** Each media's transcriptions are taken in turn:
 
@@ -565,8 +566,10 @@ read.
   name and media SHA-1 it records. The second opens a
   `transcription.json` only for a document the list leaves in, and asks
   again with the SHA-1 the transcription names, before its text is used.
-  A media one of whose transcriptions the list excludes is excluded
-  whole. A document with no readable `state.json` gives the list nothing
+  A media any of whose states the list excludes is excluded whole: every
+  transcription the archive holds of it. A transcription whose own SHA-1
+  the list names is excluded alone. A document with no readable
+  `state.json` gives the list nothing
   to ask, and its transcription is not opened: it is skipped as
   unreadable. Without a list the import refuses to start, before it
   reads the archive;
@@ -588,10 +591,12 @@ read.
   none with its bytes, one that cannot be read, or one the never-ingest
   list excludes by the name it has there, which the import does not read
   to tell apart), are **skipped**, with the reason;
-- the scan is read once for its SHA-1 and for the digest the call's key
-  names, so no adoption is keyed on bytes other than the archive's
-  media: a scan that changed since the corpus was read, or as it was
-  read, is skipped (**scan changed**), and the import can be run again;
+- the scan's SHA-1 and SHA-256 come from one reading of it, and the
+  call's key is taken only when the digest it names, from a second
+  reading, is that SHA-256, so no adoption is keyed on bytes other than
+  the archive's media: a scan that changed since the corpus was read, or
+  between the two readings, is skipped (**scan changed**), and the
+  import can be run again;
 - a transcription is adopted only when made with the prompt the run
   sends. A vision transcription in the QID format was made with the one
   prompt the vision route sent while it wrote that format, and is adopted
@@ -599,12 +604,13 @@ read.
   format does not say which prompt made it, and is skipped;
 - the transcription check judges it as the run judges an answer, with
   its scan's page count, whatever the cache holds for the call. One it
-  fails is **rejected**: recorded as a rejected answer under the call's
-  key, with the check's reason (`record_rejected`), or, when the cache
-  serves that text already (an earlier import's adoption, say), moved
-  aside as a rejection is. The run's call then misses as `rejected`, and
-  the engine reads the scan afresh, unless the cache holds the engine's
-  own answer for the call, which the run is served, and checks, as any;
+  fails is **rejected**: the entry the cache serves for the call with
+  that text, an adoption or the engine's own answer, is moved aside as a
+  rejection is, with the check's reason; with none, the text is recorded
+  as a rejected answer under the call's key (`record_rejected`). The
+  run's call then misses as `rejected`, and the engine reads the scan
+  afresh, unless the cache holds another answer for the call, which the
+  run is served, and checks, as any;
 - the rest are **imported**: adopted under the key of the call the run
   makes for the scan (the transcription prompt and the scan, keyed by the
   transcribe role's client, `--extract-effort` and `$YIZKR_LLM_MODEL`

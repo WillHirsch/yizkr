@@ -1380,6 +1380,7 @@ class TestTheCommand:
         monkeypatch.setattr(imports, "import_transcriptions", interrupted)
         argv = self.the_command(tmp_path, monkeypatch, str(archive.path))
         argv += ["--corpus", str(corpus.folder)]
+        argv += ["--cache", str(tmp_path / "cache")]
         try:
             status = cli_run(*argv)
         except KeyboardInterrupt:
