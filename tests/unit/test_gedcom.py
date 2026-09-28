@@ -618,6 +618,209 @@ class TestUnsupportedFormat:
         assert format_unsupported_tags({}) == ""
 
 
+def couple(marriage: str | None = None, divorce: str | None = None) -> str:
+    """Leopold and Agnes's family record, its marriage and divorce dated
+    (here) as given."""
+    lines = [
+        "0 @I11@ INDI",
+        "1 NAME Leopold /Löbig/",
+        "0 @I17@ INDI",
+        "1 NAME Agnes /Löbig/",
+        "0 @F5@ FAM",
+        "1 HUSB @I11@",
+        "1 WIFE @I17@",
+    ]
+    if marriage is not None:
+        lines += ["1 MARR", f"2 DATE {marriage}"]
+    if divorce is not None:
+        lines += ["1 DIV", f"2 DATE {divorce}"]
+    return "\n".join([*lines, "0 TRLR", ""])
+
+
+def shown(value) -> tuple | str:
+    """A qualifier's value: a time as (year, month, day, precision), a
+    vocabulary item by its key."""
+    if value.type == "time":
+        return value.year, value.month, value.day, value.precision
+    return value.value.key
+
+
+def spouse_qualifiers(text: str) -> list[tuple]:
+    """The qualifiers of the couple's spouse claims, which agree, as
+    (property, value) pairs in property order."""
+    batch = adapt_gedcom(text, artifact=EXPORT).batch
+    found = []
+    for subject in ("i11", "i17"):
+        (spouse,) = claims_for(batch, subject, "spouse")
+        found.append(
+            sorted((q.property, shown(q.value)) for q in spouse.qualifiers)
+        )
+    assert found[0] == found[1]
+    return found[0]
+
+
+def year(number: int) -> tuple:
+    return number, None, None, "year"
+
+
+class TestMarriageDates:
+    """A marriage's date is its spouse claims' start time and a divorce's
+    their end time, each with the range its date states as the bounds of
+    that end (docs/MODELING.md, "Marriages, residences and other
+    periods")."""
+
+    def test_no_spouse_claim_carries_a_point_in_time(self):
+        spouses = [
+            claim
+            for claim in fixture_result().batch.claims
+            if claim.property == "spouse"
+        ]
+        assert spouses
+        for claim in spouses:
+            assert "point_in_time" not in {
+                q.property for q in claim.qualifiers
+            }
+
+    def test_a_marriage_date_is_the_start_time(self):
+        # Sebastian and Hildegard, married on 15 December 1905
+        batch = fixture_result().batch
+        (marriage,) = [
+            c
+            for c in claims_for(batch, "i3", "spouse")
+            if c.value.value.local_id == "i4"
+        ]
+        (start,) = [
+            q for q in marriage.qualifiers if q.property == "start_time"
+        ]
+        assert shown(start.value) == (1905, 12, 15, "day")
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            (
+                "BET 1946 AND 1947",
+                [
+                    ("earliest_date", year(1946)),
+                    ("latest_start_date", year(1947)),
+                    ("start_time", year(1946)),
+                ],
+            ),
+            (
+                "BEF 1947",
+                [
+                    ("latest_start_date", year(1947)),
+                    ("start_time", year(1947)),
+                ],
+            ),
+            (
+                "AFT 1946",
+                [("earliest_date", year(1946)), ("start_time", year(1946))],
+            ),
+            (
+                "ABT 1947",
+                [
+                    ("sourcing_circumstances", "circa"),
+                    ("start_time", year(1947)),
+                ],
+            ),
+        ],
+    )
+    def test_a_marriage_range_bounds_the_start(self, date, expected):
+        assert spouse_qualifiers(couple(marriage=date)) == expected
+
+    @pytest.mark.parametrize(
+        ("date", "expected"),
+        [
+            (
+                "BET 1956 AND 1957",
+                [
+                    ("earliest_end_date", year(1956)),
+                    ("end_time", year(1956)),
+                    ("latest_date", year(1957)),
+                ],
+            ),
+            (
+                "AFT 1956",
+                [("earliest_end_date", year(1956)), ("end_time", year(1956))],
+            ),
+            (
+                "BEF 1957",
+                [("end_time", year(1957)), ("latest_date", year(1957))],
+            ),
+            (
+                "ABT 1957",
+                [
+                    ("end_time", year(1957)),
+                    ("sourcing_circumstances", "circa"),
+                ],
+            ),
+        ],
+    )
+    def test_a_divorce_range_bounds_the_end(self, date, expected):
+        # the range and the circa a divorce date states are never dropped
+        assert spouse_qualifiers(couple(divorce=date)) == expected
+
+    def test_each_end_keeps_its_own_range(self):
+        # (here) married "between 1946 and 1947" and divorced "after 1956":
+        # no bound of one end is read as the other's
+        assert spouse_qualifiers(couple("BET 1946 AND 1947", "AFT 1956")) == [
+            ("earliest_date", year(1946)),
+            ("earliest_end_date", year(1956)),
+            ("end_time", year(1956)),
+            ("latest_start_date", year(1947)),
+            ("start_time", year(1946)),
+        ]
+
+    def test_one_circa_stands_for_two_approximate_ends(self):
+        # (here) married about 1947 and divorced about 1957
+        assert spouse_qualifiers(couple("ABT 1947", "ABT 1957")) == [
+            ("end_time", year(1957)),
+            ("sourcing_circumstances", "circa"),
+            ("start_time", year(1947)),
+        ]
+
+    def test_an_undated_marriage_and_divorce_keep_the_wedding_place(self):
+        # (here) the family record names where Leopold and Agnes married and
+        # where they were divorced, but dates neither
+        result = adapt_gedcom(
+            "0 @I11@ INDI\n1 NAME Leopold /Löbig/\n"
+            "0 @I17@ INDI\n1 NAME Agnes /Löbig/\n"
+            "0 @F5@ FAM\n1 HUSB @I11@\n1 WIFE @I17@\n"
+            "1 MARR\n2 PLAC Flörburg, Hesse, Germany\n"
+            "1 DIV\n2 PLAC Rekau, Hesse, Germany\n"
+            "0 TRLR\n",
+            artifact=EXPORT,
+        )
+        assert result.warnings == []
+        labels = {e.id: e.label for e in result.batch.entities}
+        for subject in ("i11", "i17"):
+            (spouse,) = claims_for(result.batch, subject, "spouse")
+            assert not {"start_time", "end_time"} & {
+                q.property for q in spouse.qualifiers
+            }
+            (place,) = [
+                q.value.value.local_id
+                for q in spouse.qualifiers
+                if q.property == "location"
+            ]
+            assert labels[place] == "Flörburg, Hesse, Germany"
+
+    def test_an_unparsed_date_warns_and_omits_its_end(self):
+        result = adapt_gedcom(
+            couple("SOMEDAY MAYBE", "NEVER EVER"), artifact=EXPORT
+        )
+        assert any(
+            "marriage date 'SOMEDAY MAYBE' — start_time omitted" in warning
+            for warning in result.warnings
+        )
+        assert any(
+            "divorce date 'NEVER EVER' — end_time omitted" in warning
+            for warning in result.warnings
+        )
+        (spouse,) = claims_for(result.batch, "i11", "spouse")
+        assert spouse.qualifiers == []
+
+
 class TestIngestGedcom:
     """`yizkr ingest gedcom` on a copy of the fixture under another name."""
 
