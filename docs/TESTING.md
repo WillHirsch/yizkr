@@ -204,17 +204,31 @@ make wdqs-sandbox-down  # or: uv run python scripts/wdqs_sandbox.py down
   (`--vocab` names another; `--raw` sends a finished query as it is). It
   prints the rows as tab-separated values and the engine's wall time.
   The engine stops each run of a query at `--timeout` (default 100 s),
-  and `load` stops each request it sends (the emptying of `--replace`,
-  then one per file) at its own (default 90 s), so each request ends
-  within two minutes. A command that sends several (`query --repeat N`,
-  `load --replace`, a load of several files) can take longer.
-- **Stopping.** Every query that `query` sends carries a marker, so
-  Ctrl-C or SIGTERM during `query` cancels that query in the engine, and
-  nothing else, and kills its curl. During a load, or the emptying of
-  `load --replace`, it kills only the curl and gives the engine up to
-  20 s to finish or abort the write itself: cancelling a write would
-  leave the engine unable to take another until the sandbox restarts.
-  The engine commits a load whole or not at all.
+  and `load` stops the emptying of `--replace`, and each file's load, at
+  its own `--timeout` (default 90 s), so that at the defaults each of
+  these requests ends within two minutes. A command that sends several
+  requests can take longer: `query --repeat N`, and every `load`, which
+  ends by counting the store's triples (after the emptying of
+  `--replace`, and one request per file). So can a load cut short, which
+  waits for the engine (below).
+- **Stopping.** The sandbox runs each docker call in a session of its
+  own, so Ctrl-C at the terminal, or a signal to the process group,
+  reaches the script and none of its docker calls, and the script stops
+  the command itself. Every query that `query` sends carries a marker,
+  so Ctrl-C or SIGTERM during `query` cancels that query in the engine,
+  and nothing else, and kills its curl. During a load, or the emptying
+  of `load --replace`, it kills only the curl, since cancelling a write
+  would leave the engine unable to take another until the sandbox
+  restarts, and gives the engine up to 20 s to finish or abort the write
+  itself. When the engine is still busy, it says "waiting up to 20 s for
+  the engine to finish or abort the write". A load that runs past its
+  `--timeout` ends the same way. The engine commits a load whole or not
+  at all. Once a command is cleaning up, Ctrl-C and SIGTERM are ignored
+  until it is done. The sandbox reads the engine's running tasks from
+  its status page. When that page cannot be read whole, `query` cancels
+  nothing (the engine stops the query at `--timeout`), and a load cut
+  short takes the engine as still busy and goes on waiting, up to the
+  20 s.
 - **Timings are indicative.** One CPU makes them noisy: compare variants
   in one session with `--repeat 3` and their medians, or start the
   sandbox with `up --cpus 2`. The sandbox compares queries; it does not
