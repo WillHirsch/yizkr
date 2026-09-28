@@ -528,6 +528,21 @@ class TestChunkResponseContract:
                 "gaps_emitted": 1,
                 "gap": godparent,
             },
+            {
+                "done": True,
+                "claims_emitted": 0,
+                "gap": {**godparent, "note": "p. 2"},
+            },
+            {
+                "done": True,
+                "claims_emitted": 0,
+                "gap": {**godparent, "claims": []},
+            },
+            {
+                "done": True,
+                "claims_emitted": 0,
+                "gap": {**godparent, "evidence": ["x"]},
+            },
             {"done": True, "claims_emitted": 1, "gaps_emitted": 2},
         ]
         unread = [
@@ -563,6 +578,9 @@ class TestChunkResponseContract:
         assert parse_chunk_gaps(response) == [
             {**godparent, "object": "", "evidence": ""},
             {**godparent, "object": "", "evidence": ""},
+            {**godparent, "object": "", "evidence": ""},
+            {**godparent, "object": "", "evidence": ""},
+            {**godparent, "object": "", "evidence": "['x']"},
             {**godparent, "object": "e2", "evidence": ""},
         ]
 
