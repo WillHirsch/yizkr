@@ -229,7 +229,7 @@ the batch is recorded as made from, does not change either.
 ## Layout
 
 ```
-var/llm-cache/                     (--cache; mode 700)
+var/llm-cache/                     (--cache; private, below)
   .lock                            the lock of the process using the cache,
                                    and its record (mode 600)
   <first two hex digits of the key>/
@@ -260,6 +260,46 @@ returned with some text in it is stored**: an error, a timeout, a pause
 (`PassPaused`) or an empty answer stores nothing, so the next run asks
 again. **The cache deletes nothing**: an entry it stops serving is moved
 aside and kept.
+
+## The cache folder
+
+The entries hold corpus content: model answers, and the transcriptions
+their prompts carry. They are local-only data, never committed or shared
+(docs/AGENT_PROTOCOL.md §6), so opening a cache refuses two folders
+(#305), however the command names them:
+
+- **One a git work tree would track**: a folder inside a work tree that
+  git does not ignore, where `git add` would pick the entries up. The
+  refusal names the tree. This repository ignores `var/`, so the default
+  `var/llm-cache` is fine, as is a folder outside any work tree. A folder
+  not made yet is judged by its name, as git matches its ignore rules,
+  and nothing is made in the tree. A symbolic link is followed: what
+  counts is where the entries would land. Where no git can be run, none
+  can track the folder, and nothing is refused on this count. The scratch
+  driver refuses a runs directory by the same check.
+- **One there already that is open to other users**: any permission for
+  its group or for others, a home directory's 755 say, or a folder of
+  your own that its group can write. Its mode is left as it is: make it
+  private (`chmod 700`), or name another folder.
+
+A folder that cannot be made, is not a folder, or is private but not
+writable by this user (another user's, or one closed to its owner) is
+refused too, and so is a lock file that cannot be opened. The checks run
+as the cache opens, and every command opens its cache before its first
+call: `ingest extract --cache` before it asks the engine, `ingest run`
+and `scratch run` when a stage first needs the engine. The refusal's
+message is one line, and it is raised as `CacheRefused`, a pause
+(`PassPaused`) like `CacheInUse`: it ends the pass rather than failing
+each document in turn, the invocation ends `paused` (`scratch run`
+prints the line and exits 2), and the pass goes on once the folder can
+hold the cache, or with another.
+
+**Folders the cache makes are private** (mode 700, whatever the umask):
+the root and any missing folder above it, a key's folder for an answer
+or an adoption, and a kept session's folders, however deep. A folder
+there already keeps its mode, one another process makes first included,
+so the cache changes the mode of no folder it did not make; a private
+root keeps the folders under it from other users, whatever their modes.
 
 ## One process per cache
 
@@ -433,7 +473,9 @@ changed, or its replay failed) is no miss.
 ## Switches
 
 - `yizkr ingest run --cache DIR`: the cache (default `var/llm-cache`),
-  which serves one process at a time (One process per cache, above).
+  which serves one process at a time (One process per cache, above), in
+  a folder no git work tree would track and no other user can open (The
+  cache folder, above).
 - `--no-cache`: the engine directly; nothing is read or written. Views
   persist and are reused as with the cache, and a rejected answer the
   cache kept is asked for again in its run, so the run is otherwise the

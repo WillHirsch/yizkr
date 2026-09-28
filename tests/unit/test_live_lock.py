@@ -332,6 +332,7 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Runs]:
         refusals = {
             "gives up": {TIMEOUT_ENV: "0.1"},
             "relative path": {LOCK_ENV: "relative/live-stack.lock"},
+            "unknown home": {LOCK_ENV: "~no-such-user/live-stack.lock"},
             "unusable timeout": {TIMEOUT_ENV: "soon"},
         }
         lock_errors = {
@@ -432,6 +433,7 @@ def test_a_session_with_no_stack_configured_skips_without_waiting(runs):
     [
         ("gives up", "Gave up after 0.1 s waiting for the live-stack lock"),
         ("relative path", "is a relative path"),
+        ("unknown home", "names a home folder that cannot be found"),
         ("unusable timeout", "is not a number of seconds"),
     ],
 )
@@ -540,6 +542,18 @@ def test_the_lock_path_and_timeout_come_from_the_environment(
     monkeypatch.setenv(LOCK_ENV, "var/stack.lock")
     with pytest.raises(ValueError, match=LOCK_ENV):
         lock_path()
+    # A home folder that cannot be found is refused as well, naming the
+    # setting, rather than raising pathlib's RuntimeError (#330 review).
+    monkeypatch.setenv(LOCK_ENV, "~no-such-user/stack.lock")
+    with pytest.raises(ValueError, match=f"{LOCK_ENV}='~no-such-user/"):
+        lock_path()
+    with monkeypatch.context() as patch:
+        # no HOME, and no passwd entry either: ~ stays as it is
+        patch.delenv(LOCK_ENV)
+        patch.delenv("HOME")
+        patch.setattr(os.path, "expanduser", lambda path: path)
+        with pytest.raises(ValueError, match=f"{LOCK_ENV} is not set"):
+            lock_path()
     monkeypatch.setenv(TIMEOUT_ENV, "2.5")
     assert lock_timeout() == 2.5
     for unusable in ("soon", "-1", "nan"):

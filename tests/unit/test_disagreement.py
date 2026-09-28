@@ -51,6 +51,8 @@ NORMAL = WIKIBASE + "NormalRank"
 PREFERRED = WIKIBASE + "PreferredRank"
 PRECISION = {"decade": 8, "year": 9, "month": 10, "day": 11}
 CENTURY, MILLENNIUM = 7, 6
+# the 19th century as claims.py writes it, by its first year (#241)
+NINETEENTH_CENTURY = Term("literal", "1801-01-01T00:00:00Z", XSD_DATETIME)
 
 EXTRACT = "birth-extract-1938"
 NATURALISATION = "naturalisation-1952"
@@ -689,18 +691,38 @@ class TestSpans:
         assert listed(portrait, within) == []
         assert len(listed(portrait, after)) == 1
 
-    def test_a_century_is_stored_as_its_first_year(self):
-        # the convention claims.py writes: the 19th century is 1800
-        assert century(1800) == (1800, 1899)
-        assert century(1836) == (1800, 1899)
+    def test_a_century_is_counted_as_wikibase_counts_it(self):
+        # the 19th century runs from 1801 to 1900 whichever year in it is
+        # stored: claims.py writes its first year, and Wikibase stores its
+        # last for a curator who types "19. century" (#241)
+        assert century(1801) == (1801, 1900)
+        assert century(1836) == (1801, 1900)
+        assert century(1900) == (1801, 1900)
+        # 1800 is the 18th century's last year, 1901 the 20th's first
+        assert century(1800) == (1701, 1800)
+        assert century(1901) == (1901, 2000)
+
+    def test_a_century_before_the_common_era_is_counted_back(self):
+        # the query service gives a century's year as stored, and a year,
+        # month or day before the common era one year on, in XSD 1.1's
+        # count where 1 BCE is year 0: the 18th century BCE, stored as
+        # -1800 to -1701, spans -1799 to -1700 in the count its years
+        # arrive in
+        assert century(-1800) == (-1799, -1700)
+        assert century(-1701) == (-1799, -1700)
+        assert century(-1700) == (-1699, -1600)
+        # the 1st century BCE ends with 1 BCE, XSD 1.1's year 0
+        assert century(-1) == (-99, 0)
+        assert century(-100) == (-99, 0)
 
     def test_a_century_names_a_hundred_years(self):
-        # Eugen born in the 19th century (here), stored as 1800, and in 1836
+        # Eugen born in the 19th century (here), stored as its first year,
+        # 1801, and in 1836
         statements = (
             said(
                 "eugen-loebig",
                 "date_of_birth",
-                Term("literal", "1800-01-01T00:00:00Z", XSD_DATETIME),
+                NINETEENTH_CENTURY,
                 TREE,
                 precision=CENTURY,
             ),
@@ -708,14 +730,110 @@ class TestSpans:
         )
         assert listed(*statements) == []
 
+    @pytest.mark.parametrize(
+        ("date", "inside"),
+        [
+            # the century's first and last years and days
+            (u.Date(1801), True),
+            (u.Date(1801, 1, 1), True),
+            (u.Date(1900), True),
+            (u.Date(1900, 12, 31), True),
+            # the years on either side of it
+            (u.Date(1800), False),
+            (u.Date(1800, 12, 31), False),
+            (u.Date(1901), False),
+            (u.Date(1901, 1, 1), False),
+            # a decade beside it: the 1890s lie inside it, while the
+            # decades of 1800 to 1809 and of 1900 to 1909 reach past it
+            (u.Date(1890, decade=True), True),
+            (u.Date(1800, decade=True), False),
+            (u.Date(1900, decade=True), False),
+        ],
+        ids=str,
+    )
+    def test_a_century_holds_the_years_wikibase_counts_in_it(
+        self, date, inside
+    ):
+        # Eugen born in the 19th century (here), and on another date
+        statements = (
+            said(
+                "eugen-loebig",
+                "date_of_birth",
+                NINETEENTH_CENTURY,
+                TREE,
+                precision=CENTURY,
+            ),
+            said("eugen-loebig", "date_of_birth", date, GRAVESTONE),
+        )
+        assert (listed(*statements) == []) is inside
+
+    def test_a_century_stored_as_another_of_its_years_is_the_same_century(
+        self,
+    ):
+        # the 19th century as claims.py writes it, 1801, and as Wikibase
+        # stores it for a curator who types "19. century", 1900
+        statements = (
+            said(
+                "eugen-loebig",
+                "date_of_birth",
+                NINETEENTH_CENTURY,
+                TREE,
+                precision=CENTURY,
+            ),
+            said(
+                "eugen-loebig",
+                "date_of_birth",
+                Term("literal", "1900-01-01T00:00:00Z", XSD_DATETIME),
+                GRAVESTONE,
+                precision=CENTURY,
+            ),
+        )
+        assert listed(*statements) == []
+
+    @pytest.mark.parametrize(
+        ("stamp", "inside"),
+        [
+            # a year before the common era as the query service gives it,
+            # one on: 1800 BCE as -1799 and 1701 BCE as -1700 lie inside
+            # the 18th century BCE, and 1801 BCE as -1800 and 1700 BCE as
+            # -1699 do not
+            ("-1799-01-01T00:00:00Z", True),
+            ("-1700-01-01T00:00:00Z", True),
+            ("-1800-01-01T00:00:00Z", False),
+            ("-1699-01-01T00:00:00Z", False),
+        ],
+    )
+    def test_a_century_before_the_common_era_holds_its_years(
+        self, stamp, inside
+    ):
+        # Eugen born (here) in the 18th century BCE, stored as its first
+        # year, -1800, and in one year
+        statements = (
+            said(
+                "eugen-loebig",
+                "date_of_birth",
+                Term("literal", "-1800-01-01T00:00:00Z", XSD_DATETIME),
+                TREE,
+                precision=CENTURY,
+            ),
+            said(
+                "eugen-loebig",
+                "date_of_birth",
+                Term("literal", stamp, XSD_DATETIME),
+                GRAVESTONE,
+                precision=PRECISION["year"],
+            ),
+        )
+        assert (listed(*statements) == []) is inside
+
     def test_a_precision_coarser_than_a_century_names_no_span(self):
-        # Eugen's birth given (here) only to the millennium, stored as 1800,
+        # Eugen's birth given (here) only to the millennium, stored as 1801,
         # beside 1836: a millennium names no span, so the pair is listed
         statements = (
             said(
                 "eugen-loebig",
                 "date_of_birth",
-                Term("literal", "1800-01-01T00:00:00Z", XSD_DATETIME),
+                NINETEENTH_CENTURY,
                 TREE,
                 precision=MILLENNIUM,
             ),

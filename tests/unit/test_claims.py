@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +13,8 @@ from yizkr.claims import (
     ClaimBatch,
     RegionPercent,
     TimeValue,
+    century_of,
+    century_years,
     load_vocabulary,
     validate_against_manifest,
 )
@@ -277,6 +280,97 @@ class TestTimeValues:
             TimeValue(year=-44, month=3)
             .to_wikibase()["time"]
             .startswith("-0044-03")
+        )
+
+
+class TestCenturies:
+    """A century is counted as Wikibase counts it, from year 1, and a claim
+    gives it by its first year (#241; docs/MODELING.md, "Uncertainty and
+    time")."""
+
+    @pytest.mark.parametrize(
+        ("year", "century"),
+        [
+            (1801, 19),  # the 19th century's first year
+            (1900, 19),  # and its last
+            (1800, 18),  # the 18th century's last year
+            (1901, 20),  # the 20th century's first
+            (1, 1),
+            (100, 1),
+            (101, 2),
+            # before the common era the count runs back from 1 BCE
+            (-1, -1),
+            (-100, -1),
+            (-101, -2),
+            (-1701, -18),
+            (-1800, -18),
+            (-1801, -19),
+        ],
+    )
+    def test_a_year_is_in_the_century_wikibase_counts(self, year, century):
+        assert century_of(year) == century
+
+    def test_every_year_is_counted_as_wikibase_formats_it(self):
+        # MwTimeIsoFormatter names the century of a stored year
+        # ceil(|year| / 100), "BCE" for a negative year
+        for year in range(-2500, 2501):
+            if year:
+                wikibase = math.ceil(abs(year) / 100)
+                assert century_of(year) == math.copysign(wikibase, year)
+
+    @pytest.mark.parametrize(
+        ("century", "years"),
+        [
+            (19, (1801, 1900)),
+            (1, (1, 100)),
+            (-1, (-100, -1)),
+            (-18, (-1800, -1701)),
+        ],
+    )
+    def test_a_century_runs_from_its_first_to_its_last_year(
+        self, century, years
+    ):
+        assert century_years(century) == years
+        assert {century_of(year) for year in years} == {century}
+
+    def test_the_19th_century_is_written_as_its_first_year(self):
+        # Eugen Löbig born (here) in the 19th century
+        assert TimeValue(year=1801, precision="century").to_wikibase() == {
+            "time": "+1801-00-00T00:00:00Z",
+            "precision": 7,
+            "calendarmodel": "http://www.wikidata.org/entity/Q1985727",
+        }
+
+    @pytest.mark.parametrize(
+        "year",
+        [
+            1800,  # the 18th century's last year, never the 19th's first
+            1900,  # the 19th century's last year
+            1850,
+            1802,
+        ],
+    )
+    def test_a_century_takes_only_its_first_year(self, year):
+        with pytest.raises(ValidationError, match="century's first year"):
+            TimeValue(year=year, precision="century")
+
+    def test_a_century_before_the_common_era(self):
+        # the 18th century BCE runs from 1800 to 1701 BCE, so its first
+        # year is -1800
+        written = TimeValue(year=-1800, precision="century").to_wikibase()
+        assert (written["time"], written["precision"]) == (
+            "-1800-00-00T00:00:00Z",
+            7,
+        )
+        with pytest.raises(ValidationError, match="century's first year"):
+            TimeValue(year=-1701, precision="century")
+
+    def test_a_decade_is_not_held_to_a_centurys_first_year(self):
+        # the 1800s as a decade, 1800 to 1809, stored as 1800
+        written = TimeValue(year=1800, precision="decade").to_wikibase()
+        assert (written["time"], written["precision"]) == (
+            "+1800-00-00T00:00:00Z",
+            8,
         )
 
 
