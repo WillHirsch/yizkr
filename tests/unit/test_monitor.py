@@ -13,6 +13,7 @@ would."""
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -43,6 +44,7 @@ from yizkr.pipeline.monitor import (
     SHOW_CURSOR,
     STATUS_DIR,
     STATUS_PAGE,
+    UNKNOWN,
     NotARunDirectory,
     RunMonitor,
     failure_label,
@@ -447,6 +449,50 @@ def disagreement(run: Path, summary=None) -> str | None:
         if row:
             seen[counts.name] = row
     return None if seen == expected else f"{seen} != {expected}"
+
+
+def skip_unless_modes_hold(where: Path) -> None:
+    """Skip the test where this process reads a file whatever its mode (as
+    root does): a probe in `where` with mode 0 must be unreadable."""
+    probe = where / "mode-probe"
+    probe.write_text("x")
+    probe.chmod(0)
+    try:
+        probe.read_text()
+    except PermissionError:
+        pass
+    else:
+        pytest.skip("this process reads a file whatever its mode")
+    finally:
+        probe.chmod(0o600)
+        probe.unlink()
+
+
+# what makes a run's control file unreadable, to the driver too: its own
+# mode, or its directory's, as a link into a directory that cannot be
+# searched, so that not even its size can be looked at
+UNREADABLE_BY = ["its mode", "its directory"]
+
+
+@contextlib.contextmanager
+def unreadable_control(run: Path, by: str):
+    """The run's control file, unreadable for the block (UNREADABLE_BY),
+    then readable again, with its own mode or its directory's put back.
+    Skipped where this process reads a file whatever its mode."""
+    skip_unless_modes_hold(run.parent)
+    control = run / "control.jsonl"
+    target = control
+    if by == "its directory":
+        target = run.parent / "hidden"
+        target.mkdir()
+        control.rename(target / control.name)
+        control.symlink_to(target / control.name)
+    mode = target.stat().st_mode & 0o777
+    target.chmod(0)
+    try:
+        yield
+    finally:
+        target.chmod(mode)
 
 
 # -- the summary --------------------------------------------------------------
@@ -1271,6 +1317,82 @@ class TestSlices:
         assert RunDir(run).control().stopped(stage="critique")
         stopped = summarise_run(run, NOW).slice("stage:critique")
         assert (stopped.state, stopped.reason) == (PAUSED, "slow again")
+
+    @pytest.mark.parametrize("by", UNREADABLE_BY)
+    def test_a_control_file_that_cannot_be_read_leaves_every_slice_unknown(
+        self, run, by
+    ):
+        """The driver cannot read it either, so the watch view, on the
+        terminal and on the page, says the slices' state is unknown rather
+        than guessing them active. The counts, which the control file does
+        not touch, agree with run_state all the same."""
+        out = io.StringIO()
+        with unreadable_control(run, by):
+            with pytest.raises(PermissionError):
+                RunDir(run).control()
+            summary = summarise_run(run, NOW)
+            code = watch(
+                run,
+                once=True,
+                out=out,
+                clock=lambda: NOW,
+                size=lambda: (200, 60),
+            )
+        assert code == 0
+        # every slice the run knows, from its plan and its events
+        stages = ["transcription", "extraction", "critique", "gedcom"]
+        kinds = ["gedcom", "media", "text"]
+        assert [(item.scope, item.state) for item in summary.slices] == [
+            (scope, UNKNOWN)
+            for scope in [
+                "run",
+                *(f"stage:{name}" for name in stages),
+                *(f"kind:{name}" for name in kinds),
+            ]
+        ]
+        assert {
+            (item.since, item.by, item.reason) for item in summary.slices
+        } == {(None, None, None)}
+        assert summary.control_unreadable
+        assert summary.slice("stage:nonesuch").state == UNKNOWN
+        assert summary.skipped_lines == 0
+        assert disagreement(run, summary) is None
+        view = out.getvalue()
+        assert "running; run state unknown | invocation 2" in view
+        assert (
+            "slices     state unknown: the control file cannot be read" in view
+        )
+        assert "all active" not in view
+        assert "unreadable log lines" not in view
+        page = page_of(run).read_text(encoding="utf-8")
+        assert page.count('<span class="warn">unknown</span>') == 8
+        assert (
+            '<p class="warn">State unknown: the control file cannot be '
+            "read.</p>" in page
+        )
+        assert '<span class="good">active</span>' not in page
+
+    @pytest.mark.parametrize("by", UNREADABLE_BY)
+    def test_a_followed_control_file_is_read_again_at_every_refresh(
+        self, run, by
+    ):
+        """A monitor following the run shows every slice unknown from the
+        refresh at which the file cannot be read, a change the view is
+        drawn again for, though the file's size and modification time are
+        as they were; and the slices' states again from the refresh at
+        which it can be read."""
+        watcher = RunMonitor(run)
+        watcher.refresh()
+        known = watcher.summary(NOW).slices
+        assert {item.state for item in known} == {ACTIVE, PAUSED, ABORTED}
+        with unreadable_control(run, by):
+            assert watcher.refresh()
+            states = {item.state for item in watcher.summary(NOW).slices}
+            assert states == {UNKNOWN}
+            # read again, and still unreadable: nothing new to draw
+            assert not watcher.refresh()
+        assert watcher.refresh()
+        assert watcher.summary(NOW).slices == known
 
 
 # -- reading as the run grows -------------------------------------------------
@@ -2306,18 +2428,7 @@ class TestCommands:
         """Where the control file itself cannot be read, a command that has
         just written its request, and state_now, say the state cannot be
         told rather than guessing it."""
-        probe = run.parent / "mode-probe"
-        probe.write_text("x")
-        probe.chmod(0)
-        try:
-            probe.read_text()
-        except PermissionError:
-            pass
-        else:
-            pytest.skip("this process reads a file whatever its mode")
-        finally:
-            probe.chmod(0o600)
-            probe.unlink()
+        skip_unless_modes_hold(run.parent)
         control = run / "control.jsonl"
         mode = control.stat().st_mode & 0o777
         written = monitor.request
