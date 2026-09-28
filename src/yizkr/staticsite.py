@@ -49,12 +49,21 @@ from yizkr.queries.publish import load_templates, prefix_block, render
 
 def sparql_runner(config: Config):
     def run(query: str) -> list[dict]:
-        url = (
-            config.sparql_url
-            + "?"
-            + urllib.parse.urlencode({"query": query, "format": "json"})
+        # the query travels in the request body: the query service refuses
+        # a request line longer than about 8 KB, and the disagreement
+        # report's query is longer than that
+        request = urllib.request.Request(
+            config.sparql_url,
+            data=urllib.parse.urlencode(
+                {"query": query, "format": "json"}
+            ).encode(),
+            headers={
+                "Accept": "application/sparql-results+json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
         )
-        with urllib.request.urlopen(url, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=120) as response:
             return json.load(response)["results"]["bindings"]
 
     return run
@@ -776,21 +785,65 @@ class SiteBuilder:
     def inconsistencies_page(self, rows: list[dict]) -> str:
         body = [
             "<h1>Inconsistencies</h1>",
-            '<p class="sub">properties where sources disagree — '
+            '<p class="sub">properties where different sources disagree — '
             "the archive's "
             "flagship view (ADR-0002): coexistence is the healthy resting "
             "state, and this page exists so a reader can weigh the evidence. "
-            "Differences of resolution are suppressed once the graph records "
-            "the containment between the places involved.</p>",
+            "Two readings of one artifact are not two sources, and a value a "
+            "curator deprecated is left out. Differences of resolution are "
+            "not listed: a date whose span lies inside another's (the period "
+            "its precision names, or the range its source states with "
+            "earliest and latest dates), or a place the graph records as "
+            "contained in the other. When either of two residence or spouse "
+            "statements carries earliest or latest dates, their start and "
+            "end times are compared as stated, so a difference of "
+            "resolution between them is listed.</p>",
             "<table><tr><th>Who/what</th><th>Property</th>"
             "<th>Value A</th><th>per</th><th>Value B</th><th>per</th></tr>",
         ]
+
+        def aspect(row: dict) -> str:
+            """The property; for a dated residence or spouse, also the
+            place or person both statements name and the date compared."""
+            text = esc(cell(row, "propertyLabel"))
+            shared = cell(row, "sharedValueLabel") or qid_of(
+                row, "sharedValue"
+            )
+            if shared:
+                text += f" ({esc(shared)})"
+            qualifier = cell(row, "qualifierLabel")
+            if qualifier:
+                text += f", {esc(qualifier)}"
+            return text
+
+        def stated_range(row: dict, side: str) -> str:
+            """The earliest and latest dates a statement gives its value,
+            as the person page shows qualifiers. A residence or spouse row
+            compares a start or end time, which those dates need not
+            bound, so it shows none."""
+            if cell(row, "qualifierLabel"):
+                return ""
+            bounds = [
+                f"{name} date: "
+                + format_time(
+                    cell(row, f"{name}{side}"),
+                    cell(row, f"{name}Precision{side}"),
+                )
+                for name in ("earliest", "latest")
+                if cell(row, f"{name}{side}")
+            ]
+            if not bounds:
+                return ""
+            return (
+                f' <span class="qualifiers">({esc("; ".join(bounds))})</span>'
+            )
 
         def rendered(row: dict, side: str) -> str:
             value = row.get(f"value{side}", {})
             raw = value.get("value", "")
             if value.get("datatype", "").endswith("dateTime"):
-                return esc(format_time(raw, cell(row, f"precision{side}")))
+                shown = format_time(raw, cell(row, f"precision{side}"))
+                return esc(shown) + stated_range(row, side)
             label = cell(row, f"value{side}Label")
             if label.startswith("http"):
                 label = raw.rsplit("/", 1)[-1]
@@ -799,7 +852,7 @@ class SiteBuilder:
         for row in rows:
             body.append(
                 f"<tr><td>{esc(cell(row, 'entityLabel'))}</td>"
-                f"<td>{esc(cell(row, 'propertyLabel'))}</td>"
+                f"<td>{aspect(row)}</td>"
                 f"<td>{rendered(row, 'A')}</td>"
                 f'<td class="source" style="font-style:italic">'
                 f"{self.source_links(cell(row, 'sourcesA'), root='')}</td>"
