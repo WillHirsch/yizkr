@@ -3,12 +3,12 @@
 A scratch run takes every non-excluded source of the corpus through every
 stage, unattended, from fresh state directories (ADR-0025, ADR-0032).
 `yizkr scratch run` is the one command that runs it; this page is how to
-run one, follow it, pause, abort and resume it, and read what it did.
-The parts have their own references: the live monitor in
-[docs/MONITOR.md](../MONITOR.md), the views, the LLM cache and the run
-directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and `run.json` in
-[docs/RUN_MANIFEST.md](../RUN_MANIFEST.md). Code:
-`yizkr.pipeline.scratch`.
+count the calls one is to make, run it, follow it, pause, abort and
+resume it, and read what it did. The parts have their own references:
+the live monitor in [docs/MONITOR.md](../MONITOR.md), the views, the LLM
+cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
+`run.json` in [docs/RUN_MANIFEST.md](../RUN_MANIFEST.md). Code:
+`yizkr.pipeline.scratch`, and `yizkr.pipeline.estimate` for the estimate.
 
 ## Before a run
 
@@ -48,6 +48,47 @@ directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and `run.json` in
   (#118) writes it, and its reader comes with the write side (#199,
   #200). Until then the driver cannot tell a kept instance from another,
   so it refuses every corpus stage that touches the wiki.
+- **The estimate.** `uv run yizkr scratch estimate`, with the options
+  the run is to take, counts the engine calls that `yizkr scratch run`
+  would make now, per stage and in all: the calls of the stages whose
+  views do not stand that the LLM cache cannot answer. It plans the same
+  run, a new one or the one the command would invoke again, and says
+  which. The table gives, per stage, the documents whose views are made
+  and reused, the calls the cache answers, and the engine calls, of
+  which some are estimated:
+  - **known**: the estimate takes each stale stage through the
+    pipeline's own code with a client that keys every call as the run
+    does (the same prompts, files, models, efforts and claude CLI) and
+    answers it from the cache alone. So it knows each call the cache
+    answers and each it cannot, a kept answer the run would reject and
+    ask again (a reading the transcription check fails, a critique cut
+    off) and the replay of a conversation whose session was not kept
+    included;
+  - **estimated**: a call whose key waits on an answer the engine is yet
+    to give: the extraction after a reading the engine makes, the chunks
+    after an entity manifest it answers, and the critique of a batch
+    with chunks it answers. An extraction is counted as the latest run
+    to make the same document measured it, else by the mean for its kind
+    there, else by its text's length; a critique as one call;
+  - **at most more**: an entity manifest the engine answers may be
+    refused, and then its second attempt and the segmentation's two are
+    asked (up to 3 for an extraction); a replayed conversation that
+    answers differently asks its forks again;
+  - **not counted**: calls asked again after an engine error or a chunk
+    answer cut off (up to 2 for a chunk), and waits for the
+    subscription, which make no call.
+
+  It writes nothing, and takes no lock: it runs beside a running driver,
+  counting what the run and the cache hold as it reads them, and names
+  who holds the runs directory and the cache. It makes no model call and
+  asks the wiki nothing. It refuses what the run would refuse before its
+  first call (no never-ingest list, a model that is no full id, a PDF
+  without the renderer, other settings or another claude CLI for a run
+  invoked again) and lists what the run's preflight would still refuse
+  (the login, the pacing, disk space); a stage that touches the wiki is
+  left to the run's own preflight. Like the driver, it runs
+  `claude --version`, for the CLI version every key names. How the LLM
+  cache keys a call, and what a run's events count: docs/LLM_CACHE.md.
 
 ## Run
 
@@ -238,11 +279,6 @@ Nothing from them goes into the repository, GitHub or a cloud session.
 - No corpus stage is registered: clustering (#105), the reset,
   register, write and site stages (#200, with #199 and #103), and
   place-hierarchy reconciliation (#201) register themselves as they land.
-  Until then a run finishes at the barrier, and needs no stack.
-- Until #127 lands, the extraction prompts still name the artifact's
-  item by a QID, and a scratch run registers none, so its prompts name
-  no artifact. Every claim cites its document by the SHA-1 of its bytes
-  all the same (#102), a GEDCOM export's included. Scratch run 1 (#145)
-  waits for #127.
-- `yizkr scratch estimate`, the calls a run is expected to make (#101),
-  comes next.
+  Until then a run finishes at the barrier, and needs no stack. The
+  estimate counts the per-document stages' calls, and names any corpus
+  stage it does not count.

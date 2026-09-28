@@ -759,10 +759,10 @@ class ScratchDriver(Orchestrator):
             problems.append(f"{kept} ({', '.join(touching)} would)")
         return problems
 
-    def _preflight_host(self) -> None:
-        """Everything that needs no document: the models, the pacing, the
-        engine and its login, disk space, and the wiki when a stage to run
-        touches it. PreflightFailed lists every problem."""
+    def _model_problems(self) -> list[str]:
+        """What is wrong with the models the roles run: a model named by
+        an alias, or a role that names none. The LLM cache's keys name
+        each role's model, so every one must be a full model id."""
         problems = []
         try:
             self._refuse_model_aliases()
@@ -779,6 +779,13 @@ class ScratchDriver(Orchestrator):
                 "the LLM cache could not tell its answers from another "
                 "model's"
             )
+        return problems
+
+    def _preflight_host(self) -> None:
+        """Everything that needs no document: the models, the pacing, the
+        engine and its login, disk space, and the wiki when a stage to run
+        touches it. PreflightFailed lists every problem."""
+        problems = self._model_problems()
         try:
             self._pacing()
         except ValueError as exc:
