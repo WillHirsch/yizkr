@@ -1,4 +1,4 @@
-"""Backup/export (W1 task 7) against the running stack.
+"""Backup/export against the running stack.
 
 Needs docker + the deploy/ stack up (make up). Produces a real backup
 into a temp dir and verifies the public export's privacy invariant the

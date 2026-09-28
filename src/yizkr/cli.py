@@ -948,7 +948,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "backup",
         help="database + media + RDF dump, and a possibly-living-excluded "
-        "public export (W1 task 7)",
+        "public export (ADR-0020)",
     )
     p.add_argument("--out", type=Path, default=Path("var/backups"))
     p.add_argument("--deploy-dir", type=Path, default=Path("deploy"))
@@ -1147,7 +1147,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = isub.add_parser(
         "gedcom",
-        help="deterministic GEDCOM export -> claim batch (no LLM; item 13)",
+        help="deterministic GEDCOM export -> claim batch (no LLM)",
     )
     p.add_argument(
         "--file",
@@ -1232,7 +1232,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = isub.add_parser(
         "run",
         help="walk a folder through the whole pipeline, pausing at the "
-        "review gates; re-run to resume (item 15)",
+        "review gates; re-run to resume",
     )
     p.add_argument(
         "folder",

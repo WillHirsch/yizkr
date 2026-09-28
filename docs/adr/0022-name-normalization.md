@@ -5,7 +5,7 @@ implemented: the extraction-prompt standards (chunking.py's entity-manifest and
 chunk prompts) and the thin deterministic `pipeline/names.py` validator, wired
 into both the LLM manifest path and the GEDCOM adapter. Still pending: the
 **frontend factoring** layer (§5 — composing display forms and deriving
-short-forms from the atoms), and the §6 confidence surfacing, which was
+short-forms from the atoms; #140), and the §6 confidence surfacing, which was
 generalised and implemented by ADR-0023. **Amends ADR-0011** (re-affirms and
 re-grounds the given/family component deferral) and applies ADR-0018's
 derive-don't-store discipline to name surface forms. Validation is the live
@@ -241,13 +241,15 @@ representative cases rather than on toy examples that may not generalise.
 ## Open questions (deferred, not blocking)
 
 - The multi-axis composition **cap** value (how many alternating axes/forms before
-  the LLM stores atoms and defers composition entirely to the frontend).
+  the LLM stores atoms and defers composition entirely to the frontend). Tracked
+  in #140.
 - Whether alias-layer decisions on brand-new (unmatched) entities — which today
   pass through a thinner review surface than claims (`export_equivalences_csv`
   reviews matched proposals only) — eventually warrant their own lightweight
-  review view, beyond the `critique_notes` flag.
+  review view, beyond the `critique_notes` flag. See #112 and #137.
 - The frontend factoring/derivation layer is a separate build with its own
   design (search must resolve "Hildegard Löbig" when the label is
-  "Hildegard Laudler" and the atoms/compositions are aliases).
+  "Hildegard Laudler" and the atoms/compositions are aliases). Tracked in #140.
 - If a concrete position-typed-surname query need or a space-compound blocking
   defect ever materialises, reopen a *targeted* feature — not a per-person tier.
+  In the deferred-on-trigger register, #171.

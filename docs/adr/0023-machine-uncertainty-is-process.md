@@ -241,19 +241,19 @@ history. No graph node, no export surface, no staleness.
   operationally necessary; it carries no PII and rides existing run-item handling,
   but it extends process-provenance-in-graph from *extraction* to *acceptance*,
   reintroduces an ADR-0020-shaped staleness risk, and mis-models a review-*episode*
-  fact onto a *run* item — so it must be justified in its own ADR.
+  fact onto a *run* item — so it must be justified in its own ADR. See #65.
 
 ## Open questions
 
 - Whether a run-item `ratification_mode` is ever worth its own ADR (only if the
-  off-graph CSV + edit-history join proves operationally painful).
+  off-graph CSV + edit-history join proves operationally painful). See #65.
 - **Unmatched-entity subject-doubt** (ADR-0022 open Q2): a brand-new entity with
   no blocking candidate generates no equivalences row, so a low-confidence
   *invented* subject gets no identity-uncertainty surfacing through the reconcile
   gate — this needs the lightweight unmatched-entity review view ADR-0022 already
-  flagged.
+  flagged. See #112 and #137.
 - **Retention policy for `var/` reviewed CSVs** (ADR-0019): the bulk-accept
-  reappraisal dimension depends on these durable artifacts.
+  reappraisal dimension depends on these durable artifacts. See #100.
 - The under-witnessed query counts **multi-run corroboration by the same model**
   as "witnessed"; whether to discount same-model corroboration when scoping by
-  run/model is a query-refinement question, not a schema one.
+  run/model is a query-refinement question, not a schema one. See #137.
