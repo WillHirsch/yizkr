@@ -1027,6 +1027,30 @@ class TestDocumentFailures:
         append(run, [control(600, "start", invocation="c0ffee000001")])
         assert summarise_run(run, NOW).failed_documents == 0
 
+    def test_a_document_that_fails_twice_counts_once_by_its_later_failure(
+        self, run
+    ):
+        append(
+            run,
+            [
+                event(
+                    490,
+                    "document-failed",
+                    file="directory-1912.txt",
+                    subject=DIRECTORY,
+                    kind="text",
+                    reason="ValueError: no page of the Adressbuch was read",
+                )
+            ],
+        )
+        summary = summarise_run(run, NOW)
+        assert summary.failed_documents == 2
+        assert summary.failed_by_kind == {"media (.pdf)": 1, "text (.txt)": 1}
+        assert summary.failed_by_reason == {
+            "its source cannot be read": 1,
+            "ValueError": 1,
+        }
+
 
 class TestAlerts:
     def test_the_latest_alerts_come_first_tagged_new_or_carried(self, summary):
@@ -1552,6 +1576,18 @@ class TestMalformedLines:
         "a call of no duration": lambda s: [
             ("events.jsonl", {"event": "call", "duration_s": float("nan")})
         ],
+        # 1e308 seconds is finite; two of them sum past a float's range
+        "two calls waiting past a float's range": lambda s: (
+            [("events.jsonl", {"event": "call", "wait_s": 1e308})] * 2
+        ),
+        "a call waiting 400 digits of seconds": lambda s: [
+            ("events.jsonl", {"event": "call", "wait_s": 10**400})
+        ],
+        # json reads an int of up to 4,300 digits, and writes out no more:
+        # two such refusals sum to one digit past what a count shows
+        "refusals summed past the digits an int writes out": lambda s: (
+            [("events.jsonl", {"event": "call", "refused": 10**4300 - 1})] * 2
+        ),
         "an alert's value huge": lambda s: [
             ("alerts.jsonl", {"value": {"a": [1] * 10000}, "subject": CERT})
         ],
@@ -1625,7 +1661,16 @@ class TestMalformedLines:
         (path / "control.jsonl").write_bytes(b'{"action": "pause"}\n\xff\n')
         self.views(path)
 
-    @pytest.mark.parametrize("value", [float("inf"), float("nan"), -1, "9"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            float("inf"),
+            float("nan"),
+            -1,
+            "9",
+            pytest.param(10**400, id="400 digits"),
+        ],
+    )
     def test_seconds_are_finite_and_not_negative(self, value):
         assert monitor._seconds(value) is None
 

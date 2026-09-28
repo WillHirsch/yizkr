@@ -353,7 +353,10 @@ def _seconds(value: Any) -> float | None:
     """A finite, non-negative number of seconds from an event, or None."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
     return number if math.isfinite(number) and number >= 0 else None
 
 
@@ -372,7 +375,9 @@ def _time(value: Any) -> datetime | None:
 
 
 def _duration(seconds: float | None) -> str:
-    if seconds is None:
+    """'3m 05s'; '?' for no time, or for one that is not finite, as a sum
+    of long waits can be."""
+    if seconds is None or not math.isfinite(seconds):
         return "?"
     seconds = max(0, int(seconds))
     days, rest = divmod(seconds, 86400)
@@ -397,7 +402,12 @@ def _stamp(moment: datetime | None, spec: str = "%Y-%m-%d %H:%M UTC") -> str:
 
 
 def _n(count: int) -> str:
-    return f"{count:,}"
+    """'1,234'; '?' for a count too long for Python to write out, as a sum
+    of the counts events give can be."""
+    try:
+        return f"{count:,}"
+    except ValueError:
+        return "?"
 
 
 def _counts(counter: Counter | dict[str, int]) -> str:
@@ -1087,6 +1097,9 @@ class RunMonitor:
             attempt.calls += 1
 
     def _fold_failure(self, event: dict, invocation: str | None) -> None:
+        """A failure is keyed by its file, else its SHA-1: a document that
+        fails twice in one invocation counts once, and its later failure
+        stands. One that names neither counts alone."""
         file, subject = event.get("file"), event.get("subject")
         if isinstance(file, str) and file:
             key: Any = file

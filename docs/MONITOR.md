@@ -109,7 +109,9 @@ Events outside a stage count in the run's totals only.
 **Documents that failed.** Every document that failed in the latest
 invocation, in a stage or outside its stages (a source or a `state.json`
 that could not be read, say), by kind and file suffix and by reason, and
-how many failed before their source was read. Never by file name.
+how many failed before their source was read. Never by file name. A
+document that fails twice in one invocation (the same file, or the same
+SHA-1 when no file is named) counts once, by its later failure.
 
 **Calls.** The engine calls and the cache's answers, with the share the
 cache answered and its reasons, resumes, replays, rejections and
@@ -232,7 +234,11 @@ has something to say:
 | `window`, `resumes_at` | for a pause for a subscription limit: the window, and when the pass can go on (UTC) |
 
 Engine calls are counted from the cache's events when the run has them,
-and from call events otherwise.
+and from call events otherwise. A `duration_s` or `wait_s` that is not a
+finite, non-negative number of seconds, one too large for a float
+included, is left out; a total too large to show (waits summed past a
+float's range, refusals summed past the digits Python writes out, 4,300
+by default) shows as `?`.
 
 **Documents that failed** (#215): `document-failed` names a document that
 failed, in a stage (which has its own `failed` event too) or outside its
