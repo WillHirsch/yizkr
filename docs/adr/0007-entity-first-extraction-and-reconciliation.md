@@ -165,7 +165,9 @@ and local refs.
   statements left as they are. It cites the artifact of the claim the
   ref is in, beside the batch's run: a manifest's kind cites the first
   claim that mentions the item, but a ref states its kind where it
-  stands, so each artifact whose ref gives the kind is a witness of it.
+  stands. The writer reads the first ref to each local id, as it does
+  for the label, so each artifact where such a ref gives the kind is a
+  witness of it.
   A face-proposal batch's sitters are such refs, so a sitter a curator
   approved and the writer found gains the photograph and the detection
   run as a source of its kind, as a sitter the writer mints takes its

@@ -64,8 +64,9 @@ Per batch, the writer:
    bare QID: without a record, it brings no kind. A record's kind and
    type hint cite the artifact of the first claim that mentions the
    item, as a minted item's do. A ref's kind cites the artifact of the
-   claim the ref is in, so each artifact whose claim gives the kind is a
-   witness of it. A kind or type hint is compared with the item's
+   claim the ref is in (the writer reads the first ref to each local id,
+   as it does for the label), so each such artifact is a witness of the
+   kind. A kind or type hint is compared with the item's
    unqualified statements on the same property (a type hint as free
    text, ignoring case, Unicode form and spacing), so a qualified
    statement never matches:
