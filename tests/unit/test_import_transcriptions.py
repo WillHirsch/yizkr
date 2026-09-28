@@ -36,7 +36,13 @@ from tests.unit.test_scratch import (  # noqa: F401
 )
 from yizkr import cli
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
-from yizkr.pipeline import llm, transcribe, transcription_check
+from yizkr.pipeline import (
+    llm,
+    llmcache,
+    orchestrate,
+    transcribe,
+    transcription_check,
+)
 from yizkr.pipeline.import_transcriptions import (
     ANSWERED,
     DIFFERING,
@@ -68,7 +74,7 @@ PORTRAIT = (
     "[mount] Photograph Brüsrich, Peiltal\n"
     "[reverse] Muckel / Cilli / Wastl / Rahel / Felix"
 )
-GRAVESTONE = "Hier ruhen Eugen Löbig 1836-1909 und Cäcilie Löbig geb. Tarle"
+GRAVESTONE = "EUGEN LÖBIG\n1836 - 1909\nCÄCILIE LÖBIG\nGEB. TARLE\n1833 - 1902"
 # what a vision engine answered when its PDF renderer was missing, in the
 # engine's own voice: a tool failure, never a transcription
 TOOL_FAILURE = (
@@ -116,7 +122,7 @@ class Archive:
         where = self.path / folder
         where.mkdir(parents=True, exist_ok=True)
         state = {
-            "file": f"import/new/{file}",
+            "file": f"corpus/{file}",
             "title": Path(file).stem,
             "status": "awaiting claim review",
             "artifact_qid": qid,
@@ -899,3 +905,25 @@ class TestTheCommand:
         argv += ["--cache", str(tmp_path / "cache"), "--leave-out", "f" * 9]
         assert cli_run(*argv) == 1
         assert "no transcription" in capsys.readouterr().err
+
+    def test_a_cache_another_process_holds_stops_it_in_one_line(
+        self, tmp_path, engine, monkeypatch, capsys
+    ):
+        """One process at a time uses a cache: while a scratch run holds
+        it, the import stops as the run's pause does, with its reason."""
+        corpus = small(tmp_path)
+        archive = an_archive(tmp_path, corpus)
+        never = tmp_path / "never-ingest.txt"
+        never.write_text("")
+        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
+        monkeypatch.setenv("YIZKR_ENV_FILE", str(tmp_path / "no.env"))
+
+        def held(self, role, events=None):
+            raise llmcache.CacheInUse(tmp_path / "cache", None)
+
+        monkeypatch.setattr(orchestrate.Orchestrator, "role_client", held)
+        argv = ["scratch", "import-transcriptions", str(archive.path)]
+        argv += ["--corpus", str(corpus.folder)]
+        argv += ["--cache", str(tmp_path / "cache")]
+        assert cli_run(*argv) == 1
+        assert "one process at a time uses a cache" in capsys.readouterr().err
