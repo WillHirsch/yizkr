@@ -1380,7 +1380,11 @@ class TestTheCommand:
         monkeypatch.setattr(imports, "import_transcriptions", interrupted)
         argv = self.the_command(tmp_path, monkeypatch, str(archive.path))
         argv += ["--corpus", str(corpus.folder)]
-        assert cli_run(*argv) == 130
+        try:
+            status = cli_run(*argv)
+        except KeyboardInterrupt:
+            pytest.fail("Ctrl-C escaped the command")
+        assert status == 130
         assert capsys.readouterr().err == "interrupted\n"
 
 

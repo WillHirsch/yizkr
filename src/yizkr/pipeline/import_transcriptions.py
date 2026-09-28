@@ -365,8 +365,7 @@ def _made_at(records: Iterable[Archived]) -> None:
     """Read into each record when a run last made its transcription: the
     time of the latest `done` event of the transcription stage for its
     media, in the events of the folder that holds its document folder,
-    when that folder is the archive's (its own folder, or one inside it)
-    and its events are the archive's own file."""
+    when those events are the archive's own file (_transcribed)."""
     times: dict[Path, dict[str, str]] = {}
     for record in records:
         if len(record.sha1s) != 1:
@@ -380,12 +379,11 @@ def _made_at(records: Iterable[Archived]) -> None:
 
 def _transcribed(folder: Path, root: Path) -> dict[str, str]:
     """media SHA-1 -> the time of its transcription stage's latest `done`
-    event, in the events of `folder`; nothing for a folder outside the
-    archive, or events that are not the archive's own file."""
+    event, in the events of `folder`; nothing where there are none, or
+    they are not the archive's own file: a symbolic link, or one outside
+    it, as the events of the folder above the archive are."""
     events = folder / EVENTS
-    if not folder.is_relative_to(root) or not (
-        events.is_symlink() or events.is_file()
-    ):
+    if not (events.is_symlink() or events.is_file()):
         return {}
     if _foreign(events, root) is not None:
         return {}
