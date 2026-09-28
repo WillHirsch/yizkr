@@ -1492,8 +1492,10 @@ class _Pacer:
         used-up window: a later report that says less (a lower status, a
         lower or missing utilization) never undoes what a higher one
         already showed, since the window is not less used than it last
-        reported. Overage latches process-wide, ahead of any window, since
-        it names the account, not one window (see _hold)."""
+        reported. Overage latches process-wide, ahead of any window and
+        ahead of any window's own hold (_hold): it names the account, not
+        one window, so it never depends on a window's recorded
+        utilization."""
         if info.get("isUsingOverage") is True:
             self._overage = True
         name = _window_name(info.get("rateLimitType"))
@@ -1503,8 +1505,6 @@ class _Pacer:
             info.get("status") if info.get("status") in _STATUSES else None
         )
         utilization = _fraction(info.get("utilization"))
-        if info.get("isUsingOverage") is True:
-            utilization = max(utilization or 0.0, 1.0)
         window = self._window(name, _epoch(info.get("resetsAt")))
         if status is not None and _STATUS_RANK[status] > _STATUS_RANK.get(
             window.status, -1
