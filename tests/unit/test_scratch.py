@@ -540,6 +540,11 @@ class TestOrder:
         planned = {d["sha1"] for d in RunDir(run).manifest()["documents"]}
         assert new in planned and old not in planned
 
+    def test_an_empty_corpus_starts_no_run(self, tmp_path, fakes):
+        driver = a_run(tmp_path, Corpus(tmp_path / "corpus"), fakes)
+        assert driver.run() == EXIT_OK
+        assert not driver.state_dir.exists()
+
     def test_no_document_takes_the_corpus_stages_directory(self, tmp_path):
         folder = tmp_path / "corpus"
         folder.mkdir()
@@ -706,6 +711,48 @@ class TestControl:
         again = Driver(corpus.folder, driver.state_dir, corpus_stages=[stage])
         assert again.run() == EXIT_OK
         assert ran == [1]
+
+    @pytest.mark.parametrize("lifted", [False, True])
+    def test_a_stage_held_as_it_starts_waits_its_turn(
+        self, tmp_path, fakes, lifted
+    ):
+        """A request can land between the driver's check and the stage's
+        own. The stage is held then, with one `held` event, and dispatched
+        once a resume lets it through; a resume that lands at once lets it
+        be tried again, after a moment."""
+        corpus = small(tmp_path)
+
+        class Raced(Driver):
+            def _prepare(self, doc):
+                if doc.source.name == LETTER and not raced:
+                    raced.append(1)
+                    request(self.state_dir, "pause", stage="transcription")
+                super()._prepare(doc)
+
+        def log(*args, **kwargs):
+            if lifted and "not dispatched" in str(args[0]):
+                request(driver.state_dir, "resume", stage="transcription")
+
+        def resume():
+            request(driver.state_dir, "resume", stage="transcription")
+
+        raced: list[int] = []
+        waits = Waits(None if lifted else resume)
+        fakes.corpus = corpus
+        driver = Raced(
+            corpus.folder, runs_dir(tmp_path) / "run", waits=waits, log=log
+        )
+        assert driver.run() == EXIT_OK
+        letter = corpus.sha1(LETTER)
+        held = [
+            e for e in events(driver.state_dir, "held")
+            if e["subject"] == letter
+        ]  # fmt: skip
+        assert [(e["stage"], e["reason"]) for e in held] == [
+            ("transcription", "stage:transcription paused")
+        ]
+        assert len(waits.waited) == 1
+        assert statuses(driver.state_dir) == {DONE}
 
     def test_a_paused_run_waits_for_a_resume(self, tmp_path, fakes):
         corpus = small(tmp_path)
@@ -1466,6 +1513,8 @@ class TestCommandLine:
     def test_run_takes_the_corpus_and_the_never_ingest_list(
         self, tmp_path, monkeypatch
     ):
+        # the default runs directory and cache are relative: keep them here
+        monkeypatch.chdir(tmp_path)
         folder = tmp_path / "corpus"
         folder.mkdir()
         exclusions = tmp_path / "never-ingest.txt"
@@ -1473,9 +1522,6 @@ class TestCommandLine:
         monkeypatch.setenv("YIZKR_CORPUS_DIR", str(folder))
         monkeypatch.delenv("YIZKR_EXCLUDE_FILE", raising=False)
         monkeypatch.setenv("YIZKR_ENV_FILE", str(tmp_path / "no.env"))
-        with pytest.raises(SystemExit, match="never-ingest list"):
-            cli_run("scratch", "run")
-        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(exclusions))
         seen = {}
 
         def scratch_run(corpus, **options):
@@ -1483,6 +1529,11 @@ class TestCommandLine:
             return 0
 
         monkeypatch.setattr(scratch, "scratch_run", scratch_run)
+        # no never-ingest list: refused before the driver is asked
+        with pytest.raises(SystemExit, match="never-ingest list"):
+            cli_run("scratch", "run")
+        assert seen == {}
+        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(exclusions))
         argv = ["--until", "extraction", "--refresh", "extract", "--resume"]
         argv += ["--extract-model", "inherit", "--min-free", "0.5"]
         assert cli_run("scratch", "run", *argv) == 0
@@ -1496,6 +1547,7 @@ class TestCommandLine:
         assert seen["cache_dir"] == Path("var/llm-cache")
 
     def test_run_says_why_it_refused(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
         folder = tmp_path / "corpus"
         folder.mkdir()
         exclusions = tmp_path / "never-ingest.txt"

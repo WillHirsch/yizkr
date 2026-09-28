@@ -1018,6 +1018,10 @@ class ScratchDriver(Orchestrator):
                     stage=stage, kind=doc.kind
                 )
                 noted[(doc.sha1, stage)] = stop or ""
+                if stop is None:
+                    # let through again since it was held: a moment first,
+                    # so that no disagreement between the checks spins
+                    self._sleep(self.poll)
                 continue
             pending.remove(chosen)
             if outcome == _FAILED_HERE:
