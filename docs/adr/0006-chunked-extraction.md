@@ -214,10 +214,12 @@ engine answered: an outage fails the extraction, to be retried. Per-chunk
 progress is the log, and the chunks that failed, with the first reason,
 are the extraction's error. An extraction that ends with no claims fails
 (amended by #45, 2026-09-28) when the model's answers could not be used:
-chunks failed, the chunks' answers held JSON objects the parser reads as
-neither a claim, a gap line nor the sentinel (claims wrapped in one
-object, or written with other keys), or validation rejected every claim.
-Its error leads with that outcome and names every cause, then any
+chunks failed, the chunks' answers held JSON objects with content the
+parser cannot read (claims wrapped in one object or carried in the
+sentinel, or written with other keys; an object that holds nothing, such
+as `{}` or `{"claims": []}`, says there is nothing, and a note in a
+string beside the sentinel is harmless), or validation rejected every
+claim. Its error leads with that outcome and names every cause, then any
 fallback tier taken, with the reason each attempt at the refused turn
 gave, each cut short so that the whole stays within a `failed` event. A
 failure keeps no view, so each run makes the extraction again, from the

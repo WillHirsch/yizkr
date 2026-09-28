@@ -306,6 +306,14 @@ def wrapped(claims: list[dict]) -> str:
     return ndjson([{"claims": claims}], emitted=len(claims))
 
 
+def wrapped_in_sentinel(claims: list[dict]) -> str:
+    """A complete chunk answer whose claims ride in its terminal sentinel,
+    one object the parser reads as the sentinel alone."""
+    return json.dumps(
+        {"claims": claims, "done": True, "claims_emitted": len(claims)}
+    )
+
+
 def with_predicate(claims: list[dict]) -> str:
     """A complete chunk answer whose claims name their property under
     `predicate`, which the parser does not read as a claim."""
@@ -474,12 +482,15 @@ class TestChunkResponseContract:
         assert len(claims) == 1
 
     def test_objects_neither_claim_gap_nor_sentinel_are_unread(self):
-        """What the claim parser cannot read is counted, not guessed at: a
-        wrapper object and a claim that names its property `predicate` are
-        unread; claims, gap lines, well formed or not, and the sentinel are
-        not (#45)."""
+        """What the claim parser cannot read is counted, not guessed at, and
+        what an object holds decides, not its shape (#45). Unread: a
+        wrapper object, a claim that names its property `predicate`, and a
+        sentinel that carries claims. Read: claims, gap lines, well formed
+        or not, the sentinel, a sentinel with a note in a string, and
+        objects that hold nothing, which say there is nothing."""
         born = claim("e1", "Hildegard Löbig", 1876)
         renamed = json.loads(with_predicate([born]).splitlines()[0])
+        carrying = {"claims": [born], "done": True, "claims_emitted": 1}
         response = "\n".join(
             json.dumps(obj)
             for obj in (
@@ -488,10 +499,19 @@ class TestChunkResponseContract:
                 {"gap": "not an object"},
                 {"claims": [born]},
                 renamed,
+                {},
+                {"claims": []},
+                carrying,
+                {"done": True, "claims_emitted": 0, "note": "nothing else"},
+                {"done": True, "claims_emitted": 0, "claims": []},
                 {"done": True, "claims_emitted": 1, "gaps_emitted": 2},
             )
         )
-        assert parse_chunk_unread(response) == [{"claims": [born]}, renamed]
+        assert parse_chunk_unread(response) == [
+            {"claims": [born]},
+            renamed,
+            carrying,
+        ]
 
 
 class TestGapChannel:
@@ -1344,6 +1364,41 @@ class TestExtractionsWithoutClaims:
         assert (coverage["chunks"], coverage["claims"]) == (2, 0)
         assert coverage["unread_objects"] == 0
 
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {},
+            {"claims": []},
+            {"claims": [], "claims_emitted": 0},
+        ],
+        ids=["empty-object", "empty-wrapper", "empty-wrapper-and-count"],
+    )
+    @pytest.mark.parametrize(
+        "sentinel",
+        [
+            {"done": True, "claims_emitted": 0},
+            {"done": True, "claims_emitted": 0, "note": "nothing here"},
+            {"done": True, "claims_emitted": 0, "claims": []},
+        ],
+        ids=["sentinel", "sentinel-with-note", "sentinel-with-no-claims"],
+    )
+    def test_answers_that_hold_nothing_leave_a_claim_free_batch(
+        self, tmp_path, extra, sentinel
+    ):
+        """An object that holds nothing beside the sentinel, and a note in a
+        string or an empty list on it, say there is nothing: the chunks
+        answered with none, and the page is claim-free rather than failing
+        on every run from the cache (#45)."""
+        answer = "\n".join(json.dumps(obj) for obj in (extra, sentinel))
+        llm = ScriptedLlm([entity_manifest_json(), answer, answer])
+        extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
+        batch = extractor.extract(transcription(), "Q23")
+        assert batch.claims == []
+        assert extractor.attention == [
+            "no claims extracted: 2 chunks answered with none"
+        ]
+        assert side_output(tmp_path, "coverage.json")["unread_objects"] == 0
+
     def test_a_manifest_marking_every_entity_extract_false_is_claim_free(
         self, tmp_path
     ):
@@ -1484,17 +1539,19 @@ class TestExtractionsWithoutClaims:
         )
 
     @pytest.mark.parametrize(
-        "shape", [wrapped, with_predicate], ids=["wrapped", "predicate"]
+        "shape",
+        [wrapped, with_predicate, wrapped_in_sentinel],
+        ids=["wrapped", "predicate", "in-sentinel"],
     )
     @pytest.mark.parametrize("tier", ["entity-first", "line-range"])
     def test_answers_the_parser_cannot_read_fail_the_extraction(
         self, tmp_path, tier, shape
     ):
         """Chunks that answered in a shape the claim parser cannot read
-        (claims wrapped in one object, or naming their property
-        `predicate`) hold no claim it reads, yet they did not answer with
-        none. The extraction fails and says so, so that no view keeps the
-        misreading and a parser fix reaches the next run."""
+        (claims wrapped in one object, carried in the sentinel, or naming
+        their property `predicate`) hold no claim it reads, yet they did
+        not answer with none. The extraction fails and says so, so that no
+        view keeps the misreading and a parser fix reaches the next run."""
         people = [claim("e1", "e1", 1917), claim("e2", "e2", 1917)]
         if tier == "entity-first":
             answers = [entity_manifest_json(), shape(people[:1])]
@@ -1504,16 +1561,16 @@ class TestExtractionsWithoutClaims:
             answers = ["no manifest here", "still no manifest"]
             answers += [segmentation_json(), shape(people)]
             budget = 10_000
-            count = 1 if shape is wrapped else 2
+            count = 2 if shape is with_predicate else 1
             after = (
                 "; the entity manifest was refused (every attempt: "
                 f"{NO_MANIFEST})"
             )
-        keys = (
-            "claims"
-            if shape is wrapped
-            else "subject, predicate, value, source, conf…"
-        )
+        keys = {
+            wrapped: "claims",
+            with_predicate: "subject, predicate, value, source, conf…",
+            wrapped_in_sentinel: "claims, done, claims_emitted",
+        }[shape]
         plural = "" if count == 1 else "s"
         extractor = self.extractor(
             ScriptedLlm(answers), tmp_path, budget=budget
@@ -1533,7 +1590,7 @@ class TestExtractionsWithoutClaims:
             json.dumps(obj)
             for obj in (
                 claim("e1", "e1", 1917),
-                {"claims": []},
+                {"claims": [claim("e1", "e1", 1876)]},
                 {"done": True, "claims_emitted": 1},
             )
         )
@@ -1714,13 +1771,23 @@ class TestTheExtractionStage:
         (folder / "page.txt").write_text(text)
         return Orchestrator(folder, tmp_path / "state", log=quiet)
 
-    def test_an_unreadable_answer_fails_the_stage_in_every_run(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("shape", "keys"),
+        [
+            (wrapped, "claims"),
+            (wrapped_in_sentinel, "claims, done, claims_emitted"),
+        ],
+        ids=["wrapped", "in-sentinel"],
+    )
+    def test_an_unreadable_answer_fails_the_stage_in_every_run(
+        self, tmp_path, shape, keys
+    ):
         from tests.unit.test_orchestrate import this_run
 
         orchestrator = self.orchestrator(
             tmp_path,
             "Rahel was born in 1871.",
-            {"chunk": wrapped([claim("e1", "Rahel", 1871)])},
+            {"chunk": shape([claim("e1", "Rahel", 1871)])},
         )
         # a failure keeps no view, so each run makes the extraction again,
         # and the same answers, as the LLM cache replays them, fail it again
@@ -1730,7 +1797,7 @@ class TestTheExtractionStage:
             assert doc.state.status == FAILED
             assert doc.state.error == (
                 "ExtractionFailed: no claims extracted: 1 unreadable object "
-                "in the chunk answers (c001: keys claims)"
+                f"in the chunk answers (c001: keys {keys})"
             )
             (failed,) = this_run(orchestrator, "failed")
             assert failed["stage"] == "extraction"

@@ -481,24 +481,45 @@ def parse_chunk_gaps(response: str) -> list[dict]:
     return gaps
 
 
-def parse_chunk_unread(response: str) -> list[dict]:
-    """The JSON objects of a chunk answer that are neither a claim, a gap
-    line (well formed or not) nor the terminal sentinel: output the claim
-    parser cannot read, such as claims wrapped in one object or written
-    with other keys than `subject` and `property`.
+# the keys a terminal sentinel carries (CHUNK_PROMPT)
+SENTINEL_KEYS = frozenset({"done", "claims_emitted", "gaps_emitted"})
 
-    They are counted, never guessed at. A chunk that answered with nothing
-    else reads as unreadable rather than as answered with none, so an
-    extraction left without claims by them fails (_refuse_empty) instead
-    of passing for a claim-free document's.
+
+def parse_chunk_unread(response: str) -> list[dict]:
+    """The JSON objects of a chunk answer that hold something the claim
+    parser cannot read: claims wrapped in one object, say, or written with
+    other keys than `subject` and `property`.
+
+    Whether an object holds something decides, not its shape. A claim and
+    a gap line (well formed or not) are read. The terminal sentinel is
+    read too, unless a key of its own beside the sentinel's holds a
+    non-empty list or object, such as claims carried inside it; a note in
+    a string beside it is harmless. Any other object is unread unless all
+    its values are empty (null, false, 0, "", [] or {}), as in `{}` or
+    `{"claims": []}`, which say there is nothing.
+
+    They are counted, never guessed at. A chunk whose answer held such
+    objects and no claim reads as unreadable rather than as answered with
+    none, so an extraction left without claims by them fails
+    (_refuse_empty) instead of passing for a claim-free document's.
     """
-    return [
-        obj
-        for obj in scan_json_objects(response)
-        if obj.get("done") is not True
-        and "gap" not in obj
-        and not ("subject" in obj and "property" in obj)
-    ]
+    unread = []
+    for obj in scan_json_objects(response):
+        if obj.get("done") is True:
+            carried = [
+                value
+                for key, value in obj.items()
+                if key not in SENTINEL_KEYS
+                and isinstance(value, (list, dict))
+                and value
+            ]
+            if carried:
+                unread.append(obj)
+        elif "gap" in obj or ("subject" in obj and "property" in obj):
+            continue
+        elif any(obj.values()):
+            unread.append(obj)
+    return unread
 
 
 def pack_units(
@@ -700,8 +721,8 @@ class ChunkedClaimExtractor:
         self.fallback: dict[str, str] = {}
         # per fallback tier taken, why each of its attempts failed
         self._refusals: dict[str, list[str]] = {}
-        # per chunk, the objects its answer held that were neither a claim,
-        # a gap line nor the sentinel (parse_chunk_unread)
+        # per chunk, the objects in its answer that held something the
+        # parser could not read (parse_chunk_unread)
         self._unread: dict[str, list[dict]] = {}
         # how chunk calls saw the document: fork, inline or compressed
         self.context_mode: str | None = None
@@ -1501,8 +1522,9 @@ class ChunkedClaimExtractor:
 
 class _Chunk(NamedTuple):
     """One chunk's parsed claims and gaps, and the objects in its answer
-    that were neither, nor its sentinel (parse_chunk_unread): their count
-    is what tells an unreadable answer from one with no claims."""
+    that held something the parser could not read (parse_chunk_unread):
+    their count is what tells an unreadable answer from one with no
+    claims."""
 
     claims: list[dict]
     gaps: list[dict]
