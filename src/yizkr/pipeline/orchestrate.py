@@ -693,7 +693,9 @@ class Orchestrator:
         (MODEL_ROLES): the run's engine client for the role, with the
         role's effort and model and the pinned CLI, behind the run's LLM
         cache when it has one, keyed with the role's epoch. `events`
-        receives what the cache does.
+        receives what the cache does and, with or without the cache, an
+        event for every call that reaches the engine
+        (llm.observed_client).
 
         A tool that adopts answers for the run's calls (CachingClient.
         complete_key and seed) takes its client from an orchestrator
@@ -701,7 +703,9 @@ class Orchestrator:
         calls are served under. A CLI update changes the engine's config
         hash, and with it every key: adoptions made before it are no
         longer found, and those calls miss as absent."""
-        engine = self._engine(role)
+        from yizkr.pipeline.llm import observed_client
+
+        engine = observed_client(self._engine(role), role=role, events=events)
         cache = self._llm_cache()
         if cache is None:
             return engine
@@ -711,8 +715,9 @@ class Orchestrator:
 
     def _llm(self, role: str, doc: DocumentRun):
         """The engine for one role, as one document's stages see it
-        (`role_client`), with what the cache does reported to the run
-        directory under the document's SHA-1."""
+        (`role_client`), with what the cache does and every call that
+        reaches the engine reported to the run directory under the
+        document's SHA-1."""
         return self.role_client(
             role,
             events=functools.partial(

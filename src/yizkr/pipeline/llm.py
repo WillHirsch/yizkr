@@ -19,7 +19,11 @@ Two Anthropic-backed engines, differing in how usage is billed:
   A pass runs on one pinned CLI version, isolated from the owner's own
   Claude Code configuration, and the CLI's session transcripts of its
   calls are moved into the run record or deleted (see
-  ``ClaudeCodeClient``).
+  ``ClaudeCodeClient``). A call the subscription refuses for a limit
+  never fails: the engine waits for the limit to lift, or pauses the
+  pass (``UsageLimitReached``), and it paces its calls to leave a
+  reserve of each usage window to development sessions (see
+  "Subscription limits" below).
 
 Pick the model for either engine with $YIZKR_LLM_MODEL.
 
@@ -29,6 +33,10 @@ one, and `cached_client` wraps an engine's client so that a call made
 before with the same key is answered from it. The pipeline is written
 against the client protocols below and never against the cache, so
 without the wrapper it runs unchanged, calling the engine directly.
+`observed_client` reports every call that reaches the engine as an
+event; a run's clients have it with or without the cache, beneath the
+cache when there is one, so a run's record of its engine calls does not
+depend on the cache.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -48,12 +57,19 @@ import threading
 import time
 import uuid
 import weakref
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+# the kinds of call a client makes: one-shot, the opening turn of a
+# conversation, and a fork of one
+COMPLETE = "complete"
+OPEN = "open"
+FORK = "fork"
 
 
 class LlmClient(Protocol):
@@ -335,6 +351,35 @@ class CliToolsMismatch(PassPaused):
 class CliHomeRelative(PassPaused):
     """HOME is a relative path, which the CLI and the engine would resolve
     against different directories."""
+
+
+class UsageLimitReached(PassPaused):
+    """The claude subscription cannot serve the pass's next call within
+    the longest wait the engine allows (see "Subscription limits" below):
+    a usage window is used up, or used up to the reserve left for
+    development sessions, or the CLI kept refusing calls for a rate limit.
+
+    `reason` names the hold (``USAGE_LIMIT``, ``RESERVE``, ``THROTTLE``,
+    ``RATE_LIMIT``, ``OVERLOADED`` or ``CLOSED``), `window` the CLI's name
+    for the usage window when one is known (``five_hour``,
+    ``seven_day``, ...), and `resumes_at` (a UTC datetime) when the pass
+    can go on: the time the CLI reported that the window reopens, or,
+    when it reported none that is still ahead, the time the engine would
+    have tried again. No call is refused for good, so no document fails
+    for it: the pass unwinds, and is run again after `resumes_at`."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        reason: str | None = None,
+        window: str | None = None,
+        resumes_at: datetime | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.window = window
+        self.resumes_at = resumes_at
 
 
 def _version_mismatch(
@@ -944,6 +989,602 @@ def tool_failures(
     return list(dict.fromkeys(failures))
 
 
+# -- subscription limits ----------------------------------------------------
+# A claude-code call draws on the subscription's usage windows: a session
+# window of five hours and weekly ones, each reopening at a set time. The
+# CLI (as the pinned 2.1.237 prints it) reports them in its stream-json
+# output:
+#
+# * a rate_limit_event whenever its view of the limits changes, which in
+#   a new process means with the first response of every call. Its
+#   rate_limit_info gives the status (allowed, allowed_warning or
+#   rejected), the window that binds (rateLimitType: five_hour,
+#   seven_day, seven_day_opus, ...), when that window reopens (resetsAt,
+#   Unix seconds), whether the call ran on usage credits beyond the
+#   subscription (isUsingOverage), and, only once the use of the window
+#   passes a threshold the CLI warns at, the fraction of it used
+#   (utilization, with surpassedThreshold);
+# * a call the API refuses for a limit ends its turn on an API error: an
+#   assistant event whose error is rate_limit (overloaded, for an
+#   overload) and whose text is the CLI's notice ("You've hit your
+#   session limit · resets 3pm"), then a result event with is_error true
+#   and api_error_status 429 (529, for an overload); the process exits
+#   with 1. A used-up window is also reported rejected, with its
+#   rateLimitType and resetsAt. A refusal of another kind (the server
+#   limiting requests, which the CLI has already retried with a backoff
+#   of its own) reports no reset time.
+#
+# Not reported: the use of a window below the CLI's warning thresholds
+# (the CLI reads it from every response's headers, but prints it only in
+# its interactive status line), the size of a window in calls or tokens,
+# and how much of it other sessions use (the reported utilization
+# includes their use).
+#
+# So the engine, through the process's _Pacer:
+#
+# * never returns a refused call's notice as an answer. It asks again:
+#   after the reported reset of a used-up window, and after a doubling
+#   backoff when a refusal gives no reset time, or one the local clock has
+#   passed already (a skewed clock). A hold that would take a call's wait
+#   past the longest the call may wait in all (max_wait,
+#   $YIZKR_CLAUDE_MAX_WAIT) pauses the pass instead (UsageLimitReached),
+#   with the time it can go on. A hold that one call meets holds every
+#   thread's next call;
+# * keeps a reserve of each window for development sessions (reserve,
+#   $YIZKR_CLAUDE_RESERVE, a fraction of the window). The use of a window
+#   is estimated from its last reported utilization, plus the use of each
+#   call completed or in flight since, at the use per call measured
+#   between the first report in the window and the latest. Dispatch
+#   stops at the reserve line until the window reopens, and short of it
+#   is spaced so that what is left above the line lasts until the reset.
+#   Below the CLI's first warning nothing is reported, so nothing is
+#   paced: a reserve larger than what is left at that warning is kept
+#   from the warning on. The use per call includes what other sessions
+#   used in the same time, which makes the pacing stricter, never looser;
+# * never runs on usage credits: a call reported to have used them marks
+#   its window as used up.
+#
+# The reserve and the longest wait decide only when calls are made, never
+# what a call sends: they are no part of effective_config, so no cache key
+# depends on them.
+
+RATE_LIMIT_EVENT = "rate_limit_event"
+# the statuses a rate_limit_event reports
+ALLOWED = "allowed"
+ALLOWED_WARNING = "allowed_warning"
+REJECTED = "rejected"
+_STATUSES = frozenset({ALLOWED, ALLOWED_WARNING, REJECTED})
+# the API statuses and the assistant events' errors of a refusal for a
+# limit: 429 and rate_limit, a rate or usage limit; 529 and overloaded,
+# an overload
+LIMIT_STATUSES = frozenset({429, 529})
+LIMIT_ERRORS = frozenset({"rate_limit", "overloaded"})
+
+# Why a call waited, or its pass paused: a used-up usage window; a window
+# used up to the reserve; dispatch spaced to keep the reserve; a refusal
+# with no reset time the local clock has not passed; an overload; and a
+# wait the client's close ended.
+USAGE_LIMIT = "usage limit"
+RESERVE = "reserve"
+THROTTLE = "throttle"
+RATE_LIMIT = "rate limit"
+OVERLOADED = "overloaded"
+CLOSED = "closed"
+
+# the settings, and their defaults: a quarter of each window is left to
+# development sessions, and a call waits up to 15 minutes in all, which
+# covers a backoff and a window that reopens soon; a longer hold pauses
+# the pass
+RESERVE_ENV = "YIZKR_CLAUDE_RESERVE"
+MAX_WAIT_ENV = "YIZKR_CLAUDE_MAX_WAIT"
+DEFAULT_RESERVE = 0.25
+DEFAULT_MAX_WAIT = 900.0
+# the backoff after a refusal with no reset time ahead: a minute, doubled
+# with each refusal of the same call, up to the cap
+BACKOFF = 60.0
+BACKOFF_CAP = 480.0
+# how long after a window's reported reset the engine asks again
+RESET_MARGIN = 30.0
+# reset times this close together name the same window
+SAME_WINDOW = 60.0
+
+_WINDOW_NAMES = {
+    "five_hour": "five-hour window",
+    "seven_day": "weekly window",
+    "seven_day_opus": "weekly Opus window",
+    "seven_day_sonnet": "weekly Sonnet window",
+}
+
+
+def _describe_window(name: str | None) -> str:
+    if not name:
+        return "usage window"
+    return _WINDOW_NAMES.get(name, f"{name} window")
+
+
+def _number(value: Any) -> float | None:
+    """A finite number from a stream, or None for anything else."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _epoch(value: Any) -> float | None:
+    """A Unix time in seconds from a stream, or None."""
+    number = _number(value)
+    return number if number is not None and number > 0 else None
+
+
+def _fraction(value: Any) -> float | None:
+    """A share of a window from a stream, or None."""
+    number = _number(value)
+    return number if number is not None and number >= 0 else None
+
+
+def _utc(seconds: float) -> datetime:
+    return datetime.fromtimestamp(seconds, UTC)
+
+
+def _stamp(seconds: float) -> str:
+    return _utc(seconds).isoformat(timespec="seconds")
+
+
+def _duration(seconds: float) -> str:
+    """A duration for a message: "45 s", "15 min", "2 h 5 min"."""
+    if seconds == math.inf:
+        return "without limit"
+    seconds = max(0, round(seconds))
+    if seconds < 90:
+        return f"{seconds} s"
+    hours, minutes = divmod(round(seconds / 60), 60)
+    if not hours:
+        return f"{minutes} min"
+    return f"{hours} h" + (f" {minutes} min" if minutes else "")
+
+
+def rate_limit_infos(events: Iterable[Mapping[str, Any]]) -> list[dict]:
+    """The rate_limit_info of each rate_limit_event in a call's stream-json
+    events, in their order."""
+    return [
+        event["rate_limit_info"]
+        for event in events
+        if event.get("type") == RATE_LIMIT_EVENT
+        and isinstance(event.get("rate_limit_info"), dict)
+    ]
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A call the subscription refused for a limit: why (USAGE_LIMIT,
+    RATE_LIMIT or OVERLOADED), and for a used-up window its name and the
+    time the CLI says it reopens (Unix seconds)."""
+
+    reason: str
+    window: str | None = None
+    resets_at: float | None = None
+
+
+def refusal(
+    events: Sequence[Mapping[str, Any]], returncode: int
+) -> Refusal | None:
+    """The limit that refused a call, from the call's stream-json events
+    and exit status, or None when no limit refused it.
+
+    A call that did not end in an error (a zero exit, and no result with
+    is_error) was not refused, whatever its stream reported on the way:
+    the CLI retries some refusals itself. One that did was refused for a
+    limit when its result has the API status 429 or 529, an assistant
+    event carries a limit error, or its last rate_limit_event is
+    rejected. The refusal is for a used-up window when that event names
+    the window and when it reopens; otherwise for an overload (529), or a
+    rate limit."""
+    result = next(
+        (event for event in reversed(events) if event.get("type") == "result"),
+        {},
+    )
+    if returncode == 0 and result.get("is_error") is not True:
+        return None
+    status = result.get("api_error_status")
+    errors = {
+        event.get("error")
+        for event in events
+        if event.get("type") == "assistant"
+        and isinstance(event.get("error"), str)
+    }
+    infos = rate_limit_infos(events)
+    last = infos[-1] if infos else {}
+    rejected = last.get("status") == REJECTED
+    if not (status in LIMIT_STATUSES or errors & LIMIT_ERRORS or rejected):
+        return None
+    window = last.get("rateLimitType")
+    resets_at = _epoch(last.get("resetsAt"))
+    if rejected and isinstance(window, str) and window and resets_at:
+        return Refusal(USAGE_LIMIT, window, resets_at)
+    if status == 529 or "overloaded" in errors:
+        return Refusal(OVERLOADED)
+    return Refusal(RATE_LIMIT)
+
+
+class _Refused(Exception):
+    """An attempt at a call that the subscription refused for a limit;
+    ClaudeCodeClient asks again, or pauses the pass."""
+
+    def __init__(self, refused: Refusal) -> None:
+        super().__init__(refused.reason)
+        self.refusal = refused
+
+
+@dataclass
+class _Window:
+    """What the calls' streams last said of one usage window."""
+
+    status: str | None = None
+    resets_at: float | None = None
+    # the share of the window used, as last reported, and the pacer's
+    # count of completed calls when it was
+    utilization: float | None = None
+    observed_at: int = 0
+    # the first share reported in the window and the count then, and the
+    # use per call measured from them
+    anchor: tuple[float, int] | None = None
+    per_call: float | None = None
+
+
+@dataclass(frozen=True)
+class _Hold:
+    """Until when dispatch waits (Unix seconds), why, and for which window
+    and its reported reset, when a window is the reason."""
+
+    until: float
+    reason: str
+    window: str | None = None
+    resets_at: float | None = None
+
+
+def _sleep(seconds: float, stop: threading.Event) -> bool:
+    """Wait `seconds`; False when `stop` is set before or during it."""
+    return not stop.wait(seconds)
+
+
+class _Pacer:
+    """When the next claude-code call may be dispatched, from what the
+    calls' streams report of the subscription's usage windows (see
+    "Subscription limits" above). One pacer serves every claude-code
+    client of a process, since the windows are the account's: a hold one
+    call meets holds every thread's next call. `clock` gives Unix
+    seconds, and `sleep(seconds, stop)` waits, returning False when `stop`
+    was set before or while it waited."""
+
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.time,
+        sleep: Callable[[float, threading.Event], bool] = _sleep,
+    ) -> None:
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        # the windows by the CLI's name for them
+        self._windows: dict[str, _Window] = {}
+        # the backoff after the latest refusal, until it ends
+        self._backoff: _Hold | None = None
+        self._dispatched = 0
+        self._completed = 0
+        self._last_dispatch: float | None = None
+        # the hold the log last announced
+        self._announced: tuple | None = None
+
+    def admit(
+        self,
+        record: dict[str, Any],
+        *,
+        reserve: float,
+        max_wait: float,
+        stop: threading.Event,
+    ) -> None:
+        """Wait until a call may be dispatched, and count it dispatched.
+        `record` gathers what the call has waited (`waited`, in seconds)
+        and why (`held`) over its attempts. A hold that would take the
+        call's wait past `max_wait` raises UsageLimitReached at once,
+        without waiting, and so does a wait that `stop` ends."""
+        while True:
+            with self._lock:
+                now = self._clock()
+                hold = self._hold(now, reserve)
+                if hold is None or hold.until <= now:
+                    self._dispatched += 1
+                    self._last_dispatch = now
+                    return
+            delay = hold.until - now
+            record["held"] = hold.reason
+            if record["waited"] + delay > max_wait:
+                raise _paused(
+                    hold,
+                    now,
+                    reserve=reserve,
+                    max_wait=max_wait,
+                    waited=record["waited"],
+                )
+            self._announce(hold, reserve)
+            slept = self._sleep(delay, stop)
+            record["waited"] += max(0.0, self._clock() - now)
+            if not slept:
+                raise UsageLimitReached(
+                    "the claude-code client was closed while a call waited "
+                    f"for the subscription ({hold.reason}). The pass is "
+                    "paused and makes no further calls; its completed "
+                    "outputs are kept.",
+                    reason=CLOSED,
+                    window=hold.window,
+                    resumes_at=_utc(hold.until),
+                )
+
+    def done(self, infos: Iterable[Mapping[str, Any]]) -> None:
+        """Count a dispatched call completed, however it ended, and take in
+        what its stream reported of the windows (rate_limit_infos)."""
+        with self._lock:
+            self._completed += 1
+            for info in infos:
+                self._take(info)
+
+    def refused(self, refused: Refusal, attempt: int) -> None:
+        """Hold dispatch after a call's `attempt`-th refusal (from 1): until
+        the reported reset of a used-up window, and in any case for a
+        backoff that doubles with each refusal of the call."""
+        with self._lock:
+            now = self._clock()
+            if refused.window is not None and refused.resets_at is not None:
+                self._window(
+                    refused.window, refused.resets_at
+                ).status = REJECTED
+            backoff = min(BACKOFF * 2 ** min(attempt - 1, 16), BACKOFF_CAP)
+            if self._backoff is None or self._backoff.until < now + backoff:
+                self._backoff = _Hold(
+                    now + backoff,
+                    refused.reason,
+                    refused.window,
+                    refused.resets_at,
+                )
+
+    # -- the windows ------------------------------------------------------
+
+    def _window(self, name: str, resets_at: float | None) -> _Window:
+        """The window `name`, started afresh when `resets_at` names another
+        reset than the one it had."""
+        window = self._windows.get(name)
+        if window is None or (
+            resets_at is not None
+            and window.resets_at is not None
+            and abs(resets_at - window.resets_at) > SAME_WINDOW
+        ):
+            window = self._windows[name] = _Window()
+        if resets_at is not None:
+            window.resets_at = resets_at
+        return window
+
+    def _take(self, info: Mapping[str, Any]) -> None:
+        name = info.get("rateLimitType")
+        if not isinstance(name, str) or not name:
+            return
+        status = (
+            info.get("status") if info.get("status") in _STATUSES else None
+        )
+        utilization = _fraction(info.get("utilization"))
+        if info.get("isUsingOverage") is True:
+            utilization = max(utilization or 0.0, 1.0)
+        window = self._window(name, _epoch(info.get("resetsAt")))
+        if status is not None:
+            window.status = status
+        if utilization is None:
+            if status == ALLOWED:
+                # below the CLI's warning thresholds: the use is unknown
+                window.utilization = window.anchor = window.per_call = None
+            return
+        anchor = window.anchor
+        if anchor is None:
+            window.anchor = (utilization, self._completed)
+        elif self._completed > anchor[1] and utilization > anchor[0]:
+            window.per_call = (utilization - anchor[0]) / (
+                self._completed - anchor[1]
+            )
+        window.utilization = utilization
+        window.observed_at = self._completed
+
+    def _used(self, window: _Window) -> float | None:
+        """The estimated share of a window used, counting the calls
+        completed since its last report and those in flight, or None when
+        no use is reported."""
+        if window.utilization is None:
+            return None
+        since = (self._completed - window.observed_at) + (
+            self._dispatched - self._completed
+        )
+        return window.utilization + (window.per_call or 0.0) * max(0, since)
+
+    def _hold(self, now: float, reserve: float) -> _Hold | None:
+        """The latest hold on dispatch at `now`, or None. A window whose
+        reset has passed is forgotten: its use starts afresh."""
+        holds = []
+        if self._backoff is not None:
+            if self._backoff.until > now:
+                holds.append(self._backoff)
+            else:
+                self._backoff = None
+        line = 1.0 - reserve
+        for name, window in list(self._windows.items()):
+            if window.resets_at is None:
+                continue
+            if window.resets_at <= now:
+                del self._windows[name]
+                continue
+            reopens = window.resets_at + RESET_MARGIN
+            if window.status == REJECTED:
+                holds.append(
+                    _Hold(reopens, USAGE_LIMIT, name, window.resets_at)
+                )
+                continue
+            used = self._used(window)
+            if used is None:
+                continue
+            left = line - used
+            if left <= 0:
+                holds.append(_Hold(reopens, RESERVE, name, window.resets_at))
+            elif window.per_call and self._last_dispatch is not None:
+                spacing = (window.resets_at - now) * window.per_call / left
+                holds.append(
+                    _Hold(
+                        min(self._last_dispatch + spacing, reopens),
+                        THROTTLE,
+                        name,
+                        window.resets_at,
+                    )
+                )
+        return max(holds, key=lambda hold: hold.until, default=None)
+
+    def _announce(self, hold: _Hold, reserve: float) -> None:
+        """Say in the log, once per hold, why calls wait: once for a
+        window's hold, however many calls wait for it or are spaced by it,
+        and once for each backoff."""
+        announced = (
+            hold.reason,
+            hold.window,
+            hold.resets_at,
+            hold.until if hold.reason in (RATE_LIMIT, OVERLOADED) else None,
+        )
+        with self._lock:
+            if announced == self._announced:
+                return
+            self._announced = announced
+        window = f"the claude subscription's {_describe_window(hold.window)}"
+        if hold.reason == THROTTLE:
+            logger.warning(
+                "%s nears the reserve left to development sessions (%s): "
+                "calls are spaced so that what is left above it lasts "
+                "until the window reopens at %s",
+                window,
+                f"{reserve:.0%}",
+                _stamp(hold.resets_at or hold.until),
+            )
+            return
+        if hold.reason == USAGE_LIMIT:
+            why = f"{window} is used up"
+        elif hold.reason == RESERVE:
+            why = (
+                f"{window} is used up to the reserve left to development "
+                f"sessions ({reserve:.0%})"
+            )
+        else:
+            why = f"the claude CLI refused a call ({hold.reason})"
+        logger.warning("%s: calls wait until %s", why, _stamp(hold.until))
+
+
+def _paused(
+    hold: _Hold,
+    now: float,
+    *,
+    reserve: float,
+    max_wait: float,
+    waited: float,
+) -> UsageLimitReached:
+    """The pause for a hold that would take a call's wait past
+    `max_wait`. It resumes when the window the CLI named reopens, when that
+    is still ahead, else when the engine would have asked again."""
+    ahead = hold.resets_at is not None and hold.resets_at > now
+    resumes = hold.resets_at if ahead else hold.until
+    when = _stamp(resumes)
+    window = f"the claude subscription's {_describe_window(hold.window)}"
+    reserved = (
+        f"the reserve this pass leaves to development sessions "
+        f"({reserve:.0%} of it, {RESERVE_ENV})"
+    )
+    longest = (
+        f"the longest a call waits for the subscription "
+        f"({_duration(max_wait)}, {MAX_WAIT_ENV}; this one had waited "
+        f"{_duration(waited)})"
+    )
+    if hold.reason == USAGE_LIMIT and ahead:
+        what = (
+            f"{window} is used up, and the CLI reports that it reopens at "
+            f"{when}: later than {longest}"
+        )
+    elif hold.reason == RESERVE:
+        what = (
+            f"{window} is used up to {reserved}, and it reopens at {when}: "
+            f"later than {longest}"
+        )
+    elif hold.reason == THROTTLE:
+        what = (
+            f"{window} is so near {reserved} that its next call would wait "
+            f"longer than {longest}; the window reopens at {when}"
+        )
+    else:
+        what = (
+            f"the claude CLI keeps refusing calls ({hold.reason}"
+            + (", past the reset time it reported" if hold.resets_at else "")
+            + f"), and the engine would ask again at {when}: later than "
+            f"{longest}"
+        )
+    return UsageLimitReached(
+        f"{what}. The pass is paused and makes no further calls; its "
+        f"completed outputs are kept. Run it again after {when}.",
+        reason=hold.reason,
+        window=hold.window,
+        resumes_at=_utc(resumes),
+    )
+
+
+_PACER = _Pacer()
+
+
+def _setting(value: float | str | None, variable: str) -> str | None:
+    if value is not None:
+        return str(value)
+    return os.environ.get(variable, "").strip() or None
+
+
+def _reserve_setting(value: float | None) -> float:
+    """The share of each usage window left to development sessions:
+    `value`, else $YIZKR_CLAUDE_RESERVE, else DEFAULT_RESERVE."""
+    raw = _setting(value, RESERVE_ENV)
+    if raw is None:
+        return DEFAULT_RESERVE
+    try:
+        reserve = float(raw)
+    except ValueError:
+        reserve = math.nan
+    if not 0 <= reserve < 1:
+        raise ValueError(
+            f"the reserve left to development sessions ({RESERVE_ENV}) is "
+            f"{raw!r}: give a share of each usage window from 0 up to, not "
+            "including, 1, such as 0.25"
+        )
+    return reserve
+
+
+def _max_wait_setting(value: float | None) -> float:
+    """The longest a call waits for the subscription in all, in seconds:
+    `value`, else $YIZKR_CLAUDE_MAX_WAIT, else DEFAULT_MAX_WAIT."""
+    raw = _setting(value, MAX_WAIT_ENV)
+    if raw is None:
+        return DEFAULT_MAX_WAIT
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = math.nan
+    if not seconds >= 0:
+        raise ValueError(
+            f"the longest a call waits for the subscription ({MAX_WAIT_ENV}) "
+            f"is {raw!r}: give a number of seconds, 0 or more"
+        )
+    return seconds
+
+
+def _fresh_session() -> list[str]:
+    """The arguments of an attempt at a call in a new session: an explicit
+    id, which names its transcript even when the attempt fails before its
+    stream reports it."""
+    return ["--session-id", str(uuid.uuid4())]
+
+
 class ClaudeCodeClient:
     """Claude Code CLI client (headless ``claude -p``); subscription billing.
 
@@ -977,6 +1618,16 @@ class ClaudeCodeClient:
     (``--refresh transcribe``): a refreshed call that raises replaces
     nothing, so the answer the cache kept and the transcription view stay,
     and the next run reuses them (yizkr.pipeline.transcription_check).
+
+    **Limits.** A call the subscription refuses for a limit never fails,
+    and its notice is never returned as an answer: the call is asked again
+    once the limit lifts, or its pass pauses. Calls are paced to leave
+    ``reserve`` of each usage window to development sessions. A call waits
+    for the subscription at most ``max_wait`` seconds in all; a longer
+    hold pauses the pass (``UsageLimitReached``), with the time it can go
+    on, and so does a wait that ``close`` ends. ``last_pacing`` gives what
+    the calling thread's last call waited, and why (see "Subscription
+    limits" above).
 
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit only the environment variables
@@ -1047,6 +1698,8 @@ class ClaudeCodeClient:
         *,
         cli_version: str | None = None,
         transcripts: str | os.PathLike[str] | None = None,
+        reserve: float | None = None,
+        max_wait: float | None = None,
     ) -> None:
         self.executable = executable
         self.model = (
@@ -1063,6 +1716,15 @@ class ClaudeCodeClient:
             if effort is not None
             else os.environ.get("YIZKR_LLM_EFFORT")
         )
+        # pacing: the share of each usage window left to development
+        # sessions, and the longest a call waits for the subscription
+        self.reserve = _reserve_setting(reserve)
+        self.max_wait = _max_wait_setting(max_wait)
+        self._pacer = _PACER
+        # what the calling thread's last call waited, and why
+        self._pacing = threading.local()
+        # set by close(): no call waits for the subscription any more
+        self._closed = threading.Event()
         self.workdir = Path(tempfile.gettempdir()) / self.WORKDIR_NAME
         self.transcripts = transcript_destination(transcripts)
         self._pin = _PIN
@@ -1224,33 +1886,38 @@ class ClaudeCodeClient:
         the session."""
         return dict(getattr(self._reports, "value", {}))
 
+    def last_pacing(self) -> dict[str, Any]:
+        """How the calling thread's last call, answered or not, waited for
+        the subscription: `waited` (seconds), `refused` (how many of its
+        attempts a limit refused) and `held` (why it last waited, or
+        paused); each only when there is something to say."""
+        return dict(getattr(self._pacing, "value", {}))
+
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
         """The answer to a one-shot call that reads `image_paths`. Raises
         EngineToolError when the call's stream reports that the Read tool
         failed on one of them (tool_failures)."""
-        # An explicit fresh session id names the call's transcript, so it
-        # is released even when the call fails before its stream reports
-        # the id.
         return self._run(
-            ["--session-id", str(uuid.uuid4())],
+            _fresh_session,
             self.call_text(prompt, image_paths),
             inputs=image_paths,
-        )
+        )[0]
 
     def open_conversation(self, prompt: str) -> tuple[str, Any]:
         """First turn of a forkable session; the handle is its session id.
 
         The session's transcript stays in place for its forks until
         ``close_conversation`` or ``close``."""
-        session_id = str(uuid.uuid4())
-        response = self._run(["--session-id", session_id], prompt, hold=True)
-        return response, session_id
+        response, arguments = self._run(_fresh_session, prompt, hold=True)
+        return response, arguments[arguments.index("--session-id") + 1]
 
     def fork(self, handle: Any, prompt: str) -> str:
         """One follow-up turn on a FORK of the session — the original
         session is never mutated, so every fork branches from the same
         prefix and forks never see each other's turns."""
-        return self._run(["--resume", str(handle), "--fork-session"], prompt)
+        return self._run(
+            lambda: ["--resume", str(handle), "--fork-session"], prompt
+        )[0]
 
     def keep_conversation(self, handle: Any) -> dict[str, bytes]:
         """The files of a conversation's session, by path under the CLI's
@@ -1314,7 +1981,10 @@ class ClaudeCodeClient:
         release_transcripts([str(handle)], self.transcripts, self.config_dir)
 
     def close(self) -> None:
-        """Release the transcripts of every conversation still open."""
+        """Release the transcripts of every conversation still open, and
+        end every wait for the subscription: a call that waits, or would,
+        pauses its pass instead (UsageLimitReached)."""
+        self._closed.set()
         _release_held(
             self._conversations,
             self._conversations_lock,
@@ -1330,23 +2000,67 @@ class ClaudeCodeClient:
 
     def _run(
         self,
+        arguments: Callable[[], list[str]],
+        prompt: str,
+        *,
+        hold: bool = False,
+        inputs: Sequence[Path] = (),
+    ) -> tuple[str, list[str]]:
+        """One call: an invocation of the CLI (`_attempt`), made again for
+        as long as the subscription refuses it for a limit. Each attempt
+        waits until the process's pacer admits it, and takes the arguments
+        `arguments()` gives it. Returns the answer and the arguments of the
+        attempt that gave it. A hold that would take the call's wait past
+        `max_wait`, or a wait that `close` ends, raises UsageLimitReached;
+        `last_pacing` then says what the call waited."""
+        record: dict[str, Any] = {"waited": 0.0, "refused": 0, "held": None}
+        try:
+            self._pin.raise_if_paused()
+            while True:
+                self._pacer.admit(
+                    record,
+                    reserve=self.reserve,
+                    max_wait=self.max_wait,
+                    stop=self._closed,
+                )
+                extra_args = arguments()
+                try:
+                    text = self._attempt(
+                        extra_args, prompt, hold=hold, inputs=inputs
+                    )
+                except _Refused as refused:
+                    record["refused"] += 1
+                    record["held"] = refused.refusal.reason
+                    self._pacer.refused(refused.refusal, record["refused"])
+                    continue
+                return text, extra_args
+        finally:
+            self._pacing.value = {
+                name: value for name, value in record.items() if value
+            }
+
+    def _attempt(
+        self,
         extra_args: list[str],
         prompt: str,
         *,
         hold: bool = False,
         inputs: Sequence[Path] = (),
     ) -> str:
-        """One CLI invocation. Its sessions' transcripts are released when
-        it ends, unless ``hold`` keeps a successful call's session open
-        for forking. A call whose stream reports the Read tool failing on
-        one of its ``inputs`` raises EngineToolError, after the version
-        and tool checks."""
-        self._pin.raise_if_paused()
-        check_global_config(self.config_dir)
-        self.workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        """One CLI invocation, which the pacer has admitted and is told of
+        when it ends, with what its stream reported of the subscription's
+        windows. Its sessions' transcripts are released when it ends,
+        unless ``hold`` keeps a successful call's session open for
+        forking. A call the subscription refused for a limit raises
+        _Refused, before any other check. A call whose stream reports the
+        Read tool failing on one of its ``inputs`` raises EngineToolError,
+        after the version and tool checks."""
         stdout = ""
         held = False
         try:
+            self._pin.raise_if_paused()
+            check_global_config(self.config_dir)
+            self.workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
             try:
                 result = subprocess.run(
                     self._command() + extra_args,
@@ -1361,6 +2075,9 @@ class ClaudeCodeClient:
                 stdout = _as_text(exc.stdout)
                 raise
             stdout = result.stdout or ""
+            refused = refusal(_stream_events(stdout), result.returncode)
+            if refused is not None:
+                raise _Refused(refused)
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout).strip()[-500:]
                 raise RuntimeError(
@@ -1396,6 +2113,7 @@ class ClaudeCodeClient:
             held = hold
             return text
         finally:
+            self._pacer.done(rate_limit_infos(_stream_events(stdout)))
             sessions = _session_ids(stdout, extra_args)
             with self._conversations_lock:
                 if held:
@@ -1448,6 +2166,8 @@ def make_client(
     model: str | None = None,
     transcripts: str | os.PathLike[str] | None = None,
     cli_version: str | None = None,
+    reserve: float | None = None,
+    max_wait: float | None = None,
 ) -> LlmClient:
     """CLI engine name -> client. Extend here when adding providers.
 
@@ -1457,11 +2177,15 @@ def make_client(
     per-phase override, e.g. a disciplined extraction model distinct from
     the run's main model); ``None`` inherits $YIZKR_LLM_MODEL.
 
-    ``transcripts`` and ``cli_version`` apply to claude-code only: the
-    directory its session transcripts are moved into (``None`` defers to
-    $YIZKR_CLAUDE_TRANSCRIPTS, and unset that deletes them), and the CLI
-    version the pass must run on (``None`` pins the version installed
-    when the pass's first client starts).
+    ``transcripts``, ``cli_version``, ``reserve`` and ``max_wait`` apply
+    to claude-code only: the directory its session transcripts are moved
+    into (``None`` defers to $YIZKR_CLAUDE_TRANSCRIPTS, and unset that
+    deletes them); the CLI version the pass must run on (``None`` pins the
+    version installed when the pass's first client starts); and the share
+    of each usage window left to development sessions and the longest a
+    call waits for the subscription, in seconds (``None`` defers to
+    $YIZKR_CLAUDE_RESERVE and $YIZKR_CLAUDE_MAX_WAIT; see "Subscription
+    limits").
     """
     if engine == "anthropic":
         return AnthropicClient(model=model)
@@ -1471,12 +2195,180 @@ def make_client(
             effort=effort,
             transcripts=transcripts,
             cli_version=cli_version,
+            reserve=reserve,
+            max_wait=max_wait,
         )
     raise ValueError(
         f"unknown LLM engine {engine!r}; available: anthropic (API key, "
         f"token billing), claude-code (CLI login, subscription billing) — "
         f"self-hosted adapters welcome: implement LlmClient"
     )
+
+
+# -- engine calls as events --------------------------------------------------
+
+# the event that reports a call that reached the engine
+ENGINE_CALL = "call"
+# how an engine call ended: with an answer; with an error; with a pause of
+# its pass (PassPaused, a subscription limit's among them); or interrupted
+# (Ctrl-C)
+OK = "ok"
+ERROR = "error"
+PAUSED = "paused"
+INTERRUPTED = "interrupted"
+# the stage each role's calls are made in (yizkr.pipeline.orchestrate)
+ROLE_STAGES = {
+    "transcribe": "transcription",
+    "extract": "extraction",
+    "critique": "critique",
+}
+
+
+class ObservedClient:
+    """An engine's client whose every call is reported to `events`, as
+    ``events("call", **fields)``, whether the call answers, fails or
+    pauses its pass. The fields are the `role`, its `stage`
+    (ROLE_STAGES), the kind of `call` (complete, open or fork), the
+    `outcome` (ok, error, paused or interrupted), how long the call took
+    (`duration_s`), the `error` it raised (the exception's name, never its
+    message), and, from an engine that paces its calls (`last_pacing`),
+    the seconds it waited for the subscription (`wait_s`), how many of its
+    attempts a limit `refused` and why it was last `held`; a pause for a
+    subscription limit adds its `window` and when the pass can go on
+    (`resumes_at`). A field with nothing to say is left out.
+
+    It wraps the engine's own client, behind the LLM cache when there is
+    one, so it reports the calls that reach the engine, the cache's
+    misses and replays, and none it answers. Everything else is the
+    engine's: its attributes, and the conversational capability exactly
+    when the engine has it (ObservedConversationalClient)."""
+
+    # the optional capabilities a wrapper presents by methods of its own,
+    # or not at all
+    _CAPABILITIES = frozenset(
+        {"open_conversation", "fork", "reject", "attempt"}
+    )
+
+    def __init__(
+        self, client: Any, *, role: str, events: Callable[..., Any]
+    ) -> None:
+        self.client = client
+        self.role = role
+        self._events = events
+
+    def __getattr__(self, name: str) -> Any:
+        if (
+            name in self._CAPABILITIES
+            or name.startswith("__")
+            or name in ("client", "role", "_events")
+        ):
+            raise AttributeError(name)
+        return getattr(self.client, name)
+
+    def complete(
+        self, prompt: str, image_paths: Sequence[str | os.PathLike[str]] = ()
+    ) -> str:
+        return self._observe(
+            COMPLETE, lambda: self.client.complete(prompt, image_paths)
+        )
+
+    def _observe(self, call: str, ask: Callable[[], Any]) -> Any:
+        started = time.monotonic()
+        outcome, error, pause = OK, None, None
+        try:
+            return ask()
+        except PassPaused as exc:
+            outcome, error, pause = PAUSED, type(exc).__name__, exc
+            raise
+        except Exception as exc:
+            outcome, error = ERROR, type(exc).__name__
+            raise
+        except BaseException as exc:
+            outcome, error = INTERRUPTED, type(exc).__name__
+            raise
+        finally:
+            self._report(
+                call, outcome, time.monotonic() - started, error, pause
+            )
+
+    def _report(
+        self,
+        call: str,
+        outcome: str,
+        duration: float,
+        error: str | None,
+        pause: PassPaused | None,
+    ) -> None:
+        """Emit the call's event. An event that cannot be recorded is a
+        warning, never the call's failure: the answer matters more."""
+        last_pacing = getattr(self.client, "last_pacing", None)
+        pacing = last_pacing() if callable(last_pacing) else {}
+        fields: dict[str, Any] = {
+            "role": self.role,
+            "stage": ROLE_STAGES.get(self.role),
+            "call": call,
+            "outcome": outcome,
+            "duration_s": round(duration, 3),
+            "wait_s": round(pacing.get("waited") or 0.0, 1) or None,
+            "refused": pacing.get("refused") or None,
+            "held": pacing.get("held"),
+            "error": error,
+        }
+        if isinstance(pause, UsageLimitReached):
+            fields["held"] = pause.reason or fields["held"]
+            fields["window"] = pause.window
+            if pause.resumes_at is not None:
+                fields["resumes_at"] = pause.resumes_at.isoformat(
+                    timespec="seconds"
+                )
+        try:
+            self._events(
+                ENGINE_CALL,
+                **{
+                    name: value
+                    for name, value in fields.items()
+                    if value is not None
+                },
+            )
+        except Exception as exc:
+            logger.warning("could not record an engine call: %s", exc)
+
+
+class ObservedConversationalClient(ObservedClient):
+    """An ObservedClient for an engine that holds conversations: opening
+    one and forking it are calls like any other."""
+
+    def open_conversation(self, prompt: str) -> tuple[str, Any]:
+        return self._observe(
+            OPEN, lambda: self.client.open_conversation(prompt)
+        )
+
+    def fork(self, handle: Any, prompt: str) -> str:
+        return self._observe(FORK, lambda: self.client.fork(handle, prompt))
+
+
+def observed_client(
+    client: Any, *, role: str, events: Callable[..., Any] | None
+) -> Any:
+    """``client``, an engine's own client, with every call it makes
+    reported to ``events`` (ObservedClient) as a call of ``role``; the
+    client itself when there is no ``events`` to report to."""
+    if events is None:
+        return client
+    kind = (
+        ObservedConversationalClient
+        if isinstance(client, ConversationalLlmClient)
+        else ObservedClient
+    )
+    return kind(client, role=role, events=events)
+
+
+def engine_client(client: Any) -> Any:
+    """The engine's own client behind an ObservedClient, which holds the
+    engine's sessions: ``client`` itself when it is not observed."""
+    while isinstance(client, ObservedClient):
+        client = client.client
+    return client
 
 
 def open_cache(
@@ -1506,12 +2398,153 @@ def cached_client(
 ) -> LlmClient:
     """``client`` with every call answered from ``cache`` (an `open_cache`
     result) when the same call was answered before, and otherwise made
-    and kept. ``role`` names the pipeline step whose calls these are
-    (transcribe, extract, critique): its epoch and refresh setting apply.
-    ``events``, when given, receives an event for every hit, miss,
+    and kept. ``client`` is an engine's client, or one `observed_client`
+    made of it, whose calls are those that reach the engine: the misses
+    and the replays. ``role`` names the pipeline step whose calls these
+    are (transcribe, extract, critique): its epoch and refresh setting
+    apply. ``events``, when given, receives an event for every hit, miss,
     resume, replay, rejection and adoption. The wrapper presents the
     conversational capability exactly when ``client`` has it, and adds
     `reject` (RejectingLlmClient) and `attempt` (AttemptingLlmClient)."""
     from yizkr.pipeline.llmcache import wrap
 
     return wrap(client, cache, role=role, events=events)
+
+
+# -- expected calls ----------------------------------------------------------
+
+# the events that count a call in a run's events.jsonl, one the LLM cache
+# answered or missed, and the one that says a stage made its view
+_CACHE_CALLS = frozenset({"cache-hit", "cache-miss"})
+_STAGE_DONE = "done"
+
+
+@dataclass(frozen=True)
+class StageEstimate:
+    """The stale work of one stage of a planned run: the `documents` whose
+    view the stage is to make, the `calls` they are expected to make, and
+    how many of those documents take their count from the baseline run
+    (`measured`); the others take a typical count (estimate_calls)."""
+
+    documents: int = 0
+    calls: int = 0
+    measured: int = 0
+
+
+def run_calls(
+    events: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str], int]:
+    """(document SHA-1, stage) -> the calls a run made for the document in
+    the stage, from the run's events (events.jsonl). In an invocation with
+    the LLM cache, a call is one the cache answered or missed; without
+    it, one that reached the engine (ENGINE_CALL). A stage made in
+    several invocations of the run (one that failed or paused, then the
+    one that made it) counts its latest, and a stage made without a call
+    counts 0."""
+    tallies: dict[tuple[str, str, Any], dict[str, int]] = {}
+    latest: dict[tuple[str, str], Any] = {}
+    for event in events:
+        name = event.get("event")
+        subject = event.get("subject")
+        if name == _STAGE_DONE:
+            stage = event.get("stage")
+        elif name in _CACHE_CALLS or name == ENGINE_CALL:
+            stage = ROLE_STAGES.get(event.get("role"))
+        else:
+            continue
+        if not isinstance(subject, str) or not isinstance(stage, str):
+            continue
+        invocation = event.get("invocation")
+        tally = tallies.setdefault(
+            (subject, stage, invocation), {"cache": 0, "engine": 0}
+        )
+        if name in _CACHE_CALLS:
+            tally["cache"] += 1
+        elif name == ENGINE_CALL:
+            tally["engine"] += 1
+        latest[(subject, stage)] = invocation
+    counts = {}
+    for (subject, stage), invocation in latest.items():
+        tally = tallies[(subject, stage, invocation)]
+        counts[(subject, stage)] = tally["cache"] or tally["engine"]
+    return counts
+
+
+def estimate_calls(
+    documents: Iterable[Mapping[str, Any]],
+    *,
+    current: Collection[tuple[str, str]] = (),
+    baseline: Mapping[tuple[str, str], int] | None = None,
+    sizes: Mapping[str, int] | None = None,
+) -> dict[str, StageEstimate]:
+    """The calls a planned run is expected to make for its stale work,
+    per stage. `documents` are the run manifest's planned documents
+    ({sha1, kind, stages}), and the stale work is every stage the plan
+    gives a document but the (SHA-1, stage) pairs in `current`, whose
+    views stand and are reused without a call; a scratch run, which
+    starts from fresh state directories, has none.
+
+    A document's calls in a stage are those the `baseline` run made
+    (run_calls), when it has them. Otherwise they are the baseline's mean
+    for the planned documents of the same kind in the stage, when it has
+    any, and else typical: one vision call to transcribe a scan (none for
+    a text file or slide text), one critique, and for extraction the
+    entity manifest and its chunks, about one per DEFAULT_CHUNK_BUDGET
+    characters of the text when `sizes` gives its length (SHA-1 to
+    characters), else one; a GEDCOM file calls no engine.
+
+    These are the pipeline's calls. The LLM cache answers those whose keys
+    it holds, which only the run can tell, so the engine is asked no more
+    often, but for the replays of conversations whose kept session is
+    gone (ADR-0032 §6)."""
+    from yizkr.pipeline.chunking import DEFAULT_CHUNK_BUDGET
+
+    documents = list(documents)
+    known = dict(baseline or {})
+    reused = set(current)
+    lengths = dict(sizes or {})
+    means: dict[tuple[Any, str], list[int]] = {}
+    for document in documents:
+        for stage in document.get("stages") or ():
+            if (document["sha1"], stage) in known:
+                means.setdefault((document.get("kind"), stage), []).append(
+                    known[(document["sha1"], stage)]
+                )
+    estimates: dict[str, StageEstimate] = {}
+    for document in documents:
+        sha1, kind = document["sha1"], document.get("kind")
+        for stage in document.get("stages") or ():
+            if (sha1, stage) in reused:
+                continue
+            measured = (sha1, stage) in known
+            if measured:
+                calls = known[(sha1, stage)]
+            elif (kind, stage) in means:
+                counts = means[(kind, stage)]
+                calls = round(sum(counts) / len(counts))
+            else:
+                calls = _typical_calls(
+                    kind, stage, lengths.get(sha1), DEFAULT_CHUNK_BUDGET
+                )
+            before = estimates.get(stage, StageEstimate())
+            estimates[stage] = StageEstimate(
+                before.documents + 1,
+                before.calls + calls,
+                before.measured + int(measured),
+            )
+    return estimates
+
+
+def _typical_calls(
+    kind: Any, stage: str, size: int | None, budget: int
+) -> int:
+    """The calls a document of `kind` typically makes in `stage`, with no
+    run to measure them in (estimate_calls)."""
+    if stage == "transcription":
+        return 1 if kind == "media" else 0
+    if stage == "critique":
+        return 1
+    if stage == "extraction":
+        chunks = math.ceil(size / budget) if size else 1
+        return 1 + max(1, chunks)
+    return 0

@@ -1461,10 +1461,16 @@ class TestEngines:
     def test_without_a_cache_the_engine_is_called_directly(
         self, tmp_path, monkeypatch
     ):
+        from yizkr.pipeline.llm import RejectingLlmClient
+
         orchestrator, _ = self.orchestrator(tmp_path, monkeypatch)
         doc = DocumentRun(tmp_path / "a.txt", tmp_path / "state")
         doc.source.write_text("a")
-        assert isinstance(orchestrator._llm("extract", doc), self.Engine)
+        # the engine's calls are reported to the run (#101), and nothing
+        # keeps their answers
+        client = orchestrator._llm("extract", doc)
+        assert isinstance(client.client, self.Engine)
+        assert not isinstance(client, RejectingLlmClient)
         assert not (tmp_path / "state").exists()
 
     def test_with_a_cache_the_factory_wraps_the_engine(

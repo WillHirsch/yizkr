@@ -25,6 +25,11 @@ stage keys, stage or method versions and reused stage outputs, ADR-0032
 rules; §2's write-side key, §3's run report and §4's diff are amended in
 place.
 
+Amended by #101 (2026-09-28): a subscription limit pauses the pass
+through the engine (`UsageLimitReached`, a pause of the pass) rather than
+through a request in the control file, and the pause gives the time the
+pass can go on; §3's abort and resume is amended in place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -231,11 +236,13 @@ futile, and explain itself afterwards.
   it within a configurable timeout, the paused slice is aborted, so an
   overnight run never stalls indefinitely.
 - **Abort and resume.** Ctrl-C, `yizkr scratch abort`, or a request in
-  the control file from the monitor, an anomaly check or pacing stops
-  dispatch for the whole run or for one slice. In-flight calls finish or
-  are cancelled, every completed output stays stored (§2), and re-running
-  the same command resumes. Subscription limits pause a run and never
-  fail a document (#101).
+  the control file from the monitor or an anomaly check stops dispatch
+  for the whole run or for one slice. In-flight calls finish or are
+  cancelled, every completed output stays stored (§2), and re-running the
+  same command resumes. Subscription limits never fail a document: the
+  engine waits for a limit to lift, or pauses the pass with the time it
+  can go on, and paces its calls to leave a reserve of each usage window
+  to development sessions (#101).
 - **The run report** (#124). `yizkr scratch report` works on a completed,
   running or aborted run. Per stage it shows what was computed, reused by
   reason, failed or needs attention, and the key component that forced

@@ -17,6 +17,11 @@ a later replay displaces is released, a failed replay is remembered for
 the pass, and a fork's miss is an event only when the fork is asked (§6,
 §8).
 
+Amended by #101 (2026-09-28): with or without the cache, every call that
+reaches the engine is reported as a `call` event, by a wrapper beneath
+the cache, so the record of a run's engine calls does not depend on the
+cache (§7, §8).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -337,8 +342,9 @@ their prompts, and so their keys, stay the same from run to run.
   afresh while the answers of other epochs stay. A current view stands,
   so an epoch applies to the views a run makes again: combine it with
   `--refresh` to re-sample them.
-- `--no-cache` calls the engine directly: no wrapper, nothing read or
-  written. The run is otherwise the same (§1): a rejected answer the cache
+- `--no-cache` calls the engine directly: no caching wrapper, nothing
+  read or written, and each call still reported as a `call` event (§8).
+  The run is otherwise the same (§1): a rejected answer the cache
   kept is asked for once more in its run (§4), and a unit test also shows
   that a replay from the cache and a run without it give the same views.
   `--refresh` and `--epoch` act through the cache, and are refused with
@@ -362,6 +368,9 @@ again is a `set-aside` event, with its stage, the reason and the name it
 is kept under (§1). The monitor (#195) and the run report
 (#124) count reuse from them, and `yizkr stages state` prints the cache
 counts per role, as totals over every invocation of the run directory.
+Every call that reaches the engine is a `call` event too, with or
+without the cache (#101): a wrapper beneath the cache reports it, so a
+hit is none, and a miss or a replay is one.
 
 ### 9. Seeding: visible equivalences
 
