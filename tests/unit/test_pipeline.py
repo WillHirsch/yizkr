@@ -699,6 +699,7 @@ PROPERTIES = {
     "type_hint": "P11",
     "referred_to_as": "P12",
     "start_time": "P13",
+    "depicts": "P14",
 }
 ITEMS = {
     "human": "Q1",

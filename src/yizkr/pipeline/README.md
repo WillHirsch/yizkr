@@ -281,15 +281,16 @@ that gap:
   and prior run). You review the proposals like an equivalences CSV;
   approved pairs are executed by you — a wiki item merge, or a referenced
   `said to be the same as` statement (identity of two existing items is a
-  contestable judgement, ADR-0007). This is how "the Donald from the census"
-  and "the Donald from the letter" become one item under the default flow:
-  run it **after** a folder ingest to consolidate cross-artifact duplicates.
+  contestable judgement, ADR-0007). This is how "the Gustav from the birth
+  register" and "the Gustav from the naturalisation" become one item under
+  the default flow: run it **after** a folder ingest to consolidate
+  cross-artifact duplicates.
 
 - **`yizkr ingest run --serial`** (ADR-0019) — processes artifacts one at a
   time, most-connective first (a greedy overlap of their entity names, so a
   family tree or GEDCOM leads), each **fully written before the next
-  reconciles**. A later artifact's "Donald" then matches the earlier,
-  already-rich "Donald Bennett Hirsch" at its *own* Gate 1 — resolved once,
+  reconciles**. A later artifact's "Gustav" then matches the earlier,
+  already-rich "Gustav Löbig" at its *own* Gate 1 — resolved once,
   in context, with no duplicate to merge later. This removes the routine
   need for `reconcile-graph`; keep that command for occasional cleanup
   (pre-existing dups, cross-run dups, and within-artifact dups the

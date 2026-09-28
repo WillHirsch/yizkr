@@ -40,6 +40,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -48,6 +49,7 @@ import time
 import uuid
 import weakref
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -722,6 +724,226 @@ def _as_text(output: str | bytes | None) -> str:
     return output or ""
 
 
+# -- tool errors ------------------------------------------------------------
+# A claude-code call's stream reports each tool call the model makes (a
+# tool_use block of an assistant event: its id, the tool's name and its
+# arguments) and each call's result (a tool_result block of a user event:
+# the call's id, is_error when the tool failed, and the error's text as its
+# content). The engine reads that record for the files a call is given, so
+# that a Read that could not open or render one of them is found whatever
+# the model then writes (ClaudeCodeClient.complete).
+
+# the one tool the claude-code engine offers the model
+READ_TOOL = "Read"
+
+# The two kinds of error a Read reports. A request error refuses the form
+# of the request before anything is read: the tool asks for a page range,
+# a shorter one or one within the document, so another Read of the same
+# file that succeeds makes up for it. A file error says that the file
+# could not be found, opened or rendered, and nothing makes up for it.
+REQUEST_ERROR = "request"
+FILE_ERROR = "file"
+# the class of an error no pattern below recognises, taken as a file error
+UNCLASSIFIED = "unclassified"
+
+# The Read tool's errors, recognised by the words of the claude CLI's own
+# messages (as CLI 2.1.237 words them), each with the class a failure is
+# named by and its kind. The first pattern that matches gives the class,
+# so the request errors come first: the message refusing to read a whole
+# PDF also names the PDF renderer. A request error the CLI words
+# differently is unclassified, and fails the call until its words are
+# added here: a stricter reading, never a looser one.
+_READ_ERRORS: tuple[tuple[str, str, re.Pattern[str]], ...] = tuple(
+    (name, kind, re.compile(pattern, re.IGNORECASE))
+    for name, kind, pattern in (
+        # a PDF of more pages than one Read takes, asked for without a range
+        ("too-many-pages", REQUEST_ERROR, r"too many to read at once"),
+        # a range that runs past the document's last page
+        ("page-out-of-range", REQUEST_ERROR, r"is outside the document"),
+        # a range longer than one Read takes
+        (
+            "page-range-too-long",
+            REQUEST_ERROR,
+            r"exceeds maximum of \d+ pages per request",
+        ),
+        ("invalid-page-range", REQUEST_ERROR, r"Invalid pages parameter"),
+        # a whole PDF, which the model cannot take as a document; a range is
+        # rendered page by page instead
+        (
+            "whole-pdf-unsupported",
+            REQUEST_ERROR,
+            r"Reading full PDFs is not supported",
+        ),
+        # a text too long for one Read, which the tool offers in parts
+        ("too-many-tokens", REQUEST_ERROR, r"exceeds maximum allowed tokens"),
+        # arguments that do not fit the tool's schema
+        ("invalid-input", REQUEST_ERROR, r"InputValidationError"),
+        (
+            "pdf-renderer-missing",
+            FILE_ERROR,
+            r"pdftoppm is not installed|requires poppler-utils",
+        ),
+        ("missing", FILE_ERROR, r"File does not exist|No such file|ENOENT"),
+        ("permission-denied", FILE_ERROR, r"permission|EACCES|EPERM"),
+        ("empty", FILE_ERROR, r"\bis empty\b"),
+        ("too-large", FILE_ERROR, r"exceeds maximum allowed size"),
+        ("password-protected", FILE_ERROR, r"password-protected"),
+        # a format the tool does not read (TIFF, say), or a device file
+        (
+            "unsupported-format",
+            FILE_ERROR,
+            r"cannot read binary files|would block or produce infinite output",
+        ),
+        (
+            "corrupt",
+            FILE_ERROR,
+            r"not a valid|corrupted or invalid|reports 0 pages"
+            r"|produced no output pages|not a regular file",
+        ),
+        (
+            "render-failed",
+            FILE_ERROR,
+            r"Could not render PDF|pdftoppm failed|PDF extraction"
+            r"|extracted PDF page",
+        ),
+    )
+)
+
+
+def read_error(message: str) -> tuple[str, str]:
+    """The class and the kind (REQUEST_ERROR or FILE_ERROR) of an error the
+    Read tool reported in `message`."""
+    for name, kind, pattern in _READ_ERRORS:
+        if pattern.search(message):
+            return name, kind
+    return UNCLASSIFIED, FILE_ERROR
+
+
+@dataclass(frozen=True)
+class ToolFailure:
+    """A tool the engine's stream reports failing on one of a call's input
+    files, with nothing making up for it: the tool's name, the class of its
+    error (see read_error) and the input's position among the files the
+    call was given. Nothing of the error's own text is kept: a class says
+    what failed, and the text can name paths."""
+
+    tool: str
+    error: str
+    input: int
+
+
+def describe_tool_failures(failures: Iterable[ToolFailure]) -> str:
+    """Each distinct tool and error class, as "Read (corrupt)"."""
+    return ", ".join(dict.fromkeys(f"{f.tool} ({f.error})" for f in failures))
+
+
+class EngineToolError(RuntimeError):
+    """The engine's stream reports that a tool failed on a file the call
+    gave it (`failures`), with nothing making up for it. The answer is then
+    not a reading of that file, whatever it says, so the call fails rather
+    than return it. `response` is that answer, for a caller that records
+    what it held. The message names the tools and the classes of their
+    errors, never a path, an error's text or the answer."""
+
+    def __init__(self, failures: Sequence[ToolFailure], response: str) -> None:
+        self.failures = tuple(failures)
+        self.response = response
+        super().__init__(
+            "the engine's stream reports a tool failing on the call's "
+            f"input: {describe_tool_failures(self.failures)}"
+        )
+
+
+def _path_forms(path: str | os.PathLike[str]) -> set[str]:
+    """The absolute spellings of a file's path a tool call may use."""
+    return {os.path.abspath(path), str(Path(path).resolve())}
+
+
+def _named_input(arguments: Any, inputs: Mapping[str, int]) -> int | None:
+    """The input a tool call's arguments name by its absolute path, if
+    any."""
+    if not isinstance(arguments, dict):
+        return None
+    for value in arguments.values():
+        if isinstance(value, str) and os.path.isabs(value):
+            for form in (os.path.normpath(value), str(Path(value).resolve())):
+                if form in inputs:
+                    return inputs[form]
+    return None
+
+
+def _result_text(content: Any) -> str:
+    """The text of a tool result's content: a string, or text blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        )
+    return ""
+
+
+def tool_failures(
+    stdout: str, inputs: Sequence[str | os.PathLike[str]]
+) -> list[ToolFailure]:
+    """The Read tool's failures on the files a call was given (`inputs`),
+    as the call's stream-json output `stdout` reports them.
+
+    A Read that names one of the files by its path and whose result is an
+    error is a failure, unless its error is a request error (read_error)
+    and another Read of the same file succeeded: the tool refused the form
+    of one request, and the file was read. Reads of other files, and calls
+    of other tools, are not about the call's input and are left out. Each
+    distinct failure is listed once, in the order of the stream."""
+    targets: dict[str, int] = {}
+    for index, path in enumerate(inputs):
+        for form in _path_forms(path):
+            targets.setdefault(form, index)
+    calls: dict[str, int] = {}
+    outcomes: list[tuple[int, tuple[str, str] | None]] = []
+    for event in _stream_events(stdout):
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            call_id = block.get("id")
+            result_of = block.get("tool_use_id")
+            if (
+                event.get("type") == "assistant"
+                and block.get("type") == "tool_use"
+                and block.get("name") == READ_TOOL
+                and isinstance(call_id, str)
+            ):
+                target = _named_input(block.get("input"), targets)
+                if target is not None:
+                    calls[call_id] = target
+            elif (
+                event.get("type") == "user"
+                and block.get("type") == "tool_result"
+                and isinstance(result_of, str)
+                and result_of in calls
+            ):
+                error = (
+                    read_error(_result_text(block.get("content")))
+                    if block.get("is_error") is True
+                    else None
+                )
+                outcomes.append((calls[result_of], error))
+    read = {target for target, error in outcomes if error is None}
+    failures = [
+        ToolFailure(READ_TOOL, error[0], target)
+        for target, error in outcomes
+        if error is not None
+        and not (error[1] == REQUEST_ERROR and target in read)
+    ]
+    return list(dict.fromkeys(failures))
+
+
 class ClaudeCodeClient:
     """Claude Code CLI client (headless ``claude -p``); subscription billing.
 
@@ -742,6 +964,19 @@ class ClaudeCodeClient:
     (``CliVersionMismatch``) and the call's output is discarded, as it is
     when a call's stream reports offering the model any tool but Read
     (``CliToolsMismatch``).
+
+    **Tool errors.** A one-shot call's stream reports every Read the model
+    makes and its result. When a Read of a file the call was given fails,
+    and no other Read of it makes up for the failure (only a refusal of
+    the request's form, such as a PDF read without a page range, can be
+    made up for; see ``tool_failures``), the model has not read that file,
+    whatever its answer says: the call raises ``EngineToolError``, naming
+    the tool and the class of its error, and returns nothing. It is an
+    error like any other, so the LLM cache keeps nothing for it and the
+    next call asks again (ADR-0032), unless the call was a refresh
+    (``--refresh transcribe``): a refreshed call that raises replaces
+    nothing, so the answer the cache kept and the transcription view stay,
+    and the next run reuses them (yizkr.pipeline.transcription_check).
 
     **Isolated.** Calls load none of the owner's Claude Code settings
     files, MCP servers or skills, inherit only the environment variables
@@ -786,7 +1021,7 @@ class ClaudeCodeClient:
     # commands or write files on behalf of model output. It is the only
     # tool the model is offered (--tools) and the only one approved
     # (--allowedTools).
-    ALLOWED_TOOLS = "Read"
+    ALLOWED_TOOLS = READ_TOOL
     # Appended to the CLI's own system prompt for every call. Denied tool
     # calls still consume turns in -p mode, and a planning tool grabbed
     # mid-extraction can burn the whole cap, so everything is forbidden
@@ -990,12 +1225,16 @@ class ClaudeCodeClient:
         return dict(getattr(self._reports, "value", {}))
 
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
+        """The answer to a one-shot call that reads `image_paths`. Raises
+        EngineToolError when the call's stream reports that the Read tool
+        failed on one of them (tool_failures)."""
         # An explicit fresh session id names the call's transcript, so it
         # is released even when the call fails before its stream reports
         # the id.
         return self._run(
             ["--session-id", str(uuid.uuid4())],
             self.call_text(prompt, image_paths),
+            inputs=image_paths,
         )
 
     def open_conversation(self, prompt: str) -> tuple[str, Any]:
@@ -1090,11 +1329,18 @@ class ClaudeCodeClient:
         self.close()
 
     def _run(
-        self, extra_args: list[str], prompt: str, *, hold: bool = False
+        self,
+        extra_args: list[str],
+        prompt: str,
+        *,
+        hold: bool = False,
+        inputs: Sequence[Path] = (),
     ) -> str:
         """One CLI invocation. Its sessions' transcripts are released when
         it ends, unless ``hold`` keeps a successful call's session open
-        for forking."""
+        for forking. A call whose stream reports the Read tool failing on
+        one of its ``inputs`` raises EngineToolError, after the version
+        and tool checks."""
         self._pin.raise_if_paused()
         check_global_config(self.config_dir)
         self.workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1141,6 +1387,9 @@ class ClaudeCodeClient:
                         "session_id": event.get("session_id"),
                     }
             text = self._assemble_stream(stdout)
+            failures = tool_failures(stdout, inputs) if inputs else []
+            if failures:
+                raise EngineToolError(failures, text)
             if not text.strip():
                 raise RuntimeError("claude CLI returned no output")
             self._reports.value = report

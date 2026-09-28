@@ -32,8 +32,8 @@ from yizkr.pipeline.transcribe import Transcription
 DOC = "\n".join(
     [
         "Family record",  # 1: boilerplate
-        "1. Anna Example  b: 1900 in Springfield.",  # 2
-        "2. Bern Example  b: 1902 in Springfield.",  # 3
+        "Hildegard Löbig, b. 1876 in Fläckfeld.",  # 2
+        "Sebastian Löbig, b. 1862 in Flörburg.",  # 3
         "Dinner is at 7pm.",  # 4: logistics
     ]
 )
@@ -52,7 +52,7 @@ def claim(local_id: str, label: str, year: int) -> dict:
         "value": {"type": "time", "year": year},
         "source": {
             "artifact": {"kind": "qid", "qid": "Q23"},
-            "transcription_excerpt": {"text": f"b: {year}", "language": "en"},
+            "transcription_excerpt": {"text": f"b. {year}", "language": "en"},
         },
         "confidence": 0.9,
     }
@@ -77,18 +77,18 @@ def entity_manifest_json() -> str:
             "entities": [
                 {
                     "id": "e1",
-                    "label": "Anna Example",
-                    "aliases": ["Anna"],
+                    "label": "Hildegard Löbig",
+                    "aliases": ["Hildegard"],
                     "kind": "human",
-                    "summary": "b. 1900 Springfield",
+                    "summary": "b. 1876 Fläckfeld",
                     "mention_lines": [2],
                 },
                 {
                     "id": "e2",
-                    "label": "Bern Example",
+                    "label": "Sebastian Löbig",
                     "aliases": [],
                     "kind": "human",
-                    "summary": "b. 1902 Springfield",
+                    "summary": "b. 1862 Flörburg",
                     "mention_lines": [3],
                 },
             ]
@@ -111,7 +111,7 @@ def segmentation_json() -> str:
                 },
                 {
                     "id": "u2",
-                    "label": "Anna Example entry",
+                    "label": "Hildegard Löbig entry",
                     "kind": "person entry",
                     "first_line": 2,
                     "last_line": 2,
@@ -120,7 +120,7 @@ def segmentation_json() -> str:
                 },
                 {
                     "id": "u3",
-                    "label": "Bern Example entry",
+                    "label": "Sebastian Löbig entry",
                     "kind": "person entry",
                     "first_line": 3,
                     "last_line": 3,
@@ -325,14 +325,16 @@ class TestPacking:
 class TestChunkResponseContract:
     def test_sentinel_required(self):
         with pytest.raises(ChunkIncomplete, match="sentinel"):
-            parse_chunk_response(json.dumps(claim("e1", "Anna Example", 1900)))
+            parse_chunk_response(
+                json.dumps(claim("e1", "Hildegard Löbig", 1876))
+            )
 
     def test_count_mismatch_keeps_claims_and_warns(self):
         # a present sentinel proves completeness; a miscounted
         # claims_emitted keeps every parsed claim and only warns
         warnings: list[str] = []
         claims = parse_chunk_response(
-            ndjson([claim("e1", "Anna Example", 1900)], emitted=5),
+            ndjson([claim("e1", "Hildegard Löbig", 1876)], emitted=5),
             warn=warnings.append,
         )
         assert len(claims) == 1
@@ -340,7 +342,7 @@ class TestChunkResponseContract:
 
     def test_valid_ndjson_parses(self):
         claims = parse_chunk_response(
-            ndjson([claim("e1", "Anna Example", 1900)])
+            ndjson([claim("e1", "Hildegard Löbig", 1876)])
         )
         assert len(claims) == 1
 
@@ -350,13 +352,13 @@ class TestChunkResponseContract:
         # matches the sentinel's claims_emitted
         response = "\n".join(
             [
-                json.dumps(claim("e1", "Anna Example", 1900)),
+                json.dumps(claim("e1", "Hildegard Löbig", 1876)),
                 json.dumps(
                     {
                         "gap": {
                             "subject": "e1",
                             "predicate": "deported to",
-                            "object": "Riga",
+                            "object": "Klurnau",
                             "evidence": "...",
                         }
                     }
@@ -376,7 +378,7 @@ class TestGapChannel:
     def test_gap_line_parsed(self):
         response = "\n".join(
             [
-                json.dumps(claim("e1", "Anna Example", 1900)),
+                json.dumps(claim("e1", "Hildegard Löbig", 1876)),
                 json.dumps(
                     {
                         "gap": {
@@ -404,8 +406,8 @@ class TestGapChannel:
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([claim("e1", "Anna", 1900)]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e1", "Hildegard", 1876)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         ChunkedClaimExtractor(
@@ -443,7 +445,11 @@ class TestGapChannel:
 class TestLocalRefRewrites:
     def raw_claim(self) -> dict:
         return {
-            "subject": {"kind": "local", "local_id": "e1", "label": "Anna"},
+            "subject": {
+                "kind": "local",
+                "local_id": "e1",
+                "label": "Hildegard",
+            },
             "property": "spouse",
             "value": {
                 "type": "item",
@@ -476,13 +482,13 @@ class TestLocalRefRewrites:
 
     def test_normalize_sets_canonical_label_and_kind(self):
         records = {
-            "e1": EntityRecord(id="e1", label="Anna Example", kind="human"),
-            "e2": EntityRecord(id="e2", label="Bern Example", kind="human"),
+            "e1": EntityRecord(id="e1", label="Hildegard Löbig", kind="human"),
+            "e2": EntityRecord(id="e2", label="Sebastian Löbig", kind="human"),
         }
         fixed = normalize_to_manifest(self.raw_claim(), records)
-        assert fixed["subject"]["label"] == "Anna Example"
+        assert fixed["subject"]["label"] == "Hildegard Löbig"
         assert fixed["subject"]["instance_of"] == "human"
-        assert fixed["value"]["value"]["label"] == "Bern Example"
+        assert fixed["value"]["value"]["label"] == "Sebastian Löbig"
         # unknown id untouched: validation rejects it later
         assert fixed["qualifiers"][0]["value"]["value"]["label"] == "X"
 
@@ -494,7 +500,7 @@ class TestLocalRefRewrites:
         raw = self.raw_claim()
         raw["subject"]["local_id"] = {"local_id": "e1"}
         records = {
-            "e1": EntityRecord(id="e1", label="Alma Example", kind="human")
+            "e1": EntityRecord(id="e1", label="Hildegard Löbig", kind="human")
         }
         fixed = normalize_to_manifest(raw, records)  # must not raise
         assert fixed["subject"]["local_id"] == {"local_id": "e1"}
@@ -514,8 +520,10 @@ class TestEntityFirstExtractor:
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),  # open_conversation
-                ndjson([claim("e1", "Anna", 1900)]),  # fork c001 (alias label)
-                ndjson([claim("e2", "Bern Example", 1902)]),  # fork c002
+                ndjson(
+                    [claim("e1", "Hildegard", 1876)]
+                ),  # fork c001 (alias label)
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),  # fork c002
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
@@ -526,13 +534,15 @@ class TestEntityFirstExtractor:
         assert not extractor.used_fallback_manifest
         assert {c.subject.local_id for c in batch.claims} == {"e1", "e2"}
         # alias label normalized to the manifest's canonical form
-        anna = next(c for c in batch.claims if c.subject.local_id == "e1")
-        assert anna.subject.label == "Anna Example"
+        hildegard = next(c for c in batch.claims if c.subject.local_id == "e1")
+        assert hildegard.subject.label == "Hildegard Löbig"
         # the manifest travels with the batch (reconcile needs it)
         assert [entity.id for entity in batch.entities] == ["e1", "e2"]
         # fork prompts carry the assignment, not an inline document
         assert "Full transcription" not in llm.calls[1][1]
-        assert "e1 = Anna Example" in llm.calls[1][1]  # roster in every chunk
+        assert (
+            "e1 = Hildegard Löbig" in llm.calls[1][1]
+        )  # roster in every chunk
         assert extractor.context_mode == "fork"
         assert extractor.attention == []
         coverage = side_output(tmp_path, "coverage.json")
@@ -547,8 +557,8 @@ class TestEntityFirstExtractor:
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([claim("e1", "Anna", 1900)]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e1", "Hildegard", 1876)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         self.extractor(llm, tmp_path, budget=LINE_LENGTH).extract(
@@ -590,8 +600,8 @@ class TestEntityFirstExtractor:
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([claim("e1", "Anna", 1900)]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e1", "Hildegard", 1876)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         logs: list[str] = []
@@ -616,8 +626,8 @@ class TestEntityFirstExtractor:
                 entity_manifest_json(),
                 ndjson(
                     [
-                        claim("e1", "Anna Example", 1900),
-                        claim("e2", "Bern Example", 1902),
+                        claim("e1", "Hildegard Löbig", 1876),
+                        claim("e2", "Sebastian Löbig", 1862),
                     ]
                 ),
             ]
@@ -636,11 +646,11 @@ class TestEntityFirstExtractor:
                 entity_manifest_json(),
                 ndjson(
                     [
-                        claim("e1", "Anna Example", 1900),
+                        claim("e1", "Hildegard Löbig", 1876),
                         claim("e99", "Nobody", 1800),
                     ]
                 ),
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
@@ -654,14 +664,14 @@ class TestEntityFirstExtractor:
         # a missing sentinel is real truncation: retryable, unlike a
         # count mismatch (which keeps its claims — next test)
         truncated = json.dumps(
-            claim("e1", "Anna Example", 1900)
+            claim("e1", "Hildegard Löbig", 1876)
         )  # no sentinel
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
                 truncated,  # c001 attempt 1 (fork) — cut off
-                ndjson([claim("e1", "Anna Example", 1900)]),  # c001 retry
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e1", "Hildegard Löbig", 1876)]),  # c001 retry
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         extractor = self.extractor(
@@ -737,9 +747,9 @@ class TestEntityFirstExtractor:
             [
                 entity_manifest_json(),
                 ndjson(
-                    [claim("e1", "Anna Example", 1900)], emitted=99
+                    [claim("e1", "Hildegard Löbig", 1876)], emitted=99
                 ),  # miscount
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         extractor = self.extractor(
@@ -748,8 +758,8 @@ class TestEntityFirstExtractor:
         batch = extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == []
         assert {c.subject.label for c in batch.claims} == {
-            "Anna Example",
-            "Bern Example",
+            "Hildegard Löbig",
+            "Sebastian Löbig",
         }
         # one fork per chunk — the miscount triggered no retry
         assert sum(1 for method, _ in llm.calls if method == "fork") == 2
@@ -763,7 +773,7 @@ class TestEntityFirstExtractor:
                     "engine down"
                 ),  # c001 attempt 1 (inline fallback)
                 RuntimeError("engine down"),  # c001 attempt 2 (inline)
-                ndjson([claim("e2", "Bern Example", 1902)]),  # c002
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),  # c002
             ]
         )
         extractor = self.extractor(
@@ -771,7 +781,7 @@ class TestEntityFirstExtractor:
         )
         batch = extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c001"]
-        assert [c.subject.label for c in batch.claims] == ["Bern Example"]
+        assert [c.subject.label for c in batch.claims] == ["Sebastian Löbig"]
         assert "engine down" in extractor.failure_reasons["c001"]
         # a partial extraction writes no side outputs
         assert side_output(tmp_path, "coverage.json") is None
@@ -854,11 +864,11 @@ class TestEntityFirstExtractor:
                 entity_manifest_json(),
                 ndjson(
                     [
-                        claim("e1", "Anna Example", 1900),
-                        claim("e1", "Anna", 1900),
+                        claim("e1", "Hildegard Löbig", 1876),
+                        claim("e1", "Hildegard", 1876),
                     ]
                 ),  # alias variant normalizes into an exact duplicate
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
@@ -866,12 +876,12 @@ class TestEntityFirstExtractor:
         assert len(batch.claims) == 2
 
     def test_invalid_claims_land_in_rejects(self, tmp_path):
-        bad = dict(claim("e1", "Anna Example", 1900), property="shoe_size")
+        bad = dict(claim("e1", "Hildegard Löbig", 1876), property="shoe_size")
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([claim("e1", "Anna Example", 1900), bad]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e1", "Hildegard Löbig", 1876), bad]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
@@ -885,13 +895,13 @@ class TestEntityFirstExtractor:
         # regression: a double-nested local_id once crashed the whole
         # merge (unhashable dict, TypeError); it must degrade to a single
         # reject while the document's other claims survive
-        bad = claim("e1", "Alma Example", 1900)
+        bad = claim("e1", "Hildegard Löbig", 1876)
         bad["subject"]["local_id"] = {"local_id": "e1"}
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson([claim("e1", "Anna Example", 1900), bad]),
-                ndjson([claim("e2", "Bern Example", 1902)]),
+                ndjson([claim("e1", "Hildegard Löbig", 1876), bad]),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
@@ -952,8 +962,8 @@ class TestParallelChunks:
         llm = KeyedLlm(
             entity_manifest_json(),
             {
-                "e1": ndjson([claim("e1", "Anna Example", 1900)]),
-                "e2": ndjson([claim("e2", "Bern Example", 1902)]),
+                "e1": ndjson([claim("e1", "Hildegard Löbig", 1876)]),
+                "e2": ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             },
             barrier=threading.Barrier(2, timeout=30),
         )
@@ -990,8 +1000,8 @@ class TestParallelChunks:
         llm = Changing(
             entity_manifest_json(),
             {
-                "e1": ndjson([claim("e1", "Anna Example", 1900)]),
-                "e2": ndjson([claim("e2", "Bern Example", 1902)]),
+                "e1": ndjson([claim("e1", "Hildegard Löbig", 1876)]),
+                "e2": ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             },
         )
         extractor = ChunkedClaimExtractor(
@@ -1007,8 +1017,8 @@ class TestParallelChunks:
             entity_manifest_json(),
             {
                 # truncated (no sentinel) → fails every retry
-                "e1": json.dumps(claim("e1", "Anna Example", 1900)),
-                "e2": ndjson([claim("e2", "Bern Example", 1902)]),
+                "e1": json.dumps(claim("e1", "Hildegard Löbig", 1876)),
+                "e2": ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             },
         )
         # KeyedLlm has no complete(); disable the inline fallback path by
@@ -1022,7 +1032,7 @@ class TestParallelChunks:
         )
         batch = extractor.extract(transcription(), "Q23")
         assert extractor.failed_chunks == ["c001"]
-        assert [c.subject.label for c in batch.claims] == ["Bern Example"]
+        assert [c.subject.label for c in batch.claims] == ["Sebastian Löbig"]
 
 
 class TestFallbackLadder:
@@ -1041,8 +1051,8 @@ class TestFallbackLadder:
                 segmentation_json(),  # line-range segmentation
                 ndjson(
                     [
-                        claim("p1", "Anna Example", 1900),
-                        claim("p2", "Bern Example", 1902),
+                        claim("p1", "Hildegard Löbig", 1876),
+                        claim("p2", "Sebastian Löbig", 1862),
                     ]
                 ),
             ]
@@ -1105,7 +1115,7 @@ class TestFallbackLadder:
                 "no manifest here",
                 "still no manifest",
                 segmentation_json(),
-                ndjson([claim("p1", "Anna Example", 1900)]),
+                ndjson([claim("p1", "Hildegard Löbig", 1876)]),
             ]
         )
         self.extractor(llm, tmp_path, budget=10_000).extract(
@@ -1128,8 +1138,8 @@ class TestFallbackLadder:
                 "junk",  # segmentation 2
                 ndjson(
                     [
-                        claim("p1", "Anna Example", 1900),
-                        claim("p2", "Bern Example", 1902),
+                        claim("p1", "Hildegard Löbig", 1876),
+                        claim("p2", "Sebastian Löbig", 1862),
                     ]
                 ),
             ]

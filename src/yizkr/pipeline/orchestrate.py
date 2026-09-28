@@ -77,6 +77,19 @@ cannot give, and `control.jsonl`, whose pause and abort requests stop
 dispatch. It is runtime state — keep it under var/ or outside the repo.
 Re-running a completed document changes nothing (the writer is
 idempotent).
+
+`run.json` is the run manifest (docs/RUN_MANIFEST.md): what shapes the
+run, as its latest invocation ran it. Each invocation records its mode
+and project stage, the engine, each role's model, effort, epoch and
+refresh, the LLM cache, the corpus folder and its never-ingest list's
+hash, the code version, and its start, end and outcome; each role's
+engine client adds its configuration hash, and the claude CLI its pinned
+version, when it starts, which is inside the first stage that calls it.
+A run refuses a model named by an alias, since neither the manifest nor
+the cache's keys could say which model answered. Without
+`fixed_settings` an invocation may change the settings, as `ingest run`
+allows between runs over one state directory; with it, an invocation
+that asks for other settings than the run recorded is refused.
 """
 
 from __future__ import annotations
@@ -103,11 +116,17 @@ from yizkr.core.corpus import (
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.rundir import (
+    DEVELOPMENT_STAGE,
     RUN_END,
     RUN_INTERRUPTED,
     SET_ASIDE,
     DispatchStopped,
+    ModelAliasRefused,
     RunDir,
+    RunSettingsConflict,
+    code_version,
+    exclusions_record,
+    model_alias,
 )
 from yizkr.pipeline.stages import (
     atomic_write_text,
@@ -150,6 +169,9 @@ DOCUMENT_STAGES = {
 # the roles the engine is called in: each has its own effort and model,
 # and its own epoch and refresh setting in the LLM cache
 MODEL_ROLES = ("transcribe", "extract", "critique")
+# the model a role runs when the run names none of its own; the engines
+# read it themselves (yizkr.pipeline.llm)
+MODEL_VARIABLE = "YIZKR_LLM_MODEL"
 
 # fields of a claim batch that differ between two identical recomputes
 # (when, which commit, which engine build), left out of its content hash
@@ -460,6 +482,12 @@ class Orchestrator:
     it changes the keys of their calls, so a view made again after it is
     asked afresh, while a current view stands (combine it with `refresh`
     to re-sample the views themselves).
+
+    `fixed_settings` makes the run keep the settings its manifest records
+    (rundir.SETTINGS): a later invocation that asks for others, or whose
+    engine applies others, a claude CLI other than the version the run
+    recorded included, is refused (RunSettingsConflict). Without it, as
+    for `ingest run`, each invocation records its own.
     """
 
     def __init__(
@@ -482,9 +510,11 @@ class Orchestrator:
         cache_dir: Path | None = None,
         refresh: Collection[str] = (),
         epochs: Mapping[str, int] | None = None,
+        fixed_settings: bool = False,
         log=print,
     ) -> None:
         self.folder = folder
+        self.fixed_settings = fixed_settings
         # the never-ingest list. run() refuses to start without one:
         # an empty ExclusionList is an explicit configuration, None is none.
         self.exclusions = exclusions
@@ -541,6 +571,10 @@ class Orchestrator:
         self._engines: dict[str, Any] = {}
         self._cache: Any = None
         self._engine_lock = threading.Lock()
+        # the run-scope control request that held a stage in this run, if
+        # one did: the run was stopped even when no document was left to
+        # dispatch after it
+        self._run_held: str | None = None
 
     # -- lazy connections --------------------------------------------------
 
@@ -567,17 +601,75 @@ class Orchestrator:
             return self.extract_effort, self.extract_model
         return self.extract_effort, None
 
+    def _configured_model(self, role: str) -> tuple[str | None, str]:
+        """(model, where it is configured) for a role: its own model (the
+        extraction model), else $YIZKR_LLM_MODEL; None when neither names
+        one and the engine runs a default of its own."""
+        _effort, model = self._engine_settings(role)
+        if model:
+            return model, "the extraction model (--extract-model)"
+        return os.environ.get(MODEL_VARIABLE) or None, f"${MODEL_VARIABLE}"
+
+    def _refuse_model_aliases(self) -> None:
+        """Refuse a run whose configuration names a model by an alias
+        (rundir.model_alias): the engine would choose the model, and
+        neither the run manifest nor the LLM cache's keys could say
+        which."""
+        refused = {}
+        for role in MODEL_ROLES:
+            model, where = self._configured_model(role)
+            if model_alias(model):
+                refused.setdefault((where, model), []).append(role)
+        if refused:
+            raise ModelAliasRefused(
+                "; ".join(
+                    f"{where} names the model {model!r} for "
+                    f"{', '.join(roles)}, an alias"
+                    for (where, model), roles in refused.items()
+                )
+                + ". The engine resolves an alias to a model of its own "
+                "choosing, which neither the run manifest nor the LLM "
+                "cache's keys can name. Configure the full model id "
+                "instead, such as claude-sonnet-5."
+            )
+
     def _engine(self, role: str) -> Any:
         """The run's engine client for a role, started on first use: one
-        per role serves every document, calls in parallel included."""
+        per role serves every document, calls in parallel included. What
+        the client applies (its model, effort and configuration hash) and
+        its CLI version go into the run manifest when it starts; a run
+        that keeps its settings refuses a client that applies others, or
+        runs another CLI version than the run recorded, before any call
+        (RunSettingsConflict). The client is given no version to run: it
+        pins the one installed, so a CLI updated since an earlier
+        invocation is refused as another setting, while one updated
+        during this process pauses the pass (llm.CliVersionMismatch)."""
         with self._engine_lock:
             if role not in self._engines:
                 from yizkr.pipeline.llm import make_client
 
                 effort, model = self._engine_settings(role)
-                self._engines[role] = make_client(
-                    self.llm, effort=effort, model=model
-                )
+                engine = make_client(self.llm, effort=effort, model=model)
+                try:
+                    self.rundir.record_engine(
+                        role,
+                        {
+                            "model": _text(engine, "model"),
+                            "effort": _text(engine, "effort"),
+                            "config_hash": _text(engine, "config_hash"),
+                            "model_identifier": _text(
+                                engine, "model_identifier"
+                            ),
+                        },
+                        cli_version=_text(engine, "cli_version"),
+                        fixed_settings=self.fixed_settings,
+                    )
+                except BaseException:
+                    close = getattr(engine, "close", None)
+                    if callable(close):
+                        close()
+                    raise
+                self._engines[role] = engine
             return self._engines[role]
 
     def _llm_cache(self) -> Any:
@@ -685,8 +777,12 @@ class Orchestrator:
         reason. The reasons are kept in the document's state, for the
         runs that reuse the stage's view."""
         where = {"subject": doc.sha1, "kind": doc.kind, "stage": stage}
-        stopped = self.rundir.control().stopped(stage=stage, kind=doc.kind)
+        control = self.rundir.control()
+        stopped = control.stopped(stage=stage, kind=doc.kind)
         if stopped:
+            if control.stopped():
+                # the whole run is held, not only this stage or kind
+                self._run_held = stopped
             self.rundir.emit("held", reason=stopped, **where)
             raise DispatchStopped(f"{stage} not dispatched: {stopped}")
         self.rundir.emit("started", **where)
@@ -1568,15 +1664,41 @@ class Orchestrator:
                 seen.setdefault(state.content_sha1, Path(state.file).name)
         return seen
 
+    def _roles(self) -> dict[str, dict[str, Any]]:
+        """Each role as the run configures it, for the run manifest; the
+        role's engine client adds what it applies when it starts."""
+        roles = {}
+        for role in MODEL_ROLES:
+            effort, _model = self._engine_settings(role)
+            roles[role] = {
+                "model": self._configured_model(role)[0],
+                "effort": effort,
+                "epoch": self.epochs.get(role, 0),
+                "refresh": role in self.refresh,
+                "client": None,
+            }
+        return roles
+
     def _start_run(self, docs: list[DocumentRun]) -> None:
-        """Record the run's plan and configuration in the run manifest."""
+        """Record the run's plan and what shapes it in the run manifest
+        (docs/RUN_MANIFEST.md): settings and hashes, never a prompt or
+        any document content."""
         self.rundir.start(
+            fixed_settings=self.fixed_settings,
             mode="ingest run",
+            project_stage=DEVELOPMENT_STAGE,
+            engine={"name": self.llm, "cli_version": None},
+            roles=self._roles(),
             cache=(
                 os.path.abspath(self.cache_dir)
                 if self.cache_dir is not None
                 else None
             ),
+            corpus={
+                "folder": os.path.abspath(self.folder),
+                "exclusions": exclusions_record(self.exclusions),
+            },
+            code=code_version(),
             config={
                 "engine": self.llm,
                 "language": self.language,
@@ -1586,6 +1708,10 @@ class Orchestrator:
                 "extract_model": self.extract_model,
                 "refresh": list(self.refresh),
                 "epochs": dict(sorted(self.epochs.items())),
+                "artifact_type": self.artifact_type,
+                "serial": self.serial,
+                "chunk_concurrency": self.chunk_concurrency,
+                "extract_concurrency": self.extract_concurrency,
             },
             documents=[
                 {
@@ -1599,12 +1725,15 @@ class Orchestrator:
         )
 
     def run(self) -> int:
+        from yizkr.pipeline.llm import PassPaused
         from yizkr.pipeline.transcribe import preflight_vision_transcription
 
         # fail closed: extract-all work never starts without a
         # never-ingest list, so a missing list cannot pass as an empty one
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)
+        # only full model ids enter the run manifest and the cache's keys
+        self._refuse_model_aliases()
         docs = self.documents()
         if not docs:
             self.log(f"no supported documents in {self.folder}")
@@ -1626,13 +1755,18 @@ class Orchestrator:
         self.rundir = RunDir(self.state_dir)
         self._start_run(docs)
 
+        # the control request that stopped the run before a document, if
+        # one did, and the run-scope one that held a stage, if one did
+        stopped = None
+        self._run_held = None
         try:
             if self.serial:
                 docs = self._serial_sequence(docs)
             for doc in docs:
                 control = self.rundir.control()
-                if control.stopped():
-                    self.log(f"run stopped ({control.stopped()})")
+                stopped = control.stopped()
+                if stopped:
+                    self.log(f"run stopped ({stopped})")
                     break
                 held = control.stopped(kind=doc.kind)
                 if held:
@@ -1650,6 +1784,17 @@ class Orchestrator:
                     break
         except KeyboardInterrupt:
             self.rundir.emit(RUN_INTERRUPTED)
+            self.rundir.end("interrupted")
+            raise
+        except BaseException as exc:
+            if isinstance(exc, PassPaused):
+                outcome = "paused"
+            elif isinstance(exc, RunSettingsConflict):
+                outcome = "refused"
+            else:
+                outcome = "failed"
+            # only the exception's name: its message may quote a document
+            self.rundir.end(outcome, reason=type(exc).__name__)
             raise
         finally:
             self._close_engines()
@@ -1659,6 +1804,10 @@ class Orchestrator:
         for doc in docs:
             self.log(f"{doc.state.status:32} {doc.source.name}")
             statuses[doc.state.status] = statuses.get(doc.state.status, 0) + 1
+        # a run-scope request stopped the run even when it held a stage of
+        # the last document, with no document left to dispatch after it
+        stopped = stopped or self._run_held
+        self.rundir.end("stopped" if stopped else "finished", reason=stopped)
         self.rundir.emit(RUN_END, statuses=statuses)
         if any(doc.state.status == FAILED for doc in docs):
             return 1
@@ -1733,6 +1882,13 @@ class Orchestrator:
             if entity.extract:
                 keys |= _name_tokens(entity.label, *entity.aliases)
         return keys
+
+
+def _text(engine: Any, name: str) -> str | None:
+    """An engine client's attribute as the run manifest records it: its
+    text, or None when the client has none (or an empty one)."""
+    value = getattr(engine, name, None)
+    return value if isinstance(value, str) and value else None
 
 
 def _set_aside(directory: Path) -> Path:

@@ -37,10 +37,23 @@ reported, so a reuse across such a change can be seen.
 
 Layout under the cache root (runtime state, kept under var/, mode 700):
 
+    <root>/.lock
     <root>/<first two hex digits of the key>/<key>.json
                                             /<key>.rejected-<stamp>.json
                                             /<key>.replaced-<stamp>.json
                                             /<key>.session/<opening>/...
+
+One process at a time uses a cache (ADR-0032 §3). Opening it locks
+``.lock`` exclusively (flock) for the rest of the process and records the
+process there: its id, host, command and start. A second process that
+opens the cache is refused at once (CacheInUse, a pause of its pass) with
+that record. The kernel releases the lock when its holder ends, however
+it ends, so a holder that crashed blocks nothing: the next process to open
+the cache finds the record it left, says so, and records itself in its
+place; a clean exit empties the record. Sessions are why: a resumed
+claude-code session's transcript sits under its original id in the CLI's
+projects folder, which every process shares, so one process's release
+would pull it from under another's forks.
 
 ``<key>.json`` is the one entry a call is served. It holds the key's
 components, the response, its origin (``engine``, or the reason it was
@@ -66,21 +79,31 @@ docs/LLM_CACHE.md describes the cache, its events and the run directory.
 
 from __future__ import annotations
 
+import atexit
+import contextlib
 import copy
+import fcntl
 import json
 import logging
 import os
 import re
 import shutil
+import socket
 import stat
+import sys
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from yizkr.pipeline.llm import ConversationalLlmClient, ConversationChanged
+from yizkr.pipeline.llm import (
+    ConversationalLlmClient,
+    ConversationChanged,
+    PassPaused,
+)
 from yizkr.pipeline.stages import (
     atomic_write_text,
     canonical_json,
@@ -134,6 +157,15 @@ _KEY = re.compile(r"^[0-9a-f]{64}$")
 # how many times a publish moves a newer entry aside before it gives up
 _PUBLISH_TRIES = 20
 
+# the file under a cache root that the process using the cache locks, and
+# records itself in
+LOCK_FILE = ".lock"
+# how many times, a moment apart, a refused process reads the holder's
+# record while it names no running process: a process that has just taken
+# the lock records itself right after
+_HOLDER_READS = 10
+_HOLDER_WAIT = 0.02
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -171,15 +203,190 @@ def call_key(components: Mapping[str, Any]) -> str:
     return sha256_text(canonical_json(dict(components)))
 
 
+# -- one process per cache --------------------------------------------------
+
+
+class CacheInUse(PassPaused):
+    """Another process holds the cache, and one process at a time uses a
+    cache. Like any pause, it ends the pass before its next call, rather
+    than failing each document in turn: the pass can go on once that
+    process has ended, or with another cache."""
+
+    def __init__(self, root: Path, holder: Mapping[str, Any] | None) -> None:
+        self.root = root
+        self.holder = dict(holder or {})
+        super().__init__(
+            f"the LLM cache {root} is in use by "
+            f"{_describe(holder, 'another process, not yet recorded')}: one "
+            "process at a time uses a cache (ADR-0032). Wait for that "
+            "process to end, or give this one another cache folder, or none"
+        )
+
+
+# the caches this process holds: the real path of each root -> (its lock
+# file, open and locked; the process that locked it, which a forked
+# process does not share)
+_held: dict[str, tuple[int, int]] = {}
+_held_lock = threading.Lock()
+
+
+def _hold(root: Path) -> None:
+    """Hold the cache under `root`, a folder that exists, for the rest of
+    this process: lock its lock file exclusively, without waiting, and
+    record this process in it. A cache this process holds already is held
+    once, however many times it is opened. Raises CacheInUse, naming the
+    holder, when another process holds it.
+
+    The lock is flock's, so the kernel releases it when the process ends,
+    however it ends. A process that crashed leaves only its record, which
+    the next holder reports, in a warning, and replaces; a clean exit
+    empties the record (_clear_records)."""
+    real = os.path.realpath(root)
+    path = os.path.join(real, LOCK_FILE)
+    with _held_lock:
+        held = _held.pop(real, None)
+        if held is not None:
+            fd, pid = held
+            if pid == os.getpid() and _same_file(fd, path):
+                _held[real] = held
+                return
+            # a lock a forked process inherited, which is its parent's; or
+            # one on a lock file removed or replaced since, which excludes
+            # no one
+            os.close(fd)
+            if pid == os.getpid():
+                logger.warning(
+                    "the lock file of the LLM cache %s was removed or "
+                    "replaced while this process held it; locking it again",
+                    real,
+                )
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise CacheInUse(Path(real), _holder(fd)) from None
+            stale = _record_text(fd)
+            _write_record(fd)
+        except BaseException:
+            os.close(fd)
+            raise
+        _held[real] = (fd, os.getpid())
+    if stale.strip():
+        logger.warning(
+            "the LLM cache %s was held by %s, which ended without clearing "
+            "its record (a crash or a kill): the lock went with it, and this "
+            "process holds the cache now",
+            real,
+            _describe(_parse_record(stale), "a process it cannot name"),
+        )
+
+
+@atexit.register
+def _clear_records() -> None:
+    """Empty the records of the caches this process holds, as it exits
+    cleanly: a record the next holder finds then marks a process that did
+    not."""
+    with _held_lock:
+        for fd, pid in _held.values():
+            if pid == os.getpid():
+                with contextlib.suppress(OSError):
+                    os.ftruncate(fd, 0)
+
+
+def _same_file(fd: int, path: str) -> bool:
+    """Is the file open as `fd` the one at `path`?"""
+    try:
+        on_disk = os.stat(path)
+    except OSError:
+        return False
+    held = os.fstat(fd)
+    return (on_disk.st_dev, on_disk.st_ino) == (held.st_dev, held.st_ino)
+
+
+def _record_text(fd: int) -> str:
+    return os.pread(fd, 1 << 16, 0).decode("utf-8", errors="replace")
+
+
+def _parse_record(text: str) -> dict | None:
+    try:
+        record = json.loads(text)
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _write_record(fd: int) -> None:
+    """Record this process in the lock file it holds."""
+    record = {
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "command": " ".join(sys.argv)[:500],
+        "since": _now(),
+    }
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, (json.dumps(record) + "\n").encode(), 0)
+
+
+def _holder(fd: int) -> dict | None:
+    """The record of the process that holds the lock file open as `fd`,
+    or None while it has not recorded itself: the file is read again, a
+    moment apart, while it names no running process, since a process that
+    has just taken the lock records itself right after, over the record of
+    the process before it."""
+    for attempt in range(_HOLDER_READS):
+        if attempt:
+            time.sleep(_HOLDER_WAIT)
+        record = _parse_record(_record_text(fd))
+        if record is not None and _running(record):
+            return record
+    return None
+
+
+def _running(record: Mapping[str, Any]) -> bool:
+    """Is the process a record names running? A process on another host
+    is taken to be, since this one cannot see it."""
+    if record.get("host") != socket.gethostname():
+        return True
+    pid = record.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _describe(
+    record: Mapping[str, Any] | None, unknown: str = "a process"
+) -> str:
+    """A lock record, for a message; `unknown` without one."""
+    if not record:
+        return unknown
+    text = f"process {record.get('pid')}"
+    if record.get("host") != socket.gethostname():
+        text += f" on {record.get('host')}"
+    if record.get("command"):
+        text += f" ({record['command']})"
+    if record.get("since"):
+        text += f", since {record['since']}"
+    return text
+
+
 class EngineCache:
     """The entries under one cache root, as one run uses them.
 
     ``refresh`` names roles whose calls go to the engine whatever the
     cache holds, once per key in the run, the new answer displacing the
-    entry; ``epochs`` gives roles an epoch other than 0. Nothing is
-    written until a call is answered. The root and its subdirectories are
-    private to their owner (mode 700, applied to folders that exist
-    already): the entries hold corpus content."""
+    entry; ``epochs`` gives roles an epoch other than 0. Opening a cache
+    makes its root and holds it for the rest of the process (see the
+    module docstring), and raises CacheInUse when another process holds
+    it; no entry is written until a call is answered. The root and its
+    subdirectories are private to their owner (mode 700, applied to
+    folders that exist already): the entries hold corpus content."""
 
     def __init__(
         self,
@@ -202,6 +409,8 @@ class EngineCache:
         # was made on) for conversations whose opening turn was recomputed
         # in this run, until one is opened again
         self._sessions: dict[str, tuple[Any, Any, str]] = {}
+        self._directory(self.root)
+        _hold(self.root)
 
     def epoch(self, role: str) -> int:
         return self.epochs.get(role, 0)
@@ -239,9 +448,24 @@ class EngineCache:
     ) -> None:
         """Hold the live session of a conversation whose opening turn was
         recomputed in this run, with the SHA-256 of the opening answer it
-        was made on, for the next time it is opened."""
+        was made on, for the next time it is opened. A session held for
+        `key` before, which this one displaces and so nothing will take,
+        is released through its engine client's close_conversation."""
         with self._lock:
+            displaced = self._sessions.get(key)
             self._sessions[key] = (client, session, opening)
+        if displaced is None or (
+            displaced[0] is client and displaced[1] == session
+        ):
+            return
+        try:
+            _release(displaced[0], displaced[1])
+        except Exception as exc:  # a leftover, never the caller's failure
+            logger.warning(
+                "could not release the session displaced under %s: %s",
+                key,
+                exc,
+            )
 
     def take_session(self, key: str, client: Any) -> tuple[Any, str] | None:
         """The live session remembered for `key` with this engine client,
@@ -454,6 +678,14 @@ class EngineCache:
         return True
 
 
+def _release(client: Any, session: Any) -> None:
+    """Release `session` through the engine client that holds it, when the
+    engine holds sessions."""
+    close = getattr(client, "close_conversation", None)
+    if callable(close):
+        close(session)
+
+
 def _link(source: Path, target: Path) -> bool:
     """Publish `source` as `target` unless `target` exists: True when it
     was published."""
@@ -489,7 +721,9 @@ class Conversation:
     It carries the keys of its turns (its forks' parent chain), the
     opening turn's key components, prompt and answer with that answer's
     SHA-256, how its session was, or will be, obtained, and the engine's
-    own handle once the engine holds the conversation."""
+    own handle once the engine holds the conversation. `changed` says a
+    replay answered differently, and `failed` why a replay failed: either
+    holds for the rest of the pass, whose forks then fail at once."""
 
     def __init__(
         self,
@@ -507,6 +741,7 @@ class Conversation:
         self.session = session
         self.origin = origin
         self.changed = False
+        self.failed: str | None = None
         self.lock = threading.Lock()
 
 
@@ -527,8 +762,8 @@ class CachingClient:
     extract, critique): the role's epoch is keyed, and its refresh setting
     applies. ``events``, when given, is called with each event's name and
     fields: a hit (with its reason: a key match, or the adoption's
-    reason), a miss (absent, rejected or refresh), a resume, a replay, a
-    rejection or an adoption."""
+    reason), a miss (absent, rejected or refresh) as the engine is asked,
+    a resume, a replay, a rejection or an adoption."""
 
     def __init__(
         self,
@@ -621,23 +856,27 @@ class CachingClient:
         prompt: str,
         image_paths: Sequence[str | os.PathLike[str]] = (),
     ) -> str:
+        def ask(miss: Callable[[], None]) -> tuple[str, dict[str, Any]]:
+            miss()
+            return self.client.complete(prompt, image_paths), {}
+
         return self._serve(
-            COMPLETE,
-            self.components(COMPLETE, prompt, image_paths),
-            lambda: (self.client.complete(prompt, image_paths), {}),
+            COMPLETE, self.components(COMPLETE, prompt, image_paths), ask
         )[0]
 
     def _serve(
         self,
         call: str,
         components: dict[str, Any],
-        ask: Callable[[], tuple[str, dict[str, Any]]],
+        ask: Callable[[Callable[[], None]], tuple[str, dict[str, Any]]],
     ) -> tuple[CachedResponse, bool]:
         """(the answer, whether the engine gave it now): the cached answer
         to a call, or the engine's, which is then stored when it holds
         some text. `ask` makes the call and returns its response with any
-        provenance of its own; whatever it raises propagates, and nothing
-        is stored."""
+        provenance of its own; it is given the function that emits the
+        miss, and calls it just before it asks the engine, so that a call
+        that fails before then (a fork without a session) is no miss.
+        Whatever `ask` raises propagates, and nothing is stored."""
         key = call_key(components)
         refresh = self.cache.refreshing(self.role, key)
         if not refresh:
@@ -657,8 +896,9 @@ class CachingClient:
             reason = REJECTED
         else:
             reason = ABSENT
-        self._emit(MISS, call=call, key=key, reason=reason)
-        response, provenance = ask()
+        response, provenance = ask(
+            lambda: self._emit(MISS, call=call, key=key, reason=reason)
+        )
         if str(response).strip():
             self.cache.put(
                 key, self._entry(key, components, response, provenance)
@@ -765,17 +1005,22 @@ class ConversationalCachingClient(CachingClient):
       when the cache serves it the answer the session was made on; when
       a racing call or replay has stored another answer since, the held
       session is released, and a fork resumes the session kept for the
-      served answer, or replays.
+      served answer, or replays. A replay that fails (the engine raises, or
+      answers with no text) fails the fork, and every later fork of the
+      conversation in the pass, without asking the engine again.
 
     A session, however obtained, serves every later fork of the
     conversation in the run, and never a conversation opened on another
-    answer than the one it holds."""
+    answer than the one it holds. A fork the cache cannot answer is a miss
+    once the engine holds its session, just before the fork is asked: a
+    fork that fails for want of a session is none."""
 
     def open_conversation(self, prompt: str) -> tuple[str, Conversation]:
         components = self.components(OPEN, prompt)
         sessions: list[Any] = []
 
-        def ask() -> tuple[str, dict[str, Any]]:
+        def ask(miss: Callable[[], None]) -> tuple[str, dict[str, Any]]:
+            miss()
             response, session = self.client.open_conversation(prompt)
             sessions.append(session)
             return response, {}
@@ -804,8 +1049,9 @@ class ConversationalCachingClient(CachingClient):
         if not isinstance(handle, Conversation):
             raise TypeError("fork takes a conversation this client opened")
 
-        def ask() -> tuple[str, dict[str, Any]]:
+        def ask(miss: Callable[[], None]) -> tuple[str, dict[str, Any]]:
             session = self._session(handle)
+            miss()
             response = self.client.fork(session, prompt)
             return response, {
                 "session": handle.origin,
@@ -835,11 +1081,18 @@ class ConversationalCachingClient(CachingClient):
         """The engine's handle for `conversation` (see the class
         docstring): resumed exactly, from the session kept for its opening
         answer, or replayed and found the same; a replay that differs
-        raises ConversationChanged."""
+        raises ConversationChanged. A replay that fails raises, and the
+        failure is remembered: the conversation's later forks raise it
+        again at once, rather than asking the engine once per fork."""
         with conversation.lock:
             key = conversation.chain[-1]
             if conversation.changed:
                 raise _changed(key)
+            if conversation.failed is not None:
+                raise RuntimeError(
+                    f"the replay of the conversation opened under {key} "
+                    f"failed earlier in this pass: {conversation.failed}"
+                )
             if conversation.session is not None:
                 return conversation.session
             resume = getattr(self.client, "resume_conversation", None)
@@ -859,10 +1112,15 @@ class ConversationalCachingClient(CachingClient):
                     conversation.origin = RESUMED
                     self._emit(RESUME, call=OPEN, key=key)
                     return session
-            response, session = self.client.open_conversation(
-                conversation.prompt
-            )
+            try:
+                response, session = self.client.open_conversation(
+                    conversation.prompt
+                )
+            except Exception as exc:
+                conversation.failed = f"{type(exc).__name__}: {exc}"
+                raise
             if not str(response).strip():
+                conversation.failed = "it returned no text"
                 self._release(session)
                 raise RuntimeError(
                     f"the replay of the conversation opened under {key} "
@@ -897,9 +1155,7 @@ class ConversationalCachingClient(CachingClient):
             self._release(handle.session)
 
     def _release(self, session: Any) -> None:
-        close = getattr(self.client, "close_conversation", None)
-        if callable(close):
-            close(session)
+        _release(self.client, session)
 
 
 def _changed(key: str) -> ConversationChanged:

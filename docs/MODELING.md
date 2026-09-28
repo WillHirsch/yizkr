@@ -437,12 +437,51 @@ not a signal to grow the schema on.
   statements at **normal rank**, each with its own references.
 - Rank changes are curator actions, logged by MediaWiki history, and
   optional forever.
-- Disagreement *reporting* applies only to properties that can hold at
-  most one true value per subject (dates/places of birth and death,
-  parents, a place's identity properties). Properties that legitimately
-  accumulate values over a life — spouse, residence — are multi-valued
-  by nature: two spouses asserted by one source are remarriages, not a
-  contradiction (their start/end qualifiers tell them apart).
+- Disagreement *reporting* (`disagreement-report.rq`) pairs values that
+  **different artifacts** attribute: two readings of one artifact (a
+  curator's correction beside the machine reading it corrects) are not
+  two sources, and a page fragment counts as its artifact (ADR-0023 §4).
+  A statement with no stated-in source attributes its value to no
+  artifact and takes no part. (The unreferenced-statements report lists
+  only a statement with no reference at all, not one whose references
+  lack a stated-in source.) A deprecated statement is left out; a
+  preferred one is listed like any other, so the report never needs a
+  preference.
+- It compares values only for properties that can hold at most one true
+  value per subject (dates/places of birth and death, parents, birth
+  name, an event's own point in time or start/end time, a place's
+  identity properties). A name compares as text: spellings that differ
+  only in letter case or language tag are one value, listed once with
+  the sources of all of them. Properties that legitimately accumulate
+  values over a life — spouse, residence, married names, nicknames,
+  official names — are multi-valued by nature: two spouses asserted by
+  one source are remarriages, not a contradiction (their start/end
+  qualifiers tell them apart). For one residence place or one spouse,
+  the report compares the start and end times that different sources
+  give ("arrived there in 1938" per one, "in 1939" per another), so a
+  return to a place a person had left shows as a start-time
+  disagreement. A point in time on a residence or spouse statement dates
+  an observation and is not compared, so a marriage dated only by a
+  point in time on the spouse statement is not compared either, though
+  the person timeline lists it as the marriage's date.
+- A date whose span lies inside another's and a place the graph records
+  inside the other differ in resolution, not substance, and are not
+  reported. A date's span is the whole period its precision names (a
+  month, a year, a decade, a century), or the range its source states
+  with `earliest date` and `latest date`, open-ended when only one is
+  given: 1909 and 16 March 1909 agree, as do "between 1938 and 1939"
+  and 3 March 1939, while "the 1930s, between 1930 and 1935" and 1937
+  disagree (rule 5: a stated range is never widened back to its
+  precision). Two dates stored alike are compared through the ranges
+  their statements state: "before 1920" and "after 1920", both stored as
+  1920, disagree, as do 1930 and "the 1930s, between 1934 and 1936";
+  with the same stated ranges, or none, they differ at most in
+  resolution. The earliest and latest dates of a residence or spouse
+  statement may date either end of it, so when either statement carries
+  them, their start and end times are compared as stated, with no
+  difference of resolution suppressed: a start in 1938, on a statement
+  whose earliest and latest dates are 1938 and 1945, and a start on 3
+  March 1938 are listed side by side.
 - **Machine uncertainty is process, not graph data (ADR-0023).** The
   graph records the *source's* vagueness (circa, ranges, precision) but
   never the *machine's* confidence. Contentiousness surfaces ephemerally
