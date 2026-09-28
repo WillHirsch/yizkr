@@ -678,7 +678,8 @@ class SiteBuilder:
         display_date, as HTML, so each is escaped. A date its source gives
         a range for carries a display_date, the date with its range as the
         timeline page shows them; TimelineJS shows any other date from its
-        year, month and day, as far as its precision goes."""
+        year, and from its month and day when its precision reaches
+        them."""
         events = []
         for row in rows:
             date = cell(row, "date")
