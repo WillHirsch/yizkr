@@ -2619,15 +2619,15 @@ def cached_client(
 ) -> LlmClient:
     """``client`` with every call answered from ``cache`` (an `open_cache`
     or `read_cache` result) when the same call was answered before, and
-    otherwise made
-    and kept. ``client`` is an engine's client, or one `observed_client`
-    made of it, whose calls are those that reach the engine: the misses
-    and the replays. ``role`` names the pipeline step whose calls these
-    are (transcribe, extract, critique): its epoch and refresh setting
-    apply. ``events``, when given, receives an event for every hit, miss,
-    resume, replay, rejection and adoption. The wrapper presents the
-    conversational capability exactly when ``client`` has it, and adds
-    `reject` (RejectingLlmClient) and `attempt` (AttemptingLlmClient)."""
+    otherwise made and kept. ``client`` is an engine's client, or one
+    `observed_client` made of it, whose calls are those that reach the
+    engine: the misses and the replays. ``role`` names the pipeline step
+    whose calls these are (transcribe, extract, critique): its epoch and
+    refresh setting apply. ``events``, when given, receives an event for
+    every hit, miss, resume, replay, rejection and adoption. The wrapper
+    presents the conversational capability exactly when ``client`` has
+    it, and adds `reject` (RejectingLlmClient) and `attempt`
+    (AttemptingLlmClient)."""
     from yizkr.pipeline.llmcache import wrap
 
     return wrap(client, cache, role=role, events=events)
