@@ -1373,6 +1373,63 @@ class TestStateDirectories:
         assert self.dirs(orchestrator)["letter.txt"] == "letter"
         assert orchestrator.calls[calls:] == []
 
+    def test_damage_is_reported_against_the_document_it_names(self, tmp_path):
+        """A state.json cut short while, in the same run, a same-stem
+        source that sorts first joins: the damaged bytes still name the
+        document the directory was kept for, so that document fails, and
+        the newcomer gets a directory of its own."""
+        orchestrator = make_run(tmp_path)
+        assert orchestrator.run() == 2
+        state = orchestrator.state_dir / "letter" / "state.json"
+        good = state.read_text()
+        cut = good[: len(good) // 2]
+        assert '/letter.txt"' in cut  # a state is saved with its file first
+        state.write_text(cut)
+        (orchestrator.folder / "letter.md").write_text(
+            "Felix was born in 1867."
+        )
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 1
+        (event,) = this_run(orchestrator, "document-failed")
+        assert event["file"] == "letter.txt"
+        assert event["reason"].startswith("its state.json cannot be read (")
+        assert not any(
+            c.endswith("letter.txt") for c in orchestrator.calls[calls:]
+        )
+        assert "register:letter.md" in orchestrator.calls[calls:]
+        assert self.dirs(orchestrator) == {
+            "letter.md": "letter.md",
+            "letter.txt": "letter",
+        }
+        assert state.read_text() == cut
+
+    @pytest.mark.parametrize(
+        ("damaged", "owner"),
+        [
+            ('{\n  "file": "/docs/letter.txt",\n  "tit', "letter.txt"),
+            ('{\n  "file": "/docs/letter.md",\n  "tit', "letter.md"),
+            ('{\n  "fi', "letter.md"),  # names none: the first by name
+            ('{\n  "file": "/docs/letter.pdf"', "letter.md"),  # one gone
+        ],
+        ids=[
+            "names-the-later",
+            "names-the-first",
+            "names-none",
+            "names-other",
+        ],
+    )
+    def test_a_damaged_directory_goes_to_the_source_it_names(
+        self, tmp_path, damaged, owner
+    ):
+        state_dir = tmp_path / "state"
+        (state_dir / "letter").mkdir(parents=True)
+        (state_dir / "letter" / "state.json").write_text(damaged)
+        sources = [Path("/docs/letter.md"), Path("/docs/letter.txt")]
+        names = directory_names(sources, state_dir)
+        other = next(s for s in sources if s.name != owner)
+        assert names[Path("/docs") / owner] == "letter"
+        assert names[other] == other.name
+
     def test_a_renamed_source_keeps_its_directory_when_its_name_returns(
         self, tmp_path
     ):

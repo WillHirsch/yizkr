@@ -125,7 +125,10 @@ directory: `letter.pdf` keeps `letter` when `letter.jpg` joins it,
 renamed with its bytes unchanged keeps its directory. A source that
 keeps no directory takes one whose `state.json` cannot be read among
 the names it may have, so that damage is reported (below) whether or not
-another source shares the stem. The naming moves nothing aside: a
+another source shares the stem. Where several such sources could take
+it, the one whose file the damaged bytes still name takes it (a state
+is saved with its `file` first, so a cut-short one almost always keeps
+it), and failing that the first by name. The naming moves nothing aside: a
 directory whose source has left stays until a source is given its name,
 and when that source's bytes differ, it sets the directory aside as a
 changed source's (above). No directory takes the name of a run file

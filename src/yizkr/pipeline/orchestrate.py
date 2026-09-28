@@ -432,6 +432,24 @@ def _damaged(directory: Path) -> bool:
     return False
 
 
+def _named(directory: Path, sources: Sequence[Path]) -> list[Path]:
+    """The sources whose file a damaged state.json in `directory` still
+    names: a state is saved with its `file` first, a path that ends with
+    the file's name, so a state cut short almost always keeps it. None
+    when the bytes name none of them or cannot be read."""
+    try:
+        text = (directory / "state.json").read_bytes().decode(errors="replace")
+    except OSError:
+        return []
+    return [
+        source
+        for source in sources
+        if re.search(
+            r'["/\\]' + re.escape(json.dumps(source.name)[1:-1]) + '"', text
+        )
+    ]
+
+
 def directory_names(
     sources: Sequence[Path], state_dir: Path
 ) -> dict[Path, str]:
@@ -441,9 +459,12 @@ def directory_names(
     A source keeps the directory that records it (its state.json names the
     source's file), under any of its candidate names. A source that keeps
     none takes the first of its candidate directories whose state.json
-    cannot be read, unless another source took it first: the run fails
-    that document with the reason (DocumentRun), so a damaged state.json is
-    reported even where sources share the stem it is named after. Any other
+    cannot be read, unless another source took it first; where several
+    sources that keep none could take it, the one whose file the damaged
+    bytes still name takes it (_named), and failing that the first by
+    name. The run fails that document with the reason (DocumentRun), so a
+    damaged state.json is reported, against the document it belongs to,
+    even where sources share the stem it is named after. Any other
     source, in name order, takes its stem's slug, unless another source in
     the folder has a stem with the same slug, ignoring case, or the name is
     taken or is a run file's; then its whole file name's slug, and failing
@@ -464,10 +485,21 @@ def directory_names(
     for source in sources:
         if source in names:
             continue
-        claimed = {name.casefold() for name in names.values()}
         for name in _directory_candidates(source):
-            if name.casefold() not in claimed and _damaged(state_dir / name):
-                names[source] = name
+            claimed = {taken.casefold() for taken in names.values()}
+            if name.casefold() in claimed or not _damaged(state_dir / name):
+                continue
+            # the sources that keep no directory and could take this one,
+            # this source the first of them by name
+            rivals = [
+                other
+                for other in sources
+                if other not in names and name in _directory_candidates(other)
+            ]
+            named = _named(state_dir / name, rivals) if len(rivals) > 1 else []
+            owner = named[0] if named else source
+            names[owner] = name
+            if owner == source:
                 break
     stems = Counter(slugify(source.stem).casefold() for source in sources)
     taken = {name.casefold() for name in names.values()} | _RUN_FILES
