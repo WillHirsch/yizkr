@@ -426,9 +426,13 @@ def summary(run):
 def disagreement(run: Path, summary=None) -> str | None:
     """How the monitor's counts differ from rundir.run_state's for the
     same files (the monitor's split recombined: done and reused are
-    done, running and interrupted are running), or None."""
+    done, running and interrupted are running; a stage named as the
+    monitor shows it), or None."""
     summary = summary or summarise_run(run, NOW)
-    expected = summarise(run_state(RunDir(run)))
+    expected = {
+        monitor._token(stage): counts
+        for stage, counts in summarise(run_state(RunDir(run))).items()
+    }
     seen = {}
     for counts in summary.stages:
         row = {
@@ -543,6 +547,28 @@ class TestAgreement:
         summary = summarise_run(path, NOW)
         assert disagreement(path, summary) is None
         assert summary.stages == []
+
+    @pytest.mark.parametrize("empty", ["sha1", "stage"])
+    def test_a_plan_entry_with_an_empty_name_is_counted(self, tmp_path, empty):
+        """run_state counts every planned stage, whatever its SHA-1 or
+        name; only a stage event with an empty one is left out."""
+        path = tmp_path / "run"
+        rundir = RunDir(path)
+        planned = [{"sha1": CERT, "kind": "media", "stages": EXTRACTED}]
+        if empty == "sha1":
+            planned.append({"sha1": "", "kind": "text", "stages": EXTRACTED})
+        else:
+            planned[0]["stages"] = ["", *EXTRACTED]
+        rundir.start(documents=planned)
+        rundir.emit("started", subject="", kind="text", stage="extraction")
+        rundir.emit("started", subject=CERT, kind="media", stage="")
+        summary = summarise_run(path, NOW)
+        assert disagreement(path, summary) is None
+        pending = {counts.name: counts.pending for counts in summary.stages}
+        if empty == "sha1":
+            assert pending == dict.fromkeys(EXTRACTED, 2)
+        else:
+            assert pending == {"?": 1} | dict.fromkeys(EXTRACTED, 1)
 
     @pytest.mark.parametrize("before", ["started", "failed", "done", "reused"])
     def test_a_held_stage_is_pending_whatever_it_was(self, tmp_path, before):
@@ -1156,8 +1182,10 @@ class TestSlices:
         header = render_terminal(summary, width=200).splitlines()[1]
         assert header.startswith("running; run paused")
 
-    @pytest.mark.parametrize("scope", [["stage:critique"], {"a": 1}])
-    def test_a_request_the_driver_cannot_fold_is_skipped(self, run, scope):
+    @pytest.mark.parametrize("scope", [["stage:critique"], {"a": 1}, 5])
+    def test_a_request_whose_scope_is_no_name_is_skipped(self, run, scope):
+        """The driver's fold fails on a scope it cannot hash, and one it
+        can stops no slice."""
         append(
             run,
             [
@@ -1171,6 +1199,45 @@ class TestSlices:
         assert summary.skipped_lines == 1
         assert summary.slice("stage:critique").state == ACTIVE
         assert summary.slice("stage:extraction").state == PAUSED
+
+    @staticmethod
+    def stopped(summary) -> dict:
+        return {
+            item.scope: item.state
+            for item in summary.slices
+            if item.state != ACTIVE
+        }
+
+    @pytest.mark.parametrize("scope", [False, 0, 0.0, [], {}, ""])
+    def test_an_empty_or_false_scope_is_the_whole_run(self, run, scope):
+        """As the driver's fold has it."""
+        pause = {"at": at(600), "action": "pause", "scope": scope}
+        append(run, [("control.jsonl", pause)])
+        summary = summarise_run(run, NOW)
+        assert summary.skipped_lines == 0
+        assert self.stopped(summary) == RunDir(run).control().scopes
+        assert summary.slice("run").state == PAUSED
+
+    @pytest.mark.parametrize(
+        "scope", [["stage:extraction"], {"a": 1}, [], 5, True]
+    )
+    def test_a_start_marker_clears_every_slice_whatever_its_scope(
+        self, run, scope
+    ):
+        """As the driver's fold has it."""
+        append(
+            run,
+            [
+                ("control.jsonl", {"at": at(600), "action": "abort"}),
+                (
+                    "control.jsonl",
+                    {"at": at(610), "action": "start", "scope": scope},
+                ),
+            ],
+        )
+        summary = summarise_run(run, NOW)
+        assert summary.skipped_lines == 0
+        assert self.stopped(summary) == RunDir(run).control().scopes == {}
 
     def test_the_control_file_is_read_as_the_driver_reads_it(self, run):
         """A request whose reason holds a line separator is one line, for
@@ -2105,6 +2172,44 @@ class TestCommands:
         assert "no document the run knows has this slice" in result.message
         result = handle_command(run, "pause kind media", **known)
         assert "no document" not in result.message
+
+    @pytest.mark.parametrize(
+        ("line", "state"),
+        [
+            # a request the driver's fold cannot take: skipped
+            (
+                json.dumps({"action": "pause", "scope": ["x"]}).encode(),
+                ("now paused", "now active", "now aborted"),
+            ),
+            # not UTF-8: the driver cannot read the file either
+            (
+                b'{"action": "pause", "reason": "Fl\xf6rburg"}',
+                ("its state unknown: the control file cannot be read",) * 3,
+            ),
+        ],
+        ids=["unhashable-scope", "not-utf8"],
+    )
+    def test_commands_after_a_line_the_driver_cannot_fold(
+        self, run, line, state, capsys
+    ):
+        """The view, and the module's command line, say where a slice
+        stands without failing on the control file's other lines."""
+        with open(run / "control.jsonl", "ab") as handle:
+            handle.write(line + b"\n")
+        keys = ScriptedKeys(
+            [":", ":", "q"], lines=["pause stage extraction", "resume"]
+        )
+        code, output = _watch(run, keys)
+        assert code == 0
+        assert f"resume requested for run: {state[1]}" in output
+        result = handle_command(run, "pause stage extraction")
+        assert result.message.endswith(state[0])
+        result = handle_command(run, "abort kind media")
+        assert result.message.endswith(state[2])
+        assert monitor.main(["abort", str(run), "--kind", "text"]) == 0
+        assert capsys.readouterr().out.strip() == (
+            f"abort requested for kind:text: {state[2]}"
+        )
 
     def test_help_quit_and_nonsense(self, run):
         assert handle_command(run, "help").message.startswith("commands:")

@@ -44,7 +44,9 @@ The help, the key hint and every refusal of a command give this grammar.
 A slice may also be written `stage:NAME` or `kind:NAME`; with no slice
 the command is for the whole run. Each command appends one request to
 the run's `control.jsonl` (`rundir.RunDir.request`, `by: "monitor"`), and
-the view says what the slice's state is then. The driver honours the
+the view says what the slice's state is then, read as the slices are
+(What it reads, below), or that it cannot be told while the file is not
+text the driver can read either. The driver honours the
 requests: a pause holds dispatch for its slice until a resume; an abort
 holds it for the rest of the invocation, and invoking the run again
 resumes it (docs/LLM_CACHE.md, `control.jsonl`). Neither loses a
@@ -91,8 +93,10 @@ documents:
 The counts agree with `rundir.run_state`: `done` and `reused` together
 are its done, and `running` with the interrupted ones is its running. A
 SHA-1 planned twice (two files with the same bytes) is one document, with
-the stages both entries plan; a stage event with an empty document or
-stage is left out, as `run_state` leaves it. Under the table, the notes
+the stages both entries plan. A planned document or stage counts even
+when its SHA-1 or name is empty (a stage without a name shows as `?`),
+as `run_state` counts it; a stage event with an empty document or stage
+is left out, as `run_state` leaves it. Under the table, the notes
 break the counts down: reuse by reason, attention and failure labels,
 held and interrupted stages, and the documents that failed in the
 latest invocation.
@@ -193,9 +197,13 @@ place), starts the monitor over: it is read again from its start.
 there before its first event, and parsed again only when its inode, size
 or modification time changes. One that cannot be read (half written by a
 writer that does not replace it whole, say) leaves the last good one
-standing. `control.jsonl` is read as the driver reads it (above). A
-request whose scope is neither a name nor missing, which the driver's
-fold cannot take, is left out and counted as skipped.
+standing. `control.jsonl` is read as the driver reads it (above), and
+so are its requests: a scope that is empty, false or zero is the whole
+run, and a start marker clears every slice whatever its scope. Any other
+request whose scope is set but is not a name (a list, say) is left out
+and counted as skipped: the driver's fold fails on one it cannot hash,
+and one it can stops no slice. A command, typed in the view or given on
+the module's command line, reads the file the same way.
 
 From `events.jsonl` it reads the stage events (`started`, `done`,
 `reused`, `failed`, `held`), the LLM cache's events, the engine's call
@@ -244,8 +252,10 @@ page or the new one; at most every five seconds while events arrive, and
 at least every thirty. It is written only into a run directory that has
 `run.json` and is still there: the monitor makes the `status` directory
 and nothing else, never the run directory, and does not write through a
-`status` that is a symbolic link. A page that cannot be written is
-reported in the view, and the monitor goes on.
+`status` that is a symbolic link. No document's directory takes the name
+`status`: the driver keeps it free beside the run files
+(docs/LLM_CACHE.md). A page that cannot be written is reported in the
+view, and the monitor goes on.
 
 The page lives in the run directory under `var/`, which also holds the
 documents' views, so it is local-only data (docs/AGENT_PROTOCOL.md §6):

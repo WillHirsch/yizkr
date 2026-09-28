@@ -728,13 +728,13 @@ def _plan(manifest: dict) -> _Plan:
         if not isinstance(document, dict):
             continue
         sha1 = document.get("sha1")
-        if not isinstance(sha1, str) or not sha1:
+        if not isinstance(sha1, str):
             continue
         kind = document.get("kind")
         stages = [
             stage
             for stage in _list(document.get("stages"))
-            if isinstance(stage, str) and stage
+            if isinstance(stage, str)
         ]
         if sha1 in plan.documents:
             first_kind, first_stages = plan.documents[sha1]
@@ -755,6 +755,30 @@ def _plan(manifest: dict) -> _Plan:
         if _SHA1.fullmatch(sha1.lower())
     )
     return plan
+
+
+def _foldable(request: dict) -> bool:
+    """Whether the driver's fold of the control file (rundir.fold_control)
+    takes a request as it is written: a start marker, whatever its scope,
+    or a request whose scope is a name or is not set (an empty or false
+    one is the whole run). A request whose scope is set but is not a name
+    is left out: the fold fails on one it cannot hash, and no slice is
+    named by any other."""
+    scope = request.get("scope")
+    return (
+        request.get("action") == "start" or not scope or isinstance(scope, str)
+    )
+
+
+def _control_state(path: Path) -> dict[str, str] | None:
+    """The scopes the control file in the run directory `path` stops, and
+    how: the driver's fold of the requests it takes (_foldable). None when
+    the file is not text the driver can read either."""
+    try:
+        requests = read_jsonl(path / CONTROL)
+    except (OSError, ValueError):
+        return None
+    return fold_control([r for r in requests if _foldable(r)]).scopes
 
 
 def _invocations(manifest: dict) -> list[dict]:
@@ -865,9 +889,9 @@ class RunMonitor:
 
     def _read_control(self) -> bool:
         """control.jsonl, as the driver reads it (rundir's reader), when it
-        has changed; whether it had. A request whose scope is neither a
-        name nor missing is left out and counted as skipped: the driver's
-        fold cannot take it."""
+        has changed; whether it had. A request the driver's fold does not
+        take as it is written (_foldable) is left out and counted as
+        skipped."""
         path = self.path / CONTROL
         try:
             status = os.stat(path)
@@ -883,12 +907,7 @@ class RunMonitor:
             self._control_skipped = 1
             return False
         self._control_key = key
-        kept = [
-            request
-            for request in requests
-            if request.get("scope") is None
-            or isinstance(request.get("scope"), str)
-        ]
+        kept = [request for request in requests if _foldable(request)]
         self._control_skipped = len(requests) - len(kept)
         changed = kept != self._requests
         self._requests = kept
@@ -2320,6 +2339,16 @@ def request(
     )
 
 
+def state_now(path: Path | str, scope: str) -> str:
+    """'now paused', 'now aborted' or 'now active': where `scope` stands
+    once the driver folds the run's control file (_control_state), or
+    that it cannot be told when the file cannot be read."""
+    state = _control_state(Path(path))
+    if state is None:
+        return "its state unknown: the control file cannot be read"
+    return f"now {state.get(scope, ACTIVE)}"
+
+
 def unknown_slice_note(scope: str, summary: Summary) -> str:
     """A note for a request whose slice the run knows of no document in,
     from its plan or its events, which then stops nothing it plans (a
@@ -2421,7 +2450,7 @@ def handle_command(
     scope = command.scope
     if (
         command.action == RESUME
-        and RunDir(path).control().scopes.get(scope) == ABORTED
+        and (_control_state(path) or {}).get(scope) == ABORTED
     ):
         return CommandResult(
             f"{scope} is aborted for the rest of this invocation, and a "
@@ -2447,10 +2476,10 @@ def handle_command(
     except (OSError, ValueError) as exc:
         return CommandResult(f"not requested: {exc}")
     written = entry["scope"]
-    after = RunDir(path).control().scopes.get(written, ACTIVE)
     summary = summary or summarise_run(path)
     message = (
-        f"{command.action} requested for {written}: now {after}"
+        f"{command.action} requested for {written}: "
+        + state_now(path, written)
         + unknown_slice_note(written, summary)
     )
     return CommandResult(message, requested=entry)
@@ -2825,9 +2854,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except (OSError, ValueError) as exc:
         parser.exit(2, f"{parser.prog}: {exc}\n")
-    state = RunDir(args.run).control().scopes.get(entry["scope"], ACTIVE)
+    state = state_now(args.run, entry["scope"])
     note = unknown_slice_note(entry["scope"], summarise_run(args.run))
-    print(f"{args.command} requested for {entry['scope']}: now {state}{note}")
+    print(f"{args.command} requested for {entry['scope']}: {state}{note}")
     return 0
 
 
