@@ -158,9 +158,9 @@ document that resembles a real one by kind and date.
 ## Status
 
 - Earlier examples are gone from the ADRs, MODELING.md and the READMEs
-  (#31), the prompts and source comments (#32) and the tests (#33),
-  except two in `claims.TimeValue`'s docstring. The extraction prompt
-  embeds that docstring, so they change with the next extraction-prompt
-  change (#33).
+  (#31), the prompts and source comments (#32) and the tests (#33). The
+  last two, in `claims.TimeValue`'s docstring, are replaced with #231's
+  extraction-prompt change, since the extraction prompt embeds that
+  docstring.
 - CLAUDE.md and docs/AGENT_PROTOCOL.md state the rule (ADR-0024). The
   token denylist once used to check additions is retired (ADR-0024 §5).
