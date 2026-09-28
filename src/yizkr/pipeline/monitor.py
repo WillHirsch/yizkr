@@ -6,8 +6,9 @@ and whenever the run was started, and follows its files as they grow:
 
     run.json       the plan (each document's SHA-1, kind and stages) and
                    each invocation's start, end and outcome
-    events.jsonl   stage events, the LLM cache's events, and call events
-                   when the engine writes them
+    events.jsonl   stage events, the LLM cache's events, the engine's call
+                   events, documents that failed, and each invocation's
+                   start and close
     alerts.jsonl   anomaly alerts, new or carried
     control.jsonl  pause, resume and abort requests
 
@@ -18,47 +19,72 @@ From them it builds a summary (RunMonitor.summary):
   reason, or the view current, so it stands), need attention or failed;
 * the documents in flight: stages the running invocation has started and
   not finished;
-* engine calls and the cache's answers, the run's elapsed time, and the
-  engine calls the remaining work will take at the run's rates so far;
+* engine calls and the cache's answers, what the engine reports of its
+  calls (outcomes, waits and holds for the subscription), the run's
+  elapsed time, and the engine calls the work still to go will take at
+  the run's rates so far;
+* the documents that failed in the latest invocation, by kind and reason;
 * the latest alerts, tagged new or carried;
 * the state of each slice (the run, each stage, each document kind):
   active, paused or aborted, with the request that stopped it.
 
 It shows the summary in two views: a terminal view refreshed in place,
-in plain ANSI (`watch`), and a status page, status.html in the run
-directory: one self-contained HTML file, with no external assets, that
-reloads itself and is written again as events arrive. Both name a
-document by its SHA-1 prefix and kind only, never by its file name or
-content, and show only the leading label of a failure or attention
-reason (an exception's name, "no claims extracted"), since the details
-can quote a document. The page stays in the run directory under var/,
+in plain ANSI (`watch`), and a status page, index.html in the `status`
+directory of the run directory: one self-contained HTML file, with no
+external assets, that reloads itself and is written again as events
+arrive. `watch` can serve that page, and nothing else, over HTTP
+(serve_status), when asked to.
+
+What the views show never quotes a document. A document appears by its
+SHA-1 prefix and kind only, never by its file name or content. A name
+from the pipeline's vocabulary (a stage, a kind, a check, a status) is
+shown only when it is one: lowercase ASCII words. A failure shows the
+exception it names, and a failure or attention reason otherwise only its
+leading label, when that is such a phrase, since the details can quote a
+document. An alert's value is shown when it is a number or a yes or no,
+and by its type otherwise. Three fields are shown as they are written, cut
+short and cleaned of control characters: a control request's reason, a
+cache hit's reason, and an invocation's reason; their writers never put a
+document's words in them. The page stays in the run directory under var/,
 local-only data like everything there (docs/AGENT_PROTOCOL.md §6).
 
 From the terminal view the operator asks for a pause, resume or abort of
 the run or of one slice; the monitor appends the request to
 control.jsonl through RunDir.request, and the driver honours it. The
-monitor writes nothing else but the status page.
+monitor reads control.jsonl as the driver does (rundir's reader and
+fold), so a slice it shows as stopped is one the driver stops. It writes
+nothing else but the status page.
 
-Reading is incremental: each refresh parses only the lines appended
-since the last one, and a line not yet ended (a writer mid-line) waits
-for the next refresh, so a monitor keeps up with a long run. A file that
-shrinks or is replaced, or a run.json that names another run, starts the
-monitor over. docs/MONITOR.md describes the views, the commands and the
-events the monitor reads.
+Reading is incremental: each refresh parses only the lines appended to
+events.jsonl and alerts.jsonl since the last one, and a line not yet
+ended (a writer mid-line) waits for the next refresh, so a monitor keeps
+up with a long run. A log that shrinks, is replaced, or starts with other
+bytes than it did, or a run.json that names another run, starts the
+monitor over. docs/MONITOR.md describes the views, the commands, the
+events the monitor reads and serving the page.
 """
 
 from __future__ import annotations
 
 import argparse
-import copy
+import builtins
+import contextlib
 import html
+import http.server
 import json
+import math
 import os
 import re
 import select
 import shutil
+import socket
+import socketserver
+import stat
 import sys
+import threading
 import time
+import unicodedata
+from bisect import bisect_left
 from collections import Counter, deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -89,10 +115,13 @@ from yizkr.pipeline.rundir import (
     RunDir,
     fold_control,
 )
-from yizkr.pipeline.stages import atomic_write_text
+from yizkr.pipeline.stages import read_jsonl, staging_path
 
-# the status page, beside the run's other files
-STATUS_PAGE = "status.html"
+# the status page, in a directory of its own in the run directory: that
+# directory is all that may be served (serve_status), never the run
+# directory, which holds the documents' views
+STATUS_DIR = "status"
+STATUS_PAGE = "index.html"
 # how many hex digits of a SHA-1 name a document in the views
 PREFIX = 10
 # how many of the latest alerts the views list
@@ -100,10 +129,16 @@ LATEST_ALERTS = 10
 # what a request the monitor writes says it came from
 MONITOR = "monitor"
 
-# one engine call, when the engine records them: its fields are optional
-# (`role`, `subject`, `kind`, `stage`, `duration_s`, `outcome`, `wait_s`),
-# and a run without call events is shown from the cache's events alone
+# one call that reached the engine, as the engine reports it: `role`,
+# `stage`, `subject`, `kind`, `call`, `outcome` (ok, error, paused or
+# interrupted), `duration_s`, and when there is something to say `wait_s`,
+# `refused`, `held`, `error` (an exception's name), `window` and
+# `resumes_at`; a run without them is shown from the cache's events alone
 CALL = "call"
+# a document that failed, in a stage or outside its stages (a source or a
+# state.json that could not be read, say): `file`, `subject` once the
+# source was read, `kind`, `reason`
+DOCUMENT_FAILED = "document-failed"
 
 # how a completed stage came about: made in the run (by the engine, or by
 # code that calls none), or reused: the view current, or every call the
@@ -111,6 +146,8 @@ CALL = "call"
 MADE = "made"
 VIEW_CURRENT = "view current"
 KEY_MATCH = "key match"
+# what a reason's label shows when its words could be a document's
+OTHER = "other"
 
 # the cache's events that are an engine call: a miss asks the engine, and
 # so does a replay of a conversation's opening turn
@@ -127,148 +164,216 @@ PAGE_RELOAD = 5
 PAGE_MIN_INTERVAL = 5.0
 PAGE_MAX_AGE = 30.0
 
-_HEX = re.compile(r"[0-9a-fA-F]{4,}")
-# an exception class's name, as a failure reason starts with it: ASCII,
-# in CamelCase with two capitals at least, after any module path; a word
-# that is not one ("Error", a name) is not shown
-_EXCEPTION = re.compile(
-    r"(?:[a-z_][a-z0-9_]*\.)*[A-Z][a-z0-9]*[A-Z][A-Za-z0-9]*"
+# the command grammar, as the help, the key hint and the errors give it
+GRAMMAR = "pause|resume|abort [run | stage NAME | kind NAME] [reason]"
+
+# a name from the pipeline's vocabulary: lowercase ASCII words
+_TOKEN = re.compile(r"[a-z0-9][a-z0-9 _.:/+%(),-]*")
+# where a reason's details start, after its leading label
+_DETAIL = re.compile(r"[:;(\[{=\"'<]")
+_SHA1 = re.compile(r"[0-9a-f]{40}")
+_HEX = re.compile(r"[0-9a-f]{4,40}")
+_RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{1,32}")
+_SUFFIX = re.compile(r"\.[a-z0-9]{1,8}")
+# an exception class's name, after any module path: a failure reason
+# starts with one ("RuntimeError: ...")
+_CLASS_NAME = re.compile(r"(?:[a-z_][a-z0-9_]*\.)*(_?[A-Z][A-Za-z0-9]*)")
+# the words exception names end in: a CamelCase name before a colon
+# that ends in none of them ("McLaudler: ...") is no exception's
+_EXCEPTION_ENDINGS = (
+    "Error",
+    "Exception",
+    "Warning",
+    "Exit",
+    "Interrupt",
+    "Failed",
+    "Failure",
+    "Refused",
+    "Rejected",
+    "Conflict",
+    "Mismatch",
+    "Paused",
+    "Stopped",
+    "Reached",
+    "Changed",
+    "InUse",
+    "Incomplete",
+    "Expired",
+    "Timeout",
+    "Environment",
+    "Relative",
+    "Prerequisite",
 )
 
 
-# -- reading append-only logs -------------------------------------------------
+# -- what a view may show -----------------------------------------------------
 
 
-class _Tail:
-    """The complete lines appended to a JSON-lines file since the last read.
-
-    A line not yet ended by its newline is left for the next read, since a
-    writer may be mid-line; a complete line that is not a JSON object is
-    skipped and counted. A file that shrinks, is replaced or disappears
-    after it was read makes `read` report a restart, and the next read
-    starts from its beginning."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.offset = 0
-        self.skipped = 0
-        self._identity: tuple[int, int] | None = None
-
-    def read(self) -> tuple[list[dict], bool]:
-        """(the new entries, whether the file restarted)."""
-        try:
-            stat = os.stat(self.path)
-        except OSError:
-            restarted = self._identity is not None
-            self.offset, self._identity = 0, None
-            return [], restarted
-        identity = (stat.st_dev, stat.st_ino)
-        if self._identity is not None and (
-            identity != self._identity or stat.st_size < self.offset
-        ):
-            self.offset, self._identity = 0, None
-            return [], True
-        self._identity = identity
-        if stat.st_size == self.offset:
-            return [], False
-        entries: list[dict] = []
-        try:
-            with open(self.path, "rb") as handle:
-                handle.seek(self.offset)
-                for line in handle:
-                    if not line.endswith(b"\n"):
-                        break
-                    self.offset += len(line)
-                    if not line.strip():
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except ValueError:
-                        entry = None
-                    if isinstance(entry, dict):
-                        entries.append(entry)
-                    else:
-                        self.skipped += 1
-        except OSError:
-            pass
-        return entries, False
+def _safe(text: str) -> str:
+    """`text` with every control, format, surrogate and separator
+    character but the space made a space: nothing shown can move the
+    cursor, break a line or fail to encode."""
+    if text.isascii() and text.isprintable():
+        return text
+    return "".join(
+        char
+        if char == " " or unicodedata.category(char)[0] not in "CZ"
+        else " "
+        for char in text
+    )
 
 
-def _read_manifest(path: Path) -> dict:
-    try:
-        manifest = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return manifest if isinstance(manifest, dict) else {}
-
-
-def _seconds(value: Any) -> float | None:
-    """A non-negative number of seconds from an event, or None."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value) if value >= 0 else None
-
-
-def _time(value: Any) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-
-# -- labels that never quote a document ---------------------------------------
-
-
-def prefix(subject: Any) -> str:
-    """A document's name in the views: its SHA-1's first PREFIX hex
-    digits; '-' for anything that is not a SHA-1 or a prefix of one."""
-    if isinstance(subject, str) and _HEX.fullmatch(subject):
-        return subject[:PREFIX].lower()
-    return "-"
-
-
-def failure_label(reason: Any) -> str:
-    """The exception's name a failure reason starts with ("RuntimeError:
-    ..." gives "RuntimeError"), or "error" when it starts with anything
-    else: the message after the name can quote a document."""
-    if isinstance(reason, str):
-        head = reason.split(":", 1)[0].strip()
-        if len(head) <= 80 and _EXCEPTION.fullmatch(head):
-            return head
-    return "error"
-
-
-def attention_label(reason: Any) -> str:
-    """An attention reason up to its first colon, where its details start
-    ("entity manifest fell back to line-range segmentation: ..." gives
-    the part before the colon)."""
-    if not isinstance(reason, str):
-        return "?"
-    return _clip(reason.split(":", 1)[0].strip(), 60) or "?"
-
-
-def _value(value: Any) -> str:
-    """An alert's measured value, short."""
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, int):
-        return f"{value:,}"
-    if isinstance(value, float):
-        return f"{value:.3g}"
-    if value is None:
-        return "-"
-    if not isinstance(value, str):
-        value = json.dumps(value, ensure_ascii=False)
-    return _clip(" ".join(value.split()), 32)
+def _clean(text: str) -> str:
+    """_safe, with runs of spaces made one and the ends trimmed."""
+    return " ".join(_safe(text).split())
 
 
 def _clip(text: str, width: int) -> str:
     if len(text) <= width:
         return text
     return text[: max(0, width - 3)] + "..."
+
+
+def _token(value: Any, width: int = 40) -> str:
+    """A name from the pipeline's vocabulary (a stage, a kind, a role, a
+    check, a status, an outcome) as shown: itself when it is lowercase
+    ASCII words, since anything else could be a document's words; "?"
+    otherwise."""
+    if isinstance(value, str):
+        text = _clean(value)
+        if len(text) <= width and _TOKEN.fullmatch(text):
+            return text
+    return "?"
+
+
+def _verbatim(value: Any, width: int = 80) -> str | None:
+    """A field shown as it is written (a control request's reason, a cache
+    hit's reason, an invocation's reason), cleaned and cut short; None
+    when there is nothing to show."""
+    if not isinstance(value, str):
+        return None
+    text = _clean(value)
+    return _clip(text, width) if text else None
+
+
+def reason_label(reason: Any) -> str:
+    """A reason's leading label, before its details start (a colon, a
+    bracket, a quote, an equals sign): shown when it is a phrase of the
+    pipeline's vocabulary ("no claims extracted", "its source cannot be
+    read"), OTHER when it is anything else, since a reason's words can be
+    a document's."""
+    if isinstance(reason, str):
+        head = _DETAIL.split(_clean(reason), maxsplit=1)[0].strip()
+        if head and len(head) <= 60 and _TOKEN.fullmatch(head):
+            return head
+    return OTHER
+
+
+def _exception_name(name: str) -> bool:
+    """Whether `name` is an exception class's: a builtin one, or a CamelCase
+    name that ends in a word exception names end in."""
+    match = _CLASS_NAME.fullmatch(name) if len(name) <= 80 else None
+    if match is None:
+        return False
+    last = match.group(1)
+    builtin = getattr(builtins, last, None)
+    if isinstance(builtin, type) and issubclass(builtin, BaseException):
+        return True
+    return any(
+        last.endswith(ending) and len(last) > len(ending)
+        for ending in _EXCEPTION_ENDINGS
+    )
+
+
+def failure_label(reason: Any) -> str:
+    """How a failure is shown: the exception's name its reason starts with
+    ("RuntimeError: ..." gives "RuntimeError"), else its leading label
+    (reason_label): the message after either can quote a document."""
+    if isinstance(reason, str):
+        head = reason.split(":", 1)[0].strip()
+        if _exception_name(head):
+            return head
+    return reason_label(reason)
+
+
+def _value(value: Any) -> str:
+    """An alert's measured value: a number or a yes or no as it is,
+    anything else by its type alone, since text can quote a document."""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:.3g}" if math.isfinite(value) else str(value)
+    if value is None:
+        return "-"
+    return {str: "(text)", list: "(list)", dict: "(object)"}.get(
+        type(value), "(value)"
+    )
+
+
+def prefix(subject: Any) -> str:
+    """A document's name in the views: the first PREFIX hex digits of its
+    SHA-1; '-' for a subject that is not a whole SHA-1."""
+    if isinstance(subject, str) and _SHA1.fullmatch(subject.lower()):
+        return subject[:PREFIX].lower()
+    return "-"
+
+
+def _match(subject: Any, known: list[str]) -> str | None:
+    """The one SHA-1 an alert's subject names: the subject, when it is a
+    whole SHA-1, or else the only SHA-1 in `known` (sorted) it is a hex
+    prefix of; None for anything else, such as a name made of the letters
+    a to f."""
+    if not isinstance(subject, str):
+        return None
+    text = subject.lower()
+    if _SHA1.fullmatch(text):
+        return text
+    if not _HEX.fullmatch(text):
+        return None
+    index = bisect_left(known, text)
+    if index < len(known) and known[index].startswith(text):
+        after = index + 1
+        if after == len(known) or not known[after].startswith(text):
+            return known[index]
+    return None
+
+
+def _run_id(value: Any) -> str | None:
+    if isinstance(value, str) and _RUN_ID.fullmatch(value):
+        return value
+    return _token(value) if value else None
+
+
+def _suffix(file: Any) -> str:
+    if isinstance(file, str):
+        suffix = Path(file).suffix.lower()
+        if _SUFFIX.fullmatch(suffix):
+            return suffix
+    return "?"
+
+
+def _seconds(value: Any) -> float | None:
+    """A finite, non-negative number of seconds from an event, or None."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number >= 0 else None
+
+
+def _time(value: Any) -> datetime | None:
+    """An event's time in UTC; None for anything that is not one, or lies
+    outside the years a datetime holds once in UTC."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except (ValueError, OverflowError):
+        return None
 
 
 def _duration(seconds: float | None) -> str:
@@ -288,7 +393,12 @@ def _duration(seconds: float | None) -> str:
 
 
 def _stamp(moment: datetime | None, spec: str = "%Y-%m-%d %H:%M UTC") -> str:
-    return moment.astimezone(UTC).strftime(spec) if moment else "?"
+    if moment is None:
+        return "?"
+    try:
+        return moment.astimezone(UTC).strftime(spec)
+    except (OverflowError, ValueError):
+        return "?"
 
 
 def _n(count: int) -> str:
@@ -299,6 +409,77 @@ def _counts(counter: Counter | dict[str, int]) -> str:
     """'3 key match, 1 adopted': the most frequent first."""
     ordered = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
     return ", ".join(f"{_n(count)} {label}" for label, count in ordered)
+
+
+# -- reading append-only logs -------------------------------------------------
+
+
+class _Tail:
+    """The complete lines appended to a JSON-lines file since the last read.
+
+    A line not yet ended by its newline is left for the next read, since a
+    writer may be mid-line; a complete line that is not a JSON object is
+    skipped and counted. A file that shrinks, is replaced, disappears
+    after it was read, or starts with other bytes than the first line it
+    was read with (one deleted and written afresh on a reused inode, or
+    rewritten in place) makes `read` report a restart, and the next read
+    starts from its beginning."""
+
+    # how much of the first line is kept to tell the file by
+    HEAD = 256
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.offset = 0
+        self.skipped = 0
+        self._identity: tuple[int, int] | None = None
+        self._head = b""
+
+    def _restart(self) -> tuple[list[dict], bool]:
+        self.offset, self._identity, self._head = 0, None, b""
+        return [], True
+
+    def read(self) -> tuple[list[dict], bool]:
+        """(the new entries, whether the file restarted)."""
+        try:
+            status = os.stat(self.path)
+        except OSError:
+            if self._identity is None:
+                return [], False
+            return self._restart()
+        identity = (status.st_dev, status.st_ino)
+        if self._identity is not None and (
+            identity != self._identity or status.st_size < self.offset
+        ):
+            return self._restart()
+        self._identity = identity
+        entries: list[dict] = []
+        try:
+            with open(self.path, "rb") as handle:
+                if self._head and handle.read(len(self._head)) != self._head:
+                    return self._restart()
+                if status.st_size == self.offset:
+                    return [], False
+                handle.seek(self.offset)
+                for line in handle:
+                    if not line.endswith(b"\n"):
+                        break
+                    if not self.offset:
+                        self._head = line[: self.HEAD]
+                    self.offset += len(line)
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line.decode("utf-8"))
+                    except ValueError:
+                        entry = None
+                    if isinstance(entry, dict):
+                        entries.append(entry)
+                    else:
+                        self.skipped += 1
+        except OSError:
+            pass
+        return entries, False
 
 
 # -- the summary --------------------------------------------------------------
@@ -343,7 +524,7 @@ class StageCounts:
 @dataclass(frozen=True)
 class InFlight:
     sha1: str
-    kind: str | None
+    kind: str
     stage: str
     since: datetime | None
 
@@ -355,14 +536,14 @@ class AlertLine:
     stage: str
     check: str
     subject: str
-    kind: str | None
+    kind: str
     value: str
 
 
 @dataclass(frozen=True)
 class SliceState:
     """A slice ('run', 'stage:<name>' or 'kind:<name>') and whether the
-    control file stops it, with the request that did."""
+    control file stops it, since when, and who stopped it and why."""
 
     scope: str
     state: str
@@ -372,11 +553,21 @@ class SliceState:
 
 
 @dataclass
+class CallPause:
+    """The latest invocation's pause for the subscription, as the engine's
+    call event gives it."""
+
+    held: str
+    window: str | None
+    resumes_at: datetime | None
+
+
+@dataclass
 class CallCounts:
     """What the run's calls came to. `engine` and `cached` count the LLM
     cache's events: a miss or a replay asked the engine, a hit answered
-    from the cache. `logged` and the rest count call events, where the
-    engine writes them."""
+    from the cache. `logged` and the rest count the engine's call events,
+    where it writes them."""
 
     engine: int = 0
     cached: int = 0
@@ -393,6 +584,10 @@ class CallCounts:
     outcomes: Counter = field(default_factory=Counter)
     waited: float = 0.0
     waits: int = 0
+    refused: int = 0
+    holds: Counter = field(default_factory=Counter)
+    errors: Counter = field(default_factory=Counter)
+    pause: CallPause | None = None
 
     @property
     def to_engine(self) -> int | None:
@@ -405,6 +600,9 @@ class CallCounts:
 
 @dataclass
 class Summary:
+    """Where a run stands, ready to show: every name, label and value in
+    it is as the views show it."""
+
     path: Path
     now: datetime
     found: bool = False
@@ -413,6 +611,7 @@ class Summary:
     project_stage: str | None = None
     state: str = "waiting"
     reason: str | None = None
+    statuses: Counter = field(default_factory=Counter)
     invocations: int = 0
     started_at: datetime | None = None
     elapsed: float | None = None
@@ -423,12 +622,19 @@ class Summary:
     stages: list[StageCounts] = field(default_factory=list)
     in_flight: list[InFlight] = field(default_factory=list)
     calls: CallCounts = field(default_factory=CallCounts)
+    remaining_work: int = 0
     remaining_calls: int | None = None
     unrated: list[str] = field(default_factory=list)
+    failed_documents: int = 0
+    unread_documents: int = 0
+    failed_by_kind: Counter = field(default_factory=Counter)
+    failed_by_reason: Counter = field(default_factory=Counter)
     alerts: list[AlertLine] = field(default_factory=list)
     alert_counts: Counter = field(default_factory=Counter)
     alert_checks: Counter = field(default_factory=Counter)
     slices: list[SliceState] = field(default_factory=list)
+    # the slices the plan and the events know, as requests name them
+    known_scopes: set[str] = field(default_factory=set)
     set_aside: int = 0
     skipped_lines: int = 0
 
@@ -462,16 +668,16 @@ class _Attempt:
     # the calls of the latest attempt: engine calls (the cache's misses
     # and replays), the cache's answers by reason, and call events
     engine: int = 0
-    hits: Counter = field(default_factory=Counter)
+    hits: Counter | None = None
     calls: int = 0
-    # every attempt that ended (done, reused or failed), and their calls:
-    # what the estimate of the calls to go is made from
+    # the attempts that ended (done or failed; a view that stood makes no
+    # call and is left out), and their calls: the rates of the estimate
     ended: int = 0
     ended_engine: int = 0
     ended_calls: int = 0
 
     def begin(self) -> None:
-        self.engine, self.hits, self.calls = 0, Counter(), 0
+        self.engine, self.hits, self.calls = 0, None, 0
 
     def end(self) -> None:
         self.ended += 1
@@ -484,7 +690,13 @@ class _Attempt:
         answered with."""
         if self.engine or not self.hits:
             return MADE
-        return " + ".join(sorted(self.hits))
+        return " + ".join(
+            sorted(_verbatim(reason, 40) or "?" for reason in self.hits)
+        )
+
+
+# the state of a planned stage no event has named
+_NOT_STARTED = _Attempt()
 
 
 @dataclass
@@ -494,6 +706,68 @@ class _Rate:
     attempts: int = 0
     engine: int = 0
     calls: int = 0
+
+
+@dataclass
+class _Plan:
+    """What run.json plans: each document's kind and stages (a SHA-1
+    planned twice, for two files with the same bytes, has the stages of
+    both, and the first one's kind), the stages in the order they come,
+    and the planned SHA-1s, sorted."""
+
+    documents: dict[str, tuple[str | None, list[str]]] = field(
+        default_factory=dict
+    )
+    order: list[str] = field(default_factory=list)
+    known: list[str] = field(default_factory=list)
+
+
+def _list(value: Any) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _plan(manifest: dict) -> _Plan:
+    plan = _Plan()
+    order: dict[str, None] = {}
+    for document in _list(manifest.get("documents")):
+        if not isinstance(document, dict):
+            continue
+        sha1 = document.get("sha1")
+        if not isinstance(sha1, str) or not sha1:
+            continue
+        kind = document.get("kind")
+        stages = [
+            stage
+            for stage in _list(document.get("stages"))
+            if isinstance(stage, str) and stage
+        ]
+        if sha1 in plan.documents:
+            first_kind, first_stages = plan.documents[sha1]
+            kind = first_kind
+            stages = first_stages + [
+                stage for stage in stages if stage not in first_stages
+            ]
+        plan.documents[sha1] = (
+            kind if isinstance(kind, str) else None,
+            stages,
+        )
+        for stage in stages:
+            order.setdefault(stage)
+    plan.order = list(order)
+    plan.known = sorted(
+        sha1.lower()
+        for sha1 in plan.documents
+        if _SHA1.fullmatch(sha1.lower())
+    )
+    return plan
+
+
+def _invocations(manifest: dict) -> list[dict]:
+    return [
+        entry
+        for entry in _list(manifest.get("invocations"))
+        if isinstance(entry, dict)
+    ]
 
 
 class RunMonitor:
@@ -510,23 +784,37 @@ class RunMonitor:
     def _reset(self) -> None:
         self._events = _Tail(self.path / EVENTS)
         self._alerts = _Tail(self.path / ALERTS)
-        self._control = _Tail(self.path / CONTROL)
+        self._control_key: tuple | None = None
+        self._requests: list[dict] = []
+        self._control_skipped = 0
+        self._manifest_key: tuple | None = None
         self._manifest: dict = {}
+        self._plan = _Plan()
         self._attempts: dict[tuple[str, str], _Attempt] = {}
         # the stage each document is in, while one runs: the cache's
         # events name the document and the role, not the stage
         self._current: dict[str, str] = {}
         self._stages_seen: dict[str, None] = {}
         self._kinds: dict[str, str] = {}
+        # SHA-1s the events name that the plan does not, and the sorted
+        # list of every SHA-1 known, made again when either changes
+        self._strays: set[str] = set()
+        self._known: list[str] | None = None
         self._stage_calls: dict[str, Counter] = {}
         self._calls = CallCounts()
+        self._pause_invocation: str | None = None
         self._latest_alerts: deque[dict] = deque(maxlen=LATEST_ALERTS)
         self._alert_counts: Counter = Counter()
         self._alert_checks: Counter = Counter()
-        self._requests: list[dict] = []
         self._last_event_at: datetime | None = None
         self._last_at: dict[str, datetime] = {}
         self._marker: str | None = None
+        self._marker_invocation: str | None = None
+        # each invocation's closing event, and the documents that failed
+        # in it, by file (else SHA-1)
+        self._closing: dict[str | None, dict] = {}
+        self._failures: dict[str | None, dict[Any, tuple]] = {}
+        self._failure_invocation: str | None = None
         self._set_aside = 0
 
     def refresh(self) -> bool:
@@ -537,30 +825,82 @@ class RunMonitor:
         for tail, fold in (
             (self._events, self._fold_event),
             (self._alerts, self._fold_alert),
-            (self._control, self._requests.append),
         ):
             entries, restarted = tail.read()
             if restarted:
-                self._reset()
-                self.refresh()
-                self.version += 1
-                return True
+                return self._start_over()
             for entry in entries:
                 fold(entry)
             changed = changed or bool(entries)
-        manifest = _read_manifest(self.path)
-        known, named = self._manifest.get("run_id"), manifest.get("run_id")
-        if known and named and known != named:
-            # another run in the directory: start over
-            self._reset()
-            self.refresh()
-            self.version += 1
-            return True
-        if manifest != self._manifest:
+        changed = self._read_control() or changed
+        manifest = self._read_manifest()
+        if manifest is not None:
+            known, named = self._manifest.get("run_id"), manifest.get("run_id")
+            if known and named and known != named:
+                # another run in the directory
+                return self._start_over()
             self._manifest = manifest
+            self._plan = _plan(manifest)
+            self._known = None
             changed = True
         if changed:
             self.version += 1
+        return changed
+
+    def _start_over(self) -> bool:
+        self._reset()
+        self.refresh()
+        self.version += 1
+        return True
+
+    def _read_manifest(self) -> dict | None:
+        """run.json when it has changed since the last read, else None. It
+        is parsed again only when its inode, size or modification time has
+        changed; one that cannot be read (half written by a writer that
+        does not replace it whole, say) or is gone leaves the last good
+        one standing, and is tried again at the next refresh."""
+        try:
+            status = os.stat(self.path / MANIFEST)
+        except OSError:
+            return None
+        key = (status.st_ino, status.st_size, status.st_mtime_ns)
+        if key == self._manifest_key:
+            return None
+        manifest = RunDir(self.path).manifest()
+        if not isinstance(manifest, dict) or not manifest:
+            return None
+        self._manifest_key = key
+        return manifest
+
+    def _read_control(self) -> bool:
+        """control.jsonl, as the driver reads it (rundir's reader), when it
+        has changed; whether it had. A request whose scope is neither a
+        name nor missing is left out and counted as skipped: the driver's
+        fold cannot take it."""
+        path = self.path / CONTROL
+        try:
+            status = os.stat(path)
+            key = (status.st_ino, status.st_size, status.st_mtime_ns)
+        except OSError:
+            key = None
+        if key == self._control_key:
+            return False
+        try:
+            requests = read_jsonl(path) if key is not None else []
+        except (OSError, ValueError):
+            # not text the driver can read either: tried again next time
+            self._control_skipped = 1
+            return False
+        self._control_key = key
+        kept = [
+            request
+            for request in requests
+            if request.get("scope") is None
+            or isinstance(request.get("scope"), str)
+        ]
+        self._control_skipped = len(requests) - len(kept)
+        changed = kept != self._requests
+        self._requests = kept
         return changed
 
     # -- folding the logs --------------------------------------------------
@@ -568,41 +908,59 @@ class RunMonitor:
     def _fold_event(self, event: dict) -> None:
         name = event.get("event")
         at = _time(event.get("at"))
+        invocation = event.get("invocation")
+        invocation = invocation if isinstance(invocation, str) else None
         if at is not None:
             if self._last_event_at is None or at > self._last_event_at:
                 self._last_event_at = at
-            invocation = event.get("invocation")
-            if isinstance(invocation, str):
+            if invocation is not None:
                 self._last_at[invocation] = at
+        if not isinstance(name, str):
+            return
         if name in STAGE_EVENTS:
-            self._fold_stage(event, name, at)
+            self._fold_stage(event, name, at, invocation)
         elif name in CACHE_EVENTS:
             self._fold_cache(event, name)
         elif name == CALL:
-            self._fold_call(event)
+            self._fold_call(event, invocation)
+        elif name == DOCUMENT_FAILED:
+            self._fold_failure(event, invocation)
         elif name in (RUN_START, RUN_END, RUN_INTERRUPTED):
-            self._marker = name
+            self._marker, self._marker_invocation = name, invocation
             if name == RUN_START:
                 self._current.clear()
+            else:
+                self._closing[invocation] = event
         elif name == SET_ASIDE:
             self._set_aside += 1
 
-    def _fold_stage(self, event: dict, name: str, at: datetime | None) -> None:
+    def _fold_stage(
+        self,
+        event: dict,
+        name: str,
+        at: datetime | None,
+        invocation: str | None,
+    ) -> None:
         subject, stage = event.get("subject"), event.get("stage")
-        if not isinstance(subject, str) or not isinstance(stage, str):
+        if not (isinstance(subject, str) and subject):
             return
-        self._stages_seen.setdefault(stage)
-        kind = event.get("kind")
-        if isinstance(kind, str):
-            self._kinds.setdefault(subject, kind)
-        attempt = self._attempts.setdefault((subject, stage), _Attempt())
+        if not (isinstance(stage, str) and stage):
+            return
+        if stage not in self._stages_seen:
+            self._stages_seen[stage] = None
+        if subject not in self._kinds:
+            kind = event.get("kind")
+            if isinstance(kind, str):
+                self._kinds[subject] = kind
+        if subject not in self._plan.documents and subject not in self._strays:
+            self._strays.add(subject)
+            self._known = None
+        attempt = self._attempts.get((subject, stage))
+        if attempt is None:
+            attempt = self._attempts[(subject, stage)] = _Attempt()
         if name == "started":
             attempt.status, attempt.since = RUNNING, at
-            invocation = event.get("invocation")
-            attempt.invocation = (
-                invocation if isinstance(invocation, str) else None
-            )
-            attempt.held = False
+            attempt.invocation, attempt.held = invocation, False
             attempt.begin()
             self._current[subject] = stage
             return
@@ -615,20 +973,21 @@ class RunMonitor:
         if name == "failed":
             attempt.status = FAILED
             attempt.failure = failure_label(event.get("reason"))
+            attempt.end()
+            return
+        if name == "reused":
+            attempt.begin()
+            attempt.how = VIEW_CURRENT
         else:
-            if name == "reused":
-                attempt.begin()
-                attempt.how = VIEW_CURRENT
-            else:
-                attempt.how = attempt.reuse_reason()
-            reasons = event.get("attention") or []
-            if isinstance(reasons, str):
-                reasons = [reasons]
-            attempt.attention = tuple(
-                attention_label(reason) for reason in reasons
-            )
-            attempt.status = NEEDS_ATTENTION if attempt.attention else DONE
-        attempt.end()
+            attempt.how = attempt.reuse_reason()
+            attempt.end()
+        reasons = event.get("attention")
+        if not reasons:
+            reasons = []
+        elif not isinstance(reasons, list):
+            reasons = [reasons]
+        attempt.attention = tuple(reason_label(reason) for reason in reasons)
+        attempt.status = NEEDS_ATTENTION if attempt.attention else DONE
 
     def _fold_cache(self, event: dict, name: str) -> None:
         calls = self._calls
@@ -637,7 +996,9 @@ class RunMonitor:
         role = role if isinstance(role, str) and role else "?"
         reason = event.get("reason")
         reason = reason if isinstance(reason, str) and reason else None
-        per_role = calls.roles.setdefault(role, Counter())
+        per_role = calls.roles.get(role)
+        if per_role is None:
+            per_role = calls.roles[role] = Counter()
         if name in _ENGINE_EVENTS:
             calls.engine += 1
             per_role["engine"] += 1
@@ -653,22 +1014,34 @@ class RunMonitor:
             calls.adopted += 1
         if name == "cache-replay":
             calls.replayed += 1
+        attempt, stage = self._in_flight(event)
+        if attempt is None:
+            return
+        stage_calls = self._stage_calls.get(stage)
+        if stage_calls is None:
+            stage_calls = self._stage_calls[stage] = Counter()
+        if name in _ENGINE_EVENTS:
+            attempt.engine += 1
+            stage_calls["engine"] += 1
+        elif name == "cache-hit":
+            if attempt.hits is None:
+                attempt.hits = Counter()
+            attempt.hits[reason or KEY_MATCH] += 1
+            stage_calls["cached"] += 1
+
+    def _in_flight(self, event: dict) -> tuple[_Attempt | None, str | None]:
+        """The attempt of the stage the event's document is in, if one is
+        running: an event about a call names the document, not the
+        stage, and a document's stages run one at a time."""
         subject = event.get("subject")
         stage = (
             self._current.get(subject) if isinstance(subject, str) else None
         )
         if stage is None:
-            return
-        attempt = self._attempts[(subject, stage)]
-        stage_calls = self._stage_calls.setdefault(stage, Counter())
-        if name in _ENGINE_EVENTS:
-            attempt.engine += 1
-            stage_calls["engine"] += 1
-        elif name == "cache-hit":
-            attempt.hits[reason or KEY_MATCH] += 1
-            stage_calls["cached"] += 1
+            return None, None
+        return self._attempts[(subject, stage)], stage
 
-    def _fold_call(self, event: dict) -> None:
+    def _fold_call(self, event: dict, invocation: str | None) -> None:
         calls = self._calls
         calls.logged += 1
         duration = _seconds(event.get("duration_s"))
@@ -681,114 +1054,140 @@ class RunMonitor:
         if wait:
             calls.waited += wait
             calls.waits += 1
-        subject = event.get("subject")
-        stage = (
-            self._current.get(subject) if isinstance(subject, str) else None
+        refused = event.get("refused")
+        if isinstance(refused, int) and not isinstance(refused, bool):
+            calls.refused += max(0, refused)
+        held = event.get("held")
+        if isinstance(held, str) and held:
+            calls.holds[held] += 1
+        error = event.get("error")
+        if isinstance(error, str) and error:
+            calls.errors[failure_label(error)] += 1
+        if outcome == "paused":
+            calls.pause = CallPause(
+                held=_token(held) if held else "?",
+                window=_token(event.get("window"))
+                if event.get("window")
+                else None,
+                resumes_at=_time(event.get("resumes_at")),
+            )
+            self._pause_invocation = invocation
+        attempt, _stage = self._in_flight(event)
+        if attempt is not None:
+            attempt.calls += 1
+
+    def _fold_failure(self, event: dict, invocation: str | None) -> None:
+        file, subject = event.get("file"), event.get("subject")
+        if isinstance(file, str) and file:
+            key: Any = file
+        elif isinstance(subject, str) and subject:
+            key = subject
+        else:
+            key = object()
+        failures = self._failures.get(invocation)
+        if failures is None:
+            failures = self._failures[invocation] = {}
+        failures[key] = (
+            _token(event.get("kind")),
+            _suffix(file),
+            failure_label(event.get("reason")),
+            isinstance(subject, str) and bool(subject),
         )
-        if stage is not None:
-            self._attempts[(subject, stage)].calls += 1
+        self._failure_invocation = invocation
 
     def _fold_alert(self, alert: dict) -> None:
         self._latest_alerts.append(alert)
-        status = alert.get("status")
-        self._alert_counts[status if isinstance(status, str) else "?"] += 1
-        check = alert.get("check")
-        self._alert_checks[check if isinstance(check, str) else "?"] += 1
-
-    # -- the plan -----------------------------------------------------------
-
-    def _plan(self) -> dict[str, tuple[str | None, list[str]]]:
-        """SHA-1 -> (kind, stages) of each planned document; a SHA-1
-        planned twice (two files with the same bytes) counts once."""
-        plan: dict[str, tuple[str | None, list[str]]] = {}
-        for document in self._manifest.get("documents") or []:
-            if not isinstance(document, dict):
-                continue
-            sha1 = document.get("sha1")
-            if not isinstance(sha1, str) or sha1 in plan:
-                continue
-            kind = document.get("kind")
-            stages = [
-                stage
-                for stage in document.get("stages") or []
-                if isinstance(stage, str)
-            ]
-            plan[sha1] = (kind if isinstance(kind, str) else None, stages)
-        return plan
+        self._alert_counts[_token(alert.get("status"))] += 1
+        self._alert_checks[_token(alert.get("check"))] += 1
 
     # -- the summary --------------------------------------------------------
+
+    def _known_sha1s(self) -> list[str]:
+        if self._known is None:
+            strays = {
+                sha1.lower()
+                for sha1 in self._strays
+                if _SHA1.fullmatch(sha1.lower())
+            }
+            self._known = sorted(strays.union(self._plan.known))
+        return self._known
+
+    def _kind(self, sha1: str) -> str | None:
+        planned = self._plan.documents.get(sha1)
+        if planned is not None and planned[0] is not None:
+            return planned[0]
+        return self._kinds.get(sha1)
 
     def summary(self, now: datetime | None = None) -> Summary:
         """Where the run stands at `now` (the current time by default),
         from what the refreshes have read."""
         now = now or datetime.now(UTC)
-        manifest = self._manifest
+        manifest, plan = self._manifest, self._plan
         summary = Summary(path=self.path, now=now)
         summary.found = bool(manifest) or self._events.offset > 0
         summary.skipped_lines = (
-            self._events.skipped + self._alerts.skipped + self._control.skipped
+            self._events.skipped + self._alerts.skipped + self._control_skipped
         )
         summary.last_event_at = self._last_event_at
         summary.set_aside = self._set_aside
-        summary.calls = copy.deepcopy(self._calls)
         if not summary.found:
             return summary
-        summary.run_id = _string(manifest.get("run_id"))
-        summary.mode = _string(manifest.get("mode"))
-        summary.project_stage = _string(manifest.get("project_stage"))
-        self._invocations(summary, now)
+        summary.run_id = _run_id(manifest.get("run_id"))
+        mode, project_stage = (
+            manifest.get("mode"),
+            manifest.get("project_stage"),
+        )
+        summary.mode = _token(mode) if mode else None
+        summary.project_stage = (
+            _token(project_stage) if project_stage else None
+        )
+        latest, ended = self._invocation_state(summary, now)
+        summary.calls = self._calls_shown(latest)
+        self._document_failures(summary, latest)
+        summary.documents = len(plan.documents)
+        summary.kinds = Counter(
+            _token(kind) for kind, _ in plan.documents.values()
+        )
 
-        plan = self._plan()
-        kinds = {sha1: kind for sha1, (kind, _) in plan.items()}
-        for sha1, kind in self._kinds.items():
-            kinds.setdefault(sha1, kind)
-        summary.documents = len(plan)
-        summary.kinds = Counter(kind or "?" for kind, _ in plan.values())
-
-        order: dict[str, None] = {}
-        pairs: dict[tuple[str, str], None] = {}
-        for sha1, (_, stages) in plan.items():
-            for stage in stages:
-                order.setdefault(stage)
-                pairs.setdefault((sha1, stage))
-        for stage in self._stages_seen:
-            order.setdefault(stage)
-        for pair in self._attempts:
-            pairs.setdefault(pair)
-        stages = {stage: StageCounts(stage) for stage in order}
+        order = dict.fromkeys(plan.order)
+        order.update(dict.fromkeys(self._stages_seen))
+        stages = {stage: StageCounts(_token(stage)) for stage in order}
         for stage, counts in stages.items():
-            calls = self._stage_calls.get(stage) or Counter()
-            counts.engine, counts.cached = calls["engine"], calls["cached"]
-
-        latest = _latest_invocation(manifest)
+            calls = self._stage_calls.get(stage)
+            if calls is not None:
+                counts.engine, counts.cached = calls["engine"], calls["cached"]
         remaining: Counter = Counter()
         rates: dict[tuple[str, str | None], _Rate] = {}
-        for sha1, stage in pairs:
+
+        def count(sha1: str, stage: str, attempt: _Attempt) -> None:
             counts = stages[stage]
-            attempt = self._attempts.get((sha1, stage)) or _Attempt()
+            kind = self._kind(sha1)
             if attempt.ended:
-                rate = rates.setdefault((stage, kinds.get(sha1)), _Rate())
+                rate = rates.get((stage, kind))
+                if rate is None:
+                    rate = rates[(stage, kind)] = _Rate()
                 rate.attempts += attempt.ended
                 rate.engine += attempt.ended_engine
                 rate.calls += attempt.ended_calls
             status = attempt.status
-            if status == RUNNING and _interrupted(attempt, latest):
+            if status == RUNNING and _interrupted(attempt, latest, ended):
                 counts.pending += 1
                 counts.interrupted += 1
-                remaining[(stage, kinds.get(sha1))] += 1
+                remaining[(stage, kind)] += 1
             elif status == RUNNING:
                 counts.running += 1
-                remaining[(stage, kinds.get(sha1))] += 1
+                remaining[(stage, kind)] += 1
                 summary.in_flight.append(
-                    InFlight(sha1, kinds.get(sha1), stage, attempt.since)
+                    InFlight(sha1, _token(kind), counts.name, attempt.since)
                 )
             elif status == PENDING:
                 counts.pending += 1
                 counts.held += attempt.held
-                remaining[(stage, kinds.get(sha1))] += 1
+                remaining[(stage, kind)] += 1
             elif status == FAILED:
                 counts.failed += 1
-                counts.failures[attempt.failure or "error"] += 1
+                counts.failures[attempt.failure or OTHER] += 1
+                remaining[(stage, kind)] += 1
             elif status == NEEDS_ATTENTION:
                 counts.attention += 1
                 counts.attention_reasons.update(attempt.attention)
@@ -796,43 +1195,67 @@ class RunMonitor:
                 counts.done += 1
             else:
                 counts.reused[attempt.how] += 1
+
+        for sha1, (_kind, planned) in plan.documents.items():
+            for stage in planned:
+                count(
+                    sha1,
+                    stage,
+                    self._attempts.get((sha1, stage), _NOT_STARTED),
+                )
+        for (sha1, stage), attempt in self._attempts.items():
+            planned_stages = plan.documents.get(sha1, (None, ()))[1]
+            if stage not in planned_stages:
+                count(sha1, stage, attempt)
         summary.stages = list(stages.values())
         summary.in_flight.sort(
             key=lambda item: (item.since or now, item.stage, item.sha1)
         )
+        summary.remaining_work = sum(remaining.values())
         summary.remaining_calls, summary.unrated = self._estimate(
             remaining, rates
         )
 
+        known = self._known_sha1s()
         summary.alerts = [
-            _alert_line(alert, kinds)
+            self._alert_line(alert, known)
             for alert in reversed(self._latest_alerts)
         ]
         summary.alert_counts = Counter(self._alert_counts)
         summary.alert_checks = Counter(self._alert_checks)
-        summary.slices = self._slices(
-            list(order), sorted({kind for kind in kinds.values() if kind})
-        )
+        kinds = {kind for kind, _ in plan.documents.values() if kind}
+        kinds.update(self._kinds.values())
+        summary.known_scopes = {
+            "run",
+            *(f"stage:{stage}" for stage in order),
+            *(f"kind:{kind}" for kind in kinds),
+        }
+        summary.slices = self._slices(list(order), sorted(kinds))
         return summary
 
-    def _invocations(self, summary: Summary, now: datetime) -> None:
+    def _invocation_state(
+        self, summary: Summary, now: datetime
+    ) -> tuple[str | None, bool]:
+        """Fill in the run's state and times; (the latest invocation's id,
+        whether it has ended). An invocation has ended when run.json
+        records its end, or its closing event says how it ended."""
         manifest = self._manifest
-        invocations = [
-            entry
-            for entry in manifest.get("invocations") or []
-            if isinstance(entry, dict)
-        ]
+        invocations = _invocations(manifest)
         summary.invocations = len(invocations)
         summary.started_at = _time(manifest.get("started_at"))
         if not invocations:
             # a run.json from before invocations were recorded: the last
-            # marker event says whether the run is going
+            # start or close event says whether the run is going
+            latest = self._marker_invocation
+            closing = self._closing.get(latest)
             summary.state = {
                 RUN_START: "running",
                 RUN_END: "finished",
                 RUN_INTERRUPTED: "interrupted",
             }.get(self._marker or "", "not started")
-            return
+            if closing is not None and self._marker != RUN_START:
+                self._closed(summary, closing)
+            return latest, self._marker in (RUN_END, RUN_INTERRUPTED)
         total = 0.0
         for index, entry in enumerate(invocations):
             start = _time(entry.get("started_at"))
@@ -849,138 +1272,214 @@ class RunMonitor:
             if index == len(invocations) - 1:
                 summary.invocation_elapsed = span
         summary.elapsed = total
-        latest = invocations[-1]
-        if latest.get("ended_at"):
-            summary.state = _string(latest.get("outcome")) or "ended"
-            summary.reason = _string(latest.get("reason"))
+        last = invocations[-1]
+        latest = last.get("invocation")
+        latest = latest if isinstance(latest, str) else None
+        closing = self._closing.get(latest)
+        if last.get("ended_at"):
+            outcome = last.get("outcome")
+            summary.state = _token(outcome) if outcome else "ended"
+            summary.reason = _verbatim(last.get("reason"))
+            if closing is not None:
+                summary.statuses = _statuses(closing)
+            return latest, True
+        if closing is not None:
+            self._closed(summary, closing)
+            return latest, True
+        summary.state = "running"
+        return latest, False
+
+    @staticmethod
+    def _closed(summary: Summary, closing: dict) -> None:
+        """How an invocation ended, as its closing event says."""
+        outcome = closing.get("outcome")
+        if outcome:
+            summary.state = _token(outcome)
+        elif closing.get("event") == RUN_INTERRUPTED:
+            summary.state = "interrupted"
         else:
-            summary.state = "running"
+            summary.state = "finished"
+        summary.reason = _verbatim(closing.get("reason"))
+        summary.statuses = _statuses(closing)
+
+    def _calls_shown(self, latest: str | None) -> CallCounts:
+        """The run's call counts, with every name as the views show it; a
+        pause for the subscription only when the latest invocation made
+        it."""
+        calls = self._calls
+        roles: dict[str, Counter] = {}
+        for role, counts in calls.roles.items():
+            roles.setdefault(_token(role), Counter()).update(counts)
+        return CallCounts(
+            engine=calls.engine,
+            cached=calls.cached,
+            hit_reasons=_relabel(
+                calls.hit_reasons, lambda reason: _verbatim(reason, 40)
+            ),
+            resumed=calls.resumed,
+            replayed=calls.replayed,
+            rejected=calls.rejected,
+            adopted=calls.adopted,
+            roles=roles,
+            cache_events=calls.cache_events,
+            logged=calls.logged,
+            seconds=calls.seconds,
+            timed=calls.timed,
+            outcomes=_relabel(calls.outcomes, _token),
+            waited=calls.waited,
+            waits=calls.waits,
+            refused=calls.refused,
+            holds=_relabel(calls.holds, _token),
+            errors=Counter(calls.errors),
+            pause=calls.pause
+            if calls.pause is not None and self._pause_invocation == latest
+            else None,
+        )
+
+    def _document_failures(self, summary: Summary, latest: str | None) -> None:
+        """The documents that failed in the latest invocation: how many, by
+        kind and file suffix, and by reason; and how many failed before
+        their source could be read (no SHA-1). Never their file names."""
+        if latest is None:
+            latest = self._failure_invocation
+        failures = self._failures.get(latest) or {}
+        summary.failed_documents = len(failures)
+        for kind, suffix, label, read in failures.values():
+            summary.failed_by_kind[f"{kind} ({suffix})"] += 1
+            summary.failed_by_reason[label] += 1
+            summary.unread_documents += not read
+
+    def _alert_line(self, alert: dict, known: list[str]) -> AlertLine:
+        sha1 = _match(alert.get("subject"), known)
+        return AlertLine(
+            at=_time(alert.get("at")),
+            status=_token(alert.get("status")),
+            stage=_token(alert.get("stage")),
+            check=_token(alert.get("check")),
+            subject=prefix(sha1),
+            kind=_token(self._kind(sha1)) if sha1 else "?",
+            value=_value(alert.get("value")),
+        )
 
     def _estimate(
         self, remaining: Counter, rates: dict[tuple[str, str | None], _Rate]
     ) -> tuple[int | None, list[str]]:
-        """The engine calls the remaining stages will take, at the run's
-        rates so far: each stage of each kind at the engine calls its
-        ended attempts made on average, since kinds differ (a text file's
-        transcription makes no call, a scan's does). The stages of kinds
-        with no ended attempt yet are listed apart ('critique (media)').
-        None when the run shows no calls at all: no cache events, and no
-        call events."""
+        """(the engine calls the work still to go will take, the stages and
+        kinds it could not rate). Each stage of each kind is rated at the
+        engine calls its ended attempts made on average, since kinds differ
+        (a text file's transcription makes no call, a scan's does); a view
+        that stood made no call and is left out. The calls are None when
+        nothing to go could be rated, or the run shows no calls at all (no
+        cache events, and no call events)."""
         by_cache = self._calls.cache_events > 0
         if not by_cache and not self._calls.logged:
             return None, []
         estimate = 0.0
+        rated = False
         unrated: list[str] = []
         for (stage, kind), count in sorted(
             remaining.items(), key=lambda item: (item[0][0], item[0][1] or "")
         ):
             rate = rates.get((stage, kind))
             if rate is None or not rate.attempts:
-                unrated.append(f"{stage} ({kind or '?'})")
+                unrated.append(f"{_token(stage)} ({_token(kind)})")
                 continue
             made = rate.engine if by_cache else rate.calls
             estimate += count * made / rate.attempts
+            rated = True
+        if remaining and not rated:
+            return None, unrated
         return round(estimate), unrated
 
     def _slices(self, stages: list[str], kinds: list[str]) -> list[SliceState]:
         """Every slice the operator can stop: the run, each stage and each
-        kind the run knows, and any other scope a current request names;
-        each with its state (rundir.fold_control) and the request that
-        stopped it. Requests before the latest invocation's start marker
-        no longer apply."""
+        kind the run knows, and any other scope a current request names.
+        Their states are the driver's fold of the requests
+        (rundir.fold_control); one pass over the requests since the latest
+        invocation's start marker finds since when each stopped scope has
+        been stopped, and who stopped it and why: a pause stops a scope
+        until a resume, and another pause meanwhile gives a new reason, not
+        a new start; an abort stops it for good."""
         state = fold_control(self._requests).scopes
-        current: list[dict] = []
-        for entry in self._requests:
-            if entry.get("action") == "start":
-                current = []
-            else:
-                current.append(entry)
+        start = max(
+            (
+                index
+                for index, request in enumerate(self._requests)
+                if request.get("action") == "start"
+            ),
+            default=-1,
+        )
         scopes: dict[str, None] = {"run": None}
-        for stage in stages:
-            scopes.setdefault(f"stage:{stage}")
-        for kind in kinds:
-            scopes.setdefault(f"kind:{kind}")
-        for entry in current:
-            scope = entry.get("scope") or "run"
-            if isinstance(scope, str):
-                scopes.setdefault(scope)
+        scopes.update(dict.fromkeys(f"stage:{stage}" for stage in stages))
+        scopes.update(dict.fromkeys(f"kind:{kind}" for kind in kinds))
+        stopped: dict[str, str] = {}
+        causes: dict[str, tuple] = {}
+        for request in self._requests[start + 1 :]:
+            scope = request.get("scope") or "run"
+            scopes.setdefault(scope)
+            if stopped.get(scope) == ABORTED:
+                continue
+            action = request.get("action")
+            if action in (PAUSE, ABORT):
+                if stopped.get(scope) == PAUSED and action == PAUSE:
+                    since = causes[scope][0]
+                else:
+                    since = _time(request.get("at"))
+                stopped[scope] = ABORTED if action == ABORT else PAUSED
+                causes[scope] = (
+                    since,
+                    _token(request["by"]) if request.get("by") else None,
+                    _verbatim(request.get("reason")),
+                )
+            elif action == RESUME:
+                stopped.pop(scope, None)
+                causes.pop(scope, None)
         slices = []
         for scope in scopes:
-            status = state.get(scope)
-            if status is None:
-                slices.append(SliceState(scope, ACTIVE))
-            else:
-                since, by, reason = _stopped(current, scope)
-                slices.append(SliceState(scope, status, since, by, reason))
+            status = state.get(scope, ACTIVE)
+            cause = causes.get(scope) if status != ACTIVE else None
+            slices.append(
+                SliceState(_scope_shown(scope), status, *(cause or ()))
+            )
         return slices
 
 
-def _string(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None
+def _relabel(counter: Counter, label: Callable[[Any], Any]) -> Counter:
+    shown: Counter = Counter()
+    for key, count in counter.items():
+        shown[label(key) or "?"] += count
+    return shown
 
 
-def _stopped(
-    requests: list[dict], scope: str
-) -> tuple[datetime | None, str | None, str | None]:
-    """Since when a stopped scope has been stopped, and who stopped it and
-    why, from the requests since the invocation started, in the order
-    rundir.fold_control applies them: a pause stops a scope until a
-    resume, and another pause meanwhile gives a new reason, not a new
-    start; an abort stops it for good, and what follows it changes
-    nothing."""
-    since: datetime | None = None
-    by = reason = None
-    state = ACTIVE
-    for entry in requests:
-        if (entry.get("scope") or "run") != scope or state == ABORTED:
-            continue
-        action = entry.get("action")
-        if action in (PAUSE, ABORT):
-            if state == ACTIVE or action == ABORT:
-                since = _time(entry.get("at"))
-            state = ABORTED if action == ABORT else PAUSED
-            by, reason = _string(entry.get("by")), _string(entry.get("reason"))
-        elif action == RESUME:
-            since, by, reason, state = None, None, None, ACTIVE
-    return since, by, reason
+def _statuses(closing: dict) -> Counter:
+    """The documents per status an invocation's closing event gives."""
+    statuses = closing.get("statuses")
+    shown: Counter = Counter()
+    if isinstance(statuses, dict):
+        for status, count in statuses.items():
+            if isinstance(count, int) and not isinstance(count, bool):
+                shown[_token(status)] += count
+    return shown
 
 
-def _latest_invocation(manifest: dict) -> dict | None:
-    invocations = [
-        entry
-        for entry in manifest.get("invocations") or []
-        if isinstance(entry, dict)
-    ]
-    return invocations[-1] if invocations else None
+def _scope_shown(scope: str) -> str:
+    kind, sep, name = scope.partition(":")
+    if scope == "run":
+        return "run"
+    if sep and kind in ("stage", "kind"):
+        return f"{kind}:{_token(name)}"
+    return "?"
 
 
-def _interrupted(attempt: _Attempt, latest: dict | None) -> bool:
+def _interrupted(attempt: _Attempt, latest: str | None, ended: bool) -> bool:
     """Whether a started stage was left by an invocation that has ended,
     so that nothing runs it now: the next invocation starts it again."""
-    if latest is None:
-        return False
-    if latest.get("ended_at"):
+    if ended:
         return True
-    running = latest.get("invocation")
-    return attempt.invocation is not None and attempt.invocation != running
-
-
-def _alert_line(alert: dict, kinds: dict[str, str | None]) -> AlertLine:
-    subject = prefix(alert.get("subject"))
-    kind = None
-    if subject != "-":
-        found = {
-            kinds[sha1] for sha1 in kinds if sha1.lower().startswith(subject)
-        }
-        kind = found.pop() if len(found) == 1 else None
-    return AlertLine(
-        at=_time(alert.get("at")),
-        status=_string(alert.get("status")) or "?",
-        stage=_string(alert.get("stage")) or "?",
-        check=_string(alert.get("check")) or "?",
-        subject=subject,
-        kind=kind,
-        value=_value(alert.get("value")),
+    return (
+        latest is not None
+        and attempt.invocation is not None
+        and attempt.invocation != latest
     )
 
 
@@ -1021,7 +1520,7 @@ _COLUMNS = (
 )
 
 HELP = (
-    "commands: pause|resume|abort [run | stage NAME | kind NAME] [reason]",
+    f"commands: {GRAMMAR}",
     "  e.g. 'pause stage extraction checking the prompt', 'abort kind media'",
     "  a pause holds until a resume; an abort holds for the rest of the "
     "invocation, and invoking the run again resumes it",
@@ -1065,11 +1564,14 @@ def _header(summary: Summary) -> list[tuple[str, str]]:
         f"started {_stamp(summary.started_at)} | "
         f"{_n(summary.documents)} documents" + (f": {kinds}" if kinds else "")
     )
-    return [
+    lines = [
         (title, "title"),
         (" | ".join(parts), _state_style(summary.state)),
         (plan, ""),
     ]
+    if summary.statuses:
+        lines.append((f"statuses   {_counts(summary.statuses)}", ""))
+    return lines
 
 
 def _stage_values(stage: StageCounts) -> tuple[int, ...]:
@@ -1108,8 +1610,8 @@ def _stage_rows(summary: Summary) -> list[tuple[str, str]]:
 
 def _stage_notes(summary: Summary) -> list[tuple[str, str]]:
     """What the stage table's counts are made of: reuse by reason,
-    attention and failure labels, and pending stages that are held or
-    were interrupted."""
+    attention and failure labels, pending stages that are held or were
+    interrupted; and the documents that failed in the latest invocation."""
     notes: list[tuple[str, str]] = []
     for stage in summary.stages:
         name = stage.name
@@ -1136,7 +1638,39 @@ def _stage_notes(summary: Summary) -> list[tuple[str, str]]:
             )
         if held:
             notes.append((f"pending    {name}: {', '.join(held)}", "warn"))
+    if summary.failed_documents:
+        unread = (
+            f", {_n(summary.unread_documents)} before their source was read"
+            if summary.unread_documents
+            else ""
+        )
+        notes.append(
+            (
+                f"failed     {_n(summary.failed_documents)} documents in "
+                f"this invocation{unread}: {_counts(summary.failed_by_kind)}"
+                f"; {_counts(summary.failed_by_reason)}",
+                "bad",
+            )
+        )
     return notes
+
+
+def _to_go(summary: Summary) -> str | None:
+    """What is left, as the calls rows say it."""
+    if not summary.remaining_work:
+        return "nothing" if summary.stages else None
+    line = f"{_n(summary.remaining_work)} stages"
+    if summary.remaining_calls is None:
+        line += "; engine calls unknown"
+        if summary.unrated:
+            line += f" (no rate yet for {', '.join(summary.unrated)})"
+        return line
+    line += (
+        f", ~{_n(summary.remaining_calls)} engine calls at the rates so far"
+    )
+    if summary.unrated:
+        line += f", besides {', '.join(summary.unrated)}: no rate yet"
+    return line
 
 
 def _call_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
@@ -1173,14 +1707,9 @@ def _call_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
                 for role, counts in sorted(calls.roles.items())
             )
             rows.append(("  by role  " + roles, "dim"))
-    if summary.remaining_calls is not None:
-        line = (
-            f"  to go    ~{_n(summary.remaining_calls)} engine calls at the "
-            "rates so far"
-        )
-        if summary.unrated:
-            line += f", besides {', '.join(summary.unrated)}: no rate yet"
-        rows.append((line, ""))
+    to_go = _to_go(summary)
+    if to_go is not None:
+        rows.append((f"  to go    {to_go}", ""))
     if calls.logged:
         parts = [f"{_n(calls.logged)} calls"]
         if calls.timed:
@@ -1192,12 +1721,28 @@ def _call_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
         }
         if other:
             parts.append(_counts(other))
+        if calls.errors:
+            parts.append(f"errors: {_counts(calls.errors)}")
+        rows.append(("  logged   " + " | ".join(parts), ""))
+        waits = []
         if calls.waits:
-            parts.append(
-                f"{_n(calls.waits)} rate-limit waits, "
+            waits.append(
+                f"{_n(calls.waits)} waited for the subscription, "
                 f"{_duration(calls.waited)} in all"
             )
-        rows.append(("  logged   " + " | ".join(parts), ""))
+        if calls.refused:
+            waits.append(f"{_n(calls.refused)} attempts refused")
+        if calls.holds:
+            waits.append(f"held: {_counts(calls.holds)}")
+        if waits and detail:
+            rows.append(("  limits   " + " | ".join(waits), ""))
+    if calls.pause is not None:
+        pause = calls.pause
+        line = f"  paused   for the subscription ({pause.held}"
+        line += f", {pause.window} window)" if pause.window else ")"
+        if pause.resumes_at is not None:
+            line += f"; it can go on from {_stamp(pause.resumes_at)}"
+        rows.append((line, "warn"))
     return rows
 
 
@@ -1211,7 +1756,7 @@ def _in_flight_rows(summary: Summary, limit: int) -> list[tuple[str, str]]:
         )
         rows.append(
             (
-                f"  {prefix(item.sha1):<{PREFIX}}  {item.kind or '?':<13}"
+                f"  {prefix(item.sha1):<{PREFIX}}  {item.kind:<13}"
                 f"{item.stage:<15} for {age}",
                 "",
             )
@@ -1237,7 +1782,7 @@ def _slice_rows(summary: Summary, detail: bool) -> list[tuple[str, str]]:
         if item.by:
             line += f" by {item.by}"
         if item.reason:
-            line += f": {_clip(item.reason, 80)}"
+            line += f": {item.reason}"
         rows.append((line, "bad" if item.state == ABORTED else "warn"))
     if detail and active:
         rows.append((f"  active: {', '.join(active)}", "dim"))
@@ -1257,42 +1802,32 @@ def _alert_rows(summary: Summary, limit: int) -> list[tuple[str, str]]:
             (
                 f"  {_stamp(alert.at, '%H:%M:%S')}  {alert.status:<8}"
                 f"{alert.stage:<15}{alert.check:<24}{alert.subject:<{PREFIX}}"
-                f" {alert.kind or '?':<13}{alert.value}",
+                f" {alert.kind:<13}{alert.value}",
                 "warn" if alert.status == "new" else "",
             )
         )
     return rows
 
 
-# how the terminal view shrinks to fit: (how many in-flight documents and
-# alerts it lists, whether it shows the stage notes, whether it shows the
-# other details); the first level that fits is drawn
-_LEVELS = (
-    (8, True, True),
-    (4, True, True),
-    (2, True, True),
-    (2, False, True),
-    (2, False, False),
-    (0, False, False),
-)
-
-
-def _body(summary: Summary, level: int) -> list[tuple[str, str]]:
-    limit, notes, detail = _LEVELS[level]
+def _body(summary: Summary, full: bool) -> list[tuple[str, str]]:
+    """The view's lines above the footer: in full, or, to fit a short
+    terminal, with two documents in flight and two alerts at most, and
+    without the stage notes and other details."""
+    limit = 8 if full else 2
     body = [*_header(summary), ("", ""), *_stage_rows(summary)]
-    if notes:
+    if full:
         body += [(f"  {text}", style) for text, style in _stage_notes(summary)]
     body += [
         ("", ""),
-        *_call_rows(summary, detail),
+        *_call_rows(summary, full),
         ("", ""),
         *_in_flight_rows(summary, limit),
         ("", ""),
-        *_slice_rows(summary, detail),
+        *_slice_rows(summary, full),
         ("", ""),
         *_alert_rows(summary, limit),
     ]
-    if detail and summary.set_aside:
+    if full and summary.set_aside:
         body.append(
             (
                 "set aside to be made again (set-aside events): "
@@ -1300,7 +1835,7 @@ def _body(summary: Summary, level: int) -> list[tuple[str, str]]:
                 "dim",
             )
         )
-    if detail and summary.skipped_lines:
+    if full and summary.skipped_lines:
         body.append(
             (
                 f"unreadable log lines skipped: {_n(summary.skipped_lines)}",
@@ -1320,9 +1855,9 @@ def render_lines(
 ) -> list[str]:
     """The terminal view as lines, each at most `width` characters wide
     (ANSI styles aside, with `color`), and at most `height` of them, the
-    `footer` lines last. To fit, the in-flight and alert lists shrink
-    first, then the stage notes and other details go, and then the view is
-    cut short above the footer."""
+    `footer` lines last. To fit, the view drops its details and shortens
+    its lists (_body), and then is cut short above the footer. No line
+    holds a control character but the view's own styles."""
     tail = [("", ""), *((line, "dim") for line in footer)] if footer else []
     room = None if height is None else max(1, height - len(tail))
     if not summary.found:
@@ -1334,10 +1869,9 @@ def render_lines(
             )
         ]
     else:
-        for level in range(len(_LEVELS)):
-            body = _body(summary, level)
-            if room is None or len(body) <= room:
-                break
+        body = _body(summary, full=True)
+        if room is not None and len(body) > room:
+            body = _body(summary, full=False)
     if room is not None:
         body = body[:room]
     plain = body + tail
@@ -1345,7 +1879,7 @@ def render_lines(
         plain = plain[: max(1, height)]
     lines = []
     for text, style in plain:
-        text = _clip(text, max(1, width))
+        text = _clip(_safe(text), max(1, width))
         if color and style in _STYLES and text:
             text = f"{_STYLES[style]}{text}{_RESET}"
         lines.append(text)
@@ -1399,7 +1933,7 @@ footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
 
 
 def _e(value: Any) -> str:
-    return html.escape(str(value), quote=True)
+    return html.escape(_clean(str(value)), quote=True)
 
 
 def _table(head: Sequence[str], rows: list[list[str]], numeric=()) -> str:
@@ -1426,10 +1960,14 @@ def _table(head: Sequence[str], rows: list[list[str]], numeric=()) -> str:
     )
 
 
+def _span(style: str, text: str) -> str:
+    return f'<span class="{_e(style)}">{_e(text)}</span>'
+
+
 def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
     """The status page: one self-contained HTML document (inline style,
     no script, no external asset) that reloads itself every `reload`
-    seconds. Documents appear by SHA-1 prefix and kind only."""
+    seconds. It shows what the terminal view shows."""
     title = f"yizkr run {summary.run_id or '?'}"
     parts = [f"<h1>{_e(title)}</h1>"]
     for text, style in _header(summary)[1:]:
@@ -1449,7 +1987,7 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
             )
         )
         notes = [
-            f'<li class="{_e(style)}">{_e(" ".join(text.split()))}</li>'
+            f'<li class="{_e(style)}">{_e(text)}</li>'
             for text, style in _stage_notes(summary)
         ]
         if summary.set_aside:
@@ -1469,7 +2007,7 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
 
     parts.append("<h2>Calls</h2>")
     parts += [
-        f'<p class="{_e(style)}">{_e(" ".join(text.split()))}</p>'
+        f'<p class="{_e(style)}">{_e(text)}</p>'
         for text, style in _call_rows(summary, detail=True)
     ]
 
@@ -1481,7 +2019,7 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
                 [
                     [
                         f"<code>{_e(prefix(item.sha1))}</code>",
-                        _e(item.kind or "?"),
+                        _e(item.kind),
                         _e(item.stage),
                         _e(
                             _duration(
@@ -1505,17 +2043,17 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
             [
                 [
                     f"<code>{_e(item.scope)}</code>",
-                    '<span class="{}">{}</span>'.format(
+                    _span(
                         "good"
                         if item.state == ACTIVE
                         else "bad"
                         if item.state == ABORTED
                         else "warn",
-                        _e(item.state),
+                        item.state,
                     ),
                     _e(_stamp(item.since, "%H:%M:%S") if item.since else ""),
                     _e(item.by or ""),
-                    _e(_clip(item.reason or "", 120)),
+                    _e(item.reason or ""),
                 ]
                 for item in summary.slices
             ],
@@ -1542,14 +2080,14 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
                 [
                     [
                         _e(_stamp(alert.at, "%H:%M:%S")),
-                        '<span class="{}">{}</span>'.format(
+                        _span(
                             "warn" if alert.status == "new" else "muted",
-                            _e(alert.status),
+                            alert.status,
                         ),
                         _e(alert.stage),
                         _e(alert.check),
                         f"<code>{_e(alert.subject)}</code>",
-                        _e(alert.kind or "?"),
+                        _e(alert.kind),
                         _e(alert.value),
                     ]
                     for alert in summary.alerts
@@ -1583,15 +2121,154 @@ def render_html(summary: Summary, *, reload: int = PAGE_RELOAD) -> str:
 def write_status_page(
     path: Path | str, summary: Summary, *, reload: int = PAGE_RELOAD
 ) -> Path | None:
-    """Write the status page into the run directory, whole (atomically),
-    and return its path; None, writing nothing, when the directory holds
-    no run.json."""
+    """Write the status page, `status/index.html` in the run directory, and
+    return its path; None, writing nothing, when the directory holds no
+    run.json.
+
+    The page is written beside its place and moved there whole, so a
+    reader sees the old page or the new one. Nothing is made but the
+    `status` directory, and only in a run directory that is there: one
+    removed meanwhile is not made again (FileNotFoundError), nor is a page
+    written through a `status` that is a symbolic link. The page is a live
+    view, not a record, and is not flushed to disk."""
     path = Path(path)
     if not (path / MANIFEST).is_file():
         return None
-    page = path / STATUS_PAGE
-    atomic_write_text(page, render_html(summary, reload=reload))
+    folder = path / STATUS_DIR
+    with contextlib.suppress(FileExistsError):
+        folder.mkdir()
+    if folder.is_symlink() or not folder.is_dir():
+        raise NotADirectoryError(f"{folder} is not a directory of its own")
+    page = folder / STATUS_PAGE
+    data = render_html(summary, reload=reload).encode("utf-8", "replace")
+    staging = staging_path(page)
+    try:
+        with open(staging, "xb") as handle:
+            handle.write(data)
+        os.replace(staging, page)
+    except BaseException:
+        staging.unlink(missing_ok=True)
+        raise
     return page
+
+
+# -- serving the status page --------------------------------------------------
+
+
+class _PageHandler(http.server.BaseHTTPRequestHandler):
+    """Serves the status page and nothing else: `/` and `/index.html` are
+    the page, read from the `status` directory without following a
+    symbolic link, neither the directory's nor the page's; every other
+    path, and a page that is not there or is a link, is not found. No
+    directory is ever listed."""
+
+    status_dir: Path
+    server_version = "yizkr-monitor"
+    sys_version = ""
+
+    def do_GET(self) -> None:  # noqa: N802
+        self._send(body=True)
+
+    def do_HEAD(self) -> None:  # noqa: N802
+        self._send(body=False)
+
+    def _send(self, *, body: bool) -> None:
+        path = self.path.split("?", 1)[0].split("#", 1)[0]
+        page = self._page() if path in ("/", f"/{STATUS_PAGE}") else None
+        if page is None:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'",
+        )
+        self.end_headers()
+        if body:
+            self.wfile.write(page)
+
+    def _page(self) -> bytes | None:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            folder = os.open(
+                self.status_dir, flags | getattr(os, "O_DIRECTORY", 0)
+            )
+        except OSError:
+            return None
+        try:
+            descriptor = os.open(STATUS_PAGE, flags, dir_fd=folder)
+        except (OSError, NotImplementedError):
+            return None
+        finally:
+            os.close(folder)
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return None
+            return handle.read()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Quiet: a line on the terminal would break the view."""
+
+
+class _Server(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def server_bind(self) -> None:
+        """Bind, without the reverse name lookup HTTPServer makes of its
+        address, which can take seconds and serves nothing here."""
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+class _Server6(_Server):
+    address_family = socket.AF_INET6
+
+
+def parse_address(value: str) -> tuple[str, int]:
+    """'ADDRESS:PORT' (an IPv6 address in brackets) -> (address, port)."""
+    address, sep, port = value.rpartition(":")
+    address = address.strip("[]")
+    if not sep or not address or not port.isdigit() or int(port) > 65535:
+        raise ValueError(f"expected ADDRESS:PORT, not {value!r}")
+    return address, int(port)
+
+
+def page_url(server: http.server.HTTPServer) -> str:
+    """Where a server serve_status started serves the page."""
+    host, port = server.server_address[:2]
+    host = f"[{host}]" if ":" in str(host) else host
+    return f"http://{host}:{port}/"
+
+
+def serve_status(
+    path: Path | str, address: str, port: int
+) -> http.server.ThreadingHTTPServer:
+    """Serve the status page of the run directory at `path`, and nothing
+    else (_PageHandler), on `address`:`port`, from a thread of its own,
+    until `server.shutdown()`; `server.server_close()` then frees the
+    port. Only the `status` directory is read: the run directory holds
+    the documents' views and is never served."""
+    handler = type(
+        "PageHandler",
+        (_PageHandler,),
+        {"status_dir": Path(path) / STATUS_DIR},
+    )
+    server_class = _Server6 if ":" in address else _Server
+    server = server_class((address, port), handler)
+    # shutdown() waits for the loop's next look at its flag
+    thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": 0.1},
+        name="yizkr-status-page",
+        daemon=True,
+    )
+    thread.start()
+    return server
 
 
 # -- control requests ---------------------------------------------------------
@@ -1599,6 +2276,29 @@ def write_status_page(
 
 class NotARunDirectory(ValueError):
     """A control request for a directory that holds no run.json."""
+
+
+def _scope(stage: str | None, kind: str | None) -> str:
+    """The scope a request for `stage` or `kind` names, as RunDir.request
+    writes it."""
+    return f"stage:{stage}" if stage else f"kind:{kind}" if kind else "run"
+
+
+def _slice_name(label: str, name: str | None) -> str | None:
+    """A stage or kind name for a request, without surrounding spaces;
+    refused when it is empty, which would name the whole run, or holds a
+    space or a character that is not printable, which no slice's name
+    does."""
+    if name is None:
+        return None
+    stripped = name.strip()
+    if not stripped:
+        raise ValueError(f"an empty {label} name")
+    if any(char.isspace() for char in stripped):
+        raise ValueError(f"a {label} name has no spaces: {stripped!r}")
+    if not stripped.isprintable():
+        raise ValueError(f"a {label} name is printable: {stripped!r}")
+    return stripped
 
 
 def request(
@@ -1612,19 +2312,30 @@ def request(
 ) -> dict:
     """Ask the run's driver to pause, resume or abort the run, or one
     slice of it (a stage, or a document kind), through its control file
-    (RunDir.request). Refused for a directory without run.json, and for an
-    empty stage or kind name, which would name the whole run."""
+    (RunDir.request). A name is written without surrounding spaces.
+    Refused for a directory without run.json, and for an empty name or one
+    that holds a space (_slice_name)."""
     path = Path(path)
     if not (path / MANIFEST).is_file():
         raise NotARunDirectory(
             f"{path}: no {MANIFEST}; is it a run directory?"
         )
-    for label, name in (("stage", stage), ("kind", kind)):
-        if name is not None and not name.strip():
-            raise ValueError(f"an empty {label} name")
     return RunDir(path).request(
-        action, stage=stage, kind=kind, by=by, reason=reason
+        action,
+        stage=_slice_name("stage", stage),
+        kind=_slice_name("kind", kind),
+        by=by,
+        reason=reason,
     )
+
+
+def unknown_slice_note(scope: str, summary: Summary) -> str:
+    """A note for a request whose slice the run knows of no document in,
+    from its plan or its events, which then stops nothing it plans (a
+    misspelt name, say); '' when the run knows the slice."""
+    if scope in summary.known_scopes:
+        return ""
+    return " (no document the run knows has this slice)"
 
 
 class CommandError(ValueError):
@@ -1640,17 +2351,12 @@ class Command:
 
     @property
     def scope(self) -> str:
-        if self.stage:
-            return f"stage:{self.stage}"
-        if self.kind:
-            return f"kind:{self.kind}"
-        return "run"
+        return _scope(self.stage, self.kind)
 
 
 def parse_command(line: str) -> Command | None:
-    """`pause|resume|abort [run | stage NAME | kind NAME] [reason ...]`
-    (a slice may also be written `stage:NAME` or `kind:NAME`), `help` or
-    `quit`; None for an empty line."""
+    """A command of GRAMMAR (a slice may also be written `stage:NAME` or
+    `kind:NAME`), `help` or `quit`; None for an empty line."""
     words = line.split()
     if not words:
         return None
@@ -1661,7 +2367,7 @@ def parse_command(line: str) -> Command | None:
         return Command("help")
     if verb not in CONTROL_ACTIONS:
         raise CommandError(
-            f"unknown command {words[0]!r}: pause, resume, abort, help or quit"
+            f"unknown command {words[0]!r}: {GRAMMAR}, help or quit"
         )
     rest = words[1:]
     stage = kind = None
@@ -1671,23 +2377,20 @@ def parse_command(line: str) -> Command | None:
             rest = rest[1:]
         elif head in ("stage", "kind"):
             if len(rest) < 2:
-                raise CommandError(f"name the {head}: {verb} {head} NAME")
+                raise CommandError(f"name the {head}: {GRAMMAR}")
             name, rest = rest[1], rest[2:]
             stage, kind = (name, None) if head == "stage" else (None, name)
         elif head.startswith(("stage:", "kind:")):
             which, _, name = rest[0].partition(":")
             if not name:
-                raise CommandError(
-                    f"name the {which.lower()}: {verb} {head}NAME"
-                )
+                raise CommandError(f"name the {which.lower()}: {GRAMMAR}")
             rest = rest[1:]
             stage, kind = (
                 (name, None) if which.lower() == "stage" else (None, name)
             )
         else:
             raise CommandError(
-                f"say what to {verb}: run, stage NAME or kind NAME, then any "
-                "reason"
+                f"say what to {verb}, then any reason: {GRAMMAR}"
             )
     return Command(verb, stage, kind, " ".join(rest))
 
@@ -1709,10 +2412,10 @@ def handle_command(
 ) -> CommandResult:
     """Carry out one typed command. A pause, resume or abort is appended
     to the run's control file (`request`), and the result says what the
-    scope's state is then. An abort asks `confirm` first, when given. A
-    resume of an aborted scope is not written: an abort holds for the
-    rest of the invocation. With `summary`, a stage or kind the run does
-    not know is written but noted, since it stops nothing the run plans."""
+    scope's state is then, with a note when the run knows of no document
+    in the slice (unknown_slice_note; from `summary`, else a fresh one).
+    An abort asks `confirm` first, when given. A resume of an aborted
+    scope is not written: an abort holds for the rest of the invocation."""
     path = Path(path)
     try:
         command = parse_command(line)
@@ -1725,12 +2428,14 @@ def handle_command(
     if command.action == "help":
         return CommandResult(" | ".join(line.strip() for line in HELP))
     scope = command.scope
-    before = RunDir(path).control().scopes.get(scope)
-    if command.action == RESUME and before == ABORTED:
+    if (
+        command.action == RESUME
+        and RunDir(path).control().scopes.get(scope) == ABORTED
+    ):
         return CommandResult(
             f"{scope} is aborted for the rest of this invocation, and a "
-            "resume does not lift an abort: invoke the run again to resume "
-            "it"
+            "resume does not lift an abort: invoke the run again to "
+            "resume it"
         )
     if command.action == ABORT and confirm is not None:
         question = (
@@ -1750,12 +2455,13 @@ def handle_command(
         )
     except (OSError, ValueError) as exc:
         return CommandResult(f"not requested: {exc}")
-    after = RunDir(path).control().scopes.get(scope, ACTIVE)
-    message = f"{command.action} requested for {scope}: now {after}"
-    if summary is not None and scope != "run":
-        known = {item.scope for item in summary.slices}
-        if scope not in known:
-            message += " (no document the run knows has this slice)"
+    written = entry["scope"]
+    after = RunDir(path).control().scopes.get(written, ACTIVE)
+    summary = summary or summarise_run(path)
+    message = (
+        f"{command.action} requested for {written}: now {after}"
+        + unknown_slice_note(written, summary)
+    )
     return CommandResult(message, requested=entry)
 
 
@@ -1867,6 +2573,14 @@ def _default_keys(out: TextIO) -> Keys:
     return NoKeys()
 
 
+def _write(out: TextIO, text: str) -> None:
+    """Write `text` as the stream's encoding can take it: what it cannot
+    encode is replaced, never raised."""
+    encoding = getattr(out, "encoding", None) or "utf-8"
+    out.write(text.encode(encoding, "replace").decode(encoding))
+    out.flush()
+
+
 class _StatusPage:
     """When `watch` writes the status page: at the first refresh, then
     once the run has changed and PAGE_MIN_INTERVAL has passed since the
@@ -1894,7 +2608,7 @@ class _StatusPage:
             return
         try:
             written = write_status_page(self.path, summary)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             self.note = f"status page not written: {exc}"
         else:
             if written is not None:
@@ -1935,6 +2649,7 @@ def watch(
     interval: float = 2.0,
     once: bool = False,
     page: bool = True,
+    serve: str | None = None,
     out: TextIO | None = None,
     keys: Keys | None = None,
     clock: Callable[[], datetime] | None = None,
@@ -1946,12 +2661,14 @@ def watch(
     write the status page into the run directory (`page`; _StatusPage says
     when). The run goes on whatever the monitor does.
 
-    ':' or Enter opens a command line (handle_command): pause, resume or
-    abort the run or a slice. On an output that is not a terminal the view
-    is printed afresh whenever the run changes, without styles, and
-    commands are not read. `once` prints one view, writes the page and
-    returns. `keys`, `clock`, `size` (columns, rows) and `terminal`
-    (whether `out` is one) stand in for the terminal in tests."""
+    `serve` ('ADDRESS:PORT') serves the page, and nothing else, for as
+    long as the monitor runs (serve_status); it needs `page`, and is off
+    by default. ':' or Enter opens a command line (handle_command): pause,
+    resume or abort the run or a slice. On an output that is not a
+    terminal the view is printed afresh whenever the run changes, without
+    styles, and commands are not read. `once` prints one view, writes the
+    page and returns. `keys`, `clock`, `size` (columns, rows) and
+    `terminal` (whether `out` is one) stand in for the terminal in tests."""
     path = Path(path)
     out = out or sys.stdout
     clock = clock or (lambda: datetime.now(UTC))
@@ -1961,16 +2678,24 @@ def watch(
         and not os.environ.get("NO_COLOR")
         and os.environ.get("TERM") != "dumb"
     )
+    if serve is not None and not page:
+        raise ValueError("serving the status page needs the page written")
+    address = parse_address(serve) if serve is not None and not once else None
     if keys is None:
         keys = NoKeys() if once else _default_keys(out)
     hint = (
         "Ctrl-C: quit (keys are read only from a terminal)"
         if isinstance(keys, NoKeys)
-        else "':' or Enter: pause|resume|abort [run|stage NAME|kind NAME] "
-        "[reason]   q: quit"
+        else f"':' or Enter: {GRAMMAR}   q: quit"
     )
     monitor = RunMonitor(path)
     status_page = _StatusPage(path) if page else None
+    server = serve_status(path, *address) if address is not None else None
+    served = (
+        f"serving the status page at {page_url(server)}"
+        if server is not None
+        else ""
+    )
     message = ""
     shown = None
     first = True
@@ -1981,34 +2706,34 @@ def watch(
                 summary = monitor.summary(clock())
                 if status_page is not None:
                     status_page.update(summary, monitor.version)
-                notes = (status_page.note if status_page else "", message)
+                notes = (
+                    status_page.note if status_page else "",
+                    served,
+                    message,
+                )
                 footer = [note for note in notes if note]
                 columns, rows = (
                     size() if size else shutil.get_terminal_size((100, 40))
                 )
+                # a line as wide as the terminal would wrap on some
+                width = max(1, columns - 1)
                 if once:
-                    view = render_terminal(
-                        summary, width=columns, footer=footer
-                    )
-                    out.write(view + "\n")
-                    out.flush()
+                    view = render_terminal(summary, width=width, footer=footer)
+                    _write(out, view + "\n")
                     return 0
                 if terminal:
                     lines = render_lines(
                         summary,
-                        width=columns,
+                        width=width,
                         height=max(1, rows - 1),
                         color=color,
                         footer=[*footer, hint],
                     )
-                    out.write(_frame(lines, first))
+                    _write(out, _frame(lines, first))
                     first = False
                 elif monitor.version != shown:
-                    view = render_terminal(
-                        summary, width=columns, footer=footer
-                    )
-                    out.write(view + "\n\n")
-                out.flush()
+                    view = render_terminal(summary, width=width, footer=footer)
+                    _write(out, view + "\n\n")
                 shown = monitor.version
                 key = keys.wait(interval)
                 if key in ("q", "Q"):
@@ -2027,9 +2752,11 @@ def watch(
     except KeyboardInterrupt:
         return 0
     finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
         if terminal and not once:
-            out.write(SHOW_CURSOR + "\n")
-            out.flush()
+            _write(out, SHOW_CURSOR + "\n")
 
 
 # -- a command line -----------------------------------------------------------
@@ -2059,7 +2786,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     follow.add_argument(
         "--no-page",
         action="store_true",
-        help=f"do not write {STATUS_PAGE} into the run directory",
+        help=f"do not write {STATUS_DIR}/{STATUS_PAGE} into the run directory",
+    )
+    follow.add_argument(
+        "--serve",
+        metavar="ADDRESS:PORT",
+        help="serve the status page, and nothing else, on ADDRESS:PORT "
+        "while the monitor runs (off by default)",
     )
     for action in CONTROL_ACTIONS:
         control = commands.add_parser(
@@ -2074,12 +2807,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "watch":
         if args.interval <= 0:
             parser.error("--interval must be positive")
-        return watch(
-            args.run,
-            interval=args.interval,
-            once=args.once,
-            page=not args.no_page,
-        )
+        if args.serve is not None:
+            if args.no_page:
+                parser.error("--serve needs the page: drop --no-page")
+            try:
+                parse_address(args.serve)
+            except ValueError as exc:
+                parser.error(str(exc))
+        try:
+            return watch(
+                args.run,
+                interval=args.interval,
+                once=args.once,
+                page=not args.no_page,
+                serve=args.serve,
+            )
+        except OSError as exc:
+            parser.exit(2, f"{parser.prog}: {exc}\n")
     try:
         entry = request(
             args.run,
@@ -2091,7 +2835,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         parser.exit(2, f"{parser.prog}: {exc}\n")
     state = RunDir(args.run).control().scopes.get(entry["scope"], ACTIVE)
-    print(f"{args.command} requested for {entry['scope']}: now {state}")
+    note = unknown_slice_note(entry["scope"], summarise_run(args.run))
+    print(f"{args.command} requested for {entry['scope']}: now {state}{note}")
     return 0
 
 
