@@ -43,6 +43,7 @@ from yizkr.pipeline.chunking import (
     ExtractionFailed,
     parse_chunk_response,
 )
+from yizkr.pipeline.critique import Finding
 from yizkr.pipeline.language import resolve_language
 from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.rundir import RunDir, fold_control
@@ -894,6 +895,16 @@ class TestDistributions:
             a_text_document(tmp_path, checks, f"card{claims}.txt", claims)
         assert "claim-yield" not in checks_raised(run)
 
+    def test_a_batch_without_claims_is_no_yield_outlier(self, tmp_path):
+        """None at all is the zero checks' finding, and joins no yield's
+        distribution."""
+        run, checks = make_checks(tmp_path, self.SMALL)
+        for n in range(3):
+            a_text_document(tmp_path, checks, f"card{n}.txt", 5)
+        a_text_document(tmp_path, checks, "blank.txt", 0)
+        assert "claim-yield" not in checks_raised(run)
+        assert checks._samples[("claim-yield", "text")] == [5.0] * 3
+
     def test_no_document_is_judged_before_enough_samples(self, tmp_path):
         run, checks = make_checks(tmp_path)  # ten samples by default
         for n in range(5):
@@ -1085,17 +1096,28 @@ class TestRates:
         run, checks = make_checks(tmp_path)
         doc = Doc(tmp_path, "letter.png", "media")
         about = dict(subject=doc.sha1, kind="media", role="transcribe")
-        for outcome in ["ok"] * 4 + ["paused", "interrupted"] + ["error"] * 5:
+        # calls paused or interrupted are no failures, nor counted at all
+        for outcome in ["error"] * 6 + ["paused", "interrupted"] * 2:
             run.emit("call", stage="transcription", outcome=outcome, **about)
         checks.poll()
         assert "call-failures" not in checks_raised(run)
-        run.emit("call", stage="transcription", outcome="error", **about)
+        for outcome in ["ok"] * 3 + ["error"]:
+            run.emit("call", stage="transcription", outcome=outcome, **about)
         checks.poll()
         alert = only(run, "call-failures")
-        assert (alert["value"], alert["of"]) == (0.6, 10)
+        assert (alert["value"], alert["count"], alert["of"]) == (0.7, 7, 10)
         assert alert["pause"] == "stage:transcription"
         (pause,) = requests(run)
         assert pause["scope"] == "stage:transcription"
+
+    def test_half_the_recent_calls_failing_is_not_most(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        doc = Doc(tmp_path, "letter.png", "media")
+        about = dict(subject=doc.sha1, kind="media", role="transcribe")
+        for outcome in ["ok", "error"] * 10:
+            run.emit("call", stage="transcription", outcome=outcome, **about)
+        checks.poll()
+        assert "call-failures" not in checks_raised(run)
 
 
 # -- fail-fast pauses ---------------------------------------------------------
@@ -1267,7 +1289,8 @@ class TestNewAndCarried:
         )
 
     def test_an_output_the_engine_answered_is_new(self, tmp_path):
-        assert self.sparse(tmp_path, misses=1, calls=["ok"]) == "new"
+        """One of its calls kept, one asked of the engine."""
+        assert self.sparse(tmp_path, hits=1, misses=1, calls=["ok"]) == "new"
 
     def test_an_output_answered_without_the_cache_is_new(self, tmp_path):
         assert self.sparse(tmp_path, calls=["ok"]) == "new"
@@ -1347,15 +1370,19 @@ class Refusing:
 
 class Run(Orchestrator):
     """The wiki steps scripted; transcription runs for real (a text file
-    as itself, an image through `vision`); extraction and the critic
-    return fixed outputs through their stages."""
+    as itself, an image through `vision`); extraction returns a fixed
+    batch through its stage, and the critic `findings` findings for the
+    source file of that name (none by default)."""
 
-    def __init__(self, *args, batch=None, vision=None, **kwargs):
+    def __init__(
+        self, *args, batch=None, vision=None, findings=None, **kwargs
+    ):
         kwargs.setdefault("exclusions", ExclusionList())
         kwargs.setdefault("log", quiet)
         super().__init__(*args, **kwargs)
         self.batch = batch if batch is not None else a_batch(entities=1)
         self.vision = vision
+        self.findings = findings or {}
 
     def _llm(self, role, doc):
         return self.vision
@@ -1367,7 +1394,10 @@ class Run(Orchestrator):
         return self._run_stage(doc, "extraction", lambda: self.batch)
 
     def _step_critique(self, doc, batch):
-        return self._run_stage(doc, "critique", lambda: [])
+        found = [
+            Finding(target="e1", issue="an organisation typed as a place")
+        ] * self.findings.get(doc.source.name, 0)
+        return self._run_stage(doc, "critique", lambda: found)
 
     def _step_resolve(self, doc, batch):
         return batch
@@ -1395,6 +1425,50 @@ def by_invocation(run: RunDir) -> dict[str, list[tuple[str, str]]]:
 
 
 class TestTheOrchestrator:
+    def test_a_transcription_is_checked_as_it_is_stored(self, tmp_path):
+        orchestrator = Run(
+            a_folder(tmp_path, photo_txt=STUDIO), tmp_path / "state"
+        )
+        orchestrator.run()
+        alert = only(orchestrator.rundir, "language-short-text")
+        (doc,) = orchestrator.documents()
+        assert (alert["stage"], alert["subject"], alert["status"]) == (
+            "transcription",
+            doc.sha1[:12],
+            "new",
+        )
+
+    def test_a_critique_is_checked_as_it_is_stored(
+        self, tmp_path, monkeypatch
+    ):
+        thresholds = tmp_path / "thresholds.yaml"
+        thresholds.write_text("checks:\n  critic-rate:\n    min-samples: 3\n")
+        monkeypatch.setenv(anomalies.CONFIG_VARIABLE, str(thresholds))
+        texts = {
+            "a_txt": NATURALISATION,
+            "b_txt": MARRIAGE,
+            "c_txt": SOURCES["family-tree-1984"].text,
+            "d_txt": SOURCES["interview-2002"].text,
+        }
+        orchestrator = Run(
+            a_folder(tmp_path, **texts),
+            tmp_path / "state",
+            batch=a_batch("en"),
+            findings={"d.txt": 4},
+        )
+        orchestrator.run()
+        alert = only(orchestrator.rundir, "critic-rate")
+        (last,) = [
+            doc
+            for doc in orchestrator.documents()
+            if doc.source.name == "d.txt"
+        ]
+        assert (alert["stage"], alert["subject"], alert["value"]) == (
+            "critique",
+            last.sha1[:12],
+            2.0,
+        )
+
     def test_a_reused_output_carries_its_alert(self, tmp_path):
         folder = a_folder(tmp_path, brief_txt=MARRIAGE)
         first = Run(folder, tmp_path / "state")

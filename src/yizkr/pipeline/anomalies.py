@@ -738,13 +738,13 @@ class _Tail:
 @dataclass
 class _Attempt:
     """One stage of one document in the invocation, from its `started`
-    event to its end: what the engine and the LLM cache answered it, and
-    for an extraction its chunk calls and answers (every call but a
+    event to its end: what the engine and the LLM cache answered it (the
+    cache's misses and replays, which reach the engine, and its hits),
+    and for an extraction its chunk calls and answers (every call but a
     conversation's opening turn)."""
 
     engine: int = 0
     hits: int = 0
-    calls: int = 0
     chunk_calls: int = 0
     chunk_errors: int = 0
     chunk_answers: int = 0
@@ -753,8 +753,9 @@ class _Attempt:
     @property
     def carried(self) -> bool:
         """Whether the cache answered every call the stage made: at least
-        one, and none reached the engine."""
-        return self.hits > 0 and not self.engine and not self.calls
+        one, and none reached the engine. Without the cache there are no
+        hits, and every output is the engine's or the stage's own."""
+        return self.hits > 0 and not self.engine
 
 
 @dataclass
@@ -1175,12 +1176,11 @@ class AnomalyChecks:
             return
         failed = outcome == "error"
         attempt = self._attempt_of(subject)
-        if attempt is not None:
-            attempt.calls += 1
-            if event.get("role") == "extract" and event.get("call") != "open":
-                attempt.chunk_calls += 1
-                attempt.chunk_errors += failed
-                attempt.chunk_answers += not failed
+        chunk = event.get("role") == "extract" and event.get("call") != "open"
+        if attempt is not None and chunk:
+            attempt.chunk_calls += 1
+            attempt.chunk_errors += failed
+            attempt.chunk_answers += not failed
         stage = event.get("stage")
         settings = self.config.checks.call_failures
         if not settings.enabled or not isinstance(stage, str) or not stage:
