@@ -205,8 +205,8 @@ make wdqs-sandbox-down  # or: uv run python scripts/wdqs_sandbox.py down
   prints the rows as tab-separated values and the engine's wall time.
   `query` stops at `--timeout` (default 100 s) and `load` at its own
   (default 90 s), so that a command ends within two minutes.
-- **Stopping.** Every query the sandbox sends carries a marker, so
-  Ctrl-C or SIGTERM during a query cancels that query in the engine, and
+- **Stopping.** Every query that `query` sends carries a marker, so
+  Ctrl-C or SIGTERM during `query` cancels that query in the engine, and
   nothing else, and kills its curl. During a load, or the emptying of
   `load --replace`, it kills only the curl and gives the engine up to
   20 s to finish or abort the write itself: cancelling a write would
