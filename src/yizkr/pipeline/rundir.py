@@ -94,6 +94,8 @@ RUN_START = "run-start"
 RUN_END = "run-end"
 RUN_INTERRUPTED = "run-interrupted"
 SET_ASIDE = "set-aside"
+# a document failed, and only it: in a stage or outside its stages
+DOCUMENT_FAILED = "document-failed"
 # a stage's events: "reused" says its view was current and stands
 STAGE_EVENTS = ("started", "done", "reused", "failed", "held")
 # the LLM cache's events (yizkr.pipeline.llmcache), counted per role
