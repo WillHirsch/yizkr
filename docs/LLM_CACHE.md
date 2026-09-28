@@ -134,10 +134,10 @@ directory with its record, its `state.json` records the failure and the
 reason. A `state.json` the run cannot read is left as it is, never saved
 over, since it may hold the registration: repair it, or remove it and the
 next run starts the document afresh, its directory set aside as above. A
-source removed while the run goes on fails its document at the first
-step that reads it. `state.json` is replaced in one step, as the views
-are (written beside it, then renamed), so a kill never leaves it cut
-short.
+source removed after discovery fails its document when a later step
+reads it; a document whose views all stand may not read it again in the
+run. `state.json` is replaced in one step, as the views are (written
+beside it, then renamed), so a kill never leaves it cut short.
 
 **One-off invalidation.** A state directory made before ADR-0032 has no
 record for its views, and its files derived from the batch were recorded
