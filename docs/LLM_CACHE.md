@@ -502,6 +502,8 @@ in, and the kind of call:
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
 | `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears) |
 | `alert` | an anomaly alert was appended | `check`, `status` |
+| `anomaly-recheck` | a recheck of the stored outputs began (docs/ANOMALIES.md) | `config` (the thresholds' digest), `documents` |
+| `anomaly-error` | an anomaly check raised; nothing failed with it | `error` (the exception's name, never its message), `hook` |
 | `run-end` | the invocation ended, other than by Ctrl-C | `outcome` and `reason` as `run.json` records them for the invocation (docs/RUN_MANIFEST.md: `finished`, `stopped`, `paused`, `refused` or `failed`), `statuses` (documents per status) |
 | `run-interrupted` | the invocation was interrupted (Ctrl-C) | `outcome` (`interrupted`), `statuses` |
 
@@ -521,13 +523,17 @@ not events.
 
 One alert per line: `at`, `stage`, `check`, `subject` (a SHA-1 prefix),
 `value` (the measured value), and `status`: `new` on an output the engine
-answered in this run, `carried` on one made from cached answers. Each
-alert also appends an `alert` event.
+answered in this run, or one its stage makes without a call, `carried` on
+one made from cached answers or reused whole. Each alert also appends an
+`alert` event. The checks, and the fields each adds, are in
+[docs/ANOMALIES.md](ANOMALIES.md).
 
 ### `control.jsonl`
 
 Requests `{at, action, scope, by, reason}`: `action` is `pause`,
 `resume` or `abort`; `scope` is `run`, `stage:<name>` or `kind:<name>`.
+A fail-fast anomaly check's requests say `by: "anomaly"` and name their
+`check` (docs/ANOMALIES.md).
 The driver folds them in order: a pause holds until a resume, and an
 abort holds for the rest of the invocation. A new invocation writes
 `{action: "start"}`, after which earlier requests no longer apply: that

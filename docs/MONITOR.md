@@ -148,6 +148,7 @@ start marker no longer apply.
 ten, newest first: time, `new` (on an output the engine answered in this
 run) or `carried` (on one made from cached answers), stage, check,
 document and kind, and the measured value.
+Which checks raise them, and how, is in [docs/ANOMALIES.md](ANOMALIES.md).
 
 ## What the views never show
 

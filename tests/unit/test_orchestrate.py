@@ -501,7 +501,13 @@ class TestIsolationAndDiscovery:
     def test_state_dir_holds_documents_and_the_run_files(self, tmp_path):
         orchestrator = make_run(tmp_path)
         orchestrator.run()
-        names = sorted(p.name for p in orchestrator.state_dir.iterdir())
+        # alerts.jsonl, the run file of the anomaly checks (#196), is there
+        # once one raises an alert: the one-line letter raises one
+        names = sorted(
+            p.name
+            for p in orchestrator.state_dir.iterdir()
+            if p.name != "alerts.jsonl"
+        )
         assert names == [
             "control.jsonl",
             "events.jsonl",
