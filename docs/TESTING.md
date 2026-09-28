@@ -4,17 +4,24 @@ How the tests are layered, which runs to use while working and before a
 push, and the shared tools for proving that a test guards something and
 for trying queries without the live stack. Who runs what, and when, is in
 [docs/AGENT_PROTOCOL.md](AGENT_PROTOCOL.md): waves (§3), the pre-review
-self-check and reviews (§4), and live tests (§5). Each tool documents its
-options in its own `--help`.
+self-check and reviews (§4), and live tests (§5). Each tool documents
+itself in its own `--help`.
 
 ## Test layers
 
 - **Unit tests** (`tests/unit`) are offline: no stack, no network, no
   model. They are the default run, `uv run pytest -q` or `make test`,
   because `pyproject.toml` deselects the `live` marker unless `-m live`
-  asks for it. CI runs them, with ruff, on every push. An autouse fixture
-  points `CLAUDE_CONFIG_DIR` at a directory that does not exist, so no
-  unit test reads your Claude Code login.
+  asks for it. CI runs them, with ruff, on every push.
+  `tests/unit/conftest.py` sets their defaults:
+  - `CLAUDE_CONFIG_DIR` points at a directory that does not exist, so no
+    unit test reads your Claude Code login.
+  - `OPENBLAS_NUM_THREADS` defaults to 1; a value already set in the
+    environment is kept.
+  - `os.fsync`, `os.fdatasync` and `os.sync` are no-ops. A unit test
+    that needs the real sync calls is marked `@pytest.mark.real_fsync`,
+    as the durability tests in `tests/unit/test_stages.py` are; the live
+    tests under `tests/integration` always make them.
 - **Live tests** (`tests/integration`, every module marked `live`) run
   against the deployed stack (`make up` or `make up-local`) through
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.
@@ -22,20 +29,24 @@ options in its own `--help`.
   (`deploy/.env`) or the stack is unreachable. They write fictional
   fixture data under deterministic labels, so a re-run reuses its
   entities, and that reuse is part of what they check. They run on the
-  one instance that scratch runs reset, one session at a time behind the
-  live-stack lock (below); AGENT_PROTOCOL §5 says who runs them and how
-  the session ends. A PR that changes a write path carries
+  one instance that scratch runs reset, and take turns on it through the
+  live-stack lock (below). A PR that changes a write path carries
   `needs:live-test`, and a substantial change to one gets a live test of
-  its own (CLAUDE.md).
+  its own (CLAUDE.md). Its live run comes as soon as the draft opens
+  (AGENT_PROTOCOL §5), because the stack enforces what no unit test
+  sees: the first live run of #227 failed with HTTP 414, since the query
+  service refuses a GET request line longer than about 8 KB. Long SPARQL
+  is POSTed, as the site build and `run_sparql` in
+  `tests/integration/conftest.py` do.
 - **The real-model tests** (`tests/integration/test_live_chunked.py`,
   also marked `live`) call the model through the claude CLI: chunked
   extraction end to end, and the exact resumption of a conversation the
   cache kept. They go through the LLM cache at `$YIZKR_LIVE_CACHE`
   (default `var/live-cache`), so a first run makes a few subscription
   calls and later runs are answered from the cache. They need the claude
-  CLI, logged in, and skip when it is not installed; they don't use the
-  Wikibase stack. `make test-live` runs them with the others; on their
-  own they are
+  CLI, logged in, and skip when it is not installed. They don't use the
+  Wikibase stack, so they don't take the live-stack lock.
+  `make test-live` runs them with the others; on their own they are
   `uv run pytest -m live tests/integration/test_live_chunked.py -s`, where
   `-s` shows their cache events.
 
@@ -64,94 +75,157 @@ push, and the pre-commit hook (`make hooks`) runs ruff on every commit.
 
 ## Parallel runs (pytest-xdist)
 
-pytest-xdist is a dev dependency (#252). CI runs the unit suite with it,
-each test file in one worker. Locally it is opt-in, for when the machine
-is idle:
+CI runs the unit suite as `uv run pytest -n auto --dist loadfile` (#252):
+a worker per CPU, with each test file kept in one worker, so a file's
+module fixtures and test order are as in a serial run. Local runs stay
+serial unless `-n` is given. When the machine is idle, a parallel local
+run is:
 
 ```sh
 uv run pytest -q -n auto --dist loadfile
 ```
 
-`-n auto` starts a worker per CPU core, and `--dist loadfile` keeps each
-test file in one worker, as CI does. While other agents are testing, the
-extra workers slow everyone's runs, so run serially then (AGENT_PROTOCOL
-§3, Waves). It is for unit tests only: live tests share the one instance.
-A test that fails only in parallel is not parallel-safe, which is a bug:
-report it.
+While other agents are testing, the extra workers slow everyone's runs,
+so run serially then (AGENT_PROTOCOL §3, Waves). Parallel runs are for
+unit tests only: live tests take turns on the one instance. A test that
+needs several calls in flight at once holds them at a
+`threading.Barrier`, as `test_llmcache.py` and `test_chunking.py` do,
+never with a sleep, which stops keeping them apart under load. A test
+that fails only in parallel or under load is a bug: report it.
 
 ## The mutation harness
 
 A test earns its place by failing when the behaviour it guards breaks.
-`scripts/mutate.py` (#250) shows that it does. A spec file lists
-mutations, each with a file, the exact old text, the new text, an
-optional name and the tests to run. For each one the harness applies the
-mutation, clears that file's bytecode cache, runs the named tests,
-records the mutant as killed or survived, and restores the file byte for
-byte, even after an error or Ctrl-C. It prints a table, and exits
-non-zero if any mutant survives, unless told otherwise.
+`scripts/mutate.py` (#250) shows that it does. For each mutation in a
+spec it writes an exact text edit to one file, runs the tests that
+should catch it and restores the file. The mutant is *killed* when the
+tests fail and *survives* when they pass.
 
 ```sh
-uv run python scripts/mutate.py <spec>
-uv run python scripts/mutate.py --help    # the spec format and options
+uv run python scripts/mutate.py SPEC    # a TOML spec
+uv run python scripts/mutate.py --help  # the full contract
 ```
 
-- **Commit first.** The harness refuses to start on a file with
-  uncommitted changes, so that restoring it can never lose work; a
-  work-in-progress commit is fine.
-- **One mutation per regression.** Put back the bug the change fixes, or
-  take out the behaviour it adds, and name the tests that should catch
-  it. A mutant that survives means the test does not guard that
-  regression.
-- **Why not a script of your own.** Python reuses a cached `.pyc` while
-  its source keeps the same size and modification second, so a same-size
-  edit made within a second can run the old code and make a mutant's
-  result wrong. The harness clears the cache for each mutation.
-- **Evidence.** The PR's mutation-evidence line gives the harness's
-  table, with the spec in a collapsed block so that a reviewer can re-run
-  it. The spec is scratch: keep it out of the repository.
+The spec has one `[[mutation]]` table per mutation:
+
+```toml
+[[mutation]]
+name = "blank names are kept"    # optional and unique
+file = "src/yizkr/example.py"    # relative to the repository root
+old = 'if not name.strip():'     # exact text, found exactly once
+new = 'if False:'
+tests = ["tests/unit/test_example.py::test_blank_names_are_dropped"]
+# count = 2   # optional: old is found this many times, all replaced
+```
+
+- **Run it from your own worktree**, with `uv run` there. The harness
+  runs pytest under its own interpreter, and an environment made for
+  another checkout imports that checkout's `src/`, where no mutation
+  lands: every mutant would falsely survive.
+- **Commit first.** Before anything runs, it refuses a file that is
+  dirty, untracked or a symlink, and `old` text that is missing, found a
+  different number of times than `count`, or overlapping. It restores
+  each file byte for byte, with its mode and modification time, even
+  after a timeout or Ctrl-C, and git must show the file clean again.
+- **Write code in literal strings.** TOML's single-quoted strings
+  (`'...'`, or three quotes around several lines) keep every character
+  as written. In double-quoted ones a backslash starts an escape, and in
+  a multi-line one a backslash at the end of a line joins it to the next.
+- **The baseline.** The tests first run on the unmutated tree, once per
+  distinct test list, just as the mutants' runs will. Each run must pass,
+  with at least one test passing rather than skipping. `--no-baseline`
+  skips it.
+- **No stale bytecode.** Python reuses a cached `.pyc` while its source
+  keeps the same size and modification second, so a same-size edit can
+  run the old code. The harness deletes the module's bytecode before
+  each run and runs pytest with `PYTHONDONTWRITEBYTECODE=1`, which is why
+  a script of your own is no substitute.
+- **Stop what a test detaches.** Each pytest run has a process group of
+  its own, killed when the run ends or outlives `--timeout` (default
+  300 s). A process that leaves the group escapes, and can hold a lock or
+  a port that makes later mutants look killed, so tests stop what they
+  detach, in a fixture's teardown.
+- **Results.** The run stops at the first survivor or error unless
+  `--keep-going`. It prints a Markdown table, ready for the PR, and
+  `--json PATH` also writes a report. The exit status is 0 when every
+  mutant was killed (or survived under `--allow-survivors`), 1 for a
+  survivor, 2 for a refusal or an error, and 128 + N after signal N.
+- **Evidence.** The PR's mutation-evidence line gives the table, with the
+  spec in a collapsed block so that a reviewer can re-run it. The spec is
+  scratch: keep it out of the repository.
 
 ## The query-engine sandbox
 
-For writing or reviewing a SPARQL query without the live stack.
-`scripts/synthetic_graph.py` (#251) writes a deterministic, seeded graph
-in Wikibase's RDF shape, of a chosen size and with neutral placeholder
-labels only. It holds persons with source-attributed dates at several
-precisions, earliest/latest ranges, contradictions between artifacts,
-place containment chains, residences, spouses, ranks and redirects.
-`scripts/wdqs_sandbox.py` runs a throwaway query engine to load it into:
-a `wikibase/wdqs:2` container with no network, capped at 768 MB, under a
-unique name.
+For writing or reviewing a SPARQL query without the live stack (#251).
+`scripts/synthetic_graph.py` writes a deterministic graph in the query
+service's form of Wikibase data, and a vocabulary map beside it. Its
+labels are neutral placeholders only ("Person 17", "Place 3").
+`scripts/wdqs_sandbox.py` runs a throwaway query engine to load it into.
+`DIR` is any scratch directory outside the repository:
 
 ```sh
-make wdqs-sandbox-up                           # start the sandbox
-uv run python scripts/synthetic_graph.py --help
-uv run python scripts/wdqs_sandbox.py --help   # up, load, query, down
-make wdqs-sandbox-down                         # remove it
+uv run python scripts/synthetic_graph.py --persons 250 --seed 7 \
+    --out DIR/g.ttl
+make wdqs-sandbox-up    # or: uv run python scripts/wdqs_sandbox.py up
+uv run python scripts/wdqs_sandbox.py load DIR/g.ttl
+uv run python scripts/wdqs_sandbox.py query \
+    src/yizkr/queries/disagreement-report.rq --repeat 3 --max-rows 20
+make wdqs-sandbox-down  # or: uv run python scripts/wdqs_sandbox.py down
 ```
 
-`load` puts a graph into the sandbox. `query` renders the repository's
-query templates with the synthetic graph's property ids, runs them, and
-prints the rows and the timing. The sandbox needs Docker but never
-touches the live stack, so it takes no lock. Take it down when you are
-done: a sandbox left running holds memory that other sessions need.
+- **The graph.** `--persons` sets its size, and the same `--persons` and
+  `--seed` give the same bytes on a given Python version. It holds
+  persons with source-attributed dates at several precisions,
+  earliest/latest ranges, contradictions between artifacts, place
+  containment chains, residences, spouses, ranks and redirects.
+- **Isolated.** `up` starts a `wikibase/wdqs:2` container with no
+  network, no ports and no volumes, capped at 768 MB and one CPU. The
+  sandbox never touches the deployed stack, so it takes no lock, and it
+  acts only on a container that carries its label and name prefix.
+- **One per checkout.** Its state file and container name are keyed on
+  the checkout's top directory, so worktrees never share or remove each
+  other's sandbox. One command at a time uses a sandbox; a second one
+  waits.
+- **Queries.** `query` renders a template as `yizkr publish-queries`
+  does, through the vocabulary map beside the graph loaded last
+  (`--vocab` names another; `--raw` sends a finished query as it is). It
+  prints the rows as tab-separated values and the engine's wall time.
+  `load` and `query` stop at `--timeout` (default 100 s), and Ctrl-C
+  cancels the engine's running work.
+- **Timings are indicative.** One CPU makes them noisy: compare variants
+  in one session with `--repeat 3` and their medians, or start the
+  sandbox with `up --cpus 2`. The sandbox compares queries; it does not
+  predict the deployment's times.
+- **Take it down** when you are done (`down` is safe to repeat): a
+  sandbox left running holds memory that other sessions need.
 
 ## The live-stack lock
 
-Live test sessions serialise on one lock (#253). When pytest selects any
-live test, a session-scoped fixture in `tests/integration/conftest.py`
+Live test sessions take turns on the one instance (#253). A session
 takes an exclusive lock on `$YIZKR_LIVE_LOCK` (default
-`~/.cache/yizkr/live-stack.lock`) before the first live test runs, and
-releases it when the session ends; a unit run never takes it. The
-default path is per user, not per worktree, so every worktree on the
-machine shares it, and sessions exclude each other only when they use
-the same path.
+`~/.cache/yizkr/live-stack.lock`) when its first test that uses the
+stack sets up, and holds it to the end of the session: the `config`
+fixture in `tests/integration/conftest.py` takes the `live_stack_lock`
+fixture, and `tests/integration/live_lock.py` holds the code. Unit runs
+never take the lock, and nor do the real-model tests, which need only the
+claude CLI. The default path is per user, not per worktree, so every
+worktree on the machine shares it; `$YIZKR_LIVE_LOCK` must be an absolute
+path.
 
-A session that finds the lock held prints the holder's pid, command and
-start time, and waits; it gives up after a timeout that can be
-configured. The lock has flock semantics: it is released when its holder
-exits, however it exits, so a crashed session never blocks the next.
-
-Only live test sessions take the lock. A scratch run's reset and write,
-`yizkr bootstrap` and other writers to the stack do not, so the
-orchestrating session still gives the stack to one agent at a time
-(AGENT_PROTOCOL §3).
+- **Waiting.** A session that finds the lock held says once who holds it
+  (pid, command, working directory and start time), and waits. After
+  `$YIZKR_LIVE_LOCK_TIMEOUT` seconds (default 7200) it gives up: its
+  tests that use the stack error at setup, with that message shown once.
+- **Crashes.** The lock is a flock, which the kernel releases when its
+  holder ends, however it ends, so a crashed or killed session blocks
+  nothing. The holder records itself in the lock file and empties the
+  record as it releases the lock, so a record in a free lock file was
+  left by a crash.
+- **Never delete the lock file.** A session that found no file would
+  create and lock a new one, while the holder of the old one went on:
+  two sessions on the stack at once.
+- **Only live test sessions take it.** A scratch run's reset and write,
+  `yizkr bootstrap` and other writers to the stack don't, so the
+  orchestrating session still gives the stack to one agent at a time
+  (AGENT_PROTOCOL §3). Live test sessions need no check by hand for
+  another one: the lock makes them wait their turn.

@@ -16,6 +16,9 @@ Start here:
 - `CLAUDE.md` – standing instructions for AI-assisted development
 - `docs/AGENT_PROTOCOL.md` – how work moves from an issue to main, and
   how real data stays out of the repository and GitHub
+- `docs/TESTING.md` – the test layers, which test runs to use when, and
+  the shared tools: the mutation harness, the query-engine sandbox and
+  the live-stack lock
 - `docs/REQUIREMENTS.md` – the six requirements (acceptance criteria)
 - `docs/adr/` – architecture decisions and their rationale; ADR-0025
   says how the pipeline is developed: whole-corpus scratch runs, reuse of

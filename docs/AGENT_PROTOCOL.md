@@ -47,11 +47,15 @@ write produces carries the matching `stage:*` label: a change to the
 stage's code, a prompt template it uses, the manifest, or the model,
 effort or parameters it runs with (ADR-0025 §2, ADR-0032). A PR that
 changes a stage that already runs also carries `needs:scratch-diff` (§5).
-An edit that cannot change any output (a comment, a rename, a refactor)
-needs neither label; the review checks that it is neutral. New stages get
-their own `stage:*` label as they are added. The convergence report
-(#155) lists the open issues under each `stage:*` label and flags merged
-PRs that changed a stage without one.
+**The pre-baseline exception:** until the first whole-corpus scratch run
+exists (#145), there is no baseline to diff against, so a PR that changes
+a stage before write carries its `stage:*` label but not
+`needs:scratch-diff`, and the first run's baseline includes the change
+(as on #228, #247 and #273). An edit that cannot change any output (a
+comment, a rename, a refactor) needs neither label; the review checks
+that it is neutral. New stages get their own `stage:*` label as they are
+added. The convergence report (#155) lists the open issues under each
+`stage:*` label and flags merged PRs that changed a stage without one.
 
 ## 3. Dispatch and claiming
 
@@ -121,7 +125,8 @@ diff: scratch runs, the keeper run and reviews of their output.
    works now and carry no development history such as issue or PR
    numbers; ADR references are fine (CLAUDE.md, Engineering conventions).
    The verdict names the commit it reviewed; any commit pushed after that
-   is re-checked by the reviewer before the PR is marked ready.
+   is re-checked by the reviewer, in a bounded re-review (below), before
+   the PR is marked ready.
 7. **Mark it ready.** The orchestrating session runs `gh pr ready` once
    the verdict is in and the fixes are checked. Until then the PR stays a
    draft. This is the standard for all agentic work: a draft means "not
@@ -137,7 +142,9 @@ through the reviewer's usual checklist before the first push for review,
 and records it in the PR template's self-check:
 
 1. **Docs moved with the code.** Every doc the change makes untrue is
-   updated in the same PR (CLAUDE.md, Engineering conventions).
+   updated in the same PR (CLAUDE.md, Engineering conventions), except
+   CLAUDE.md itself, which changes only with the owner's approval: the PR
+   proposes its new wording under owner actions instead.
 2. **Each new or changed test fails under the regression it guards.**
    Show it with the mutation harness, `scripts/mutate.py` (#250,
    docs/TESTING.md): a mutation that puts the bug back, or takes the
@@ -173,8 +180,13 @@ with the full suite once before its push.
   the code, docs, commit messages or PR text. Everything else, such as
   naming, structure, extra coverage or ideas for later, goes in the
   verdict as a note or a proposed follow-up, and the orchestrating session
-  files the follow-ups as issues. A re-check of later commits (step 6)
-  keeps the same boundary.
+  files the follow-ups as issues. A demand that new code match the speed
+  of what it replaces is a note too, unless the change breaks a real
+  budget, such as the 120 s that the site build and the live tests give
+  each query.
+- **Bounded re-review.** After a fix round, the re-review (step 6) checks
+  only the required fixes and any regressions they caused, under the
+  same boundary. It does not review the PR afresh.
 - **CI runs the full suite; the reviewer doesn't run it again.** The
   reviewer relies on CI's result for the commit under review:
   `gh pr checks <n>` while that commit is the PR's head (`--watch` waits
@@ -183,9 +195,11 @@ with the full suite once before its push.
   adds or changes, the PR's mutation spec or one of its own, and edge
   cases the PR doesn't list. If CI fails for that commit, the failure is a
   required fix. CI never runs live tests; they run centrally (§5).
-- **Fix rounds resume the same fixer.** Where the orchestrating session
-  can, every fix round on a PR resumes the same fixer rather than starting
-  a new agent, so its context carries over from round to round.
+- **Resume, don't restart.** Where the orchestrating session can, every
+  fix round on a PR resumes the same fixer, and every re-review the same
+  reviewer, rather than starting a new agent, so their context carries
+  over from round to round. The implementer's and the reviewer's
+  worktrees are kept until the PR merges, so that both can be resumed.
 
 **Hooks.** `make hooks` installs the pre-commit hook (ruff) and the
 pre-push hook (`scripts/git-hooks/pre-push`). The pre-push hook refuses
@@ -212,15 +226,21 @@ feature, decision, ingestion pass). An agent that files an issue with
   the latest scratch run, so that no scratch run mistakes the instance for
   one it wrote (#199). Once the instance is kept, live tests wait for
   #159's decision on where they run.
-- **Live tests run centrally, one session at a time.** The orchestrating
-  session runs them for the PRs that need them, or hands a run to one
-  session at a time; no other agent starts live tests of its own. The
-  live-stack lock (#253, docs/TESTING.md) serialises the sessions: a
-  pytest session that selects live tests takes the lock before the first
-  one runs and holds it to the end, and a second session waits, saying
-  who holds it. Only live test sessions take the lock, so the scratch
-  reset, bootstrap and other writers still get the stack from the
-  orchestrating session (§3).
+- **Live tests run centrally, as soon as the draft opens.** The
+  orchestrating session runs them for a PR that needs them, or hands the
+  run to one session, in parallel with the first review rather than after
+  the review rounds; no other agent starts live tests of its own. #227
+  went through six agents and about 11.5 agent-hours before its first
+  live run, which failed at once: HTTP 414, because the query service
+  refuses a GET request line longer than about 8 KB, so long SPARQL must
+  be POSTed.
+- **Live sessions take turns by themselves.** A session takes the
+  live-stack lock (#253, docs/TESTING.md) when its first test that uses
+  the stack sets up, and holds it to the end; a second session waits,
+  saying who holds the lock. No one checks by hand for another live
+  session. Only live test sessions take the lock, so the scratch reset,
+  bootstrap and other writers still get the stack from the orchestrating
+  session (§3).
 - **`needs:scratch-diff`** goes on any PR that changes a stage before
   write that already runs (§2). The procedure:
   1. **Run.** A local session runs a whole-corpus scratch run at the PR's
@@ -247,8 +267,12 @@ feature, decision, ingestion pass). An agent that files an issue with
   5. **Fix.** A regression is fixed in the pipeline on the PR's branch and
      run again. Nothing is repaired in the graph.
 
-  Until the scratch driver, report and diff land (#194, #124, #198), no
-  scratch-diff evidence exists, and PRs with the label wait.
+  Until the first whole-corpus scratch run exists (#145), the
+  pre-baseline exception applies (§2): a PR that changes a stage carries
+  its `stage:*` label but not this one, and the first run's baseline
+  includes the change. Until the scratch driver, report and diff land
+  (#194, #124, #198), no scratch-diff evidence exists, and PRs with the
+  label wait.
 - While a PR waits for this evidence, its Project Status is *Needs local
   verify*. Cloud agents never provide the evidence; they leave the label
   for a local session.

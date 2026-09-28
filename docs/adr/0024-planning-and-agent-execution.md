@@ -24,6 +24,15 @@ the engine boundary): §2 (a change to a stage's code needs no version
 bump), §4 (the LLM cache takes the stage store's place in `var/`) and §7
 (scratch runs reuse unchanged model calls).
 
+Amended by #249 (2026-09-28), for the owner-approved review of the
+2026-09-27 agent workload: §3 (the machine the agents share: waves keep
+test-heavy agents to a moderate number at once, and live test sessions
+take turns on the live-stack lock, #253). Matching edit: §2 (the
+pre-baseline exception for `needs:scratch-diff`, until the first
+scratch run, #145). The review's operational rules are in
+[`docs/AGENT_PROTOCOL.md`](../AGENT_PROTOCOL.md): the pre-review
+self-check and the review rules in §4, central live tests in §5.
+
 ## Context
 
 Work resumed on 2026-09-27 after a pause. Most changes are now made by
@@ -103,7 +112,10 @@ now, cloud sessions later. Four things had to change together.
   or its parameters) carries `needs:scratch-diff`: a local session posts
   the aggregate report of a whole-corpus scratch run and its diff against
   the latest run on main, read by the owner or a local reviewer agent
-  (ADR-0025 §4).
+  (ADR-0025 §4). Until the first whole-corpus scratch run exists (#145),
+  there is no run to diff against: such a PR carries its `stage:*` label
+  but not `needs:scratch-diff`, and the first run's baseline includes the
+  change.
 
 ### 3. Dispatch: a standing go-ahead, limited by non-interference
 
@@ -119,7 +131,13 @@ now, cloud sessions later. Four things had to change together.
   resource: the live Wikibase stack, and the claude-code subscription for
   LLM-heavy work. A scratch run holds the subscription for its LLM stages,
   and holds the live stack only while its reset, register, write,
-  place-reconcile and site stages run.
+  place-reconcile and site stages run. Live test sessions take turns on
+  the stack by themselves, through the live-stack lock (#253). The
+  machine the agents run on is shared by all of them, so for it the
+  second rule takes a softer form: dispatch comes in waves that keep
+  test-heavy agents to a moderate number at once, because contention
+  slows every test run and causes timing flakes. Waves pace the agents
+  that run at once; they set no ceiling on open draft PRs.
 - Parked issues and `exec:owner` issues are never dispatched.
   `exec:cloud-agent-ok` issues go to cloud agents only after the
   cloud-dispatch gate (§4) closes. The #34 edge gates cloud dispatch only:

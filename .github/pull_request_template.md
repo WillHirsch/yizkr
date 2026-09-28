@@ -22,18 +22,18 @@ people by QID, and give metrics as aggregates only.
 Commands run and their results, aggregates only:
 - `uv run ruff check .`, `uv run ruff format --check .`, and the full
   `uv run pytest -q` once, before the final push (docs/TESTING.md)
-- needs:live-test: `make test-live` results from the session that ran them
-  on the one instance, and how it cleared the instance-contents key
-  (docs/AGENT_PROTOCOL.md §5)
+- needs:live-test: `make test-live` results from the central live run,
+  started when the draft opened, and how it cleared the instance-contents
+  key (docs/AGENT_PROTOCOL.md §5)
 -->
 
 **Mutation evidence:**
 <!--
-For each new or changed test: the regression it guards, and the table
-from `uv run python scripts/mutate.py <spec>` showing its mutant killed,
-with the spec in a collapsed <details> block so a reviewer can re-run it
-(docs/TESTING.md). Explain any survivor. Or write "no new or changed
-tests".
+For each new or changed test: the regression it guards, and the Markdown
+table from `uv run python scripts/mutate.py SPEC` showing its mutant
+killed, with the TOML spec in a collapsed <details> block so a reviewer
+can re-run it (docs/TESTING.md). Explain any survivor. Or write "no new
+or changed tests".
 -->
 
 **Edge cases:**
@@ -68,7 +68,9 @@ checklist (docs/AGENT_PROTOCOL.md §4). A fix round runs it again over
 what its own commits change.
 -->
 
-- [ ] Docs move with code (ADRs, MODELING.md, CLAUDE.md, READMEs).
+- [ ] Docs move with code (ADRs, MODELING.md, READMEs, docs/). A
+  CLAUDE.md change needs the owner's approval, so its proposed wording
+  goes under owner actions, not into the diff.
 - [ ] **Tests fail under their regressions.** Each new or changed test
   is shown, with `scripts/mutate.py`, to fail under the regression it
   guards (Mutation evidence above).
@@ -85,7 +87,10 @@ what its own commits change.
   that cannot change its outputs (a comment, a rename, a refactor). Or it
   can change them (its code, a prompt, the manifest, a model, effort or
   parameters), and this PR and its issue carry the matching `stage:*`
-  label, plus `needs:scratch-diff` if the stage already runs.
+  label, plus `needs:scratch-diff` if the stage already runs. Until the
+  first whole-corpus scratch run exists (#145), no PR carries
+  `needs:scratch-diff` (the pre-baseline exception,
+  docs/AGENT_PROTOCOL.md §2).
 - [ ] **Test runs.** Targeted tests while iterating, then the full
   `uv run pytest -q` once, before the final push.
 - [ ] **No real data (self-reviewed, docs/AGENT_PROTOCOL.md §7).** I
