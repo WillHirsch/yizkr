@@ -92,6 +92,12 @@ def number(literal: str) -> int:
     return int(re.fullmatch(r'"(-?\d+)"\^\^xsd:integer', literal)[1])
 
 
+def iso_date(literal: str) -> str:
+    """A time term's YYYY-MM-DD, comparable as a string in chronological
+    order (every date here is zero-padded to the same width)."""
+    return literal[1:11]
+
+
 class Graph:
     """A generated graph, parsed and indexed for the shape checks."""
 
@@ -297,6 +303,19 @@ def dated_residences(g: Graph) -> list[str]:
     ]
 
 
+def ranged_residences(g: Graph) -> list[str]:
+    """Residences whose start and end each carry their own range
+    (MODELING.md, "Marriages, residences and other periods")."""
+    return [
+        statement
+        for _, statement in g.statements("residence")
+        if g.qualifiers(statement, "earliest_date")
+        and g.qualifiers(statement, "latest_start_date")
+        and g.qualifiers(statement, "earliest_end_date")
+        and g.qualifiers(statement, "latest_date")
+    ]
+
+
 def spouses(g: Graph) -> list[tuple[str, str]]:
     """Couples whose spouse statements run both ways, one of them dated."""
     pairs = defaultdict(list)
@@ -382,6 +401,7 @@ SHAPES = {
     "contradictions within one artifact": lambda g: contradictions(g, True),
     "place containment chains": containment_chains,
     "residences with start and end": dated_residences,
+    "residences with a range on each end": ranged_residences,
     "spouses": spouses,
     "a date beside a deprecated one": lambda g: ranked_dates(g, "Deprecated"),
     "a date beside a preferred one": lambda g: ranked_dates(g, "Preferred"),
@@ -687,6 +707,29 @@ class TestShapes:
             assert list(graph.out[redirect]) == ["owl:sameAs"]
             assert target not in graph.redirects
             assert graph.out[target], target
+
+    def test_residence_ranges_bound_their_own_end(self, graph):
+        """MODELING.md, "Marriages, residences and other periods": a
+        start's range (earliest_date/latest_start_date) contains
+        start_time, and an end's range (earliest_end_date/latest_date)
+        contains end_time, each pair bounding only its own end."""
+        found = ranged_residences(graph)
+        assert found
+        for statement in found:
+            start = iso_date(graph.qualifiers(statement, "start_time")[0])
+            end = iso_date(graph.qualifiers(statement, "end_time")[0])
+            earliest = iso_date(
+                graph.qualifiers(statement, "earliest_date")[0]
+            )
+            latest_start = iso_date(
+                graph.qualifiers(statement, "latest_start_date")[0]
+            )
+            earliest_end = iso_date(
+                graph.qualifiers(statement, "earliest_end_date")[0]
+            )
+            latest = iso_date(graph.qualifiers(statement, "latest_date")[0])
+            assert earliest <= start <= latest_start, statement
+            assert earliest_end <= end <= latest, statement
 
 
 class TestVocabulary:
