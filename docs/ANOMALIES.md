@@ -324,9 +324,11 @@ the new invocation, and even when the timer looks between the start
 marker and the carry. A pause whose timeout passes during the wait is
 aborted there, and the driver carries the abort instead; a pause carried
 from a reading of the file older than the checks' abort is aborted again
-at the next look. The watch keeps the request's time in the process, so
-a pause that another process carried would be timed from its own
-request.
+at the next look. The watch lives in the process whose checks asked for
+the pause: a pause carried into another process is not watched there,
+and holds until someone resumes or aborts it. A driver that carries
+pauses from one invocation to the next within its process, as the
+scratch driver does, needs nothing more.
 
 **How a driver sees it.** A driver folds `control.jsonl` with
 `rundir.fold_control`, as it folds every request, the monitor's

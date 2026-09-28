@@ -973,13 +973,14 @@ class _SliceWatch:
     control file as the driver folds it, under the lock its appenders
     take, and aborts the slice when a pause of the checks alone stands on
     it and the timeout has passed since the checks asked for the pause
-    (its origin, which a carry does not change; a pause they did not ask
-    for in this process is timed from its own request). A look that finds
-    such a pause short of its timeout looks again when it is due; any
-    other look, the one that aborts included, looks again when the
-    checks' request would reach its timeout, or once that has passed, a
-    timeout later, for a carry still to come. One pending timer per slice
-    makes the looks, and so does every check the orchestrator calls."""
+    (its origin, which a carry does not change). A look that finds such a
+    pause short of its timeout looks again when it is due; any other look,
+    the one that aborts included, looks again when the checks' request
+    would reach its timeout, or once that has passed, a timeout later, for
+    a carry still to come. One pending timer per slice makes the looks,
+    and so does every check the orchestrator calls. The watch belongs to
+    the process whose checks asked for the pause: a pause carried into
+    another process is not watched there."""
 
     def __init__(self, path: Path) -> None:
         self.run = RunDir(path)
