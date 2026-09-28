@@ -124,7 +124,9 @@ def read_jsonl(path: Path) -> list[dict]:
     Records are split at newlines only: a record's strings may hold other
     line separators (U+2028, U+2029, U+0085), which the writers leave raw.
     Each line is decoded on its own, so a line torn inside a multi-byte
-    character is skipped like any other torn line.
+    character is skipped like any other torn line. A line nested too
+    deeply for the decoder to recurse through is skipped the same way: no
+    writer here produces one, but a reader does not stop on one either.
     """
     if not path.is_file():
         return []
@@ -134,7 +136,7 @@ def read_jsonl(path: Path) -> list[dict]:
             continue
         try:
             entry = json.loads(line.decode("utf-8"))
-        except ValueError:  # UnicodeDecodeError included
+        except (ValueError, RecursionError):  # UnicodeDecodeError included
             continue
         if isinstance(entry, dict):
             entries.append(entry)
