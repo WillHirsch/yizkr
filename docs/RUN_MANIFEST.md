@@ -68,7 +68,10 @@ whole or not at all.
    stand in an invocation starts no client, and its `client` stays
    `null`.
 3. **When the invocation ends.** Its `ended_at` and `outcome` are
-   recorded (below), and so is the run's `ended_at`.
+   recorded (below), and so is the run's `ended_at`. Then the event that
+   closes the invocation's events (`run-end`, or `run-interrupted` for
+   Ctrl-C) gives the same `outcome` and `reason`, however the invocation
+   ended, a paused pass included (docs/LLM_CACHE.md).
 
 A model named by an alias is refused before anything is written (below).
 
@@ -166,7 +169,7 @@ version of the code: `run.json` files from before format 1 hold only
 | `corpus` | `{folder, exclusions}`: the corpus folder's absolute path; the never-ingest list as `{file, sha256}`, see below |
 | `code` | `{version, commit, dirty, diff_sha256}`, see below |
 | `config` | The run's configuration: `engine`, `language`, `fallback_language`, `extract_effort`, `review_effort`, `extract_model`, `refresh` (the refreshed roles), `epochs` (role to epoch, where not 0), `artifact_type`, `serial`, `chunk_concurrency`, `extract_concurrency` |
-| `documents` | One entry per planned document, `{sha1, file, kind, stages}`: its media SHA-1, its file name, its slice (`text`, `media`, `presentation`, `gedcom`) and the stages planned for it |
+| `documents` | One entry per planned document, `{sha1, file, kind, stages}`: its media SHA-1, its file name, its slice (`text`, `media`, `presentation`, `gedcom`) and the stages planned for it. A document whose source or `state.json` cannot be read is not planned; a `document-failed` event names it (docs/LLM_CACHE.md) |
 | `started_at` | When the first invocation started (UTC, ISO 8601, to the second) |
 | `ended_at` | When the latest invocation ended; `null` while it runs, or when it was killed |
 | `invocations` | One entry per invocation, in order, see below |

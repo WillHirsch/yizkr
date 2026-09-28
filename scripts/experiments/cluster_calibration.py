@@ -362,7 +362,7 @@ def load_gedcom(path: Path) -> Manifest:
 
 
 def fold(text: str) -> str:
-    """Case- and accent-insensitive form (``Zoë`` == ``zoe``)."""
+    """Case- and accent-insensitive form (``Cäcilie`` == ``cacilie``)."""
     decomposed = unicodedata.normalize("NFKD", text)
     stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
     return stripped.casefold().replace("ß", "ss")
@@ -481,7 +481,7 @@ def given_names(mention: Mention) -> set[str]:
 
 
 def partial_tokens(mention: Mention) -> set[str]:
-    """The lone tokens of a person named by one word only ("Ada",
+    """The lone tokens of a person named by one word only ("Hildegard",
     "Frau X"): under-specified for a given+surname key."""
     return {
         form[0]
@@ -498,7 +498,8 @@ def _given_match(first: str, second: str) -> bool:
 def keys_match(
     first: set[tuple[str, str]], second: set[tuple[str, str]]
 ) -> bool:
-    """Same surname and a prefix-compatible given name ("Theo"/"Theodore")."""
+    """Same surname and a prefix-compatible given name
+    ("Hilde"/"Hildegard")."""
     return any(
         s1 == s2 and _given_match(g1, g2)
         for g1, s1 in first
@@ -516,8 +517,8 @@ DEFAULT_PLACE_KEY = PLACE_KEY_VARIANTS[-1]
 
 
 def place_keys(mention: Mention, variant: str = DEFAULT_PLACE_KEY) -> set[str]:
-    """Keys from the name before the first comma ("Oakfield Camp,
-    Norland" -> "oakfield camp"): the whole component, or each of its
+    """Keys from the name before the first comma ("Lager Klurnau,
+    Klurnau" -> "lager klurnau"): the whole component, or each of its
     tokens of four or more characters (a longer or shorter form of the
     same name still shares one)."""
     return _cached(
@@ -733,7 +734,7 @@ def anchor_candidates(
 def partial_anchor_pairs(mentions: list[Mention]) -> set[Pair]:
     """A person with no key at all (one name token, no kin surnames)
     pairs with the GEDCOM people whose given name is prefix-compatible:
-    the tree is the bounded roster that can resolve a bare "Ada"."""
+    the tree is the bounded roster that can resolve a bare "Hildegard"."""
     people = [m for m in mentions if m.kind == HUMAN and m.source == "gedcom"]
     pairs: set[Pair] = set()
     for mention in mentions:
@@ -781,7 +782,7 @@ def block_gedcom_anchored(
 def cannot_link(a: Mention, b: Mention) -> bool:
     """Two ids of one manifest are kept apart (soft), except GEDCOM
     places: the adapter mints one place per distinct PLAC string, so
-    "Oakfield" and "Oakfield, Norland" are two ids for what may be one
+    "Kredfeld" and "Kredfeld, Hesse" are two ids for what may be one
     place, never a statement that they differ."""
     if a.sha1 != b.sha1:
         return False
@@ -924,7 +925,7 @@ def name_level(a: Mention, b: Mention) -> str:
     if a.kind == HUMAN and keys_match(human_keys(a), human_keys(b)):
         return "key"
     if a.kind == PLACE_KIND and place_keys(a) & place_keys(b):
-        # "Oakfield" vs "Oakfield, Norland": one name's parts inside the
+        # "Kredfeld" vs "Kredfeld, Hesse": one name's parts inside the
         # other's is a refinement, not a rival place
         return "nested" if _nested_place(a, b) else "key"
     if _tokens_overlap(token_keys(a), token_keys(b)):

@@ -846,10 +846,10 @@ class TestTranscribers:
             transcriber.transcribe(text_file)
 
     def test_text_file_short_genuine_text_passes(self, tmp_path):
-        text_file = tmp_path / "receipt.txt"
-        text_file.write_text("1937")
+        text_file = tmp_path / "note.txt"
+        text_file.write_text("1863")
         result = TextFileTranscriber(text_file).transcribe(text_file)
-        assert result.text == "1937"
+        assert result.text == "1863"
 
     @pytest.mark.parametrize(
         "line", CORRESPONDENCE + REPLIES + TRANSCRIBING_LETTERS

@@ -104,14 +104,67 @@ files but no `derivations.json` (a directory from before the records, or
 one that lost its record, so nothing says what its files were derived
 from), or when files sit beside the record with no `state.json` to name
 the artifact they were made for, `ingest run` moves the directory aside
-whole, as `.<slug>.superseded-<n>` in the state directory, and ingests
-the document afresh in a new one: registration, views and gates. No
-document slug starts with a dot, so none can take that name. Nothing in
-the old directory is deleted, the log and a `set-aside` event name it,
-and the bytes it recorded seed no content dedup. Every directory `ingest
+whole, as `.<name>.superseded-<n>` in the state directory (`<name>` is
+the directory's), and ingests the document afresh in a new one:
+registration, views and gates. No document directory's name starts with
+a dot, so none can take that name. Nothing in the old directory is
+deleted, the log and a `set-aside` event name it and the document, and
+the bytes it recorded seed no content dedup. Every directory `ingest
 run` makes has its `derivations.json` from its first run, written before
 any other file, and its `state.json` from its registration, before any
 view; no state is saved into a directory without its record.
+
+**A directory per source file.** Each source file has a directory of its
+own in the state directory, named after its stem (`letter`) when no
+other source in the folder has a stem of the same name, ignoring case.
+Sources that share a stem (`letter.pdf` and `letter.jpg`) are named after
+their whole file names (`letter.pdf`, `letter.jpg`), and where that name
+is taken too, after its first 200 characters with a hash of the file
+name. A source keeps the directory whose `state.json` names its file,
+and a document's state names its file as the file is named now, so a
+source that joins or leaves the folder moves no other source's
+directory: `letter.pdf` keeps `letter` when `letter.jpg` joins it,
+`letter.jpg` keeps `letter.jpg` when `letter.pdf` leaves, and a source
+renamed with its bytes unchanged keeps its directory. A source that
+keeps no directory takes one whose `state.json` cannot be read among
+the names it may have, so that damage is reported (below) whether or not
+another source shares the stem. Where several such sources could take
+it, the one whose file the damaged bytes still name takes it (a state
+is saved with its `file` first, so a cut-short one almost always keeps
+it), and failing that the first by name. The naming moves nothing aside: a
+directory whose source has left stays until a source is given its name,
+and when that source's bytes differ, it sets the directory aside as a
+changed source's (above). No directory takes the name of a run file
+(`run.json`, `events.jsonl`, `alerts.jsonl`, `control.jsonl`) or of the
+live monitor's page (`status.html`).
+
+A state directory an earlier `ingest run` made may hold one directory
+that two same-stem sources shared: it stays with the source its
+`state.json` names, but its views may have been made from the other
+source. Resume such a state directory with `--refresh` for each role
+(`transcribe`, `extract`, `critique`), or start a fresh one, as every
+scratch run does.
+
+**A document that cannot be read** fails alone, and the run goes on with
+the others. That is a document whose source cannot be read (its
+permissions, say), whose bytes the never-ingest list's hashes cannot be
+checked against, or whose `state.json` cannot be read (cut short,
+foreign, or its permissions). It is not planned or dispatched: a
+`document-failed` event names it, with the reason. Where it has a
+directory with its record, and its `state.json` names its file, its
+`state.json` records the failure and the reason; a state that names
+another file, a departed source's, is left as it is. A `state.json` the
+run cannot read is left as it is too, never saved over, since it may hold
+the registration: repair it, or remove it and the next run starts the
+document afresh. A source removed after discovery fails its document
+when a later step reads it; a document whose views all stand may not
+read it again in the run.
+
+`state.json` is replaced in one step, as the views are (written beside
+it, then renamed), so a kill never leaves it cut short; a state that has
+not changed is not written. So a document whose views all stand is
+advanced in a directory the run cannot write to. One whose state must
+change there, and cannot be saved, fails alone, and the reason says so.
 
 **One-off invalidation.** A state directory made before ADR-0032 has no
 record for its views, and its files derived from the batch were recorded
@@ -412,7 +465,8 @@ cache's absolute path, or `null` without one), `config` (the engine,
 languages, efforts, extraction model, `refresh` and `epochs`), and
 `documents`: one entry per planned document, `{sha1, file, kind,
 stages}`, where `kind` is the document's slice (`text`, `media`,
-`presentation`, `gedcom`) and `stages` the stages planned for it. The
+`presentation`, `gedcom`) and `stages` the stages planned for it; a
+document that cannot be read is not planned (Views, above). The
 full run manifest (#96) adds the rest: stage (development or kept),
 engine and CLI version, per-stage model ids, commit, exclusion-list hash,
 start and end.
@@ -421,11 +475,13 @@ start and end.
 
 Every line has `at` (UTC), `event` and `invocation` (one per run of `ingest
 run`). Events about a document add `subject` (its media SHA-1) and `kind`;
-stage events add `stage` (`transcription`, `extraction`, `critique` or
-`gedcom`); cache events add `role` and `key`, and all of them but
-`cache-reject` and `cache-adopt` the kind of call (`call`); call events
-add `role`, the `stage` the role's calls are made in, and the kind of
-call:
+`document-failed` and a directory's `set-aside` also add `file`, the
+source's file name, which names a document whose source could not be
+read and so has no `subject`; stage events add `stage` (`transcription`,
+`extraction`, `critique` or `gedcom`); cache events add `role` and `key`,
+and all of them but `cache-reject` and `cache-adopt` the kind of call
+(`call`); call events add `role`, the `stage` the role's calls are made
+in, and the kind of call:
 
 | Event | Meaning | Extra fields |
 |---|---|---|
@@ -435,7 +491,8 @@ call:
 | `reused` | a stage's view was current and stands | `attention`: the reasons noted when it was made |
 | `failed` | a stage failed | `reason` |
 | `held` | the control file stopped a stage's dispatch | `reason` |
-| `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
+| `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `file` (a directory's), `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
+| `document-failed` | a document failed, and only it: a stage failed (with its own `failed` event too), or something outside its stages, such as its source or `state.json` that could not be read, its first record, or a step between the stages | `file`, `reason` |
 | `cache-hit` | the cache answered a call | `reason`: `key match`, or an adoption's reason |
 | `cache-miss` | the engine was asked (a fork: once its session is held) | `reason`: `absent`, `rejected` or `refresh` |
 | `cache-resume` | a conversation was resumed exactly for a fork | |
@@ -444,8 +501,20 @@ call:
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
 | `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears) |
 | `alert` | an anomaly alert was appended | `check`, `status` |
-| `run-end` | the invocation finished | `statuses` |
-| `run-interrupted` | the invocation was interrupted (Ctrl-C) | |
+| `run-end` | the invocation ended, other than by Ctrl-C | `outcome` and `reason` as `run.json` records them for the invocation (docs/RUN_MANIFEST.md: `finished`, `stopped`, `paused`, `refused` or `failed`), `statuses` (documents per status) |
+| `run-interrupted` | the invocation was interrupted (Ctrl-C) | `outcome` (`interrupted`), `statuses` |
+
+Every invocation's events end with `run-end` or `run-interrupted`,
+however it ended: a paused pass, a refusal and an escaped error
+included. So a reader of the events alone tells an invocation that ended
+from one still running. Only a killed one ends with neither, and its
+`ended_at` in `run.json` stays `null`.
+
+A document has one `document-failed` event each time it fails. Serial
+mode advances a document twice in one invocation (the extraction of
+every document first, then its turn in the sequence), so a document
+that fails both times has two; the later one stands. Count documents,
+not events.
 
 ### `alerts.jsonl`
 
@@ -480,8 +549,12 @@ file (`rundir.run_state`, `yizkr stages state <run dir>`):
   **running** once started; **done**, or **needs attention** with its
   reasons, once completed or reused; **failed** with its reason; or
   **pending** with the reason the control file held it. A stage that
-  started with no later event was running, or was interrupted; the next
-  run starts it again.
+  started with no later event is **running**. Run state does not look
+  at how the invocation ended, so this includes a stage whose
+  invocation's closing event (`run-end`, `run-interrupted`) follows it,
+  or whose invocation was killed: that stage was cut off. A reader that
+  needs to tell them apart looks for the closing event. The next run
+  starts it again.
 
 `yizkr stages state` also counts what the cache did for each role
 (`rundir.cache_counts`): hits and misses by reason, resumes, replays,
@@ -619,6 +692,6 @@ through it, and the transcription check counts its pages with it
 cache, or is a view the run reuses and checks again.
 
 The per-document path goes when the scratch driver has run the corpus
-end to end (#119). Until #128 and #103 land, it still registers the
+end to end (#119). Until #103 lands, it still registers the
 artifact in the wiki before the stages run; the stages themselves read
 and write no wiki.

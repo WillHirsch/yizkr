@@ -1112,9 +1112,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--review-effort",
         choices=effort_choices,
         default="high",
-        help="reasoning effort for the judgment steps (adjudication/"
-        "equivalence, critique). Default high — low-volume, high-stakes "
-        "decisions worth the thinking (claude-code engine only)",
+        help="reasoning effort for the judgment step, the extraction "
+        "critique. Default high — a low-volume, high-stakes review worth "
+        "the thinking (claude-code engine only)",
     )
     p.add_argument(
         "--extract-model",
@@ -1122,7 +1122,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="MODEL",
         help="model for the claim-extraction step only; the run's main "
         "model ($YIZKR_LLM_MODEL) still drives transcription and the "
-        "judgment steps. Default claude-sonnet-5 — extraction rewards "
+        "critique. Default claude-sonnet-5 — extraction rewards "
         "source discipline over raw capability (ADR-0016). Pass 'inherit' "
         "to use the run's main model for extraction too. Either is a full "
         "model id: the run refuses an alias such as 'sonnet' or "
@@ -1131,11 +1131,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--serial",
         action="store_true",
-        help="reconcile artifacts one at a time, hubs first, each fully "
-        "written before the next reconciles — so cross-artifact identity is "
-        "resolved at the per-artifact review gates instead of a separate "
-        "reconcile-graph pass (ADR-0019). Advance by re-running after each "
-        "review; ~2 re-runs per artifact",
+        help="take artifacts one at a time, hubs first, each fully written "
+        "before the next reconciles — so a later artifact's resolve step "
+        "finds, by exact label, the items the earlier ones wrote; "
+        "reconcile-graph consolidates an entity two artifacts name "
+        "differently (ADR-0019). Advance by re-running after each claim "
+        "review; about one re-run per artifact",
     )
     cache = p.add_mutually_exclusive_group()
     cache.add_argument(

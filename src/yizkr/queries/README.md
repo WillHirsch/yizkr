@@ -46,6 +46,14 @@ uv run yizkr publish-queries             # or: make publish-queries
 - **person-timeline** — every dated assertion about each person
   (statements, dated qualifiers such as a marriage's point in time, and
   events participated in), plural-by-default with sources (R6).
+- **kinship** — how each person is related to a subject, derived from
+  the kinship primitives and gendered by the relative's `sex_or_gender`
+  (ADR-0014), beside the terms sources assert with `relative` +
+  `kinship_type`. A row reads "?relative is ?subject's ?relationship".
+  An asserted term names the statement's subject and has the ego as its
+  value (ADR-0018), so `Klara —relative→ Nicholas ; kinship_type =
+  "aunt"` is Nicholas's row, with Klara as his aunt
+  (`tests/integration/test_live_kinship.py`).
 - **places-map** — coordinates + what connects to each place; renders
   as a map view in the query UI.
 - **unreferenced-statements** — QC report; every row is a

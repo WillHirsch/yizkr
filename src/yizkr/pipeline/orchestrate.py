@@ -40,6 +40,14 @@ events in the run directory. The transcription is routed per document
 The PDF renderer the vision engine and the transcription check need is
 checked once, before any document.
 
+Three steps use the wiki: registration, which runs first; resolve, which
+matches labels to the graph's items; and the write. Everything else
+reads nothing from it and writes nothing to it (ADR-0025 §2): the stages
+before the gates; a deck's derived media, which are recorded in its
+directory (`derived-media.json`) and not registered; and the reconcile
+step, which has no roster to match a document's entities against, so it
+proposes nothing and the first gate has nothing to review.
+
 Dependencies are make-style by content hash (`derivations.json`): the
 transcription is made from the correction, when there is one; the batch
 from the transcription; the critique from the batch; and the later
@@ -60,11 +68,20 @@ directory without it. A directory with files but no `derivations.json`
 was made before the records, or has lost its record, so nothing says
 what its files were derived from; one with files beside its record but
 no `state.json` has lost the registration its views were made for. It
-is set aside whole, as `.<slug>.superseded-<n>` in the state directory,
+is set aside whole, as `.<name>.superseded-<n>` in the state directory,
 and the document starts afresh in a new one, as a document whose source
 bytes changed does (ADR-0010: different bytes are a different artifact).
 Nothing in the old directory is deleted, and it no longer counts for
 content dedup. Modification times are read nowhere.
+
+Each source file has a directory of its own, named after its stem, or
+after its whole file name where another source in the folder shares the
+stem; a source keeps the directory that records it (directory_names).
+A document whose source or state.json cannot be read fails alone, and
+the run goes on with the others; a state.json it cannot read is left as
+it is. state.json is replaced in one step, as the views are, and only
+when it changes; a document whose changed state cannot be saved fails
+alone too.
 
 A reviewed file's PRESENCE is the gate: the orchestrator never
 interprets a half-filled CSV as consent. Documents whose reconcile
@@ -72,11 +89,12 @@ produced no proposals skip the first gate (there is nothing to review).
 
 The state directory is also the run directory (yizkr.pipeline.rundir):
 `run.json`, `events.jsonl` with an event for every stage start,
-completion, failure and reused view and every answer the cache gives or
-cannot give, and `control.jsonl`, whose pause and abort requests stop
-dispatch. It is runtime state — keep it under var/ or outside the repo.
-Re-running a completed document changes nothing (the writer is
-idempotent).
+completion, failure and reused view, every answer the cache gives or
+cannot give, every document that fails, and the end of every
+invocation, however it ended, and `control.jsonl`, whose pause and abort
+requests stop dispatch. It is runtime state — keep it under var/ or
+outside the repo. Re-running a completed document changes nothing (the
+writer is idempotent).
 
 `run.json` is the run manifest (docs/RUN_MANIFEST.md): what shapes the
 run, as its latest invocation ran it. Each invocation records its mode
@@ -100,6 +118,7 @@ import os
 import re
 import sys
 import threading
+from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -116,7 +135,12 @@ from yizkr.core.corpus import (
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.rundir import (
+    ALERTS,
+    CONTROL,
     DEVELOPMENT_STAGE,
+    DOCUMENT_FAILED,
+    EVENTS,
+    MANIFEST,
     RUN_END,
     RUN_INTERRUPTED,
     SET_ASIDE,
@@ -133,6 +157,7 @@ from yizkr.pipeline.stages import (
     content_hash,
     sha1_file,
     sha256_file,
+    sha256_text,
 )
 
 GEDCOM_SUFFIXES = {".ged"}
@@ -232,11 +257,30 @@ class DocumentState:
 
     @classmethod
     def load(cls, path: Path) -> DocumentState:
-        return cls(**json.loads(path.read_text()))
+        """The state saved at `path`. OSError when it cannot be read;
+        ValueError or TypeError when it holds no document's state: a file
+        cut short, a foreign one, or fields of other types."""
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict):
+            raise ValueError(f"{path.name} holds no object")
+        state = cls(**data)
+        texts = (state.file, state.title, state.status)
+        optional = (state.artifact_qid, state.error, state.content_sha1)
+        if not (
+            all(isinstance(value, str) for value in texts)
+            and all(isinstance(value, str | None) for value in optional)
+            and isinstance(state.detail, dict | None)
+        ):
+            raise ValueError(f"{path.name} holds a field of another type")
+        return state
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.__dict__, indent=2))
+        """Replace the state saved at `path` in one step, as the views are
+        (_write_view), and leave an identical one untouched. A save cut
+        short, by a kill say, leaves the state it was replacing whole; and
+        a state that has not changed is not written, so a document whose
+        views all stand is advanced in a directory it cannot write to."""
+        _write_view(path, json.dumps(self.__dict__, indent=2))
 
 
 class Derivations:
@@ -356,12 +400,152 @@ def slugify(name: str) -> str:
     return slug or "document"
 
 
-class DocumentRun:
-    """Paths and state for one document within a folder run."""
+# the files a run directory holds beside its documents' directories
+# (yizkr.pipeline.rundir), and the live status page the run monitor
+# writes there: no document directory may take their names
+_RUN_FILES = frozenset({MANIFEST, EVENTS, ALERTS, CONTROL, "status.html"})
+# how much of a whole file name's slug a hashed directory name keeps, so
+# that with its hash it stays well inside a filesystem's 255-byte limit
+_HASHED_PREFIX = 200
 
-    def __init__(self, source: Path, state_dir: Path) -> None:
+
+def _directory_candidates(source: Path) -> tuple[str, str, str]:
+    """The names a source's directory may have, in the order they are
+    tried: its stem's slug (`letter`), its whole file name's (`letter.pdf`),
+    and the start of that with a hash of the file name."""
+    whole = slugify(source.name)
+    hashed = f"{whole[:_HASHED_PREFIX]}-{sha256_text(source.name)[:8]}"
+    return slugify(source.stem), whole, hashed
+
+
+def _records(directory: Path, source: Path) -> bool:
+    """Does `directory` hold the state of `source`: a state.json, readable,
+    that names the source's file?"""
+    try:
+        state = DocumentState.load(directory / "state.json")
+    except (OSError, TypeError, ValueError):
+        return False
+    return Path(state.file).name == source.name
+
+
+def _damaged(directory: Path) -> bool:
+    """Does `directory` hold a state.json that cannot be read: one cut
+    short, a foreign one, or one without permission?"""
+    try:
+        DocumentState.load(directory / "state.json")
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except (OSError, TypeError, ValueError):
+        return True
+    return False
+
+
+def _named(directory: Path, sources: Sequence[Path]) -> list[Path]:
+    """The sources whose file a damaged state.json in `directory` still
+    names: a state is saved with its `file` first, a path that ends with
+    the file's name, so a state cut short almost always keeps it. None
+    when the bytes name none of them or cannot be read."""
+    try:
+        text = (directory / "state.json").read_bytes().decode(errors="replace")
+    except OSError:
+        return []
+    return [
+        source
+        for source in sources
+        if re.search(
+            r'["/\\]' + re.escape(json.dumps(source.name)[1:-1]) + '"', text
+        )
+    ]
+
+
+def directory_names(
+    sources: Sequence[Path], state_dir: Path
+) -> dict[Path, str]:
+    """The name of each source's directory in `state_dir`, one directory
+    per source file.
+
+    A source keeps the directory that records it (its state.json names the
+    source's file), under any of its candidate names. A source that keeps
+    none takes the first of its candidate directories whose state.json
+    cannot be read, unless another source took it first; where several
+    sources that keep none could take it, the one whose file the damaged
+    bytes still name takes it (_named), and failing that the first by
+    name. The run fails that document with the reason (DocumentRun), so a
+    damaged state.json is reported, against the document it belongs to,
+    even where sources share the stem it is named after. Any other
+    source, in name order, takes its stem's slug, unless another source in
+    the folder has a stem with the same slug, ignoring case, or the name is
+    taken or is a run file's; then its whole file name's slug, and failing
+    that the start of that slug with a hash of the file name. So sources
+    that differ only in extension, or in case, never share a directory; a
+    source whose stem no other source shares keeps its stem's name; and a
+    source that joins or leaves the folder moves no other source's
+    recorded directory. Naming sets nothing aside: a directory whose source
+    has left stays until a source is given its name, and that source, when
+    its bytes differ, sets it aside as a changed source's when it is
+    advanced."""
+    names: dict[Path, str] = {}
+    for source in sources:
+        for name in _directory_candidates(source):
+            if _records(state_dir / name, source):
+                names[source] = name
+                break
+    for source in sources:
+        if source in names:
+            continue
+        for name in _directory_candidates(source):
+            claimed = {taken.casefold() for taken in names.values()}
+            if name.casefold() in claimed or not _damaged(state_dir / name):
+                continue
+            # the sources that keep no directory and could take this one,
+            # this source the first of them by name
+            rivals = [
+                other
+                for other in sources
+                if other not in names and name in _directory_candidates(other)
+            ]
+            named = _named(state_dir / name, rivals) if len(rivals) > 1 else []
+            owner = named[0] if named else source
+            names[owner] = name
+            if owner == source:
+                break
+    stems = Counter(slugify(source.stem).casefold() for source in sources)
+    taken = {name.casefold() for name in names.values()} | _RUN_FILES
+    for source in sources:
+        if source in names:
+            continue
+        stem, whole, hashed = _directory_candidates(source)
+        if stems[stem.casefold()] == 1 and stem.casefold() not in taken:
+            name = stem
+        elif whole.casefold() not in taken:
+            name = whole
+        else:
+            name, n = hashed, 2
+            while name.casefold() in taken:
+                name, n = f"{hashed}-{n}", n + 1
+        names[source] = name
+        taken.add(name.casefold())
+    return names
+
+
+def _why(exc: BaseException) -> str:
+    """An exception as a failure's reason: its name and its message."""
+    return f"{type(exc).__name__}: {exc}"
+
+
+class DocumentRun:
+    """Paths and state for one document within a folder run.
+
+    Its directory in `state_dir` is `dirname` (directory_names), by
+    default its stem's slug. A document whose state.json cannot be read is
+    `unreadable`, and so is one whose source cannot be read once
+    `read_source` has tried: the run fails it alone (Orchestrator.run)."""
+
+    def __init__(
+        self, source: Path, state_dir: Path, *, dirname: str | None = None
+    ) -> None:
         self.source = source
-        self.dir = state_dir / slugify(source.stem)
+        self.dir = state_dir / (dirname or slugify(source.stem))
         self.state_path = self.dir / "state.json"
         self.transcription = self.dir / "transcription.json"
         # a curator's corrected transcription (plain text); when present
@@ -410,10 +594,21 @@ class DocumentRun:
         # gaps the last extraction found, for the gap review CSV
         self.gaps_found: list[dict] = []
         self._sha1: str | None = None
-        if self.state_path.exists():
-            self.state = DocumentState.load(self.state_path)
-        else:
-            self.state = DocumentState(file=str(source), title=source.stem)
+        # why the run cannot take the document on, when it cannot
+        self.unreadable: str | None = None
+        # a state.json that cannot be read is kept as it is, never saved
+        # over: it may still hold the registration a person can recover
+        self._state_unread = False
+        self.state = DocumentState(file=str(source), title=source.stem)
+        try:
+            if self.state_path.exists():
+                self.state = DocumentState.load(self.state_path)
+        except (OSError, TypeError, ValueError) as exc:
+            self.unreadable = (
+                f"its state.json cannot be read ({_why(exc)}); repair it, or "
+                f"remove it and the document starts afresh"
+            )
+            self._state_unread = True
 
     @property
     def sha1(self) -> str:
@@ -421,6 +616,23 @@ class DocumentRun:
         if self._sha1 is None:
             self._sha1 = sha1_file(self.source)
         return self._sha1
+
+    @property
+    def known_sha1(self) -> str | None:
+        """The media SHA-1 once the source has been read, else None."""
+        return self._sha1
+
+    def read_source(self) -> str | None:
+        """Read the source for its media SHA-1 now, before the run starts
+        any document. None, and the document `unreadable`, when the source
+        cannot be read."""
+        try:
+            return self.sha1
+        except OSError as exc:
+            self.unreadable = self.unreadable or (
+                f"its source cannot be read ({_why(exc)})"
+            )
+            return None
 
     @property
     def kind(self) -> str:
@@ -451,18 +663,26 @@ class DocumentRun:
         """Save the document's state, only into a directory with its
         record: state without one would make the directory unrecorded, and
         a run stopped before a new directory's record is written leaves no
-        state in it."""
-        if self.derivations.path.exists():
+        state in it. A state.json that could not be read is left as it
+        is, and so is one that names another source's file, as a directory
+        whose source has left does: the state the document is advanced with
+        names its own file (Orchestrator._advance)."""
+        if (
+            not self._state_unread
+            and Path(self.state.file).name == self.source.name
+            and self.derivations.path.exists()
+        ):
             self.state.save(self.state_path)
 
 
 def _write_view(path: Path, text: str) -> bool:
     """Refresh a plain-file view, leaving an identical one untouched;
-    returns whether the file changed."""
+    returns whether the file changed. A file that cannot be read, or is
+    not text, is replaced."""
     try:
         if path.read_text() == text:
             return False
-    except OSError:
+    except (OSError, ValueError):
         pass
     atomic_write_text(path, text)
     return True
@@ -529,27 +749,26 @@ class Orchestrator:
         self.fallback_language = fallback_language
         self.chunk_concurrency = chunk_concurrency
         # reasoning effort per phase: mechanical bulk steps (transcription,
-        # extraction) run low; judgment steps (adjudication, critique) run
-        # high — where the thinking is cheap and the decision matters.
+        # extraction) run low; the judgment step, the critique, runs high
+        # — where the thinking is cheap and the decision matters.
         self.extract_effort = extract_effort
         self.review_effort = review_effort
         # per-phase model: claim extraction is a high-volume, structured
         # task where source discipline (extract only what the source
         # asserts) matters more than raw capability, so it can run a
         # distinct model from the run's main one — which stays on the
-        # judgment steps (adjudication, critique). None inherits the main
-        # model. See docs/adr/0016.
+        # critique. None inherits the main model. See docs/adr/0016.
         self.extract_model = extract_model
         # serial mode (ADR-0019): process artifacts one at a time, in a
         # greedy-overlap sequence, each fully written before the next
-        # reconciles — so cross-artifact identity resolves inline at the
-        # per-artifact gates instead of in a separate reconcile-graph pass.
+        # reconciles — so a later artifact's resolve step finds, by exact
+        # label, the items the earlier ones wrote.
         self.serial = serial
         # how many documents to extract (transcribe + chunked extract) at
         # once during serial mode's up-front extract-all phase. Multiplies
         # with chunk_concurrency, so keep the product sane for the engine's
-        # rate/usage limits. Wiki writes (register/derive) are serialised by
-        # a lock, so only the LLM-heavy extraction actually overlaps.
+        # rate/usage limits. Registration, a wiki write, is serialised by a
+        # lock, so only the LLM-heavy extraction actually overlaps.
         self.extract_concurrency = max(1, extract_concurrency)
         self._wiki_lock = threading.Lock()
         self.env_file = env_file
@@ -741,16 +960,27 @@ class Orchestrator:
     # -- document discovery --------------------------------------------------
 
     def documents(self) -> list[DocumentRun]:
+        """The folder's documents, in name order, each with a directory of
+        its own (directory_names) and its source read for its SHA-1. A
+        document whose source or state.json cannot be read is `unreadable`
+        (DocumentRun), and so is one whose bytes the never-ingest list's
+        hashes cannot be checked against: it is not ingested."""
         files = []
+        unread: dict[Path, str] = {}
         for path in sorted(self.folder.iterdir()):
             if not path.is_file() or path.name.startswith("."):
                 continue
             # the never-ingest list is asked first, before any step
             # reads the document, and whatever the file's type: an excluded
             # file gets no state, no artifact and no transcription
-            if self.exclusions is not None and is_excluded(
-                self.exclusions, path
-            ):
+            try:
+                excluded = self.exclusions is not None and is_excluded(
+                    self.exclusions, path
+                )
+            except OSError as exc:
+                excluded = False
+                unread[path] = f"its source cannot be read ({_why(exc)})"
+            if excluded:
                 self.log(
                     f"excluding {path.name}: on the never-ingest list",
                     file=sys.stderr,
@@ -762,7 +992,16 @@ class Orchestrator:
                 )
             else:
                 files.append(path)
-        return [DocumentRun(path, self.state_dir) for path in files]
+        names = directory_names(files, self.state_dir)
+        docs = []
+        for path in files:
+            doc = DocumentRun(path, self.state_dir, dirname=names[path])
+            if path in unread:
+                doc.unreadable = doc.unreadable or unread[path]
+            else:
+                doc.read_source()
+            docs.append(doc)
+        return docs
 
     # -- stages ---------------------------------------------------------------
 
@@ -884,17 +1123,38 @@ class Orchestrator:
         return result.artifact_qid
 
     def _presentation(self, doc: DocumentRun):
+        """The deck unpacked, kept by the SHA-1 of its bytes: a deck is
+        unpacked once for each content it has had, so one whose bytes
+        change between two runs of the orchestrator is unpacked again."""
         from yizkr.pipeline.presentation import unpack_pptx
 
         if not hasattr(self, "_presentation_cache"):
             self._presentation_cache: dict[str, object] = {}
-        key = str(doc.source)
-        if key not in self._presentation_cache:
-            self._presentation_cache[key] = unpack_pptx(doc.source)
-        return self._presentation_cache[key]
+        if doc.sha1 not in self._presentation_cache:
+            self._presentation_cache[doc.sha1] = unpack_pptx(doc.source)
+        return self._presentation_cache[doc.sha1]
 
-    def _step_derive_media(self, doc: DocumentRun) -> dict[str, str]:
-        from yizkr.pipeline.presentation import register_derived_media
+    def _derived_media_current(self, doc: DocumentRun) -> bool:
+        """Does the document's directory hold the record of its deck's
+        derived media, whole and with the file of every medium it names
+        (presentation.read_derived_media), made for the deck's bytes as
+        they are now? A record made for other bytes, as in a directory
+        two sources have shared, is made again, and so is a missing or
+        damaged one."""
+        from yizkr.pipeline.presentation import read_derived_media
+
+        record = read_derived_media(doc.dir)
+        return record is not None and record.source_sha1 == doc.sha1
+
+    def _step_derive_media(self, doc: DocumentRun):
+        """Record the images the deck embeds in the document's directory
+        (presentation.record_derived_media): each by the SHA-1 of its
+        bytes, with the deck's own SHA-1 and title and the slides it is
+        on, and its bytes kept beside the record. Nothing is read from the
+        wiki or written to it (ADR-0025 §2): registering the images and
+        uploading their bytes is left to the write side. Returns the
+        record."""
+        from yizkr.pipeline.presentation import record_derived_media
 
         content = self._presentation(doc)
         for suffix, count in content.skipped_media.items():
@@ -903,12 +1163,11 @@ class Orchestrator:
                 f"skipped (image media only in W1)",
                 file=sys.stderr,
             )
-        return register_derived_media(
-            self.client,
-            deck_qid=doc.state.artifact_qid,
-            deck_title=doc.state.title,
-            content=content,
-            workdir=doc.dir / "media",
+        return record_derived_media(
+            content,
+            source_sha1=doc.sha1,
+            title=doc.state.title,
+            directory=doc.dir,
         )
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
@@ -1106,12 +1365,12 @@ class Orchestrator:
         from yizkr.pipeline.chunking import ChunkedClaimExtractor
 
         # always entity-first (ADR-0007), even for documents that fit a
-        # single call: reconciliation NEEDS the entity manifest, and a
-        # small document without one silently mints duplicates instead
-        # of being adjudicated against the graph — every entity must
-        # reach the adjudicator, however short the document. Chunking a
-        # small document costs a few extra calls and is never incorrect
-        # (ADR-0006 §7).
+        # single call: the batch carries the entity manifest, which the
+        # writer takes each entity's label, aliases and kind from, the
+        # critic and serial mode's sequencer read, and identity matching
+        # blocks on — every entity must be in it, however short the
+        # document. Chunking a small document costs a few extra calls and
+        # is never incorrect (ADR-0006 §7).
         extractors: list[ChunkedClaimExtractor] = []
 
         def extract() -> ClaimBatch:
@@ -1147,35 +1406,19 @@ class Orchestrator:
         return batch
 
     def _step_reconcile(self, doc: DocumentRun, batch: ClaimBatch) -> int:
-        from yizkr.pipeline.llm import make_client
-        from yizkr.pipeline.reconcile import (
-            adjudicate,
-            block_candidates,
-            export_equivalences_csv,
-            fetch_place_containment,
-            fetch_roster,
-        )
+        """Write the document's identity proposals, `equivalences.csv`,
+        and return how many there are: none.
 
-        roster = fetch_roster(self.client, self.config)
-        # the transitive place-containment closure lets blocking prune pairs
-        # the graph proves impossible (a camp inside a country is not the
-        # country) before adjudication (ADR-0017)
-        containment = fetch_place_containment(self.client, self.config)
-        candidates = block_candidates(
-            batch.entities, roster, batch=batch, containment=containment
-        )
-        proposals = (
-            adjudicate(
-                make_client(self.llm, effort=self.review_effort),
-                batch.entities,
-                candidates,
-                batch,
-            )
-            if candidates
-            else []
-        )
+        A proposal matches one of the document's entities to an entity
+        of a roster, and a stage before the write reads nothing from the
+        wiki (ADR-0025 §2), so no roster of the graph, nor its place
+        containment, reaches this step, and it has no other roster to
+        match against. The CSV holds its header alone, and the identity
+        gate has nothing to review."""
+        from yizkr.pipeline.reconcile import export_equivalences_csv
+
         return export_equivalences_csv(
-            proposals, batch.entities, roster, doc.equivalences
+            [], batch.entities, [], doc.equivalences
         )
 
     def _step_resolve(self, doc: DocumentRun, batch: ClaimBatch) -> ClaimBatch:
@@ -1424,33 +1667,77 @@ class Orchestrator:
 
         ``stop_after_extract`` returns once the batch (entity manifest)
         exists, before reconcile — the serial sequencer needs every
-        document's manifest before it can order them."""
+        document's manifest before it can order them. The document's state
+        is saved on the way out, however it went; a state that must be
+        saved and cannot be fails the document, and only it."""
         try:
-            return self._advance(doc, stop_after_extract=stop_after_extract)
+            status = self._advance(doc, stop_after_extract=stop_after_extract)
         except DispatchStopped as exc:
             # held by the control file: nothing failed, nothing is lost
             doc.state.status = PAUSED
             self.log(f"  {doc.source.name}: {exc}")
-            return PAUSED
+            status = PAUSED
         except Exception as exc:  # per-document isolation: others continue
-            doc.state.status = FAILED
-            doc.state.error = f"{type(exc).__name__}: {exc}"
-            doc.save()
-            self.log(
-                f"  {doc.source.name}: FAILED — {doc.state.error}",
-                file=sys.stderr,
-            )
+            self._fail(doc, _why(exc))
             return FAILED
-        finally:
+        except BaseException:
+            # a paused pass or Ctrl-C goes on through, with the state the
+            # document reached kept where it can be
+            unsaved = self._save(doc)
+            if unsaved is not None:
+                self.log(f"  {doc.source.name}: {unsaved}", file=sys.stderr)
+            raise
+        unsaved = self._save(doc)
+        if unsaved is not None:
+            self._fail(doc, unsaved, save=False)
+            return FAILED
+        return status
+
+    def _save(self, doc: DocumentRun) -> str | None:
+        """Save the document's state (DocumentRun.save): None when it was
+        saved or needed no save, else why it could not be saved."""
+        try:
             doc.save()
+        except OSError as exc:
+            return f"its state could not be saved ({_why(exc)})"
+        return None
+
+    def _fail(
+        self, doc: DocumentRun, reason: str, *, save: bool = True
+    ) -> None:
+        """Fail the document, and only it, for `reason`: in its state
+        (saved where its directory has its record, DocumentRun.save; a
+        save that cannot be made adds why to the reason, and the run goes
+        on), in the log, and in a `document-failed` event that names it by
+        its file and, once its source has been read, its SHA-1. It is the
+        event of every document that fails, whether a stage failed (which
+        has its own `failed` event too) or something outside its stages
+        did: its source, its state.json, its first record or the save of
+        its state, say. `save` is False for a state that could not be saved
+        just now."""
+        doc.state.status = FAILED
+        doc.state.error = reason
+        unsaved = self._save(doc) if save else None
+        if unsaved is not None:
+            reason = f"{reason}; {unsaved}"
+        self.rundir.emit(
+            DOCUMENT_FAILED,
+            file=doc.source.name,
+            subject=doc.known_sha1,
+            kind=doc.kind,
+            reason=reason[:500],
+        )
+        self.log(f"  {doc.source.name}: FAILED — {reason}", file=sys.stderr)
 
     def _set_aside(self, doc: DocumentRun, why: str) -> None:
         """Move the document's directory aside whole and start it afresh,
-        saying so in the log and the run directory."""
+        saying so in the log and in a `set-aside` event that names the
+        document, by its file and its SHA-1."""
         kept = _set_aside(doc.dir)
         doc.state = DocumentState(file=str(doc.source), title=doc.source.stem)
         self.rundir.emit(
             SET_ASIDE,
+            file=doc.source.name,
             subject=doc.sha1,
             kind=doc.kind,
             reason=why,
@@ -1493,6 +1780,10 @@ class Orchestrator:
         doc.dir.mkdir(parents=True, exist_ok=True)
         doc.derivations.begin()
         doc.state.content_sha1 = content_sha1
+        # the state names the file it is kept for as the file is named now,
+        # so a source renamed with its bytes unchanged keeps its directory
+        # when another source takes its old name or its stem
+        doc.state.file = str(doc.source)
 
         # content-identity dedup (ADR-0010): claim this file's bytes; if an
         # earlier document in this run — or one already ingested to
@@ -1522,16 +1813,12 @@ class Orchestrator:
             doc.save()
             self.log(f"  registered as {doc.state.artifact_qid}")
 
-        if doc.source.suffix.lower() in PRESENTATION_SUFFIXES and not (
-            doc.state.detail or {}
-        ).get("derived_media"):
-            with self._wiki_lock:  # register_derived_media also writes items
-                derived = self._step_derive_media(doc)
-            doc.state.detail = (doc.state.detail or {}) | {
-                "derived_media": derived
-            }
-            doc.save()
-            self.log(f"  derived media: {len(derived)} item(s)")
+        # a deck's derived media are recorded in its directory, not
+        # registered: no wiki access, so no lock. The record is current
+        # while it is there whole (_derived_media_current)
+        if doc.kind == "presentation" and not self._derived_media_current(doc):
+            record = self._step_derive_media(doc)
+            self.log(f"  derived media: {len(record.media)} recorded")
 
         # the views before the gates are brought up to date once in each
         # run
@@ -1545,7 +1832,7 @@ class Orchestrator:
 
         # serial mode extracts every document first (so the sequencer has all
         # the manifests), then processes them in order — stop here on the
-        # extract-only pass, before any reconcile touches the graph.
+        # extract-only pass, before any reconcile.
         if stop_after_extract:
             return doc.state.status
 
@@ -1642,7 +1929,8 @@ class Orchestrator:
         A directory set aside (a dot-prefixed name, _set_aside) seeds
         nothing: the bytes it recorded are no longer its document's. Nor
         does a directory whose document is in this run (`docs`) with other
-        bytes, which is set aside when that document is advanced.
+        bytes, which is set aside when that document is advanced, nor one
+        whose state.json cannot be read.
         """
         seen: dict[str, str] = {}
         if not self.state_dir.exists():
@@ -1654,11 +1942,11 @@ class Orchestrator:
             if sub.name.startswith("."):  # set aside
                 continue
             state_file = sub / "state.json"
-            if not state_file.exists():
-                continue
             try:
+                if not state_file.exists():
+                    continue
                 state = DocumentState.load(state_file)
-            except (TypeError, ValueError):  # malformed/foreign state: skip
+            except (OSError, TypeError, ValueError):  # unreadable or foreign
                 continue
             if (
                 sub.name in current
@@ -1739,10 +2027,15 @@ class Orchestrator:
             raise ExclusionConfigError(MISSING_LIST)
         # only full model ids enter the run manifest and the cache's keys
         self._refuse_model_aliases()
-        docs = self.documents()
-        if not docs:
+        found = self.documents()
+        if not found:
             self.log(f"no supported documents in {self.folder}")
             return 0
+        # a document whose source or state.json cannot be read is not
+        # planned or dispatched: it fails alone once the run has started,
+        # and the run goes on with the others
+        unread = [doc for doc in found if doc.unreadable is not None]
+        docs = [doc for doc in found if doc.unreadable is None]
         # once for the whole run, before any document: a PDF needs the
         # renderer the vision engine reads it through and the page count
         # the transcription check takes, whether its transcription comes
@@ -1765,6 +2058,8 @@ class Orchestrator:
         stopped = None
         self._run_held = None
         try:
+            for doc in unread:
+                self._fail(doc, doc.unreadable)
             if self.serial:
                 docs = self._serial_sequence(docs)
             for doc in docs:
@@ -1788,8 +2083,7 @@ class Orchestrator:
                     )
                     break
         except KeyboardInterrupt:
-            self.rundir.emit(RUN_INTERRUPTED)
-            self.rundir.end("interrupted")
+            self._end_invocation(found, "interrupted")
             raise
         except BaseException as exc:
             if isinstance(exc, PassPaused):
@@ -1799,30 +2093,54 @@ class Orchestrator:
             else:
                 outcome = "failed"
             # only the exception's name: its message may quote a document
-            self.rundir.end(outcome, reason=type(exc).__name__)
+            self._end_invocation(found, outcome, reason=type(exc).__name__)
             raise
         finally:
             self._close_engines()
 
-        statuses: dict[str, int] = {}
-        self.log("")
-        for doc in docs:
-            self.log(f"{doc.state.status:32} {doc.source.name}")
-            statuses[doc.state.status] = statuses.get(doc.state.status, 0) + 1
         # a run-scope request stopped the run even when it held a stage of
         # the last document, with no document left to dispatch after it
         stopped = stopped or self._run_held
-        self.rundir.end("stopped" if stopped else "finished", reason=stopped)
-        self.rundir.emit(RUN_END, statuses=statuses)
-        if any(doc.state.status == FAILED for doc in docs):
+        # the invocation ends before the statuses are printed, so that Ctrl-C
+        # or a closed pipe while they print leaves it ended
+        self._end_invocation(
+            found, "stopped" if stopped else "finished", reason=stopped
+        )
+        self.log("")
+        for doc in [*unread, *docs]:
+            self.log(f"{doc.state.status:32} {doc.source.name}")
+        if any(doc.state.status == FAILED for doc in found):
             return 1
         if any(
             doc.state.status.startswith("awaiting")
             or doc.state.status == PAUSED
-            for doc in docs
+            for doc in found
         ):
             return 2
         return 0
+
+    def _end_invocation(
+        self,
+        docs: Sequence[DocumentRun],
+        outcome: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        """End the invocation, however it ended: its outcome (rundir.
+        OUTCOMES) and reason in the run manifest, and then the same outcome
+        and reason, with the count of the documents' statuses, in the event
+        that closes its events: `run-interrupted` for Ctrl-C, `run-end`
+        otherwise. So a reader of the events alone tells an invocation that
+        ended, a paused or refused one included, from one still running;
+        only a killed one ends with neither."""
+        statuses = dict(Counter(doc.state.status for doc in docs))
+        self.rundir.end(outcome, reason=reason)
+        self.rundir.emit(
+            RUN_INTERRUPTED if outcome == "interrupted" else RUN_END,
+            outcome=outcome,
+            reason=reason,
+            statuses=statuses,
+        )
 
     def _serial_sequence(self, docs: list[DocumentRun]) -> list[DocumentRun]:
         """Extract every document, then order them by greedy entity overlap.
