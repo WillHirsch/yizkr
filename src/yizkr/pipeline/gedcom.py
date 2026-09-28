@@ -87,7 +87,9 @@ derived from shared parents: the export asserts parentage, not
 siblinghood (docs/MODELING.md — never derive). Dates accept the
 GEDCOM-standard English abbreviations plus what hand-maintained trees
 actually contain: full English and German month names, and month-first
-order when the month is named. Tags the adapter does not map (e.g.
+order when the month is named. A PLAC of nothing but commas and spaces
+(', , ,', a place whose jurisdictions a tool left empty) names no place.
+Tags the adapter does not map (e.g.
 REPO, SUBM, tool-specific `_` tags) are counted and reported, not
 silently dropped: the census walks every record and nesting level and
 names the top-most unmapped tag in each branch, leaving an already-
@@ -406,6 +408,13 @@ def _name_text(name: Record) -> str:
     )
 
 
+def _names_a_place(plac: str) -> bool:
+    """Whether a PLAC's value names a place: one of nothing but commas and
+    spaces (', , ,', the jurisdictions of a place a tool leaves empty)
+    names none, and so neither gives a place item nor states an event."""
+    return bool(plac.replace(",", " ").strip())
+
+
 def _source_title(record: Record) -> str:
     """A level-0 SOUR record's human title (TITL), else its inline value.
 
@@ -594,7 +603,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         ]
         return (
             value.upper() == "Y"
-            or any(place.value for place in death.all("PLAC"))
+            or any(_names_a_place(place.value) for place in death.all("PLAC"))
             or any(parse_gedcom_date(date)[0] is not None for date in dates)
             or (not value and bool(dates))
         )
@@ -789,7 +798,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         a further PLAC is an alternative, placed by a claim of its own."""
         return list(
             dict.fromkeys(
-                place.value for place in event.all("PLAC") if place.value
+                place.value
+                for place in event.all("PLAC")
+                if _names_a_place(place.value)
             )
         )
 
@@ -1023,12 +1034,14 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 "family links that name it"
             )
             continue
-        # every date the record gives a birth or a death, as it gives them
+        # every date the record gives a birth or a death, as it gives them,
+        # save a DEAT's that states no death
         summary_bits = []
         for tag, mark in (("BIRT", "b."), ("DEAT", "d.")):
             dates = [
                 date.value
                 for event in record.all(tag)
+                if tag != "DEAT" or states_death(event)
                 for date in event.all("DATE")
                 if date.value
             ]

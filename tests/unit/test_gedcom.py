@@ -1632,6 +1632,77 @@ class TestRepeatedDetails:
             (cemetery, [("point_in_time", day(1909, 3, 20))]),
         ]
 
+    @pytest.mark.parametrize(
+        ("text", "subject", "prop", "expected", "named", "warnings"),
+        [
+            (
+                eugen("1 BIRT", "2 DATE 1836", "2 PLAC , , ,"),
+                "i1",
+                "place_of_birth",
+                [],
+                [],
+                [],
+            ),
+            (
+                eugen("1 DEAT", "2 DATE 16 MAR 1909", "2 PLAC , ,"),
+                "i1",
+                "place_of_death",
+                [],
+                [],
+                [],
+            ),
+            (
+                eugen(
+                    "1 BURI",
+                    "2 DATE 20 MAR 1909",
+                    "2 PLAC , , ,",
+                    "2 PLAC Friedhof Flörburg, Hesse, Germany",
+                ),
+                "i1",
+                "burial_place",
+                [
+                    (
+                        "Friedhof Flörburg, Hesse, Germany",
+                        [("point_in_time", day(1909, 3, 20))],
+                    )
+                ],
+                ["Friedhof Flörburg, Hesse, Germany"],
+                [],
+            ),
+            (
+                person(
+                    "I8", "Gustav /Löbig/", "1 RESI", "2 DATE 1952", "2 PLAC ,"
+                ),
+                "i8",
+                "residence",
+                [],
+                [],
+                ["line 3: RESI without PLAC — no residence claim emitted"],
+            ),
+            (
+                family("1 MARR", "2 DATE 8 FEB 1947", "2 PLAC , , ,"),
+                "i11",
+                "spouse",
+                [("Agnes Löbig", [("start_time", day(1947, 2, 8))])],
+                [],
+                [],
+            ),
+        ],
+        ids=["BIRT", "DEAT", "BURI", "RESI", "MARR"],
+    )
+    def test_a_place_of_commas_alone_names_no_place(
+        self, text, subject, prop, expected, named, warnings
+    ):
+        # (here) the export gives a PLAC whose jurisdictions a tool left
+        # empty (", , ,"): it names no place, so it gives no place claim
+        # and no place item
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.warnings == warnings
+        assert stated(text, subject, prop) == expected
+        assert [
+            e.label for e in result.batch.entities if e.kind == "place"
+        ] == named
+
     def test_a_burial_pairs_each_date_with_each_place(self):
         # Eugen was buried on 20 March 1909 in the Friedhof Flörburg, and
         # (here) in 1909 in Flörburg too
@@ -2229,6 +2300,10 @@ class TestUndatedDeath:
             ["1 DEAT N", "2 DATE SOMEDAY MAYBE"],
             ["1 DEAT N", "2 CAUS Wassersucht"],
             ["1 DEAT 16 MAR 1909"],
+            ["1 DEAT 16 MAR 1909", "2 DATE SOMEDAY MAYBE"],
+            ["1 DEAT Yes"],
+            # a place whose jurisdictions a tool left empty names none
+            ["1 DEAT", "2 PLAC , , ,"],
         ],
         ids=[
             "bare",
@@ -2246,6 +2321,9 @@ class TestUndatedDeath:
             "N-and-unparsed-date",
             "N-and-CAUS",
             "date-on-the-line",
+            "date-on-the-line-and-unparsed-date",
+            "Yes",
+            "commas-PLAC",
         ],
     )
     def test_a_deat_that_states_no_death_gives_no_claim(self, lines):
@@ -2265,6 +2343,29 @@ class TestUndatedDeath:
         assert participations(result.batch) == []
         for prop in ("date_of_death", "place_of_death", "cause_of_death"):
             assert not claims_for(result.batch, "i1", prop)
+
+    @pytest.mark.parametrize(
+        ("lines", "summary"),
+        [
+            (["1 DEAT N", "2 DATE SOMEDAY MAYBE"], "b. 1836"),
+            (["1 DEAT 16 MAR 1909", "2 DATE SOMEDAY MAYBE"], "b. 1836"),
+            # a DEAT that states the death keeps its date, as given
+            (
+                ["1 DEAT", "2 DATE SOMEDAY MAYBE"],
+                "b. 1836; d. SOMEDAY MAYBE",
+            ),
+        ],
+        ids=["N", "date-on-the-line", "stated"],
+    )
+    def test_the_summary_dates_only_a_stated_death(self, lines, summary):
+        # (here) the export dates Eugen's birth, and gives a DEAT with a
+        # date the grammar cannot parse: the summary, which the private
+        # site shows, gives that date only when the DEAT states the death
+        batch = adapt_gedcom(
+            eugen("1 BIRT", "2 DATE 1836", *lines), artifact=EXPORT
+        ).batch
+        (eugen_entity,) = [e for e in batch.entities if e.id == "i1"]
+        assert eugen_entity.summary == summary
 
 
 def leopold_and_agnes(*family_lines: str) -> str:
@@ -2517,15 +2618,17 @@ class TestNameParts:
             ("I16", ["2 NSFX Wwe."]),
             ("I9", ["2 NPFX Fräulein"]),
             ("I9", ["2 NPFX Fräulein", "2 GIVN ,"]),
+            ("I16", ["2 SPFX de, la"]),
         ],
-        ids=["suffix", "prefix", "prefix-and-commas"],
+        ids=["suffix", "prefix", "prefix-and-commas", "surname-prefix"],
     )
     def test_a_prefix_or_a_suffix_alone_gives_no_name(self, xref, parts):
         # the directory's widow, Löbig, Ursula, Wwe., and the postcard's
         # Fräulein Klara Löbig: (here) the export's one NAME for either
-        # gives its suffix or its prefix, and no given name or surname.
-        # That names no one, and as a label it would make everyone so
-        # named one item, so the person is skipped, with the warning
+        # gives its suffix, its prefix or (here) a surname prefix, and no
+        # given name or surname. That names no one, and as a label it
+        # would make everyone so named one item, so the person is
+        # skipped, with the warning
         text = "\n".join([f"0 @{xref}@ INDI", "1 NAME", *parts, "0 TRLR", ""])
         result = adapt_gedcom(text, artifact=EXPORT)
         assert result.batch.entities == []

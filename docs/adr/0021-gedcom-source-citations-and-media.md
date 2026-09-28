@@ -257,7 +257,12 @@ gave its cause of death all the same:
   which reads it as death evidence, is not the adapter's to change. This
   fails closed. A tool may drop the Y once it attaches a citation to a
   death, and such a death then stays unstated, until evidence (a scratch
-  run's census, say) shows real deaths lost that way.
+  run's census, say) shows real deaths lost that way. A PLAC of nothing
+  but commas and spaces (`, , ,`, the jurisdictions of a place a tool
+  leaves empty) names no place: under any event it gives no place claim
+  and no place item, and under a DEAT it states no death. The person's
+  summary, the item's description, gives a death date only from a DEAT
+  that states the death.
 - **A family with one partner or none has its MARR and DIV counted.** A
   family whose HUSB or WIFE is missing, or names no person the adapter
   maps (no INDI record, or a person without a name, below), gives no
