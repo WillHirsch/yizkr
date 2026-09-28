@@ -26,6 +26,10 @@ Amended by #127 (2026-09-28): no prompt cites an artifact QID; the
 extraction prompts and the transcription view name the artifact by the
 SHA-1 of its media, so a reset changes no key (§2).
 
+Amended by #305 (2026-09-28): the cache refuses a folder a git work tree
+would track, and one there already that is open to other users, and
+changes the mode only of the folders it makes (§3).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -173,8 +177,10 @@ an artifact a new QID changes no key.
 ### 3. What is stored, and where
 
 - The cache lives under `var/llm-cache` by default, is local-only data
-  like the rest of `var/` (ADR-0024 §4), and is private to its owner (mode
-  700, applied to folders that exist already). Each key has one live
+  like the rest of `var/` (ADR-0024 §4), and is private to its owner: the
+  folders it makes are mode 700, it refuses a folder a git work tree
+  would track and one there already that is open to other users, and it
+  changes the mode of no folder it did not make. Each key has one live
   entry, published whole by a link that fails where the key has one
   already: a reader sees an entry whole or not at all.
 - Only a response the engine returned with some text in it is stored. An
