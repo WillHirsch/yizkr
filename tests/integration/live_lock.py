@@ -42,11 +42,12 @@ for a process that imported the module before the variable was set.
 
 A holder killed while a child shares its hold leaves the lock held until
 the child, and every process that it forked without exec, has ended. For
-a killed harness, that is its live run's pytest process, which nothing
-then stops at the harness's --timeout, and any process that a test
-forked from it. A waiting process names the holder from its record, and
-says that it has ended and that the lock is held by a process with no
-record of its own.
+a harness ended by a signal that it does not catch, such as SIGKILL, that
+is its live run's pytest process, which nothing then stops at the
+harness's --timeout, and any process that a test forked from it. (On
+SIGINT, SIGTERM or SIGHUP the harness stops the run itself.) A waiting
+process names the holder from its record, and says that it has ended
+and that the lock is held by a process with no record of its own.
 
 Never delete the lock file. A session that then found no file would
 create and lock a new one, while the session still holding the old one
@@ -91,11 +92,25 @@ class LiveStackBusy(TimeoutError):
 
 
 def lock_path() -> Path:
-    """$YIZKR_LIVE_LOCK, else ~/.cache/yizkr/live-stack.lock."""
+    """$YIZKR_LIVE_LOCK, else ~/.cache/yizkr/live-stack.lock. A setting
+    that names no usable lock raises ValueError, naming the setting: a
+    relative path, or a home folder that cannot be found."""
     configured = os.environ.get(LOCK_ENV)
-    if not configured:
-        return Path.home() / ".cache" / "yizkr" / "live-stack.lock"
-    path = Path(configured).expanduser()
+    try:
+        if not configured:
+            return Path.home() / ".cache" / "yizkr" / "live-stack.lock"
+        path = Path(configured).expanduser()
+    except RuntimeError:  # pathlib's error for a ~ that it cannot expand
+        if not configured:
+            raise ValueError(
+                f"{LOCK_ENV} is not set, and the home folder that holds the "
+                f"default lock cannot be found: set {LOCK_ENV} to an "
+                "absolute path"
+            ) from None
+        raise ValueError(
+            f"{LOCK_ENV}={configured!r} names a home folder that cannot be "
+            "found"
+        ) from None
     if not path.is_absolute():
         raise ValueError(
             f"{LOCK_ENV}={configured!r} is a relative path: sessions in "
@@ -172,12 +187,12 @@ def hold_for_session(pytest_config: pytest.Config) -> Iterator[None]:
     The fixture runs while the session's first stack test sets up, when
     pytest captures output, so the messages go to the terminal around the
     capture. If the lock cannot be taken in time, or a setting is refused
-    (a relative $YIZKR_LIVE_LOCK, or a $YIZKR_LIVE_LOCK_TIMEOUT that is not
-    a number of seconds), that test and every later one that uses the
-    stack error at setup, each with the message alone and no traceback, so
-    the message appears once per such test. pytest keeps a session
-    fixture's error for the whole session, so the session waits only
-    once."""
+    (a $YIZKR_LIVE_LOCK that is relative or names a home folder that
+    cannot be found, or a $YIZKR_LIVE_LOCK_TIMEOUT that is not a number
+    of seconds), that test and every later one that uses the stack error
+    at setup, each with the message alone and no traceback, so the
+    message appears once per such test. pytest keeps a session fixture's
+    error for the whole session, so the session waits only once."""
     # imported here, so that processes that only hold the lock need not
     # load pytest
     import pytest
@@ -269,11 +284,11 @@ def _close_on_exec() -> None:
     when it is open on the lock file: run as this module is imported
     (module docstring). A holder passes its descriptor down open across
     exec, so it is inheritable until then. Nothing is locked, and a lock
-    path that lock_path() refuses or cannot expand is left for hold() to
-    raise, as a session takes the lock."""
+    path that lock_path() refuses is left for hold() to raise, as a
+    session takes the lock."""
     try:
         fd = _named(lock_path())
-    except (ValueError, RuntimeError):  # RuntimeError: no home folder
+    except ValueError:
         return
     if fd is not None:
         os.set_inheritable(fd, False)

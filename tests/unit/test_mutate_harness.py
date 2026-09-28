@@ -254,8 +254,10 @@ LIVE = "tests/integration/test_stack.py"
 # the run, before any test uses the stack: os.system passes the job every
 # inheritable descriptor. The second uses the stack, and holds the run
 # until the file that $RUN_GO names appears. Each notes a pid in the file
-# that $JOB_PID or $RUN_PID names.
+# that $JOB_PID or $RUN_PID names, and the first notes, in the file that
+# $EARLY_HELD names, whether the lock is held exclusively as it runs.
 EARLY_JOB = """\
+import fcntl
 import os
 import shlex
 import time
@@ -263,10 +265,25 @@ from pathlib import Path
 
 import pytest
 
+from .live_lock import lock_path
+
 pytestmark = pytest.mark.live
 
 
+def held_exclusively(path):
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
 def test_start_a_job_before_the_stack():
+    held = held_exclusively(lock_path())
+    Path(os.environ["EARLY_HELD"]).write_text(str(held))
     pidfile = shlex.quote(os.environ["JOB_PID"])
     assert os.system(f"sleep 60 >/dev/null 2>&1 & echo $! >{pidfile}") == 0
 
@@ -1098,12 +1115,13 @@ def stack_settings(where):
     return path
 
 
-def taken(lock):
+def taken(lock, how=fcntl.LOCK_EX):
     """Whether an open file description holds the lock at `lock`: a new
-    one cannot take it."""
+    one cannot take it. Asked for LOCK_SH, whether one holds it
+    exclusively: a new one cannot even share it."""
     fd = os.open(lock, os.O_RDWR)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, how | fcntl.LOCK_NB)
     except BlockingIOError:
         return True
     finally:
@@ -1293,6 +1311,14 @@ def test_a_live_spec_is_refused_when_the_lock_cannot_be_used(
     assert len(problems) == 1
     assert "is a relative path" in problems[0]
 
+    # a refusal, not an internal error (#330 review)
+    monkeypatch.setenv(LOCK_ENV, "~no-such-user/live-stack.lock")
+    lock, problems = mutate.live_stack(repo)
+    assert problems == [
+        f"{LOCK_ENV}='~no-such-user/live-stack.lock' names a home folder "
+        "that cannot be found"
+    ]
+
     monkeypatch.setenv(LOCK_ENV, str(tmp_path / "live-stack.lock"))
     monkeypatch.setenv(TIMEOUT_ENV, "soon")
     lock, problems = mutate.live_stack(repo)
@@ -1408,16 +1434,19 @@ def test_a_killed_harness_leaves_the_lock_to_its_run_until_the_run_ends(
     shell's background job. The lock's module made the descriptor
     close-on-exec as the run's conftest imported it, so the job shares no
     hold: once the run ends, the lock is free, though the job runs on
-    (#314)."""
+    (#314). The import left the harness's hold as it was: when the job
+    started, the lock was held, exclusively (#330 review)."""
     monkeypatch.setattr(live_lock, "RECORD_INTERVAL", 0)
     lock = tmp_path / "live-stack.lock"
     job_pid, run_pid, go = (tmp_path / name for name in ("job", "run", "go"))
+    early_held = tmp_path / "early-held"
     spec = tmp_path / "spec.toml"
     spec.write_text(mutation("live sum", "a + b", "a - b", [EARLY], live=True))
     env = environment(
         JOB_PID=str(job_pid),
         RUN_PID=str(run_pid),
         RUN_GO=str(go),
+        EARLY_HELD=str(early_held),
         **{
             LOCK_ENV: str(lock),
             TIMEOUT_ENV: "5",
@@ -1442,6 +1471,7 @@ def test_a_killed_harness_leaves_the_lock_to_its_run_until_the_run_ends(
         for noted in (run_pid, job_pid):
             pids.append(int(noted.read_text()))
         run, job = pids
+        assert early_held.read_text() == "True"
         process.kill()
         process.wait(timeout=30)
         with (
@@ -1496,26 +1526,31 @@ def test_a_process_given_the_holders_descriptor_shares_its_hold(
 LOCK_MODULE = REPO / "tests" / "integration" / "live_lock.py"
 
 
+@pytest.mark.parametrize("held", [False, True], ids=["free", "held"])
 def test_the_import_makes_a_named_descriptor_of_the_lock_close_on_exec(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, held
 ):
     """What each live run of the harness does as its conftest imports the
     lock's module, before any test runs: the descriptor that the variable
     names, open on the lock file, becomes close-on-exec, so that no
     program a test starts shares the hold, however early (#314). The
-    import neither locks nor records anything: here the lock is free, and
-    stays so."""
+    import changes nothing else: it records nothing, a free lock stays
+    free, and a lock held through the descriptor, as the harness holds
+    it, stays held, exclusively (#330 review)."""
     lock = tmp_path / "live-stack.lock"
     lock.write_text("")
     fd = os.open(lock, os.O_RDWR)
     try:
         # as the run inherits it through pass_fds
         os.set_inheritable(fd, True)
+        if held:
+            fcntl.flock(fd, fcntl.LOCK_EX)
         monkeypatch.setenv(LOCK_ENV, str(lock))
         monkeypatch.setenv(SHARED_ENV, str(fd))
         load(LOCK_MODULE)
         assert not os.get_inheritable(fd)
-        assert not taken(lock)
+        assert taken(lock) == held
+        assert taken(lock, fcntl.LOCK_SH) == held
         assert lock.read_text() == ""
     finally:
         os.close(fd)

@@ -291,14 +291,15 @@ path, though a leading `~` is expanded.
   with that message.
 - **Crashes.** The lock is a flock, which the kernel releases when its
   holder ends, however it ends, so a crashed or killed session blocks
-  nothing. The exception is a mutation harness killed outright (SIGKILL)
-  during a live run. The run goes on, with no `--timeout` to stop it,
-  and keeps the lock until its pytest process, and every process that a
-  test forked from it without exec, has ended. A program that a test
-  starts, by `os.system` say, does not keep it, however early the test
-  runs (below). The holder records itself in the lock file and empties
-  the record as it releases the lock, so a record in a free lock file
-  was left by a crash.
+  nothing. The exception is a mutation harness ended during a live run
+  by a signal that it does not catch: SIGKILL, say, or SIGQUIT, SIGUSR1
+  or SIGSEGV (on SIGINT, SIGTERM or SIGHUP it stops the run itself). The
+  run goes on, with no `--timeout` to stop it, and keeps the lock until
+  its pytest process, and every process that a test forked from it
+  without exec, has ended. A program that a test starts, by `os.system`
+  say, does not keep it, however early the test runs (below). The holder
+  records itself in the lock file and empties the record as it releases
+  the lock, so a record in a free lock file was left by a crash.
 - **Never delete the lock file.** A session that found no file would
   create and lock a new one, while the holder of the old one went on:
   two sessions on the stack at once.
@@ -321,12 +322,13 @@ path, though a leading `~` is expanded.
   descriptor is; it does so only when the variable names a descriptor of
   the lock file, and changes nothing else. So no program that a test
   starts (by `os.system`, a shell's background job or `close_fds=False`)
-  shares the hold; a process that a test forks without exec does. If the
-  harness is killed, the run's copy of the descriptor keeps the lock held
-  until the run ends (Crashes, above). A session waiting meanwhile names
-  the harness from the record, with its working directory, in the
-  checkout where it left the mutant, and says that it has ended and that
-  the lock is held by a process with no record of its own.
+  shares the hold; a process that a test forks without exec does. If a
+  signal that the harness does not catch ends it, the run's copy of the
+  descriptor keeps the lock held until the run ends (Crashes, above). A
+  session waiting meanwhile names the harness from the record, with its
+  working directory, in the checkout where it left the mutant, and says
+  that it has ended and that the lock is held by a process with no
+  record of its own.
 - **Only live test sessions and the harness take it.** A scratch run's
   reset and write, `yizkr bootstrap` and other writers to the stack
   don't, so the orchestrating session still gives the stack to one agent
