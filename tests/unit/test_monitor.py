@@ -1741,6 +1741,7 @@ class TestLogsThatCannotBeRead:
         append(run, [("alerts.jsonl", "not an object")])
         with unreadable_file(run, "events.jsonl", by):
             summary = summarise_run(run, NOW)
+        assert summary.events_unreadable
         assert summary.skipped_lines == 1
         note = "unreadable log lines skipped: 1"
         assert note in render_terminal(summary, width=200)
@@ -2622,6 +2623,15 @@ class TestStatusPage:
         assert "<th>stage</th>" in page
         assert "jsonl cannot be read" not in page
         assert "nknown" not in page
+        # the notes on what the stage counts are made of are shown too
+        assert (
+            '<li class="">reused transcription: 1 adopted, 1 view current</li>'
+            in page
+        )
+        assert (
+            '<li class="muted">set aside to be made again (set-aside '
+            "events): 1</li>" in page
+        )
 
     def test_text_is_escaped(self, run):
         append(run, [control(600, "pause", reason="<b>&")])
