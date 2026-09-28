@@ -1038,6 +1038,9 @@ class Orchestrator:
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
             self.rundir.emit("failed", reason=reason[:500], **where)
+            from yizkr.pipeline import anomalies
+
+            anomalies.failed(self.rundir, doc, stage)
             raise
         reasons = list(attention(result)) if attention is not None else []
         detail = dict(doc.state.detail or {})
@@ -1097,6 +1100,9 @@ class Orchestrator:
             stage=stage,
             attention=noted.get(stage) or None,
         )
+        from yizkr.pipeline import anomalies
+
+        anomalies.reused(self.rundir, doc, stage, loaded)
         return loaded
 
     # -- pipeline steps (override points for tests) ---------------------------
@@ -1248,6 +1254,9 @@ class Orchestrator:
                 ),
             )
             doc.derivations.record(doc.transcription)
+            from yizkr.pipeline import anomalies
+
+            anomalies.stored(self.rundir, doc, "transcription", transcription)
         self._views[memo] = transcription
         return transcription
 
@@ -1483,6 +1492,9 @@ class Orchestrator:
             ),
         )
         doc.derivations.record(doc.critique)
+        from yizkr.pipeline import anomalies
+
+        anomalies.stored(self.rundir, doc, "critique", findings)
         if findings and changed:
             self.log(
                 f"  critique: {len(findings)} concern(s) flagged for review"
@@ -1630,6 +1642,9 @@ class Orchestrator:
             batch = self._step_batch(doc)
             changed = self._update_batch_view(doc, batch)
             doc.derivations.record(doc.batch)
+            from yizkr.pipeline import anomalies
+
+            anomalies.stored(self.rundir, doc, doc.views[doc.batch][1], batch)
         if changed:
             # a new batch invalidates everything derived from the old one
             # — stale machine outputs must never gate or write

@@ -274,10 +274,12 @@ class TestIngestRunManifest:
     ):
         orchestrator = Run(a_folder(tmp_path), tmp_path / "state")
         orchestrator.run()
+        # alerts.jsonl, the anomaly checks' run file (#196), is there once
+        # one raises an alert, as the short letter's language check does
         assert sorted(
             path.name
             for path in orchestrator.state_dir.iterdir()
-            if path.is_file()
+            if path.is_file() and path.name != "alerts.jsonl"
         ) == ["control.jsonl", "events.jsonl", "run.json"]
 
 

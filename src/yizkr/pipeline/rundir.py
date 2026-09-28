@@ -509,8 +509,10 @@ class RunDir:
         **fields: Any,
     ) -> dict:
         """Append an anomaly alert, and an event pointing at it. `carried`
-        marks an alert on an output made from answers the LLM cache gave
-        (new ones are on outputs the engine answered in this run)."""
+        marks an alert on an output the LLM cache answered every call of,
+        or one reused whole; a new one is on an output the engine answered
+        a call of in this run, or one its stage makes without a call
+        (docs/ANOMALIES.md, New and carried)."""
         entry = {
             "at": _now(),
             "invocation": self.invocation,
