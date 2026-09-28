@@ -242,13 +242,13 @@ on each; `pause-timeout-s` and `chars-per-page` sit beside the checks,
 and `version`, the file's layout, which is 1. `pause-timeout-s` is a
 number of seconds up to the longest wait a thread can make
 (`threading.TIMEOUT_MAX`, about 292 years), or `null`; infinity is
-refused. To change some, write a YAML file with just those keys, nested as in
-`anomalies.yaml`, and name it in `$YIZKR_ANOMALIES`; the scratch driver
-may pass one of its own (`anomalies.load_config`, `anomalies.attach`).
-Its values replace the defaults, a list replacing the whole list. A key
-the defaults do not have is refused, and so is a value out of range (a
-`min-count` larger than its `window`, a share above one), so a misspelt
-key never passes silently.
+refused. To change some, write a YAML file with just those keys, nested
+as in `anomalies.yaml`, and name it in `$YIZKR_ANOMALIES`; the scratch
+driver may pass one of its own (`anomalies.load_config`,
+`anomalies.attach`). Its values replace the defaults, a list replacing
+the whole list. A key the defaults do not have is refused, and so is a
+value out of range (a `min-count` larger than its `window`, a share
+above one), so a misspelt key never passes silently.
 
 The thresholds decide only which alerts are raised and which slices are
 paused, never what a stage makes: no view and no LLM cache key depends on
@@ -270,9 +270,11 @@ the run's control file (`RunDir.request`):
 
 ```json
 {"at": "...", "action": "pause", "scope": "kind:media", "by": "anomaly",
- "reason": "kind-failures: transcription failed 6 of the first 6 media documents",
- "check": "kind-failures"}
+ "reason": "...", "check": "kind-failures"}
 ```
+
+Its `reason` names the check and what it counted, here
+`kind-failures: transcription failed 6 of the first 6 media documents`.
 
 No pause is asked for a slice the control file stops already, whoever
 stopped it.
@@ -300,15 +302,18 @@ reads the control file as a driver folds it and, when a pause of the
 checks alone stands on the slice and the timeout has passed since they
 asked for it, appends the abort. When such a pause stands short of the
 timeout, the next look comes when it is due; otherwise the next look
-comes when the checks' request would reach the timeout, or, that past,
-a timeout later. A slice has one pending timer at a time, cancelled
-when a look needs a sooner one. The look holds the lock
-the control file's appenders take (rundir's `_append_line`) from its
-read to its abort, so no other process appends a request in between:
-an operator's resume lands before the look, and is seen, or after the
-abort. The lock is POSIX's, so it does not hold against this process's
-own threads, nor after any descriptor on the file in this process is
-closed.
+comes when the checks' request would reach the timeout, or, that past, a
+timeout later. A slice has one pending timer at a time, cancelled when a
+look needs a sooner one. The look holds the lock the control file's
+appenders take (rundir's `_append_line`) from its read to its abort, so
+no other process appends a request in between: an operator's resume
+lands before the look, and is seen, or after the abort. The lock is
+POSIX's, so it does not hold against this process's own threads, nor
+after any descriptor on the file in this process is closed. A look the
+timer makes that fails (the control file cannot be read, or the abort
+cannot be appended, on a full disk say) is an `anomaly-error` event,
+under the watch's own invocation, `watch-<hex>`, and the slice is looked
+at again a timeout later: it never goes unwatched.
 
 The slice stays watched after its pause is aborted, resumed or cleared,
 because a driver that invokes the run again in the same process, as the

@@ -15,6 +15,7 @@ for the checks' timers (tests/unit/conftest.py).
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -330,7 +331,7 @@ class TestThresholds:
         assert set(shipped["checks"]) <= documented
         for settings in shipped["checks"].values():
             assert set(settings) <= documented
-        assert {"pause-timeout-s", "chars-per-page"} <= documented
+        assert {"version", "pause-timeout-s", "chars-per-page"} <= documented
 
     def test_a_file_named_in_the_variable_overrides_the_defaults(
         self, tmp_path, monkeypatch
@@ -361,6 +362,7 @@ class TestThresholds:
             "checks:\n  kind-failures:\n    max-share: 1.5\n",
             "pause-timeout-s: -1\n",
             "pause-timeout-s: .inf\n",  # would stop the timer's thread
+            "pause-timeout-s: 1.0e+10\n",  # beyond threading.TIMEOUT_MAX
             "pause-timeout-s: .nan\n",
             "- a list\n",
             "checks: [\n",  # not YAML
@@ -1436,6 +1438,7 @@ class TestFailFastPauses:
         finally:
             for timer in started:
                 timer.cancel()
+                timer.join(timeout=30)
 
     def test_a_timer_waits_at_most_the_longest_wait_a_thread_can(self):
         timer = START_TIMER(threading.TIMEOUT_MAX + 1, lambda: None)
@@ -1509,6 +1512,10 @@ class TestFailFastPauses:
         clock.advance(1802)
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
+        # the look that aborted, past the checks' request's timeout, looks
+        # again a timeout later
+        (pending,) = timers.waiting()
+        assert pending.seconds == 1801
         # a preflight that outlasts the timeout: the slice is looked at
         # again meanwhile, and stays watched
         for _ in range(delay // 1801):
@@ -1551,6 +1558,38 @@ class TestFailFastPauses:
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media paused"
         clock.advance(2)
+        timers.fire()
+        assert run.control().stopped(kind="media") == "kind:media aborted"
+
+    def test_a_timer_whose_look_fails_looks_again_a_timeout_later(
+        self, tmp_path, clock, monkeypatch
+    ):
+        """A look the timer makes that fails, here on a full disk as it
+        appends the abort, is an `anomaly-error` event under the watch's
+        own invocation, and the slice is looked at again a timeout later,
+        so that it never goes unwatched."""
+        timers = Timers()
+        run, _checks = paused_media(tmp_path, clock=clock, timers=timers)
+        watch = anomalies._watch_of(run.path)
+
+        def full(*args, **kwargs):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(watch.run, "request", full)
+            clock.advance(1802)
+            timers.fire()
+            assert run.control().stopped(kind="media") == "kind:media paused"
+            (error,) = [
+                event
+                for event in run.events()
+                if event["event"] == "anomaly-error"
+            ]
+            assert (error["error"], error["hook"]) == ("OSError", "timer")
+            assert error["invocation"].startswith("watch-")
+            (pending,) = timers.waiting()
+            assert pending.seconds == 1801
+        # the disk has room again, and the next look aborts
         timers.fire()
         assert run.control().stopped(kind="media") == "kind:media aborted"
 

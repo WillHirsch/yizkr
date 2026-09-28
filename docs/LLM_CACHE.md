@@ -474,16 +474,18 @@ start and end.
 
 ### `events.jsonl`
 
-Every line has `at` (UTC), `event` and `invocation` (one per run of `ingest
-run`, and one per recheck of the anomaly checks, `recheck-<hex>`,
-docs/ANOMALIES.md). Events about a document add `subject` (its media SHA-1) and `kind`;
-`document-failed` and a directory's `set-aside` also add `file`, the
-source's file name, which names a document whose source could not be
-read and so has no `subject`; stage events add `stage` (`transcription`,
-`extraction`, `critique` or `gedcom`); cache events add `role` and `key`,
-and all of them but `cache-reject` and `cache-adopt` the kind of call
-(`call`); call events add `role`, the `stage` the role's calls are made
-in, and the kind of call:
+Every line has `at` (UTC), `event` and `invocation` (one per run of
+`ingest run`; one per recheck of the anomaly checks, `recheck-<hex>`;
+and one for the anomaly checks' pause watch in a run's process,
+`watch-<hex>`, whose only events are its failed looks' `anomaly-error`;
+docs/ANOMALIES.md). Events about a document add `subject` (its media
+SHA-1) and `kind`; `document-failed` and a directory's `set-aside` also
+add `file`, the source's file name, which names a document whose source
+could not be read and so has no `subject`; stage events add `stage`
+(`transcription`, `extraction`, `critique` or `gedcom`); cache events
+add `role` and `key`, and all of them but `cache-reject` and
+`cache-adopt` the kind of call (`call`); call events add `role`, the
+`stage` the role's calls are made in, and the kind of call:
 
 | Event | Meaning | Extra fields |
 |---|---|---|

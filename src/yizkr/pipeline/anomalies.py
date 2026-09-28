@@ -983,7 +983,9 @@ class _SliceWatch:
     another process is not watched there."""
 
     def __init__(self, path: Path) -> None:
-        self.run = RunDir(path)
+        # the watch's own events (a look that fails) carry an invocation of
+        # its own, since it outlives the invocations it watches for
+        self.run = RunDir(path, invocation=f"watch-{uuid.uuid4().hex[:8]}")
         self._lock = threading.Lock()
         self._slices: dict[str, _Watched] = {}
 
@@ -1017,26 +1019,42 @@ class _SliceWatch:
 
     def _fire(self, scope: str, token: object) -> None:
         """A pending timer's end: its slice is looked at, unless a later
-        look has put another timer in its place."""
+        look has put another timer in its place. A look that fails (the
+        control file cannot be read, or the abort cannot be appended) is an
+        `anomaly-error` event, and the slice is looked at again a timeout
+        later, so that it never goes unwatched."""
         try:
             with self._lock:
                 watched = self._slices.get(scope)
                 if watched is None or watched.token is not token:
                     return
                 watched.pending = watched.token = watched.due = None
-                self._look(scope, watched)
+                try:
+                    self._look(scope, watched)
+                finally:
+                    if watched.pending is None:
+                        margin = timedelta(seconds=watched.timeout + 1)
+                        self._arm(scope, watched, watched.now() + margin)
         except Exception as exc:
             _report(self.run, "timer", exc)
 
     def _look(self, scope: str, watched: _Watched) -> None:
         """Look at a slice, and see that its next look is pending: a timer
         is started when none is, or when this look wants one sooner than
-        the pending one is due, which is then cancelled."""
+        the pending one is due, which is then cancelled. The looks agree
+        on when a pause is due, so a sooner one comes only when the wall
+        clock steps back; the pending timer is then never later than the
+        look the slice needs."""
         due = self._judge(scope, watched)
         if watched.pending is not None and (
             watched.due is not None and watched.due <= due
         ):
             return
+        self._arm(scope, watched, due)
+
+    def _arm(self, scope: str, watched: _Watched, due: datetime) -> None:
+        """Start the timer that looks at the slice when `due` comes, in
+        place of the pending one, which is cancelled."""
         _cancel(watched.pending)
         token = object()
         watched.token, watched.due = token, due

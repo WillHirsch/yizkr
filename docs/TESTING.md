@@ -14,7 +14,9 @@ itself in its own `--help`.
   because `pyproject.toml` deselects the `live` marker unless `-m live`
   asks for it. CI runs them, with ruff, on every push.
   `tests/unit/conftest.py` sets their defaults, and
-  `tests/unit/test_conftest.py` tests them:
+  `tests/unit/test_conftest.py` tests them, apart from the anomaly
+  checks' one, which `tests/unit/test_anomalies.py` tests
+  (`TestTheUnitTestDefaults`):
   - `CLAUDE_CONFIG_DIR` points at a directory that does not exist, so no
     unit test reads your Claude Code login.
   - `OPENBLAS_NUM_THREADS` is set to 1, unless `OPENBLAS_NUM_THREADS`,
@@ -30,11 +32,19 @@ itself in its own `--help`.
     (registered in `pyproject.toml`), as the durability tests in
     `tests/unit/test_stages.py` and `tests/unit/test_llmcache.py` are;
     the live tests under `tests/integration` always make them.
-  - The config directory and the no-op sync calls are patches held by
-    the test's own `monkeypatch`, so a test that calls
-    `monkeypatch.undo()` loses them for the rest of its run. A test that
-    needs a patch for part of its run scopes it with
-    `with monkeypatch.context() as patch:` instead.
+  - The anomaly checks (`yizkr.pipeline.anomalies`) start no thread: the
+    `_no_anomaly_timers` fixture records the timer a fail-fast pause
+    would start instead of starting it, and yields the recorded timers;
+    it forgets the checks and the watched slices each test made; and it
+    removes `$YIZKR_ANOMALIES`, so the checks run on their default
+    thresholds whatever the environment names. The one test that needs a
+    real timer takes the real one, which test_anomalies.py saves.
+  - The config directory, the no-op sync calls, the recorded anomaly
+    timers and the removed `$YIZKR_ANOMALIES` are patches held by the
+    test's own `monkeypatch`, so a test that calls `monkeypatch.undo()`
+    loses them for the rest of its run. A test that needs a patch for
+    part of its run scopes it with `with monkeypatch.context() as patch:`
+    instead.
 - **Live tests** (`tests/integration`, every module marked `live`) run
   against the deployed stack (`make up` or `make up-local`) through
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.
