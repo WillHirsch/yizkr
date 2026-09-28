@@ -1,67 +1,260 @@
-# Inconsistency report — the flagship R2 view.
-# Every entity+property carrying two or more different attributed values,
-# with the sources each value is stated in. Values shown here are a
-# HEALTHY RESTING STATE (ADR-0002), not errors: this report exists so a
-# reader can weigh the evidence, not so someone can "fix" it.
+# Disagreement report — the flagship R2 view.
+# Every entity and property where DIFFERENT ARTIFACTS attribute different
+# values, each value listed with every source that states it. These rows are
+# a HEALTHY RESTING STATE (ADR-0002), not errors: this report exists so a
+# reader can weigh the evidence, never to pick a value or "fix" one.
 #
-# Only properties that can hold at most one true value per person are
-# candidates. Properties that legitimately accumulate values over a life
-# (spouse, residence, ...) are excluded — two spouses from one source are
-# remarriages, not a contradiction. Values that differ only in
-# RESOLUTION are suppressed when the graph knows the containment (an
-# address located in the town another source names): recording that
-# hierarchy is what makes this report sharpen over time.
+# Coexistence here is cross-source value multiplicity (ADR-0023 §4). A pair
+# counts only when its two values are not stated by one and the same
+# artifact alone: two readings of one artifact (a curator's correction
+# beside the machine reading it corrects) are not two sources, and a page
+# fragment counts as the artifact it is part of. A statement with no
+# stated-in source attributes its value to no artifact and takes no part. A
+# statement a curator DEPRECATED is left out. Nothing needs a preferred
+# rank: a preferred value is listed like any other.
+#
+# Single-valued properties compare their values: dates and places of birth
+# and death, parents, birth name, the dates an event or other entity
+# carries as its own statements (point in time, start time, end time), and
+# a place's identity properties. A name compares as text: spellings that
+# differ only in letter case or language tag are one value, shown in one of
+# those spellings with the sources of all of them.
+#
+# Residence and spouse accumulate values over a life (two spouses from one
+# source are remarriages), so their values never conflict. The SAME place
+# or spouse dated differently by another source does: the report compares
+# their start and end times (arrived there in 1938 per one source, in 1939
+# per another). A return to a place a person had left therefore shows as a
+# disagreement over the start time, both datings side by side. A point in
+# time on a residence or spouse statement dates an observation, not the
+# range, and is not compared, so a marriage dated only that way is not
+# compared (the person timeline still lists it). Married names, nicknames
+# and official names accumulate too, and are not compared.
+#
+# Differences of RESOLUTION are suppressed: a place the graph records as
+# contained in the other (an address in the town another source names), and
+# a date whose span lies inside the other's. A date's span is the whole
+# period its precision names (a month, a year, a decade, a century), or the
+# range its source states with earliest and latest dates, open-ended when
+# only one is given: 1909 and 16 March 1909 agree, as do "between 1938 and
+# 1939" and 3 March 1939, while "the 1930s, between 1930 and 1935" and 1937
+# disagree. Two dates stored alike are compared through the ranges their
+# statements state: "before 1920" and "after 1920", both stored as 1920,
+# disagree, as do 1930 and "the 1930s, between 1934 and 1936". Earliest and
+# latest dates on a residence or spouse statement may date either end of
+# it, so when either statement carries them, their start and end times are
+# compared as stated, with no difference of resolution suppressed.
+# Recording the place hierarchy is what makes this report sharpen over time.
 SELECT ?entity ?entityLabel ?propertyLabel
-       ?valueA ?valueALabel ?precisionA
-       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceA), "/entity/"), "~", ?sourceALabelRaw); separator="|") AS ?sourcesA)
-       ?valueB ?valueBLabel ?precisionB
-       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceB), "/entity/"), "~", ?sourceBLabelRaw); separator="|") AS ?sourcesB)
+       ?sharedValue ?sharedValueLabel ?qualifierLabel
+       (MIN(COALESCE(?canonicalA, ?rawValueA)) AS ?valueA) ?valueALabel ?precisionA
+       ?earliestA ?earliestPrecisionA ?latestA ?latestPrecisionA
+       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceA), "/entity/"), "~", COALESCE(?sourceALabelRaw, "")); separator="|") AS ?sourcesA)
+       (MIN(COALESCE(?canonicalB, ?rawValueB)) AS ?valueB) ?valueBLabel ?precisionB
+       ?earliestB ?earliestPrecisionB ?latestB ?latestPrecisionB
+       (GROUP_CONCAT(DISTINCT CONCAT(STRAFTER(STR(?sourceB), "/entity/"), "~", COALESCE(?sourceBLabelRaw, "")); separator="|") AS ?sourcesB)
 WHERE {
-  VALUES ?property {
-    wd:{P:date_of_birth} wd:{P:date_of_death}
-    wd:{P:place_of_birth} wd:{P:place_of_death}
-    wd:{P:father} wd:{P:mother}
-    wd:{P:coordinate_location} wd:{P:geonames_id} wd:{P:whg_place_id}
+  # The pairs are found and filtered in sub-selects, so the source and label
+  # lookups below run only on the pairs that survive. Every lookup joins on
+  # a variable a sub-select binds with a triple pattern, never on a BIND
+  # result, so the query service evaluates it per pair rather than against
+  # every label or source in the graph.
+  {
+    SELECT ?entity ?property ?sharedValue ?sharedValueLabel ?qualifierLabel
+           ?stA ?rawValueA ?canonicalA ?precisionA ?earliestA ?earliestPrecisionA ?latestA ?latestPrecisionA
+           ?stB ?rawValueB ?canonicalB ?precisionB ?earliestB ?earliestPrecisionB ?latestB ?latestPrecisionB
+    WHERE {
+      {
+        SELECT ?entity ?property ?qualifier ?valuePredicate ?sharedValue ?sharedValueLabel ?qualifierLabel
+               ?stA ?rawValueA ?canonicalA ?stB ?rawValueB ?canonicalB
+        WHERE {
+          {
+            # places: a value the graph records as contained in the other
+            # (location or part of, through merge redirects) differs only
+            # in resolution
+            VALUES ?property { wd:{P:place_of_birth} wd:{P:place_of_death} }
+            ?property wikibase:claim ?p ;
+                      wikibase:statementProperty ?ps ;
+                      wikibase:statementValue ?valuePredicate .
+            ?entity ?p ?stA , ?stB .
+            ?stA ?ps ?rawValueA .
+            ?stB ?ps ?rawValueB .
+            FILTER(!sameTerm(?rawValueA, ?rawValueB))
+            FILTER NOT EXISTS {
+              ?rawValueA (<http://www.w3.org/2002/07/owl#sameAs>|^<http://www.w3.org/2002/07/owl#sameAs>|wdt:{P:location}|wdt:{P:part_of}) ?stepA .
+              ?stepA (<http://www.w3.org/2002/07/owl#sameAs>|^<http://www.w3.org/2002/07/owl#sameAs>|wdt:{P:location}|wdt:{P:part_of})* ?rawValueB .
+            }
+            FILTER NOT EXISTS {
+              ?rawValueB (<http://www.w3.org/2002/07/owl#sameAs>|^<http://www.w3.org/2002/07/owl#sameAs>|wdt:{P:location}|wdt:{P:part_of}) ?stepB .
+              ?stepB (<http://www.w3.org/2002/07/owl#sameAs>|^<http://www.w3.org/2002/07/owl#sameAs>|wdt:{P:location}|wdt:{P:part_of})* ?rawValueA .
+            }
+          } UNION {
+            # the other single-valued properties: two statements' own
+            # values, and two dates stored alike, which the ranges their
+            # statements state may still set apart
+            VALUES ?property {
+              wd:{P:date_of_birth} wd:{P:date_of_death}
+              wd:{P:father} wd:{P:mother}
+              wd:{P:birth_name}
+              wd:{P:point_in_time} wd:{P:start_time} wd:{P:end_time}
+              wd:{P:coordinate_location} wd:{P:geonames_id} wd:{P:whg_place_id}
+            }
+            ?property wikibase:claim ?p ;
+                      wikibase:statementProperty ?ps ;
+                      wikibase:statementValue ?valuePredicate .
+            ?entity ?p ?stA , ?stB .
+            ?stA ?ps ?rawValueA .
+            ?stB ?ps ?rawValueB .
+            FILTER(!sameTerm(?rawValueA, ?rawValueB)
+                   || (!sameTerm(?stA, ?stB) && DATATYPE(?rawValueA) = <http://www.w3.org/2001/XMLSchema#dateTime>))
+          } UNION {
+            # dated multi-valued statements: one place or spouse (the same
+            # item, through merge redirects), dated two ways
+            VALUES (?property ?qualifier) {
+              (wd:{P:residence} wd:{P:start_time}) (wd:{P:residence} wd:{P:end_time})
+              (wd:{P:spouse} wd:{P:start_time}) (wd:{P:spouse} wd:{P:end_time})
+            }
+            ?property wikibase:claim ?p ;
+                      wikibase:statementProperty ?ps .
+            ?qualifier wikibase:qualifier ?pq ;
+                       wikibase:qualifierValue ?valuePredicate .
+            ?entity ?p ?stA .
+            ?stA ?pq ?rawValueA ;
+                 ?ps ?sharedRawA .
+            ?sharedRawA <http://www.w3.org/2002/07/owl#sameAs>?/^<http://www.w3.org/2002/07/owl#sameAs>? ?sharedRawB .
+            ?entity ?p ?stB .
+            ?stB ?ps ?sharedRawB ;
+                 ?pq ?rawValueB .
+            FILTER(!sameTerm(?rawValueA, ?rawValueB))
+            OPTIONAL { ?sharedRawA <http://www.w3.org/2002/07/owl#sameAs> ?sharedCanonicalA . }
+            BIND(COALESCE(?sharedCanonicalA, ?sharedRawA) AS ?sharedValue)
+            OPTIONAL { ?sharedRawA <http://www.w3.org/2002/07/owl#sameAs>?/rdfs:label ?sharedValueLabel .
+                       FILTER(LANG(?sharedValueLabel) = "en") }
+            OPTIONAL { ?qualifier rdfs:label ?qualifierLabel . FILTER(LANG(?qualifierLabel) = "en") }
+          }
+          # an item value written before a merge still points at the
+          # redirect: compare the item it resolves to. Each pair is kept
+          # once, in the order of its values (two dates stored alike are
+          # ordered below, by their spans and stated bounds); a name
+          # compares as text, letter case and language tag aside.
+          OPTIONAL { ?rawValueA <http://www.w3.org/2002/07/owl#sameAs> ?canonicalA . }
+          OPTIONAL { ?rawValueB <http://www.w3.org/2002/07/owl#sameAs> ?canonicalB . }
+          FILTER(IF(isLiteral(?rawValueA) && LANG(?rawValueA) != "", LCASE(STR(?rawValueA)), STR(COALESCE(?canonicalA, ?rawValueA)))
+                 < IF(isLiteral(?rawValueB) && LANG(?rawValueB) != "", LCASE(STR(?rawValueB)), STR(COALESCE(?canonicalB, ?rawValueB)))
+                 || sameTerm(?rawValueA, ?rawValueB))
+        }
+      }
+      # each date's stated precision and span, once per statement: the span
+      # is a yyyymmdd range, the whole period the precision names (the unit
+      # is 1 for a day, 1e2 a month, 1e4 a year, 1e5 a decade, 1e6 a
+      # century), or the statement's earliest and latest dates, open-ended
+      # when only one is given. The units are doubles: the query service
+      # mishandles integer constants chosen by a nested IF in a sub-select.
+      OPTIONAL {
+        ?stA ?valuePredicate ?timeNodeA .
+        ?timeNodeA wikibase:timeValue ?rawValueA ;
+                   wikibase:timePrecision ?precisionA .
+        OPTIONAL { wd:{P:earliest_date} wikibase:qualifierValue ?earliestValueA .
+                   ?stA ?earliestValueA ?earliestNodeA .
+                   ?earliestNodeA wikibase:timeValue ?earliestA ;
+                                  wikibase:timePrecision ?earliestPrecisionA . }
+        OPTIONAL { wd:{P:latest_date} wikibase:qualifierValue ?latestValueA .
+                   ?stA ?latestValueA ?latestNodeA .
+                   ?latestNodeA wikibase:timeValue ?latestA ;
+                                wikibase:timePrecision ?latestPrecisionA . }
+        BIND(IF(?precisionA >= 11, 1e0, IF(?precisionA = 10, 1e2, IF(?precisionA = 9, 1e4, IF(?precisionA = 8, 1e5, 1e6)))) AS ?unitA)
+        BIND(IF(?earliestPrecisionA >= 11, 1e0, IF(?earliestPrecisionA = 10, 1e2, IF(?earliestPrecisionA = 9, 1e4, IF(?earliestPrecisionA = 8, 1e5, 1e6)))) AS ?earliestUnitA)
+        BIND(IF(?latestPrecisionA >= 11, 1e0, IF(?latestPrecisionA = 10, 1e2, IF(?latestPrecisionA = 9, 1e4, IF(?latestPrecisionA = 8, 1e5, 1e6)))) AS ?latestUnitA)
+        BIND(IF(BOUND(?earliestA),
+                FLOOR((YEAR(?earliestA) * 10000 + MONTH(?earliestA) * 100 + DAY(?earliestA)) / ?earliestUnitA) * ?earliestUnitA,
+                IF(BOUND(?latestA), -1e10,
+                   FLOOR((YEAR(?rawValueA) * 10000 + MONTH(?rawValueA) * 100 + DAY(?rawValueA)) / ?unitA) * ?unitA)) AS ?fromA)
+        BIND(IF(BOUND(?latestA),
+                FLOOR((YEAR(?latestA) * 10000 + MONTH(?latestA) * 100 + DAY(?latestA)) / ?latestUnitA) * ?latestUnitA + ?latestUnitA - 1,
+                IF(BOUND(?earliestA), 1e10,
+                   FLOOR((YEAR(?rawValueA) * 10000 + MONTH(?rawValueA) * 100 + DAY(?rawValueA)) / ?unitA) * ?unitA + ?unitA - 1)) AS ?toA)
+        # a precision coarser than a century names no span
+        BIND(?precisionA >= 7 && COALESCE(?earliestPrecisionA, 11) >= 7 && COALESCE(?latestPrecisionA, 11) >= 7 AS ?spannedA)
+        # which of the bounds the statement states, and at what precision
+        BIND(COALESCE(?earliestPrecisionA, -1e0) * 1e2 + COALESCE(?latestPrecisionA, -1e0) AS ?boundsA)
+      }
+      OPTIONAL {
+        ?stB ?valuePredicate ?timeNodeB .
+        ?timeNodeB wikibase:timeValue ?rawValueB ;
+                   wikibase:timePrecision ?precisionB .
+        OPTIONAL { wd:{P:earliest_date} wikibase:qualifierValue ?earliestValueB .
+                   ?stB ?earliestValueB ?earliestNodeB .
+                   ?earliestNodeB wikibase:timeValue ?earliestB ;
+                                  wikibase:timePrecision ?earliestPrecisionB . }
+        OPTIONAL { wd:{P:latest_date} wikibase:qualifierValue ?latestValueB .
+                   ?stB ?latestValueB ?latestNodeB .
+                   ?latestNodeB wikibase:timeValue ?latestB ;
+                                wikibase:timePrecision ?latestPrecisionB . }
+        BIND(IF(?precisionB >= 11, 1e0, IF(?precisionB = 10, 1e2, IF(?precisionB = 9, 1e4, IF(?precisionB = 8, 1e5, 1e6)))) AS ?unitB)
+        BIND(IF(?earliestPrecisionB >= 11, 1e0, IF(?earliestPrecisionB = 10, 1e2, IF(?earliestPrecisionB = 9, 1e4, IF(?earliestPrecisionB = 8, 1e5, 1e6)))) AS ?earliestUnitB)
+        BIND(IF(?latestPrecisionB >= 11, 1e0, IF(?latestPrecisionB = 10, 1e2, IF(?latestPrecisionB = 9, 1e4, IF(?latestPrecisionB = 8, 1e5, 1e6)))) AS ?latestUnitB)
+        BIND(IF(BOUND(?earliestB),
+                FLOOR((YEAR(?earliestB) * 10000 + MONTH(?earliestB) * 100 + DAY(?earliestB)) / ?earliestUnitB) * ?earliestUnitB,
+                IF(BOUND(?latestB), -1e10,
+                   FLOOR((YEAR(?rawValueB) * 10000 + MONTH(?rawValueB) * 100 + DAY(?rawValueB)) / ?unitB) * ?unitB)) AS ?fromB)
+        BIND(IF(BOUND(?latestB),
+                FLOOR((YEAR(?latestB) * 10000 + MONTH(?latestB) * 100 + DAY(?latestB)) / ?latestUnitB) * ?latestUnitB + ?latestUnitB - 1,
+                IF(BOUND(?earliestB), 1e10,
+                   FLOOR((YEAR(?rawValueB) * 10000 + MONTH(?rawValueB) * 100 + DAY(?rawValueB)) / ?unitB) * ?unitB + ?unitB - 1)) AS ?toB)
+        BIND(?precisionB >= 7 && COALESCE(?earliestPrecisionB, 11) >= 7 && COALESCE(?latestPrecisionB, 11) >= 7 AS ?spannedB)
+        BIND(COALESCE(?earliestPrecisionB, -1e0) * 1e2 + COALESCE(?latestPrecisionB, -1e0) AS ?boundsB)
+      }
+      # two dates stored alike differ only through the ranges their
+      # statements state: such a pair is kept once, in the order of its
+      # spans and then of the bounds it states, and left out when both
+      # statements give the same span and the same bounds
+      FILTER(!sameTerm(?rawValueA, ?rawValueB)
+             || ?fromA < ?fromB
+             || (?fromA = ?fromB && (?toA < ?toB || (?toA = ?toB && ?boundsA < ?boundsB))))
+      # a date whose span lies inside the other's differs only in
+      # resolution. Earliest and latest dates on a residence or spouse
+      # statement may date either end of it, so when either statement
+      # carries them, their start and end times are compared as stated,
+      # with no difference of resolution suppressed
+      FILTER(!BOUND(?fromA) || !BOUND(?fromB)
+             || !(?spannedA && ?spannedB
+                  && (!BOUND(?qualifier) || !(BOUND(?earliestA) || BOUND(?latestA) || BOUND(?earliestB) || BOUND(?latestB)))
+                  && ((?fromA <= ?fromB && ?toB <= ?toA) || (?fromB <= ?fromA && ?toA <= ?toB))))
+    }
   }
-  ?property wikibase:claim ?p ;
-            wikibase:statementProperty ?ps .
-  ?entity ?p ?stA , ?stB .
-  ?stA ?ps ?rawValueA .
-  ?stB ?ps ?rawValueB .
-  # canonicalize through item-merge redirects: a statement written
-  # before a merge still points at the redirect, and that indirection
-  # is not an inconsistency
-  OPTIONAL { ?rawValueA <http://www.w3.org/2002/07/owl#sameAs> ?canonicalA . }
-  OPTIONAL { ?rawValueB <http://www.w3.org/2002/07/owl#sameAs> ?canonicalB . }
-  BIND(COALESCE(?canonicalA, ?rawValueA) AS ?valueA)
-  BIND(COALESCE(?canonicalB, ?rawValueB) AS ?valueB)
-  FILTER(?valueA != ?valueB)
-  FILTER(STR(?stA) < STR(?stB))
-  # a value CONTAINED in the other (per the graph's own location /
-  # part-of knowledge) is a difference of resolution, not substance
-  FILTER NOT EXISTS { ?valueA (wdt:{P:location}|wdt:{P:part_of})+ ?valueB . }
-  FILTER NOT EXISTS { ?valueB (wdt:{P:location}|wdt:{P:part_of})+ ?valueA . }
-  # stated precision for time values: display must never pad or narrow
-  OPTIONAL { ?stA ?vpA ?nodeA .
-             ?nodeA wikibase:timeValue ?rawValueA ;
-                    wikibase:timePrecision ?precisionA . }
-  OPTIONAL { ?stB ?vpB ?nodeB .
-             ?nodeB wikibase:timeValue ?rawValueB ;
-                    wikibase:timePrecision ?precisionB . }
+  # rank is an optional curator overlay: a deprecated statement is out of
+  # contention, while normal and preferred statements are listed alike
+  OPTIONAL { ?stA wikibase:rank ?rankA . }
+  OPTIONAL { ?stB wikibase:rank ?rankB . }
+  FILTER(?rankA != wikibase:DeprecatedRank && ?rankB != wikibase:DeprecatedRank)
+  # every stated-in source of each value, with its label and the artifact
+  # it belongs to (a page fragment belongs to the artifact it is part of)
   OPTIONAL { ?stA prov:wasDerivedFrom/pr:{P:stated_in} ?sourceA .
-             ?sourceA rdfs:label ?sourceALabelRaw .
-             FILTER(LANG(?sourceALabelRaw) = "en") }
+             OPTIONAL { ?sourceA wdt:{P:instance_of} wd:{Q:artifact_fragment} ;
+                                 wdt:{P:part_of} ?wholeA . }
+             OPTIONAL { ?sourceA rdfs:label ?sourceALabelRaw . FILTER(LANG(?sourceALabelRaw) = "en") } }
   OPTIONAL { ?stB prov:wasDerivedFrom/pr:{P:stated_in} ?sourceB .
-             ?sourceB rdfs:label ?sourceBLabelRaw .
-             FILTER(LANG(?sourceBLabelRaw) = "en") }
-  # labels bound directly (the label service is unreliable under
-  # GROUP BY); literal values simply have no label
+             OPTIONAL { ?sourceB wdt:{P:instance_of} wd:{Q:artifact_fragment} ;
+                                 wdt:{P:part_of} ?wholeB . }
+             OPTIONAL { ?sourceB rdfs:label ?sourceBLabelRaw . FILTER(LANG(?sourceBLabelRaw) = "en") } }
+  FILTER(BOUND(?sourceA) && BOUND(?sourceB))
+  # labels bound directly (the label service is unreliable under GROUP BY);
+  # an item value's label is its merge target's, and literals have none
   OPTIONAL { ?entity rdfs:label ?entityLabel . FILTER(LANG(?entityLabel) = "en") }
   OPTIONAL { ?property rdfs:label ?propertyLabel . FILTER(LANG(?propertyLabel) = "en") }
-  OPTIONAL { ?valueA rdfs:label ?valueALabel . FILTER(LANG(?valueALabel) = "en") }
-  OPTIONAL { ?valueB rdfs:label ?valueBLabel . FILTER(LANG(?valueBLabel) = "en") }
+  OPTIONAL { ?rawValueA <http://www.w3.org/2002/07/owl#sameAs>?/rdfs:label ?valueALabel . FILTER(LANG(?valueALabel) = "en") }
+  OPTIONAL { ?rawValueB <http://www.w3.org/2002/07/owl#sameAs>?/rdfs:label ?valueBLabel . FILTER(LANG(?valueBLabel) = "en") }
 }
+# one row per pair of values: spellings of a name that differ only in case
+# or language tag share a key, so their sources are listed together
 GROUP BY ?entity ?entityLabel ?propertyLabel
-         ?valueA ?valueALabel ?precisionA
-         ?valueB ?valueBLabel ?precisionB
-ORDER BY ?entityLabel ?propertyLabel
+         ?sharedValue ?sharedValueLabel ?qualifierLabel
+         (IF(isLiteral(?rawValueA) && LANG(?rawValueA) != "", LCASE(STR(?rawValueA)), STR(COALESCE(?canonicalA, ?rawValueA))) AS ?keyA)
+         ?valueALabel ?precisionA ?earliestA ?earliestPrecisionA ?latestA ?latestPrecisionA
+         (IF(isLiteral(?rawValueB) && LANG(?rawValueB) != "", LCASE(STR(?rawValueB)), STR(COALESCE(?canonicalB, ?rawValueB))) AS ?keyB)
+         ?valueBLabel ?precisionB ?earliestB ?earliestPrecisionB ?latestB ?latestPrecisionB
+# only a disagreement BETWEEN artifacts: the two values' sources are not
+# all one and the same artifact
+HAVING (MIN(STR(COALESCE(?wholeA, ?sourceA))) != MAX(STR(COALESCE(?wholeB, ?sourceB)))
+        || MAX(STR(COALESCE(?wholeA, ?sourceA))) != MIN(STR(COALESCE(?wholeB, ?sourceB))))
+ORDER BY ?entityLabel ?propertyLabel ?sharedValueLabel ?qualifierLabel ?keyA ?keyB
