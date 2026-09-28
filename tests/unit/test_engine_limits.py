@@ -81,7 +81,7 @@ from yizkr.pipeline.llm import (
 )
 from yizkr.pipeline.orchestrate import AWAITING_CLAIMS, BATCHED, Orchestrator
 from yizkr.pipeline.review import export_review_csv
-from yizkr.pipeline.rundir import RUNNING, run_state
+from yizkr.pipeline.rundir import DOCUMENT_FAILED, RUNNING, run_state
 
 PINNED = "2.1.237"
 # a Unix time in September 2026, where every fake clock starts
@@ -1361,6 +1361,9 @@ class TestNoDocumentFails:
         assert last.state.error is None
         events = run.rundir.events()
         assert not [event for event in events if event["event"] == "failed"]
+        assert not [
+            event for event in events if event["event"] == DOCUMENT_FAILED
+        ]
         (invocation,) = run.rundir.manifest()["invocations"]
         assert (invocation["outcome"], invocation["reason"]) == (
             "paused",
