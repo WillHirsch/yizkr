@@ -655,6 +655,28 @@ class TestSpans:
             == []
         )
 
+    def test_a_range_bound_coarser_than_a_century_names_no_span(self):
+        # Eugen's death in 1909 per the tree, stated (here) with an earliest
+        # date given only to the millennium, beside 16 March 1909: the
+        # range names no span, so the pair is listed
+        coarse = said(
+            "eugen-loebig",
+            "date_of_death",
+            u.Date(1909),
+            TREE,
+            earliest=Time("1800-01-01T00:00:00Z", MILLENNIUM),
+        )
+        register = said(
+            "eugen-loebig", "date_of_death", u.Date(1909, 3, 16), REGISTER
+        )
+        assert len(listed(coarse, register)) == 1
+        # given to the century, the same bound names a span that holds it
+        century_bound = replace(
+            coarse,
+            earliest=frozenset({Time("1800-01-01T00:00:00Z", CENTURY)}),
+        )
+        assert listed(century_bound, register) == []
+
     def test_a_stated_range_is_the_span(self):
         # Klara left "between 1938 and 1939" per the interview and on 22
         # June 1938 per the postcard; (here) 21 August 1942 per the tree
