@@ -65,8 +65,8 @@ publish-queries:    ## publish the SPARQL library to wiki pages
 	$(UV) run yizkr publish-queries
 
 # Query reviews: a throwaway, network-less query engine, separate from the
-# stack. Load a scripts/synthetic_graph.py graph into it and run queries
-# with scripts/wdqs_sandbox.py (see its --help).
+# stack, one per checkout. Load a scripts/synthetic_graph.py graph into it
+# and run queries with scripts/wdqs_sandbox.py (see its --help).
 wdqs-sandbox-up:    ## start a network-less query-engine sandbox (768 MB cap)
 	$(UV) run python scripts/wdqs_sandbox.py up
 

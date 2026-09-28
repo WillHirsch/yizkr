@@ -8,27 +8,50 @@
       src/yizkr/queries/disagreement-report.rq --repeat 3 --max-rows 20
   make wdqs-sandbox-down      (or: uv run python scripts/wdqs_sandbox.py down)
 
+Each checkout (git worktree) has a sandbox of its own: the state file
+(~/.cache/yizkr/wdqs-sandbox-KEY.json) and the container's name
+(yizkr-wdqs-sandbox-KEY-...) carry a key made from the top directory of
+the checkout the command runs in, so sessions in different worktrees never
+share, refuse or remove each other's sandbox. --state (or
+$YIZKR_WDQS_SANDBOX_STATE) names another state file. One command at a
+time uses a sandbox; a second one says it is waiting.
+
 up starts a wikibase/wdqs:2 container (the Blazegraph build the deployment
 runs) with no network, no ports and no volumes, capped at 768 MB without
-swap and at one CPU, under a unique name that a small state file records
-(~/.cache/yizkr/wdqs-sandbox.json). It never touches the deployed stack:
-every request reaches the engine through docker exec and the container's
-own curl. The image's journal settings ask for 1000 one-megabyte
-write-cache buffers, more direct memory than the cap leaves, so up copies
-the image's RWStore.properties into the container with 8 before it starts.
-up refuses while the recorded container runs; down removes the container
-and the state file, and is safe to repeat. Another --state (or
-$YIZKR_WDQS_SANDBOX_STATE) runs a second sandbox beside the first.
+swap and at one CPU, and waits until the engine answers. Nothing here
+touches the deployed stack: requests reach the engine through docker exec
+and the container's own curl, and every command acts only on a container
+named yizkr-wdqs-sandbox-... that carries the org.yizkr.sandbox=wdqs label,
+refusing any other container a state file names. The image's journal
+settings ask for 1000 one-megabyte write-cache buffers, more direct memory
+than the cap leaves, so up copies the image's RWStore.properties into the
+container with 8 before it starts. up refuses while its sandbox runs, and
+a failed or interrupted up removes the container it was starting. down
+removes the container and the state file, and is safe to repeat.
 
-load adds Turtle (.ttl) or N-Triples (.nt) files to the store; --replace
-empties it first. query renders a template as yizkr publish-queries does:
-it resolves the {P:key}/{Q:key} placeholders through a vocabulary map
-(synthetic_graph.py writes one beside each graph, and query uses the one
-beside the graph loaded last unless --vocab names another) and prepends
-PREFIX lines for the map's concept URI; --raw sends a finished query as
-it is. It prints the rows as tab-separated values on stdout (IRIs
-shortened to wd:, wds:, wdref: and wdv:, language tags as value@lang) and
-the engine's wall time on stderr; --max-rows 0 prints the header only.
+load copies Turtle (.ttl) or N-Triples (.nt) files into the container and
+adds them to the store; --replace empties the store first. query renders
+a template as yizkr publish-queries does: it resolves the {P:key}/{Q:key}
+placeholders through a vocabulary map (synthetic_graph.py writes one
+beside each graph, and query uses the one beside the graph loaded last
+unless --vocab names another) and prepends PREFIX lines for the map's
+concept URI; --raw sends a finished query as it is. It prints the rows as
+tab-separated values on stdout (IRIs shortened to wd:, wds:, wdref: and
+wdv:, language tags as value@lang) and the engine's wall time on stderr;
+--max-rows 0 prints the header only. load and query stop at --timeout
+(100 s by default, so that a command ends within two minutes). Ctrl-C or
+SIGTERM cancels the engine's running queries and loads, and kills the
+command's curl in the container. The engine commits a load whole or not
+at all.
+
+Timings are indicative. One CPU makes them noisy, since garbage
+collection and CPU throttling land inside a query's wall time: compare
+variants in one session with --repeat 3 and their medians, or start the
+sandbox with --cpus 2 for steadier numbers. The heap (320 MB) and direct
+memory (192 MB) are well below the deployed service's (a 1 GB heap by
+default), so a query that needs memory may be slower here, or fail where
+the deployment runs it: the sandbox compares queries, it does not predict
+the deployment's times.
 """
 
 from __future__ import annotations
@@ -36,44 +59,115 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import io
 import json
 import os
 import re
 import secrets
+import signal
 import statistics
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 IMAGE = "wikibase/wdqs:2"
-ENDPOINT = "http://localhost:9999/bigdata/namespace/wdq/sparql"
+ENGINE = "http://localhost:9999/bigdata"
+ENDPOINT = f"{ENGINE}/namespace/wdq/sparql"
+STATUS = f"{ENGINE}/status"
 CONFIG = "/wdqs/RWStore.properties"
 WRITE_CACHE_BUFFERS = (
     "com.bigdata.journal.AbstractJournal.writeCacheBufferCount"
 )
 STATE_ENV = "YIZKR_WDQS_SANDBOX_STATE"
-LABEL = "org.yizkr.sandbox=wdqs"
+LABEL = "org.yizkr.sandbox"
+LABEL_VALUE = "wdqs"
+PREFIX = "yizkr-wdqs-sandbox-"
+SANDBOX_NAME = re.compile(rf"{re.escape(PREFIX)}[a-z0-9][a-z0-9-]*")
+# What sandbox() reads of a container: its name, status and sandbox label.
+INSPECT = (
+    "{{.Name}}|{{.State.Status}}|{{index .Config.Labels " + f'"{LABEL}"' + "}}"
+)
+# A command's files in the container (uploads, its curl's pid file).
+WORK_DIR = "/tmp"
+WORK_PREFIX = "yizkr-sandbox-"
 FORMATS = {".ttl": "text/turtle", ".nt": "text/plain"}
 # curl reports the request's wall time on stderr after this marker.
 TIMING = "time_total="
 # The engine failed to start; waiting longer will not help.
 FATAL_LOG = ("Failed startup of context", "OutOfMemoryError")
+QUERY_ID = re.compile(
+    r"queryId=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+)
+# How long a create that was interrupted may still land on the daemon.
+CREATE_GRACE = 5.0
+PLACEHOLDER = re.compile(r"\{([PQ]):([a-z][a-z0-9_]*)\}")
 
 
 class SandboxError(Exception):
-    """A failure to report without a traceback."""
+    """A failure to report in one line."""
+
+
+class Stopped(KeyboardInterrupt):
+    """Ctrl-C or SIGTERM; after a clean-up, the message says what it did."""
+
+    def __init__(self, message: str = "", signum: int = signal.SIGINT):
+        super().__init__(message)
+        self.signum = signum
+
+
+def on_sigterm(signum, frame):
+    raise Stopped("terminated", signum)
+
+
+def signum_of(exc: BaseException) -> int:
+    return getattr(exc, "signum", signal.SIGINT)
+
+
+@contextlib.contextmanager
+def shielded():
+    """Hold off Ctrl-C and SIGTERM while a clean-up runs."""
+    previous = {
+        signum: signal.signal(signum, signal.SIG_IGN)
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+def checkout() -> Path:
+    """The top directory of the checkout the command runs in, or of this
+    script's when it runs outside one."""
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return REPO
+    top = done.stdout.strip()
+    return Path(top) if done.returncode == 0 and top else REPO
+
+
+def checkout_key(top: Path) -> str:
+    return hashlib.sha1(str(top).encode()).hexdigest()[:8]
 
 
 def default_state() -> Path:
     if os.environ.get(STATE_ENV):
         return Path(os.environ[STATE_ENV]).expanduser()
-    cache = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
-    return Path(cache) / "yizkr" / "wdqs-sandbox.json"
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    key = checkout_key(checkout())
+    return cache / "yizkr" / f"wdqs-sandbox-{key}.json"
 
 
 # -- docker -------------------------------------------------------------------
@@ -92,21 +186,44 @@ def docker(*args: str, stdin: bytes | None = None, check=True):
     return done
 
 
-def container_status(name: str) -> str | None:
-    """'running', 'exited', 'created', ...; None when there is none."""
-    done = docker("inspect", "-f", "{{.State.Status}}", name, check=False)
-    if done.returncode != 0:
-        return None
-    return done.stdout.decode().strip()
+@dataclass(frozen=True)
+class Sandbox:
+    """A container this tool made. Everything that removes a container or
+    runs a command in one takes a Sandbox, and only sandbox() makes one."""
+
+    name: str
+    status: str
 
 
-def curl(name: str, *args: str, stdin: bytes | None = None):
-    """Run curl inside the container (the only way in: it has no
-    network)."""
-    flags = ["-i"] if stdin is not None else []
-    return docker(
-        "exec", *flags, name, "curl", "-sS", *args, stdin=stdin, check=False
+def sandbox(name) -> Sandbox | None:
+    """The sandbox container `name`, or None when no container has that
+    name. Any other container is refused: a name without the sandbox
+    prefix (the deployed stack's, another tool's, a container ID or ID
+    prefix) or a container without the sandbox label."""
+    if not isinstance(name, str) or not SANDBOX_NAME.fullmatch(name):
+        raise SandboxError(
+            f"{name!r} is not a sandbox this tool made (their names start "
+            f"{PREFIX}); nothing was done"
+        )
+    done = docker(
+        "inspect", "--type", "container", "-f", INSPECT, name, check=False
     )
+    if done.returncode != 0:
+        detail = done.stderr.decode(errors="replace").strip()
+        if "No such container" in detail:
+            return None
+        raise SandboxError(f"docker inspect failed: {detail}")
+    resolved, status, label = done.stdout.decode().strip().split("|", 2)
+    if resolved != f"/{name}" or label != LABEL_VALUE:
+        raise SandboxError(
+            f"container {name} does not carry the {LABEL}={LABEL_VALUE} "
+            f"label, so this tool did not make it; nothing was done"
+        )
+    return Sandbox(name, status)
+
+
+def remove(box: Sandbox) -> None:
+    docker("rm", "-fv", box.name)
 
 
 # -- state --------------------------------------------------------------------
@@ -114,11 +231,18 @@ def curl(name: str, *args: str, stdin: bytes | None = None):
 
 def read_state(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        state = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
-    except json.JSONDecodeError as exc:
-        raise SandboxError(f"unreadable state file {path}: {exc}") from None
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SandboxError(
+            f"unreadable state file {path} ({exc}); check it and remove it "
+            f"by hand (docker ps -a --filter label={LABEL}={LABEL_VALUE} "
+            f"lists the sandboxes)"
+        ) from None
+    if not isinstance(state, dict):
+        raise SandboxError(f"{path} is not a sandbox state file")
+    return state
 
 
 def write_state(path: Path, state: dict) -> None:
@@ -130,45 +254,70 @@ def write_state(path: Path, state: dict) -> None:
     os.replace(tmp, path)
 
 
+def record_loaded(path: Path, loaded: list[str]) -> None:
+    state = read_state(path)
+    state["loaded"] = loaded
+    write_state(path, state)
+
+
 @contextlib.contextmanager
 def locked(path: Path):
-    """Serialise up and down on one state file, so two sessions starting
-    a sandbox at once cannot both start one."""
+    """One command at a time per state file."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with open(path.with_name(path.name + ".lock"), "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    lock_path = path.with_name(path.name + ".lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "r+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(
+                f"waiting for {lock_path}: another command is using this "
+                f"sandbox",
+                file=sys.stderr,
+                flush=True,
+            )
+            fcntl.flock(lock, fcntl.LOCK_EX)
         yield
 
 
-def running_sandbox(state_path: Path) -> str:
+def running_sandbox(state_path: Path) -> Sandbox:
     name = read_state(state_path).get("container")
     if not name:
         raise SandboxError(
             f"no sandbox recorded in {state_path}; start one with `up`"
         )
-    status = container_status(name)
-    if status != "running":
+    box = sandbox(name)
+    if box is None or box.status != "running":
+        status = box.status if box else "gone"
         raise SandboxError(
-            f"sandbox {name} is {status or 'gone'}; run `down`, then `up`"
+            f"sandbox {name} is {status}; run `down`, then `up`"
         )
-    return name
+    return box
 
 
 # -- up / down ----------------------------------------------------------------
 
 
-def patched_config(name: str) -> bytes:
+def patched_config(box: Sandbox) -> bytes:
     """The image's own RWStore.properties with a write cache that fits
     the memory cap, as a tar stream for `docker cp -`."""
-    done = docker("cp", f"{name}:{CONFIG}", "-")
+    done = docker("cp", f"{box.name}:{CONFIG}", "-")
     with tarfile.open(fileobj=io.BytesIO(done.stdout)) as archive:
         member = archive.getmembers()[0]
         text = archive.extractfile(member).read().decode()
     pattern = re.compile(rf"^{re.escape(WRITE_CACHE_BUFFERS)}=.*$", re.M)
     if not pattern.search(text):
         raise SandboxError(f"{CONFIG} in {IMAGE} has no {WRITE_CACHE_BUFFERS}")
-    data = pattern.sub(f"{WRITE_CACHE_BUFFERS}=8", text).encode()
-    info = tarfile.TarInfo(Path(CONFIG).name)
+    return tar_of(
+        Path(CONFIG).name,
+        pattern.sub(f"{WRITE_CACHE_BUFFERS}=8", text).encode(),
+    )
+
+
+def tar_of(name: str, data: bytes) -> bytes:
+    """A one-file tar stream; the file is readable by the engine's user,
+    whatever the source's mode."""
+    info = tarfile.TarInfo(name)
     info.size, info.mode, info.mtime = len(data), 0o644, int(time.time())
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
@@ -176,16 +325,20 @@ def patched_config(name: str) -> bytes:
     return buffer.getvalue()
 
 
-def wait_ready(name: str, timeout: float) -> float:
+def wait_ready(box: Sandbox, timeout: float) -> float:
     start = time.monotonic()
     while time.monotonic() - start < timeout:
-        probe = curl(name, "-m", "5", f"{ENDPOINT}?query=ASK%7B%7D")
+        probe = docker(
+            "exec", box.name, "curl", "-sS", "-m", "5",
+            f"{ENDPOINT}?query=ASK%7B%7D", check=False,
+        )  # fmt: skip
         if b"true" in probe.stdout:
             return time.monotonic() - start
-        status = container_status(name)
-        if status != "running":
+        now = sandbox(box.name)
+        if now is None or now.status != "running":
+            status = now.status if now else "gone"
             raise SandboxError(f"the container stopped ({status})")
-        logs = docker("logs", "--tail", "200", name, check=False)
+        logs = docker("logs", "--tail", "200", box.name, check=False)
         output = (logs.stdout + logs.stderr).decode(errors="replace")
         for marker in FATAL_LOG:
             if marker in output:
@@ -195,42 +348,46 @@ def wait_ready(name: str, timeout: float) -> float:
     raise SandboxError(f"the engine was not ready after {timeout:.0f}s")
 
 
+def discard(state_path: Path, name: str, grace: float) -> None:
+    """Remove the container `up` was starting, waiting up to `grace`
+    seconds for an interrupted create to land on the daemon, and then the
+    state file."""
+    deadline = time.monotonic() + grace
+    while True:
+        box = sandbox(name)
+        if box is not None:
+            remove(box)
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
+    with contextlib.suppress(FileNotFoundError):
+        state_path.unlink()
+
+
 def cmd_up(args) -> int:
-    # The lock is held until the engine answers, so a second `up` on this
-    # state file waits and then finds the sandbox running.
     with locked(args.state):
         old = read_state(args.state).get("container")
         if old:
-            status = container_status(old)
-            if status == "running":
+            box = sandbox(old)
+            if box is not None and box.status == "running":
                 raise SandboxError(
                     f"sandbox {old} is already running (state {args.state});"
-                    " run `down` first, or pass another --state for a second"
-                    " sandbox"
+                    " load and query it, or pass another --state for a "
+                    "second sandbox"
                 )
-            if status is not None:
-                docker("rm", "-f", old)
+            if box is not None:
+                remove(box)
                 print(f"removed the stopped sandbox {old}")
-        name = f"yizkr-wdqs-sandbox-{secrets.token_hex(4)}"
-        docker(
-            "create",
-            "--name", name,
-            "--label", LABEL,
-            "--hostname", "localhost",
-            "--network", "none",
-            "--memory", args.memory,
-            "--memory-swap", args.memory,
-            "--cpus", args.cpus,
-            "--ulimit", "nofile=32768:32768",
-            "-e", f"HEAP_SIZE={args.heap}",
-            "-e", f"EXTRA_JVM_OPTS=-XX:MaxDirectMemorySize={args.direct}",
-            args.image,
-            "/runBlazegraph.sh",
-        )  # fmt: skip
+        top = checkout()
+        name = f"{PREFIX}{checkout_key(top)}-{secrets.token_hex(3)}"
+        # The name is recorded before the container exists, so whatever
+        # interrupts up, the clean-up (or a later down) knows what to remove.
         write_state(
             args.state,
             {
                 "container": name,
+                "checkout": str(top),
                 "image": args.image,
                 "memory": args.memory,
                 "cpus": args.cpus,
@@ -239,22 +396,51 @@ def cmd_up(args) -> int:
                 "loaded": [],
             },
         )
+        created = False
         try:
-            config = patched_config(name)
-            docker("cp", "-", f"{name}:{Path(CONFIG).parent}", stdin=config)
-            docker("start", name)
-            waited = wait_ready(name, args.timeout)
-        except KeyboardInterrupt:
-            remove(args.state)
-            raise SandboxError(
-                "interrupted; the sandbox was removed"
-            ) from None
-        except SandboxError as exc:
-            logs = docker("logs", "--tail", "20", name, check=False)
-            output = (logs.stdout + logs.stderr).decode(errors="replace")
-            sys.stderr.write(output)
-            remove(args.state)
-            raise SandboxError(f"{exc}; the sandbox was removed") from None
+            docker(
+                "create",
+                "--name", name,
+                "--label", f"{LABEL}={LABEL_VALUE}",
+                "--label", f"{LABEL}.checkout={top}",
+                "--hostname", "localhost",
+                "--network", "none",
+                "--memory", args.memory,
+                "--memory-swap", args.memory,
+                "--cpus", args.cpus,
+                "--ulimit", "nofile=32768:32768",
+                "-e", f"HEAP_SIZE={args.heap}",
+                "-e", f"EXTRA_JVM_OPTS=-XX:MaxDirectMemorySize={args.direct}",
+                args.image,
+                "/runBlazegraph.sh",
+            )  # fmt: skip
+            created = True
+            box = sandbox(name)
+            if box is None:
+                raise SandboxError(f"docker create made no container {name}")
+            config = patched_config(box)
+            docker(
+                "cp", "-", f"{box.name}:{Path(CONFIG).parent}", stdin=config
+            )
+            docker("start", box.name)
+            waited = wait_ready(box, args.timeout)
+        except BaseException as exc:
+            interrupted = isinstance(exc, KeyboardInterrupt)
+            with shielded():
+                if created and not interrupted:
+                    logs = docker("logs", "--tail", "20", name, check=False)
+                    sys.stderr.write(
+                        (logs.stdout + logs.stderr).decode(errors="replace")
+                    )
+                grace = CREATE_GRACE if interrupted and not created else 0
+                discard(args.state, name, grace)
+            if interrupted:
+                raise Stopped(
+                    "interrupted; the sandbox was removed", signum_of(exc)
+                ) from None
+            if isinstance(exc, SandboxError):
+                raise SandboxError(f"{exc}; the sandbox was removed") from None
+            raise
     print(
         f"sandbox {name} ready after {waited:.0f}s "
         f"(memory {args.memory}, {args.cpus} CPU, heap {args.heap}); "
@@ -263,54 +449,165 @@ def cmd_up(args) -> int:
     return 0
 
 
-def remove(state_path: Path) -> tuple[str | None, bool]:
-    """Remove the recorded container and the state file: (the name
-    recorded, whether a container by that name existed)."""
-    name = read_state(state_path).get("container")
-    existed = bool(name) and container_status(name) is not None
-    if existed:
-        docker("rm", "-f", name)
-    with contextlib.suppress(FileNotFoundError):
-        state_path.unlink()
-    return name, existed
-
-
 def cmd_down(args) -> int:
     with locked(args.state):
-        try:
-            read_state(args.state)
-        except SandboxError as exc:
-            # an unreadable state file names no container to stop
+        name = read_state(args.state).get("container")
+        if not name:
+            print("no sandbox recorded")
+            return 0
+        box = sandbox(name)
+        if box is not None:
+            remove(box)
+        with contextlib.suppress(FileNotFoundError):
             args.state.unlink()
-            raise SandboxError(
-                f"{exc}; removed it. List sandbox containers with: docker "
-                f"ps -a --filter label={LABEL}"
-            ) from None
-        name, existed = remove(args.state)
-    if not name:
-        print("no sandbox recorded")
-    elif existed:
+    if box is not None:
         print(f"removed sandbox {name}")
     else:
         print(f"sandbox {name} was already gone; cleared its state")
     return 0
 
 
-# -- load ---------------------------------------------------------------------
+# -- work in the engine -------------------------------------------------------
 
 
-def update(name: str, text: str) -> None:
-    done = curl(
-        name, "--fail-with-body", "-X", "POST",
-        "--data-urlencode", f"update={text}", ENDPOINT,
+@dataclass
+class Work:
+    """What one load or query puts in the sandbox: files it uploads and
+    the curl it runs, named by one token so that stop() can find them."""
+
+    box: Sandbox
+    token: str = field(default_factory=lambda: secrets.token_hex(4))
+    files: list[str] = field(default_factory=list)
+
+    @property
+    def pidfile(self) -> str:
+        return f"{WORK_DIR}/{WORK_PREFIX}{self.token}.pid"
+
+    def upload(self, data: bytes, suffix: str) -> str:
+        """Copy bytes into the container; returns the file's path there.
+        The path is recorded first, so that a copy cut short is removed
+        too."""
+        name = f"{WORK_PREFIX}{self.token}-{len(self.files)}{suffix}"
+        path = f"{WORK_DIR}/{name}"
+        self.files.append(path)
+        docker(
+            "cp", "-", f"{self.box.name}:{WORK_DIR}", stdin=tar_of(name, data)
+        )
+        return path
+
+    def curl(self, *args: str):
+        """curl in the container, with its pid in the pid file and the token
+        on its command line, so that stop() kills this curl and no other
+        process that later takes its pid."""
+        return docker(
+            "exec", self.box.name,
+            "sh", "-c", 'echo $$ > "$0"; exec "$@"', self.pidfile,
+            "curl", "-sS", "-H", f"X-Yizkr-Sandbox: {self.token}", *args,
+            check=False,
+        )  # fmt: skip
+
+    def stop(self) -> list[str]:
+        """Cancel the engine's running queries and loads, kill this
+        command's curl, remove its files; returns the ids cancelled."""
+        page = docker(
+            "exec", self.box.name,
+            "curl", "-sS", "-m", "10", f"{STATUS}?showQueries",
+            check=False,
+        ).stdout.decode(errors="replace")  # fmt: skip
+        cancelled = sorted(set(QUERY_ID.findall(page)))
+        for query_id in cancelled:
+            docker(
+                "exec", self.box.name,
+                "curl", "-sS", "-m", "10", "-o", "/dev/null", "-X", "POST",
+                f"{STATUS}?cancelQuery&queryId={query_id}",
+                check=False,
+            )  # fmt: skip
+        kill = (
+            'pid=$(cat "$0" 2>/dev/null) || exit 0; '
+            'case "$(tr "\\0" " " < /proc/$pid/cmdline 2>/dev/null)" in '
+            '*"$1"*) kill "$pid" ;; esac'
+        )
+        docker(
+            "exec", self.box.name, "sh", "-c", kill, self.pidfile, self.token,
+            check=False,
+        )  # fmt: skip
+        self.clean()
+        return cancelled
+
+    def clean(self) -> None:
+        docker(
+            "exec", "-u", "0", self.box.name,
+            "rm", "-f", self.pidfile, *self.files,
+            check=False,
+        )  # fmt: skip
+        self.files.clear()
+
+
+def engine_error(done) -> str:
+    """The telling line of an engine error: the root cause of a Java
+    stack trace, or curl's own message."""
+    text = (done.stdout + done.stderr).decode(errors="replace")
+    if "TimeoutException" in text:
+        return "the engine stopped it at the timeout (--timeout)"
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
+        and not line.strip().startswith(("at ", "...", TIMING))
+        and "The requested URL returned error" not in line
+    ]
+    causes = [line for line in lines if line.startswith("Caused by:")]
+    thrown = [
+        line for line in lines if re.search(r"(Exception|Error)\b", line)
+    ]
+    if causes:
+        return causes[-1][:1000]
+    if thrown:
+        return thrown[0][:1000]
+    return " | ".join(lines[-3:])[:1000]
+
+
+def failure(done, what: str) -> SandboxError:
+    if done.returncode == 28:
+        return SandboxError(f"{what} ran past --timeout")
+    return SandboxError(f"{what} failed: {engine_error(done)}")
+
+
+def engine_query(work: Work, source: str, timeout: float):
+    """(rows, variables, seconds the engine took); `source` is curl's
+    query@FILE or query=TEXT."""
+    done = work.curl(
+        "--fail-with-body", "-X", "POST",
+        "-m", str(int(timeout) + 10),
+        "-H", "Accept: application/sparql-results+json",
+        "-H", f"X-BIGDATA-MAX-QUERY-MILLIS: {int(timeout * 1000)}",
+        "--data-urlencode", source,
+        "-w", f"%{{stderr}}{TIMING}%{{time_total}}\n",
+        ENDPOINT,
     )  # fmt: skip
     if done.returncode != 0:
-        raise SandboxError(f"update failed: {engine_error(done)}")
+        raise failure(done, "query")
+    try:
+        result = json.loads(done.stdout)
+    except json.JSONDecodeError:
+        raise SandboxError(f"query failed: {engine_error(done)}") from None
+    timing = re.search(rf"^{TIMING}([\d.]+)$", done.stderr.decode(), re.M)
+    seconds = float(timing.group(1)) if timing else float("nan")
+    return result["results"]["bindings"], result["head"]["vars"], seconds
 
 
-def triple_count(name: str) -> int:
-    rows, _, _ = run_query(name, "SELECT (COUNT(*) AS ?n) { ?s ?p ?o }", 60)
+def triple_count(box: Sandbox, timeout: float = 60) -> int:
+    work = Work(box)
+    try:
+        rows, _, _ = engine_query(
+            work, "query=SELECT (COUNT(*) AS ?n) { ?s ?p ?o }", timeout
+        )
+    finally:
+        work.clean()
     return int(rows[0]["n"]["value"])
+
+
+# -- load ---------------------------------------------------------------------
 
 
 def cmd_load(args) -> int:
@@ -321,37 +618,72 @@ def cmd_load(args) -> int:
             )
         if not path.is_file():
             raise SandboxError(f"{path}: no such file")
-    name = running_sandbox(args.state)
-    if args.replace:
-        update(name, "DROP ALL")
-    loaded = [] if args.replace else read_state(args.state).get("loaded", [])
-    for path in args.files:
-        done = curl(
-            name, "--fail-with-body", "-X", "POST",
-            "-H", f"Content-Type: {FORMATS[path.suffix]}",
-            "--data-binary", "@-", ENDPOINT,
-            stdin=path.read_bytes(),
-        )  # fmt: skip
-        if done.returncode != 0:
-            raise SandboxError(f"{path}: load failed: {engine_error(done)}")
-        body = done.stdout.decode(errors="replace")
-        added = re.search(r'modified="(\d+)"', body)
-        millis = re.search(r'milliseconds="(\d+)"', body)
-        print(
-            f"loaded {path}: {added.group(1) if added else '?'} triples"
-            f" in {int(millis.group(1)) / 1000 if millis else 0:.1f}s"
-        )
-        loaded.append(str(path.resolve()))
-    state = read_state(args.state)
-    state["loaded"] = loaded
-    write_state(args.state, state)
-    print(f"the store holds {triple_count(name)} triples")
+    with locked(args.state):
+        box = running_sandbox(args.state)
+        loaded = [] if args.replace else read_state(args.state).get("loaded")
+        loaded = list(loaded or [])
+        work = Work(box)
+        current = None
+        try:
+            if args.replace:
+                done = work.curl(
+                    "--fail-with-body", "-X", "POST",
+                    "-m", str(int(args.timeout) + 10),
+                    "--data-urlencode", "update=DROP ALL", ENDPOINT,
+                )  # fmt: skip
+                if done.returncode != 0:
+                    raise failure(done, "emptying the store")
+                # the store is empty now, whatever happens next
+                record_loaded(args.state, [])
+            for path in args.files:
+                current = path
+                remote = work.upload(path.read_bytes(), path.suffix)
+                done = work.curl(
+                    "--fail-with-body", "-X", "POST",
+                    "-m", str(int(args.timeout) + 10),
+                    "-H", f"Content-Type: {FORMATS[path.suffix]}",
+                    "--data-binary", f"@{remote}", ENDPOINT,
+                )  # fmt: skip
+                if done.returncode != 0:
+                    raise failure(done, f"loading {path}")
+                work.clean()
+                body = done.stdout.decode(errors="replace")
+                added = re.search(r'modified="(\d+)"', body)
+                millis = re.search(r'milliseconds="(\d+)"', body)
+                print(
+                    f"loaded {path}: {added.group(1) if added else '?'} "
+                    f"triples in "
+                    f"{int(millis.group(1)) / 1000 if millis else 0:.1f}s"
+                )
+                loaded.append(str(path.resolve()))
+                record_loaded(args.state, loaded)
+            current = None
+        except BaseException as exc:
+            with shielded():
+                cancelled = work.stop()
+                if args.replace:
+                    # the store may have been emptied even if DROP ALL
+                    # was cut short: record only what this command loaded
+                    record_loaded(args.state, loaded)
+                try:
+                    holds = f"{triple_count(box, 10)} triples"
+                except SandboxError:
+                    holds = "an unknown number of triples"
+            detail = (
+                f"{' while loading ' + str(current) if current else ''}; "
+                f"cancelled {len(cancelled)} running engine task(s). A load "
+                f"lands whole or not at all: the store holds {holds}"
+            )
+            if isinstance(exc, KeyboardInterrupt):
+                raise Stopped(f"interrupted{detail}", signum_of(exc)) from None
+            if isinstance(exc, SandboxError):
+                raise SandboxError(f"{exc}{detail}") from None
+            raise
+        print(f"the store holds {triple_count(box)} triples")
     return 0
 
 
 # -- query --------------------------------------------------------------------
-
-PLACEHOLDER = re.compile(r"\{([PQ]):([a-z][a-z0-9_]*)\}")
 
 
 def adapter_render(template, properties, items, concept_uri) -> str:
@@ -438,53 +770,6 @@ def vocabulary(args) -> tuple[dict, Path]:
     return vocab, path
 
 
-def engine_error(done) -> str:
-    """The telling line of an engine error: the root cause of a Java
-    stack trace, or curl's own message."""
-    text = (done.stdout + done.stderr).decode(errors="replace")
-    if "TimeoutException" in text:
-        return "the engine stopped it at the timeout (--timeout)"
-    lines = [
-        line.strip()
-        for line in text.splitlines()
-        if line.strip()
-        and not line.strip().startswith(("at ", "...", TIMING))
-        and "The requested URL returned error" not in line
-    ]
-    causes = [line for line in lines if line.startswith("Caused by:")]
-    thrown = [
-        line for line in lines if re.search(r"(Exception|Error)\b", line)
-    ]
-    if causes:
-        return causes[-1][:1000]
-    if thrown:
-        return thrown[0][:1000]
-    return " | ".join(lines[-3:])[:1000]
-
-
-def run_query(name: str, text: str, timeout: float):
-    """(rows, variables, seconds the engine took)."""
-    done = curl(
-        name, "--fail-with-body", "-X", "POST",
-        "-m", str(int(timeout) + 30),
-        "-H", "Accept: application/sparql-results+json",
-        "-H", f"X-BIGDATA-MAX-QUERY-MILLIS: {int(timeout * 1000)}",
-        "--data-urlencode", "query@-",
-        "-w", f"%{{stderr}}{TIMING}%{{time_total}}\n",
-        ENDPOINT,
-        stdin=text.encode(),
-    )  # fmt: skip
-    if done.returncode != 0:
-        raise SandboxError(f"query failed: {engine_error(done)}")
-    try:
-        result = json.loads(done.stdout)
-    except json.JSONDecodeError:
-        raise SandboxError(f"query failed: {engine_error(done)}") from None
-    timing = re.search(rf"^{TIMING}([\d.]+)$", done.stderr.decode(), re.M)
-    seconds = float(timing.group(1)) if timing else float("nan")
-    return result["results"]["bindings"], result["head"]["vars"], seconds
-
-
 def shorten(value: str, prefixes: list[tuple[str, str]]) -> str:
     for prefix, iri in prefixes:
         if value.startswith(iri):
@@ -508,44 +793,61 @@ def cmd_query(args) -> int:
         template = args.file.read_text(encoding="utf-8")
     except OSError as exc:
         raise SandboxError(f"cannot read {args.file}: {exc}") from None
-    name = running_sandbox(args.state)
-    prefixes: list[tuple[str, str]] = []
-    if args.raw:
-        if PLACEHOLDER.search(template):
-            raise SandboxError(
-                f"{args.file} has {{P:...}}/{{Q:...}} placeholders; drop "
-                f"--raw to render them"
-            )
+    if args.raw and PLACEHOLDER.search(template):
+        raise SandboxError(
+            f"{args.file} has {{P:...}}/{{Q:...}} placeholders; drop "
+            f"--raw to render them"
+        )
+    with locked(args.state):
+        box = running_sandbox(args.state)
+        prefixes: list[tuple[str, str]] = []
         text = template
-    else:
-        vocab, path = vocabulary(args)
-        concept = vocab["concept_uri"]
+        if not args.raw:
+            vocab, path = vocabulary(args)
+            concept = vocab["concept_uri"]
+            try:
+                text = renderer()(
+                    template, vocab["properties"], vocab["items"], concept
+                )
+            except KeyError as exc:
+                raise SandboxError(f"{args.file}: {exc.args[0]}") from None
+            print(f"vocabulary {path}", file=sys.stderr)
+            prefixes = [
+                ("wds", f"{concept}/entity/statement/"),
+                ("wd", f"{concept}/entity/"),
+                ("wdref", f"{concept}/reference/"),
+                ("wdv", f"{concept}/value/"),
+            ]
+        if args.show:
+            print(text, file=sys.stderr)
+        work = Work(box)
+        times = []
         try:
-            text = renderer()(
-                template, vocab["properties"], vocab["items"], concept
-            )
-        except KeyError as exc:
-            raise SandboxError(f"{args.file}: {exc.args[0]}") from None
-        print(f"vocabulary {path}", file=sys.stderr)
-        prefixes = [
-            ("wds", f"{concept}/entity/statement/"),
-            ("wd", f"{concept}/entity/"),
-            ("wdref", f"{concept}/reference/"),
-            ("wdv", f"{concept}/value/"),
-        ]
-    if args.show:
-        print(text, file=sys.stderr)
-    times = []
-    for _ in range(args.repeat):
-        try:
-            rows, variables, seconds = run_query(name, text, args.timeout)
-        except SandboxError as exc:
-            if not args.raw and "Multiple prefix declarations" in str(exc):
+            source = f"query@{work.upload(text.encode(), '.rq')}"
+            for _ in range(args.repeat):
+                rows, variables, seconds = engine_query(
+                    work, source, args.timeout
+                )
+                times.append(seconds)
+        except BaseException as exc:
+            with shielded():
+                cancelled = work.stop()
+            if isinstance(exc, KeyboardInterrupt):
+                raise Stopped(
+                    f"interrupted; cancelled {len(cancelled)} running engine "
+                    f"task(s) and stopped the query's curl",
+                    signum_of(exc),
+                ) from None
+            if (
+                isinstance(exc, SandboxError)
+                and not args.raw
+                and "Multiple prefix declarations" in str(exc)
+            ):
                 raise SandboxError(
                     f"{exc} (the file declares its own prefixes: pass --raw)"
                 ) from None
             raise
-        times.append(seconds)
+        work.clean()
     print("\t".join(variables))
     shown = rows if args.max_rows is None else rows[: args.max_rows]
     for row in shown:
@@ -576,11 +878,10 @@ def parser() -> argparse.ArgumentParser:
     top.add_argument(
         "--state",
         type=Path,
-        default=default_state(),
         help=(
-            "state file naming the sandbox (default "
-            "~/.cache/yizkr/wdqs-sandbox.json, or $YIZKR_WDQS_SANDBOX_STATE);"
-            " use another for a second sandbox"
+            "state file naming the sandbox (default: "
+            "~/.cache/yizkr/wdqs-sandbox-KEY.json, one per checkout, or "
+            "$YIZKR_WDQS_SANDBOX_STATE); another one runs a second sandbox"
         ),
     )
     commands = top.add_subparsers(dest="command", required=True)
@@ -611,9 +912,9 @@ def parser() -> argparse.ArgumentParser:
     up.add_argument(
         "--timeout",
         type=float,
-        default=180,
+        default=110,
         metavar="SECONDS",
-        help="how long to wait for the engine (180)",
+        help="how long to wait for the engine (110)",
     )
     up.set_defaults(handler=cmd_up)
 
@@ -621,8 +922,9 @@ def parser() -> argparse.ArgumentParser:
         "load",
         help="load Turtle or N-Triples files into the sandbox",
         description=(
-            "Add .ttl or .nt files to the sandbox's store, and print how "
-            "many triples each added and the store's total."
+            "Copy .ttl or .nt files into the sandbox and add them to its "
+            "store, and print how many triples each added and the store's "
+            "total."
         ),
     )
     load.add_argument("files", nargs="+", type=Path, metavar="FILE")
@@ -630,6 +932,13 @@ def parser() -> argparse.ArgumentParser:
         "--replace",
         action="store_true",
         help="empty the store before loading",
+    )
+    load.add_argument(
+        "--timeout",
+        type=float,
+        default=100,
+        metavar="SECONDS",
+        help="when to stop a load (100)",
     )
     load.set_defaults(handler=cmd_load)
 
@@ -669,9 +978,9 @@ def parser() -> argparse.ArgumentParser:
     query.add_argument(
         "--timeout",
         type=float,
-        default=600,
+        default=100,
         metavar="SECONDS",
-        help="when the engine stops the query (600)",
+        help="when the engine stops the query (100)",
     )
     query.add_argument(
         "--max-rows",
@@ -700,11 +1009,23 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "repeat", 1) < 1:
         print("--repeat must be at least 1", file=sys.stderr)
         return 2
+    if (getattr(args, "max_rows", None) or 0) < 0:
+        print("--max-rows must be 0 or more", file=sys.stderr)
+        return 2
+    if args.state is None:
+        args.state = default_state()
+    previous = signal.signal(signal.SIGTERM, on_sigterm)
     try:
         return args.handler(args)
     except SandboxError as exc:
         print(f"wdqs_sandbox {args.command}: {exc}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt as exc:
+        message = str(exc) or "interrupted"
+        print(f"wdqs_sandbox {args.command}: {message}", file=sys.stderr)
+        return 128 + signum_of(exc)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":

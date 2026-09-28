@@ -310,12 +310,14 @@ def spouses(g: Graph) -> list[tuple[str, str]]:
     ]
 
 
-def ranked(g: Graph, rank: str) -> list[str]:
-    return [
-        st
-        for _, _, st in g.all_statements()
-        if g.rank(st) == f"wikibase:{rank}"
-    ]
+def ranked_dates(g: Graph, rank: str) -> list[tuple[str, str]]:
+    """A person's date where a normal statement stands beside a `rank`
+    one (a curator's deprecation or preference of one reading)."""
+    groups = defaultdict(set)
+    for key, subject, statement in dated_statements(g):
+        groups[(subject, key)].add(g.rank(statement))
+    wanted = {"wikibase:NormalRank", f"wikibase:{rank}Rank"}
+    return [group for group, ranks in groups.items() if ranks >= wanted]
 
 
 def unsourced(g: Graph, with_run: bool) -> list[str]:
@@ -355,6 +357,22 @@ def machine_and_curator(g: Graph) -> list[str]:
     return [key for key, seen in kinds.items() if seen == {True, False}]
 
 
+def ranks_beyond_dates(g: Graph, wanted: set[str], only: bool) -> list:
+    """Subjects and non-date properties whose statements hold exactly the
+    ranks `wanted` (`only`: nothing but them; else at least them)."""
+    dates = {g.pid(key) for key in DATES}
+    groups = defaultdict(set)
+    for subject, pid, statement in g.all_statements():
+        if pid not in dates:
+            groups[(subject, pid)].add(g.rank(statement))
+    wanted = {f"wikibase:{rank}Rank" for rank in wanted}
+    return [
+        key
+        for key, ranks in groups.items()
+        if (ranks == wanted if only else ranks >= wanted)
+    ]
+
+
 SHAPES = {
     "dates at every precision": date_precisions,
     "earliest and latest ranges": lambda g: ranges(g, both=True),
@@ -365,8 +383,14 @@ SHAPES = {
     "place containment chains": containment_chains,
     "residences with start and end": dated_residences,
     "spouses": spouses,
-    "deprecated ranks": lambda g: ranked(g, "DeprecatedRank"),
-    "preferred ranks": lambda g: ranked(g, "PreferredRank"),
+    "a date beside a deprecated one": lambda g: ranked_dates(g, "Deprecated"),
+    "a date beside a preferred one": lambda g: ranked_dates(g, "Preferred"),
+    "a property stated only deprecated": lambda g: ranks_beyond_dates(
+        g, {"Deprecated"}, only=True
+    ),
+    "preferred beside deprecated": lambda g: ranks_beyond_dates(
+        g, {"Preferred", "Deprecated"}, only=False
+    ),
     "run-only references": lambda g: unsourced(g, with_run=True),
     "unreferenced statements": lambda g: unsourced(g, with_run=False),
     "redirected values": redirected_values,
@@ -397,8 +421,103 @@ class TestTurtle:
                     o, "wikibase:geoLatitude"
                 ), (s, p, o)
             if p == "prov:wasDerivedFrom":
-                assert "wikibase:Reference" in graph.objects(o, "a")
                 assert any(q.startswith("pr:") for q in graph.out[o]), o
+
+    def test_type_triples_as_the_updater_keeps_them(self, graph):
+        """The updater (no --keepTypes) drops item, statement and
+        reference types, and keeps property, best-rank and value types."""
+        types = {o for _, p, o in graph.triples if p == "a"}
+        assert types == {
+            "wikibase:Property",
+            "wikibase:BestRank",
+            "wikibase:TimeValue",
+            "wikibase:GlobecoordinateValue",
+        }
+
+    def test_qualifier_values_carry_their_precision(self, graph):
+        """Every time qualifier has its pqv: value node, with the same time
+        and a precision, as psv: has for statement values."""
+        checked = 0
+        for _, _, statement in graph.all_statements():
+            for p, objects in graph.out[statement].items():
+                if not p.startswith("pq:"):
+                    continue
+                for value in objects:
+                    if not value.endswith("^^xsd:dateTime"):
+                        continue
+                    nodes = graph.objects(statement, f"pqv:{p[3:]}")
+                    matching = [
+                        node
+                        for node in nodes
+                        if graph.objects(node, "wikibase:timeValue") == [value]
+                    ]
+                    assert len(matching) == 1, (statement, p, value)
+                    (precision,) = graph.objects(
+                        matching[0], "wikibase:timePrecision"
+                    )
+                    assert 7 <= number(precision) <= 11
+                    checked += 1
+        assert checked > 100
+
+    def test_references_are_shared_by_content(self, graph):
+        """One node per distinct reference, shared by every statement that
+        cites it, as Wikibase names reference nodes by their content."""
+        content = defaultdict(list)
+        for node, predicates in graph.out.items():
+            if node.startswith("wdref:"):
+                snaks = tuple(
+                    sorted((p, o) for p, os in predicates.items() for o in os)
+                )
+                content[snaks].append(node)
+        assert all(len(nodes) == 1 for nodes in content.values())
+        uses = defaultdict(int)
+        for _, p, o in graph.triples:
+            if p == "prov:wasDerivedFrom":
+                uses[o] += 1
+        run = f"pr:{graph.pid('inferred_from_extraction_run')}"
+        run_nodes = [n for n in uses if graph.objects(n, run)]
+        assert run_nodes and all(uses[n] > 10 for n in run_nodes)
+        # an artifact's registrar statements cite the artifact itself,
+        # through one node
+        artifact = next(iter(graph.labelled("3")))
+        own = {
+            ref
+            for p, statements in graph.out[artifact].items()
+            if p.startswith("p:")
+            for statement in statements
+            for ref in graph.objects(statement, "prov:wasDerivedFrom")
+        }
+        assert len(own) == 1
+
+    def test_source_references_are_nearly_one_per_statement(self, graph):
+        """Most machine source references carry the claim's excerpt, as
+        the writer's do, so each is one statement's alone."""
+        excerpt = f"pr:{graph.pid('transcription_excerpt')}"
+        uses = defaultdict(int)
+        for _, p, o in graph.triples:
+            if p == "prov:wasDerivedFrom":
+                uses[o] += 1
+        excerpted = [node for node in uses if graph.objects(node, excerpt)]
+        assert excerpted and all(uses[node] == 1 for node in excerpted)
+        stated_in = f"pr:{graph.pid('stated_in')}"
+        sources = [node for node in uses if graph.objects(node, stated_in)]
+        per_node = sum(uses[n] for n in sources) / len(sources)
+        assert per_node < 1.5, per_node
+
+    def test_text_values_are_placeholders(self, graph):
+        """Names and excerpts, like labels, are neutral placeholders."""
+        texts = [
+            re.fullmatch(r'"(.*)"@[a-z]+', o)[1]
+            for _, p, o in graph.triples
+            if p.startswith(("ps:", "wdt:", "pr:"))
+            and re.fullmatch(r'".*"@[a-z]+', o)
+        ]
+        assert any(t.startswith("Excerpt ") for t in texts)
+        assert any(t.startswith("Name ") for t in texts)
+        for text in texts:
+            assert re.fullmatch(
+                r"(Name|NAME) [1-9][0-9]*(-2)?|Excerpt [1-9][0-9]*", text
+            ), text
 
     def test_every_statement_has_a_rank_and_one_value(self, graph):
         for _, pid, statement in graph.all_statements():

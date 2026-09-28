@@ -22,14 +22,21 @@ ranges, so nothing points at a real place. Generated ids say what they
 name: Person 17 is Q100017, Place 3 Q200003, Artifact 9 Q300009;
 fragments are Q4xxxxx, events Q5xxxxx, runs Q6xxxxx, redirects Q9xxxxx.
 
-The RDF is the query service's form of Wikibase data: the manifest's
-properties (with the wikibase: predicates the queries join on) and items,
-with their labels; statements (p:, ps:, pq:, wikibase:rank) with time and
-coordinate value nodes (psv:, pqv:, wikibase:timePrecision) and
-references (prov:wasDerivedFrom to shared wdref: nodes carrying pr:
-snaks); truthy wdt: triples for best-rank statements only (preferred if
-any, else normal); and redirects, merged items that are owl:sameAs their
-target and nothing else, which some statements still point at.
+The RDF is the query service's form of Wikibase data, as the updater
+writes it: the manifest's properties (with the wikibase: predicates the
+queries join on) and items, with their labels; statements (p:, ps:, pq:,
+wikibase:rank) with time and coordinate value nodes (psv:, pqv:,
+wikibase:timePrecision) and references (prov:wasDerivedFrom to wdref:
+nodes carrying pr: snaks, one node per distinct reference, shared by
+every statement that cites it); truthy wdt: triples for best-rank
+statements only (preferred if any, else normal); and redirects, merged
+items that are owl:sameAs their target and nothing else, which some
+statements still point at. Like the updater, it keeps the type triples
+of properties, best-rank statements and value nodes, and writes none for
+items, statements or references. Most machine references carry the
+claim's transcription excerpt (a placeholder, "Excerpt 12"), as the
+writer's do, so a source reference is nearly one node per statement,
+while registrar, run and containment references are shared.
 
 Shapes, each present at least once from 20 persons up (a slot runs
 through its scenarios once before drawing them by weight):
@@ -48,10 +55,12 @@ through its scenarios once before drawing them by weight):
   location) with coordinates and external ids that sometimes disagree;
   artifacts with page fragments, photographs inside presentations, and
   events with participants and locations;
-- deprecated and preferred ranks; machine statements (stated in, and a
-  run) beside curator ones (stated in only); statements without stated
-  in: run-only references (containment edges among them), and a few with
-  no reference at all, for the unreferenced-statements report.
+- deprecated and preferred ranks, on dates and on places too: a place
+  of birth or death stated only at deprecated rank (no truthy value), and
+  a preferred place beside a deprecated one; machine statements (stated
+  in, and a run) beside curator ones (stated in only); statements without
+  stated in: run-only references (containment edges among them), and a
+  few with no reference at all, for the unreferenced-statements report.
 """
 
 from __future__ import annotations
@@ -161,8 +170,10 @@ SCENARIOS = {
         "conflict": 12,
         "resolution": 12,
         "redirect": 6,
+        "deprecated_only": 2,
+        "ranked": 3,
         "agree": 10,
-        "single": 60,
+        "single": 55,
     },
     "parent": {"conflict": 6, "redirect": 3, "single": 91},
     "residence": {
@@ -451,10 +462,12 @@ class Graph:
         ]
 
     def _entity_lines(self, entity, values, references) -> list[str]:
+        # The updater keeps no item, statement or reference types; a
+        # best-rank statement keeps its wikibase:BestRank type.
         s = f"wd:{entity.qid}"
         if entity.redirect_to is not None:
             return [f"{s} owl:sameAs wd:{entity.redirect_to} ."]
-        lines = [f"{s} a wikibase:Item ."]
+        lines = []
         if entity.label is not None:
             lines.append(f"{s} rdfs:label {literal(entity.label)}@en .")
         best = best_ranked(entity.statements)
@@ -463,7 +476,6 @@ class Graph:
             pid = self.vocab.properties[st.prop]
             node = f"wds:{st.guid}"
             lines.append(f"{s} p:{pid} {node} .")
-            lines.append(f"{node} a wikibase:Statement .")
             if st.guid in best:
                 lines.append(f"{node} a wikibase:BestRank .")
                 truthy[f"{s} wdt:{pid} {term(st.value)} ."] = None
@@ -512,10 +524,11 @@ class Graph:
         return node
 
     def _reference_node(self, snaks: tuple, references) -> str:
+        """The node of a reference, named by its content as Wikibase names
+        it, so every statement citing the same reference shares it."""
         pairs = [(self.vocab.properties[k], term(v)) for k, v in snaks]
         node = digest("|".join(f"{pid}={obj}" for pid, obj in pairs))
-        block = [f"wdref:{node} a wikibase:Reference ."]
-        block += [f"wdref:{node} pr:{pid} {obj} ." for pid, obj in pairs]
+        block = [f"wdref:{node} pr:{pid} {obj} ." for pid, obj in pairs]
         references.setdefault(node, block)
         return node
 
@@ -566,6 +579,7 @@ class Builder:
         self.towns: list[str] = []
         self.addresses: list[str] = []
         self.name_number = 0
+        self.excerpt_number = 0
 
     # -- draws ----------------------------------------------------------------
 
@@ -607,12 +621,24 @@ class Builder:
             return artifact, stated_in(artifact, self.rng.randint(1, 4))
         return artifact, stated_in(artifact)
 
+    def excerpted(self, reference: tuple) -> tuple:
+        """A machine source reference as the writer makes it: most carry
+        the claim's own transcription excerpt (here a placeholder), which
+        makes the reference, and its node, the claim's alone."""
+        if not self.chance(0.9):
+            return reference
+        self.excerpt_number += 1
+        excerpt = Text(f"Excerpt {self.excerpt_number}", "en")
+        return (*reference, ("transcription_excerpt", excerpt))
+
     def refs(self, reference: tuple, machine: bool | None = None) -> list:
         """A machine statement cites its source and its run; a curator
         statement cites its source only."""
         if machine is None:
             machine = self.chance(0.88)
-        return [reference, by_run(self.run())] if machine else [reference]
+        if not machine:
+            return [reference]
+        return [self.excerpted(reference), by_run(self.run())]
 
     def claim(self, subject, prop, value, *, exclude=(), **kwargs):
         """One statement from one freshly cited source; returns the
@@ -832,7 +858,10 @@ class Builder:
             self.people.append(person)
             # one instance-of statement; each later source adds its own
             # reference to it
-            sources = [self.cite()[1] for _ in range(self.rng.randint(1, 3))]
+            sources = [
+                self.excerpted(self.cite()[1])
+                for _ in range(self.rng.randint(1, 3))
+            ]
             refs = sources + [by_run(self.run())]
             self.g.add(qid, "instance_of", Item(items["human"]), refs)
             if sex is not None:
@@ -1023,9 +1052,8 @@ class Builder:
             _, ref_b = self.cite(exclude=(first,))
             if self.chance(0.5):
                 # one statement citing both sources
-                self.g.add(
-                    subject, prop, base, [ref_a, ref_b, by_run(self.run())]
-                )
+                refs = [self.excerpted(ref_a), self.excerpted(ref_b)]
+                self.g.add(subject, prop, base, [*refs, by_run(self.run())])
             else:
                 self.g.add(subject, prop, base, self.refs(ref_a))
                 self.g.add(subject, prop, base, self.refs(ref_b))
@@ -1109,7 +1137,12 @@ class Builder:
     def places(self, subject: str, prop: str) -> None:
         kind = self.scenario("place")
         place = self.rng.choice(self.towns + self.addresses)
-        first = self.claim(subject, prop, Item(place))
+        if kind == "deprecated_only":
+            # a curator deprecated the only statement: no truthy value
+            self.claim(subject, prop, Item(place), rank="Deprecated")
+            return
+        rank = "Preferred" if kind == "ranked" else "Normal"
+        first = self.claim(subject, prop, Item(place), rank=rank)
         if kind == "agree":
             self.claim(subject, prop, Item(place), exclude=(first,))
         elif kind == "resolution":
@@ -1118,11 +1151,13 @@ class Builder:
             while wider in self.parent_place and self.chance(0.5):
                 wider = self.parent_place[wider]
             self.claim(subject, prop, Item(wider), exclude=(first,))
-        elif kind == "conflict":
+        elif kind in ("conflict", "ranked"):
+            # an unrelated town; beside a preferred place, deprecated
             other = self.rng.choice(self.towns)
             while other == place or self.parent_place.get(place) == other:
                 other = self.rng.choice(self.towns)
-            self.claim(subject, prop, Item(other), exclude=(first,))
+            rank = "Deprecated" if kind == "ranked" else "Normal"
+            self.claim(subject, prop, Item(other), exclude=(first,), rank=rank)
         elif kind == "redirect":
             value = Item(self.redirect_of(place))
             self.claim(subject, prop, value, exclude=(first,))
