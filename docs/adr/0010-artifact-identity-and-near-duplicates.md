@@ -1,7 +1,7 @@
 # ADR-0010: Artifact identity and near-duplicate handling
 
 Status: accepted (content-hash key implemented; near-duplicate linking
-deferred, see "Later").
+deferred, see "2 & 3. Near-duplicates and versions" and #162).
 Amended by #186 (2026-09-27): uploads honour MediaWiki's warnings, with a
 file-naming rule for changed sources (§1, "Media files").
 Amended by #225 (2026-09-27): a document directory without
@@ -173,7 +173,7 @@ batch and across runs (efficiency), which were the concrete costs.
 ### 2 & 3. Near-duplicates and versions (deferred, designed here)
 
 These are **not** implemented; this ADR records the intended shape so
-the hash key above is built to carry them.
+the hash key above is built to carry them. Tracked in #162.
 
 - **Perceptual detection.** A perceptual hash (pHash/dHash) computed at
   scan time clusters near-neighbours across re-encodes, re-scans, and

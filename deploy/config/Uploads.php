@@ -13,8 +13,8 @@ $wgFileExtensions = array_merge(
 );
 
 // GEDCOM exports (.ged) are the artifact itself for structured
-// genealogy ingestion (ROADMAP item 13), and manual transcriptions
-// (.txt/.md) are folder-ingestion documents (item 15). MediaWiki's
+// genealogy ingestion (the GEDCOM adapter), and manual transcriptions
+// (.txt/.md) are folder-ingestion documents (`yizkr ingest run`). MediaWiki's
 // MIME map does not know ged/md, so uploads fail the extension/MIME
 // consistency check ("does not match the detected MIME type
 // text/plain") unless the analyzer is taught they are plain text.

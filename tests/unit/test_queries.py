@@ -44,7 +44,7 @@ def vocabulary() -> tuple[dict, dict]:
 
 
 class TestLibrary:
-    def test_roadmap_queries_present(self, templates):
+    def test_expected_queries_present(self, templates):
         assert set(templates) >= EXPECTED_QUERIES
 
     def test_every_template_has_description(self, templates):
@@ -180,11 +180,14 @@ class TestDisagreementReport:
     def test_a_time_comes_with_its_precision_range_and_dates(self, q):
         # rule 5: the stated precision and the earliest and latest dates
         # travel with a value, and a residence's or a marriage's start and
-        # end (and a point in time, which the comparison leaves out)
+        # end with the bounds of each (and a point in time, which the
+        # comparison leaves out)
         assert "?valueNode wikibase:timePrecision ?precision" in q
         for key, name in (
             ("earliest_date", "earliest"),
             ("latest_date", "latest"),
+            ("latest_start_date", "latestStart"),
+            ("earliest_end_date", "earliestEnd"),
             ("start_time", "start"),
             ("end_time", "end"),
             ("point_in_time", "pointInTime"),

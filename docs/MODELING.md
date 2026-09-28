@@ -163,7 +163,9 @@ its subject stays the photograph's item.
 ## Uncertainty and time
 
 - Use Wikibase time precision (year / month / day / decade / century).
-- Ranges and vagueness: earliest date / latest date qualifiers.
+- Ranges and vagueness: earliest date / latest date qualifiers. On a
+  statement dated as a period (a marriage, a residence), each end has its
+  own pair: see "Marriages, residences and other periods".
 - "circa": sourcing circumstances qualifier.
 - Redundant-but-asserted values (e.g. "Alter: 73 Jahre" alongside a death
   date) are kept verbatim as qualifiers (`age at death`), never derived or
@@ -400,6 +402,67 @@ subject; there is no household statement enumerating occupants.
   kinship. No `co-resides-with` edge. (Asymmetric sheltering — "gave
   refuge to" — is the separate, non-derivable case ADR-0014 tracks.)
 
+## Marriages, residences and other periods
+
+A statement that holds for a period, such as a marriage (`spouse`), a
+residence, an occupation or a membership, is dated as Wikidata dates
+spouse (P26):
+
+- **A marriage's date is the `start_time` of the spouse statement**, and
+  the date it ended (a divorce, an annulment, or widowhood, when the
+  source dates the end itself) is its `end_time`: Leopold and Agnes's
+  marriage, from 8 February 1947 until the divorce of 2 January 1957 per
+  the judgment, is a spouse statement with that start time and end time.
+  Each partner's spouse statement carries the dates its source gives, and
+  the GEDCOM adapter writes a family's `MARR` date as the start time of
+  both partners' statements and its `DIV` date as their end time. A move
+  in and a move out date a residence the same way.
+- **`point_in_time` on a spouse or residence statement dates an
+  observation**: a date at which the source presents the marriage or the
+  residence as holding (a directory's listing, a census) without dating
+  its start or end. It never carries a wedding date. A source that merely
+  names a spouse, without dating the marriage, gives an undated spouse
+  statement: the document's own date is not an observation of the
+  marriage (Ida's registration card of 1945 names Felix, dead since 1931,
+  as her husband).
+- **Each end has a range of its own.** A statement has one start and
+  one end, and a source may bound either, so each end takes its own pair
+  of qualifiers, as on Wikidata since `latest start date` (P8555) and
+  `earliest end date` (P8554):
+  - a start runs from its `earliest_date` to its `latest_start_date`;
+  - an end runs from its `earliest_end_date` to its `latest_date`.
+
+  `earliest_date` and `latest_date` are thus the outer bounds of the
+  period: the earliest it can have begun and the latest it can still have
+  held. A marriage "between 1946 and 1947" is a start time of 1946 (the
+  first date, as the GEDCOM adapter stores a range) with an earliest date
+  of 1946 and a latest start date of 1947; a divorce "before 1958" is an
+  end time of 1958 with a latest date of 1958. An earliest date never
+  bounds an end, nor a latest date a start.
+
+  These pairs bound start and end time *qualifiers*. An entity's own
+  `start_time` or `end_time` claim, such as the firm's founding in 1863
+  or the start of Leopold's detention in 1939, is a date value like a
+  date of birth: `earliest_date` and `latest_date` bound it, and the
+  disagreement report compares it as a single-valued date. A latest start
+  date or an earliest end date never qualifies such a claim.
+- **On a statement with no start or end time**, `earliest_date` and
+  `latest_date` bound its point in time, as they bound a date value: a
+  residence observed "between 1938 and 1939" is a point in time of 1938
+  with those two dates. A point in time beside a start or end time has no
+  range, since there those dates bound the period.
+- **Circa** (`sourcing_circumstances`) qualifies the whole statement. On
+  a spouse statement with a start and an end, it says that the source
+  gives at least one of them approximately, and cannot say which: the
+  GEDCOM adapter writes one circa when the marriage's or the divorce's
+  date is approximate, rather than drop it (rule 5).
+
+The disagreement report compares a residence's or a spouse's start and
+end times, each through its own range ("Contradictions" below); the
+person timeline (`queries/person-timeline.rq`) lists each start, end and
+point in time with the range stated for it; and the extraction prompt
+gives the extractor this convention.
+
 ## Persecution and displacement as events (see ADR-0014)
 
 Forced removal, detention, and freeing are **events**, not relations:
@@ -477,9 +540,8 @@ not a signal to grow the schema on.
   sources give (in Australia from 1939 per one source, from 1938 per
   another), so a return to a place a person had left shows as a
   start-time disagreement. A point in time on a residence or spouse
-  statement dates an observation and is not compared, so a marriage
-  dated only by a point in time on the spouse statement is not compared
-  either, though the person timeline lists it as the marriage's date.
+  statement dates an observation, not the residence or the marriage
+  ("Marriages, residences and other periods"), and is not compared.
 - A date whose span lies inside another's and a place the graph records
   inside the other differ in resolution, not substance, and are not
   reported. A date's span is the whole period its precision names (a
@@ -500,14 +562,14 @@ not a signal to grow the schema on.
   as 1890, all stored as 1890. A statement that carries two earliest (or
   latest) dates states its value once per range, and each is compared
   with other statements' values; its own readings alone are one claim,
-  never listed against each other, however many artifacts cite it. The
-  earliest and latest dates of a residence or spouse statement may date
-  either end of it, so when either statement carries them, their start
-  and end times are compared as stated, with no difference of resolution
-  suppressed: a start in 1938, on a statement whose earliest and latest
-  dates are 1938 and 1939, and a start on 22 June 1938 are listed side by
-  side, and so are an end on 1 October 1939 and an end in October 1939,
-  though both are stored alike.
+  never listed against each other, however many artifacts cite it. A
+  residence's or a spouse's start and end times are compared like any
+  other date, each through the range its statement states for that end:
+  a start from the earliest date to the latest start date, an end from
+  the earliest end date to the latest date. So a marriage begun "between
+  1946 and 1947" and one begun on 8 February 1947 differ only in
+  resolution, while a latest date, which bounds the end, sets no start
+  apart.
 - **Machine uncertainty is process, not graph data (ADR-0023).** The
   graph records the *source's* vagueness (circa, ranges, precision) but
   never the *machine's* confidence. Contentiousness surfaces ephemerally

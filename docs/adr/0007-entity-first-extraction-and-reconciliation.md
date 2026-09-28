@@ -304,5 +304,5 @@ Leopolds as a pair.
   ADR-0006's chunk prompt and merge are modified in place — one
   chunked pipeline, not two.
 - Deferred: MCP/agentic graph access (revisit at roster ≫ prompt
-  scale or for interactive curation); automatic merge execution
-  (never — human-gated by design).
+  scale or for interactive curation; the deferred-on-trigger register,
+  #171); automatic merge execution (never — human-gated by design).

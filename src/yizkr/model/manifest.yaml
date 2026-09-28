@@ -364,13 +364,21 @@ properties:
 
   earliest_date:
     label: earliest date
-    description: qualifier; earliest possible date for the statement's value, for ranges and vague sources
+    description: >-
+      qualifier; earliest possible date for the statement's date (its value
+      or its point in time), for ranges and vague sources; on a statement
+      with start or end time qualifiers (a marriage, a residence), the
+      earliest its start can be
     datatype: time
     wikidata: P1319
 
   latest_date:
     label: latest date
-    description: qualifier; latest possible date for the statement's value, for ranges and vague sources
+    description: >-
+      qualifier; latest possible date for the statement's date (its value or
+      its point in time), for ranges and vague sources; on a statement with
+      start or end time qualifiers (a marriage, a residence), the latest its
+      end can be
     datatype: time
     wikidata: P1326
 
@@ -379,6 +387,26 @@ properties:
     description: qualifier for how a source states the value, e.g. circa; never narrow what a source says
     datatype: wikibase-item
     wikidata: P1480
+
+  latest_start_date:
+    label: latest start date
+    description: >-
+      qualifier; on a statement with start or end time qualifiers (a
+      marriage, a residence), the latest its start can be: with
+      earliest_date, the range a source gives the start. Never on a
+      start_time claim, which earliest_date and latest_date bound
+    datatype: time
+    wikidata: P8555
+
+  earliest_end_date:
+    label: earliest end date
+    description: >-
+      qualifier; on a statement with start or end time qualifiers (a
+      marriage, a residence), the earliest its end can be: with
+      latest_date, the range a source gives the end. Never on an end_time
+      claim, which earliest_date and latest_date bound
+    datatype: time
+    wikidata: P8554
 
   # --- depiction (ADR-0005) ---
 
