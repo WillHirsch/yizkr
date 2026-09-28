@@ -28,10 +28,11 @@ chunks after an entity manifest it answers, the forks after a replayed
 conversation, and the critique of a batch that holds chunks it answers.
 Each such call is counted as the engine's, since a new answer changes
 the keys after it: an extraction as the latest run to make it measured
-it (llm.run_calls), else by the mean for its kind there, else by its
-text's length (llm.estimate_calls); the forks after a replay as the
-chunks the cache kept leave them unanswered, as they are when the replay
-answers as the cache did; and a critique as one call.
+it (llm.run_calls), else by the mean for its kind over the runs
+measured, else by its text's length (llm.estimate_calls); the forks
+after a replay as the chunks the cache kept leave them unanswered, as
+they are when the replay answers as the cache did; and a critique as one
+call.
 
 **Up to more.** What only the engine's answers decide is counted apart.
 An entity manifest the engine answers, a replay's among them, can be
@@ -991,12 +992,14 @@ def _estimated(estimate: Estimate) -> list[str]:
         elif extraction.measured:
             how = (
                 f"{extraction.measured} as the latest run to make them "
-                "measured them, the others by the mean for their kind there "
-                "or by their text's length"
+                "measured them, the others by the mean for their kind over "
+                "the runs measured, or by their text's length"
             )
         else:
-            how = "by the mean for their kind in the latest run, or by their "
-            how += "text's length"
+            how = (
+                "by the mean for their kind over the runs measured, or by "
+                "their text's length"
+            )
         parts.append(
             _plural(
                 extraction.estimated - extraction.replay_calls,

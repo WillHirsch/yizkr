@@ -70,9 +70,9 @@ cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
     after an entity manifest it answers, the forks after a replay, and
     the critique of a batch with chunks it answers. An extraction is
     counted as the latest run to make the same document measured it,
-    else by the mean for its kind there, else by its text's length; the
-    forks after a replay as the chunks the cache kept leave them
-    unanswered; a critique as one call;
+    else by the mean for its kind over the runs measured, else by its
+    text's length; the forks after a replay as the chunks the cache kept
+    leave them unanswered; a critique as one call;
   - **up to more**: an entity manifest the engine answers, a replay's
     among them, may be refused, and then its second attempt and the
     segmentation's two are asked (3 more for an extraction at most); a

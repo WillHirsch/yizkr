@@ -397,9 +397,11 @@ def runs_refusal(runs: Path) -> str | None:
 
     Its runs hold corpus content, so it must be private (a runs directory
     that exists and is open to other users is refused, and its mode left
-    alone) and never one a git work tree would track. And it must be a
-    directory it can write to, or one it can make: a path that is a file,
-    or lies under one, is refused, and so is a folder it cannot write in."""
+    alone) and never one a git work tree would track. And hold must be
+    able to open its lock file as hold opens it: a lock file there
+    already, to read and write, in a directory it can pass through, and
+    otherwise a directory it can make one in, or can make. A path that is
+    a file, or a link to nothing, or lies under a file, is refused."""
     runs = Path(runs)
     tree = tracked_by_git(runs)
     if tree is not None:
@@ -410,7 +412,7 @@ def runs_refusal(runs: Path) -> str | None:
             "git ignores, such as var/scratch, or one outside the work tree."
         )
     try:
-        if runs.exists():
+        if os.path.lexists(runs):
             if not runs.is_dir():
                 return (
                     f"{runs} cannot be the runs directory: it is not a "
@@ -423,12 +425,26 @@ def runs_refusal(runs: Path) -> str | None:
                     f"(mode {mode:o}), and its runs hold corpus content: "
                     "make it private (chmod 700), or name another"
                 )
+            lock = runs / LOCK_FILE
+            if os.path.lexists(lock):
+                # hold opens the lock file there, and makes nothing else
+                if not (
+                    lock.is_file()
+                    and os.access(runs, os.X_OK)
+                    and os.access(lock, os.R_OK | os.W_OK)
+                ):
+                    return (
+                        f"{runs} cannot be the runs directory: this user "
+                        f"cannot open its lock file {lock} to read and "
+                        "write it"
+                    )
+                return None
             folder = runs
         else:
             # the nearest folder that exists, which the runs directory is
             # to be made in
             folder = Path(os.path.abspath(runs)).parent
-            while not folder.exists() and folder != folder.parent:
+            while not os.path.lexists(folder) and folder != folder.parent:
                 folder = folder.parent
             if not folder.is_dir():
                 return (

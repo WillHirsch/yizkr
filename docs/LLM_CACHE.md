@@ -293,7 +293,8 @@ message is one line, and it is raised as `CacheRefused`, a pause
 each document in turn, the invocation ends `paused` (`scratch run`
 prints the line and exits 2), and the pass goes on once the folder can
 hold the cache, or with another. `yizkr scratch estimate` refuses the
-same folders, found without making or changing anything
+same folders, and a lock file there already that this user cannot open
+to read and write, found without making or changing anything
 (`llm.read_cache`), where the run would meet them, as a stale stage
 first needs the engine; it prints the line and exits 1.
 

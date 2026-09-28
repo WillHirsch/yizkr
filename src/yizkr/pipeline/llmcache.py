@@ -268,8 +268,10 @@ def _root_refusal(root: Path) -> str | None:
 
 def _folder_refusal(root: Path, info: os.stat_result) -> str | None:
     """Why the folder at `root`, as `info` states it, cannot hold the
-    cache: not a folder, open to other users, or one this user cannot
-    write in; None when it can."""
+    cache: not a folder, open to other users, one this user cannot write
+    in, or one whose lock file there already this user cannot open to
+    read and write, as opening the cache does (_hold); None when it
+    can."""
     if not stat.S_ISDIR(info.st_mode):
         return f"{root} cannot be the LLM cache: it is not a folder"
     mode = stat.S_IMODE(info.st_mode)
@@ -285,6 +287,14 @@ def _folder_refusal(root: Path, info: os.stat_result) -> str | None:
         return (
             f"{root} cannot be the LLM cache: this user cannot write in it "
             f"(mode {mode:o})"
+        )
+    lock = root / LOCK_FILE
+    if os.path.lexists(lock) and not (
+        lock.is_file() and os.access(lock, os.R_OK | os.W_OK)
+    ):
+        return (
+            f"{root} cannot be the LLM cache: this user cannot open its lock "
+            f"file {lock} to read and write it"
         )
     return None
 

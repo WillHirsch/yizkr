@@ -4,13 +4,12 @@ A fake claude-code engine behind the real LLM cache makes scratch runs,
 as in test_scratch.py, and holds conversations whose sessions it keeps
 and resumes as the claude CLI does. Asked again, it answers afresh, as a
 model does. The estimate counts the calls the next invocation is to
-make, and each count test holds its counts against the calls that
-invocation then makes: the known counts exactly, the estimated ones
+make, and each test of TestCounts holds its counts against the calls
+that invocation then makes: the known counts exactly, the estimated ones
 where the fake makes as many calls as the estimate expects, and where
 only the engine's answers decide, the calls within the estimate and its
-bound.
-The claude CLI and its login are faked where they are looked for;
-nothing runs the CLI or calls a model. Documents are the fictional
+bound. The claude CLI and its login are faked where they are looked
+for; nothing runs the CLI or calls a model. Documents are the fictional
 universe's (docs/EXAMPLES.md).
 """
 
@@ -540,6 +539,8 @@ class TestCounts:
         text = "\n".join(estimate.describe(counted))
         assert "2 chunk calls after 1 replayed conversation" in text
         assert "3 extraction calls for 1 document" in text
+        made = run(tmp_path, corpus, engine, new=True)
+        assert per_stage(counted, "engine_calls") == made
 
     def test_a_kept_critique_the_run_rejects_is_asked_again(
         self, tmp_path, engine
@@ -626,6 +627,7 @@ class TestCounts:
             "critique": 4,
         }
         assert again.total().engine_calls == 0
+        assert run(tmp_path, corpus, engine, **refresh) == Counter()
 
     def test_a_resumed_run_counts_its_stale_work_alone(self, tmp_path, engine):
         """Taken to its transcriptions only, then invoked again: the
@@ -693,7 +695,8 @@ class TestCounts:
         assert run(tmp_path, corpus, engine, **other)["extraction"] == 6
         assert (
             "1 as the latest run to make them measured them, the others by "
-            "the mean for their kind there or by their text's length"
+            "the mean for their kind over the runs measured, or by their "
+            "text's length"
         ) in "\n".join(estimate.describe(counted))
 
     def test_a_reading_that_fails_the_check_now_is_made_again(
@@ -952,7 +955,8 @@ class TestCounts:
         run(tmp_path, corpus, engine)
         counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.stages["gedcom"] == StageCalls(reused=1)
-        assert run(tmp_path, corpus, engine, resume=LATEST) == Counter()
+        made = run(tmp_path, corpus, engine, resume=LATEST)
+        assert per_stage(counted, "engine_calls") == made
         refresh = {"resume": LATEST, "refresh": ["extract"]}
         refreshed = estimate_of(tmp_path, corpus, engine, **refresh)
         assert refreshed.stages["gedcom"] == StageCalls(made=1)
@@ -1239,6 +1243,82 @@ class TestRefusals:
         finally:
             closed.chmod(0o700)
 
+    def test_a_closed_runs_directory_with_its_lock_is_resumed(
+        self, tmp_path, engine
+    ):
+        """A private runs directory closed to writing (mode 500) that holds
+        its run and its lock file: the driver opens the lock that is there,
+        makes nothing else in it, and resumes the run; the estimate counts
+        that invocation, as it makes it."""
+        corpus = small(tmp_path)
+        run(tmp_path, corpus, engine, until="transcription")
+        runs = runs_dir(tmp_path)
+        assert (runs / scratch.LOCK_FILE).is_file()
+        runs.chmod(0o500)
+        try:
+            if os.access(runs, os.W_OK):
+                pytest.skip("this user writes to any directory")
+            assert scratch.runs_refusal(runs) is None
+            counted = estimate_of(tmp_path, corpus, engine)
+            assert counted.resumed
+            made = run(tmp_path, corpus, engine)
+        finally:
+            runs.chmod(0o700)
+        assert per_stage(counted, "engine_calls") == made
+
+    def test_a_lock_file_it_cannot_open_is_refused(self, tmp_path, engine):
+        """A lock file this user cannot open to read and write (one a run
+        under another user left, say), in a runs directory or a cache
+        folder it can write in: the run refuses each as it opens the lock,
+        and so does the estimate, before it."""
+        corpus = small(tmp_path)
+        runs, cache = runs_dir(tmp_path), tmp_path / "cache"
+        for folder in (runs, cache):
+            folder.mkdir(mode=0o700)
+            folder.chmod(0o700)
+            (folder / ".lock").write_text("")
+            (folder / ".lock").chmod(0o400)
+        try:
+            if os.access(runs / ".lock", os.W_OK):
+                pytest.skip("this user writes to any file")
+            with pytest.raises(ScratchRefused, match="cannot open its lock"):
+                estimate_of(tmp_path, corpus, engine)
+            with (
+                pytest.raises(ScratchRefused, match="cannot be the runs"),
+                scratch.hold(runs),
+            ):
+                pass
+            (runs / ".lock").chmod(0o600)
+            with pytest.raises(CacheRefused, match="cannot open its lock"):
+                estimate_of(tmp_path, corpus, engine)
+            with pytest.raises(CacheRefused, match="cannot open its lock"):
+                llm.open_cache(cache)
+        finally:
+            for folder in (runs, cache):
+                (folder / ".lock").chmod(0o600)
+        assert list(cache.iterdir()) == [cache / ".lock"]
+
+    def test_a_closed_cache_folder_with_its_lock_is_refused(
+        self, tmp_path, engine
+    ):
+        """A cache folder closed to writing, even with its lock file in it:
+        the cache writes its entries there, so the run refuses it as it
+        opens the cache, and so does the estimate."""
+        corpus = small(tmp_path)
+        cache = tmp_path / "cache"
+        cache.mkdir(mode=0o700)
+        (cache / ".lock").write_text("")
+        cache.chmod(0o500)
+        try:
+            if os.access(cache, os.W_OK):
+                pytest.skip("this user writes to any folder")
+            with pytest.raises(CacheRefused, match="cannot write in it"):
+                estimate_of(tmp_path, corpus, engine)
+            with pytest.raises(CacheRefused, match="cannot write in it"):
+                llm.open_cache(cache)
+        finally:
+            cache.chmod(0o700)
+
     def test_a_runs_directory_git_would_track(
         self, tmp_path, engine, monkeypatch
     ):
@@ -1449,8 +1529,8 @@ class TestReport:
         assert "an estimate, not a ceiling." in text
         assert (
             "6 extraction calls for 4 documents, by the mean for their kind "
-            "in the latest run, or by their text's length; 4 critiques, one "
-            "each."
+            "over the runs measured, or by their text's length; 4 critiques, "
+            "one each."
         ) in text
         assert "- Not counted:" in text
 
