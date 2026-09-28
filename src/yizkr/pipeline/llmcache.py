@@ -35,13 +35,25 @@ compaction, and the CLI fills in details of its own when it runs, such as
 the date (yizkr.pipeline.llm). Each entry records the model the engine
 reported, so a reuse across such a change can be seen.
 
-Layout under the cache root (runtime state, kept under var/, mode 700):
+Layout under the cache root (runtime state, kept under var/):
 
     <root>/.lock
     <root>/<first two hex digits of the key>/<key>.json
                                             /<key>.rejected-<stamp>.json
                                             /<key>.replaced-<stamp>.json
                                             /<key>.session/<opening>/...
+
+The entries hold corpus content, model answers and the transcriptions
+their prompts carry, which is never committed or shared
+(docs/AGENT_PROTOCOL.md §6). So opening a cache refuses a root that a
+git work tree would track, where `git add` would pick its entries up, and
+a root that exists and is open to other users, whose mode it leaves
+alone (CacheRefused, a pause of its pass, before its first call). Every
+folder the cache makes, the root and any missing folder above it
+included, is made private to its owner (mode 700, whatever the umask); a
+folder there already keeps its mode, so the cache changes the mode of no
+folder it did not make. A private root keeps the folders under it from
+other users, whatever their modes.
 
 One process at a time uses a cache (ADR-0032 §3). Opening it locks
 ``.lock`` exclusively (flock) for the rest of the process and records the
@@ -200,6 +212,72 @@ def _read(path: Path, key: str) -> dict | None:
 def call_key(components: Mapping[str, Any]) -> str:
     """A call's key: the SHA-256 of its components in canonical JSON."""
     return sha256_text(canonical_json(dict(components)))
+
+
+# -- the cache folder ---------------------------------------------------------
+
+
+class CacheRefused(PassPaused):
+    """The folder named for a cache cannot hold one: a git work tree would
+    track it, it exists and is open to other users, or it cannot be made
+    or is not a folder. Like CacheInUse, it is a pause: it ends the pass
+    before its first call, rather than failing each document in turn, and
+    the pass can go on once the folder is fit to hold the cache, or with
+    another."""
+
+
+def _open_root(root: Path) -> None:
+    """Make the cache root when it is not there yet, or refuse it
+    (CacheRefused): one a git work tree would track, before anything is
+    made; one that cannot be made or is not a folder; and one that exists
+    and is open to other users, whose mode is left as it is."""
+    # the scratch driver keeps its runs directory out of work trees with
+    # this check; its module loads the orchestrator, which a process that
+    # only opens a cache does not need
+    from yizkr.pipeline.scratch import tracked_by_git
+
+    tree = tracked_by_git(root)
+    if tree is not None:
+        raise CacheRefused(
+            f"the LLM cache {root} is in the git work tree {tree}, which "
+            "does not ignore it: its entries hold corpus content, which is "
+            "never committed (docs/AGENT_PROTOCOL.md §6). Give the cache a "
+            "folder git ignores, such as var/llm-cache, or one outside the "
+            "work tree"
+        )
+    try:
+        _make_private(root)
+        info = root.stat()
+    except OSError as exc:
+        raise CacheRefused(f"{root} cannot be the LLM cache: {exc}") from None
+    if not stat.S_ISDIR(info.st_mode):
+        raise CacheRefused(
+            f"{root} cannot be the LLM cache: it is not a folder"
+        )
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & 0o077:
+        raise CacheRefused(
+            f"the LLM cache {root} is open to other users (mode {mode:o}), "
+            "and its entries hold corpus content: make it private (chmod "
+            "700), or give the cache another folder"
+        )
+
+
+def _make_private(folder: Path) -> None:
+    """Make `folder`, and each folder above it that is not there yet,
+    private to its owner: mode 700, whatever the umask. A folder that is
+    there already, one another process has just made included, keeps its
+    mode."""
+    missing = []
+    while not os.path.lexists(folder) and folder.parent != folder:
+        missing.append(folder)
+        folder = folder.parent
+    for made in reversed(missing):
+        try:
+            os.mkdir(made, 0o700)
+        except FileExistsError:
+            continue
+        os.chmod(made, 0o700)
 
 
 # -- one process per cache --------------------------------------------------
@@ -382,10 +460,12 @@ class EngineCache:
     cache holds, once per key in the run, the new answer displacing the
     entry; ``epochs`` gives roles an epoch other than 0. Opening a cache
     makes its root and holds it for the rest of the process (see the
-    module docstring), and raises CacheInUse when another process holds
-    it; no entry is written until a call is answered. The root and its
-    subdirectories are private to their owner (mode 700, applied to
-    folders that exist already): the entries hold corpus content."""
+    module docstring); it raises CacheRefused for a root a git work tree
+    would track, or one there already that is open to other users, and
+    CacheInUse when another process holds it. No entry is written until a
+    call is answered. The folders the cache makes are private to their
+    owner (mode 700), and it changes the mode of no folder it did not
+    make: the entries hold corpus content."""
 
     def __init__(
         self,
@@ -408,7 +488,7 @@ class EngineCache:
         # was made on) for conversations whose opening turn was recomputed
         # in this run, until one is opened again
         self._sessions: dict[str, tuple[Any, Any, str]] = {}
-        self._directory(self.root)
+        _open_root(self.root)
         _hold(self.root)
 
     def epoch(self, role: str) -> int:
@@ -498,7 +578,7 @@ class EngineCache:
         """Store `entry` under `key`. An entry the key already has, live or
         damaged, is moved aside as replaced, never overwritten."""
         path = self.path(key)
-        self._directory(path.parent)
+        _make_private(path.parent)
         staging = staging_path(path)
         try:
             write_synced(staging, _dump(entry))
@@ -569,7 +649,7 @@ class EngineCache:
         for aside in self.rejected(key):
             if (_read(aside, key) or {}).get("response") == response:
                 return False
-        self._directory(path.parent)
+        _make_private(path.parent)
         entry = {
             "format": FORMAT,
             "key": key,
@@ -602,17 +682,17 @@ class EngineCache:
         if not files:
             return
         target = self._session_dir(key, opening)
-        self._directory(target.parent)
+        _make_private(target.parent)
         staging = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
         try:
-            staging.mkdir(mode=0o700)
+            _make_private(staging)
             for name, content in files.items():
                 path = (staging / name).resolve()
                 if not path.is_relative_to(staging.resolve()):
                     raise ValueError(
                         f"a session file outside its folder: {name}"
                     )
-                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                _make_private(path.parent)
                 path.write_bytes(content)
             if target.exists():
                 os.rename(target, self._aside_name(target, "replaced"))
@@ -634,18 +714,6 @@ class EngineCache:
         }
 
     # -- helpers -------------------------------------------------------------
-
-    def _directory(self, directory: Path) -> None:
-        """Make `directory`, and each folder from the root down to it,
-        private to its owner."""
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        folders = [self.root]
-        for part in directory.relative_to(self.root).parts:
-            folders.append(folders[-1] / part)
-        for folder in folders:
-            folder.mkdir(mode=0o700, exist_ok=True)
-            if stat.S_IMODE(folder.stat().st_mode) != 0o700:
-                os.chmod(folder, 0o700)
 
     @staticmethod
     def _aside_name(path: Path, what: str) -> Path:

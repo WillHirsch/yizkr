@@ -2575,8 +2575,11 @@ def open_cache(
     ``refresh`` names roles whose calls go to the engine once per key in
     this run even where the cache holds an answer, which then replaces
     it; ``epochs`` gives a role an epoch other than 0, so that its calls
-    are keyed, and answered, afresh. Nothing is written until a call is
-    answered."""
+    are keyed, and answered, afresh. No entry is written until a call is
+    answered. Every command opens its cache here, before its first call,
+    and the cache refuses (llmcache.CacheRefused, a pause) a ``root`` a
+    git work tree would track and one there already that is open to other
+    users, whose mode it leaves alone: its entries hold corpus content."""
     from yizkr.pipeline.llmcache import EngineCache
 
     return EngineCache(root, refresh=refresh, epochs=epochs)
