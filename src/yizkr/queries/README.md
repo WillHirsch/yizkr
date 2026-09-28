@@ -28,13 +28,15 @@ uv run yizkr publish-queries             # or: make publish-queries
   entity and property are listed side by side. Rows here are a healthy
   resting state (ADR-0002), not errors. Each row carries the statement's
   rank, its value with its precision, the earliest and latest dates its
-  source gives, its start time, end time and point in time, and the
-  artifact each source belongs to (a page fragment belongs to its
-  artifact). The compared properties are the single-valued ones (dates
-  and places of birth and death, parents, birth name, an entity's own
-  point in time, start and end time, a place's identity properties), and
-  residence and spouse, whose dates are compared. The query pairs and
-  filters nothing (ADR-0033): `yizkr.disagreement` pairs the values
+  source gives, its start time, end time and point in time, the latest
+  start date and earliest end date that bound a residence's or a
+  marriage's start and end, and the artifact each source belongs to (a
+  page fragment belongs to its artifact). The compared properties are the
+  single-valued ones (dates and places of birth and death, parents, birth
+  name, an entity's own point in time, start and end time, a place's
+  identity properties), and residence and spouse, whose dates are
+  compared. The query pairs and filters nothing (ADR-0033):
+  `yizkr.disagreement` pairs the values
   that different artifacts attribute and sets aside differences of
   resolution, and the static site's inconsistencies page shows its rows.
   See MODELING.md "Contradictions" for the rules; the offline tests are
@@ -45,8 +47,19 @@ uv run yizkr publish-queries             # or: make publish-queries
   another, or the same item through a redirect, differs from it only in
   resolution (ADR-0009).
 - **person-timeline** — every dated assertion about each person
-  (statements, dated qualifiers such as a marriage's point in time, and
-  events participated in), plural-by-default with sources (R6).
+  (statements, the dates their statements carry as qualifiers, and events
+  participated in), plural-by-default with sources (R6). A qualifier's
+  row names the statement's property, its value and the qualifier: a
+  marriage is its spouse statement's start time, its end the end time,
+  and a point in time on a spouse or residence statement an observation
+  (docs/MODELING.md, "Marriages, residences and other periods"). Each row
+  carries the range its source states for that date: a start's earliest
+  date and latest start date, an end's earliest end date and latest date,
+  a date value's or a point in time's earliest and latest date
+  (`tests/integration/test_live_period_dates.py`). Rendered and
+  URL-encoded, it is about 8.5 KB, more than the query service accepts in
+  a GET request line, so a client sends it by POST, as the site and the
+  live tests do.
 - **kinship** — how each person is related to a subject, derived from
   the kinship primitives and gendered by the relative's `sex_or_gender`
   (ADR-0014), beside the terms sources assert with `relative` +

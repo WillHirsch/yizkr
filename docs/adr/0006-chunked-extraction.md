@@ -16,7 +16,7 @@ of its media, the key its claims cite, and never by QID (§3).
 
 ## Context
 
-The first trial ingestion (see ROADMAP "Hardening items") showed that
+The first trial ingestion showed that
 LLM claim extraction is **output-bound**: claim JSON amplifies source
 text roughly 16× (an 8 KB family tree became a 130 KB response), so a
 dense document exceeds what a model emits in one turn. Responses then
@@ -51,7 +51,7 @@ Out of scope here, decided elsewhere: structured-export adapters
 (GEDCOM and friends) are the *preferred* path for machine-generated
 genealogy exports — this ADR covers the generative path for documents
 without exploitable structure. Cross-document reconciliation beyond
-exact labels is ROADMAP item 9.
+exact labels is ADR-0007.
 
 ## Decision
 
@@ -293,7 +293,7 @@ After merge, a `coverage.json` in the state dir lists: units with
 `extract: true` that yielded zero claims, unsegmented line ranges, and
 the diff between segmentation unit labels and distinct subject labels
 in the batch. Advisory and curator-facing — no automatic re-extraction
-loop in v1.
+loop in v1 (the loop is in the deferred-on-trigger register, #171).
 
 Amended by #45 (2026-09-28): on either tier, `coverage.json` also records
 the extraction's health: how many chunks it asked (`chunks`), its claims
@@ -330,7 +330,7 @@ works with any `LlmClient`.
 - More calls per document, each small; wall-clock may rise slightly,
   and prompt overhead (schema + vocabulary repeated per chunk) is
   accepted for now — a slimmed per-chunk schema is a later
-  optimization. Forking makes the *document* portion of that overhead
+  optimization (#90). Forking makes the *document* portion of that overhead
   cache-priced.
 - The `LlmClient` protocol grows an optional conversation capability
   (open a conversation, fork it with a follow-up); engines that lack it
@@ -340,7 +340,7 @@ works with any `LlmClient`.
   while verifying fork feasibility: a nested CLI silently adopts its
   parent's session id.
 - Every stage is inspectable and replayable from the state dir, which
-  also gives folder-level orchestration (ROADMAP item 8) a natural
+  also gives folder-level orchestration (`yizkr ingest run`) a natural
   unit of progress to track.
 - Segmentation adds one cheap model call and one new failure mode, with
   a deterministic fallback.

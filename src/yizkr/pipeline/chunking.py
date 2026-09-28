@@ -231,6 +231,21 @@ Rules — these mirror the archive's non-negotiable conventions:
   never asserted here. If you do record a dependent's residence from a
   relative's address (e.g. a newborn at the parents' address), lower its
   confidence to mark the inference.
+- Dating a marriage, a residence or any other period: a marriage's date
+  is `start_time` on the `spouse` claim, and the date the source gives
+  for its end (a divorce, an annulment, widowhood) is its `end_time`; a
+  move in and a move out date a `residence` the same way. `point_in_time`
+  on a spouse or residence claim only records a date at which the source
+  presents the marriage or the residence as holding (a census, a
+  directory entry), never a wedding date; a document that merely names a
+  spouse gives no such date. A range bounds one end: a start takes
+  `earliest_date` and `latest_start_date`, an end takes
+  `earliest_end_date` and `latest_date`. Married "between X and Y" is
+  start_time X with earliest_date X and latest_start_date Y; divorced
+  "before Z" is end_time Z with latest_date Z. These pairs bound
+  `start_time` and `end_time` qualifiers; an entity's own `start_time` or
+  `end_time` claim (a firm's founding, a detention's start) is a date
+  value that `earliest_date` and `latest_date` bound.
 - Persecution and displacement are EVENTS, not relations and not
   locations on a person (ADR-0014). "Deported to Klurnau in 1942" is a
   `deportation`; "held at", "interned at", "taken to" an

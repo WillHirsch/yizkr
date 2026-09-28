@@ -3,7 +3,7 @@
 Status: **accepted** — implemented (`yizkr.core.privacy`, the reworked
 `backup.py` exclusion, the `publish-site` badge, and the review CSV with
 its `living` column removed and `warning` renamed `critique_notes`).
-Supersedes the living-person mechanism ROADMAP item 10 originally shipped
+Supersedes the living-person mechanism that ingestion originally shipped
 (a curated `living person` flag set from a review-CSV column).
 
 ## Context
@@ -42,7 +42,7 @@ Three problems with the flag:
 The correct shape is the one the data already supports: **do not store the
 inference; compute it when it matters.** "Possibly living" is only ever
 needed at a privacy-sensitive boundary (the public export; a future
-internet-facing publish). At that boundary the graph is right there to
+internet-facing publish, #163). At that boundary the graph is right there to
 query.
 
 ## Decision
@@ -127,5 +127,5 @@ is strictly safer, since the determination is now absence-of-death only.
   old flow; they are inert (ignored by the new code, skipped by the site).
   A one-off cleanup can delete them, but nothing requires it.
 - Docs move with the code: MODELING.md "Living persons and privacy",
-  ROADMAP item 10, `deploy/README.md`, and `pipeline/README.md` are
-  updated in the same change; ADR-0018's exclusion note now points here.
+  `deploy/README.md`, and `pipeline/README.md` are updated in the same
+  change; ADR-0018's exclusion note now points here.

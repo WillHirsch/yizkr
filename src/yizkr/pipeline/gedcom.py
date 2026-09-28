@@ -17,7 +17,11 @@ Source-first conventions carry over unchanged:
 * GEDCOM's own uncertainty vocabulary maps to the archive's structural
   uncertainty (docs/MODELING.md): ABT/EST/CAL -> `circa` sourcing
   circumstances; BEF -> `latest date`; AFT -> `earliest date`;
-  BET .. AND .. -> both; missing day/month -> reduced precision.
+  BET .. AND .. -> both; missing day/month -> reduced precision. A
+  marriage's or a divorce's range bounds the one end of the spouse
+  statement it dates: a marriage's BEF is its `latest start date`, a
+  divorce's AFT its `earliest end date` (docs/MODELING.md, "Marriages,
+  residences and other periods").
   A date the grammar cannot parse yields NO date claim and a warning —
   never a guess.
 
@@ -31,8 +35,9 @@ and places,
 cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
 the record is), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
-when the record is), parent-child relations, marriages (date, place)
-and divorces (end time). Source citations (SOUR) are folded into each
+when the record is), parent-child relations, marriages (the spouse
+statements' start time and place) and divorces (their end time). Source
+citations (SOUR) are folded into each
 claim's reference (ADR-0021): the PAGE locator becomes the reference's
 page number and the cited source's own title is surfaced in the excerpt
 — the upstream source is resolved, never fetched. Multimedia objects
@@ -240,6 +245,18 @@ def parse_gedcom_date(text: str) -> tuple[dict | None, list[dict]]:
         return None, []
     value = _parse_plain_date(raw)
     return (value, []) if value else (None, [])
+
+
+# The qualifiers that bound each end of a period, as on Wikidata's spouse
+# (P26; docs/MODELING.md, "Marriages, residences and other periods"): a
+# start runs from its earliest date to its latest start date, and an end
+# from its earliest end date to its latest date. parse_gedcom_date names a
+# range's bounds earliest_date and latest_date, so each end renames the
+# bound that is its own.
+PERIOD_BOUNDS = {
+    "start_time": {"latest_date": "latest_start_date"},
+    "end_time": {"earliest_date": "earliest_end_date"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +550,31 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 quals.extend(date_quals)
         return quals
 
+    def period_end(event: Record, end: str, context: str) -> list[dict]:
+        """The qualifiers that date one end of a period from an event's
+        DATE: the date as `end` (start_time or end_time), and the range it
+        states as that end's bounds, never the other end's."""
+        date_record = event.first("DATE")
+        if date_record is None:
+            return []
+        value, date_quals = parse_gedcom_date(date_record.value)
+        if value is None:
+            warnings.append(
+                f"line {date_record.line_number}: unparsed {context} "
+                f"date {date_record.value!r} — {end} omitted"
+            )
+            return []
+        bounds = PERIOD_BOUNDS[end]
+        return [{"property": end, "value": value}] + [
+            {
+                **qualifier,
+                "property": bounds.get(
+                    qualifier["property"], qualifier["property"]
+                ),
+            }
+            for qualifier in date_quals
+        ]
+
     def event_claims(
         indi_xref: str, event: Record, date_prop: str, place_prop: str
     ):
@@ -772,23 +814,10 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         fam,
                     )
         if husband in individuals and wife in individuals:
-            quals = []
+            quals: list[dict] = []
             marriage = fam.first("MARR")
             if marriage:
-                date_record = marriage.first("DATE")
-                if date_record:
-                    value, date_quals = parse_gedcom_date(date_record.value)
-                    if value is None:
-                        warnings.append(
-                            f"line {date_record.line_number}: unparsed "
-                            f"marriage date {date_record.value!r} "
-                            "— start_time omitted"
-                        )
-                    else:
-                        quals.append(
-                            {"property": "start_time", "value": value}
-                        )
-                        quals.extend(date_quals)
+                quals.extend(period_end(marriage, "start_time", "marriage"))
                 place = marriage.text("PLAC")
                 if place:
                     quals.append(
@@ -802,17 +831,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     )
             divorce = fam.first("DIV")
             if divorce:
-                date_record = divorce.first("DATE")
-                value = None
-                if date_record:
-                    value, _ = parse_gedcom_date(date_record.value)
-                if value is not None:
-                    quals.append({"property": "end_time", "value": value})
-                elif date_record is not None:
-                    warnings.append(
-                        f"line {date_record.line_number}: unparsed divorce "
-                        f"date {date_record.value!r} — end_time omitted"
-                    )
+                for qualifier in period_end(divorce, "end_time", "divorce"):
+                    # a circa the marriage's date gave the statement
+                    # already stands for the divorce's too
+                    if qualifier not in quals:
+                        quals.append(qualifier)
             for subject, other in ((husband, wife), (wife, husband)):
                 claim(
                     person_id(subject),
