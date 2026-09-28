@@ -7,10 +7,10 @@ its writer when a write is cancelled, as the real one does (#265 review),
 and aborts a write whose curl is killed. The tests check that the sandbox
 acts only on containers it made, that an interrupted or failed `up`
 leaves no container (even one the daemon makes late), and that an
-interrupted load or query leaves nothing running and the engine writable,
-even when a second signal reaches the whole process group while it
-cleans up. The pid guard of the curl kill runs against real local
-processes.
+interrupted load or query leaves nothing of its own running, stops no
+other command's task and leaves the engine writable, even when a second
+signal reaches the whole process group while it cleans up. The pid guard
+of the curl kill runs against real local processes.
 """
 
 from __future__ import annotations
@@ -352,6 +352,22 @@ LABELLED_ELSEWHERE = {
     "status": "running",
     "labels": {"org.yizkr.sandbox": "wdqs"},
 }
+# Engine tasks that another command started: a write, and a query that
+# another sandbox command sent with its own marker.
+OTHER_WRITE = {
+    "id": "0e1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
+    "kind": "write",
+    "text": "InsertWithBodyTask{namespace=wdq}",
+    "pidfile": None,
+    "until": None,
+}
+OTHER_QUERY = {
+    "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+    "kind": "query",
+    "text": "#yizkr-sandbox:0badf00d\nSELECT * { ?s ?p ?o }",
+    "pidfile": None,
+    "until": None,
+}
 # Names a state file might hold that are not a sandbox this tool made.
 REFUSED = {
     "the deployed query service": DEPLOYED["name"],
@@ -651,28 +667,24 @@ class TestInterruptedWorkStops:
         "signum", [signal.SIGINT, signal.SIGTERM], ids=["INT", "TERM"]
     )
     def test_query(self, fake, signum):
-        """An interrupted query cancels its own task and no other: a write
-        that happens to be running is left to the engine."""
-        other_write = {
-            "id": "0e1f2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b",
-            "kind": "write",
-            "text": "InsertWithBodyTask{namespace=wdq}",
-            "pidfile": None,
-            "until": None,
-        }
-        fake.set_world([SANDBOX], hang="query", running=[other_write])
+        """An interrupted query cancels its own task and no other: another
+        sandbox command's query (its marker carries another token) and a
+        write that happen to be running go on."""
+        fake.set_world(
+            [SANDBOX], hang="query", running=[OTHER_WRITE, OTHER_QUERY]
+        )
         fake.record(SANDBOX["name"], loaded=[])
         code, _, err, _ = fake.interrupt(
             "query", "--raw", str(fake.query), signum=signum
         )
         assert code == 128 + signum
-        assert "interrupted; cancelled the query in the engine" in (
+        assert "interrupted; cancelled the query in the engine (1 task)" in (
             one_line_error(err)
         )
         world = fake.world()
         (cancelled,) = world["cancelled"]
-        assert cancelled != other_write["id"]
-        assert world["running"] == [other_write]
+        assert cancelled not in (OTHER_WRITE["id"], OTHER_QUERY["id"])
+        assert world["running"] == [OTHER_WRITE, OTHER_QUERY]
         assert not world["wedged"]
         assert world["killed"] == world["pidfiles"][:1]
         assert not [path for path in world["files"] if path.endswith(".rq")]
@@ -767,33 +779,51 @@ class TestInterruptedWorkStops:
         assert world["running"] == []
         assert world["cancelled"] == []
 
+    @pytest.mark.parametrize("command", ["load", "query"])
     @pytest.mark.parametrize(
         "signum", [signal.SIGINT, signal.SIGTERM], ids=["INT", "TERM"]
     )
     def test_a_second_signal_to_the_group_reaches_no_docker_call(
-        self, fake, signum
+        self, fake, signum, command
     ):
         """A terminal's Ctrl-C goes to the whole process group, and docker's
-        CLI takes it even while the load holds signals off for its
+        CLI takes it even while a command holds signals off for its
         clean-up: a stopped `docker exec` exits 0 while its command runs on
         (#265 review). Every docker call runs in a session of its own, so
-        neither signal reaches one: a second signal while the load kills
-        its curl leaves the kill to finish, and the engine aborts the
-        write."""
-        fake.set_world([SANDBOX], hang="load", slow_kill=1.5)
+        neither signal reaches one, and the command's own process holds
+        the second off: a second signal while a load or a query kills its
+        curl leaves the kill and the rest of the clean-up to finish. The
+        engine aborts the load's write; the query cancels its own task, a
+        write that happens to be running goes on, and its uploaded query
+        is removed."""
+        if command == "load":
+            fake.set_world([SANDBOX], hang="load", slow_kill=1.5)
+            args = ("load", str(fake.graph))
+        else:
+            fake.set_world(
+                [SANDBOX], hang="query", slow_kill=1.5, running=[OTHER_WRITE]
+            )
+            args = ("query", "--raw", str(fake.query))
         fake.record(SANDBOX["name"], loaded=[])
         code, _, err = fake.interrupt_group(
-            "load", str(fake.graph), signum=signum, then=fake.root / "killing"
+            *args, signum=signum, then=fake.root / "killing"
         )
         assert code == 128 + signum
         message = one_line_error(err)
-        assert "the engine finished or aborted the write" in message
         assert fake.signalled() == []
         world = fake.world()
         assert world["killed"] == world["pidfiles"][:1]
-        assert world["running"] == []
-        assert world["cancelled"] == []
         assert not world["wedged"]
+        if command == "load":
+            assert "the engine finished or aborted the write" in message
+            assert world["running"] == []
+            assert world["cancelled"] == []
+        else:
+            assert "cancelled the query in the engine (1 task)" in message
+            (cancelled,) = world["cancelled"]
+            assert cancelled != OTHER_WRITE["id"]
+            assert world["running"] == [OTHER_WRITE]
+            assert not [p for p in world["files"] if p.endswith(".rq")]
 
 
 class TestWork:
