@@ -6,10 +6,11 @@ Status: accepted
 ## Context
 
 The archive's purpose is to let a reader see what the evidence says –
-e.g. "moved to France in 1929 per source A; in 1930–1935 per source B;
-married there in 1933 per the marriage record" – even when no curator
-or algorithm has expressed a view. Any design that depends on
-resolving disagreements is over-dependent on those resolutions.
+e.g. "Gustav Löbig was born on 7 January 1919 per his birth register
+extract; on 1 July 1919 per his naturalisation certificate; in 1919
+per a family tree" – even when no curator or algorithm has expressed
+a view. Any design that depends on resolving disagreements is
+over-dependent on those resolutions.
 
 ## Decision
 
