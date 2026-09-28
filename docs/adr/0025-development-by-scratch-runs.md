@@ -186,8 +186,8 @@ a second store of assertions: the graph stays the system of record.
   a deck's slide text and derived media, the reconcile step, and the
   per-document adjudication (`reconcile.adjudicate`) given a roster ask
   nothing of it. Corpus clustering, cluster adjudication and flags have
-  no code yet; their issues (#105, #106, #112) run them under the same
-  stub.
+  no code yet; their issues (#105, #106, #112) require them to run under
+  the same stub.
 - **A stage-version registry declares the version of each stage and of
   each method.** A unit test checks the registry against each stage's
   source hash and fails when the source changed without a version bump.

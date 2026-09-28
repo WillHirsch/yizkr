@@ -19,13 +19,13 @@ its check, extraction (entity manifest, chunks, critique), the GEDCOM
 adapter, a deck's slide text and derived media, the reconcile step, and
 the per-document adjudication (`reconcile.adjudicate`) given a roster.
 Corpus clustering, cluster adjudication and flags have no code yet; #105,
-#106 and #112 run them under this refusing wiki. Two steps before the
-write that are outside that list still use the wiki in `ingest run`, and
-the orchestrator here replaces them: registration, which runs first
-until write-time registration (#103) takes its place, and the resolve
-step's exact-label read, which goes with the identity-map writer (#109).
-A document stops at the claim-review gate, so the write itself is never
-reached.
+#106 and #112 require them to run under this refusing wiki. Two steps
+before the write that are outside that list still use the wiki in
+`ingest run`, and the orchestrator here replaces them: registration,
+which runs first until write-time registration (#103) takes its place,
+and the resolve step's exact-label read, which goes with the
+identity-map writer (#109). A document stops at the claim-review gate,
+so the write itself is never reached.
 
 Every document and deck is fictional (docs/EXAMPLES.md).
 """
