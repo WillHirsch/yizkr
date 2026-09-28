@@ -162,6 +162,8 @@ prompt cites no QID.
 
 ```
 var/llm-cache/                     (--cache; mode 700)
+  .lock                            the lock of the process using the cache,
+                                   and its record (mode 600)
   <first two hex digits of the key>/
     <key>.json                     the entry the call is served
     <key>.rejected-<stamp>.json    a response a caller rejected
@@ -190,6 +192,38 @@ returned with some text in it is stored**: an error, a timeout, a pause
 (`PassPaused`) or an empty answer stores nothing, so the next run asks
 again. **The cache deletes nothing**: an entry it stops serving is moved
 aside and kept.
+
+## One process per cache
+
+One process at a time uses a cache (#236): a scratch run and `ingest
+extract --cache` on the same cache at once, say, is not supported.
+Opening a cache locks its `.lock` exclusively (flock) for the rest of the
+process, and records the process there: its id, host, command and start.
+`ingest run` opens its cache when a stage first needs the engine,
+`ingest extract --cache` before its first call. A second process that
+opens the cache while another holds it is refused at once with
+`CacheInUse`, whose message names the holder. The refusal is a pause
+(`PassPaused`): it ends the pass before its next call, as a claude CLI
+update does, rather than failing each document in turn. Run the pass
+again once the holder has ended, or give it another cache folder, or
+none.
+
+The kernel releases the lock when its holder ends, however it ends, so a
+holder that crashed or was killed blocks nothing. A clean exit empties the
+record, so a record the next process finds was left by a holder that did
+not exit cleanly: the process says so in a warning, naming the holder,
+and records itself in its place. A process opens its cache as often as
+it likes and holds it once. Nothing deletes the lock file: one removed
+while a process holds the cache no longer excludes anyone, and the
+holder, when it next opens the cache, warns and locks the file there
+again, or is refused if another process has taken it meanwhile.
+
+Why one process: several session paths assume it. A resumed claude-code
+session's transcript sits under its original id in the CLI's projects
+folder, which every process shares, so one process's release could pull
+it from under another's forks; and a session held in memory after a
+replay (Conversations and forks, below) is known only to the process
+that holds it.
 
 ## Rejection
 
@@ -239,6 +273,31 @@ attempt from the cache, takes the same fallback, and gives the same
 batch, whatever the engine would answer now. `--refresh extract` or a new
 epoch asks again.
 
+**A stricter parser replays a kept answer, rather than rejecting it.** An
+entity manifest or segmentation the cache kept, which the parser now
+refuses because it was made stricter since, is not rejected: it spends
+its attempt, as any refused answer does. A later attempt that no earlier
+run asked goes to the engine: when the old parser accepted the first
+attempt's answer, the second attempt is asked afresh. Only when every
+attempt is refused does the document take the next tier. Why not reject
+it and ask once more, as the rejectors above do:
+
+- the caller cannot tell a refusal by a stricter parser from the refusal
+  an answer met when it was stored; both are refused now. Rejecting
+  every refused answer the cache kept would ask the engine again for
+  every refused manifest in every run, and the attempt-by-attempt replay
+  that makes a document's fallback repeat, and a scratch run's fallback
+  counts comparable, would be lost;
+- a refused manifest or segmentation falls back to the next tier, which
+  is what the parser does with an unusable answer with or without the
+  cache, rather than failing the document, as a transcription the check
+  fails does.
+
+The price: after a parser is made stricter, a run with the cache can fall
+back where one without it would have had fresh answers for the attempts
+the cache answered. `--refresh extract`, or a new epoch, asks every
+attempt afresh, and the scratch diff of the change shows its fallbacks.
+
 ## Conversations and forks
 
 Opening a conversation is a call like any other; the handle the cache
@@ -270,19 +329,31 @@ conversation exactly as the fork's context assumes:
    answer, whose forks are keyed apart and are made on the replay's
    session. That session is also held in memory for the rest of the run,
    with the SHA-256 of the answer the replay gave, and the conversation
-   opened again takes it only when the cache serves that answer. When
-   another run on the same cache (`ingest run` and `ingest extract
-   --cache` on the same document, say) has stored another answer
-   meanwhile, the held session is released, and the fork resumes the
-   session kept for the served answer, or replays again.
+   opened again takes it only when the cache serves that answer. When a
+   racing caller in the run (another document with the same opening
+   prompt, say) has stored another answer meanwhile, the held session is
+   released, and the fork resumes the session kept for the served answer,
+   or replays again. So is a held session that a later replay's session
+   displaces under the same key, since nothing will take it.
+
+   A replay that fails (the engine raises, or answers with no text) fails
+   the fork, and is remembered for the conversation: its later forks in
+   the pass fail at once, without asking the engine again, so a failing
+   engine is asked once per pass rather than once per chunk. Each chunk
+   then drops to inline context. The conversation opened again, for a new
+   pass, replays again.
 
 A session, however obtained, serves every later fork of the conversation
 in the run, and never a conversation opened on another answer than the
-one it holds.
+one it holds. A fork's `cache-miss` is emitted once the engine holds its
+session, just before the fork is asked, after any `cache-resume` or
+`cache-replay`: a fork that ends for want of a session (the conversation
+changed, or its replay failed) is no miss.
 
 ## Switches
 
-- `yizkr ingest run --cache DIR`: the cache (default `var/llm-cache`).
+- `yizkr ingest run --cache DIR`: the cache (default `var/llm-cache`),
+  which serves one process at a time (One process per cache, above).
 - `--no-cache`: the engine directly; nothing is read or written. Views
   persist and are reused as with the cache, and a rejected answer the
   cache kept is asked for again in its run, so the run is otherwise the
@@ -360,7 +431,7 @@ stage events add `stage` (`transcription`, `extraction`, `critique` or
 | `held` | the control file stopped a stage's dispatch | `reason` |
 | `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
 | `cache-hit` | the cache answered a call | `reason`: `key match`, or an adoption's reason |
-| `cache-miss` | the engine was asked | `reason`: `absent`, `rejected` or `refresh` |
+| `cache-miss` | the engine was asked (a fork: once its session is held) | `reason`: `absent`, `rejected` or `refresh` |
 | `cache-resume` | a conversation was resumed exactly for a fork | |
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
 | `cache-reject` | a caller's rejection moved an answer aside | `reason` |

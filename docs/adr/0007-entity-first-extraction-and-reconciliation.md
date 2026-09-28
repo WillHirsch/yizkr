@@ -2,13 +2,12 @@
 
 Status: accepted (implemented: `pipeline/chunking.py` entity path,
 `pipeline/reconcile.py`, writer alias handling; validated live — the
-travel notes' entity manifest unified aliases and even disambiguated
-the document's two Davids unaided; document-side reconciliation
-proposed the correct family-tree items for Rosa/Alex/Samuel at
-0.75–0.95 on relational evidence, flagging the trial's duplicate items
-as duplicates; the graph-side pass proposed all four known duplicate
-pairs and correctly rejected the two-Davids trap as different
-generations; approved equivalences applied through
+interview's entity manifest unified aliases unaided; document-side
+reconciliation proposed the correct family-tree items for
+Pünktchen/Gus/Leopold at 0.75–0.95 on relational evidence, flagging the
+trial's duplicate items as duplicates; the graph-side pass proposed all
+four known duplicate pairs and correctly rejected the two-Ursulas trap
+as different generations; approved equivalences applied through
 `resolve --equivalences` end to end)
 Amended by #225 (2026-09-27): the entity manifest's state moves from
 the stage store to the LLM cache of ADR-0032 (State and CLI).
@@ -25,18 +24,17 @@ Two identity problems surfaced in the first trial and the ADR-0006
 acceptance run:
 
 1. **Within a document**, entities are referred to by multiple aliases
-   ("Rosa Genserowski" in a tree entry; "Rosa", "our great
+   ("Cäcilie Löbig" in a tree entry; "Cäcilie", "our great
    grandmother" in narrative) and sources themselves vary spellings
-   ("Berlin, Germany" / "Berlin, Berlin, Deutschland"). Line-range
+   ("Floerburg, Germany" / "Flörburg, Hessen, Deutschland"). Line-range
    chunking preserves whatever form each chunk happens to see; label
    consistency across chunks is luck, mitigated but not guaranteed by
    full-document context.
 2. **Across documents**, exact-label resolve creates duplicates: the
-   trial wrote "Samuel Genserowski" (travel notes) alongside "Samuel
-   Moses Genserowski" (family tree) as distinct people. Every further
-   document re-mentions the same core family under variant names, so
-   bulk ingestion without reconciliation makes the graph worse per
-   document ingested.
+   trial wrote "Leopold" (interview) alongside "Leopold Löbig" (family
+   tree) as distinct people. Every further document re-mentions the
+   same core family under variant names, so bulk ingestion without
+   reconciliation makes the graph worse per document ingested.
 
 Line-range chunking also made claim *ownership* ambiguous — the
 ADR-0006 acceptance run dropped 22 parent-child claims whose evidence
@@ -45,9 +43,9 @@ assignment makes ownership structural instead of prompted.
 
 String matching (OpenRefine-style) is the wrong primary tool here:
 the decisive identity evidence in genealogical material is
-**relational** — "Rosa" whose spouse is "Salomon Rothholz" and "Rosa
-Genserowski" whose spouse is "Salomon Isaac Rothholz" are the same
-person by structure, not by edit distance. Adjudicating that is
+**relational** — "Hilde" whose spouse is "Sebastian Löbig" and
+"Hildegard Laudler" whose spouse is "Sebastian 'Wastl' Löbig" are the
+same person by structure, not by edit distance. Adjudicating that is
 exactly what an LLM pass is good at, and exactly what must never be
 auto-confirmed (R3/ADR-0005: identity errors corrupt every downstream
 attribution; a human approves every equivalence).
@@ -185,7 +183,7 @@ A separate pipeline step between extract and resolve:
    as today.
 
 **Graph-side reconciliation** (cleaning duplicates that already
-exist, e.g. the trial's two Samuels): the same blocking + adjudication
+exist, e.g. the trial's two Leopolds): the same blocking + adjudication
 run over roster × roster, proposing pairs. A curator resolves each
 approved pair by MediaWiki item merge (true duplicate) or — when
 equivalence is itself a contestable, source-attributed judgement — a
@@ -226,11 +224,12 @@ entity packing by mentions and by count; unknown-manifest-id rejection;
 label normalization to canonical; alias flow into `ClaimBatch.entities`
 and the writer; blocking produces expected candidate sets; proposal
 CSV round-trip into resolve. Live acceptance uses the answer key the
-trial already produced: extracting the travel notes entity-first must
-manifest Rosa/Alex/Samuel with aliases; reconciling against the
+trial already produced: extracting the interview entity-first must
+manifest Pünktchen/Gus/Leopold with aliases; reconciling against the
 existing graph must propose `same` for exactly those three against
-their family-tree items (relational evidence: shared spouse, parents);
-and `reconcile-graph` must propose the two existing Samuels as a pair.
+their family-tree items (relational evidence: kinship to the narrator
+and to each other); and `reconcile-graph` must propose the two existing
+Leopolds as a pair.
 
 ## Consequences
 

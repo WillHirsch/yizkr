@@ -21,16 +21,14 @@ from yizkr.pipeline.places import (
 
 def places() -> list[PlaceRecord]:
     return [
-        PlaceRecord(qid="Q1", label="Exampleland"),
-        PlaceRecord(qid="Q2", label="Springfield, Exampleland"),
-        PlaceRecord(qid="Q3", label="Old Mill, Springfield, Exampleland"),
-        PlaceRecord(qid="Q4", label="Shelbyville"),
+        PlaceRecord(qid="Q1", label="Germany"),
+        PlaceRecord(qid="Q2", label="Flörburg, Germany"),
+        PlaceRecord(qid="Q3", label="Brunnenring 35, Flörburg, Germany"),
+        PlaceRecord(qid="Q4", label="Klurnau"),
         PlaceRecord(
-            qid="Q5", label="Espringfeld", aliases=["Springfield, Exampleland"]
+            qid="Q5", label="Bad Flörburg", aliases=["Flörburg, Germany"]
         ),
-        PlaceRecord(
-            qid="Q6", label="Capital City, Exampleland", parents=["Q1"]
-        ),
+        PlaceRecord(qid="Q6", label="Rekau, Germany", parents=["Q1"]),
     ]
 
 
@@ -38,19 +36,19 @@ class TestCommaCandidates:
     def test_nearest_existing_suffix_wins(self):
         questions = comma_parent_candidates(places())
         pairs = {(q.qid_a, q.qid_b) for q in questions}
-        # Old Mill attaches to Springfield (nearest), not Exampleland
+        # Brunnenring 35 attaches to Flörburg (nearest), not Germany
         assert ("Q3", "Q2") in pairs or ("Q3", "Q5") in pairs
         assert ("Q3", "Q1") not in pairs
-        # Springfield attaches to Exampleland
+        # Flörburg attaches to Germany
         assert ("Q2", "Q1") in pairs
 
     def test_alias_matches_count_as_names(self):
         # Q5's ALIAS equals Q2's label form; suffix matching must see it
         questions = comma_parent_candidates(
             [
-                PlaceRecord(qid="Q7", label="Docks, Espringfeld"),
+                PlaceRecord(qid="Q7", label="Brunnenring, Bad Flörburg"),
                 PlaceRecord(
-                    qid="Q5", label="Some Other Name", aliases=["Espringfeld"]
+                    qid="Q5", label="Some Other Name", aliases=["Bad Flörburg"]
                 ),
             ]
         )
@@ -62,9 +60,7 @@ class TestCommaCandidates:
 
     def test_no_commas_no_candidates(self):
         assert (
-            comma_parent_candidates(
-                [PlaceRecord(qid="Q4", label="Shelbyville")]
-            )
+            comma_parent_candidates([PlaceRecord(qid="Q4", label="Klurnau")])
             == []
         )
 
@@ -112,7 +108,7 @@ class TestAdjudication:
                     "qid_b": "Q2",
                     "verdict": "a_within_b",
                     "confidence": 0.95,
-                    "evidence": "a mill in the town",
+                    "evidence": "an address in the town",
                 }  # fmt: skip
             ),
             json.dumps(  # not an asked question: must be dropped
@@ -135,7 +131,7 @@ class TestAdjudication:
             ("Q3", "Q2", "a_within_b")
         ]
         # the prompt shows full labels — the evidence the model weighs
-        assert "Old Mill, Springfield, Exampleland" in llm.prompts[0]
+        assert "Brunnenring 35, Flörburg, Germany" in llm.prompts[0]
 
     def test_missing_sentinel_raises(self):
         llm = ScriptedLlm(
@@ -172,7 +168,7 @@ class TestPlanContainment:
         assert any("curator-executed" in note for note in notes)
 
     def test_live_cycle_guard(self):
-        rows = [row("Q1", "Q3", "a_within_b")]  # country inside the mill
+        rows = [row("Q1", "Q3", "a_within_b")]  # country inside the address
         edges, notes = plan_containment(
             rows,
             creates_cycle=lambda child, parent: (
@@ -184,8 +180,8 @@ class TestPlanContainment:
 
     def test_batch_internal_cycle_guard(self):
         rows = [
-            row("Q3", "Q2", "a_within_b"),  # mill in town
-            row("Q2", "Q3", "a_within_b"),  # town in mill: cyclic with above
+            row("Q3", "Q2", "a_within_b"),  # address in town
+            row("Q2", "Q3", "a_within_b"),  # town in address: cyclic
         ]
         edges, notes = plan_containment(rows, creates_cycle=lambda c, p: False)
         assert edges == [("Q3", "Q2")]
@@ -214,13 +210,13 @@ class TestCsv:
                 qid_b="Q4",
                 verdict="distinct",
                 confidence=0.9,
-                evidence="different towns",  # fmt: skip
+                evidence="different places",  # fmt: skip
             )
         ]
         path = tmp_path / "places.csv"
         export_places_csv(proposals, questions, places(), path)
         with open(path, newline="") as handle:
             (line,) = list(csv.DictReader(handle))
-        assert line["label_a"] == "Old Mill, Springfield, Exampleland"
+        assert line["label_a"] == "Brunnenring 35, Flörburg, Germany"
         assert line["question"] == "pob of X"
         assert line["decision"] == ""

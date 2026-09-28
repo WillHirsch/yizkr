@@ -121,7 +121,7 @@ def clone(tmp_path):
     git("init", "--bare", "-b", "main", str(remote), cwd=tmp_path)
     git("init", "-b", "main", str(work), cwd=tmp_path)
     git("remote", "add", "origin", str(remote), cwd=work)
-    (work / "README.md").write_text("Springfield\n")
+    (work / "README.md").write_text("Peiltal\n")
     git("add", "README.md", cwd=work)
     git("commit", "-m", "seed", cwd=work)
     # Seed the remote's main before the hook exists, as GitHub already has.
@@ -132,7 +132,7 @@ def clone(tmp_path):
     shutil.copy(HOOK, dest / "pre-push")
     (dest / "pre-push").chmod(0o755)
     git("switch", "-c", "20-slug", cwd=work)
-    (work / "README.md").write_text("Springfield\nLakeside\n")
+    (work / "README.md").write_text("Peiltal\nRekau\n")
     git("commit", "-am", "change", cwd=work)
     return work, remote, git
 

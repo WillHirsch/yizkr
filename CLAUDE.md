@@ -40,8 +40,9 @@ values and N source-attributed values, and everything still works.*
    earliest/latest qualifiers, and sourcing-circumstances qualifiers.
    Never round, guess, or narrow what a source says.
 6. **Frontends are plural-by-default.** Display all attributed values
-   with source labels (e.g. "moved to France: 1929 per source A;
-   1930–1935 per source B"). Never silently pick one value.
+   with source labels (e.g. "born: 7 January 1919 per the birth
+   register extract; 1 July 1919 per the naturalisation
+   certificate"). Never silently pick one value.
 7. **Privacy first.** Data includes living people. Nothing public by
    default; no personal data to third-party services without explicit
    instruction; self-hosted components only unless told otherwise.

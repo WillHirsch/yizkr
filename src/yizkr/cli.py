@@ -7,6 +7,7 @@
     yizkr ingest <step>    pipeline steps; every step reads/writes plain
                            files so runs pause for review and resume
     yizkr stages state     what a run did, from its run directory
+    yizkr stages manifest  what shapes a run, from its run.json
 
 Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 --env-file); see deploy/README.md.
@@ -550,6 +551,7 @@ def cmd_write(args) -> int:
 def cmd_run(args) -> int:
     from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
     from yizkr.pipeline.orchestrate import Orchestrator
+    from yizkr.pipeline.rundir import ModelAliasRefused
     from yizkr.pipeline.transcribe import MissingPrerequisite
 
     if args.no_cache and (args.refresh or args.epoch):
@@ -594,7 +596,7 @@ def cmd_run(args) -> int:
     )
     try:
         return orchestrator.run()
-    except MissingPrerequisite as exc:
+    except (MissingPrerequisite, ModelAliasRefused) as exc:
         sys.exit(str(exc))
 
 
@@ -644,6 +646,17 @@ def cmd_stages_state(args) -> int:
             f"{count} {label}" for label, count in sorted(counts.items())
         )
         print(f"cache {role:10} {rendered} (all invocations)")
+    return 0
+
+
+def cmd_stages_manifest(args) -> int:
+    from yizkr.pipeline.rundir import RunDir, describe_manifest
+
+    manifest = RunDir(args.run).manifest()
+    if not manifest:
+        sys.exit(f"{args.run}: no run.json; is it a run directory?")
+    for line in describe_manifest(manifest):
+        print(line)
     return 0
 
 
@@ -1111,7 +1124,9 @@ def build_parser() -> argparse.ArgumentParser:
         "model ($YIZKR_LLM_MODEL) still drives transcription and the "
         "judgment steps. Default claude-sonnet-5 — extraction rewards "
         "source discipline over raw capability (ADR-0016). Pass 'inherit' "
-        "to use the run's main model for extraction too",
+        "to use the run's main model for extraction too. Either is a full "
+        "model id: the run refuses an alias such as 'sonnet' or "
+        "'...-latest' (docs/RUN_MANIFEST.md)",
     )
     p.add_argument(
         "--serial",
@@ -1224,8 +1239,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     stages = sub.add_parser(
         "stages",
-        help="what a run did to each document's stages, from its run "
-        "directory",
+        help="what a run did to each document's stages, and what shapes "
+        "the run, from its run directory",
     )
     ssub = stages.add_subparsers(dest="action", required=True)
 
@@ -1243,6 +1258,17 @@ def build_parser() -> argparse.ArgumentParser:
         "counts per role",
     )
     p.set_defaults(func=cmd_stages_state)
+
+    p = ssub.add_parser(
+        "manifest",
+        help="what shapes a run, from its run.json (docs/RUN_MANIFEST.md): "
+        "mode and project stage, engine and CLI version, each role's "
+        "model, effort, epoch and client configuration hash, the cache, "
+        "the corpus and its never-ingest list's hash, the code version, "
+        "and when it started and ended",
+    )
+    p.add_argument("run", type=Path, help="run directory (with run.json)")
+    p.set_defaults(func=cmd_stages_manifest)
 
     return parser
 
