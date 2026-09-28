@@ -217,6 +217,11 @@ def template(tmp_path_factory):
     for name, text in files.items():
         (root / name).write_text(text)
     git(root, "init", "-q", "-b", "main")
+    # no automatic maintenance: newer git starts it in the background
+    # after a commit, and a lock it holds can vanish while copy() copies
+    # the repository. Each copy inherits this configuration.
+    git(root, "config", "maintenance.auto", "false")
+    git(root, "config", "gc.auto", "0")
     git(root, "add", ".")
     git(root, "commit", "-q", "-m", "seed")
     return root
