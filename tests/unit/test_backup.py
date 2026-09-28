@@ -102,7 +102,7 @@ class TestExclusionReport:
         assert {"Q303", "Q304", "Q308"} & found.excluded == {"Q303"}
 
     def test_births_are_read_with_the_privacy_modules_query(self, vocabulary):
-        properties, items = vocabulary
+        properties, _ = vocabulary
         _, calls = self.report(vocabulary)
         assert len(calls) == 2
         assert prefix_block(CONCEPT) + BIRTHS_QUERY.format(**properties) in (

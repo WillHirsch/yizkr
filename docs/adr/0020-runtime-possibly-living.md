@@ -67,10 +67,10 @@ answer is exactly what the graph's own referenced statements assert.
 Amended by #334 (2026-09-28): a birth releases a person only at the
 latest year it allows, and only when every birth does. The check first
 read one birth sampled from the truthy values and took its stored year,
-whatever its precision. So a birth in the 20th century, stored as one of
-its years, counted as that year, before the cutoff, and a sample could
-pick an early birth over a later one, or a preferred early birth hide a
-normal later one. Now:
+whatever its precision. So a birth in the 20th century, stored as 1901
+(or 1900, its round hundred), counted as that year, before the cutoff;
+and a sample could pick an early birth over a later one, or a preferred
+early birth hide a normal later one. Now:
 
 - **Every birth statement.** `yizkr.core.privacy.BIRTHS_QUERY` reads
   every `date of birth` statement a curator has not deprecated, through
