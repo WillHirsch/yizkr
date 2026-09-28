@@ -914,7 +914,8 @@ class RunMonitor:
         try:
             requests = read_jsonl(path) if key is not None else []
         except (OSError, ValueError):
-            # not text the driver can read either: tried again next time
+            # the file itself cannot be read, by the driver either: tried
+            # again next time
             self._control_skipped = 1
             return False
         self._control_key = key

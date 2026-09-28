@@ -2292,22 +2292,48 @@ class TestCommands:
         assert capsys.readouterr().out.strip() == (
             f"abort requested for kind:text: {state[2]}"
         )
+        # the view reads the control file as the driver does
+        view = {
+            item.scope: item.state
+            for item in summarise_run(run, NOW).slices
+            if item.state != ACTIVE
+        }
+        assert view and view == monitor._control_state(run)
 
-    @pytest.mark.skipif(
-        not hasattr(os, "geteuid") or os.geteuid() == 0,
-        reason="root reads a file whatever its mode",
-    )
-    def test_a_control_file_that_cannot_be_read(self, run):
-        """Where the control file itself cannot be read, a command says
-        its state cannot be told rather than guessing it."""
-        control = run / "control.jsonl"
-        control.chmod(0)
+    def test_a_control_file_that_cannot_be_read(self, run, monkeypatch):
+        """Where the control file itself cannot be read, a command that has
+        just written its request, and state_now, say the state cannot be
+        told rather than guessing it."""
+        probe = run.parent / "mode-probe"
+        probe.write_text("x")
+        probe.chmod(0)
         try:
-            assert state_now(run, "run") == (
-                "its state unknown: the control file cannot be read"
-            )
+            probe.read_text()
+        except PermissionError:
+            pass
+        else:
+            pytest.skip("this process reads a file whatever its mode")
         finally:
-            control.chmod(0o644)
+            probe.chmod(0o600)
+            probe.unlink()
+        control = run / "control.jsonl"
+        mode = control.stat().st_mode & 0o777
+        written = monitor.request
+
+        def then_unreadable(*args, **kwargs):
+            entry = written(*args, **kwargs)
+            control.chmod(0)
+            return entry
+
+        monkeypatch.setattr(monitor, "request", then_unreadable)
+        unknown = "its state unknown: the control file cannot be read"
+        try:
+            result = handle_command(run, "pause stage extraction")
+            assert result.requested is not None
+            assert result.message.endswith(unknown)
+            assert state_now(run, "run") == unknown
+        finally:
+            control.chmod(mode)
 
     def test_help_quit_and_nonsense(self, run):
         assert handle_command(run, "help").message.startswith("commands:")
