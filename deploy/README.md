@@ -234,9 +234,21 @@ directory under `var/backups/` containing:
   mentions an excluded person is dropped — including other people's
   claims about them and orphaned provenance nodes — and transcription
   excerpts (raw source quotations) never enter the public tier at all.
+  Who counts as a person fails closed as well: every item with person
+  evidence in the dump, at any rank (a `human` type, a birth, kinship, a
+  part in a death...), is dropped unless the check released it.
   The exclusions file records who was excluded and why, for curator
   review. Nothing here publishes anything: the file is an artifact you
   may choose to publish.
+
+  The check runs on the query service, so the export first waits (up to
+  three minutes) for the query service to hold the dump's revision of
+  every item, and **refuses to run** while it does not, or when the
+  graph changes during the check: `yizkr backup` then keeps the other
+  dumps, records the refusal in `manifest.json` and exits with an error.
+  Run it again once the graph is at rest; a query service that lacks
+  items for good (after a query-service-only reset, below) needs
+  reloading from `full.nt.gz`.
 
 Schedule it with cron on the host, e.g. nightly at 03:15 keeping two
 weeks:

@@ -32,6 +32,15 @@ source states. A person is released by birth only when every one of those
 years is at or before the cutoff year; a statement that allows no latest
 year keeps them possibly living. The public export and the site read
 births with this one query and this one reading.
+
+Who counts as a person fails closed too. The check assesses every item
+with person evidence (``PEOPLE_SELECTION``): a `human` type, a property
+only a person has, the value of a kinship relation (or of `gave refuge
+to`), or a part in an event that happens to people, each read through its
+statement node at every rank, so that no curator's rank and no missing or
+outranked type hides anyone. The public export reads the same evidence
+from its own dump, and keeps an item that has any of it only once this
+check has released it.
 """
 
 from __future__ import annotations
@@ -55,6 +64,125 @@ DEATH_EVIDENCE_PROPERTIES = (
     "cause_of_death",
     "burial_place",
 )
+
+# Person evidence (manifest keys): what marks an item as a person, read at
+# every rank, deprecated included, since a statement a curator deprecated
+# still records that a source said so. An item is a person when it is
+# typed `PERSON_CLASS`, is the subject of a `PERSON_SUBJECT_PROPERTIES`
+# statement, is the value of a `PERSON_VALUE_PROPERTIES` one, or takes
+# part in an event typed as one of `PERSON_EVENTS`.
+PERSON_CLASS = "human"
+# Properties that only a person is the subject of: a birth, a death and a
+# burial; kinship; a birth or married name; a sex or gender and a number
+# of children; and an occupation, an employer, a school, a citizenship
+# and a residence. Names that a place or an organization can have too (a
+# nickname, an official name, what it is referred to as) and ties that an
+# organization shares (a religion, a membership) are not evidence.
+PERSON_SUBJECT_PROPERTIES = (
+    "date_of_birth",
+    "date_of_death",
+    "place_of_birth",
+    "place_of_death",
+    "burial_place",
+    "cause_of_death",
+    "father",
+    "mother",
+    "spouse",
+    "child",
+    "sibling",
+    "relative",
+    "birth_name",
+    "married_name",
+    "sex_or_gender",
+    "number_of_children",
+    "occupation",
+    "employer",
+    "educated_at",
+    "country_of_citizenship",
+    "residence",
+)
+# Properties whose value is only ever a person: kinship, and the one
+# given refuge.
+PERSON_VALUE_PROPERTIES = (
+    "father",
+    "mother",
+    "spouse",
+    "child",
+    "sibling",
+    "relative",
+    "gave_refuge_to",
+)
+# The kinds of event that happen to people, so that whoever takes part in
+# one is a person (or, for a migration, a family). A participant in any
+# other event may be an organization or a group.
+PERSON_EVENTS = (
+    "birth",
+    "death",
+    "marriage",
+    "migration",
+    "military_service",
+    "deportation",
+    "imprisonment",
+    "release",
+)
+
+# Every item with person evidence, once each, read through statement
+# nodes at every rank, never through the truthy wdt: values. A value that
+# is not an item (an unknown value) is left out, and so is a redirect,
+# which has no statements of its own: the item it redirects to is
+# selected for what it holds. The filters test each item once, after
+# DISTINCT, not each statement that names it. `people_selection` fills in
+# the lists.
+PEOPLE_SELECTION = """\
+  {{
+    SELECT ?person WHERE {{
+      {{
+        SELECT DISTINCT ?person WHERE {{
+          {{
+            ?person p:{instance_of} ?typing .
+            ?typing ps:{instance_of} wd:{human} .
+          }} UNION {{
+            VALUES ?link {{ {subject_links} }}
+            ?person ?link ?statement .
+          }} UNION {{
+            VALUES ?link {{ {value_links} }}
+            ?statement ?link ?person .
+          }} UNION {{
+            VALUES ?kind {{ {event_kinds} }}
+            ?event p:{instance_of} ?eventTyping .
+            ?eventTyping ps:{instance_of} ?kind .
+            ?event p:{participant} ?participation .
+            ?participation ps:{participant} ?person .
+          }}
+        }}
+      }}
+      FILTER(REGEX(STR(?person), "/entity/Q[1-9][0-9]*$"))
+      FILTER NOT EXISTS {{
+        ?person <http://www.w3.org/2002/07/owl#sameAs> ?target .
+      }}
+    }}
+  }}
+"""
+
+
+def people_selection(
+    properties: Mapping[str, str], items: Mapping[str, str]
+) -> str:
+    """``PEOPLE_SELECTION`` with an instance's ids: a group that binds
+    ?person to each item with person evidence, for a query to join on."""
+    return PEOPLE_SELECTION.format(
+        instance_of=properties["instance_of"],
+        participant=properties["participant"],
+        human=items[PERSON_CLASS],
+        subject_links=" ".join(
+            f"p:{properties[key]}" for key in PERSON_SUBJECT_PROPERTIES
+        ),
+        value_links=" ".join(
+            f"ps:{properties[key]}" for key in PERSON_VALUE_PROPERTIES
+        ),
+        event_kinds=" ".join(f"wd:{items[key]}" for key in PERSON_EVENTS),
+    )
+
 
 # Wikibase's time precisions run from 0 (a billion years) to 14 (a
 # second): 6 is a millennium, 7 a century, 8 a decade and 9 a year.

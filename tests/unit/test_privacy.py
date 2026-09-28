@@ -2,7 +2,9 @@
 docs/MODELING.md, "Living persons and privacy"). No stack: the rows of
 the births query are given as the query service returns them. A birth
 releases a person only at the latest year it allows, and only when every
-birth statement does so by the cutoff (#334).
+birth statement does so by the cutoff (#334). The check assesses every
+item with person evidence, read at every rank, so no type hides a person
+from it (#344).
 
 CASES is shared with the public export's tests (test_backup.py) and the
 site's (test_staticsite.py), so both paths are held to one table.
@@ -10,18 +12,29 @@ site's (test_staticsite.py), so both paths are held to one table.
 
 from __future__ import annotations
 
+import re
+
+import yaml
+
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     CENTURY,
     DECADE,
     MILLENNIUM,
+    PEOPLE_SELECTION,
+    PERSON_CLASS,
+    PERSON_EVENTS,
+    PERSON_SUBJECT_PROPERTIES,
+    PERSON_VALUE_PROPERTIES,
     YEAR,
     is_possibly_living,
     latest_birth_year,
     latest_births,
+    people_selection,
     year_of,
     years_allowed,
 )
+from yizkr.model.schema import read_manifest_data
 
 CUTOFF = 1903  # as if today were 2026 with the default 123-year window
 CONCEPT = "http://wikibase.example"
@@ -418,3 +431,124 @@ class TestTheBirthsQuery:
             "wikibase:DeprecatedRank . }}\n"
             "}}\n"
         )
+
+
+MANIFEST = yaml.safe_load(read_manifest_data())
+# the instance's ids as the unit tests give them: P1.. and Q1.., in the
+# manifest's order
+PROPERTIES = {key: f"P{n}" for n, key in enumerate(MANIFEST["properties"], 1)}
+ITEMS = {key: f"Q{n}" for n, key in enumerate(MANIFEST["items"], 1)}
+
+
+def flat(query: str) -> str:
+    """A query with each run of whitespace as one space."""
+    return " ".join(query.split())
+
+
+class TestThePeopleSelection:
+    """Who the check assesses (#344): every item with person evidence,
+    read through statement nodes at every rank, so that a deprecated or
+    outranked `human` type, or none, hides no one."""
+
+    selection = flat(people_selection(PROPERTIES, ITEMS))
+
+    def test_people_are_read_through_statement_nodes_at_every_rank(self):
+        # never the truthy values, which hold only the best-ranked type,
+        # and no rank filter, so a deprecated statement counts too
+        assert "wdt:" not in PEOPLE_SELECTION
+        assert "rank" not in PEOPLE_SELECTION
+        typing = PROPERTIES["instance_of"]
+        assert (
+            f"{{ ?person p:{typing} ?typing . "
+            f"?typing ps:{typing} wd:{ITEMS['human']} . }} UNION"
+        ) in self.selection
+
+    def test_each_kind_of_evidence_selects(self):
+        subjects = " ".join(
+            f"p:{PROPERTIES[key]}" for key in PERSON_SUBJECT_PROPERTIES
+        )
+        values = " ".join(
+            f"ps:{PROPERTIES[key]}" for key in PERSON_VALUE_PROPERTIES
+        )
+        events = " ".join(f"wd:{ITEMS[key]}" for key in PERSON_EVENTS)
+        typing, participant = (
+            PROPERTIES["instance_of"],
+            PROPERTIES["participant"],
+        )
+        assert (
+            f"{{ VALUES ?link {{ {subjects} }} ?person ?link ?statement . }}"
+        ) in self.selection
+        assert (
+            f"{{ VALUES ?link {{ {values} }} ?statement ?link ?person . }}"
+        ) in self.selection
+        assert (
+            f"{{ VALUES ?kind {{ {events} }} "
+            f"?event p:{typing} ?eventTyping . "
+            f"?eventTyping ps:{typing} ?kind . "
+            f"?event p:{participant} ?participation . "
+            f"?participation ps:{participant} ?person . }}"
+        ) in self.selection
+
+    def test_an_unknown_value_or_a_redirect_is_no_person(self):
+        # an unknown value is a blank node or a skolem IRI, never an
+        # item; a redirect has no statements, so its target is selected.
+        # Each item is tested once, after DISTINCT.
+        assert (
+            "SELECT ?person WHERE { { SELECT DISTINCT ?person WHERE {"
+        ) in self.selection
+        assert self.selection.endswith(
+            '} } FILTER(REGEX(STR(?person), "/entity/Q[1-9][0-9]*$")) '
+            "FILTER NOT EXISTS { "
+            "?person <http://www.w3.org/2002/07/owl#sameAs> ?target . "
+            "} } }"
+        )
+
+    def test_every_id_is_filled_in(self):
+        assert not re.search(r"\{[a-z_]+\}", self.selection)
+
+    def test_the_evidence_is_the_manifests_vocabulary(self):
+        assert PERSON_CLASS in MANIFEST["items"]
+        for key in (*PERSON_SUBJECT_PROPERTIES, *PERSON_VALUE_PROPERTIES):
+            assert MANIFEST["properties"][key]["datatype"]
+        for key in PERSON_EVENTS:
+            assert MANIFEST["items"][key]["subclass_of"] == "event"
+        for key in PERSON_VALUE_PROPERTIES:
+            assert MANIFEST["properties"][key]["datatype"] == "wikibase-item"
+
+    def test_places_artifacts_and_vocabulary_are_no_evidence(self):
+        # the value of a property that names a place, an organization, an
+        # artifact or a vocabulary item is never a person, and names or
+        # ties that places and organizations share mark no one
+        for key in (
+            "instance_of",
+            "stated_in",
+            "part_of",
+            "place_of_birth",
+            "place_of_death",
+            "burial_place",
+            "residence",
+            "location",
+            "country_of_citizenship",
+            "sex_or_gender",
+            "occupation",
+            "employer",
+            "educated_at",
+            "member_of",
+            "depicts",
+            "image",
+            "participant",
+        ):
+            assert key not in PERSON_VALUE_PROPERTIES
+        for key in (
+            "nickname",
+            "official_name",
+            "referred_to_as",
+            "religion",
+            "member_of",
+            "location",
+            "part_of",
+            "coordinate_location",
+        ):
+            assert key not in PERSON_SUBJECT_PROPERTIES
+        # any group may take part in an event of no person kind
+        assert "event" not in PERSON_EVENTS

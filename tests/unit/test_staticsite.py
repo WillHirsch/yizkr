@@ -40,7 +40,7 @@ from yizkr import disagreement
 from yizkr.backup import exclusion_report
 from yizkr.core import sparql
 from yizkr.core.config import Config
-from yizkr.core.privacy import BIRTHS_QUERY
+from yizkr.core.privacy import BIRTHS_QUERY, people_selection
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import load_templates, prefix_block
 from yizkr.staticsite import SiteBuilder, format_time
@@ -533,6 +533,36 @@ class TestTheBadgeReadsEveryBirth:
             prefix_block(config().concept_uri)
             + BIRTHS_QUERY.format(**properties)
         ]
+
+
+class TestThePeopleAreTheExports:
+    """The site lists, and badges, the people the public export's check
+    assesses: every item with person evidence, at every rank, so that a
+    person whose `human` type a curator deprecated or outranked, or who
+    has none, is listed and badged too (#344)."""
+
+    def test_people_and_their_statements_are_selected_as_the_check_selects(
+        self, tmp_path, vocabulary
+    ):
+        calls = []
+
+        def run(query: str) -> list[dict]:
+            calls.append(query)
+            return []
+
+        SiteBuilder(
+            config(), tmp_path / "site", run=run, vocabulary=vocabulary
+        ).build()
+        properties, items = vocabulary
+        selection = people_selection(properties, items)
+        truthy = f"?person wdt:{properties['instance_of']} wd:{items['human']}"
+        for marker in (
+            "GROUP_CONCAT(DISTINCT ?alias",  # the roster
+            "GROUP_CONCAT(DISTINCT ?qualifierText",  # their statements
+        ):
+            (query,) = [query for query in calls if marker in query]
+            assert selection in query
+            assert truthy not in query
 
 
 class TestSections:

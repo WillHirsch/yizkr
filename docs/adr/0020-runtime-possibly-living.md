@@ -9,6 +9,12 @@ Amended by #334 (2026-09-28): births fail closed. Every birth statement a
 curator has not deprecated is read, each at the latest year it allows,
 and a person is released by birth only when all of them lie at or before
 the cutoff (§1, §4).
+Amended by #344 (2026-09-29): the public export fails closed. It keeps a
+person only once the check has released them: the check assesses every
+item with person evidence, read at every rank; the export reads the same
+evidence from its own dump and drops every such item the check did not
+release; and it refuses to run while the query service, where the check
+runs, does not hold the dump's revisions (§4, Ruling 6).
 
 ## Context
 
@@ -131,6 +137,58 @@ is renamed **`critique_notes`** to reflect its now-single role (ADR-0013).
   and predicate — the private site therefore shows exactly what the
   public export would remove, derived, never stored.
 
+Amended by #344 (2026-09-29): the export fails closed on who is a person,
+as it does on whether they may be living. The check selected people by
+their truthy `human` type, and the export dropped only the people the
+check had assessed, so a person the check never selected went into
+`public.nt.gz` in full: one whose `human` type a curator deprecated, or
+outranked with a preferred other type; one with no type at all; and one
+written after the query service last caught up, since the dump comes
+from the database while the check reads the query service. Now:
+
+- **Person evidence, at every rank.** `yizkr.core.privacy.PEOPLE_SELECTION`
+  selects every item with person evidence, each read through its
+  statement node at every rank, deprecated included, since a deprecated
+  statement still records that a source said so: an item typed `human`;
+  the subject of a property only a person has (a birth, a death or a
+  burial, kinship, a birth or married name, a sex or gender, a number of
+  children, an occupation, an employer, a school, a citizenship or a
+  residence); the value of a kinship property or of `gave refuge to`; or
+  a participant in an event of a kind that happens to people (a birth, a
+  death, a marriage, a migration, military service, a deportation, an
+  imprisonment or a release, whatever the rank of the event's type). An
+  unknown value is no item, and a redirect has no statements of its own.
+  Names that a place or an organization can have too (a nickname, an
+  official name, what it is referred to as), ties that an organization
+  shares (a religion, a membership), a participant in an event of any
+  other kind, and the values of place, organization, artifact and
+  vocabulary properties are not evidence, so places, artifacts and the
+  vocabulary are not taken for people. The check and the site select
+  people with it.
+- **Only released people leave.** The export reads the same evidence
+  from its own dump (`yizkr.backup.read_dump`) and drops every item that
+  has any of it, in the dump or at the query service, unless the check
+  released it (`public_exclusions`). An item the check never assessed is
+  dropped, and `public-exclusions.json` says so. A redirect stands for
+  the item it redirects to: it is dropped when that item is, so a link
+  to a merged-away item does not outlive the person it now names. Items
+  with no person evidence are kept.
+- **The query service must hold the dump.** The export reads each item's
+  revision from the dump and waits, up to `LAG_TIMEOUT`, for the query
+  service to hold exactly those revisions (a redirect aside, which the
+  query service keeps with no revision), then runs the check, and
+  compares again once it has run. If the two differ at either point, the
+  export refuses to run (`QueryServiceLag`): nothing public is written,
+  and the backup keeps its other dumps and records the refusal. The
+  export does not assess people from the dump itself, so that the site
+  and the export keep one births query and one predicate (Ruling 5).
+- **The site lists the same people.** `yizkr publish-site` lists every
+  item the selection finds, and badges each one the check does not
+  release, so its badges and the export's exclusions agree.
+
+An item with no type and no person evidence at all, a label alone, is
+not recognisable as a person, and is kept.
+
 ### 5. Vocabulary retired
 
 The `living person` property and the `yes`/`no` items it alone used are
@@ -154,6 +212,10 @@ is strictly safer, since the determination is now absence-of-death only.
 5. **One predicate, shared.** `yizkr.core.privacy.is_possibly_living` is
    the sole implementation; export and site both call it, with the births
    its one query reads (amended by #334).
+6. **Only released people leave.** The public export drops every item
+   with person evidence, read at every rank, that the check has not
+   released, and refuses to run while the query service does not hold
+   the dump's revisions (amended by #344).
 
 ## Consequences
 
@@ -167,6 +229,12 @@ is strictly safer, since the determination is now absence-of-death only.
 - Existing instances may carry legacy `living person` statements from the
   old flow; they are inert (ignored by the new code, skipped by the site).
   A one-off cleanup can delete them, but nothing requires it.
+- The public export can refuse to run (amended by #344): while the graph
+  is being written, or when the query service lacks items for good (a
+  query service reset that replayed only recent changes). The refusal
+  names the items, and the backup's other dumps are kept. A group or a
+  vessel recorded as a participant in a person event is dropped from the
+  export as a person would be.
 - Docs move with the code: MODELING.md "Living persons and privacy",
   `deploy/README.md`, and `pipeline/README.md` are updated in the same
   change; ADR-0018's exclusion note now points here.

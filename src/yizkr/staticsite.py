@@ -45,6 +45,7 @@ from yizkr.core.privacy import (
     DEFAULT_CUTOFF_YEARS,
     is_possibly_living,
     latest_births,
+    people_selection,
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import Disagreement, Side
@@ -62,18 +63,21 @@ def qid_of(binding: dict, name: str) -> str:
 
 
 # people roster with labels/descriptions/aliases and a RUNTIME
-# possibly-living signal (ADR-0020): ?deceased is true when the graph
-# holds any death-implying statement (date/place/cause of death, place
-# of burial) or a death event with the person as participant — none of
-# which needs a date. Births, for the birth-recency cutoff, are read
-# statement by statement with the query the public export reads them with
-# (core/privacy.py). No stored "living" flag is read; the badge is
-# derived, like the public export.
+# possibly-living signal (ADR-0020). The people are the items the public
+# export's check assesses: ``{people}`` is the privacy module's selection,
+# every item with person evidence at any rank, so a person whose `human`
+# type a curator deprecated or outranked, or who has none, is listed and
+# badged too. ?deceased is true when the graph holds any death-implying
+# statement (date/place/cause of death, place of burial) or a death event
+# with the person as participant — none of which needs a date. Births, for
+# the birth-recency cutoff, are read statement by statement with the query
+# the public export reads them with (core/privacy.py). No stored "living"
+# flag is read; the badge is derived, like the public export.
 PEOPLE_QUERY = """\
 SELECT ?person ?personLabel ?personDescription ?deceased
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
 WHERE {{
-  ?person wdt:{instance_of} wd:{human} .
+{people}
   OPTIONAL {{ ?person skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
   BIND((
         EXISTS {{ ?person wdt:{date_of_death} [] }}
@@ -89,15 +93,16 @@ GROUP BY ?person ?personLabel ?personDescription ?deceased
 ORDER BY ?personLabel
 """
 
-# every statement about every human: value, time precision, sources,
-# qualifiers — the raw material of the plural-by-default person page
+# every statement about every person the roster lists (``{people}``, as
+# above): value, time precision, sources, qualifiers — the raw material
+# of the plural-by-default person page
 STATEMENTS_QUERY = """\
 SELECT ?person ?propLabel ?st ?value ?valueLabel ?precision
        (GROUP_CONCAT(DISTINCT ?sourceLabel; separator="|") AS ?sources)
        (GROUP_CONCAT(DISTINCT ?qualifierText; separator="|")
         AS ?qualifierTexts)
 WHERE {{
-  ?person wdt:{instance_of} wd:{human} .
+{people}
   ?person ?p ?st .
   ?prop wikibase:claim ?p ;
         wikibase:statementProperty ?ps ;
@@ -363,9 +368,12 @@ class SiteBuilder:
         return is_possibly_living(births, has_death, self._cutoff_year)[0]
 
     def _instance_query(self, template: str) -> str:
+        """`template` with this instance's ids, its ``{people}`` (where it
+        has one) the privacy module's selection of people."""
         vocabulary = {**self.items, **self.properties}
         return prefix_block(self.config.concept_uri) + template.format(
-            **vocabulary
+            people=people_selection(self.properties, self.items),
+            **vocabulary,
         )
 
     def _library_query(self, name: str) -> str:

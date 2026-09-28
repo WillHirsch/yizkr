@@ -692,6 +692,26 @@ not a signal to grow the schema on.
   mention (other people's claims about them, orphaned provenance nodes),
   and transcription excerpts — raw source quotations, which can name
   anyone — never enter the public tier.
+- **Who is a person fails closed too** (ADR-0020, as amended by #344).
+  An item is a person when it has any person evidence, read at every
+  rank, deprecated included: a `human` type; a statement of a property
+  only a person has (a birth, a death or a burial, kinship, a birth or
+  married name, a sex or gender, a number of children, an occupation, an
+  employer, a school, a citizenship or a residence); being the value of
+  a kinship statement or of `gave refuge to`; or taking part in a birth,
+  a death, a marriage, a migration, military service, a deportation, an
+  imprisonment or a release. So neither a curator's deprecated or
+  outranked `human` type nor a missing one hides anyone. Names a place
+  can have too (a nickname, an official name, what it is referred to
+  as), a religion or a membership, a part in an event of another kind,
+  and the values of place, organization, artifact and vocabulary
+  properties mark no one. The export reads this evidence from its own
+  dump and **keeps a person only once the check has released them**:
+  an item the check never assessed is dropped, and a redirect goes with
+  the item it redirects to. The check runs on the query service, so the
+  export waits for the query service to hold the dump's revision of
+  every item, and **refuses to run** while it does not, or when the
+  graph changes during the check.
 - **Births fail closed** (ADR-0020, as amended by #334). A birth releases
   a person only at the latest year it allows, and only when every
   `date of birth` statement a curator has not deprecated does so by the
@@ -713,4 +733,5 @@ not a signal to grow the schema on.
   is unknown, unreadable or coarser than a millennium.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never in
-  public exports"), using the same runtime call.
+  public exports"), using the same runtime call. Its people are the items
+  with person evidence, selected as the check selects them.
