@@ -4,16 +4,21 @@
 Centuries are counted as Wikibase counts them: the 19th century runs from
 1801 to 1900, and a claim gives it by its first year. A fictional fixture
 writes one person's birth as three sources date it, in the 19th century,
-in 1900 and in 1800, and an event in the 18th century before the common
-era, and reads them back through the stack:
+in 1900 and in 1800, and an event as two sources date it, in the 18th
+century before the common era and in 1701 BCE, its last year, and reads
+them back through the stack:
 
 * the writer stores the 19th century as 1801 at century precision, and
   Wikibase shows it as "19. century"; it stores the 18th century BCE as
   -1800, which Wikibase shows as "18. century BCE";
 * the query service serves each century's year as stored, and the static
   site's format_time names the century Wikibase shows;
+* it serves 1701 BCE, at year precision, one year on, as -1700 in XSD
+  1.1's count;
 * the disagreement report gives the 19th century the span Wikibase
-  counts: 1900, its last year, lies inside it, and 1800 does not.
+  counts: 1900, its last year, lies inside it, and 1800 does not. It
+  gives the 18th century BCE its span in the count its years are served
+  in, so 1701 BCE lies inside it.
 
 Each source is registered with a fictional PNG of its own
 (register_fictional), which its claims cite by SHA-1 (#102). Like every
@@ -86,10 +91,12 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
     write onto an earlier version's items and see their statements beside
     its own. With the marker each version writes items of its own, and a
     re-run of one version finds its own items again. The hash also covers
-    each claim's time as the writer stores it, so a writer that stores
+    each claim's time as TimeValue.to_wikibase gives it, the datavalue the
+    writer's time conversion starts from, so a to_wikibase that gives
     another time (a mutant of the harness, say) writes items of its own
-    too, and never leaves a second value on these. Returns the write's
-    result and the marker."""
+    too, and never leaves a second value on these. A change inside
+    BatchWriter._to_wbi_claim is not hashed. Returns the write's result
+    and the marker."""
     stored = [
         TimeValue.model_validate(claim["value"]).to_wikibase()
         for claim in claims
@@ -161,6 +168,8 @@ def fixture_graph(client, config):
             claim(PERSON, "date_of_birth", date(1800), source["C"]),
             # per A: the event in the 18th century BCE, 1800 to 1701 BCE
             claim(EVENT, "point_in_time", date(-1800, "century"), source["A"]),
+            # per B: in 1701 BCE, the 18th century BCE's last year
+            claim(EVENT, "point_in_time", date(-1701), source["B"]),
         ],
     )
     qids = {
@@ -262,18 +271,47 @@ def test_the_report_spans_the_century_wikibase_shows(
             letter[s.qid] for s in side.sources
         )
 
+    found = disagreements(
+        lambda query: run_sparql(config, query),
+        properties,
+        items,
+        config.concept_uri,
+    )
     rows = {
         frozenset({described(row.a), described(row.b)})
-        for row in disagreements(
-            lambda query: run_sparql(config, query),
-            properties,
-            items,
-            config.concept_uri,
-        )
+        for row in found
         if row.entity_qid == qids["person"]
     }
     # 1900 lies inside the 19th century, so A and B agree; 1800 does not
     assert rows == {
         frozenset({"1801-01-01/7 per A", "1800-01-01/9 per C"}),
         frozenset({"1900-01-01/9 per B", "1800-01-01/9 per C"}),
+    }
+    # 1701 BCE, served as -1700, lies inside the 18th century BCE
+    assert not [row for row in found if row.entity_qid == qids["event"]]
+
+
+def test_a_year_bce_is_served_one_year_on(client, config, fixture_graph):
+    # the one-year shift the report's span of a century BCE allows for: a
+    # year before the common era is served in XSD 1.1's count, a century's
+    # year as stored
+    qids, _ = fixture_graph
+    properties, _ = client.vocabulary()
+    query = prefix_block(config.concept_uri) + (
+        "SELECT ?value ?precision WHERE {\n"
+        f"  wd:{properties['point_in_time']} wikibase:claim ?p ;\n"
+        "    wikibase:statementValue ?psv .\n"
+        f"  wd:{qids['event']} ?p ?statement .\n"
+        "  ?statement ?psv ?node .\n"
+        "  ?node wikibase:timeValue ?value ;\n"
+        "    wikibase:timePrecision ?precision .\n"
+        "}"
+    )
+    served = {
+        (row["value"]["value"], row["precision"]["value"])
+        for row in run_sparql(config, query)
+    }
+    assert served == {
+        ("-1800-01-01T00:00:00Z", "7"),
+        ("-1700-01-01T00:00:00Z", "9"),
     }

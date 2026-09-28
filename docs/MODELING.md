@@ -180,12 +180,13 @@ artifact a new QID, changes neither.
   writer stores that year as it is: the wiki shows it as "19. century". A
   claim at century precision whose year is not the first year of its
   century is refused, so the 19th century given as 1800, which Wikibase
-  counts as the 18th, is reported and never written. Claims have no
-  millennium precision. The readers count as the wiki does, whichever
-  year of a century is stored (a curator who types "19. century" into
-  the wiki stores 1900): the static site shows a century-precision date
-  stored as 1801 or 1900 as the 19th century, and the disagreement
-  report gives it the span 1801–1900 ("Contradictions").
+  counts as the 18th, is never written. Claims have no millennium
+  precision. The static site's `format_time` and the disagreement report
+  count as the wiki does, whichever year of a century is stored (a
+  curator who types "19. century" into the wiki stores 1900):
+  `format_time` shows a century-precision date stored as 1801 or 1900 as
+  the 19th century, and the report gives it the span 1801–1900
+  ("Contradictions").
 - "The 1800s", meaning 1800–1899, is not a century in that count, and
   is stated as a range, earliest date 1800 and latest date 1899, never
   rounded to the 19th century.

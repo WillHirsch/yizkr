@@ -445,7 +445,9 @@ structural in the schema:
   preferring is a curator act on the wiki (ADR-0002).
 - Time values carry explicit precision and calendar; ranges and
   "circa" are qualifiers, and inconsistent precision is rejected
-  rather than silently narrowed or padded (docs/MODELING.md).
+  rather than silently narrowed or padded (docs/MODELING.md). A
+  century is given by its first year as Wikibase counts centuries (the
+  19th as 1801), and a century given by any other year is refused.
 
 Properties and vocabulary items are referenced by **manifest key**
 (`spouse`, `circa` — see `model/manifest.yaml`), never by local P/Q id:
