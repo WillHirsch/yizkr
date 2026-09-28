@@ -447,9 +447,9 @@ def public_exclusions(
 
 
 # The revision of every entity the query service holds, redirects left
-# out: the dump gives a redirect a revision, while the query service
-# keeps only its owl:sameAs link, so the two are compared on the items
-# that are not redirects. Items alone are compared: the check reads
+# out: the dump gives a redirect a revision, which the query service need
+# not keep beside its owl:sameAs link, so the two are compared on the
+# items that are not redirects. Items alone are compared: the check reads
 # people's statements from items, and a property the query service lags
 # on can only leave a birth's value unread, which keeps its person
 # possibly living.

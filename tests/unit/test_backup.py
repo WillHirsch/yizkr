@@ -553,7 +553,7 @@ class TestTheQueryServiceLag:
         assert stale_items(lambda query: rows, self.DUMPED) == []
 
     def test_the_query_leaves_redirects_out(self):
-        # the dump gives a redirect a revision, the query service none
+        # the dump gives a redirect a revision, the query service need not
         assert REVISIONS_QUERY.startswith("SELECT ?entity ?version WHERE {")
         assert "?entity <http://schema.org/version> ?version ." in (
             REVISIONS_QUERY

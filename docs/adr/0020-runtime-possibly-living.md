@@ -175,13 +175,14 @@ from the database while the check reads the query service. Now:
   with no person evidence are kept.
 - **The query service must hold the dump.** The export reads each item's
   revision from the dump and waits, up to `LAG_TIMEOUT`, for the query
-  service to hold exactly those revisions (a redirect aside, which the
-  query service keeps with no revision), then runs the check, and
-  compares again once it has run. If the two differ at either point, the
-  export refuses to run (`QueryServiceLag`): nothing public is written,
-  and the backup keeps its other dumps and records the refusal. The
-  export does not assess people from the dump itself, so that the site
-  and the export keep one births query and one predicate (Ruling 5).
+  service to hold exactly those revisions (a redirect aside, as the dump
+  gives it a revision and the query service need not), then runs the
+  check, and compares again once it has run. If the two differ at either
+  point, the export refuses to run (`QueryServiceLag`): nothing public is
+  written, and the backup keeps its other dumps and records the refusal.
+  The export does not assess people from the dump itself, so that the
+  site and the export keep one births query and one predicate (Ruling
+  5).
 - **The site lists the same people.** `yizkr publish-site` lists every
   item the selection finds, and badges each one the check does not
   release, so its badges and the export's exclusions agree.
