@@ -586,6 +586,52 @@ class TestStorage:
         assert kept["response"] == "first"
         assert "at" in kept["replaced"]
 
+    @pytest.mark.real_fsync
+    @pytest.mark.parametrize("stored", ["answer", "adoption"])
+    def test_an_entry_is_fsynced_whole_before_it_is_linked_into_place(
+        self, tmp_path, monkeypatch, stored
+    ):
+        """A crash just after the link must not leave the key naming a
+        file whose bytes never reached the disk: an entry is written to a
+        staging file, which is fsynced, with all of the entry in it,
+        before os.link publishes it under the key (#254). The unit tests
+        skip fsync unless marked real_fsync (tests/unit/conftest.py)."""
+        calls: list[tuple] = []
+        real_fsync, real_link = os.fsync, os.link
+
+        def file_id(info: os.stat_result) -> tuple[int, int]:
+            return info.st_dev, info.st_ino
+
+        def fsync(fd):
+            info = os.fstat(fd)
+            calls.append(("fsync", file_id(info), info.st_size))
+            return real_fsync(fd)
+
+        def link(src, dst, *args, **kwargs):
+            calls.append(("link", file_id(os.stat(src)), os.fspath(dst)))
+            return real_link(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(os, "fsync", fsync)
+        monkeypatch.setattr(os, "link", link)
+        caching = client(tmp_path, Engine())
+        if stored == "answer":
+            key = caching.complete("Read it.").key
+        else:
+            key = caching.complete_key("Read it.")
+            assert caching.seed(key, "archived text", {"engine": "archive"})
+        path = caching.cache.path(key)
+        (linked,) = [n for n, call in enumerate(calls) if call[0] == "link"]
+        _, published, destination = calls[linked]
+        assert destination == os.fspath(path)
+        assert file_id(path.stat()) == published
+        synced_sizes = [
+            size
+            for name, synced, size in calls[:linked]
+            if name == "fsync" and synced == published
+        ]
+        assert synced_sizes, f"the entry was not fsynced first: {calls}"
+        assert synced_sizes[-1] == path.stat().st_size
+
     def test_parallel_calls_under_one_key_leave_one_whole_entry(
         self, tmp_path
     ):
@@ -1233,18 +1279,18 @@ class TestForks:
             raise ValueError("an engine that cannot resume this session")
 
         engine.resume_conversation = unusable
-        if failure == "keep raises":
+        with monkeypatch.context() as patch:
+            if failure == "keep raises":
 
-            def full(cache, key, opening, files):
-                raise OSError("no space left on the device")
+                def full(cache, key, opening, files):
+                    raise OSError("no space left on the device")
 
-            monkeypatch.setattr(EngineCache, "keep_session", full)
-        caching = wrap(engine, EngineCache(root), role="extract")
-        response, handle = caching.open_conversation("the document")
-        assert response == "opening answer #1"
-        with pytest.raises(ConversationChanged):
-            caching.fork(handle, "c1")
-        monkeypatch.undo()
+                patch.setattr(EngineCache, "keep_session", full)
+            caching = wrap(engine, EngineCache(root), role="extract")
+            response, handle = caching.open_conversation("the document")
+            assert response == "opening answer #1"
+            with pytest.raises(ConversationChanged):
+                caching.fork(handle, "c1")
         key = response.key
         assert EngineCache(root).get(key)["response"] == "opening answer #51"
         # the old answer's session is kept aside from the new answer's

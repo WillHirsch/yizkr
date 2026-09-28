@@ -4,6 +4,8 @@ import csv
 import hashlib
 import itertools
 import json
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +19,7 @@ from yizkr.claims import (
     MonolingualText,
     QidRef,
 )
+from yizkr.pipeline import extract
 from yizkr.pipeline.extract import (
     ClaimFileExtractor,
     LlmClaimExtractor,
@@ -304,6 +307,63 @@ class TestExtract:
         )
         assert len(result.claims) == 2
         assert result.extraction_run.model_identifier == "manual"
+
+
+class TestRunMetadata:
+    """Every batch names the short commit of the checkout that made it,
+    asked of git once per process (#254)."""
+
+    @pytest.fixture
+    def asked(self, monkeypatch):
+        """The commands started through subprocess.run in the test."""
+        commands = []
+        real_run = subprocess.run
+
+        def run(args, *more, **options):
+            commands.append(list(args))
+            return real_run(args, *more, **options)
+
+        monkeypatch.setattr(subprocess, "run", run)
+        return commands
+
+    @pytest.fixture
+    def fresh(self):
+        """No commit asked for in this process yet, and none left behind
+        for the tests after."""
+        extract._software_commit.cache_clear()
+        yield
+        extract._software_commit.cache_clear()
+
+    def test_it_is_the_short_head_of_the_checkout(self):
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(extract.__file__).parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert extract.run_metadata("fake-model").software_commit == head
+
+    def test_git_is_asked_at_most_once(self, asked):
+        """At most: an earlier test may have asked already."""
+        commits = {
+            extract.run_metadata("fake-model").software_commit
+            for _ in range(3)
+        }
+        assert len(asked) <= 1
+        assert len(commits) == 1
+
+    @pytest.mark.parametrize("without", ["git", "a checkout"])
+    def test_no_commit_without_git_or_a_checkout(
+        self, fresh, asked, monkeypatch, tmp_path, without
+    ):
+        if without == "git":
+            monkeypatch.setenv("PATH", str(tmp_path))  # no git to be found
+        else:
+            monkeypatch.setenv("GIT_DIR", str(tmp_path / "no-repository"))
+        for _ in range(2):
+            assert extract.run_metadata("fake-model").software_commit is None
+        assert len(asked) == 1
 
 
 class TestResolve:
