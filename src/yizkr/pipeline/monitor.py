@@ -97,6 +97,7 @@ from yizkr.pipeline.rundir import (
     CACHE_EVENTS,
     CONTROL,
     CONTROL_ACTIONS,
+    DOCUMENT_FAILED,
     DONE,
     EVENTS,
     FAILED,
@@ -134,11 +135,6 @@ MONITOR = "monitor"
 # `refused`, `held`, `error` (an exception's name), `window` and
 # `resumes_at`; a run without them is shown from the cache's events alone
 CALL = "call"
-# a document that failed, in a stage or outside its stages (a source or a
-# state.json that could not be read, say): `file`, `subject` once the
-# source was read, `kind`, `reason`
-DOCUMENT_FAILED = "document-failed"
-
 # how a completed stage came about: made in the run (by the engine, or by
 # code that calls none), or reused: the view current, or every call the
 # stage made answered by the cache, labelled by the answers' reasons
