@@ -1570,6 +1570,9 @@ class TestFailFastPauses:
         assert run.control().stopped(kind="media") == "kind:media paused"
         first, second = timers.started
         assert first.cancelled and not second.cancelled
+        # a timer whose call began as another took its place does nothing
+        first.callback()
+        assert timers.waiting() == [second]
         timers.fire()
         assert len(timers.waiting()) == 1
 
