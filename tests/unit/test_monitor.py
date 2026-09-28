@@ -2278,6 +2278,8 @@ class TestCommands:
         stands without failing on the control file's other lines."""
         with open(run / "control.jsonl", "ab") as handle:
             handle.write(line + b"\n")
+        assert state_now(run, "run") == "now active"
+        assert summarise_run(run, NOW).slice("run").state == ACTIVE
         keys = ScriptedKeys(
             [":", ":", "q"], lines=["pause stage extraction", "resume"]
         )
