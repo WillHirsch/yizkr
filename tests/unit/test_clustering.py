@@ -1211,16 +1211,22 @@ class TestTheStage:
     ):
         directory_ = tmp_path / "corpus" / "clustering"
         documents = self.docs(tmp_path)
-        made = ensure_identity_map(directory_, documents)
+        ensure_identity_map(directory_, documents)
         other = load_config(overrides={"evidence": {"circa-years": 6}})
         remade = ensure_identity_map(directory_, documents, other)
         assert not remade.reused
         assert remade.identity_map["config"] == other.digest()
-        # a new version whose map comes out the same keeps every cluster
-        # id and the hash
+        made = ensure_identity_map(directory_, documents)
+        assert not made.reused
+        assert ensure_identity_map(directory_, documents).reused
+        # a new version, and nothing else: made again, and a map that
+        # comes out the same keeps every cluster id and the hash
         monkeypatch.setattr(clustering, "VERSION", clustering.VERSION + 1)
         bumped = ensure_identity_map(directory_, documents)
         assert not bumped.reused
+        assert (
+            bumped.identity_map["version"] == made.identity_map["version"] + 1
+        )
         assert bumped.identity_map["hash"] == made.identity_map["hash"]
         assert bumped.identity_map["clusters"] == made.identity_map["clusters"]
         assert ensure_identity_map(directory_, documents).reused
