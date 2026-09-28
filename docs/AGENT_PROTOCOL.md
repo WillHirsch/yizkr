@@ -152,10 +152,10 @@ and records it in the PR template's self-check:
    docs/TESTING.md): a mutation that puts the bug back, or takes the
    behaviour out, is killed by the test. The PR gives the harness's table
    and the spec it ran. A test whose mutant survives does not guard that
-   regression: fix the test before review. The harness runs non-live
-   tests only: for a new or changed live test, the PR names under
-   Mutation evidence the regression the test guards, and the central
-   live run (§5) is where the test is shown to fail under it.
+   regression: fix the test before review. For a new or changed live
+   test, the spec marks its mutation `live = true`, and since live tests
+   run centrally, the PR gives that spec under Mutation evidence and the
+   central live run (§5) runs it.
 3. **Edge cases.** The PR lists the edge cases considered, each with the
    test that covers it or the reason none is needed.
 4. **Current with main.** After `git fetch origin`, if
@@ -243,9 +243,10 @@ feature, decision, ingestion pass). An agent that files an issue with
   run to one session, in parallel with the first review rather than after
   the review rounds; no other agent starts live tests of its own. The
   results name the commit they ran at, and a fix round that changes a
-  write path gets another central run. The run also shows each new or
-  changed live test failing under the regression its PR names, since
-  the mutation harness runs non-live tests only (§4, docs/TESTING.md).
+  write path gets another central run. The run also runs the PR's live
+  mutation spec with the harness, which holds the live-stack lock for it,
+  and posts the table, which shows each new or changed live test failing
+  under the regression it guards (§4, docs/TESTING.md).
   #227 went through six agents and about 11.5 agent-hours before its
   first live run, which failed at once: HTTP 414, because the query
   service refuses a GET request line longer than about 8 KB, so long

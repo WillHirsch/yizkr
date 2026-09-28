@@ -15,6 +15,18 @@ itself empties its record first, so a record in a free lock file was left
 by a holder that crashed or was killed; the next holder writes its own
 over it.
 
+A process that a holder starts can share its hold, as the pytest runs of
+scripts/mutate.py share the harness's. The holder passes its locked
+descriptor down, open, and names it in ``$YIZKR_LIVE_LOCK_FD``. A flock
+belongs to the open file description, which the two processes then
+share, so the child holds the lock through that descriptor: it neither
+waits nor records itself, and it never releases the lock, which would
+release the holder's too. The variable counts only when it names a
+descriptor, open in the process, of the lock file itself, and flock on
+that descriptor succeeds at once. A stray or stale variable names no
+such descriptor, and the process then takes the lock as any other does,
+so the variable lets no session past the lock.
+
 Never delete the lock file. A session that then found no file would
 create and lock a new one, while the session still holding the old one
 went on: two sessions on the stack at once.
@@ -40,6 +52,8 @@ if TYPE_CHECKING:
 
 LOCK_ENV = "YIZKR_LIVE_LOCK"
 TIMEOUT_ENV = "YIZKR_LIVE_LOCK_TIMEOUT"
+# names the descriptor through which a process shares its parent's hold
+SHARED_ENV = "YIZKR_LIVE_LOCK_FD"
 DEFAULT_TIMEOUT = 7200.0
 # seconds between attempts to take the lock while another process holds it
 POLL_INTERVAL = 0.5
@@ -91,8 +105,9 @@ def hold(
     path: Path | None = None,
     timeout: float | None = None,
     announce: Callable[[str], None] | None = None,
-) -> Iterator[None]:
-    """Hold the live-stack lock for the duration of the block.
+) -> Iterator[int]:
+    """Hold the live-stack lock for the duration of the block, and give
+    the block the descriptor that holds it.
 
     `path` and `timeout` default to lock_path() and lock_timeout(). While
     another process holds the lock, `announce` (by default, a print to
@@ -100,10 +115,19 @@ def hold(
     POLL_INTERVAL seconds. After `timeout` seconds LiveStackBusy is
     raised, naming the holder. Once this process has the lock, it writes
     its record over the one in the file, and it empties the record again
-    as it releases the lock."""
+    as it releases the lock.
+
+    A process that shares its parent's hold ($YIZKR_LIVE_LOCK_FD, in the
+    module docstring) gets the shared descriptor at once. It writes no
+    record, and it leaves the descriptor open and locked: releasing it
+    would release the parent's lock too."""
     path = lock_path() if path is None else path
     timeout = lock_timeout() if timeout is None else timeout
     announce = announce or _print_to_stderr
+    shared = _shared(path)
+    if shared is not None:
+        yield shared
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     # opened without truncating: the record in the file is the holder's
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -111,7 +135,7 @@ def hold(
         _take(fd, path, timeout, announce)
         try:
             _record(fd)
-            yield
+            yield fd
         finally:
             with contextlib.suppress(OSError):
                 os.ftruncate(fd, 0)
@@ -176,6 +200,29 @@ def _take(
             )
             waiting = True
         time.sleep(min(POLL_INTERVAL, timeout - waited))
+
+
+def _shared(path: Path) -> int | None:
+    """The descriptor that $YIZKR_LIVE_LOCK_FD names, when this process
+    holds the lock through it: the descriptor is open on the lock file at
+    `path`, and flock on it succeeds at once. Otherwise None."""
+    try:
+        fd = int(os.environ.get(SHARED_ENV, ""))
+        inherited = os.fstat(fd)
+        lock = os.stat(path)
+    except (ValueError, OverflowError, OSError):
+        return None
+    # A descriptor of any other file would lock that file instead.
+    if (inherited.st_dev, inherited.st_ino) != (lock.st_dev, lock.st_ino):
+        return None
+    # On the description that holds the lock this changes nothing, and on
+    # any other it fails while that one holds the lock. A free lock is
+    # taken through this descriptor.
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return None
+    return fd
 
 
 def _record(fd: int) -> None:
