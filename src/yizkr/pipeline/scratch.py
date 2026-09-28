@@ -18,8 +18,10 @@ run registers no artifact, and a deck's derived media are recorded in its
 directory (ADR-0025 §2). There is no human stop. When every document's
 per-document stages have ended, done or failed, the run is at the
 **barrier**, and the driver runs the corpus stages registered with it
-(CORPUS_STAGES), in order, once each, over the documents whose stages all
-completed. Face detection is never a stage of a scratch run.
+(CORPUS_STAGES), in order, over the documents whose stages all
+completed: every one, in each invocation that goes past the barrier, so
+a corpus stage reuses its own outputs while their inputs stand, as the
+views do. Face detection is never a stage of a scratch run.
 
 **Order.** One document of each kind, the first by name, goes through
 every per-document stage first: the canaries. The rest follow stage by
@@ -32,31 +34,35 @@ rate is known early. `until` stops the run after a stage.
 stage, the driver reads the run's control file (rundir.fold_control): a
 pause of the whole run, a stage or a document kind holds dispatch for its
 slice until a resume, and the driver waits while nothing else can go on;
-an abort holds its slice for the rest of the invocation. The monitor, the
-anomaly checks and `yizkr scratch pause|resume|abort` write those
-requests. A stage in flight when a request arrives finishes. Ctrl-C
-stops the invocation at once, and the engine's calls in flight with it.
-Every completed call is in the cache and every completed view in its
-directory, so invoking the run again resumes it with nothing completed
-made again: a view that stands is reused.
+an abort holds its slice for the rest of the invocation, and outranks a
+pause of another scope that also covers a stage, since no resume can let
+that stage through. The monitor, the anomaly checks and `yizkr scratch
+pause|resume|abort` write those requests. A stage in flight when a
+request arrives finishes. Ctrl-C stops the invocation at once, and the
+engine's calls in flight with it. Every completed call is in the cache
+and every completed view in its directory, so invoking the run again
+resumes it with nothing completed made again: a view that stands is
+reused, and so is one that a refresh of its role (`--refresh`) has made
+again in the run already.
 
 **The engine's pauses.** A subscription limit pauses the pass with the
 time it can go on (llm.UsageLimitReached). The invocation ends `paused`,
-the driver waits until then while honouring the control file (an abort
-of the run ends the wait), and invokes the run again, with the slices
-the control file stopped still stopped. Any other pause (a claude CLI
-that changed, a cache another process holds, a call that ran on usage
-credits) ends the driver, which says what to do.
+the driver waits until a margin past then, never less than the margin,
+while honouring the control file (an abort of the run ends the wait),
+and invokes the run again, with every request in force at the new
+invocation's start written again after it. Any other pause (a claude
+CLI that changed, a cache another process holds, a call that ran on
+usage credits) ends the driver, which says what to do.
 
 **The manifest.** A scratch run keeps its settings (rundir: fixed
 settings): an invocation that asks for others is refused. The one
-exception is the code, once every per-document stage of the run has
-ended: an invocation on other code, one that registers a corpus stage
-say, goes past the barrier alone, dispatching no per-document stage, and
-records its own code beside the run's. Besides the settings, run.json
-records the engine's pacing and the invocation's `scratch` facts: how far
-it was asked to go, the canaries, the corpus stages and whether it went
-to the end.
+exception is the code, once every document's per-document stages have
+ended, or one of them has failed: an invocation on other code, one that
+registers a corpus stage say, goes past the barrier alone, dispatching
+no per-document stage, and records its own code beside the run's.
+Besides the settings, run.json records the engine's pacing and the
+invocation's `scratch` facts: how far it was asked to go, the canaries,
+the corpus stages and whether it went to the end.
 
 **Before any call** the driver refuses to start without a never-ingest
 list, and runs its preflight: the engine's CLI and its login, a full
@@ -64,11 +70,13 @@ model id for every role, the engine's pacing settings, free disk space,
 the PDF renderer when the corpus holds a PDF, and, only when a stage
 that touches the wiki is to run, a reachable stack and an instance that
 carries no kept-state marker. One driver at a time uses a runs
-directory (hold).
+directory (hold), and a run is invoked only from the runs directory it
+is in.
 
 Run directories hold transcriptions, claims and the cache's raw model
 output: they are local-only data, kept under var/ (docs/AGENT_PROTOCOL.md
-§6).
+§6). So the runs directory is private to its owner, and never one that
+a git work tree would track.
 """
 
 from __future__ import annotations
@@ -79,6 +87,8 @@ import json
 import os
 import shutil
 import socket
+import stat
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -108,6 +118,7 @@ from yizkr.pipeline.rundir import (
     NEEDS_ATTENTION,
     PAUSE,
     RESUME,
+    ControlState,
     DispatchStopped,
     ModelAliasRefused,
     RunDir,
@@ -134,6 +145,16 @@ LOCK_FILE = ".lock"
 CORPUS_DIR = "corpus"
 # the event that says the run is past the barrier
 BARRIER = "barrier"
+# the event that says a document's stage was made again under a refresh of
+# its role, which the run's later invocations reuse
+REFRESHED = "refreshed"
+# the role whose calls each per-document stage makes
+STAGE_ROLES = {
+    "transcription": "transcribe",
+    "extraction": "extract",
+    "gedcom": "extract",
+    "critique": "critique",
+}
 # a document whose transcription is its last stage done so far
 TRANSCRIBED = "transcribed"
 # the rank of each per-document stage: the rest of the documents take them
@@ -152,7 +173,8 @@ POLL_SECONDS = 5.0
 # of the LLM cache
 MIN_FREE_BYTES = 2 * 1024**3
 # how long after a subscription limit's reported time the driver invokes
-# the run again: the engine holds its pause a moment past that time
+# the run again, and after a pause whose time has passed already: the
+# engine can hold its pause past that time
 RESUME_MARGIN = 60.0
 # `--resume` with no run named: the latest run
 LATEST = "latest"
@@ -176,6 +198,31 @@ def _why(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+def stop_of(
+    control: ControlState,
+    *,
+    stage: str | None = None,
+    kind: str | None = None,
+) -> str | None:
+    """What stops a stage, of a kind, as '<scope> paused|aborted': the
+    run's scope, the stage's or the kind's, an abort before a pause, since
+    a stage an abort covers stays stopped whatever else is resumed; among
+    equals, the run's scope, then the stage's, then the kind's. None when
+    nothing does."""
+    scopes = ["run"]
+    if stage:
+        scopes.append(f"stage:{stage}")
+    if kind:
+        scopes.append(f"kind:{kind}")
+    stops = [
+        f"{scope} {control.scopes[scope]}"
+        for scope in scopes
+        if scope in control.scopes
+    ]
+    aborts = [stop for stop in stops if stop.endswith(" aborted")]
+    return (aborts or stops or [None])[0]
+
+
 # -- corpus stages ------------------------------------------------------------
 
 
@@ -197,11 +244,15 @@ class CorpusContext:
 
 @dataclass(frozen=True)
 class CorpusStage:
-    """A stage the driver runs once over the whole corpus, after the
-    barrier. `run` takes the stage's CorpusContext and returns the reasons
-    its output needs attention, if any: labels that never quote a
-    document, since they reach the run's events. An exception fails the
-    stage, and the stages after it wait for the next invocation.
+    """A stage the driver runs over the whole corpus, after the barrier:
+    once in every invocation that goes past the barrier, a later one
+    after a subscription limit or a resume included. So a stage keeps its
+    outputs in its directory and reuses them while their inputs stand, as
+    the documents' views are reused; the driver keeps no record of it
+    between invocations. `run` takes the stage's CorpusContext and returns
+    the reasons its output needs attention, if any: labels that never
+    quote a document, since they reach the run's events. An exception
+    fails the stage, and the stages after it wait for the next invocation.
 
     `touches_wiki` marks a stage that reads or writes the wiki: the driver
     runs one only when the stack is reachable and the instance carries no
@@ -304,6 +355,42 @@ def _free_bytes(path: Path) -> int:
 # -- the runs directory -------------------------------------------------------
 
 
+def _ask_git(
+    where: Path, *arguments: str
+) -> subprocess.CompletedProcess | None:
+    """git's answer to a command run in `where`, or None when git cannot
+    be run."""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(where), *arguments],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def tracked_by_git(path: Path) -> Path | None:
+    """The top of the git work tree that holds the directory `path`, when
+    git there does not ignore it and so would track what is put in it;
+    None when no work tree holds it, git ignores it, or there is no git to
+    ask. The path need not exist yet: git matches its ignore rules against
+    the name, as a directory's."""
+    path = Path(os.path.realpath(path))
+    probe = path
+    while not probe.is_dir() and probe != probe.parent:
+        probe = probe.parent
+    top = _ask_git(probe, "rev-parse", "--show-toplevel")
+    if top is None or top.returncode != 0 or not top.stdout.strip():
+        return None
+    tree = Path(top.stdout.strip())
+    ignored = _ask_git(tree, "check-ignore", "-q", f"{path}/")
+    if ignored is not None and ignored.returncode == 0:
+        return None
+    return tree
+
+
 @contextlib.contextmanager
 def hold(runs: Path) -> Iterator[None]:
     """Hold the runs directory for as long as the block runs: one driver
@@ -311,12 +398,42 @@ def hold(runs: Path) -> Iterator[None]:
     flock's on its LOCK_FILE, which the kernel releases however the
     holder ends; the holder records itself there, and empties the record
     as it lets go. Another holder is refused at once, by name
-    (ScratchRunInUse). The directory is made private to its owner (mode
-    700): its runs hold corpus content."""
+    (ScratchRunInUse).
+
+    Its runs hold corpus content, so the runs directory is private: made
+    so (mode 700) when it is made here, and refused when it exists and is
+    open to other users, whose mode is left alone. So is one a git work
+    tree would track, and one that cannot be made, read or written
+    (ScratchRefused)."""
     runs = Path(runs)
-    runs.mkdir(parents=True, exist_ok=True)
-    os.chmod(runs, 0o700)
-    fd = os.open(runs / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+    tree = tracked_by_git(runs)
+    if tree is not None:
+        raise ScratchRefused(
+            f"{runs} is in the git work tree {tree}, which does not ignore "
+            "it: a run directory holds corpus content, which is never "
+            "committed (docs/AGENT_PROTOCOL.md §6). Name a runs directory "
+            "git ignores, such as var/scratch, or one outside the work tree."
+        )
+    try:
+        if not runs.exists():
+            runs.mkdir(parents=True, mode=0o700)
+            os.chmod(runs, 0o700)
+        elif not runs.is_dir():
+            raise ScratchRefused(
+                f"{runs} cannot be the runs directory: it is not a directory"
+            )
+        mode = stat.S_IMODE(runs.stat().st_mode)
+        if mode & 0o077:
+            raise ScratchRefused(
+                f"the runs directory {runs} is open to other users (mode "
+                f"{mode:o}), and its runs hold corpus content: make it "
+                "private (chmod 700), or name another"
+            )
+        fd = os.open(runs / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        raise ScratchRefused(
+            f"{runs} cannot be the runs directory: {exc}"
+        ) from None
     held = False
     try:
         try:
@@ -402,16 +519,23 @@ def is_complete(run: Path) -> bool:
 def choose_run(
     runs: Path, *, resume: str | None = None, new: bool = False
 ) -> Path:
-    """The run directory a `scratch run` invocation takes: a new one
-    (`new`); the run `resume` names (LATEST, the latest), which must be a
-    scratch run; otherwise the latest run when it has not been taken to
-    the end, so that running the same command again resumes it, and a new
-    one when it has."""
+    """The run directory a `scratch run` invocation takes, in `runs`: a
+    new one (`new`); the run `resume` names (LATEST, the latest), which
+    must be a scratch run in `runs`, the directory whose hold (hold)
+    keeps a second driver off it; otherwise the latest run when it has
+    not been taken to the end, so that running the same command again
+    resumes it, and a new one when it has."""
     runs = Path(runs)
     if new:
         return runs / new_run_id(runs)
     if resume is not None:
         path = resolve_run(runs, resume)
+        if os.path.realpath(path.parent) != os.path.realpath(runs):
+            raise ScratchRefused(
+                f"{path} is not in the runs directory {runs}: a run is "
+                "invoked from its own, which one driver at a time holds. "
+                f"Name it: --runs {path.parent} --resume {path.name}"
+            )
         mode = RunDir(path).manifest().get("mode")
         if mode != MODE:
             raise ScratchRefused(
@@ -502,6 +626,10 @@ class ScratchDriver(Orchestrator):
         self._batches: dict[str, Any] = {}
         # the directories made ready in this invocation
         self._prepared: set[Path] = set()
+        # (document SHA-1, stage) whose current view a refresh of the
+        # stage's role made in this run, read from its events at the
+        # start of each invocation: it stands for the rest of the run
+        self._refreshed: set[tuple[str, str]] = set()
 
     # -- stages -----------------------------------------------------------
 
@@ -727,8 +855,9 @@ class ScratchDriver(Orchestrator):
         self, fields: dict[str, Any], docs: Sequence[DocumentRun]
     ) -> bool:
         """Whether this invocation asks for the settings the run recorded
-        but for its code, and every per-document stage of the run has
-        ended: then it goes past the barrier alone."""
+        but for its code, and every document has ended its per-document
+        stages, done or failed (a failed stage leaves the stages after it
+        undispatched): then it goes past the barrier alone."""
         recorded = self.rundir.manifest()
         if not recorded.get("run_id"):
             return False
@@ -739,12 +868,17 @@ class ScratchDriver(Orchestrator):
         ):
             return False
         states = run_state(self.rundir)
-        return all(
-            (state := states.get((doc.sha1, stage))) is not None
-            and state.status in _ENDED
-            for doc in docs
-            for stage in DOCUMENT_STAGES[doc.kind]
-        )
+
+        def ended(doc: DocumentRun) -> bool:
+            found = [
+                states.get((doc.sha1, s)) for s in DOCUMENT_STAGES[doc.kind]
+            ]
+            statuses = {state.status for state in found if state is not None}
+            return STAGE_FAILED in statuses or (
+                None not in found and statuses <= _ENDED
+            )
+
+        return all(ended(doc) for doc in docs)
 
     def _complete(self, complete: bool) -> None:
         """Record whether the invocation went through every stage."""
@@ -754,15 +888,19 @@ class ScratchDriver(Orchestrator):
 
     # -- control ------------------------------------------------------------
 
-    def _stops_in_force(self) -> list[dict]:
-        """The requests that stop a slice (a stage or a kind) now, as the
-        control file holds them since the latest invocation's start: the
-        abort that holds a slice, or the pause that does. Read as
-        rundir.fold_control reads the file."""
+    def _stops_in_force(self, before: str | None = None) -> list[dict]:
+        """The requests that stop the run or a slice (a stage or a kind),
+        as the control file holds them since a start marker: the abort
+        that holds a scope, or the pause that does. Read as
+        rundir.fold_control reads the file. With `before`, an invocation's
+        id, the requests in force just before that invocation's start
+        marker, since the one before it; otherwise those in force now."""
         held: dict[str, dict] = {}
         for request in read_jsonl(self.state_dir / CONTROL):
             action = request.get("action")
             if action == "start":
+                if before is not None and request.get("invocation") == before:
+                    break
                 held.clear()
                 continue
             scope = request.get("scope") or "run"
@@ -774,19 +912,25 @@ class ScratchDriver(Orchestrator):
                 held[scope] = request
             elif action == RESUME:
                 held.pop(scope, None)
-        # a scope that names no stage or kind stops nothing
+        # a slice's scope that names no stage or kind stops nothing
         return [
             request
             for scope, request in held.items()
-            if scope.startswith(("stage:", "kind:"))
-            and scope.partition(":")[2]
+            if scope == "run"
+            or (
+                scope.startswith(("stage:", "kind:"))
+                and scope.partition(":")[2]
+            )
         ]
 
-    def _carry(self, requests: Sequence[dict]) -> None:
-        """Stop again, in this invocation, the slices the last one left
-        stopped: its requests, with who asked and why, marked carried."""
-        for request in requests:
-            which, _, name = request["scope"].partition(":")
+    def _carry(self) -> None:
+        """Keep in force, in this invocation, what the control file held
+        when it started: the requests in force just before its start
+        marker, which voids them, written again after it, with who asked
+        and why, and marked carried. So a request written while the driver
+        waited, or while this invocation was getting ready, is honoured."""
+        for request in self._stops_in_force(before=self.rundir.invocation):
+            which, _, name = (request.get("scope") or "run").partition(":")
             self.rundir.request(
                 request["action"],
                 stage=name if which == "stage" else None,
@@ -845,6 +989,59 @@ class ScratchDriver(Orchestrator):
         the critique right after the batch, and a scratch run makes it in
         its own turn (_run_stage_of)."""
         self._batches[doc.sha1] = batch
+
+    # -- refreshes ------------------------------------------------------------
+
+    def _refreshes_made(self) -> set[tuple[str, str]]:
+        """(document SHA-1, stage) whose current view a refresh made in
+        this run, of a role this invocation refreshes too: the stage's
+        latest `done` event is followed by a `refreshed` one."""
+        if not self.refresh:
+            return set()
+        made: dict[tuple[str, str], str | None] = {}
+        for event in self.rundir.events():
+            name = event.get("event")
+            key = (event.get("subject"), event.get("stage"))
+            if name == "done":
+                made[key] = None
+            elif name == REFRESHED:
+                made[key] = event.get("role")
+        return {key for key, role in made.items() if role in self.refresh}
+
+    def _run_stage(self, doc, stage, compute, attention=None):
+        """The orchestrator's stage, noting a view made under a refresh of
+        its role (a `refreshed` event), so that the run's later
+        invocations reuse it rather than make it again."""
+        result = super()._run_stage(doc, stage, compute, attention)
+        role = STAGE_ROLES.get(stage)
+        if role in self.refresh:
+            self._refreshed.add((doc.sha1, stage))
+            self.rundir.emit(
+                REFRESHED,
+                subject=doc.sha1,
+                kind=doc.kind,
+                stage=stage,
+                role=role,
+            )
+        return result
+
+    def _reused_view(self, doc, view, load, recheck=None):
+        """The orchestrator's reuse of a view, with a view a refresh of
+        its role has made already in this run standing as any current
+        view does: a refresh makes each view again once in a run, however
+        many invocations it takes."""
+        role, stage = doc.views[view]
+        if (
+            role not in self.refresh
+            or (doc.sha1, stage) not in self._refreshed
+        ):
+            return super()._reused_view(doc, view, load, recheck)
+        refresh = self.refresh
+        self.refresh = tuple(other for other in refresh if other != role)
+        try:
+            return super()._reused_view(doc, view, load, recheck)
+        finally:
+            self.refresh = refresh
 
     def _run_stage_of(self, doc: DocumentRun, stage: str) -> None:
         """One per-document stage of one document, through the
@@ -958,12 +1155,15 @@ class ScratchDriver(Orchestrator):
     ) -> tuple[str | None, list[tuple[DocumentRun, str]]]:
         """Take the (document, stage) pairs in order, as the control file
         lets them through. Each round takes the first pair whose document
-        has no earlier stage waiting and whose slice nothing stops; a pair
-        a pause or an abort stops is held, with a `held` event, and the
-        pairs after it go on. While a pause holds everything left, the
-        driver waits for a resume or an abort. A failed document's later
-        stages are dropped. Returns (why dispatch stopped short, the pairs
-        it left), or (None, []) when every pair has ended."""
+        has no earlier stage waiting and that nothing stops (stop_of: the
+        run, its stage or its kind; an abort before a pause). A pair its
+        stage's or kind's request stops is held, with a `held` event, and
+        the pairs after it go on. While a pause holds a pair that nothing
+        aborts, and no pair can go on, the driver waits for a resume or an
+        abort; once an abort holds every pair left, no resume can let one
+        through, and dispatch stops. A failed document's later stages are
+        dropped. Returns (why dispatch stopped short, the pairs it left),
+        or (None, []) when every pair has ended."""
         pending = list(pending)
         noted: dict[tuple[str, str], str] = {}
         announced: set[str] = set()
@@ -973,13 +1173,6 @@ class ScratchDriver(Orchestrator):
             if not pending:
                 return None, []
             control = self.rundir.control()
-            whole = control.stopped()
-            if whole is not None:
-                if whole.endswith("aborted"):
-                    self.log(f"run stopped ({whole})")
-                    return whole, pending
-                self._await_resume({whole}, announced)
-                continue
             chosen = None
             waiting: set[str] = set()
             aborted: set[str] = set()
@@ -988,12 +1181,17 @@ class ScratchDriver(Orchestrator):
                 if id(doc) in behind:
                     continue
                 behind.add(id(doc))
-                stop = control.stopped(stage=stage, kind=doc.kind)
+                stop = stop_of(control, stage=stage, kind=doc.kind)
                 if stop is None:
                     chosen = (doc, stage)
                     break
-                (aborted if stop.endswith("aborted") else waiting).add(stop)
-                if noted.get((doc.sha1, stage)) != stop:
+                (aborted if stop.endswith(" aborted") else waiting).add(stop)
+                # a stop of the whole run holds every pair: the run's slice
+                # says so, with no event per pair
+                if (
+                    not stop.startswith("run ")
+                    and noted.get((doc.sha1, stage)) != stop
+                ):
                     noted[(doc.sha1, stage)] = stop
                     self.rundir.emit(
                         "held",
@@ -1043,12 +1241,13 @@ class ScratchDriver(Orchestrator):
 
     def _hold_corpus(self, stage: CorpusStage) -> str | None:
         """Wait while the control file pauses the corpus stage (or the
-        run); the abort that stops it, if one does."""
+        run) and nothing aborts it; the abort that stops it, if one does,
+        whatever is paused besides."""
         announced: set[str] = set()
         noted = None
         while True:
             control = self.rundir.control()
-            stop = control.stopped(stage=stage.name)
+            stop = stop_of(control, stage=stage.name)
             if stop is None:
                 return None
             if stop != noted:
@@ -1134,13 +1333,18 @@ class ScratchDriver(Orchestrator):
         self.log(f"report: {REPORT_COMMAND} {self.state_dir}")
         self.log(f"watch:  yizkr scratch watch {self.state_dir}")
         if not is_complete(self.state_dir):
-            self.log(f"resume: yizkr scratch run --resume {self.state_dir}")
+            self.log(
+                f"resume: yizkr scratch run --runs {self.state_dir.parent} "
+                f"--resume {self.state_dir.name}"
+            )
 
-    def _invocation(self, carried: Sequence[dict]) -> Any:
+    def _invocation(self, carry: bool = False) -> Any:
         """One invocation of the run: preflight, the manifest, the
-        per-document stages, the barrier and the corpus stages. Returns
-        the exit status, or the UsageLimitReached to wait out before the
-        run is invoked again."""
+        per-document stages, the barrier and the corpus stages. With
+        `carry`, the driver's own invocation after a subscription limit,
+        the requests in force when it starts stay in force (_carry).
+        Returns the exit status, or the UsageLimitReached to wait out
+        before the run is invoked again."""
         from yizkr.pipeline.llm import PassPaused, UsageLimitReached
 
         # fail closed: no never-ingest list, nothing read
@@ -1174,10 +1378,12 @@ class ScratchDriver(Orchestrator):
             fields["code"] = self.rundir.manifest().get("code")
         self._views, self._derived, self._batches = {}, {}, {}
         self._prepared = set()
+        self._refreshed = self._refreshes_made()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         # refused here, before anything is written, when the settings differ
         self.rundir.start(fixed_settings=True, **fields)
-        self._carry(carried)
+        if carry:
+            self._carry()
         if canaries and not past:
             self.log(
                 "canaries: "
@@ -1245,13 +1451,14 @@ class ScratchDriver(Orchestrator):
 
     def _await_subscription(self, pause: Any) -> bool:
         """Wait until the pass can go on after a subscription limit, and a
-        moment past it, while honouring the control file: False when an
-        abort of the run ends the wait. A pause of the run keeps it
+        margin past it, while honouring the control file: False when an
+        abort of the run ends the wait. The margin counts from now when
+        that time has passed already, as it has when the engine holds a
+        pause past the time it reported, so the run is never invoked again
+        sooner than the margin after a pause. A pause of the run keeps it
         waiting until a resume, past that time if need be."""
-        resumes = max(
-            pause.resumes_at + timedelta(seconds=RESUME_MARGIN),
-            self._clock() + timedelta(seconds=self.poll),
-        )
+        margin = timedelta(seconds=RESUME_MARGIN)
+        resumes = max(pause.resumes_at, self._clock()) + margin
         self.log(
             f"waiting until {resumes:%Y-%m-%d %H:%M:%S} UTC, then invoking "
             "the run again (`yizkr scratch abort` or Ctrl-C stops the wait)"
@@ -1272,16 +1479,16 @@ class ScratchDriver(Orchestrator):
 
     def run(self) -> int:
         """Run the scratch run: one invocation, and another after each
-        subscription limit that paused it, with the slices the control
-        file stopped still stopped. Returns the exit status (EXIT_*)."""
-        carried: list[dict] = []
+        subscription limit that paused it, with every request in force as
+        it starts still in force. Returns the exit status (EXIT_*)."""
+        carry = False
         while True:
-            result = self._invocation(carried)
+            result = self._invocation(carry)
             if isinstance(result, int):
                 return result
             if not self._await_subscription(result):
                 return EXIT_STOPPED
-            carried = self._stops_in_force()
+            carry = True
 
 
 def scratch_run(

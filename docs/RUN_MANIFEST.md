@@ -127,11 +127,12 @@ keeps its settings refuses to resume from one.
 
 **A scratch run past its barrier.** A scratch run keeps its code with one
 exception, so that a corpus stage registered after the run reached its
-barrier can still run on it. When every document's per-document stages
-have ended in the run's events, done or failed, and the code is the only
-setting an invocation changes, the invocation goes past the barrier
-alone: it dispatches no document's stage, and runs the corpus stages
-over the views as they are. The run's `code` stays the code the
+barrier can still run on it. When every document has ended its
+per-document stages in the run's events, all of them done or failed, or
+one failed (the stages after a failed one are never dispatched), and the
+code is the only setting an invocation changes, the invocation goes past
+the barrier alone: it dispatches no document's stage, and runs the
+corpus stages over the views as they are. The run's `code` stays the code the
 documents' stages ran on, and the invocation records its own under
 `scratch.code`, with `scratch.past_barrier_only`. Such an invocation
 refuses `--refresh`, which would make views again. With any other

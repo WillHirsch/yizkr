@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -604,6 +605,19 @@ def cmd_run(args) -> int:
         sys.exit(str(exc))
 
 
+def _gibibytes(value: str) -> float:
+    """A size in GiB for --min-free: a finite number, 0 or more."""
+    try:
+        size = float(value)
+    except ValueError:
+        size = math.nan
+    if not (math.isfinite(size) and size >= 0):
+        raise argparse.ArgumentTypeError(
+            f"a size in GiB, finite and 0 or more, not {value!r}"
+        )
+    return size
+
+
 def _role_epoch(value: str) -> tuple[str, int]:
     """`ROLE=N` -> (role, N), for --epoch."""
     role, _, epoch = value.partition("=")
@@ -762,6 +776,7 @@ def cmd_scratch_control(args) -> int:
     from yizkr.pipeline.rundir import ABORT, RESUME, RunDir
 
     run = _scratch_run_dir(args)
+    again = f"yizkr scratch run --runs {run.parent} --resume {run.name}"
     scope = (
         f"stage:{args.stage.strip()}"
         if args.stage
@@ -776,9 +791,9 @@ def cmd_scratch_control(args) -> int:
             aborted = False
         if aborted:
             print(
-                f"{scope} is aborted for the rest of this invocation, and a "
-                "resume does not lift an abort: run `yizkr scratch run "
-                f"--resume {run}` to invoke the run again"
+                f"{scope} of run {run.name} is aborted for the rest of this "
+                "invocation, and a resume does not lift an abort: run "
+                f"`{again}` to invoke the run again"
             )
             return 1
     try:
@@ -795,14 +810,11 @@ def cmd_scratch_control(args) -> int:
     written = entry["scope"]
     note = monitor.unknown_slice_note(written, monitor.summarise_run(run))
     print(
-        f"{args.action} requested for {written}: "
+        f"{args.action} requested for {written} of run {run.name}: "
         f"{monitor.state_now(run, written)}{note}"
     )
     if args.action == ABORT:
-        print(
-            "completed work is kept; `yizkr scratch run --resume "
-            f"{run}` invokes the run again"
-        )
+        print(f"completed work is kept; `{again}` invokes the run again")
     return 0
 
 
@@ -1528,7 +1540,7 @@ def _scratch_parsers(sub, effort_choices) -> None:
     )
     p.add_argument(
         "--min-free",
-        type=float,
+        type=_gibibytes,
         default=scratch.MIN_FREE_BYTES / 1024**3,
         metavar="GIB",
         help="the free space, in GiB, the run directory's and the cache's "

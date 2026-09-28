@@ -17,10 +17,15 @@ directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and `run.json` in
   (docs/AGENT_PROTOCOL.md §3). The driver holds its runs directory while
   it runs, and a second `yizkr scratch run` is refused at once, naming
   the holder. The monitor and the control commands never take that hold.
-- **Configuration**, in the environment or `deploy/.env`:
+- **Configuration in the environment or `deploy/.env`** (or the file
+  `--env-file` names):
   - `$YIZKR_CORPUS_DIR`, the corpus folder (or `--corpus`);
   - `$YIZKR_EXCLUDE_FILE`, the never-ingest list. There is no run without
-    one; an empty file is an explicit, allowed list;
+    one; an empty file is an explicit, allowed list.
+- **Configuration in the environment only.** These are read from the
+  process's environment and never from `deploy/.env`: a model set only
+  there makes the preflight refuse, and a pacing setting there is
+  ignored.
   - `$YIZKR_LLM_MODEL`, a full model id (`claude-opus-5-5`, never an alias
     such as `opus`): the model of the transcription and the critique.
     Extraction runs `--extract-model`, `claude-sonnet-5` by default
@@ -39,6 +44,10 @@ directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and `run.json` in
   answer and the instance must carry no kept-state marker. No such stage
   is registered yet (below), so a run needs no stack. A refusal lists
   every problem it found.
+- **The kept-state marker.** Nothing reads the marker yet: keeper mode
+  (#118) writes it, and its reader comes with the write side (#199,
+  #200). Until then the driver cannot tell a kept instance from another,
+  so it refuses every corpus stage that touches the wiki.
 
 ## Run
 
@@ -52,7 +61,13 @@ uv run yizkr scratch run
   end: then it invokes that run again, so running the same command again
   resumes it. `--new` always starts a new run; `--resume [RUN]` invokes
   a given run again (the latest when none is named), even one that went
-  to the end.
+  to the end. A run is invoked only from its own runs directory, which
+  one driver at a time holds: for a run elsewhere, name its directory,
+  `--runs <its runs directory> --resume <run id>`, as the driver's own
+  resume line does.
+- **Failed documents.** A run that went to the end with failed documents
+  is complete: the bare command then starts a new run, and only `--resume`
+  tries the failed documents again in the same run.
 - **The order.** One document of each kind (text file, image or PDF,
   deck, GEDCOM file), the first by name, goes through all its stages
   first: the canaries. A misalignment of any kind shows within the first
@@ -61,16 +76,24 @@ uv run yizkr scratch run
   adapter, then every critique.
 - **The barrier.** When every document's stages have ended, done or
   failed, the run is at the barrier, and the driver runs each corpus
-  stage registered with it, once, over the documents whose stages all
-  completed; a corpus stage keeps its outputs in `corpus/<stage>/` in the
-  run directory. None is registered yet: a run finishes at the barrier.
+  stage registered with it over the documents whose stages all
+  completed. It runs every one in each invocation that goes past the
+  barrier, so a corpus stage keeps its outputs in `corpus/<stage>/` in
+  the run directory and reuses them while their inputs stand, as the
+  documents' views are reused. None is registered yet: a run finishes at
+  the barrier.
 - **Options.** `--until STAGE` stops after a stage (`transcription`,
   `extraction`, `critique`, or a corpus stage; `gedcom` stops with
-  `extraction`). `--refresh ROLE` makes a role's views again in this
-  invocation, asking the engine afresh for each call even where the cache
-  holds an answer. `--cache DIR` names the LLM cache (default
+  `extraction`). `--cache DIR` names the LLM cache (default
   `var/llm-cache`), which every model call goes through. The rest are as
   for `ingest run`.
+- **`--refresh ROLE`** makes the role's views again, asking the engine
+  afresh for each call even where the cache holds an answer, once in the
+  run: a later invocation that refreshes the role again, the driver's
+  own after a subscription limit or yours with the same `--refresh`,
+  reuses the views the refresh has made already and makes the rest. One
+  without `--refresh` makes the views not made yet from the cache's
+  answers, unrefreshed. So resume a refresh with its `--refresh`.
 - **The end.** The driver prints how the invocation ended, the states of
   the stages, and the commands that show the run and resume it. It exits
   0 when it finished and no document failed; 1 when a document or a
@@ -97,7 +120,7 @@ the run.
 
 ```sh
 uv run yizkr scratch pause  [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
-uv run yizkr scratch resume [<run>] [--stage NAME | --kind NAME]
+uv run yizkr scratch resume [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
 uv run yizkr scratch abort  [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
 ```
 
@@ -105,7 +128,8 @@ The monitor's command line (`:` or Enter) asks the same. A request names
 the whole run, a stage (`transcription`, `extraction`, `critique`,
 `gedcom`, or a corpus stage) or a kind (`text`, `media`, `presentation`,
 `gedcom`), and goes into the run's control file, which the driver reads
-before each stage of each document and before each corpus stage.
+before each stage of each document and before each corpus stage. With no
+run named, the command takes the latest, and says which run it wrote to.
 
 - **Pause** holds its slice until a resume. The stage in flight finishes;
   the rest of the run goes on, and the driver waits only when nothing
@@ -114,6 +138,10 @@ before each stage of each document and before each corpus stage.
   else can go on, the invocation ends `stopped`. A run whose documents'
   stages are held does not go past the barrier. `resume` does not lift an
   abort: invoke the run again.
+- **An abort outranks a pause.** A stage an abort covers stays stopped
+  whatever else is resumed, so a pause of its stage, its kind or the run
+  that also covers it makes the driver wait for nothing: when an abort
+  holds every stage left, the invocation ends `stopped` at once.
 - **Ctrl-C** stops the invocation at once, with the engine's calls in
   flight; it ends `interrupted`.
 - **Anomaly checks** (#196) pause or abort a slice on their own, through
@@ -125,14 +153,21 @@ every view made is in its document's directory.
 **Subscription limits.** A call the subscription refuses never fails a
 document: the engine waits, or pauses the pass with the time it can go
 on. Then the invocation ends `paused`, and the driver waits until a
-minute past that time, reading the control file as it waits: an abort
-of the run ends the wait, and a pause of the run keeps it waiting until
-a resume. It then invokes the run again by itself, with the slices that
-were stopped still stopped. A pause with no such time ends the driver,
-which prints the engine's reason and what to do: a call reported to have
-run on usage credits (turn extra usage off on the account, then run the
-command again), a claude CLI that changed during the run, or an LLM
-cache another process holds.
+minute past that time, and never less than a minute when that time has
+passed already (the engine can hold its pause past the time it
+reported). It reads the control file as it waits: an abort of the run
+ends the wait, and a pause of the run keeps it waiting until a resume.
+It then invokes the run again by itself, and every request in force as
+the new invocation starts stays in force, the whole run's included, one
+made while the driver got ready again too. A wait can last a window's
+length, days for a weekly window, and all the while the process holds
+the runs directory and the LLM cache, so no other scratch run or
+cache user can start; Ctrl-C or `yizkr scratch abort` ends the wait. A
+pause with no such time ends the driver, which prints the engine's
+reason and what to do: a call reported to have run on usage credits
+(turn extra usage off on the account, then run the command again), a
+claude CLI that changed during the run, or an LLM cache another process
+holds.
 
 ## Resume
 
@@ -152,10 +187,12 @@ calls from the cache.
   view again with the fix, and the LLM cache answers every call the fix
   leaves the same, so only the calls it changes reach the engine.
 - **A corpus stage registered after the run reached the barrier**: once
-  every document's stages have ended, an invocation on other code goes
-  past the barrier alone, dispatching no document's stage:
+  every document has ended its stages, done or failed (a failed stage
+  leaves the ones after it undispatched), an invocation on other code
+  goes past the barrier alone, dispatching no document's stage:
   `yizkr scratch run --resume <run>`. Its code is recorded beside the
   run's (docs/RUN_MANIFEST.md).
+- **A refresh** is resumed with its `--refresh` (Run, above).
 
 ## Reading what a run did
 
@@ -189,6 +226,12 @@ Nothing from them goes into the repository, GitHub or a cloud session.
   descriptor, and give metrics as aggregates.
 - Serve the status page with `watch --serve` alone: never serve the run
   directory, which holds every document's views.
+- **The runs directory is private, and never tracked.** The driver makes
+  the runs directory mode 700 when it makes it, and refuses one that
+  exists and is open to other users, leaving its mode alone. It refuses
+  a runs directory inside a git work tree unless git ignores it, as this
+  repository ignores `var/`: `--runs .`, or any other path git would
+  track, is refused before anything is written.
 
 ## Not yet
 

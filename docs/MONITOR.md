@@ -26,8 +26,9 @@ uv run yizkr scratch pause|resume|abort [<run>] [--stage NAME | --kind NAME] [--
 
 `<run>` is a run id in the runs directory (`--runs`, default
 `var/scratch`) or a run directory's path; left out, it is the latest run
-there. Their requests are written by `operator`, and a resume of an
-aborted slice is not written, as in the view (below). The monitor also
+there, and the command says which run it wrote to. Their requests are
+written by `operator`, and a resume of an aborted slice is not written,
+as in the view (below). The monitor also
 runs as a module, on any run directory, an `ingest run` state directory
 included:
 

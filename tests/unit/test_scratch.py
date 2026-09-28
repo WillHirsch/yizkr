@@ -20,6 +20,8 @@ import json
 import os
 import re
 import shutil
+import stat
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -626,7 +628,8 @@ class TestControl:
         assert events(run)[-1]["event"] == "run-end"
         # it says how to read the run, and how to resume it
         assert f"report: yizkr stages state {run}" in said
-        assert f"resume: yizkr scratch run --resume {run}" in said
+        resume = f"yizkr scratch run --runs {runs} --resume {run.name}"
+        assert f"resume: {resume}" in said
 
         fakes.hook = None
         asked = list(fakes.calls)
@@ -756,6 +759,29 @@ class TestControl:
         assert len(waits.waited) == (1 if lifted else 2)
         assert statuses(driver.state_dir) == {DONE}
 
+    @pytest.mark.parametrize(
+        "paused", [{"stage": "transcription"}, {}], ids=["a stage", "the run"]
+    )
+    def test_an_abort_outranks_a_pause_over_the_same_stages(
+        self, tmp_path, fakes, paused
+    ):
+        """With the photographs aborted, a pause of the transcriptions or
+        of the whole run can let none of them through: dispatch stops,
+        and the driver never waits for a resume."""
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.image(PHOTO, "studio-photo-1890s")
+        corpus.image(STONE, "gravestone-photo-1956")
+
+        def hook(what, name):
+            if what == "vision" and name == PHOTO:
+                request(driver.state_dir, "abort", kind="media")
+                request(driver.state_dir, "pause", **paused)
+
+        fakes.hook = hook
+        driver = a_run(tmp_path, corpus, fakes)
+        assert driver.run() == EXIT_STOPPED
+        assert outcome(driver.state_dir) == ("stopped", "kind:media aborted")
+
     def test_a_paused_run_waits_for_a_resume(self, tmp_path, fakes):
         corpus = small(tmp_path)
 
@@ -800,9 +826,7 @@ class TestControl:
         assert any(hit.get("subject") == text for hit in hits)
         assert statuses(driver.state_dir) == {DONE}
 
-    def test_the_stops_in_force_are_those_since_the_latest_start(
-        self, tmp_path
-    ):
+    def test_the_stops_in_force_are_those_since_a_start(self, tmp_path):
         run = RunDir(tmp_path / "run")
         run.request("abort", kind="gedcom")  # before the start: void
         run.start(run_id="r")
@@ -812,19 +836,30 @@ class TestControl:
         run.request("abort", kind="media", by="operator", reason="futile")
         run.request("resume", kind="media")  # an abort holds
         run.request("pause", stage="critique", by="operator", reason="later")
-        run.request("pause")  # the run's own scope is the wait's
+        run.request("pause", reason="a break")
         with open(run.path / CONTROL, "a") as control:
             # a scope that names no stage stops none, and is not carried
             control.write('{"action": "pause", "scope": "stage:"}\n')
         driver = ScratchDriver(tmp_path, run.path)
-        stops = [
-            (r["action"], r["scope"], r["by"], r["reason"])
-            for r in driver._stops_in_force()
-        ]
-        assert stops == [
+
+        def stops(before=None):
+            return [
+                (r["action"], r["scope"], r["by"], r["reason"])
+                for r in driver._stops_in_force(before)
+            ]
+
+        in_force = [
             ("abort", "kind:media", "operator", "futile"),
             ("pause", "stage:critique", "operator", "later"),
+            ("pause", "run", "operator", "a break"),
         ]
+        assert stops() == in_force
+        # a later invocation's marker voids them all, and those in force
+        # just before it are the ones it carries
+        later = RunDir(run.path)
+        later.start(run_id="r")
+        assert stops() == []
+        assert stops(before=later.invocation) == in_force
 
 
 # -- the subscription's limits ------------------------------------------------
@@ -849,7 +884,9 @@ class TestSubscription:
             if what == "chunk" and name == LETTER and not limited:
                 limited.append(waits.now + timedelta(minutes=30))
                 # meanwhile, the operator has aborted the photographs
-                request(driver.state_dir, "abort", kind="media")
+                request(
+                    driver.state_dir, "abort", kind="media", reason="blurred"
+                )
                 raise usage_limit(waits)
 
         fakes.hook = hook
@@ -868,13 +905,14 @@ class TestSubscription:
             "stopped",
             "kind:media aborted",
         )
-        # the abort the first invocation had is carried into the second
+        # the abort the first invocation had is carried into the second,
+        # with who asked for it and why
         carried = [
-            (r["action"], r["scope"], r["by"])
+            (r["action"], r["scope"], r["by"], r["reason"])
             for r in read_jsonl(driver.state_dir / CONTROL)
             if r.get("carried")
         ]
-        assert carried == [("abort", "kind:media", "monitor")]
+        assert carried == [("abort", "kind:media", "monitor", "blurred")]
         states = run_state(RunDir(driver.state_dir))
         assert states[(corpus.sha1(LETTER), "critique")].status == DONE
         (call,) = [
@@ -883,6 +921,146 @@ class TestSubscription:
             if e["outcome"] == "paused"
         ]
         assert call["resumes_at"] == limit_at.isoformat(timespec="seconds")
+
+    @pytest.mark.parametrize("gap", ["abort of a kind", "pause of the run"])
+    def test_a_request_made_as_it_gets_ready_again_is_honoured(
+        self, tmp_path, fakes, gap
+    ):
+        """After the wait, the driver's preflight and its reading of the
+        corpus come before the new invocation's start marker, which voids
+        what was asked before it. A request made then is kept in force."""
+        corpus = small(tmp_path)
+
+        class Again(Driver):
+            def documents(self):
+                if self._readings == 1:
+                    if gap == "pause of the run":
+                        request(self.state_dir, "pause", reason="a break")
+                    else:
+                        request(self.state_dir, "abort", kind="media")
+                self._readings += 1
+                return super().documents()
+
+        def resume_once_carried():
+            invocations = RunDir(driver.state_dir).manifest()["invocations"]
+            if len(invocations) == 2:
+                request(driver.state_dir, "resume")
+
+        limited = []
+
+        def hook(what, name):
+            if what == "chunk" and name == LETTER and not limited:
+                limited.append(1)
+                raise usage_limit(waits)
+
+        fakes.hook = hook
+        fakes.corpus = corpus
+        waits = Waits(*[resume_once_carried] * 10)
+        driver = Again(
+            corpus.folder, runs_dir(tmp_path) / "run", waits=waits, poll=600
+        )
+        driver._readings = 0
+        second = (
+            ("stopped", "kind:media aborted")
+            if gap == "abort of a kind"
+            else ("finished", None)
+        )
+        assert driver.run() == (EXIT_STOPPED if second[0] == "stopped" else 0)
+        assert outcome(driver.state_dir) == second
+        carried = [
+            (r["action"], r["scope"])
+            for r in read_jsonl(driver.state_dir / CONTROL)
+            if r.get("carried")
+        ]
+        assert carried == (
+            [("abort", "kind:media")]
+            if gap == "abort of a kind"
+            else [("pause", "run")]
+        )
+
+    def test_a_refresh_is_not_made_again_after_a_limit(self, tmp_path, fakes):
+        """A refresh makes each view of its role again once in a run: the
+        views it made before a limit paused the run stand, and the driver's
+        next invocation asks the engine only for the rest."""
+        corpus = small(tmp_path)
+        assert command(tmp_path, corpus, fakes) == EXIT_OK  # a warm cache
+        waits = Waits(*[None] * 10)
+        limited: list[int] = []
+
+        def hook(what, name):
+            if what == "manifest" and name == LETTER and not limited:
+                limited.append(len(fakes.calls))
+                raise usage_limit(waits)
+
+        fakes.hook = hook
+        driver = Driver(
+            corpus.folder,
+            runs_dir(tmp_path) / "refreshed",
+            refresh=["extract"],
+            cache_dir=tmp_path / "cache",
+            waits=waits,
+            poll=600,
+        )
+        assert driver.run() == EXIT_OK
+        (at,) = limited
+        again = {
+            name
+            for what, name in fakes.calls[at:]
+            if what in ("manifest", "chunk")
+        }
+        assert again == {LETTER, STONE}
+        reused = stages_of(driver.state_dir, "reused", invocation=-1)
+        assert (corpus.sha1(TEXT), "extraction") in reused
+        assert (corpus.sha1(PHOTO), "extraction") in reused
+        refreshed = stages_of(driver.state_dir, scratch.REFRESHED)
+        assert sorted(refreshed) == sorted(
+            (corpus.sha1(name), "extraction") for name in corpus.texts
+        )
+
+    def test_a_pause_whose_time_has_passed_waits_the_margin(
+        self, tmp_path, fakes
+    ):
+        """The engine can hold a pause past the time it reported. The
+        driver never invokes the run again sooner than the margin after
+        such a pause, so it does not spin while the pause holds."""
+        corpus = small(tmp_path)
+        waits = Waits(*[None] * 200)
+        paused_at: list[datetime] = []
+
+        def hook(what, name):
+            if not paused_at:
+                paused_at.append(waits.now)
+                raise usage_limit(waits, minutes=-10)
+
+        fakes.hook = hook
+        driver = a_run(tmp_path, corpus, fakes, waits=waits)
+        assert driver.run() == EXIT_OK
+        (at,) = paused_at
+        margin = timedelta(seconds=scratch.RESUME_MARGIN)
+        assert waits.now >= at + margin
+        assert len(RunDir(driver.state_dir).manifest()["invocations"]) == 2
+
+    def test_usage_credits_end_the_driver(self, tmp_path, fakes):
+        """A call that ran on usage credits pauses the pass with no time to
+        go on: the driver ends, and never waits."""
+        corpus = small(tmp_path)
+
+        def hook(what, name):
+            raise UsageLimitReached(
+                "a call ran on usage credits",
+                reason=llm.OVERAGE,
+                resumes_at=None,
+            )
+
+        fakes.hook = hook
+        driver = a_run(tmp_path, corpus, fakes)
+        with pytest.raises(UsageLimitReached):
+            driver.run()
+        (only,) = RunDir(driver.state_dir).manifest()["invocations"]
+        assert (only["outcome"], only["reason"]) == (
+            "paused",
+            "UsageLimitReached",
+        )
 
     def test_an_abort_while_waiting_ends_the_run(self, tmp_path, fakes):
         corpus = small(tmp_path)
@@ -1161,6 +1339,74 @@ class TestCorpusStages:
             command(tmp_path, corpus, fakes)
         assert (run / "run.json").read_bytes() == before
 
+    def test_an_abort_of_a_corpus_stage_outranks_a_pause_of_the_run(
+        self, tmp_path, fakes
+    ):
+        clustering = Recorder()
+
+        def flags(context):
+            request(context.run.path, "pause")
+            request(context.run.path, "abort", stage="clustering")
+
+        stages = [
+            CorpusStage("flags", flags),
+            CorpusStage("clustering", clustering),
+        ]
+        driver = a_run(tmp_path, small(tmp_path), fakes, corpus_stages=stages)
+        assert driver.run() == EXIT_STOPPED
+        assert outcome(driver.state_dir) == (
+            "stopped",
+            "stage:clustering aborted",
+        )
+        assert clustering.contexts == []
+
+    def test_every_invocation_past_the_barrier_runs_them(
+        self, tmp_path, fakes
+    ):
+        """A corpus stage runs in each invocation that goes past the
+        barrier, and reuses its own outputs while their inputs stand."""
+        corpus = small(tmp_path)
+        clustering = Recorder()
+        stages = [CorpusStage("clustering", clustering)]
+        assert command(tmp_path, corpus, fakes, corpus_stages=stages) == 0
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        again = command(
+            tmp_path, corpus, fakes, resume=run.name, corpus_stages=stages
+        )
+        assert again == EXIT_OK
+        assert len(clustering.contexts) == 2
+        assert started(run, invocation=-1) == []
+
+    def test_a_failed_document_keeps_no_run_from_other_code(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """A document that failed leaves its later stages undispatched;
+        it has ended all the same, so a run at the barrier goes past it
+        on other code."""
+        corpus = small(tmp_path)
+
+        def hook(what, name):
+            if what == "manifest" and name == LETTER:
+                raise RuntimeError("engine down")
+
+        fakes.hook = hook
+        assert command(tmp_path, corpus, fakes) == EXIT_FAILED
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        letter = corpus.sha1(LETTER)
+        assert run_state(RunDir(run))[(letter, "critique")].status == "pending"
+        other = dict(RunDir(run).manifest()["code"], commit="f" * 40)
+        monkeypatch.setattr(scratch, "code_version", lambda: dict(other))
+        clustering = Recorder()
+        stages = [CorpusStage("clustering", clustering)]
+        # the failed document's state still says so
+        again = command(
+            tmp_path, corpus, fakes, resume=run.name, corpus_stages=stages
+        )
+        assert again == EXIT_FAILED
+        assert started(run, invocation=-1) == []
+        assert len(clustering.contexts[0].documents) == 3
+        assert RunDir(run).manifest()["scratch"]["past_barrier_only"] is True
+
     def test_corpus_stages_need_names_of_their_own(self, tmp_path):
         stage = CorpusStage("critique", lambda context: None)
         run = tmp_path / "runs" / "r"
@@ -1402,6 +1648,86 @@ class TestRunsDirectory:
         with scratch.hold(runs):
             pass
 
+    def test_the_command_waits_its_turn_behind_another_driver(
+        self, tmp_path, fakes
+    ):
+        corpus = small(tmp_path)
+        runs = runs_dir(tmp_path)
+        with scratch.hold(runs), pytest.raises(ScratchRunInUse):
+            command(tmp_path, corpus, fakes)
+        assert scratch.runs_in(runs) == []
+        assert [path.name for path in runs.iterdir()] == [scratch.LOCK_FILE]
+        assert fakes.calls == []
+
+    def test_a_runs_directory_it_cannot_use_is_refused(self, tmp_path):
+        a_file = tmp_path / "a-file"
+        a_file.write_text("")
+        for runs in (a_file, a_file / "runs"):
+            with (
+                pytest.raises(ScratchRefused, match="cannot be the runs"),
+                scratch.hold(runs),
+            ):
+                pass
+        closed = tmp_path / "closed"
+        closed.mkdir()
+        closed.chmod(0o500)
+        try:
+            if os.access(closed, os.W_OK):
+                pytest.skip("this user writes to any directory")
+            with (
+                pytest.raises(ScratchRefused, match="cannot be the runs"),
+                scratch.hold(closed),
+            ):
+                pass
+        finally:
+            closed.chmod(0o700)
+
+    def test_a_runs_directory_open_to_others_is_refused_and_left_alone(
+        self, tmp_path
+    ):
+        """The driver makes private only the runs directory it makes: one
+        that exists keeps its mode, and is refused when others can read or
+        write it (a home directory, say)."""
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        shared.chmod(0o750)
+        with (
+            pytest.raises(ScratchRefused, match="open to other users"),
+            scratch.hold(shared),
+        ):
+            pass
+        assert stat.S_IMODE(shared.stat().st_mode) == 0o750
+        assert list(shared.iterdir()) == []
+        private = tmp_path / "private"
+        private.mkdir()
+        private.chmod(0o700)
+        with scratch.hold(private):
+            pass
+        made = tmp_path / "made" / "runs"
+        with scratch.hold(made):
+            pass
+        assert stat.S_IMODE(made.stat().st_mode) == 0o700
+
+    def test_a_runs_directory_git_would_track_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        if shutil.which("git") is None:
+            pytest.skip("no git")
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".gitignore").write_text("var/\n")
+        monkeypatch.chdir(repo)
+        for runs in (Path("."), repo / "runs", repo / "var-scratch"):
+            with (
+                pytest.raises(ScratchRefused, match="git work tree"),
+                scratch.hold(runs),
+            ):
+                pass
+        assert sorted(p.name for p in repo.iterdir()) == [".git", ".gitignore"]
+        with scratch.hold(Path("var/scratch")):
+            pass
+        assert (repo / "var" / "scratch" / scratch.LOCK_FILE).is_file()
+
     def test_the_command_resumes_the_latest_run_unless_it_went_to_the_end(
         self, tmp_path
     ):
@@ -1426,10 +1752,24 @@ class TestRunsDirectory:
         assert scratch.choose_run(runs, new=True) not in (older, newer)
         with pytest.raises(ScratchRefused, match="no run there"):
             scratch.choose_run(runs, resume="20260101T000000Z-000000")
-        state = tmp_path / "state"
+        # the latest directory there is no scratch run: the command takes
+        # the latest scratch run, and --resume refuses the other
+        state = runs / "20260929T090000Z-0000aa"
         RunDir(state).update_manifest(run_id="x", mode="ingest run")
+        assert scratch.choose_run(runs) == newer
         with pytest.raises(ScratchRefused, match="not a scratch run"):
-            scratch.choose_run(runs, resume=str(state))
+            scratch.choose_run(runs, resume=state.name)
+
+    def test_a_run_is_resumed_only_from_its_own_runs_directory(self, tmp_path):
+        """One driver at a time holds a runs directory, so a run in another
+        is refused, and the refusal names the runs directory to hold."""
+        runs, elsewhere = runs_dir(tmp_path), tmp_path / "elsewhere"
+        run = elsewhere / "20260928T090000Z-0000aa"
+        RunDir(run).update_manifest(run_id=run.name, mode="scratch run")
+        with pytest.raises(ScratchRefused) as refused:
+            scratch.choose_run(runs, resume=str(run))
+        assert f"--runs {elsewhere} --resume {run.name}" in str(refused.value)
+        assert scratch.choose_run(elsewhere, resume=str(run)) == run
 
     def test_new_run_ids_sort_as_the_runs_start(self, tmp_path):
         runs = runs_dir(tmp_path)
@@ -1482,6 +1822,16 @@ class TestCommandLine:
         assert seen["page"] is False
         with pytest.raises(SystemExit, match="no run there"):
             cli_run("scratch", "watch", "nothing", "--runs", runs)
+        seen.clear()
+        serve = ("--interval", "5", "--serve", "127.0.0.1:0")
+        assert cli_run("scratch", "watch", str(run), *serve) == 0
+        assert seen == {
+            "path": run,
+            "interval": 5.0,
+            "once": False,
+            "page": True,
+            "serve": "127.0.0.1:0",
+        }
 
     def test_pause_resume_and_abort_write_the_control_file(
         self, tmp_path, capsys
@@ -1492,11 +1842,16 @@ class TestCommandLine:
         pause = ("scratch", "pause", "--runs", runs, "--kind", "media")
         assert cli_run(*pause, "--reason", reason) == 0
         out = capsys.readouterr().out
-        assert "pause requested for kind:media: now paused" in out
+        # with no run named, it says which run it wrote to
+        assert f"pause requested for kind:media of run {run.name}: " in out
+        assert "now paused" in out
         assert cli_run("scratch", "abort", str(run), "--kind", "media") == 0
+        again = f"yizkr scratch run --runs {run.parent} --resume {run.name}"
+        assert again in capsys.readouterr().out
         # a resume does not lift an abort, so none is written
         assert cli_run("scratch", "resume", str(run), "--kind", "media") == 1
-        assert "invoke the run again" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "invoke the run again" in out and again in out
         written = [
             (r["action"], r["scope"], r["by"], r["reason"])
             for r in read_jsonl(run / CONTROL)
@@ -1547,6 +1902,62 @@ class TestCommandLine:
         assert seen["exclusions"].source == exclusions
         assert seen["runs"] == scratch.DEFAULT_RUNS
         assert seen["cache_dir"] == Path("var/llm-cache")
+
+    def test_run_passes_on_every_option(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        folder = tmp_path / "corpus"
+        folder.mkdir()
+        exclusions = tmp_path / "never-ingest.txt"
+        exclusions.write_text("# none\n")
+        # the never-ingest list comes from the env file --env-file names
+        env = tmp_path / "fictional.env"
+        env.write_text(f"YIZKR_EXCLUDE_FILE={exclusions}\n")
+        monkeypatch.delenv("YIZKR_EXCLUDE_FILE", raising=False)
+        monkeypatch.delenv("YIZKR_CORPUS_DIR", raising=False)
+        seen = {}
+
+        def scratch_run(corpus, **options):
+            seen.update(options, corpus=corpus)
+            return 0
+
+        monkeypatch.setattr(scratch, "scratch_run", scratch_run)
+        argv = [
+            "--env-file", str(env), "scratch", "run",
+            "--corpus", str(folder), "--runs", "my-runs", "--new",
+            "--until", "critique", "--refresh", "transcribe",
+            "--refresh", "critique", "--cache", "my-cache",
+            "--language", "de", "--fallback-language", "de",
+            "--chunk-concurrency", "5", "--extract-effort", "medium",
+            "--review-effort", "max", "--extract-model", "claude-opus-5-5",
+            "--min-free", "3",
+        ]  # fmt: skip
+        assert cli_run(*argv) == 0
+        options = dict(seen)
+        assert options.pop("exclusions").source == exclusions
+        assert options == {
+            "corpus": folder,
+            "runs": Path("my-runs"),
+            "resume": None,
+            "new": True,
+            "until": "critique",
+            "refresh": ["transcribe", "critique"],
+            "cache_dir": Path("my-cache"),
+            "env_file": env,
+            "language": "de",
+            "fallback_language": "de",
+            "chunk_concurrency": 5,
+            "extract_effort": "medium",
+            "review_effort": "max",
+            "extract_model": "claude-opus-5-5",
+            "min_free": 3 * 1024**3,
+        }
+
+    @pytest.mark.parametrize("size", ["nan", "inf", "-1", "two"])
+    def test_min_free_is_a_finite_size(self, tmp_path, capsys, size):
+        with pytest.raises(SystemExit) as refused:
+            cli_run("scratch", "run", "--min-free", size)
+        assert refused.value.code == 2
+        assert "finite and 0 or more" in capsys.readouterr().err
 
     def test_run_says_why_it_refused(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)

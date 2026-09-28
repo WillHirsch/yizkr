@@ -505,6 +505,7 @@ in, and the kind of call:
 | `failed` | a stage failed | `reason` |
 | `held` | the control file stopped a stage's dispatch | `reason` |
 | `barrier` | a scratch run went past the barrier: every document's stages had ended, and its corpus stages come next | `documents` (whose stages all completed), `failed` (with a failed stage) |
+| `refreshed` | in a scratch run, a stage's view was just made under a refresh of its role (`--refresh`): the run's later invocations that refresh the role reuse it | `role` |
 | `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `file` (a directory's), `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
 | `document-failed` | a document failed, and only it: a stage failed (with its own `failed` event too), or something outside its stages, such as its source or `state.json` that could not be read, its first record, or a step between the stages | `file`, `reason` |
 | `cache-hit` | the cache answered a call | `reason`: `key match`, or an adoption's reason |
@@ -554,13 +555,17 @@ run.
 
 The scratch driver (docs/runbooks/scratch-run.md) honours every request
 before each stage of each document and before each corpus stage, with a
-`held` event for each stage it holds. Other slices go on, and when
-nothing else can, it waits for a paused slice's resume; an aborted slice
-waits for the next invocation, and so does the barrier while a
-document's stage is held. When it invokes a run again by itself after a
-subscription limit, it writes the requests that stopped a slice then
-again, after the new start marker, with who asked and why and
-`carried: true`, so the slices stay stopped.
+`held` event for each stage a stage's or a kind's request holds. Of the
+requests that cover a stage (the run's, its stage's, its kind's), an
+abort outranks a pause, since no resume can let the stage through. Other
+slices go on, and when nothing else can, it waits for a paused slice's
+resume; an aborted slice waits for the next invocation, and so does the
+barrier while a document's stage is held; once an abort holds every
+stage left, the invocation ends. When it invokes a run again by itself
+after a subscription limit, it writes the requests in force just before
+the new start marker (the whole run's included) again after it, with
+who asked and why and `carried: true`, so what was stopped stays
+stopped, a request made while the driver got ready again included.
 
 ## Run state
 
@@ -648,8 +653,9 @@ nor the control file reaches until it ends, since a pool's threads are
 not the one Python delivers a signal to. So a window that reopens later
 than the longest wait pauses the pass rather than hold a pool's threads
 for hours: the scratch driver waits until a minute past `resumes_at`,
-reading the control file as it waits, and then invokes the run again by
-itself (docs/runbooks/scratch-run.md). Set `$YIZKR_CLAUDE_MAX_WAIT` to
+and a minute at least when that time has passed already (a pause can
+hold past the time it reports), reading the control file as it waits,
+and then invokes the run again by itself (docs/runbooks/scratch-run.md). Set `$YIZKR_CLAUDE_MAX_WAIT` to
 21600 to wait through a five-hour window inside the call instead.
 
 **The reserve** (`$YIZKR_CLAUDE_RESERVE`, a share of each window, 0.25 by
