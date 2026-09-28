@@ -717,9 +717,10 @@ class TestControl:
         self, tmp_path, fakes, lifted
     ):
         """A request can land between the driver's check and the stage's
-        own. The stage is held then, with one `held` event, and dispatched
-        once a resume lets it through; a resume that lands at once lets it
-        be tried again, after a moment."""
+        own. The stage is held then, with one `held` event however long
+        the pause lasts, and dispatched once a resume lets it through; a
+        resume that lands at once lets it be tried again, after a
+        moment."""
         corpus = small(tmp_path)
 
         class Raced(Driver):
@@ -737,7 +738,8 @@ class TestControl:
             request(driver.state_dir, "resume", stage="transcription")
 
         raced: list[int] = []
-        waits = Waits(None if lifted else resume)
+        # a pause not lifted at once outlasts the moment after the hold
+        waits = Waits(None) if lifted else Waits(None, resume)
         fakes.corpus = corpus
         driver = Raced(
             corpus.folder, runs_dir(tmp_path) / "run", waits=waits, log=log
@@ -751,7 +753,7 @@ class TestControl:
         assert [(e["stage"], e["reason"]) for e in held] == [
             ("transcription", "stage:transcription paused")
         ]
-        assert len(waits.waited) == 1
+        assert len(waits.waited) == (1 if lifted else 2)
         assert statuses(driver.state_dir) == {DONE}
 
     def test_a_paused_run_waits_for_a_resume(self, tmp_path, fakes):
