@@ -28,7 +28,15 @@ Per batch, the writer:
    unclassified entity's `type hint`, with two references: stated in ->
    the artifact that mentions the entity, and inferred from extraction
    run -> the run item. An entity's kind is the extraction's proposal,
-   a machine write like any claim (ADR-0003);
+   a machine write like any claim (ADR-0003). A local ref resolves
+   through the batch's entity-manifest record of its id when there is
+   one (ADR-0007, read through `entity_records` in yizkr.pipeline.review,
+   as the depicts gate reads it): the record gives the label, the
+   summary as description, the kind, type hint and aliases; otherwise
+   the ref gives its own label, description and kind. The document's
+   aliases go onto the item it names, minted or reused, append-only;
+   those of an entity an approved equivalence names go on before any
+   claim is written;
 3. writes each claim as a statement at NORMAL rank (the contract has
    no rank field — ADR-0002) with TWO references (ADR-0003):
    * stated in -> artifact, with page number / region / excerpt
@@ -42,14 +50,21 @@ Per batch, the writer:
    claim is skipped (safe re-run). Same value but different
    qualifiers is a different assertion and coexists as its own
    statement (ADR-0002);
-5. after the claims, records the manifest's kind and type hint for
-   every entity whose item existed before this batch — found by exact
-   label here or by the resolve step, or named by an approved
-   equivalence — and that one of the batch's claims mentions. The
-   source is the artifact of the first claim that mentions the entity,
-   as for a minted item. A kind or type hint is compared with the
-   item's unqualified statements on the same property (a type hint as
-   free text, ignoring case, Unicode form and spacing):
+5. after the claims, records what the batch says of every item that
+   existed before it and that one of its claims mentions: the kind and
+   type hint of the manifest record that names the item (by an approved
+   equivalence, by exact label here, or by the resolve step's exact-label
+   match), and the kind a local ref without a record gives on its
+   `instance_of` when the writer matched it by exact label (the kind an
+   item minted from it would take). An item the resolve step matched
+   gains the record's aliases here too, as the others have by now. A
+   local ref the resolve step matched reaches the writer as the item's
+   bare QID: without a record, it brings no kind. The source is the
+   artifact of the first claim that mentions the item, as for a minted
+   item. A kind or type hint is compared with the item's unqualified
+   statements on the same property (a type hint as free text, ignoring
+   case, Unicode form and spacing), so a qualified statement never
+   matches:
    * a matching statement already referenced to that artifact: nothing
      to add (safe re-run);
    * a matching machine statement at normal rank: it gains this
@@ -95,7 +110,7 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.wiki import WikiClient
-from yizkr.pipeline.review import unapproved_depicts
+from yizkr.pipeline.review import entity_records, unapproved_depicts
 
 
 class UnapprovedDepictsError(ValueError):
@@ -150,6 +165,18 @@ class WriteResult:
     type_statements_referenced: int = 0
 
 
+@dataclass(frozen=True)
+class _FoundEntity:
+    """What a batch says of an item it found rather than minted (step 5 of
+    the module docstring): the kind, and type hint, its source gives, and
+    the document's aliases when no earlier step has appended them."""
+
+    qid: str
+    kind: str
+    type_hint: str | None = None
+    aliases: tuple[str, ...] = ()
+
+
 def batch_fingerprint(batch: ClaimBatch) -> str:
     canonical = json.dumps(batch.model_dump(mode="json"), sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:10]
@@ -186,9 +213,12 @@ class BatchWriter:
         # the instance's lag-free media SHA-1 index, read on first need
         self._media_sha1_index: dict[str, str] | None = None
         # per write_batch call: item QID -> artifact QID of the first
-        # claim that mentions the item, and the items the batch minted
+        # claim that mentions the item, the items the batch minted, and
+        # item QID -> the kinds that local refs without a manifest record
+        # give the item they were matched to by label
         self._mentions: dict[str, str] = {}
         self._minted: set[str] = set()
+        self._ref_kinds: dict[str, list[str]] = {}
 
     # -- artifact resolution (content-addressed sources) -------------------
 
@@ -286,6 +316,12 @@ class BatchWriter:
         if existing:
             if aliases:
                 self._ensure_aliases(existing, aliases)
+            if instance_of and record is None:
+                # a ref without a manifest record gives its kind itself, as
+                # it does to an item minted from it (step 5 records it)
+                kinds = self._ref_kinds.setdefault(existing, [])
+                if instance_of not in kinds:
+                    kinds.append(instance_of)
             result.created_items[ref.local_id] = existing
             return existing
         if self.dry_run:
@@ -335,10 +371,16 @@ class BatchWriter:
         Idempotent and append-only (MODELING.md: name variants live in
         aliases; matching quality compounds per ingested document). The
         item's own label never counts as a missing alias.
+
+        The item is read afresh, and the writer's later edits to it start
+        from that read, or from a read after the aliases are written, so
+        none of them sends the aliases as they stood before: an edit sends
+        the item's aliases whole.
         """
         if self.dry_run or not aliases:
             return
         item = self.client.wbi.item.get(qid)
+        self._entity_cache[qid] = item
         label = str(item.labels.get("en") or "")
         existing = {str(alias) for alias in (item.aliases.get("en") or [])}
         missing = [
@@ -350,6 +392,7 @@ class BatchWriter:
             return
         item.aliases.set("en", sorted(existing | set(missing)))
         item.write(summary="ingest: aliases from document entity manifest")
+        self._entity_cache[qid] = self.client.wbi.item.get(qid)
 
     # -- WBI datavalue construction -----------------------------------------
 
@@ -611,36 +654,50 @@ class BatchWriter:
                     return True
         return False
 
-    # -- type statements of items the batch did not mint ---------------------
+    # -- items the batch found rather than minted ----------------------------
 
-    def _found_entities(
-        self, batch: ClaimBatch, result: WriteResult
-    ) -> list[tuple[str, EntityRecord]]:
-        """(item QID, manifest record) for every record whose item existed
-        before this batch and one of its claims mentions.
+    def _found_entities(self, result: WriteResult) -> list[_FoundEntity]:
+        """What the batch says of each item that existed before it and that
+        one of its claims mentions (step 5 of the module docstring).
 
-        A record names its item by an approved equivalence (`qid`), by
-        the exact-label match that materialized its local refs here, or,
-        once the resolve step has replaced those refs with the item's
-        QID, by the item's English label being the record's label: the
-        match the resolve step made.
+        A manifest record names its item by an approved equivalence
+        (`qid`), by the exact-label match that materialized its local refs
+        here, or, once the resolve step has replaced those refs with the
+        item's QID, by the item's English label being the record's label:
+        the match the resolve step made. Only in that last case have the
+        record's aliases not reached the item yet. A local ref without a
+        manifest record that the writer matched by exact label gives the
+        kind on its own `instance_of`.
         """
-        found: list[tuple[str, EntityRecord]] = []
+        found: list[_FoundEntity] = []
         by_label: dict[str, list[EntityRecord]] = {}
-        for record in batch.entities:
+        for record in self._entity_records.values():
             qid = record.qid or result.created_items.get(record.id)
             if qid is None:
                 by_label.setdefault(record.label, []).append(record)
-            elif qid not in self._minted:
-                found.append((qid, record))
+            else:
+                found.append(_FoundEntity(qid, record.kind, record.type_hint))
         if by_label:
             for qid in self._mentions:
                 if qid in self._minted:
                     continue
                 label = str(self._entity(qid).labels.get("en") or "")
-                for record in by_label.get(label, []):
-                    found.append((qid, record))
-        return [(qid, rec) for qid, rec in found if qid in self._mentions]
+                found.extend(
+                    _FoundEntity(
+                        qid,
+                        record.kind,
+                        record.type_hint,
+                        tuple(record.aliases),
+                    )
+                    for record in by_label.get(label, [])
+                )
+        for qid, kinds in self._ref_kinds.items():
+            found.extend(_FoundEntity(qid, kind) for kind in kinds)
+        return [
+            entity
+            for entity in found
+            if entity.qid in self._mentions and entity.qid not in self._minted
+        ]
 
     def _is_curated(self, statement) -> bool:
         """A human write (no extraction-run reference, ADR-0003) or a
@@ -719,27 +776,27 @@ class BatchWriter:
             result.type_statements_written += 1
         self._entity_cache[qid] = self.client.wbi.item.get(qid)
 
-    def _record_found_types(
-        self, batch: ClaimBatch, result: WriteResult
-    ) -> None:
+    def _record_found_entities(self, result: WriteResult) -> None:
         from wikibaseintegrator.datatypes import String
 
-        for qid, record in self._found_entities(batch, result):
-            artifact_qid = self._mentions[qid]
+        for found in self._found_entities(result):
+            if found.aliases:
+                self._ensure_aliases(found.qid, list(found.aliases))
+            artifact_qid = self._mentions[found.qid]
             self._record_type_statement(
-                qid,
+                found.qid,
                 self._item_claim(
-                    self.properties["instance_of"], self.items[record.kind]
+                    self.properties["instance_of"], self.items[found.kind]
                 ),
                 artifact_qid,
                 result,
             )
-            if record.type_hint:
+            if found.type_hint:
                 self._record_type_statement(
-                    qid,
+                    found.qid,
                     String(
                         prop_nr=self.properties["type_hint"],
-                        value=record.type_hint,
+                        value=found.type_hint,
                     ),
                     artifact_qid,
                     result,
@@ -766,14 +823,16 @@ class BatchWriter:
         )
         # every cited artifact must resolve before the first write
         self.resolve_artifacts(batch)
-        self._entity_records = {record.id: record for record in batch.entities}
+        # the manifest as the depicts gate read it (ADR-0005): one lookup
+        self._entity_records = entity_records(batch)
         self._mentions = {}
         self._minted = set()
+        self._ref_kinds = {}
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
         # contribute the document's aliases to the existing items here
         if not self.dry_run:
-            for record in batch.entities:
+            for record in self._entity_records.values():
                 if record.qid:
                     self._ensure_aliases(
                         record.qid, [record.label, *record.aliases]
@@ -844,5 +903,5 @@ class BatchWriter:
                 )
             result.written += 1
         if not self.dry_run:
-            self._record_found_types(batch, result)
+            self._record_found_entities(result)
         return result

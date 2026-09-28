@@ -3,6 +3,8 @@
 Status: accepted
 Amended by #226 (2026-09-27): the write step enforces the confirmation
 rule instead of trusting its input (see Amendments).
+Amended by #258 (2026-09-28): the writer and the approval record read
+the entity manifest through one lookup (see Amendments).
 
 ## Context
 
@@ -85,3 +87,17 @@ detect-faces batch included. Now:
   claims out and count them, so the check never fires there. A depicts
   claim that reaches the writer by any unreviewed path is refused, not
   written.
+
+Amended by #258 (2026-09-28): **one lookup of the entity manifest.** The
+writer and `approval_digest` read a batch's entity-manifest records
+through one function, `entity_records` in yizkr.pipeline.review. When two
+records share an id, which manifest validation refuses but a hand-edited
+batch file can hold, the last one counts for both: the approval binds
+the record the writer resolves the local ref through, and the other
+record changes neither the approval nor anything written. A change to
+how the lookup picks a record, such as letting the first win or
+refusing a duplicate id, changes both at once. The rule for a local ref
+without a record compares whole refs: another ref to its id that
+differs only in its description or kind voids the approval as one that
+differs in its label does, and a ref that is the value of one of the
+claim's qualifiers is held to the same rule.

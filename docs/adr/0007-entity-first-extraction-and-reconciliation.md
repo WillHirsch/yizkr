@@ -11,6 +11,8 @@ as different generations; approved equivalences applied through
 `resolve --equivalences` end to end)
 Amended by #225 (2026-09-27): the entity manifest's state moves from
 the stage store to the LLM cache of ADR-0032 (State and CLI).
+Amended by #240 (2026-09-28): aliases and kinds reach an item however
+the writer found it (Phase 2).
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
@@ -146,6 +148,30 @@ becomes a statement of its own, coexisting with the others at normal
 rank (ADR-0002). A curated statement, one with no run reference or a
 rank a curator set, is never altered: a source that agrees with it gets
 a statement of its own beside it. A re-run adds nothing.
+
+Amended by #240 (2026-09-28): a document's aliases and kinds reach an
+existing item whichever way the writer finds it.
+
+- **Aliases.** A record whose item the resolve step matched by exact
+  label gives the item the document's aliases too, after the claims, as
+  a record the writer matches or an approved equivalence names already
+  does. The resolve step leaves the record without a `qid`, so the writer
+  pairs it with a QID that one of the batch's claims mentions, by that
+  item's label; a record no claim mentions adds no alias.
+- **Kinds without a manifest.** A batch without an entity manifest, such
+  as the line-range tier of ADR-0006 produces, states each entity's kind
+  only on its local refs' `instance_of`. When the writer matches such a
+  ref to an existing item by exact label, it records that kind as it
+  records a manifest's: the same comparison, the same two references,
+  and curated statements left as they are. A face-proposal batch's
+  sitters are such refs, so a sitter a curator approved and the writer
+  found gains the photograph and the detection run as a source of its
+  kind, as a sitter the writer mints takes its kind from them
+  (ADR-0005). A ref the resolve step replaced with the item's QID brings
+  no kind, since a QID carries none. An item the batch itself minted is
+  left out: it took its kind from the first ref that named it.
+- The orchestrator's write summary (`write.json`) and its log line count
+  the type statements written and referenced.
 
 Coverage report: in place of ADR-0006's line audit, `coverage.json`
 flags transcription lines that mention no manifest entity (heuristic:

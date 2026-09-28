@@ -2,6 +2,7 @@
 
 import csv
 import hashlib
+import itertools
 import json
 from types import SimpleNamespace
 
@@ -700,17 +701,23 @@ PROPERTIES = {
     "referred_to_as": "P12",
     "start_time": "P13",
     "depicts": "P14",
+    "residence": "P15",
+    "location": "P16",
 }
 ITEMS = {
     "human": "Q1",
     "extraction_run": "Q2",
     "unclassified_entity": "Q3",
     "organization": "Q4",
+    "place": "Q5",
 }
 
 
 class FakeItems:
-    """WikibaseIntegrator items held in memory; write() assigns a QID."""
+    """WikibaseIntegrator items held in memory; write() assigns a QID.
+
+    Every get() returns the one object the store holds, so a write through
+    any copy is seen through every other (compare DetachedItems)."""
 
     def __init__(self) -> None:
         self.store: dict[str, object] = {}
@@ -737,14 +744,71 @@ class FakeItems:
         return self.store[qid]
 
 
+class DetachedItems(FakeItems):
+    """Items as an instance serves them: every get() returns a copy of the
+    item as last written, and a write stores the writing copy whole. So a
+    write through a copy read before another write undoes that write, as
+    an edit sent from a stale read does on an instance: an edit sends the
+    item's aliases whole, and its statements as that copy holds them."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._statement_ids = itertools.count(1)
+
+    def _bound(self, item):
+        def write(summary=None, **_):
+            self.writes += 1
+            if item.id is None:
+                item.id = f"Q{self._next}"
+                self._next += 1
+            for statement in item.claims:
+                if statement.id is None:
+                    statement.id = f"{item.id}${next(self._statement_ids)}"
+            self.store[item.id] = self._copy(item)
+            return item
+
+        item.write = write
+        return item
+
+    def _copy(self, item):
+        from wikibaseintegrator import WikibaseIntegrator
+
+        data = item.get_json()
+        data["lastrevid"] = self.writes
+        # an instance hashes every reference block it stores
+        for statements in data.get("claims", {}).values():
+            for statement in statements:
+                for block in statement.get("references", []):
+                    block.setdefault(
+                        "hash",
+                        hashlib.sha1(
+                            json.dumps(block["snaks"], sort_keys=True).encode()
+                        ).hexdigest(),
+                    )
+        return self._bound(WikibaseIntegrator().item.new().from_json(data))
+
+    def new(self):
+        from wikibaseintegrator import WikibaseIntegrator
+
+        return self._bound(WikibaseIntegrator().item.new())
+
+    def get(self, qid):
+        return self._copy(self.store[qid])
+
+
 class FakeWiki:
     """Just enough of WikiClient for BatchWriter: the vocabulary, the
-    label lookup, the media SHA-1 index and in-memory items."""
+    label lookup, the media SHA-1 index and in-memory items, `detached`
+    as an instance serves them (DetachedItems)."""
 
-    def __init__(self, media: dict[str, str] | None = None) -> None:
+    def __init__(
+        self, media: dict[str, str] | None = None, detached: bool = False
+    ) -> None:
         self.media = dict(media or {})  # media SHA-1 -> artifact QID
         self.index_reads = 0
-        self.wbi = SimpleNamespace(item=FakeItems())
+        self.wbi = SimpleNamespace(
+            item=DetachedItems() if detached else FakeItems()
+        )
 
     def vocabulary(self):
         return dict(PROPERTIES), dict(ITEMS)
@@ -1038,8 +1102,53 @@ def _directory_batch(
     )
 
 
+def _directory_lines_batch(kind: str = "organization") -> ClaimBatch:
+    """The directory's batch as the line-range tier gives it (ADR-0006):
+    no entity manifest, so the firm's kind is given only on its local
+    refs' `instance_of`."""
+    return _directory_batch(kind).model_copy(update={"entities": []})
+
+
+# the directory's batch with and without an entity manifest
+DIRECTORY_BATCHES = {
+    "manifest": _directory_batch,
+    "no manifest": _directory_lines_batch,
+}
+
+
 def _two_sources() -> FakeWiki:
     return FakeWiki({INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"})
+
+
+SEBASTIAN = "Sebastian Löbig"
+
+
+def _certificate_batch() -> ClaimBatch:
+    """The 1905 marriage certificate's batch: Sebastian Löbig's birth."""
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "claims": [
+                {
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "e01",
+                        "label": SEBASTIAN,
+                        "instance_of": "human",
+                    },
+                    "property": "date_of_birth",
+                    "value": {
+                        "type": "time",
+                        "year": 1862,
+                        "month": 2,
+                        "day": 15,
+                    },
+                    "source": {"artifact": ARTIFACT},
+                }
+            ],
+            "entities": [{"id": "e01", "label": SEBASTIAN, "kind": "human"}],
+        }
+    )
 
 
 def _statements(wiki: FakeWiki, qid: str, key: str) -> list:
@@ -1082,24 +1191,33 @@ def _snapshot(wiki: FakeWiki, qid: str) -> str:
 
 
 class TestWriterLaterSourceTypes:
-    """A later batch whose manifest names an existing item records its
-    kind and type hint: a matching statement gains the batch's source
+    """A later batch that names an existing item records the kind and type
+    hint it gives the item: a matching statement gains the batch's source
     and run, a different value becomes a statement of its own, and a
-    curated statement is never altered (rules 1-3, ADR-0002)."""
+    curated statement is never altered (rules 1-3, ADR-0002). The batch
+    gives them in its entity manifest or, without one (#240), gives the
+    kind on the local refs the writer matches to the item by label."""
 
-    def test_same_kind_from_a_second_source_gains_its_references(self):
+    @pytest.mark.parametrize(
+        "directory_batch",
+        DIRECTORY_BATCHES.values(),
+        ids=DIRECTORY_BATCHES.keys(),
+    )
+    def test_same_kind_from_a_second_source_gains_its_references(
+        self, directory_batch
+    ):
         wiki = _two_sources()
         interview = BatchWriter(wiki).write_batch(_firm_batch())
         firm = interview.created_items["firm"]
         # a dry run plans; it writes nothing
         writes = wiki.wbi.item.writes
         BatchWriter(wiki, dry_run=True).write_batch(
-            _directory_batch("unclassified_entity")
+            directory_batch("unclassified_entity")
         )
         assert wiki.wbi.item.writes == writes
 
         directory = BatchWriter(wiki).write_batch(
-            _directory_batch("unclassified_entity")
+            directory_batch("unclassified_entity")
         )
         assert directory.created_items["firm"] == firm
         (kind,) = _statements(wiki, firm, "instance_of")
@@ -1113,11 +1231,16 @@ class TestWriterLaterSourceTypes:
         assert directory.type_statements_referenced == 1
         assert directory.type_statements_written == 0
 
-    def test_different_kind_is_a_statement_of_its_own(self):
+    @pytest.mark.parametrize(
+        "directory_batch",
+        DIRECTORY_BATCHES.values(),
+        ids=DIRECTORY_BATCHES.keys(),
+    )
+    def test_different_kind_is_a_statement_of_its_own(self, directory_batch):
         wiki = _two_sources()
         interview = BatchWriter(wiki).write_batch(_firm_batch())
         firm = interview.created_items["firm"]
-        directory = BatchWriter(wiki).write_batch(_directory_batch())
+        directory = BatchWriter(wiki).write_batch(directory_batch())
         kinds = _by_value(_statements(wiki, firm, "instance_of"))
         assert set(kinds) == {
             ITEMS["unclassified_entity"],
@@ -1181,12 +1304,20 @@ class TestWriterLaterSourceTypes:
         assert normalized_type_hint("ﬀ") == normalized_type_hint("ff")
         assert normalized_type_hint("Hutmacherei") != "hat shop"
 
-    def test_rewriting_a_later_batch_adds_nothing(self):
+    @pytest.mark.parametrize(
+        "directory_batch",
+        [
+            lambda: _directory_batch(type_hint="Hutmacherei"),
+            _directory_lines_batch,
+        ],
+        ids=DIRECTORY_BATCHES.keys(),
+    )
+    def test_rewriting_a_later_batch_adds_nothing(self, directory_batch):
         wiki = _two_sources()
         firm = (
             BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
         )
-        batch = _directory_batch(type_hint="Hutmacherei")
+        batch = directory_batch()
         BatchWriter(wiki).write_batch(batch)
         assert set(_by_value(_statements(wiki, firm, "instance_of"))) == {
             ITEMS["unclassified_entity"],
@@ -1207,8 +1338,15 @@ class TestWriterLaterSourceTypes:
             assert again.type_statements_referenced == 0
         assert _snapshot(wiki, firm) == before
 
+    @pytest.mark.parametrize(
+        "directory_batch",
+        DIRECTORY_BATCHES.values(),
+        ids=DIRECTORY_BATCHES.keys(),
+    )
     @pytest.mark.parametrize("curation", ["human write", "deprecated"])
-    def test_curated_statement_is_left_untouched(self, curation):
+    def test_curated_statement_is_left_untouched(
+        self, curation, directory_batch
+    ):
         from wikibaseintegrator.datatypes import Item
         from wikibaseintegrator.models import Reference, References
         from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseRank
@@ -1238,7 +1376,7 @@ class TestWriterLaterSourceTypes:
         firm.write()
         curated_before = json.dumps(curated.get_json(), sort_keys=True)
 
-        directory = BatchWriter(wiki).write_batch(_directory_batch(kind))
+        directory = BatchWriter(wiki).write_batch(directory_batch(kind))
         same_value = [
             statement
             for statement in _statements(wiki, firm_qid, "instance_of")
@@ -1305,34 +1443,8 @@ class TestWriterLaterSourceTypes:
         # Sebastian Löbig as the 1905 marriage certificate gives him, then
         # as the family's GEDCOM export does: its adapter's local refs
         # carry no label, so the writer finds him by his manifest label
-        certificate = ClaimBatch.model_validate(
-            {
-                "extraction_run": RUN,
-                "claims": [
-                    {
-                        "subject": {
-                            "kind": "local",
-                            "local_id": "e01",
-                            "label": "Sebastian Löbig",
-                            "instance_of": "human",
-                        },
-                        "property": "date_of_birth",
-                        "value": {
-                            "type": "time",
-                            "year": 1862,
-                            "month": 2,
-                            "day": 15,
-                        },
-                        "source": {"artifact": ARTIFACT},
-                    }
-                ],
-                "entities": [
-                    {"id": "e01", "label": "Sebastian Löbig", "kind": "human"}
-                ],
-            }
-        )
         wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        first = BatchWriter(wiki).write_batch(certificate)
+        first = BatchWriter(wiki).write_batch(_certificate_batch())
         person = first.created_items["e01"]
         export = adapt_gedcom(
             "0 HEAD\n1 CHAR UTF-8\n0 @I3@ INDI\n1 NAME Sebastian /Löbig/\n"
@@ -1423,6 +1535,264 @@ class TestWriterLaterSourceTypes:
             (["Q26"], []),
         ]
         assert directory.type_statements_referenced == 1
+
+    def test_a_qualified_statement_is_no_match(self):
+        # an earlier batch took "gegr. 1863" on the directory's second page
+        # for the firm being an organization since 1863: a machine
+        # statement at normal rank, but qualified, so a different assertion
+        # from the bare kind the directory's manifest gives (ADR-0002)
+        wiki = FakeWiki(
+            {
+                INTERVIEW_SHA1: "Q25",
+                DIRECTORY_SHA1: "Q26",
+                DIRECTORY_PAGE_2_SHA1: "Q28",
+            }
+        )
+        firm = (
+            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
+        )
+        since_1863 = ClaimBatch.model_validate(
+            {
+                "extraction_run": dict(
+                    DIRECTORY_RUN, started_at="2026-07-13T10:00:00Z"
+                ),
+                "claims": [
+                    {
+                        # a ref that gives no kind of its own
+                        "subject": {
+                            "kind": "local",
+                            "local_id": "firm",
+                            "label": FIRM_LABEL,
+                        },
+                        "property": "instance_of",
+                        "value": {
+                            "type": "item",
+                            "value": {"kind": "vocab", "key": "organization"},
+                        },
+                        "qualifiers": [
+                            {
+                                "property": "start_time",
+                                "value": {"type": "time", "year": 1863},
+                            }
+                        ],
+                        "source": {
+                            "artifact": {
+                                "kind": "artifact",
+                                "sha1": DIRECTORY_PAGE_2_SHA1,
+                            },
+                            "transcription_excerpt": {
+                                "text": "gegr. 1863",
+                                "language": "de",
+                            },
+                        },
+                    }
+                ],
+            }
+        )
+        page_2 = BatchWriter(wiki).write_batch(since_1863)
+        assert (page_2.written, page_2.type_statements_written) == (1, 0)
+        (qualified,) = [
+            statement
+            for statement in _statements(wiki, firm, "instance_of")
+            if statement.qualifiers.qualifiers
+        ]
+        qualified_before = json.dumps(qualified.get_json(), sort_keys=True)
+
+        directory = BatchWriter(wiki).write_batch(_directory_batch())
+
+        organization = [
+            statement
+            for statement in _statements(wiki, firm, "instance_of")
+            if statement.mainsnak.datavalue["value"]["id"]
+            == ITEMS["organization"]
+        ]
+        assert len(organization) == 2
+        assert json.dumps(qualified.get_json(), sort_keys=True) == (
+            qualified_before
+        )
+        (bare,) = [s for s in organization if not s.qualifiers.qualifiers]
+        assert _sources(bare) == [(["Q26"], []), ([], [directory.run_qid])]
+        assert directory.type_statements_written == 1
+        assert directory.type_statements_referenced == 0
+
+    def test_an_equivalence_no_claim_mentions_records_nothing(self):
+        # the reviewer approved the directory's firm as the interview's
+        # item, then rejected the firm's founding year: the claim left is
+        # the widow's address, so no claim cites a source that the firm's
+        # kind could be recorded from (rule 1)
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        wiki = _two_sources()
+        firm = (
+            BatchWriter(wiki).write_batch(_firm_batch()).created_items["firm"]
+        )
+        before = _snapshot(wiki, firm)
+        widow = {"id": "widow", "label": "Ursula Löbig", "kind": "human"}
+        address = {"id": "address", "label": "Angerring 57", "kind": "place"}
+
+        def ref(entity: dict) -> dict:
+            return {
+                "kind": "local",
+                "local_id": entity["id"],
+                "label": entity["label"],
+                "instance_of": entity["kind"],
+            }
+
+        lives_at = {
+            "subject": ref(widow),
+            "property": "residence",
+            "value": {"type": "item", "value": ref(address)},
+            "qualifiers": [
+                {
+                    "property": "point_in_time",
+                    "value": {"type": "time", "year": 1912},
+                }
+            ],
+            "source": {
+                "artifact": {"kind": "artifact", "sha1": DIRECTORY_SHA1},
+                "transcription_excerpt": {
+                    "text": "Löbig, Ursula, Wwe., Angerring 57",
+                    "language": "de",
+                },
+            },
+        }
+        reviewed = ClaimBatch.model_validate(
+            {
+                "extraction_run": DIRECTORY_RUN,
+                "claims": [lives_at],
+                "entities": [
+                    {
+                        "id": "firm",
+                        "label": FIRM_LABEL,
+                        "kind": "organization",
+                    },
+                    widow,
+                    address,
+                ],
+            }
+        )
+        approved = apply_equivalences(reviewed, {"firm": firm})
+        assert approved.entities[0].qid == firm
+
+        directory = BatchWriter(wiki).write_batch(approved)
+
+        assert directory.written == 1
+        assert _snapshot(wiki, firm) == before
+        assert directory.type_statements_written == 0
+        assert directory.type_statements_referenced == 0
+
+
+# -- writer: a document's aliases reach the item however it was found (#240)
+
+# The 1984 family tree names Sebastian Löbig by his diminutive too:
+# "Sebastian 'Wastl' 1862–1945", "Children of Wastl and Hilde".
+TREE_SHA1 = hashlib.sha1(b"fictional scan: the 1984 family tree").hexdigest()
+TREE_RUN = dict(RUN, started_at="2026-07-15T09:00:00Z")
+
+
+def _tree_batch() -> ClaimBatch:
+    """The family tree's batch: Sebastian's birth year, and in its entity
+    manifest the tree's other name for him."""
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": TREE_RUN,
+            "claims": [
+                {
+                    "subject": {
+                        "kind": "local",
+                        "local_id": "e03",
+                        "label": SEBASTIAN,
+                        "instance_of": "human",
+                    },
+                    "property": "date_of_birth",
+                    "value": {"type": "time", "year": 1862},
+                    "source": {
+                        "artifact": {"kind": "artifact", "sha1": TREE_SHA1},
+                        "transcription_excerpt": {
+                            "text": "Sebastian 'Wastl' 1862–1945",
+                            "language": "en",
+                        },
+                    },
+                }
+            ],
+            "entities": [
+                {
+                    "id": "e03",
+                    "label": SEBASTIAN,
+                    "kind": "human",
+                    "aliases": ["Wastl"],
+                }
+            ],
+        }
+    )
+
+
+def _aliases(wiki: FakeWiki, qid: str) -> list[str]:
+    aliases = wiki.wbi.item.get(qid).aliases.get("en") or []
+    return [str(alias) for alias in aliases]
+
+
+def _approved(batch: ClaimBatch, approved: dict[str, str]) -> ClaimBatch:
+    """`batch` after a reviewer approved each local id's equivalence to
+    the item `approved` gives it (ADR-0007)."""
+    from yizkr.pipeline.reconcile import apply_equivalences
+
+    return apply_equivalences(batch, approved)
+
+
+class TestWriterAliases:
+    """Every document adds its names for an entity to the item's aliases,
+    append-only (ADR-0007), whichever step found the item: the writer by
+    exact label, the resolve step by exact label (#240), or a reviewer's
+    approved equivalence. The instance here serves every read as a copy
+    (DetachedItems), so an edit sent from a read taken before the aliases
+    went on would take them off again."""
+
+    # the tree's batch as the writer receives it, given Sebastian's QID
+    FOUND_BY = {
+        "writer": lambda batch, qid: batch,
+        "resolve step": lambda batch, qid: resolve_batch(
+            batch, {SEBASTIAN: qid}
+        ),
+        "equivalence": lambda batch, qid: _approved(batch, {"e03": qid}),
+    }
+
+    @pytest.mark.parametrize(
+        "one_writer", [False, True], ids=["writer each", "one writer"]
+    )
+    @pytest.mark.parametrize(
+        "found_by", FOUND_BY.values(), ids=FOUND_BY.keys()
+    )
+    def test_a_later_documents_aliases_reach_the_item(
+        self, found_by, one_writer
+    ):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
+        writer = BatchWriter(wiki)
+        certificate = writer.write_batch(_certificate_batch())
+        sebastian = certificate.created_items["e01"]
+        assert _aliases(wiki, sebastian) == []
+        tree_batch = found_by(_tree_batch(), sebastian)
+
+        tree = (writer if one_writer else BatchWriter(wiki)).write_batch(
+            tree_batch
+        )
+
+        assert _aliases(wiki, sebastian) == ["Wastl"]
+        # the tree's birth year and its witness of the kind, written after
+        # the aliases went on, left them on
+        assert tree.written == 1
+        (kind,) = _statements(wiki, sebastian, "instance_of")
+        assert _sources(kind) == [
+            (["Q23"], []),
+            ([], [certificate.run_qid]),
+            (["Q29"], []),
+            ([], [tree.run_qid]),
+        ]
+        # a re-run edits nothing, and the item's label is never an alias
+        writes = wiki.wbi.item.writes
+        BatchWriter(wiki).write_batch(tree_batch)
+        assert wiki.wbi.item.writes == writes
+        assert _aliases(wiki, sebastian) == ["Wastl"]
 
 
 class TestPrivacyDefaults:
