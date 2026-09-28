@@ -8,12 +8,23 @@ from __future__ import annotations
 
 import io
 import json
+import urllib.error
 import urllib.parse
 
 import pytest
 import yaml
 
-from yizkr import staticsite
+from tests.fixtures import example_universe as u
+from tests.unit.test_disagreement import (
+    QIDS,
+    at,
+    containment_rows,
+    iri,
+    rows_of,
+    said,
+    text,
+)
+from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.model.schema import read_manifest_data
 from yizkr.staticsite import SiteBuilder, format_time
@@ -39,22 +50,92 @@ def config() -> Config:
     )
 
 
-def test_the_sparql_runner_sends_the_query_in_the_request_body(monkeypatch):
-    # the query service refuses a request line longer than about 8 KB, and
-    # the disagreement report's query is longer than that
-    sent = []
+class TestTheQueryClient:
+    """The site runs its queries through the shared client
+    (yizkr.core.sparql), which sends each one in a POST body."""
 
-    def urlopen(request, timeout):
-        sent.append(request)
-        return io.BytesIO(b'{"results": {"bindings": []}}')
+    def test_each_query_travels_in_the_request_body(
+        self, monkeypatch, tmp_path, vocabulary
+    ):
+        # the query service refuses a request line longer than about 8 KB
+        sent = []
 
-    monkeypatch.setattr(staticsite.urllib.request, "urlopen", urlopen)
-    query = "SELECT ?x WHERE {}\n#" + "x" * 10_000
-    assert staticsite.sparql_runner(config())(query) == []
-    (request,) = sent
-    assert request.get_method() == "POST"
-    assert request.full_url == "http://query.example/sparql"
-    assert urllib.parse.parse_qs(request.data.decode())["query"] == [query]
+        def urlopen(request, timeout):
+            sent.append(request)
+            return io.BytesIO(b'{"results": {"bindings": []}}')
+
+        monkeypatch.setattr(sparql.urllib.request, "urlopen", urlopen)
+        builder = SiteBuilder(config(), tmp_path, vocabulary=vocabulary)
+        query = "SELECT ?x WHERE {}\n#" + "x" * 10_000
+        assert builder.run(query) == []
+        (request,) = sent
+        assert request.get_method() == "POST"
+        assert request.full_url == "http://query.example/sparql"
+        assert urllib.parse.parse_qs(request.data.decode())["query"] == [query]
+
+    @staticmethod
+    def refused(monkeypatch, body: bytes, code: int = 400) -> None:
+        def urlopen(request, timeout):
+            raise urllib.error.HTTPError(
+                request.full_url, code, "Refused", {}, io.BytesIO(body)
+            )
+
+        monkeypatch.setattr(sparql.urllib.request, "urlopen", urlopen)
+
+    def test_a_refused_query_reports_the_engines_answer(self, monkeypatch):
+        # the query service echoes the whole query before it explains, with
+        # each character outside ASCII echoed as "?"; a query longer than
+        # the message keeps is still explained
+        query = (
+            "# Disagreement report — the values sources attribute\n"
+            + "".join(f"# comment line {n}\n" for n in range(200))
+            + "SELECT ?x WHERE { ?x ?p ?o }\n}"
+        )
+        assert len(query.encode()) > sparql.DETAIL_LIMIT
+        echoed = query.encode("ascii", errors="replace")
+        self.refused(
+            monkeypatch,
+            b"SPARQL-QUERY: queryStr="
+            + echoed
+            + b"\njava.util.concurrent.ExecutionException: "
+            b"org.openrdf.query.MalformedQueryException: Encountered "
+            b'" "}" "} "" at line 203, column 1.\n'
+            b"\tat java.util.concurrent.FutureTask.report(FutureTask.java:122)"
+            b"\n",
+        )
+        with pytest.raises(sparql.SparqlError) as refused:
+            sparql.runner(config())(query)
+        message = str(refused.value)
+        assert "HTTP 400" in message
+        assert "MalformedQueryException: Encountered" in message
+        assert "at line 203, column 1." in message
+        assert "comment line" not in message
+
+    def test_an_answer_that_names_no_exception_is_kept_from_its_start(
+        self, monkeypatch
+    ):
+        # a proxy in front of the engine refuses with a page of its own
+        self.refused(
+            monkeypatch,
+            b"<html><head><title>502 Bad Gateway</title></head></html>\n",
+            code=502,
+        )
+        with pytest.raises(sparql.SparqlError, match="HTTP 502: <html>"):
+            sparql.runner(config())("SELECT ?x WHERE {}")
+
+    def test_a_missing_endpoint_is_named(self):
+        with pytest.raises(sparql.SparqlError, match="WDQS_PUBLIC_HOST"):
+            sparql.runner(
+                Config(
+                    wikibase_url="http://wikibase.example",
+                    concept_uri="http://wikibase.example",
+                    wdqs_url=None,
+                    sparql_url=None,
+                    admin_name="x",
+                    admin_pass="x",
+                    env_file=None,
+                )
+            )
 
 
 def uri(qid: str) -> dict:
@@ -176,92 +257,98 @@ GALLERY = [
     }
 ]
 
-# disagreement-report rows: the universe's contradiction (Gustav's birth
-# day and month transposed between the civil register extract and the
-# naturalisation), then placeholder rows for a dated residence, a birth
-# name, an event date one source gives as a range ("between 1938 and
-# 1939", the universe's form for an emigration) that another contradicts,
-# and a date two sources store alike, set apart by their stated ranges
-INCONSISTENCIES = [
-    {
-        "entity": uri("Q12"),
-        "entityLabel": literal("Gustav Löbig"),
-        "propertyLabel": literal("date of birth"),
-        "valueA": time_literal("+1919-01-07T00:00:00Z"),
-        "precisionA": literal("11"),
-        "sourcesA": literal("Q41~Birth register extract for Gustav Löbig"),
-        "valueB": time_literal("+1919-07-01T00:00:00Z"),
-        "precisionB": literal("11"),
-        "sourcesB": literal(
-            "Q43~Certificate of naturalisation for Gustave Lobig"
-        ),
-    },
-    {
-        "entity": uri("Q60"),
-        "entityLabel": literal("Disagreement Fixture Person"),
-        "propertyLabel": literal("residence"),
-        "sharedValue": uri("Q61"),
-        "sharedValueLabel": literal("Disagreement Fixture Town"),
-        "qualifierLabel": literal("start time"),
-        "valueA": time_literal("+1938-01-01T00:00:00Z"),
-        "precisionA": literal("9"),
-        # a residence statement's own range: it may date either end, so
-        # the start-time row does not show it
-        "earliestA": time_literal("+1937-01-01T00:00:00Z"),
-        "earliestPrecisionA": literal("9"),
-        "sourcesA": literal("Q62~Disagreement fixture source A"),
-        "valueB": time_literal("+1939-01-01T00:00:00Z"),
-        "precisionB": literal("9"),
-        "sourcesB": literal("Q63~Disagreement fixture source B"),
-    },
-    {
-        "entity": uri("Q64"),
-        "entityLabel": literal("Disagreement Fixture Spouse"),
-        "propertyLabel": literal("birth name"),
-        "valueA": {
-            "type": "literal",
-            "value": "Fixture Spouse Birth Name",
-            "xml:lang": "en",
-        },
-        "sourcesA": literal("Q62~Disagreement fixture source A"),
-        "valueB": {
-            "type": "literal",
-            "value": "Fixture Spouse Maiden Name",
-            "xml:lang": "en",
-        },
-        "sourcesB": literal("Q63~Disagreement fixture source B"),
-    },
-    {
-        "entity": uri("Q65"),
-        "entityLabel": literal("Disagreement Fixture Emigration"),
-        "propertyLabel": literal("point in time"),
-        "valueA": time_literal("+1938-01-01T00:00:00Z"),
-        "precisionA": literal("9"),
-        "earliestA": time_literal("+1938-01-01T00:00:00Z"),
-        "earliestPrecisionA": literal("9"),
-        "latestA": time_literal("+1939-01-01T00:00:00Z"),
-        "latestPrecisionA": literal("9"),
-        "sourcesA": literal("Q62~Disagreement fixture source A"),
-        "valueB": time_literal("+1940-06-22T00:00:00Z"),
-        "precisionB": literal("11"),
-        "sourcesB": literal("Q63~Disagreement fixture source B"),
-    },
-    {
-        "entity": uri("Q66"),
-        "entityLabel": literal("Disagreement Fixture Same Year"),
-        "propertyLabel": literal("date of death"),
-        "valueA": time_literal("+1920-01-01T00:00:00Z"),
-        "precisionA": literal("9"),
-        "latestA": time_literal("+1920-01-01T00:00:00Z"),
-        "latestPrecisionA": literal("9"),
-        "sourcesA": literal("Q62~Disagreement fixture source A"),
-        "valueB": time_literal("+1920-01-01T00:00:00Z"),
-        "precisionB": literal("9"),
-        "earliestB": time_literal("+1920-01-01T00:00:00Z"),
-        "earliestPrecisionB": literal("9"),
-        "sourcesB": literal("Q63~Disagreement fixture source B"),
-    },
+# What the disagreement report's two queries return (#266): the universe's
+# contradiction (Gustav's birth day and month transposed between the civil
+# register extract and the naturalisation), and variations with the
+# universe's dates: one residence two sources date differently, a second
+# birth name, an event date one source gives as a range ("between 1938
+# and 1939") that another lies outside, and a date two sources store alike,
+# set apart only by their stated ranges ("after 1945" and "before 1945").
+# Gustav's two birthplaces are a difference of resolution: the recorded
+# containment sets them aside.
+DISAGREEING = [
+    said(
+        "gustav-loebig",
+        "date_of_birth",
+        u.Date(1919, 1, 7),
+        "birth-extract-1938",
+    ),
+    said(
+        "gustav-loebig",
+        "date_of_birth",
+        u.Date(1919, 7, 1),
+        "naturalisation-1952",
+    ),
+    said(
+        "gustav-loebig",
+        "place_of_birth",
+        "brunnenring-35",
+        "birth-extract-1938",
+    ),
+    said(
+        "gustav-loebig", "place_of_birth", "floerburg", "naturalisation-1952"
+    ),
+    # a residence statement's own range may date either end of it, so the
+    # start-time row does not show it
+    said(
+        "gustav-loebig",
+        "residence",
+        "australia",
+        "family-tree-1984",
+        start=at(u.Date(1938)),
+        latest=at(u.Date(1952)),
+    ),
+    said(
+        "gustav-loebig",
+        "residence",
+        "australia",
+        "naturalisation-1952",
+        start=at(u.Date(1939)),
+    ),
+    said(
+        "caecilie-loebig",
+        "birth_name",
+        text("Cäcilie Tarle", "de"),
+        "burial-register-1909",
+    ),
+    said(
+        "caecilie-loebig",
+        "birth_name",
+        text("Cäcilie Löbig", "en"),
+        "family-tree-1984",
+    ),
+    said(
+        "emigration-1938",
+        "point_in_time",
+        u.Date(1938, qualifier="between", until=u.Date(1939)),
+        "interview-2002",
+    ),
+    said(
+        "emigration-1938",
+        "point_in_time",
+        u.Date(1942, 8, 21),
+        "family-tree-1984",
+    ),
+    said(
+        "rahel-loebig",
+        "date_of_death",
+        u.Date(1945, qualifier="after"),
+        "family-tree-1984",
+    ),
+    said(
+        "rahel-loebig",
+        "date_of_death",
+        u.Date(1945, qualifier="before"),
+        "interview-2002",
+    ),
 ]
+FETCHED = [row for statement in DISAGREEING for row in rows_of(statement)]
+CONTAINED = containment_rows(
+    edges=[
+        (iri("brunnenring-35"), iri("brunnenring")),
+        (iri("brunnenring"), iri("floerburg")),
+    ]
+)
 
 
 def build(tmp_path, vocabulary, responses):
@@ -287,9 +374,11 @@ RESPONSES = {
     'date of birth"@en': TIMELINE,  # person-timeline UNION arm marker
     "Special:FilePath": GALLERY,  # photo-gallery builds this URL
     "?kind wdt:": ARTIFACTS,  # artifacts query walks the subclass path
-    # assertions query (not ?stA/?stB)
+    # assertions query (not the disagreement report's ?statement)
     "?st prov:wasDerivedFrom/pr:": ASSERTIONS,
-    "?sharedValueLabel": INCONSISTENCIES,  # disagreement-report projection
+    # the disagreement report's statements and the recorded containment
+    "wikibase:rank ?rank": FETCHED,
+    "?item ?link ?target": CONTAINED,
 }
 
 
@@ -389,34 +478,41 @@ class TestSections:
 
 
 class TestInconsistencies:
-    """The disagreement report as a page: both values of every row, each
-    with its sources and at its stated precision (ADR-0002, rule 6)."""
+    """The disagreement report as a page: the site fetches the attributed
+    values and the recorded containment, compares them
+    (yizkr.disagreement), and shows both values of every row, each with its
+    sources and at its stated precision (ADR-0002, rule 6)."""
 
     def page(self, tmp_path, vocabulary) -> str:
         site, summary = build(tmp_path, vocabulary, RESPONSES)
-        assert summary["inconsistencies"] == len(INCONSISTENCIES)
+        # Gustav's birth, the residence, the birth name, the emigration and
+        # Rahel's death; the two birthplaces differ only in resolution
+        assert summary["inconsistencies"] == 5
         return (site / "inconsistencies.html").read_text()
 
     def test_both_values_render_with_their_sources(self, tmp_path, vocabulary):
         text = self.page(tmp_path, vocabulary)
         assert "1919-01-07" in text and "1919-07-01" in text
         assert (
-            '<a href="artifacts/Q41.html">'
+            f'<a href="artifacts/{QIDS["birth-extract-1938"]}.html">'
             "Birth register extract for Gustav Löbig</a>"
         ) in text
         assert (
-            '<a href="artifacts/Q43.html">'
+            f'<a href="artifacts/{QIDS["naturalisation-1952"]}.html">'
             "Certificate of naturalisation for Gustave Lobig</a>"
         ) in text
+
+    def test_recorded_containment_leaves_the_birthplaces_out(
+        self, tmp_path, vocabulary
+    ):
+        text = self.page(tmp_path, vocabulary)
+        assert "<td>place of birth</td>" not in text
 
     def test_dated_residence_names_the_place_and_the_date_compared(
         self, tmp_path, vocabulary
     ):
         text = self.page(tmp_path, vocabulary)
-        assert (
-            "<td>residence (Disagreement Fixture Town), start time</td>"
-            in text
-        )
+        assert "<td>residence (Australia), start time</td>" in text
         # year precision, never padded to 1 January
         assert "<td>1938</td>" in text and "<td>1939</td>" in text
         assert "1938-01-01" not in text
@@ -425,27 +521,29 @@ class TestInconsistencies:
         self, tmp_path, vocabulary
     ):
         # rule 5: the range a source gives is never silently dropped, and
-        # it is why the pair is listed (1940 lies outside 1938-1939)
+        # it is why the pair is listed (21 August 1942 lies outside
+        # 1938-1939)
         text = self.page(tmp_path, vocabulary)
         assert (
             '<td>1938 <span class="qualifiers">(earliest date: 1938; '
             "latest date: 1939)</span></td>"
         ) in text
+        assert "<td>1942-08-21</td>" in text
         # a residence or spouse row compares a start or end time, which
         # the statement's range need not bound: it is not shown there
-        assert "earliest date: 1937" not in text
+        assert "latest date: 1952" not in text
 
     def test_dates_stored_alike_show_the_ranges_that_set_them_apart(
         self, tmp_path, vocabulary
     ):
-        # "before 1920" and "after 1920" are both stored as 1920: without
+        # "before 1945" and "after 1945" are both stored as 1945: without
         # their ranges the row would show the same value twice
         text = self.page(tmp_path, vocabulary)
         assert (
-            '<td>1920 <span class="qualifiers">(latest date: 1920)</span></td>'
+            '<td>1945 <span class="qualifiers">(latest date: 1945)</span></td>'
         ) in text
         assert (
-            '<td>1920 <span class="qualifiers">(earliest date: 1920)</span>'
+            '<td>1945 <span class="qualifiers">(earliest date: 1945)</span>'
             "</td>"
         ) in text
 
@@ -455,8 +553,8 @@ class TestInconsistencies:
         text = self.page(tmp_path, vocabulary)
         assert "<td>date of birth</td>" in text
         assert "<td>birth name</td>" in text
-        assert "<td>Fixture Spouse Birth Name</td>" in text
-        assert "<td>Fixture Spouse Maiden Name</td>" in text
+        assert "<td>Cäcilie Tarle</td>" in text
+        assert "<td>Cäcilie Löbig</td>" in text
 
 
 class TestTimeFormatting:

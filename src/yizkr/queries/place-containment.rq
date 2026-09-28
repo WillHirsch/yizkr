@@ -1,0 +1,18 @@
+# Place containment — the recorded hierarchy the disagreement report reads
+# (ADR-0009, ADR-0033): every location and part-of edge, and every merge
+# redirect. A place value that lies inside another, following these edges
+# (an address in the town another source names), or the same item
+# through a redirect, differs from it only in resolution, and the
+# comparison in yizkr.disagreement leaves such a pair out (MODELING.md
+# "Contradictions"). Recording the hierarchy is what makes the report
+# sharpen over time.
+SELECT ?item ?itemLabel ?link ?target ?targetLabel
+WHERE {
+  VALUES ?link {
+    wdt:{P:location} wdt:{P:part_of} <http://www.w3.org/2002/07/owl#sameAs>
+  }
+  ?item ?link ?target .
+  OPTIONAL { ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel) = "en") }
+  OPTIONAL { ?target rdfs:label ?targetLabel .
+             FILTER(LANG(?targetLabel) = "en") }
+}
