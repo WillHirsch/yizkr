@@ -528,20 +528,51 @@ class TestExtractedClaimsCiteTheirDocument:
 
 class TestIngestExtract:
     """`yizkr ingest extract`: its claims cite the artifact its
-    transcription names, by the SHA-1 of its media (#102, #127), and a
+    transcription names, by the SHA-1 of its media (#102, #127). A
     transcription of media on the never-ingest list is refused before the
-    engine is asked anything."""
+    engine is asked anything: by the key the transcription names, and by
+    the name and bytes of the media file `--media` gives. A transcription
+    keeps no file name, so a list that names files by pattern refuses to
+    run without `--media`."""
 
-    def run(self, tmp_path, monkeypatch, excluded: str = ""):
+    # the transcribed media's file name, which a pattern can match
+    NAME = "example-marriage-certificate.png"
+
+    @pytest.fixture(autouse=True)
+    def no_host_settings(self, tmp_path, monkeypatch):
+        """No list from the host: an empty env file of the test's own,
+        and the list's variable cleared from the environment."""
+        env_file = tmp_path / "test.env"
+        env_file.write_text("")
+        monkeypatch.setenv("YIZKR_ENV_FILE", str(env_file))
+        monkeypatch.delenv("YIZKR_EXCLUDE_FILE", raising=False)
+
+    def run(
+        self,
+        tmp_path,
+        monkeypatch,
+        listed: str | None = "",
+        *,
+        media: bytes | None = None,
+        engine: str = "llm",
+        transcription: str | None = None,
+    ):
+        """The step on a transcription of MEDIA (or on `transcription`'s
+        text), with the llm engine or a claims file. `listed` is the
+        never-ingest list's text; with None, no list is configured here.
+        `media`, when given, is written to a file named NAME, and passed
+        as `--media`."""
         from yizkr import cli
         from yizkr.pipeline import llm
 
-        never = tmp_path / "never-ingest.txt"
-        never.write_text(excluded)
-        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
-        transcription = tmp_path / "transcription.json"
-        transcription.write_text(
-            Transcription(
+        if listed is not None:
+            never = tmp_path / "never-ingest.txt"
+            never.write_text(listed)
+            monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
+        path = tmp_path / "transcription.json"
+        path.write_text(
+            transcription
+            or Transcription(
                 artifact=MEDIA_REF, text="married 1947", engine="test"
             ).model_dump_json()
         )
@@ -554,14 +585,34 @@ class TestIngestExtract:
         )
         monkeypatch.setattr(llm, "make_client", lambda *a, **k: self.engine)
         out = tmp_path / "batch.json"
-        args = cli.build_parser().parse_args(
-            [
-                *("ingest", "extract", "--transcription", str(transcription)),
-                *("--engine", "llm", "--strategy", "single"),
-                *("--out", str(out)),
-            ]
-        )
+        argv = ["ingest", "extract", "--transcription", str(path)]
+        if media is not None:
+            (tmp_path / self.NAME).write_bytes(media)
+            argv += ["--media", str(tmp_path / self.NAME)]
+        if engine == "file":
+            claims = tmp_path / "claims.json"
+            claims.write_text(
+                json.dumps(
+                    {
+                        "claims": [
+                            dict(CLAIMS[1], source={"artifact": ARTIFACT})
+                        ]
+                    }
+                )
+            )
+            argv += ["--engine", "file", "--claims-file", str(claims)]
+        else:
+            argv += ["--engine", "llm", "--strategy", "single"]
+        args = cli.build_parser().parse_args([*argv, "--out", str(out)])
         return args.func(args), out, self.engine
+
+    def refused(self, tmp_path, match: str, **run) -> None:
+        """The step is refused, saying `match`, before the engine is asked
+        anything: no answer is dumped, and no batch written."""
+        with pytest.raises(SystemExit, match=match):
+            self.run(tmp_path, **run)
+        assert self.engine.prompts == []
+        assert sorted(path.name for path in tmp_path.glob("batch.json*")) == []
 
     def test_the_claims_cite_the_transcriptions_artifact(
         self, tmp_path, monkeypatch
@@ -572,29 +623,124 @@ class TestIngestExtract:
         assert [claim.source.artifact for claim in batch.claims] == [MEDIA_REF]
         assert len(engine.prompts) == 1
 
-    def test_a_transcription_of_listed_media_is_refused(
+    @pytest.mark.parametrize(
+        "listed",
+        [None, "", "# nothing listed yet\n", f"{'1' * 40}\n"],
+        ids=["no-list", "empty-list", "comments-only", "other-hash"],
+    )
+    def test_without_media_it_runs_where_hashes_can_decide(
+        self, tmp_path, monkeypatch, listed
+    ):
+        """No list, or a list with no patterns in it: the key the
+        transcription names is all the list can be asked about."""
+        status, out, engine = self.run(tmp_path, monkeypatch, listed)
+        assert status == 0
+        assert out.exists() and len(engine.prompts) == 1
+
+    @pytest.mark.parametrize("engine", ["llm", "file"])
+    @pytest.mark.parametrize("media", [None, MEDIA], ids=["key", "media"])
+    def test_media_listed_by_its_hash_is_refused(
+        self, tmp_path, monkeypatch, engine, media
+    ):
+        self.refused(
+            tmp_path,
+            "on the never-ingest list",
+            monkeypatch=monkeypatch,
+            listed=f"{MEDIA_SHA1}\n",
+            media=media,
+            engine=engine,
+        )
+
+    @pytest.mark.parametrize("engine", ["llm", "file"])
+    def test_a_list_with_patterns_needs_the_media(
+        self, tmp_path, monkeypatch, engine
+    ):
+        """A transcription made before its media was listed by name: its
+        key is on no list, and without the media file the pattern cannot
+        be checked, so the step refuses to run."""
+        self.refused(
+            tmp_path,
+            "names files by pattern",
+            monkeypatch=monkeypatch,
+            listed="*marriage-certificate*\n",
+            engine=engine,
+        )
+
+    def test_media_listed_by_its_name_is_refused(self, tmp_path, monkeypatch):
+        self.refused(
+            tmp_path,
+            f"{self.NAME} is on the never-ingest list",
+            monkeypatch=monkeypatch,
+            listed="*marriage-certificate*\n",
+            media=MEDIA,
+        )
+
+    def test_media_a_pattern_does_not_match_runs(self, tmp_path, monkeypatch):
+        status, out, engine = self.run(
+            tmp_path, monkeypatch, "*divorce-judgment*\n", media=MEDIA
+        )
+        assert status == 0
+        assert out.exists() and len(engine.prompts) == 1
+
+    @pytest.mark.parametrize("listed", [None, "*divorce-judgment*\n"])
+    def test_media_that_is_not_the_transcriptions_is_refused(
+        self, tmp_path, monkeypatch, listed
+    ):
+        """`--media` must be the file the transcription names, or the list
+        would be asked about another document."""
+        self.refused(
+            tmp_path,
+            "is not the media transcription.json transcribes",
+            monkeypatch=monkeypatch,
+            listed=listed,
+            media=b"fictional scan: another page",
+        )
+
+    def test_a_configured_list_that_cannot_be_read_is_refused(
         self, tmp_path, monkeypatch
     ):
-        with pytest.raises(SystemExit, match="never-ingest"):
-            self.run(tmp_path, monkeypatch, excluded=f"{MEDIA_SHA1}\n")
-        # the engine was asked nothing, no answer was dumped, and no batch
-        # written
+        monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(tmp_path / "gone.txt"))
+        self.refused(
+            tmp_path,
+            "cannot read the never-ingest list",
+            monkeypatch=monkeypatch,
+            listed=None,
+        )
+
+    def test_a_transcription_that_names_a_qid_is_refused_with_a_reason(
+        self, tmp_path, monkeypatch
+    ):
+        """A transcription made before #127 names its artifact by QID: the
+        step says in one line that it cannot read it, and to transcribe the
+        media again."""
+        by_qid = {"artifact_qid": "Q23", "text": "married 1947", "engine": "t"}
+        with pytest.raises(SystemExit) as refused:
+            self.run(tmp_path, monkeypatch, transcription=json.dumps(by_qid))
+        reason = str(refused.value.code)
+        assert "\n" not in reason
+        assert reason.startswith(
+            "transcription.json is not a transcription this step reads"
+        )
+        assert "artifact: Field required" in reason
+        assert "artifact_qid: Extra inputs are not permitted" in reason
+        assert reason.endswith(
+            "transcribe the media again with `yizkr ingest transcribe`"
+        )
         assert self.engine.prompts == []
-        assert sorted(path.name for path in tmp_path.glob("batch.json*")) == []
 
     @pytest.mark.parametrize(
         "argv",
         [
             ("transcribe", "--file", "scan.png", "--artifact", "Q23"),
             ("extract", "--transcription", "t.json", "--artifact", "Q23"),
-            ("extract", "--transcription", "t.json", "--media", "scan.png"),
         ],
-        ids=["transcribe-artifact", "extract-artifact", "extract-media"],
+        ids=["transcribe-artifact", "extract-artifact"],
     )
-    def test_the_steps_before_the_write_take_no_qid(self, argv, capsys):
-        """Nothing before the write names an artifact by its QID (#127):
-        `ingest transcribe` names it by the SHA-1 of the file it reads,
-        and `ingest extract` reads that key from the transcription."""
+    def test_transcribe_and_extract_take_no_qid(self, argv, capsys):
+        """No transcription and no extraction prompt names an artifact by
+        its QID (#127): `ingest transcribe` names it by the SHA-1 of the
+        file it reads, and `ingest extract` reads that key from the
+        transcription."""
         from yizkr import cli
 
         with pytest.raises(SystemExit) as refused:

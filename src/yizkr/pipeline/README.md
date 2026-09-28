@@ -192,9 +192,12 @@ The corpus lives outside the repository, in the private folder named by
   `ingest run` drops a listed document at discovery, so it gets no
   artifact, no transcription and no state. The single-file steps
   (`register`, `transcribe`, `extract`, `gedcom`, `detect-faces`) run
-  without a list, but refuse a listed file once one is configured (for
-  `extract`, the media its transcription names, by the SHA-1 of its
-  bytes, which only the list's hashes can match). New entry points must
+  without a list, but refuse a listed file once one is configured. For
+  `extract`, that is the media its transcription names: by its SHA-1,
+  and by name and hash through `--media`, the media file, which must be
+  the one the transcription names. A transcription keeps no file name,
+  so with a list that names files by pattern, `extract` refuses to run
+  without `--media`. New entry points must
   call it too: write-time registration (#103), transcription import
   (#104), the run driver (#118) and faces (#160).
 

@@ -45,18 +45,28 @@ def _refuse_if_excluded(
 
     The single steps are debugging tools and run without a list; when one
     is configured, a file on it is refused before anything reads it. A
-    step that reads no source file, as `ingest extract` reads a
-    transcription, gives the content SHA-1 its input records, which the
-    list's SHA-1 entries are checked against. The extract-all command,
-    `ingest run`, requires the list (cmd_run)."""
+    step whose input is not the source file, as `ingest extract` reads a
+    transcription, gives the content SHA-1 its input records, and the
+    source file too when it is given one. Without a file only the list's
+    SHA-1 entries can be checked, so a list that names files by pattern
+    fails closed. The extract-all command, `ingest run`, requires the
+    list (cmd_run)."""
     from yizkr.core.corpus import is_excluded, load_exclusions
 
     if path is None and sha1 is None:
         return
     exclusions = load_exclusions(required=False, env_file=args.env_file)
-    if exclusions is not None and is_excluded(exclusions, path, sha1=sha1):
+    if exclusions is None:
+        return
+    if is_excluded(exclusions, path, sha1=sha1):
         what = path.name if path is not None else f"SHA-1 {sha1[:12]}"
         sys.exit(f"{what} is on the never-ingest list; refusing")
+    if path is None and exclusions.patterns:
+        sys.exit(
+            "the never-ingest list names files by pattern, and no file was "
+            "given to match them against: give the transcribed media file "
+            "(--media); refusing"
+        )
 
 
 # -- top-level commands -------------------------------------------------
@@ -293,14 +303,36 @@ def cmd_transcribe(args) -> int:
 
 
 def cmd_extract(args) -> int:
+    from pydantic import ValidationError
+
+    from yizkr.claims import ArtifactRef
     from yizkr.pipeline.transcribe import Transcription
 
-    transcription = Transcription.model_validate_json(
-        args.transcription.read_text()
-    )
+    try:
+        transcription = Transcription.model_validate_json(
+            args.transcription.read_text()
+        )
+    except ValidationError as exc:
+        found = "; ".join(
+            f"{'.'.join(map(str, error['loc'])) or 'file'}: {error['msg']}"
+            for error in exc.errors()[:3]
+        )
+        sys.exit(
+            f"{args.transcription.name} is not a transcription this step "
+            f"reads ({found}): transcribe the media again with `yizkr ingest "
+            f"transcribe`"
+        )
     # the transcription names the artifact it transcribes by the SHA-1 of
-    # its media: the key its claims cite, and the one the list is asked
-    _refuse_if_excluded(args, sha1=transcription.artifact.sha1)
+    # its media, the key its claims cite: the list is asked for that key,
+    # and for the media file by name and hash when one is given
+    _refuse_if_excluded(args, args.media, sha1=transcription.artifact.sha1)
+    if args.media is not None and (
+        ArtifactRef.from_path(args.media) != transcription.artifact
+    ):
+        sys.exit(
+            f"{args.media.name} is not the media {args.transcription.name} "
+            f"transcribes (its SHA-1 differs); refusing"
+        )
     if args.engine == "file":
         if not args.claims_file:
             sys.exit("--engine file requires --claims-file")
@@ -948,6 +980,14 @@ def build_parser() -> argparse.ArgumentParser:
         "the artifact it names by the SHA-1 of its media, which the write "
         "resolves to the item `ingest register` made for it (a claims "
         "file's claims cite their artifacts themselves)",
+    )
+    p.add_argument(
+        "--media",
+        type=Path,
+        help="the transcribed media file, which must be the one the "
+        "transcription names: the never-ingest list is checked against "
+        "its name as well as its SHA-1. Required when the list names files "
+        "by pattern, since a transcription keeps no file name",
     )
     p.add_argument("--engine", choices=["llm", "file"], default="file")
     p.add_argument(

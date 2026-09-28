@@ -1892,17 +1892,56 @@ class Registered(CachedRun):
         return f"Q{next(self.qids)}"
 
 
-def derivations(state_dir: Path) -> dict:
+class RefusingPlain(Refusing):
+    """The refusing engine without conversations, as PlainEngine is."""
+
+    open_conversation = None  # type: ignore[assignment]
+    fork = None  # type: ignore[assignment]
+
+
+def reset_answers(kind, prompt, opening):
+    """pipeline_answers, with the manifest refused for the note about
+    Gustav, whose extraction takes the line-range tier: one unit, the
+    whole note."""
+    if "manifest of EVERY distinct entity" in prompt and "1: Gustav" in prompt:
+        return "no manifest here"
+    if prompt.startswith("You segment a document"):
+        last = len(re.findall(r"^\d+: ", prompt, re.M))
+        unit = {
+            "id": "u01",
+            "label": "all",
+            "kind": "narrative section",
+            "first_line": 1,
+            "last_line": last,
+            "context": "",
+            "extract": True,
+        }
+        return json.dumps({"units": [unit]})
+    return pipeline_answers(kind, prompt, opening)
+
+
+# the views a document's stages make
+VIEWS = ("transcription.json", "batch.json", "critique.json")
+
+
+def view_records(state_dir: Path) -> dict:
     """Each document's record of what its views were made from: the
-    content hashes of its transcription and batch, which the views after
-    them are made from, and the input hashes of each view."""
-    return {
-        directory.name: json.loads(
-            (directory / "derivations.json").read_text()
-        )
-        for directory in sorted(state_dir.iterdir())
-        if (directory / "derivations.json").is_file()
-    }
+    content hashes of its transcription and batch, and the input hashes
+    of each view. The files after the views are left out: the review
+    sheet is recorded against the resolved batch's bytes, which hold the
+    run's stamps."""
+    records = {}
+    for directory in sorted(state_dir.iterdir()):
+        path = directory / "derivations.json"
+        if not path.is_file():
+            continue
+        record = json.loads(path.read_text())
+        derived = record["derived"]
+        records[directory.name] = {
+            "content": record["content"],
+            "derived": {view: derived.get(view) for view in VIEWS},
+        }
+    return records
 
 
 def folder_of_three(tmp_path) -> Path:
@@ -1987,14 +2026,25 @@ class TestThePipeline:
         CachedRun(folder, tmp_path / "second", engine=engine, log=quiet).run()
         assert sorted(engine.calls) == sorted(first.engine.calls)
 
-    def test_a_reset_changes_no_prompt_and_no_key(self, tmp_path):
+    @pytest.mark.parametrize(
+        "engine, refusing",
+        [(Engine, Refusing), (PlainEngine, RefusingPlain)],
+        ids=["conversation", "inline"],
+    )
+    def test_a_reset_changes_no_prompt_and_no_key(
+        self, tmp_path, engine, refusing
+    ):
         """A reset empties the instance, and the run after it registers
-        each artifact again, under another QID (#127). No stage before the
-        write reads the QID: the prompts and the transcriptions name each
-        artifact by the SHA-1 of its media. So a run after the reset, in a
-        fresh state directory as a scratch run's is, sends the engine the
-        same prompts word for word, under the same keys, all of which the
-        cache answers, and its views hash as the first run's did."""
+        each artifact again, under another QID (#127). No stage reads the
+        QID: the prompts and the transcriptions name each artifact by the
+        SHA-1 of its media. So a run after the reset, in a fresh state
+        directory as a scratch run's is, sends the engine the same prompts
+        word for word, under the same keys, all of which the cache
+        answers, and its views hash as the first run's did. Every kind of
+        extraction prompt is sent: an entity manifest and its chunks, and,
+        for the note whose manifest is refused, a segmentation and its
+        chunk; with a conversation the chunks fork it, and without one
+        they carry the document inline."""
         folder = folder_of_three(tmp_path)
         cache = tmp_path / "cache"
 
@@ -2010,21 +2060,23 @@ class TestThePipeline:
             assert orchestrator.run() == 2
             return orchestrator
 
-        before = run("before", Engine(pipeline_answers), 100, cache)
+        before = run("before", engine(reset_answers), 100, cache)
         # after the reset, the engine is asked again without the cache,
-        after = run("after", Engine(pipeline_answers), 200, None)
+        after = run("after", engine(reset_answers), 200, None)
         # and through it, every call is answered and the engine never asked
-        replay = run("replay", Refusing(pipeline_answers), 300, cache)
+        replay = run("replay", refusing(reset_answers), 300, cache)
 
         registered = [
             {doc.state.artifact_qid for doc in orchestrator.documents()}
             for orchestrator in (before, after, replay)
         ]
         assert len(set().union(*registered)) == 9, registered
-        # the scan's reading, then each document's manifest, chunk and
-        # critique
+        # the scan's reading; each document's manifest, chunk and critique;
+        # and for the note, its manifest asked for again, and its
+        # segmentation
         prompts = sorted(before.engine.calls)
-        assert len(prompts) == 10
+        assert len(prompts) == 12
+        assert any(p.startswith("You segment a document") for _, p in prompts)
         assert sorted(after.engine.calls) == prompts
 
         def keys(orchestrator, event):
@@ -2034,14 +2086,16 @@ class TestThePipeline:
                 if e["event"] == event
             )
 
-        assert len(keys(before, "cache-miss")) == 10
+        assert len(keys(before, "cache-miss")) == 12
         assert keys(replay, "cache-hit") == keys(before, "cache-miss")
         assert keys(replay, "cache-miss") == []
         records = [
-            derivations(tmp_path / name)
+            view_records(tmp_path / name)
             for name in ("before", "after", "replay")
         ]
         assert len(records[0]) == 3
+        for record in records[0].values():
+            assert all(record["derived"].values()), record
         assert records[0] == records[1] == records[2]
 
     def test_abort_and_resume_lose_no_completed_call(self, tmp_path):

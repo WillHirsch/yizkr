@@ -149,9 +149,11 @@ The list is a UTF-8 text file, one entry per line:
   transcription, no state under `var/runs/`.
 - The single-file steps (`ingest register`, `transcribe`, `extract`,
   `gedcom`, `detect-faces`) are debugging tools and run without a list, but
-  once one is configured they refuse a listed file (for `extract`, the
-  media its transcription names, by the SHA-1 of its bytes, which only
-  the list's hashes can match).
+  once one is configured they refuse a listed file. For `extract`, that is
+  the media its transcription names: by its SHA-1, and by name and hash
+  through `--media`, the media file, which must be the one the
+  transcription names. A transcription keeps no file name, so with a list
+  that names files by pattern, `extract` refuses to run without `--media`.
 
 In the containerised CLI (`docker-compose.localhost.yml`), a set path that
 does not exist stops the container from starting; nothing is created in
