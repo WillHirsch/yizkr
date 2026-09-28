@@ -14,6 +14,7 @@ would."""
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import io
 import json
@@ -1562,17 +1563,15 @@ class TestLogsThatCannotBeRead:
         )
         assert "No alerts." not in page
 
-    # what the driver appends to each log, and a line of it that is skipped
+    # what the driver appends to each log
     APPENDED = {
         "events.jsonl": [
             cache("cache-miss", 500, POSTCARD, "critique", reason="absent"),
             stage("done", 510, POSTCARD, "critique"),
-            ("events.jsonl", "not an object"),
         ],
-        "alerts.jsonl": [
-            *alert(510, "critique", "claim rate", "run", 0.25, "new")[:1],
-            ("alerts.jsonl", "not an object"),
-        ],
+        "alerts.jsonl": alert(
+            510, "critique", "claim rate", "run", 0.25, "new"
+        )[:1],
     }
 
     @pytest.mark.parametrize("by", UNREADABLE_BY)
@@ -1584,10 +1583,14 @@ class TestLogsThatCannotBeRead:
         the refresh at which it cannot be read, a change the view is drawn
         again for, and tries it at every refresh. It reads it again from
         its start at the refresh at which it can: what the driver appended
-        meanwhile counts once, and so does a line skipped. At every step
-        it shows what a monitor reading the run afresh shows."""
+        before, and a line skipped, count once. At every step it shows
+        what a monitor reading the run afresh shows."""
+        # a line that is not an object: skipped, and counted
+        append(run, [(name, "not an object")])
         watcher = RunMonitor(run)
         watcher.refresh()
+        assert watcher.summary(NOW).skipped_lines == 1
+        # appended, and not read yet
         append(run, self.APPENDED[name])
         with unreadable_file(run, name, by):
             assert watcher.refresh()
@@ -1612,6 +1615,46 @@ class TestLogsThatCannotBeRead:
             assert followed.calls.engine == 8
         else:
             assert followed.alert_counts == {"new": 3, "carried": 2}
+
+    def test_a_read_that_fails_partway_leaves_the_tail_as_it_was(
+        self, run, monkeypatch
+    ):
+        """An error partway through the new lines (EIO, say) raises, as it
+        does for the driver's reader, and takes none of them: the next read
+        gives them all. A monitor keeps the tail of a log it cannot read
+        from one refresh to the next, so a line taken then would be lost."""
+        tail = monitor._Tail(run / "events.jsonl")
+        tail.read()
+        offset = tail.offset
+        append(
+            run,
+            [
+                stage("done", 510, POSTCARD, "critique"),
+                stage("started", 511, CARD, "critique"),
+            ],
+        )
+
+        class Failing(io.BufferedReader):
+            """The log as the tail opens it, but its lines fail after the
+            first."""
+
+            def __iter__(self):
+                yield self.readline()
+                raise OSError(errno.EIO, "Input/output error")
+
+        monkeypatch.setattr(
+            monitor,
+            "open",
+            lambda path, mode: Failing(io.FileIO(path, "r")),
+            raising=False,
+        )
+        with pytest.raises(OSError):
+            tail.read()
+        assert tail.offset == offset
+        monkeypatch.undo()
+        entries, restarted = tail.read()
+        assert not restarted
+        assert [entry["event"] for entry in entries] == ["done", "started"]
 
     @pytest.mark.parametrize("by", UNREADABLE_BY)
     @pytest.mark.parametrize("name", ["events.jsonl", "alerts.jsonl"])
