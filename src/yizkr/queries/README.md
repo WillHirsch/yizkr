@@ -55,7 +55,11 @@ uv run yizkr publish-queries             # or: make publish-queries
   (docs/MODELING.md, "Marriages, residences and other periods"). Each row
   carries the range its source states for that date: a start's earliest
   date and latest start date, an end's earliest end date and latest date,
-  a date value's or a point in time's earliest and latest date.
+  a date value's or a point in time's earliest and latest date
+  (`tests/integration/test_live_period_dates.py`). Rendered and
+  URL-encoded, it is about 8.5 KB, more than the query service accepts in
+  a GET request line, so a client sends it by POST, as the site and the
+  live tests do.
 - **kinship** — how each person is related to a subject, derived from
   the kinship primitives and gendered by the relative's `sex_or_gender`
   (ADR-0014), beside the terms sources assert with `relative` +

@@ -767,6 +767,32 @@ class TestMarriageDates:
             ("start_time", year(1947)),
         ]
 
+    def test_an_undated_marriage_and_divorce_keep_the_wedding_place(self):
+        # (here) the family record names where Leopold and Agnes married and
+        # where they were divorced, but dates neither
+        result = adapt_gedcom(
+            "0 @I11@ INDI\n1 NAME Leopold /Löbig/\n"
+            "0 @I17@ INDI\n1 NAME Agnes /Löbig/\n"
+            "0 @F5@ FAM\n1 HUSB @I11@\n1 WIFE @I17@\n"
+            "1 MARR\n2 PLAC Flörburg, Hesse, Germany\n"
+            "1 DIV\n2 PLAC Rekau, Hesse, Germany\n"
+            "0 TRLR\n",
+            artifact_qid="Q23",
+        )
+        assert result.warnings == []
+        labels = {e.id: e.label for e in result.batch.entities}
+        for subject in ("i11", "i17"):
+            (spouse,) = claims_for(result.batch, subject, "spouse")
+            assert not {"start_time", "end_time"} & {
+                q.property for q in spouse.qualifiers
+            }
+            (place,) = [
+                q.value.value.local_id
+                for q in spouse.qualifiers
+                if q.property == "location"
+            ]
+            assert labels[place] == "Flörburg, Hesse, Germany"
+
     def test_an_unparsed_date_warns_and_omits_its_end(self):
         result = adapt_gedcom(
             couple("SOMEDAY MAYBE", "NEVER EVER"), artifact_qid="Q23"

@@ -164,7 +164,14 @@ comparison follows the documentation:
   as two such dates of a single-valued property are. Amended by #231
   (2026-09-28): those dates now bound one end each, so two start or end
   times stored alike are told apart by the ranges stated for that end,
-  as two dates of a single-valued property are (§2).
+  as two dates of a single-valued property are (§2). The last sentence
+  above never held for a single-valued property beside a century: a time
+  coarser than a century is given its century's period, so beside a
+  century-precision time stored alike, with no range on either, it names
+  the same period, and the two are one value. A residence's or a spouse's
+  start or end now compares the same way, so there too such a time is one
+  value with a century stored alike, and is listed beside a decade, a
+  year or a day stored alike.
 - **Letter case.** The query lowercased names. "Differ only in letter
   case" is Unicode case folding, which also makes a sharp s and SS one
   value, and a long s (ſ) and s.

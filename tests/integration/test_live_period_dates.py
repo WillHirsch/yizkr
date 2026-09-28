@@ -24,6 +24,8 @@ session that runs it ends by clearing the recorded instance-contents key
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -94,11 +96,61 @@ def married(artifact_qid: str, *qualifiers) -> dict:
     )
 
 
+def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
+    """Write the fixture's claims under item labels that carry a marker:
+    six hex digits of a hash over the claims, each artifact named by its
+    letter in `artifacts`, as test_live_disagreement.py's write_fixture
+    marks its own. The writer finds a local item by its label, so a
+    version of the fixture with other claims would otherwise write onto an
+    earlier version's items and see their statements beside its own. With
+    the marker each version writes items of its own, and a re-run of one
+    version finds its own items again. Returns the write's result and the
+    marker."""
+    content = [
+        {
+            **claim,
+            "source": {
+                **claim["source"],
+                "artifact": artifacts[claim["source"]["artifact"]["qid"]],
+            },
+        }
+        for claim in claims
+    ]
+    marker = hashlib.sha256(
+        json.dumps(content, sort_keys=True).encode()
+    ).hexdigest()[:6]
+
+    def marked(value):
+        """`value` with the marker on the label of every local item."""
+        if isinstance(value, dict):
+            value = {key: marked(item) for key, item in value.items()}
+            if value.get("kind") == "local":
+                value["label"] = f"{value['label']} ({marker})"
+        elif isinstance(value, list):
+            value = [marked(item) for item in value]
+        return value
+
+    written = BatchWriter(client).write_batch(
+        ClaimBatch.model_validate(
+            {
+                "extraction_run": {
+                    "model_identifier": "integration-test",
+                    "pipeline_version": "0.0.0",
+                    "started_at": datetime.now(UTC).isoformat(),
+                },
+                "claims": marked(claims),
+            }
+        )
+    )
+    return written, marker
+
+
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
-    """Write the fixture (idempotent: re-runs reuse and skip everything)
-    and wait until the query service holds the person's latest revision.
-    Returns (QIDs by role, source QIDs by letter)."""
+    """Write the fixture under its marked labels (write_fixture;
+    idempotent: re-runs reuse and skip everything) and wait until the
+    query service holds the person's latest revision. Returns (QIDs by
+    role, source QIDs by letter, the marked labels by role)."""
     source = {
         letter: register_artifact(
             client,
@@ -109,61 +161,58 @@ def fixture_graph(client, config):
         ).artifact_qid
         for letter in "ABC"
     }
-    written = BatchWriter(client).write_batch(
-        ClaimBatch.model_validate(
-            {
-                "extraction_run": {
-                    "model_identifier": "integration-test",
-                    "pipeline_version": "0.0.0",
-                    "started_at": datetime.now(UTC).isoformat(),
-                },
-                "claims": [
-                    # per A: married between 1946 and 1947, the marriage
-                    # over between 1956 and 1957, and observed in 1950
-                    married(
-                        source["A"],
-                        ("start_time", date(1946)),
-                        ("earliest_date", date(1946)),
-                        ("latest_start_date", date(1947)),
-                        ("end_time", date(1956)),
-                        ("earliest_end_date", date(1956)),
-                        ("latest_date", date(1957)),
-                        ("point_in_time", date(1950)),
-                    ),
-                    # per B: 1948 to 1955, outside both of A's ranges
-                    married(
-                        source["B"],
-                        ("start_time", date(1948)),
-                        ("end_time", date(1955)),
-                    ),
-                    # per C: 8 February 1947 to 2 January 1957, inside them
-                    married(
-                        source["C"],
-                        ("start_time", date(1947, 2, 8)),
-                        ("end_time", date(1957, 1, 2)),
-                    ),
-                    # observed in the town sometime between 1938 and 1939
-                    claim(
-                        PERSON,
-                        "residence",
-                        {"type": "item", "value": TOWN},
-                        source["A"],
-                        (
-                            ("point_in_time", date(1938)),
-                            ("earliest_date", date(1938)),
-                            ("latest_date", date(1939)),
-                        ),
-                    ),
-                ],
-            }
-        )
+    written, marker = write_fixture(
+        client,
+        {qid: letter for letter, qid in source.items()},
+        [
+            # per A: married between 1946 and 1947, the marriage over
+            # between 1956 and 1957, and observed in 1950
+            married(
+                source["A"],
+                ("start_time", date(1946)),
+                ("earliest_date", date(1946)),
+                ("latest_start_date", date(1947)),
+                ("end_time", date(1956)),
+                ("earliest_end_date", date(1956)),
+                ("latest_date", date(1957)),
+                ("point_in_time", date(1950)),
+            ),
+            # per B: 1948 to 1955, outside both of A's ranges
+            married(
+                source["B"],
+                ("start_time", date(1948)),
+                ("end_time", date(1955)),
+            ),
+            # per C: 8 February 1947 to 2 January 1957, inside them
+            married(
+                source["C"],
+                ("start_time", date(1947, 2, 8)),
+                ("end_time", date(1957, 1, 2)),
+            ),
+            # observed in the town sometime between 1938 and 1939
+            claim(
+                PERSON,
+                "residence",
+                {"type": "item", "value": TOWN},
+                source["A"],
+                (
+                    ("point_in_time", date(1938)),
+                    ("earliest_date", date(1938)),
+                    ("latest_date", date(1939)),
+                ),
+            ),
+        ],
     )
     qids = {
         role: written.created_items[ref["local_id"]]
         for role, ref in (("person", PERSON), ("spouse", SPOUSE))
     }
+    labels = {
+        role: f"{ref['label']} ({marker})"
+        for role, ref in (("spouse", SPOUSE), ("town", TOWN))
+    }
     wait_for_query_service(config, client, [qids["person"]])
-    return qids, source
+    return qids, source, labels
 
 
 def day(value: str) -> str:
@@ -174,7 +223,7 @@ def day(value: str) -> str:
 def test_the_spouse_statement_carries_each_bound_as_written(
     client, fixture_graph
 ):
-    qids, _ = fixture_graph
+    qids, _, _ = fixture_graph
     properties, _ = client.vocabulary()
     key_of = {pid: key for key, pid in properties.items()}
     found = client.api_get(
@@ -210,7 +259,7 @@ def test_the_spouse_statement_carries_each_bound_as_written(
 def test_the_timeline_dates_each_end_with_its_own_range(
     client, config, fixture_graph
 ):
-    qids, source = fixture_graph
+    qids, source, labels = fixture_graph
     properties, items = client.vocabulary()
     query = render_for_instance(
         load_templates()["person-timeline"],
@@ -234,9 +283,9 @@ def test_the_timeline_dates_each_end_with_its_own_range(
         )
         for row in run_sparql(config, query)
     }
-    start = "spouse: Period Fixture Spouse (start time)"
-    end = "spouse: Period Fixture Spouse (end time)"
-    observed = "spouse: Period Fixture Spouse (point in time)"
+    start = f"spouse: {labels['spouse']} (start time)"
+    end = f"spouse: {labels['spouse']} (end time)"
+    observed = f"spouse: {labels['spouse']} (point in time)"
     assert rows == {
         (start, "1946-01-01", "9", "1946-01-01", "1947-01-01", "A"),
         (end, "1956-01-01", "9", "1956-01-01", "1957-01-01", "A"),
@@ -247,7 +296,7 @@ def test_the_timeline_dates_each_end_with_its_own_range(
         (start, "1947-02-08", "11", None, None, "C"),
         (end, "1957-01-02", "11", None, None, "C"),
         (
-            "residence: Period Fixture Town (point in time)",
+            f"residence: {labels['town']} (point in time)",
             "1938-01-01",
             "9",
             "1938-01-01",
@@ -260,7 +309,7 @@ def test_the_timeline_dates_each_end_with_its_own_range(
 def test_the_report_compares_each_end_through_its_own_range(
     client, config, fixture_graph
 ):
-    qids, source = fixture_graph
+    qids, source, _ = fixture_graph
     properties, items = client.vocabulary()
     letter = {qid: name for name, qid in source.items()}
 

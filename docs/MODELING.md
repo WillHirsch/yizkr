@@ -409,13 +409,13 @@ spouse (P26):
   both partners' statements and its `DIV` date as their end time. A move
   in and a move out date a residence the same way.
 - **`point_in_time` on a spouse or residence statement dates an
-  observation**: a date at which the source shows the marriage or the
-  residence holding (a directory's listing, a census) without dating its
-  start or end. It never carries a wedding date. A source that names a
-  spouse without dating the marriage gives an undated spouse statement:
-  the document's own date is not an observation of the marriage (Ida's
-  registration card of 1945 names Felix, dead since 1931, as her
-  husband).
+  observation**: a date at which the source presents the marriage or the
+  residence as holding (a directory's listing, a census) without dating
+  its start or end. It never carries a wedding date. A source that merely
+  names a spouse, without dating the marriage, gives an undated spouse
+  statement: the document's own date is not an observation of the
+  marriage (Ida's registration card of 1945 names Felix, dead since 1931,
+  as her husband).
 - **Each end has a range of its own.** A statement has one start and
   one end, and a source may bound either, so each end takes its own pair
   of qualifiers, as on Wikidata since `latest start date` (P8555) and
@@ -430,6 +430,13 @@ spouse (P26):
   of 1946 and a latest start date of 1947; a divorce "before 1958" is an
   end time of 1958 with a latest date of 1958. An earliest date never
   bounds an end, nor a latest date a start.
+
+  These pairs bound start and end time *qualifiers*. An entity's own
+  `start_time` or `end_time` claim, such as the firm's founding in 1863
+  or the start of Leopold's detention in 1939, is a date value like a
+  date of birth: `earliest_date` and `latest_date` bound it, and the
+  disagreement report compares it as a single-valued date. A latest start
+  date or an earliest end date never qualifies such a claim.
 - **On a statement with no start or end time**, `earliest_date` and
   `latest_date` bound its point in time, as they bound a date value: a
   residence observed "between 1938 and 1939" is a point in time of 1938

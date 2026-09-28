@@ -367,8 +367,8 @@ properties:
     description: >-
       qualifier; earliest possible date for the statement's date (its value
       or its point in time), for ranges and vague sources; on a statement
-      with a start or end time (a marriage, a residence), the earliest its
-      start can be
+      with start or end time qualifiers (a marriage, a residence), the
+      earliest its start can be
     datatype: time
     wikidata: P1319
 
@@ -377,8 +377,8 @@ properties:
     description: >-
       qualifier; latest possible date for the statement's date (its value or
       its point in time), for ranges and vague sources; on a statement with
-      a start or end time (a marriage, a residence), the latest its end can
-      be
+      start or end time qualifiers (a marriage, a residence), the latest its
+      end can be
     datatype: time
     wikidata: P1326
 
@@ -391,18 +391,20 @@ properties:
   latest_start_date:
     label: latest start date
     description: >-
-      qualifier; on a statement with a start or end time (a marriage, a
-      residence), the latest its start can be: with earliest_date, the
-      range a source gives the start
+      qualifier; on a statement with start or end time qualifiers (a
+      marriage, a residence), the latest its start can be: with
+      earliest_date, the range a source gives the start. Never on a
+      start_time claim, which earliest_date and latest_date bound
     datatype: time
     wikidata: P8555
 
   earliest_end_date:
     label: earliest end date
     description: >-
-      qualifier; on a statement with a start or end time (a marriage, a
-      residence), the earliest its end can be: with latest_date, the range
-      a source gives the end
+      qualifier; on a statement with start or end time qualifiers (a
+      marriage, a residence), the earliest its end can be: with
+      latest_date, the range a source gives the end. Never on an end_time
+      claim, which earliest_date and latest_date bound
     datatype: time
     wikidata: P8554
 

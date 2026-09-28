@@ -20,8 +20,10 @@ The schema makes the archive's core conventions structural:
 * Uncertainty is structural (docs/MODELING.md): time values carry explicit
   precision (day/month/year/decade/century) and a calendar; ranges and
   approximation are expressed with `earliest_date`/`latest_date`/
-  `sourcing_circumstances` qualifiers. Nothing invites the extractor to
-  round or guess.
+  `sourcing_circumstances` qualifiers, and a range for the start or end
+  time qualifier of a period (a marriage, a residence) with that end's own
+  bounds, `latest_start_date` and `earliest_end_date` among them. Nothing
+  invites the extractor to round or guess.
 
 Vocabulary: `property` fields and vocabulary references hold *manifest
 keys* (e.g. ``spouse``, ``circa``) from model/manifest.yaml — stable,
@@ -182,10 +184,12 @@ class TimeValue(StrictModel):
     time"). For decades use the first year (1890s -> year=1890,
     precision=decade); same for centuries (1800).
     Ranges ("between 1938 and 1939") are NOT a precision problem: use
-    earliest_date/latest_date qualifiers on the claim, or for the start
-    or end of a period (a marriage, a residence) that end's own bounds:
-    earliest_date/latest_start_date for a start, earliest_end_date/
-    latest_date for an end.
+    earliest_date/latest_date qualifiers on the claim. A start_time or
+    end_time qualifier dating a period (a marriage, a residence) takes
+    that end's own bounds instead: earliest_date/latest_start_date for a
+    start, earliest_end_date/latest_date for an end. An entity's own
+    start_time or end_time claim (a firm's founding) is a date value that
+    earliest_date/latest_date bound.
     """
 
     type: Literal["time"] = "time"
@@ -213,7 +217,7 @@ class TimeValue(StrictModel):
             self.precision = finest
         elif self.precision in ("century", "decade"):
             # Coarse precisions are expressed through their first year
-            # (1920s -> year=1920), so a bare year is expected; month/day
+            # (1890s -> year=1890), so a bare year is expected; month/day
             # would claim more than the source says.
             if finest != "year":
                 raise ValueError(

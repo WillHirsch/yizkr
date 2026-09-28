@@ -57,10 +57,11 @@ class TestTheExtractionPrompts:
         rule = dating_rule(prompt)
         assert (
             "`point_in_time` on a spouse or residence claim only records a "
-            "date at which the source shows the marriage or the residence "
-            "holding"
+            "date at which the source presents the marriage or the "
+            "residence as holding (a census, a directory entry), never a "
+            "wedding date; a document that merely names a spouse gives no "
+            "such date."
         ) in rule
-        assert "never a wedding date" in rule
 
     @PROMPTS
     def test_a_range_bounds_one_end(self, prompt):
@@ -75,6 +76,19 @@ class TestTheExtractionPrompts:
         ) in rule
         assert 'divorced "before Z" is end_time Z with latest_date Z' in rule
 
+    @PROMPTS
+    def test_an_entitys_own_start_or_end_is_a_date_value(self, prompt):
+        # a firm's founding or a detention's start is a start_time claim,
+        # which the report compares as a single-valued date bounded by its
+        # earliest and latest date: the pairs of the ends bound qualifiers
+        # only
+        assert (
+            "These pairs bound `start_time` and `end_time` qualifiers; an "
+            "entity's own `start_time` or `end_time` claim (a firm's "
+            "founding, a detention's start) is a date value that "
+            "`earliest_date` and `latest_date` bound."
+        ) in dating_rule(prompt)
+
     def test_both_prompts_give_the_same_rule(self):
         assert dating_rule(CHUNK_PROMPT) == dating_rule(EXTRACTION_PROMPT)
 
@@ -88,6 +102,23 @@ class TestTheExtractionPrompts:
         assert "the latest its start can be" in lines["latest_start_date"]
         assert "the earliest its end can be" in lines["earliest_end_date"]
         assert "the latest its end can be" in lines["latest_date"]
+        # each for a statement's start and end time qualifiers, never for
+        # an entity's own start or end time claim
+        for key in (
+            "earliest_date",
+            "latest_date",
+            "latest_start_date",
+            "earliest_end_date",
+        ):
+            assert "with start or end time qualifiers" in lines[key], key
+        assert (
+            "Never on a start_time claim, which earliest_date and "
+            "latest_date bound" in lines["latest_start_date"]
+        )
+        assert (
+            "Never on an end_time claim, which earliest_date and "
+            "latest_date bound" in lines["earliest_end_date"]
+        )
 
     def test_the_schema_names_the_bounds_of_each_end(self):
         # the TimeValue docstring is the schema's description, which the
@@ -95,8 +126,14 @@ class TestTheExtractionPrompts:
         schema = ClaimBatch.model_json_schema()
         description = flat(schema["$defs"]["TimeValue"]["description"])
         assert (
+            "A start_time or end_time qualifier dating a period (a "
+            "marriage, a residence) takes that end's own bounds instead: "
             "earliest_date/latest_start_date for a start, "
-            "earliest_end_date/ latest_date for an end"
+            "earliest_end_date/latest_date for an end."
+        ) in description
+        assert (
+            "An entity's own start_time or end_time claim (a firm's "
+            "founding) is a date value that earliest_date/latest_date bound."
         ) in description
 
 
@@ -147,8 +184,8 @@ def values_rows(template: str, *variables: str) -> list[tuple[str, ...]]:
 class TestThePersonTimeline:
     """person-timeline.rq lists a marriage by its spouse statement's start
     and end time, a point in time as an observation, and each date with the
-    range its source states for it. Live, the query service runs it
-    (tests/integration/test_live_queries.py)."""
+    range its source states for it. tests/integration/test_live_period_dates.py
+    pins its rows for a fictional marriage on the running stack."""
 
     @pytest.fixture
     def q(self) -> str:
