@@ -91,25 +91,53 @@ Transcription of artifact {artifact_qid} (language: {language}):
 
 
 def run_metadata(model_identifier: str) -> ExtractionRunMetadata:
-    try:
-        commit = (
-            subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=Path(__file__).parent,
-            ).stdout.strip()
-            or None
-        )
-    except OSError:
-        commit = None
     return ExtractionRunMetadata(
         model_identifier=model_identifier,
         pipeline_version=yizkr.__version__,
-        software_commit=commit,
+        software_commit=_software_commit(),
         started_at=datetime.now(UTC),
     )
+
+
+# The commit git gave for this code's checkout, once it has given one.
+_commit: str | None = None
+
+
+def _software_commit() -> str | None:
+    """The short commit of the git checkout this code runs from, or None
+    when git gives none (see _ask_git_for_commit).
+
+    Every batch asks git until it answers, so a failed ask costs only its
+    own batch the commit. The first answer is kept for the process, and
+    later batches name the same commit without starting git; batches that
+    ask at the same moment as the first may each start git."""
+    global _commit
+    if _commit is None:
+        commit = _ask_git_for_commit()
+        if commit is None:
+            return None
+        _commit = commit
+    return _commit
+
+
+def _ask_git_for_commit() -> str | None:
+    """git's short commit for the checkout this code runs from, or None
+    when git cannot be started (it is missing, say, or the process is out
+    of processes or descriptors), exits with an error (outside a checkout)
+    or prints no commit. A git that runs past the timeout raises
+    subprocess.TimeoutExpired."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=Path(__file__).parent,
+        )
+    except OSError:
+        return None
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and commit else None
 
 
 def scan_json_objects(response: str) -> list[dict]:
@@ -286,9 +314,12 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
-# The renderers below run per chunk and parse + validate the whole
-# manifest, which ships as package data and cannot change mid-run.
-# Cached so a hundred-chunk document pays for it once.
+# The renderers below run for every extraction prompt, chunk prompts
+# included, and what they render cannot change mid-run: the manifest
+# ships as package data, and the claim schema is built from the claim
+# models. Rendering parses and validates the whole manifest, or builds
+# the whole schema, so each is cached and a hundred-chunk document pays
+# for it once.
 
 
 @lru_cache(maxsize=1)
@@ -338,6 +369,13 @@ def entity_kind_prompt_lines() -> tuple[str, str]:
     )
 
 
+@lru_cache(maxsize=1)
+def claim_schema_prompt_text() -> str:
+    """The claim JSON Schema, as the single-call and chunk prompts carry
+    it."""
+    return json.dumps(ClaimBatch.model_json_schema(), indent=2)
+
+
 class LlmClaimExtractor:
     """Single-call extraction: one prompt, one NDJSON answer.
 
@@ -363,10 +401,9 @@ class LlmClaimExtractor:
     def extract(
         self, transcription: Transcription, artifact_qid: str
     ) -> ClaimBatch:
-        schema = json.dumps(ClaimBatch.model_json_schema(), indent=2)
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
-            schema=schema,
+            schema=claim_schema_prompt_text(),
             property_keys=property_keys,
             item_keys=item_keys,
             kinds=entity_kind_prompt_lines()[0],
