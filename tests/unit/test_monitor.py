@@ -680,8 +680,14 @@ class TestAlerts:
 
     def test_the_views_tag_each_alert(self, summary):
         view = render_terminal(summary, width=200)
-        lines = [line for line in view.splitlines() if "fallback" in line]
-        assert "carried" in lines[-1] and POSTCARD[:10] in lines[-1]
+        (line,) = [
+            line
+            for line in view.splitlines()
+            if "fallback manifest" in line and POSTCARD[:10] in line
+        ]
+        assert line.split()[1] == "carried"
+        (line,) = [line for line in view.splitlines() if CERT[:10] in line]
+        assert line.split()[1] == "new"
         page = render_html(summary)
         assert '<span class="muted">carried</span>' in page
         assert '<span class="warn">new</span>' in page
