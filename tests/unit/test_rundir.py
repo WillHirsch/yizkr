@@ -273,8 +273,9 @@ else:
 
 class TestTheAppendLock:
     """An append locks the log from before it reads the last byte until
-    its record is written, so a writer in another process that dies
-    mid-write costs only its own record (#271)."""
+    its record is written, so, wherever the lock holds, a writer in
+    another process that dies mid-write costs only its own record; where
+    lockf fails, the append goes ahead unlocked (#271)."""
 
     def test_an_append_checks_the_last_line_after_the_lock_is_free(
         self, tmp_path, monkeypatch
