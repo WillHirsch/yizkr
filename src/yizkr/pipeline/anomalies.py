@@ -712,7 +712,8 @@ def document_pages(
 class _Tail:
     """The complete lines appended to a log since the last read, as
     objects: a line its writer has not ended yet waits for the next read,
-    and a line that is not a JSON object is skipped. Only lines holding
+    and a line that is not a JSON object, including one nested too deeply
+    for the decoder to recurse through, is skipped. Only lines holding
     `marker` are parsed, so reading the log from its start costs little.
     A log that shrinks is read again from its start."""
 
@@ -741,7 +742,7 @@ class _Tail:
                     continue
                 try:
                     entry = json.loads(line.decode("utf-8"))
-                except ValueError:
+                except (ValueError, RecursionError):
                     continue
                 if isinstance(entry, dict):
                     entries.append(entry)
@@ -890,15 +891,15 @@ def _pause_stretches(
 
 def _requests(data: bytes) -> list[dict]:
     """The requests in a control file's bytes, read as stages.read_jsonl
-    reads a log: split at newlines only, with a torn or blank line
-    skipped."""
+    reads a log: split at newlines only, with a torn or blank line, or one
+    nested too deeply for the decoder to recurse through, skipped."""
     requests = []
     for line in data.split(b"\n"):
         if not line.strip():
             continue
         try:
             entry = json.loads(line.decode("utf-8"))
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(entry, dict):
             requests.append(entry)
@@ -1715,7 +1716,7 @@ def _excerpt_language(claim: Any) -> Any:
 def _read_json(path: Any) -> Any:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, RecursionError):
         return None
 
 

@@ -1409,3 +1409,13 @@ class TestStreamEvents:
         result = {"type": "result", "is_error": False}
         stream = f"{json.dumps(event)}\r\n{json.dumps(result)}\r\n"
         assert llm._stream_events(stream) == [event, result]
+
+    def test_a_deeply_nested_line_is_dropped(self):
+        """A line nested past Python's recursion limit makes `json.loads`
+        raise RecursionError, not `json.JSONDecodeError`: it is dropped
+        like any other line that fails to parse, and the events around
+        it are kept (#285)."""
+        event = {"type": "system", "subtype": "init"}
+        result = {"type": "result", "is_error": False}
+        stream = f"{json.dumps(event)}\n{'[' * 100_000}\n{json.dumps(result)}"
+        assert llm._stream_events(stream) == [event, result]
