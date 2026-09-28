@@ -61,6 +61,9 @@ values and N source-attributed values, and everything still works.*
   the deployed stack via `make test-live`. Substantial behavior changes
   to write paths get a live test, not just a session's manual check.
   Live tests run on the one instance, which scratch runs reset.
+  `docs/TESTING.md` covers the test layers, targeted and full runs,
+  parallel runs, the mutation harness, the query-engine sandbox and the
+  live-stack lock.
 - Scratch-diff evidence: a change to a stage before write (its code, a
   prompt, the manifest, a model or its parameters) is checked by a
   whole-corpus scratch run: its aggregate report and its diff against
@@ -98,8 +101,9 @@ values and N source-attributed values, and everything still works.*
 
 ## Agent execution & data boundary
 
-Every change goes issue → branch → draft PR → review → ready → owner
-merge; see `docs/AGENT_PROTOCOL.md` and ADR-0024.
+Every change goes issue → branch → self-check → draft PR → review →
+ready → owner merge; see `docs/AGENT_PROTOCOL.md` (§4 has the pre-review
+self-check) and ADR-0024.
 
 - **Local-only data** is read only by local sessions and never copied
   into the repository, GitHub or a cloud agent's session: the corpus

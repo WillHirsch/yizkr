@@ -203,8 +203,11 @@ make wdqs-sandbox-down  # or: uv run python scripts/wdqs_sandbox.py down
   does, through the vocabulary map beside the graph loaded last
   (`--vocab` names another; `--raw` sends a finished query as it is). It
   prints the rows as tab-separated values and the engine's wall time.
-  `query` stops at `--timeout` (default 100 s) and `load` at its own
-  (default 90 s), so that a command ends within two minutes.
+  The engine stops each run of a query at `--timeout` (default 100 s),
+  and `load` stops each request it sends (the emptying of `--replace`,
+  then one per file) at its own (default 90 s), so each request ends
+  within two minutes. A command that sends several (`query --repeat N`,
+  `load --replace`, a load of several files) can take longer.
 - **Stopping.** Every query that `query` sends carries a marker, so
   Ctrl-C or SIGTERM during `query` cancels that query in the engine, and
   nothing else, and kills its curl. During a load, or the emptying of
