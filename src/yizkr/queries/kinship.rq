@@ -3,12 +3,16 @@
 # child) — never stored. Second-order relations (grandparent, aunt/uncle,
 # cousin, in-law) are property PATHS; the same term set describes any
 # pair, so a frontend reuses this to answer "how are A and B related?".
+# Each row reads "?relative is ?subject's ?relationship". A term a source
+# asserts with `relative` + `kinship_type` is read as ADR-0018 records
+# it: the statement's subject is the person the term names (the row's
+# ?relative), and its value is the ego (the row's ?subject).
 #
-# Gendered terms (father vs mother, aunt vs uncle) come from
-# `sex_or_gender`; where sex is unknown the neutral term is used — never
-# guessed. This starter covers the common relations; degrees ("great-",
-# "once removed", half- vs full) are a frontend extension over the same
-# primitives.
+# Gendered terms (father vs mother, aunt vs uncle) come from the
+# ?relative's `sex_or_gender`; where sex is unknown the neutral term is
+# used — never guessed. This starter covers the common relations; degrees
+# ("great-", "once removed", half- vs full) are a frontend extension over
+# the same primitives.
 #
 # For one subject, append e.g.:  FILTER(?subject = wd:Q26)
 SELECT DISTINCT ?subject ?subjectLabel ?relative ?relativeLabel ?relationship
@@ -69,10 +73,12 @@ WHERE {
       ?subject wdt:{P:spouse}/(wdt:{P:sibling}|^wdt:{P:sibling}) ?relative .
       BIND("sibling-in-law" AS ?base)
     }
-    # --- source-asserted compound relation (the `relative` fallback) --
+    # --- source-asserted compound relation (the `relative` fallback:
+    #     X relative Y, kinship type T ⇒ X is Y's T, so the edge's
+    #     SUBJECT is the relative and its value the ego; ADR-0018) -----
     UNION {
-      ?subject p:{P:relative} ?rst .
-      ?rst ps:{P:relative} ?relative .
+      ?relative p:{P:relative} ?rst .
+      ?rst ps:{P:relative} ?subject .
       OPTIONAL { ?rst pq:{P:kinship_type} ?asserted }
       BIND(COALESCE(?asserted, "relative") AS ?base)
     }
