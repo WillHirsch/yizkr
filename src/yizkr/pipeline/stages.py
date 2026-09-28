@@ -118,11 +118,15 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 
 def read_jsonl(path: Path) -> list[dict]:
-    """Entries of an append-only log; a torn last line is skipped."""
+    """Entries of an append-only log; a torn last line is skipped.
+
+    Records are split at newlines only: a record's strings may hold other
+    line separators (U+2028, U+2029, U+0085), which the writers leave raw.
+    """
     if not path.is_file():
         return []
     entries = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").split("\n"):
         if not line.strip():
             continue
         try:
