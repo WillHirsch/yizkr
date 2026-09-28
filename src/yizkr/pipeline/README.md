@@ -88,10 +88,10 @@ An extraction that ends with no claims because the model's answers could
 not be used fails its document too (ADR-0006 §5): a chunk failed, the
 chunks' answers held JSON objects with content the parser cannot read
 as claims (claims wrapped in one object or carried in the sentinel, say,
-or written with other keys; an empty object such as `{}` counts for
-nothing), or validation rejected every claim. The `error` leads with
-that outcome and names every cause, then any fallback tier taken, with
-each attempt's reason. A chunk that failed because its engine call
+or written with other keys; an object that holds nothing at any depth,
+such as `{}` or `{"claims": [{}]}`, counts for nothing), or validation
+rejected every claim. The `error` leads with that outcome and names
+every cause, then any fallback tier taken, with each attempt's reason. A chunk that failed because its engine call
 failed, or its answer was cut off, is asked again on the next run. A
 failure the model's answers caused is not cured by re-running: the LLM
 cache replays the same answers, at no engine cost, and they fail the

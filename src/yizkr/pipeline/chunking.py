@@ -481,8 +481,15 @@ def parse_chunk_gaps(response: str) -> list[dict]:
     return gaps
 
 
-# the keys a terminal sentinel carries (CHUNK_PROMPT)
-SENTINEL_KEYS = frozenset({"done", "claims_emitted", "gaps_emitted"})
+def _holds(value: Any) -> bool:
+    """Whether a JSON value holds something at any depth: an object when
+    one of its values does, a list when one of its items does, anything
+    else when it is not empty (null, false, 0 or "")."""
+    if isinstance(value, dict):
+        return any(_holds(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_holds(item) for item in value)
+    return bool(value)
 
 
 def parse_chunk_unread(response: str) -> list[dict]:
@@ -490,13 +497,17 @@ def parse_chunk_unread(response: str) -> list[dict]:
     parser cannot read: claims wrapped in one object, say, or written with
     other keys than `subject` and `property`.
 
-    Whether an object holds something decides, not its shape. A claim and
-    a gap line (well formed or not) are read. The terminal sentinel is
-    read too, unless a key of its own beside the sentinel's holds a
-    non-empty list or object, such as claims carried inside it; a note in
-    a string beside it is harmless. Any other object is unread unless all
-    its values are empty (null, false, 0, "", [] or {}), as in `{}` or
-    `{"claims": []}`, which say there is nothing.
+    Whether an object holds something (_holds) decides, not its shape. A
+    claim and a gap line (well formed or not) are read. The terminal
+    sentinel is read too, unless one of its keys holds a list or object
+    that holds something, such as claims carried inside it. A note in a
+    string on it is harmless, and so is its `gap` key, a gap line merged
+    into it, which parse_chunk_gaps reads; a list of notes or of line
+    numbers on it is unread, since a failure that shows, which `--refresh
+    extract` asks the model again for, is preferred to claims lost in
+    silence. Any other object is unread unless it holds nothing at any
+    depth, as in `{}`, `{"claims": []}` or `{"result": {"claims": [{}]}}`,
+    which say there is nothing.
 
     They are counted, never guessed at. A chunk whose answer held such
     objects and no claim reads as unreadable rather than as answered with
@@ -509,15 +520,15 @@ def parse_chunk_unread(response: str) -> list[dict]:
             carried = [
                 value
                 for key, value in obj.items()
-                if key not in SENTINEL_KEYS
+                if key != "gap"
                 and isinstance(value, (list, dict))
-                and value
+                and _holds(value)
             ]
             if carried:
                 unread.append(obj)
         elif "gap" in obj or ("subject" in obj and "property" in obj):
             continue
-        elif any(obj.values()):
+        elif _holds(obj):
             unread.append(obj)
     return unread
 
@@ -1315,7 +1326,7 @@ class ChunkedClaimExtractor:
         if self._unread:
             count = sum(len(objects) for objects in self._unread.values())
             first, objects = next(iter(self._unread.items()))
-            keys = _brief(", ".join(map(str, objects[0])) or "none")
+            keys = _brief(", ".join(map(str, objects[0])))
             plural = "" if count == 1 else "s"
             causes.append(
                 f"{count} unreadable object{plural} in the chunk answers "

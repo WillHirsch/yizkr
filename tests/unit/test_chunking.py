@@ -483,35 +483,60 @@ class TestChunkResponseContract:
 
     def test_objects_neither_claim_gap_nor_sentinel_are_unread(self):
         """What the claim parser cannot read is counted, not guessed at, and
-        what an object holds decides, not its shape (#45). Unread: a
-        wrapper object, a claim that names its property `predicate`, and a
-        sentinel that carries claims. Read: claims, gap lines, well formed
-        or not, the sentinel, a sentinel with a note in a string, and
-        objects that hold nothing, which say there is nothing."""
+        what an object holds, at any depth, decides, not its shape (#45).
+        Unread: a wrapper object, a claim that names its property
+        `predicate` or is written flat under another key, any other object
+        that holds something (a number, or a note beside the sentinel), and
+        a sentinel that carries a list or object that holds something under
+        any key. Read: claims, gap lines, well formed or not, the sentinel,
+        a sentinel with a note in a string, an empty list or object, or a
+        gap line merged into it, and objects that hold nothing at any
+        depth, which say there is nothing."""
         born = claim("e1", "Hildegard Löbig", 1876)
         renamed = json.loads(with_predicate([born]).splitlines()[0])
-        carrying = {"claims": [born], "done": True, "claims_emitted": 1}
-        response = "\n".join(
-            json.dumps(obj)
-            for obj in (
-                born,
-                {"gap": {"subject": "e1", "predicate": "godparent of"}},
-                {"gap": "not an object"},
-                {"claims": [born]},
-                renamed,
-                {},
-                {"claims": []},
-                carrying,
-                {"done": True, "claims_emitted": 0, "note": "nothing else"},
-                {"done": True, "claims_emitted": 0, "claims": []},
-                {"done": True, "claims_emitted": 1, "gaps_emitted": 2},
-            )
-        )
-        assert parse_chunk_unread(response) == [
+        godparent = {"subject": "e1", "predicate": "godparent of"}
+        read = [
+            born,
+            {"gap": godparent},
+            {"gap": "not an object"},
+            {},
+            {"claims": []},
+            {"claims": [[]]},
+            {"claims": [{}]},
+            {"result": {"claims": []}},
+            {"output": {"claims": [], "gaps": []}},
+            {"done": True, "claims_emitted": 0, "note": "nothing else"},
+            {"done": True, "claims_emitted": 0, "claims": []},
+            {"done": True, "claims_emitted": 0, "result": {"claims": []}},
+            {
+                "done": True,
+                "claims_emitted": 0,
+                "gaps_emitted": 1,
+                "gap": godparent,
+            },
+            {"done": True, "claims_emitted": 1, "gaps_emitted": 2},
+        ]
+        unread = [
             {"claims": [born]},
             renamed,
-            carrying,
+            {"claim": "Hildegard Löbig, born 1876"},
+            {"count": 2},
+            {"note": "nothing else"},
+            {"claims": [born], "done": True, "claims_emitted": 1},
+            {"done": True, "claims_emitted": 1, "people": [born]},
+            {"done": True, "claims_emitted": 1, "output": {"claims": [born]}},
+            {"done": True, "claims_emitted": [born]},
+            # kept on purpose: a failure that shows, which --refresh extract
+            # asks again, rather than claims lost in silence
+            {"done": True, "claims_emitted": 0, "notes": ["nothing else"]},
+            {"done": True, "claims_emitted": 0, "lines": [1, 4]},
         ]
+        response = "\n".join(json.dumps(obj) for obj in (*read, *unread))
+        assert parse_chunk_unread(response) == unread
+        assert (
+            parse_chunk_gaps(response)
+            == [{**godparent, "object": "", "evidence": ""}] * 2
+        )
 
 
 class TestGapChannel:
@@ -1370,8 +1395,20 @@ class TestExtractionsWithoutClaims:
             {},
             {"claims": []},
             {"claims": [], "claims_emitted": 0},
+            {"result": {"claims": []}},
+            {"output": {"claims": [], "gaps": []}},
+            {"claims": [[]]},
+            {"claims": [{}]},
         ],
-        ids=["empty-object", "empty-wrapper", "empty-wrapper-and-count"],
+        ids=[
+            "empty-object",
+            "empty-wrapper",
+            "empty-wrapper-and-count",
+            "nested-empty-wrapper",
+            "nested-empty-lists",
+            "empty-list-in-list",
+            "empty-object-in-list",
+        ],
     )
     @pytest.mark.parametrize(
         "sentinel",
@@ -1379,16 +1416,30 @@ class TestExtractionsWithoutClaims:
             {"done": True, "claims_emitted": 0},
             {"done": True, "claims_emitted": 0, "note": "nothing here"},
             {"done": True, "claims_emitted": 0, "claims": []},
+            {"done": True, "claims_emitted": 0, "result": {"claims": []}},
+            {
+                "done": True,
+                "claims_emitted": 0,
+                "gaps_emitted": 1,
+                "gap": {"subject": "e1", "predicate": "godparent of"},
+            },
         ],
-        ids=["sentinel", "sentinel-with-note", "sentinel-with-no-claims"],
+        ids=[
+            "sentinel",
+            "sentinel-with-note",
+            "sentinel-with-no-claims",
+            "sentinel-with-nested-nothing",
+            "sentinel-with-gap",
+        ],
     )
     def test_answers_that_hold_nothing_leave_a_claim_free_batch(
         self, tmp_path, extra, sentinel
     ):
-        """An object that holds nothing beside the sentinel, and a note in a
-        string or an empty list on it, say there is nothing: the chunks
-        answered with none, and the page is claim-free rather than failing
-        on every run from the cache (#45)."""
+        """An object that holds nothing at any depth beside the sentinel,
+        and a note in a string, a list or object that holds nothing, or a
+        gap line merged into it, say there is nothing: the chunks answered
+        with none, and the page is claim-free rather than failing on every
+        run from the cache (#45)."""
         answer = "\n".join(json.dumps(obj) for obj in (extra, sentinel))
         llm = ScriptedLlm([entity_manifest_json(), answer, answer])
         extractor = self.extractor(llm, tmp_path, budget=LINE_LENGTH)
