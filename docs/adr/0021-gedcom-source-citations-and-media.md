@@ -182,10 +182,10 @@ and circa, so that the alternatives coexist (ADR-0002):
   "Marriages, residences and other periods"). Pairing only the first
   keeps each MARR's and each DIV's date on one pair of claims, rather than
   pairing every marriage with every divorce;
-- what dates nothing (`1 BIRT Y`, `1 MARR Y`, a date the grammar cannot
-  parse) adds no undated claim beside a dated one of the same event or
-  family, so it never hides a dated one. An undated DIV is still counted
-  as `DIV`, as above.
+- what gives nothing to claim (`1 BIRT Y`, `1 MARR Y`, a date the
+  grammar cannot parse) adds no claim beside one that does, so it never
+  hides one, while an undated MARR that gives a place keeps it on a pair
+  of its own. An undated DIV is still counted as `DIV`, as above.
 
 These are mapped rather than counted because each is something the record
 states that a claim of the model can hold, and a claim of its own keeps

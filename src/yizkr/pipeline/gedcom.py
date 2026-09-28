@@ -40,10 +40,11 @@ burial, a residence, an occupation, a marriage), each of the event's dates
 is paired with each of its places. A family's first marriage (a date with
 a place) and its first divorce date one pair of spouse claims, as a
 family's only MARR and DIV do, and every other marriage or divorce dates a
-pair of its own. What dates nothing (`1 BIRT Y`, `1 MARR Y`, a date the
-grammar cannot parse) never hides what does: it adds no undated claim
-beside a dated one of the same event or family. A claim the batch holds
-already, from an event that restates another, is not added again.
+pair of its own. What gives nothing to claim (`1 BIRT Y`, `1 MARR Y`, a
+date the grammar cannot parse) never hides what does: it adds no claim
+beside one that does, while an undated MARR that gives a place keeps it
+on a pair of its own. A claim the batch holds already, from an event
+that restates another, is not added again.
 
 Supported (the fields family-tree exports actually carry):
 individuals (names -> label + aliases, PLUS typed referenced name

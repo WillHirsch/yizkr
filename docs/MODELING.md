@@ -426,9 +426,9 @@ spouse (P26):
   the GEDCOM adapter writes a family's `MARR` date as the start time of
   both partners' statements and its `DIV` date as their end time. A
   family that repeats a `MARR` or a `DIV`, as GEDCOM states an
-  alternative, gets a further pair of statements for each alternative,
-  with its own date, place and circa, beside the pair that its first
-  marriage and first divorce date: an export that dates Leopold and
+  alternative, gets a pair of statements of its own for each alternative
+  date or place it gives, with its own circa, beside the pair that its
+  first marriage and first divorce date: an export that dates Leopold and
   Agnes's marriage both 8 February 1947 and 1947 gives one pair that
   starts on 8 February 1947 and one that starts in 1947. A move
   in and a move out date a residence the same way, and the adapter reads
