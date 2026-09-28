@@ -137,9 +137,9 @@ surgery. The re-run frequency is a *surface* concern, and
 the right place to remove it is a thin stateful layer **on top** — the
 planned human frontend, or a future optional `--watch`/`--loop` mode that
 re-invokes when a reviewed CSV appears — driving the stateless core rather
-than replacing it. That layer is out of scope here (#171); this ADR only requires
-that the docs state plainly that advancing the process currently means
-re-running `ingest run`.
+than replacing it. That layer is out of scope here (#171); this ADR only
+requires that the docs state plainly that advancing the process currently
+means re-running `ingest run`.
 
 ### 5. `reconcile-graph` retained, demoted
 

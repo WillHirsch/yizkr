@@ -28,8 +28,8 @@ phase is throwaway.
   W2 and W3 coexist (immich for photos, IIIF for documents).
 - **Frontend ladder:** SPARQL embeds → static publish tier (scheduled
   SPARQL exports rendered as a static site: map browse, timelines,
-  galleries) → custom plural-display SPA over SPARQL (+ IIIF in W2;
-  #165).
+  galleries) → custom plural-display SPA (#165) over SPARQL (+ IIIF
+  in W2).
 
 ## Consequences
 
