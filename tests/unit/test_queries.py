@@ -112,250 +112,147 @@ def group_at(template: str, marker: str) -> str:
 
 
 class TestDisagreementReport:
-    """The flagship R2 view (ADR-0002): values that different artifacts
-    attribute, side by side. Coexistence is cross-source only (ADR-0023
-    §4), rank is an optional overlay, and the rows are a resting state.
-    tests/integration/test_live_disagreement.py pins the rows live."""
+    """The flagship R2 view (ADR-0002), fetched by two flat queries and
+    compared in Python (ADR-0033): disagreement-report.rq lists the
+    attributed values of the compared properties, place-containment.rq the
+    recorded containment, and yizkr.disagreement compares them
+    (tests/unit/test_disagreement.py). The published page lists the values
+    side by side, not pairs. tests/integration/test_live_disagreement.py
+    pins the report's rows live."""
 
     @pytest.fixture
     def q(self, templates) -> str:
         return templates["disagreement-report"]
 
-    @staticmethod
-    def single_valued(q: str) -> set[str]:
-        places, others = values_blocks(q, "property")
-        return places | others
+    @pytest.fixture
+    def containment(self, templates) -> str:
+        return templates["place-containment"]
 
-    def test_single_valued_properties_include_event_dates_and_birth_name(
-        self, q
-    ):
-        assert self.single_valued(q) == {
-            "date_of_birth",
-            "date_of_death",
-            "place_of_birth",
-            "place_of_death",
-            "father",
-            "mother",
-            "birth_name",
-            # an event's own dates (#136)
-            "point_in_time",
-            "start_time",
-            "end_time",
-            "coordinate_location",
-            "geonames_id",
-            "whg_place_id",
-        }
+    def test_it_fetches_every_property_the_comparison_compares(self, q):
+        from yizkr.disagreement import COMPARED, DATED, SINGLE_VALUED
 
-    def test_accumulating_properties_never_compare_values(self, q):
-        # spouse and residence accumulate over a life (MODELING.md
-        # "Contradictions"), and so do the other typed names
-        assert not self.single_valued(q) & {
-            "residence",
-            "spouse",
+        (fetched,) = values_blocks(q, "property")
+        assert fetched == COMPARED
+        # the single-valued properties, an event's own dates among them
+        # (#136), and the two that accumulate but are dated
+        assert sorted(DATED) == ["residence", "spouse"]
+        assert {"birth_name", "point_in_time", "start_time"} <= SINGLE_VALUED
+
+    def test_accumulating_names_are_never_fetched(self, q):
+        # married names, nicknames, official names and appellations
+        # accumulate over a life (MODELING.md "Contradictions")
+        (fetched,) = values_blocks(q, "property")
+        assert not fetched & {
             "married_name",
             "nickname",
             "official_name",
             "referred_to_as",
         }
 
-    def test_one_residence_or_spouse_compares_its_start_and_end(self, q):
-        # "arrived there in 1938 per one source, in 1939 per another"; a
-        # point in time on a residence dates an observation, not the range
-        assert values_pairs(q, "property", "qualifier") == {
-            ("residence", "start_time"),
-            ("residence", "end_time"),
-            ("spouse", "start_time"),
-            ("spouse", "end_time"),
-        }
+    def test_it_lists_statements_and_pairs_none(self, q):
+        # flat and linear: one statement per row, no pairing, grouping or
+        # path walked (the comparison pairs them in Python)
+        for pairing in ("?stA", "?stB", "GROUP BY", "HAVING", "NOT EXISTS"):
+            assert pairing not in q, pairing
+        assert re.search(r"\)[*+]", q) is None
+        # the only filters pick a label's language
+        filters = re.findall(r"FILTER\s*\((.*)", q)
+        assert filters
+        assert all(f.startswith("LANG(") for f in filters), filters
 
-    def test_containment_is_checked_for_place_values_only(self, q):
-        # a place inside the other is a difference of resolution; only the
-        # place-valued pairs follow the containment path, starting from a
-        # statement's own value so that the path is seeded by it rather
-        # than walked over the whole graph (#136)
-        places, _ = values_blocks(q, "property")
-        assert places == {"place_of_birth", "place_of_death"}
-        path = "wdt:{P:location}|wdt:{P:part_of}"
-        place_arm = group_at(q, "VALUES ?property { wd:{P:place_of_birth}")
-        assert place_arm.count(path) == q.count(path) == 4
-        for side in "AB":
-            assert f"?rawValue{side} (<http" in place_arm
-
-    def test_only_pairs_from_different_artifacts_count(self, q):
-        # a value needs a stated-in source, a page fragment counts as its
-        # artifact, and a group's sources must not all be one artifact
-        assert "FILTER(BOUND(?sourceA) && BOUND(?sourceB))" in q
-        having = " ".join(q.split("HAVING", 1)[1].split("ORDER BY")[0].split())
-        artifact = {
-            side: f"STR(COALESCE(?whole{side}, ?source{side}))"
-            for side in "AB"
-        }
-        # the sources are all one artifact exactly when the smallest and
-        # largest artifact of each side are that same artifact
-        assert having == (
-            f"(MIN({artifact['A']}) != MAX({artifact['B']}) "
-            f"|| MAX({artifact['A']}) != MIN({artifact['B']}))"
-        )
-        for side in "AB":
-            lookup = group_at(
-                q, f"?st{side} prov:wasDerivedFrom/pr:{{P:stated_in}}"
-            )
-            # the source is looked up in an OPTIONAL after the pair
-            # sub-select: a required pattern beside a sub-select is
-            # evaluated first, across every statement in the graph
-            assert lookup.startswith("{") and q[
-                : q.index(lookup)
-            ].rstrip().endswith("OPTIONAL")
-            # the fragment and label lookups sit inside it: at group level
-            # they would bind a missing source to any fragment or label
-            assert "wd:{Q:artifact_fragment}" in lookup
-            assert f"?source{side}LabelRaw" in lookup
-
-    def test_deprecated_values_are_out_and_preferred_is_never_needed(self, q):
-        for side in "AB":
-            assert f"OPTIONAL {{ ?st{side} wikibase:rank ?rank{side} . }}" in q
-        assert (
-            "FILTER(?rankA != wikibase:DeprecatedRank "
-            "&& ?rankB != wikibase:DeprecatedRank)"
-        ) in q
-        # rule 4: no preference is read, and no best-rank shortcut hides
-        # a normal value beside a preferred one
-        assert "PreferredRank" not in q
-        assert "BestRank" not in q
-        for key in self.single_valued(q) | {"residence", "spouse"}:
+    def test_every_statement_is_listed_with_its_rank(self, q):
+        # rank is an overlay the comparison reads (rule 4): nothing
+        # filters on it, and no truthy triple, which holds best-rank values
+        # only, stands in for a statement
+        projection = q.split("WHERE", 1)[0]
+        assert "?rank" in projection
+        assert "?statement ?ps ?value ;" in q
+        assert "wikibase:rank ?rank" in q
+        for rank in ("DeprecatedRank", "PreferredRank", "BestRank"):
+            assert rank not in q
+        (fetched,) = values_blocks(q, "property")
+        for key in fetched:
             assert f"wdt:{{P:{key}}}" not in q, key
 
-    def test_names_compare_as_text_and_case_variants_share_a_row(self, q):
-        # the comparison key: a name's text without case or language tag,
-        # an item through its merge redirect, any other value as written
-        group_by = q.split("GROUP BY", 1)[1].split("HAVING", 1)[0]
-        keys = {}
-        for side in "AB":
-            keys[side] = key = (
-                f"IF(isLiteral(?rawValue{side}) && LANG(?rawValue{side}) "
-                f'!= "", LCASE(STR(?rawValue{side})), '
-                f"STR(COALESCE(?canonical{side}, ?rawValue{side})))"
-            )
-            # it orders each pair once, and it groups the rows
-            assert q.count(key) == 2, side
-            assert f"{key} AS ?key{side})" in group_by
-            # spellings that share a key are one row: one spelling shown,
-            # the sources of all of them listed
-            assert (
-                f"(MIN(COALESCE(?canonical{side}, ?rawValue{side})) "
-                f"AS ?value{side})"
-            ) in q
-        # each pair of values once, in key order: never both orientations
-        # (two dates stored alike are ordered by their spans and bounds)
-        flat = " ".join(q.split())
-        assert (
-            f"FILTER({keys['A']} < {keys['B']} "
-            "|| sameTerm(?rawValueA, ?rawValueB))"
-        ) in flat
-
-    def test_a_date_spans_its_precision_or_its_stated_range(self, q):
-        # rule 5: a range a source states with earliest and latest dates
-        # is its span, so "the 1930s, between 1930 and 1935" and 1937
-        # disagree while "between 1938 and 1939" and 3 March 1939 agree
-        for key in ("earliest_date", "latest_date"):
-            assert f"wd:{{P:{key}}} wikibase:qualifierValue" in q
-        for side in "AB":
-            # a month, year, decade or century is a span; the units are
-            # doubles, since the query service fails on integer constants
-            # chosen by a nested IF in a sub-select
-            unit = (
-                f"IF(?precision{side} >= 11, 1e0, IF(?precision{side} = 10, "
-                f"1e2, IF(?precision{side} = 9, 1e4, IF(?precision{side} = 8,"
-                " 1e5, 1e6))))"
-            )
-            assert unit in q
-            # a precision coarser than a century names no span
-            assert f"BIND(?precision{side} >= 7 &&" in q
-        assert not re.search(r"\b(?:100|10000|100000|1000000)\)", q)
-        assert (
-            "(?fromA <= ?fromB && ?toB <= ?toA) || "
-            "(?fromB <= ?fromA && ?toA <= ?toB)"
-        ) in q
-
-    def test_dates_stored_alike_are_compared_through_their_ranges(self, q):
-        # rule 5: "before 1920" and "after 1920" are both stored as 1920,
-        # and 1930 and "the 1930s, between 1934 and 1936" as 1930, yet
-        # their spans neither overlap nor nest (#136)
-        same = "sameTerm(?rawValueA, ?rawValueB)"
-        dated = "DATATYPE(?rawValueA) = <http://www.w3.org/2001/XMLSchema#dateTime>"
-        # two statements of a single-valued date stored alike are paired
-        single = " ".join(
-            group_at(q, "# the other single-valued properties").split()
-        )
-        assert (
-            f"FILTER(!{same} || (!sameTerm(?stA, ?stB) && {dated}))" in single
-        )
-        # places, and a residence's or spouse's start and end times, still
-        # pair different values only
-        for marker in ("# places:", "VALUES (?property ?qualifier)"):
-            arm = " ".join(group_at(q, marker).split())
-            assert f"FILTER(!{same})" in arm, marker
-            assert "sameTerm(?stA" not in arm, marker
-        # such a pair is kept once, in the order of its spans and then of
-        # the bounds its statements state (which of them, at what
-        # precision), and left out when both give the same span and bounds:
-        # below a century no span is named, so the bounds still count there
-        for side in "AB":
-            assert (
-                f"BIND(COALESCE(?earliestPrecision{side}, -1e0) * 1e2 "
-                f"+ COALESCE(?latestPrecision{side}, -1e0) AS ?bounds{side})"
-            ) in q
-        flat = " ".join(q.split())
-        assert (
-            f"FILTER(!{same} || ?fromA < ?fromB || (?fromA = ?fromB && "
-            "(?toA < ?toB || (?toA = ?toB && ?boundsA < ?boundsB))))"
-        ) in flat
-
-    def test_a_residence_or_spouse_time_beside_a_range_is_as_stated(self, q):
-        # its earliest and latest dates may date either end of it, so when
-        # either statement carries them, no difference of resolution
-        # between their start or end times is suppressed
-        assert (
-            "!BOUND(?qualifier) || !(BOUND(?earliestA) || BOUND(?latestA) "
-            "|| BOUND(?earliestB) || BOUND(?latestB))"
-        ) in q
-
-    def test_lookups_join_on_values_bound_by_triple_patterns(self, q):
-        # a lookup joined on a BIND result makes the query service compare
-        # every row with every label in the graph: labels join on the raw
-        # value, through its merge redirect
-        same_as = "<http://www.w3.org/2002/07/owl#sameAs>"
-        for side in "AB":
-            assert (
-                f"?rawValue{side} {same_as}?/rdfs:label ?value{side}Label"
-            ) in q
-            assert f"?value{side} rdfs:label" not in q
-        assert f"?sharedRawA {same_as}?/rdfs:label ?sharedValueLabel" in q
-        assert "?sharedValue rdfs:label" not in q
-
-    def test_projection_carries_what_the_site_renders(self, q):
-        projection = q.split("WHERE", 1)[0]
-        for column in (
-            "?entityLabel",
-            "?propertyLabel",
-            "?sharedValueLabel",
-            "?qualifierLabel",
-            "?valueA",
-            "?precisionA",
-            "?earliestA",
-            "?earliestPrecisionA",
-            "?latestA",
-            "?latestPrecisionA",
-            "?sourcesA",
-            "?valueB",
-            "?precisionB",
-            "?earliestB",
-            "?earliestPrecisionB",
-            "?latestB",
-            "?latestPrecisionB",
-            "?sourcesB",
+    def test_a_time_comes_with_its_precision_range_and_dates(self, q):
+        # rule 5: the stated precision and the earliest and latest dates
+        # travel with a value, and a residence's or a marriage's start and
+        # end (and a point in time, which the comparison leaves out)
+        assert "?valueNode wikibase:timePrecision ?precision" in q
+        for key, name in (
+            ("earliest_date", "earliest"),
+            ("latest_date", "latest"),
+            ("start_time", "start"),
+            ("end_time", "end"),
+            ("point_in_time", "pointInTime"),
         ):
-            assert column in projection, column
+            link = f"wd:{{P:{key}}} wikibase:qualifierValue ?{name}Link ."
+            assert link in q, key
+            lookup = group_at(q, f"?statement ?{name}Link ?{name}Node")
+            assert f"wikibase:timeValue ?{name} ;" in lookup
+            assert f"wikibase:timePrecision ?{name}Precision" in lookup
+            # the qualifier is bound once, before the statements, so the
+            # lookup joins on the statement alone
+            assert q.index(link) < q.index("?entity ?p ?statement")
+            assert q[: q.index(lookup)].rstrip().endswith("OPTIONAL")
+
+    def test_every_stated_in_source_comes_with_its_artifact(self, q):
+        lookup = group_at(q, "?statement prov:wasDerivedFrom ?reference")
+        assert "?reference pr:{P:stated_in} ?source ." in lookup
+        # optional: a statement with no stated-in source is listed, and the
+        # comparison leaves it out
+        assert q[: q.index(lookup)].rstrip().endswith("OPTIONAL")
+        # a page fragment resolves to the artifact it is part of; the
+        # fragment and label lookups sit inside the source's own group,
+        # where a missing source cannot bind them to any fragment or label
+        assert "wd:{Q:artifact_fragment}" in lookup
+        assert "wdt:{P:part_of} ?whole" in lookup
+        assert "BIND(COALESCE(?whole, ?source) AS ?artifact)" in lookup
+        assert "?source rdfs:label ?sourceLabel" in lookup
+
+    def test_an_item_value_is_labelled_through_its_merge_redirect(self, q):
+        same_as = "<http://www.w3.org/2002/07/owl#sameAs>"
+        assert f"?value {same_as}?/rdfs:label ?valueLabel" in q
+
+    def test_projection_carries_what_the_comparison_reads(self, q):
+        from yizkr.disagreement import TIME_COLUMNS
+
+        projection = set(re.findall(r"\?(\w+)", q.split("WHERE", 1)[0]))
+        read = {
+            "entity",
+            "entityLabel",
+            "property",
+            "statement",
+            "rank",
+            "value",
+            "valueLabel",
+            "precision",
+            "source",
+            "sourceLabel",
+            "artifact",
+        }
+        for column in TIME_COLUMNS.values():
+            read |= {column, f"{column}Precision"}
+        assert read <= projection
+        assert "propertyLabel" in projection  # for the published page
+
+    def test_containment_lists_location_part_of_and_redirects(
+        self, containment
+    ):
+        (links,) = re.findall(r"VALUES\s+\?link\s*" + VALUES_BODY, containment)
+        assert placeholder_keys(links)[0] == {"location", "part_of"}
+        assert "<http://www.w3.org/2002/07/owl#sameAs>" in links
+        # truthy edges: a deprecated containment is not followed
+        assert "wdt:{P:location}" in links and "wdt:{P:part_of}" in links
+        assert "?item ?link ?target ." in containment
+        # every edge, flat: the comparison walks the paths, and the only
+        # filters pick a label's language
+        assert re.search(r"\)[*+]|GROUP BY", containment) is None
+        filters = re.findall(r"FILTER\s*\((.*)", containment)
+        assert all(f.startswith("LANG(") for f in filters), filters
+        projection = containment.split("WHERE", 1)[0]
+        for column in ("?item", "?link", "?target"):
+            assert column in projection
 
 
 class TestRendering:

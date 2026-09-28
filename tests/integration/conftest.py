@@ -17,6 +17,7 @@ import time
 import pytest
 import requests
 
+from yizkr.core import sparql
 from yizkr.core.config import USER_AGENT, Config
 from yizkr.core.wiki import WikiClient
 
@@ -62,19 +63,10 @@ def client(config: Config) -> WikiClient:
 
 
 def run_sparql(config: Config, query: str) -> list[dict]:
-    # in the request body, as the site sends it: the query service refuses
-    # a request line longer than about 8 KB
-    response = requests.post(
-        config.sparql_url,
-        data={"query": query},
-        headers={
-            "Accept": "application/sparql-results+json",
-            "User-Agent": USER_AGENT,
-        },
-        timeout=120,
-    )
-    response.raise_for_status()
-    return response.json()["results"]["bindings"]
+    # through the client the site uses, which sends the query in the
+    # request body: the query service refuses a request line longer than
+    # about 8 KB
+    return sparql.select(config.sparql_url, query)
 
 
 def wait_for_query_service(

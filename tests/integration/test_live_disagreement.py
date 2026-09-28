@@ -44,9 +44,9 @@ import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from yizkr.claims import ClaimBatch
+from yizkr.disagreement import Disagreement, disagreements
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.queries.publish import load_templates, render_for_instance
 
 from .conftest import run_sparql, wait_for_query_service
 
@@ -417,20 +417,61 @@ def fixture_graph(client, config):
 
 
 def report_rows(client, config, qids: dict[str, str]) -> list[dict]:
-    """The report's rows about the fixture subjects."""
+    """The report's rows about the fixture subjects: its two queries run
+    against the stack and compared (yizkr.disagreement, #266), each row in
+    the shape the helpers below read."""
     properties, items = client.vocabulary()
-    query = render_for_instance(
-        load_templates()["disagreement-report"],
-        properties,
-        items,
-        config.concept_uri,
-    )
     subjects = {qids[role] for role in SUBJECTS}
     return [
-        row
-        for row in run_sparql(config, query)
-        if row["entity"]["value"].rsplit("/", 1)[-1] in subjects
+        as_row(row)
+        for row in disagreements(
+            lambda query: run_sparql(config, query),
+            properties,
+            items,
+            config.concept_uri,
+        )
+        if row.entity_qid in subjects
     ]
+
+
+def as_row(found: Disagreement) -> dict:
+    """A report row as SPARQL result cells: the entity, the property, the
+    place or person a residence or spouse row dates and the date compared,
+    and each value with its precision, its stated range and its sources as
+    'QID~label' pairs."""
+
+    def cell(value: str) -> dict:
+        return {"type": "literal", "value": value}
+
+    row = {
+        "entity": {"type": "uri", "value": found.entity},
+        "propertyLabel": cell(found.property_label),
+    }
+    if found.shared:
+        row["sharedValue"] = {"type": "uri", "value": found.shared}
+    if found.qualifier:
+        row["qualifierLabel"] = cell(found.qualifier_label)
+    for side, name in ((found.a, "A"), (found.b, "B")):
+        value = side.value
+        term = {"type": value.term.kind, "value": value.term.value}
+        if value.term.datatype:
+            term["datatype"] = value.term.datatype
+        if value.term.lang:
+            term["xml:lang"] = value.term.lang
+        row[f"value{name}"] = term
+        if value.precision is not None:
+            row[f"precision{name}"] = cell(str(value.precision))
+        for bound, time in (
+            ("earliest", value.earliest),
+            ("latest", value.latest),
+        ):
+            if time is not None:
+                row[f"{bound}{name}"] = cell(time.value)
+                row[f"{bound}Precision{name}"] = cell(str(time.precision))
+        row[f"sources{name}"] = cell(
+            "|".join(f"{s.qid}~{s.label}" for s in side.sources)
+        )
+    return row
 
 
 def time_shown(value: str, precision: int) -> str:

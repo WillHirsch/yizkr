@@ -39,6 +39,15 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from yizkr.claims import ClaimBatch
+from yizkr.disagreement import (
+    CONTAINMENT,
+    FETCH,
+    Containment,
+    compare,
+    place_within,
+    read_containment,
+    read_statements,
+)
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
@@ -87,27 +96,6 @@ HOME = (
     "Ehefrau Hildegard Löbig geborene Laudler zu Flörburg in seiner Wohnung"
 )
 ADDRESS_IN_TOWN = "wohnhaft in Flörburg, Brunnenring 35"
-
-# a NOT EXISTS block of the query template: its body may span lines and
-# hold {P:key} placeholders, so braces nest one level
-NOT_EXISTS = re.compile(r"FILTER NOT EXISTS \{(?:[^{}]|\{[PQ]:\w+\})*\}")
-# the disagreement report's containment filters follow this path
-CONTAINMENT_PATH = "wdt:{P:location}|wdt:{P:part_of}"
-
-
-def without_containment(template: str) -> tuple[str, int]:
-    """The template without its containment filters, and how many it
-    removed."""
-    removed = 0
-
-    def strip(match: re.Match) -> str:
-        nonlocal removed
-        if CONTAINMENT_PATH not in match.group(0):
-            return match.group(0)
-        removed += 1
-        return ""
-
-    return NOT_EXISTS.sub(strip, template), removed
 
 
 RUN = {
@@ -390,26 +378,32 @@ def test_inconsistencies_suppress_recorded_containment(site, client, config):
     # resolution, which the report leaves out
     assert not [row for row in rows if html.escape(ADDRESS) in row]
 
-    # ... and only its containment filters leave the pair out: the same
-    # query without them lists the two birthplaces, so the report does
-    # compare the places
-    template, filters = without_containment(
-        load_templates()["disagreement-report"]
-    )
-    assert filters == 2, "the report's containment filters have changed"
+    # ... and only the recorded containment leaves the pair out: the
+    # containment query returns the seeded path, and the report's
+    # statements compared without it list the two birthplaces, so the
+    # report does compare the places (#266)
     properties, items = client.vocabulary()
-    query = render_for_instance(
-        template, properties, items, config.concept_uri
-    )
+    templates = load_templates()
+
+    def fetch(name: str) -> list[dict]:
+        query = render_for_instance(
+            templates[name], properties, items, config.concept_uri
+        )
+        return run_sparql(config, query)
+
     entity = f"{config.concept_uri}/entity/"
-    compared = {
-        frozenset((row["valueA"]["value"], row["valueB"]["value"]))
-        for row in run_sparql(config, query)
-        if row["entity"]["value"] == entity + site.person
-    }
-    places = frozenset(
-        entity + site.places[key] for key in ("address", "town")
+    address, town = (entity + site.places[key] for key in ("address", "town"))
+    containment = read_containment(fetch(CONTAINMENT))
+    assert place_within(containment, address, town), (
+        "the containment query does not return the seeded path"
     )
+    statements = read_statements(fetch(FETCH), properties)
+    compared = {
+        frozenset((row.a.value.term.value, row.b.value.term.value))
+        for row in compare(statements, Containment())
+        if row.entity == entity + site.person
+    }
+    places = frozenset((address, town))
     assert places in compared
 
     # and the places page shows the recorded containment

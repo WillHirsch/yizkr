@@ -31,10 +31,12 @@ import html
 import json
 import shutil
 import urllib.parse
-import urllib.request
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 
+from yizkr import disagreement
+from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.core.privacy import (
     DEFAULT_CUTOFF_YEARS,
@@ -42,31 +44,10 @@ from yizkr.core.privacy import (
     year_of,
 )
 from yizkr.core.wiki import WikiClient
+from yizkr.disagreement import Disagreement, Side
 from yizkr.queries.publish import load_templates, prefix_block, render
 
 # -- SPARQL ----------------------------------------------------------------
-
-
-def sparql_runner(config: Config):
-    def run(query: str) -> list[dict]:
-        # the query travels in the request body: the query service refuses
-        # a request line longer than about 8 KB, and the disagreement
-        # report's query is longer than that
-        request = urllib.request.Request(
-            config.sparql_url,
-            data=urllib.parse.urlencode(
-                {"query": query, "format": "json"}
-            ).encode(),
-            headers={
-                "Accept": "application/sparql-results+json",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=120) as response:
-            return json.load(response)["results"]["bindings"]
-
-    return run
 
 
 def cell(binding: dict, name: str) -> str:
@@ -323,7 +304,7 @@ class SiteBuilder:
     ):
         self.config = config
         self.out = out_dir
-        self.run = run or sparql_runner(config)
+        self.run = run or sparql.runner(config)
         if vocabulary is None:
             properties, items = WikiClient(config).vocabulary()
         else:
@@ -371,7 +352,9 @@ class SiteBuilder:
         statements = self.run(self._instance_query(STATEMENTS_QUERY))
         timeline = self.run(self._library_query("person-timeline"))
         gallery = self.run(self._library_query("photo-gallery"))
-        inconsistencies = self.run(self._library_query("disagreement-report"))
+        inconsistencies = disagreement.disagreements(
+            self.run, self.properties, self.items, self.config.concept_uri
+        )
         places = self.run(self._library_query("places-map"))
         place_tree = self.run(self._instance_query(PLACE_TREE_QUERY))
         artifacts = self.run(self._instance_query(ARTIFACTS_QUERY))
@@ -415,12 +398,18 @@ class SiteBuilder:
         }
 
     def source_links(self, encoded: str, root: str = "../") -> str:
-        """'Q23~label|Q29~label' -> comma-separated artifact-page links."""
+        """'Q23~label|Q29~label' -> artifact-page links."""
+        pairs = (
+            pair.partition("~")[::2] for pair in encoded.split("|") if pair
+        )
+        return self.artifact_links(pairs, root)
+
+    def artifact_links(
+        self, sources: Iterable[tuple[str, str]], root: str = "../"
+    ) -> str:
+        """(QID, label) pairs -> artifact-page links, '; '-separated."""
         links = []
-        for pair in encoded.split("|"):
-            if not pair:
-                continue
-            qid, _, label = pair.partition("~")
+        for qid, label in sources:
             if qid.startswith("Q") and label:
                 links.append(
                     f'<a href="{root}artifacts/{esc(qid)}.html">'
@@ -782,7 +771,10 @@ class SiteBuilder:
             )
         return "".join(parts)
 
-    def inconsistencies_page(self, rows: list[dict]) -> str:
+    def inconsistencies_page(self, rows: list[Disagreement]) -> str:
+        """The disagreement report (yizkr.disagreement) as a page: both
+        values of every row, each with its sources and at its stated
+        precision (ADR-0002, rule 6)."""
         body = [
             "<h1>Inconsistencies</h1>",
             '<p class="sub">properties where different sources disagree — '
@@ -802,35 +794,31 @@ class SiteBuilder:
             "<th>Value A</th><th>per</th><th>Value B</th><th>per</th></tr>",
         ]
 
-        def aspect(row: dict) -> str:
+        def aspect(row: Disagreement) -> str:
             """The property; for a dated residence or spouse, also the
             place or person both statements name and the date compared."""
-            text = esc(cell(row, "propertyLabel"))
-            shared = cell(row, "sharedValueLabel") or qid_of(
-                row, "sharedValue"
-            )
-            if shared:
+            text = esc(row.property_label)
+            if row.shared:
+                shared = row.shared_label or row.shared.rsplit("/", 1)[-1]
                 text += f" ({esc(shared)})"
-            qualifier = cell(row, "qualifierLabel")
-            if qualifier:
-                text += f", {esc(qualifier)}"
+            if row.qualifier:
+                text += f", {esc(row.qualifier_label)}"
             return text
 
-        def stated_range(row: dict, side: str) -> str:
+        def stated_range(row: Disagreement, side: Side) -> str:
             """The earliest and latest dates a statement gives its value,
             as the person page shows qualifiers. A residence or spouse row
             compares a start or end time, which those dates need not
             bound, so it shows none."""
-            if cell(row, "qualifierLabel"):
+            if row.qualifier:
                 return ""
             bounds = [
-                f"{name} date: "
-                + format_time(
-                    cell(row, f"{name}{side}"),
-                    cell(row, f"{name}Precision{side}"),
+                f"{name} date: " + format_time(time.value, str(time.precision))
+                for name, time in (
+                    ("earliest", side.value.earliest),
+                    ("latest", side.value.latest),
                 )
-                for name in ("earliest", "latest")
-                if cell(row, f"{name}{side}")
+                if time is not None
             ]
             if not bounds:
                 return ""
@@ -838,28 +826,32 @@ class SiteBuilder:
                 f' <span class="qualifiers">({esc("; ".join(bounds))})</span>'
             )
 
-        def rendered(row: dict, side: str) -> str:
-            value = row.get(f"value{side}", {})
-            raw = value.get("value", "")
-            if value.get("datatype", "").endswith("dateTime"):
-                shown = format_time(raw, cell(row, f"precision{side}"))
+        def rendered(row: Disagreement, side: Side) -> str:
+            value = side.value
+            if value.term.is_time:
+                precision = "" if value.precision is None else value.precision
+                shown = format_time(value.term.value, str(precision))
                 return esc(shown) + stated_range(row, side)
-            label = cell(row, f"value{side}Label")
-            if label.startswith("http"):
-                label = raw.rsplit("/", 1)[-1]
-            return esc(label or raw)
+            if value.term.kind == "uri":
+                return esc(value.label or value.term.value.rsplit("/", 1)[-1])
+            return esc(value.label or value.term.value)
+
+        def sources(side: Side) -> str:
+            return self.artifact_links(
+                ((source.qid, source.label) for source in side.sources),
+                root="",
+            )
 
         for row in rows:
             body.append(
-                f"<tr><td>{esc(cell(row, 'entityLabel'))}</td>"
+                f"<tr><td>{esc(row.entity_label)}</td>"
                 f"<td>{aspect(row)}</td>"
-                f"<td>{rendered(row, 'A')}</td>"
+                f"<td>{rendered(row, row.a)}</td>"
                 f'<td class="source" style="font-style:italic">'
-                f"{self.source_links(cell(row, 'sourcesA'), root='')}</td>"
-                f"<td>{rendered(row, 'B')}</td>"
+                f"{sources(row.a)}</td>"
+                f"<td>{rendered(row, row.b)}</td>"
                 f'<td class="source" style="font-style:italic">'
-                f"{self.source_links(cell(row, 'sourcesB'), root='')}"
-                "</td></tr>"
+                f"{sources(row.b)}</td></tr>"
             )
         body.append("</table>")
         return page("Inconsistencies", "".join(body))
