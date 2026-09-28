@@ -38,6 +38,12 @@ above it either. A local budget needing no CLI report is the only way to
 keep headroom below the first warning; the owner decided (2026-09-28)
 not to add one.
 
+Amended by #105 (2026-09-29): corpus clustering has code, the scratch
+driver's first corpus stage, and runs under §2's stub; §2 is amended in
+place. It keeps its identity map in its own directory of the run
+directory and reuses it while the documents' batches, its declared
+version and its thresholds stand, as ADR-0032 has the views reused.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -198,9 +204,9 @@ a second store of assertions: the graph stays the system of record.
   its check, extraction (manifest, chunks, critique), the GEDCOM adapter,
   a deck's slide text and derived media, the reconcile step, and the
   per-document adjudication (`reconcile.adjudicate`) given a roster ask
-  nothing of it. Corpus clustering, cluster adjudication and flags have
-  no code yet; their issues (#105, #106, #112) require them to run under
-  the same stub.
+  nothing of it, and nor does corpus clustering (#105), over the batches
+  they make. Cluster adjudication and flags have no code yet; their
+  issues (#106, #112) require them to run under the same stub.
 - **A stage-version registry declares the version of each stage and of
   each method.** A unit test checks the registry against each stage's
   source hash and fails when the source changed without a version bump.

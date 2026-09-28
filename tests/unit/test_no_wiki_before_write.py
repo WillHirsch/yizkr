@@ -16,10 +16,11 @@ the wiki, not only that nothing raised.
 The steps are those #128 lists that have code: transcription (by vision,
 from a text file, from slide text and from a curator's correction) and
 its check, extraction (entity manifest, chunks, critique), the GEDCOM
-adapter, a deck's slide text and derived media, the reconcile step, and
-the per-document adjudication (`reconcile.adjudicate`) given a roster.
-Corpus clustering, cluster adjudication and flags have no code yet; #105,
-#106 and #112 require them to run under this refusing wiki. Two steps
+adapter, a deck's slide text and derived media, the reconcile step, the
+per-document adjudication (`reconcile.adjudicate`) given a roster, and
+corpus clustering (#105), the scratch driver's corpus stage, over the
+batches those steps made. Cluster adjudication and flags have no code
+yet; #106 and #112 require them to run under this refusing wiki. Two steps
 before the write that are outside that list still use the wiki in
 `ingest run`, and the orchestrator here replaces them: registration,
 which runs first until write-time registration (#103) takes its place,
@@ -81,6 +82,7 @@ from yizkr.pipeline.reconcile import (
     block_candidates,
 )
 from yizkr.pipeline.rundir import DONE, run_state
+from yizkr.pipeline.scratch import CORPUS_STAGES, CorpusContext
 
 SOURCES = {source.key: source for source in u.SOURCES}
 RUN = {
@@ -572,6 +574,47 @@ def test_adjudication_given_a_roster_asks_nothing_of_the_wiki(refusals):
         ("e1", "Q31", "same")
     ]
     assert refusals.asked == []
+
+
+def test_corpus_clustering_asks_nothing_of_the_wiki(tmp_path, refusals):
+    """The scratch driver's clustering stage (#105) clusters the batches
+    the steps before it made, and reads no graph, no query service and no
+    connection setting to do it: containment and kinship come from the
+    manifests alone."""
+    orchestrator = BeforeTheWrite(
+        corpus(tmp_path), tmp_path / "state", refusals
+    )
+    assert orchestrator.run() == 2
+    (stage,) = [stage for stage in CORPUS_STAGES if stage.name == "clustering"]
+    assert not stage.touches_wiki
+    logged: list[str] = []
+    context = CorpusContext(
+        run=orchestrator.rundir,
+        documents=tuple(orchestrator.documents()),
+        directory=tmp_path / "state" / "corpus" / "clustering",
+        env_file=None,
+        log=lambda line, **kwargs: logged.append(line),
+    )
+    stage.run(context)
+    # the map it made stands, and is read back
+    stage.run(context)
+    assert "identity map reused" in logged[-1]
+    assert refusals.asked == []
+
+    identity = json.loads(
+        (context.directory / "identity-map.json").read_text()
+    )
+    # the portrait's Eugen and the deck's meet the export's, whose dates
+    # agree; the postcard's Klara meets hers
+    merged = {
+        tuple(sorted(identity["mentions"][m]["label"] for m in members))
+        for entry in identity["clusters"].values()
+        if len(members := entry["members"]) > 1
+    }
+    assert merged == {
+        ("Eugen Löbig", "Eugen Löbig", "Eugen Löbig"),
+        ("Klara Löbig", "Klara Löbig"),
+    }
 
 
 class ScriptedAdjudicator:

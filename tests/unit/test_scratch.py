@@ -1464,6 +1464,40 @@ class TestCorpusStages:
         assert len(clustering.contexts[0].documents) == 3
         assert RunDir(run).manifest()["scratch"]["past_barrier_only"] is True
 
+    def test_clustering_is_the_stage_registered(
+        self, tmp_path, fakes, request
+    ):
+        """A run that goes to the end clusters the corpus past the barrier
+        (#105), asking nothing of the wiki, and an invocation that finds
+        its inputs unchanged leaves the identity map as it was."""
+        asked = request.getfixturevalue("refusals")
+        (stage,) = scratch.CORPUS_STAGES
+        assert (stage.name, stage.touches_wiki) == ("clustering", False)
+        corpus = small(tmp_path)
+        corpus.gedcom("f-example-family.ged")
+        driver = a_run(tmp_path, corpus, fakes)
+        assert driver.run() == EXIT_OK
+        assert asked.asked == []
+        assert corpus_events(driver.state_dir) == [
+            ("started", "clustering"),
+            ("done", "clustering"),
+        ]
+        path = driver.state_dir / CORPUS_DIR / "clustering"
+        identity = json.loads((path / "identity-map.json").read_text())
+        # every document's one person, Eugen, born in 1836 as the export
+        # says: a confident cluster of five
+        (merged,) = [
+            entry
+            for entry in identity["clusters"].values()
+            if len(entry["members"]) > 1
+        ]
+        assert (merged["method"], len(merged["members"])) == ("confident", 5)
+        before = (path / "identity-map.json").read_bytes()
+        again = Driver(corpus.folder, driver.state_dir)
+        assert again.run() == EXIT_OK
+        assert (path / "identity-map.json").read_bytes() == before
+        assert scratch.is_complete(driver.state_dir)
+
     def test_corpus_stages_need_names_of_their_own(self, tmp_path):
         stage = CorpusStage("critique", lambda context: None)
         run = tmp_path / "runs" / "r"
@@ -1665,9 +1699,11 @@ class TestManifest:
         assert manifest["scratch"] == {
             "until": "critique",
             "canaries": [corpus.sha1(TEXT), corpus.sha1(PHOTO)],
-            "corpus_stages": [],
+            # the corpus stages registered, which a run stopped after the
+            # per-document stages does not reach: it is not complete
+            "corpus_stages": ["clustering"],
             "past_barrier_only": False,
-            "complete": True,
+            "complete": False,
         }
         files = sorted(d["file"] for d in manifest["documents"])
         assert files == sorted(corpus.texts)

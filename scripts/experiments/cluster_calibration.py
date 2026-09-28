@@ -92,12 +92,12 @@ from yizkr.pipeline.reconcile import (
     ADJUDICATION_PROMPT,
     KINSHIP_PROPERTIES,
     PLACE_KIND,
+    PairFacts,
     PlaceContainment,
     RosterEntity,
     _batch_candidates,
     _batch_pair_facts,
     _name_tokens,
-    _PairFacts,
     _tokens_overlap,
     block_candidates,
     entity_facts,
@@ -796,10 +796,10 @@ def cannot_link(a: Mention, b: Mention) -> bool:
     return not (a.source == "gedcom" and a.kind == b.kind == PLACE_KIND)
 
 
-def lifted_facts(mention: Mention) -> _PairFacts:
+def lifted_facts(mention: Mention) -> PairFacts:
     """impossible_pair's input with local-id kin edges lifted: the
     mention uid stands in for a QID on both sides of every edge."""
-    return _PairFacts(
+    return PairFacts(
         kind=mention.kind,
         label=mention.label,
         qid=mention.uid,
