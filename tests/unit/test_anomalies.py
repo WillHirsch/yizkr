@@ -2350,3 +2350,37 @@ class TestHelpers:
         assert tail.read() == [{"invocation": "i1", "n": 2}]
         log.write_bytes(b'{"invocation": "i1", "n": 4}\n')
         assert tail.read() == [{"invocation": "i1", "n": 4}]
+
+    def test_the_event_tail_skips_a_deeply_nested_line(self, tmp_path):
+        """A line nested past Python's recursion limit makes `json.loads`
+        raise RecursionError, not ValueError: the tail skips it like any
+        other line that holds the marker but cannot be decoded, and the
+        entries around it are read (#285). No writer here produces such
+        a line."""
+        log = tmp_path / "events.jsonl"
+        tail = anomalies._Tail(log, b'"i1"')
+        log.write_bytes(
+            b'{"invocation": "i1", "n": 1}\n'
+            + b"[" * 100_000
+            + b'"i1"\n'
+            + b'{"invocation": "i1", "n": 2}\n'
+        )
+        assert tail.read() == [
+            {"invocation": "i1", "n": 1},
+            {"invocation": "i1", "n": 2},
+        ]
+
+    def test_requests_skips_a_deeply_nested_line(self):
+        """A line nested past Python's recursion limit makes `json.loads`
+        raise RecursionError, not ValueError: `_requests` skips it like
+        any other line it cannot decode, and the requests around it are
+        read (#285). No writer here produces such a line."""
+        data = (
+            b'{"action": "pause", "scope": "run"}\n'
+            + b"[" * 100_000
+            + b'\n{"action": "resume", "scope": "run"}\n'
+        )
+        assert anomalies._requests(data) == [
+            {"action": "pause", "scope": "run"},
+            {"action": "resume", "scope": "run"},
+        ]

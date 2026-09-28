@@ -442,7 +442,8 @@ class _Tail:
     it, say). A read that raises leaves the tail as it was.
 
     A line not yet ended by its newline is left for the next read, since a
-    writer may be mid-line; a complete line that is not a JSON object is
+    writer may be mid-line; a complete line that is not a JSON object,
+    including one nested too deeply for the decoder to recurse through, is
     skipped and counted. A file that shrinks, is replaced, disappears
     after it was read, or starts with other bytes than the first line it
     was read with (one deleted and written afresh on a reused inode, or
@@ -494,7 +495,7 @@ class _Tail:
                     continue
                 try:
                     entry = json.loads(line.decode("utf-8"))
-                except ValueError:
+                except (ValueError, RecursionError):
                     entry = None
                 if isinstance(entry, dict):
                     entries.append(entry)

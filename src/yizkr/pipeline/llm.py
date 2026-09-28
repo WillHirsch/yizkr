@@ -761,7 +761,9 @@ def _stream_events(stdout: str) -> list[dict]:
     the event is silently dropped, up to the terminal result event
     itself. The per-line `strip` still removes an incidental trailing
     ``\\r`` (CRLF) or leading or trailing space, since it only touches
-    each line's own ends, never a character in its middle."""
+    each line's own ends, never a character in its middle. A line nested
+    too deeply for the decoder to recurse through is dropped the same way
+    as one that fails to parse outright."""
     events = []
     for line in stdout.split("\n"):
         line = line.strip()
@@ -769,7 +771,7 @@ def _stream_events(stdout: str) -> list[dict]:
             continue
         try:
             event = json.loads(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             continue
         if isinstance(event, dict):
             events.append(event)
