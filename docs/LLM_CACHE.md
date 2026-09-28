@@ -246,8 +246,12 @@ adoption's reason) and `provenance`: the `role`, the `call`, the
 `config_hash`, the client's `model_identifier` and the time (`at`). A
 fork's entry adds how its session was obtained (`session`: `live`,
 `resumed`, `replayed` or `recomputed`) and the `opening_sha256` it was
-made on. An entry moved aside gains `rejected` (`at`, `reason`, `role`)
-or `replaced` (`at`). An entry is served only under the key it records.
+made on. An adoption's entry holds the components when its seeder gives
+them, and the provenance its seeder gives, with `adopted_at` (Seeding,
+below). An entry moved aside gains `rejected` (`at`, `reason`, `role`)
+or `replaced` (`at`); an answer recorded as rejected
+(`record_rejected`) has `rejected` from the start. An entry is served
+only under the key it records.
 
 **Writes are atomic, and nothing is overwritten.** An entry is written to
 a staging file beside it, flushed, and published by a link that fails
@@ -488,18 +492,148 @@ changed, or its replay failed) is no miss.
 
 ## Seeding: visible equivalences
 
-`seed(key, response, provenance, reason="adopted")` stores an answer the
-engine did not give, for the call whose key the caching client computes
-(`complete_key(prompt, image_paths)`); the entry keeps the provenance it
-was given. A hit on it reports `reason` instead of a key match. It never
-replaces an entry the key already has, never adopts an answer a caller
-rejected under that key, and refuses the reason `engine`. The
-archived-transcription import (#104) uses it once the transcription check
-passes, with the client `Orchestrator.role_client("transcribe")` builds:
-the role's client exactly as `ingest run` makes it (engine, effort, model,
-pinned CLI, cache and epoch), so that the keys match the run's calls. A
-CLI update changes every key: adoptions made before it are not found, and
-those calls miss as `absent` until they are adopted again.
+`seed(key, response, provenance, reason="adopted", components=None)`
+stores an answer the engine did not give, for the call whose key the
+caching client computes (`complete_key(prompt, image_paths)`). The entry
+keeps the provenance it was given, and the key's components when the
+seeder gives them (the client's `components(...)`, which must hash to the
+key). A hit on it reports `reason` instead of a key match, and the answer
+it serves says what made it (`made_by`: the model identifier its
+provenance names, else the reason; the engine's answers say nothing). It
+never replaces an entry the key already has, never adopts an answer a
+caller rejected under that key, and refuses the reason `engine`.
+`record_rejected(key, response, provenance, rejection)` records an
+answer the engine did not give, which a check fails, as rejected under
+the key (`<key>.rejected-<stamp>.json`, with `rejected.reason`), beside
+whatever the key holds and never served: a call under the key that the
+cache cannot answer misses as `rejected`, and no seed adopts it. A seeder
+takes its client from `Orchestrator.role_client(role)`, the role's client
+exactly as `ingest run` and `scratch run` make it (engine, effort, model,
+pinned CLI, cache and epoch), so that its keys are the run's.
+
+### Archived transcriptions
+
+`yizkr scratch import-transcriptions <archive>`
+(`yizkr.pipeline.import_transcriptions`) adopts the vision
+transcriptions an earlier `ingest run` made, so that a scratch run reuses
+them rather than ask the engine to read those scans again.
+
+**The archive** is that run's state directory: a folder per source file,
+each with the document's `state.json` (`file`, the source's path, and
+`content_sha1`, the SHA-1 of its bytes) and `transcription.json` (`text`,
+`language`, `engine`, and the artifact: `artifact_qid` in the QID format
+the runs before #127 wrote, `artifact.sha1` in the current one). The
+transcription's `engine` names its route and then the client that made
+it: `llm-vision:claude-code/<CLI version>[:<model>]` for the claude CLI,
+`llm-vision:<model>` for the API; `text-file:…`, `pptx-adapter` and
+`correction` for the routes that make no call. A folder whose name starts
+with a dot is one a run set aside, and is passed over; nothing else in
+the archive is read, but for a run directory's `events.jsonl` beside the
+document folders, which gives the time each transcription was made (its
+stage's latest `done` event). File modification times are not read.
+
+**What is adopted.** Each media's transcriptions are taken in turn:
+
+- the never-ingest list is asked first (`is_excluded`), with every file
+  name and media SHA-1 the archive records for them, and nothing else is
+  done with an excluded one (**excluded**). A media one of whose
+  transcriptions the list excludes is excluded whole. Without a list the
+  import refuses to start, before it reads the archive;
+- `--leave-out SHA1` (repeatable; a prefix of at least 7 hex digits)
+  leaves out the media whose SHA-1 starts so (**left out**): its
+  transcription is not adopted, and an adoption of it made earlier is
+  withdrawn, moved aside as rejected, so the next run transcribes it
+  afresh. The engine's own answer for the call is never withdrawn. A
+  prefix that matches no transcription in the archive refuses the import
+  before anything is written;
+- a transcription made without a call, one a folder cannot give (a file
+  that cannot be read, no media SHA-1, or a state and a transcription
+  that name other media), one of a media the corpus holds no scan of,
+  and a media with differing transcriptions, which nothing says how to
+  choose between, are **skipped**, with the reason;
+- a transcription is adopted only when made with the prompt the run
+  sends. A vision transcription in the QID format was made with the one
+  prompt the vision route sent while it wrote that format, and is adopted
+  while the run sends it (`prompt_sha256` below); one in the current
+  format does not say which prompt made it, and is skipped;
+- the transcription check judges it as the run judges an answer, with
+  its scan's page count. One it fails is **rejected**: recorded as a
+  rejected answer under the call's key, with the check's reason
+  (`record_rejected`), or, when the cache serves that text already, moved
+  aside as a rejection is; the run's call then misses as `rejected`, and
+  the engine reads the scan afresh;
+- the rest are **imported**: adopted under the key of the call the run
+  makes for the scan (the transcription prompt and the scan, keyed by the
+  transcribe role's client, `--extract-effort` and `$YIZKR_LLM_MODEL`
+  among its components), unless the cache holds an answer for the call
+  already (the engine's, or another adoption), which stands, or a caller
+  rejected that text under the key before, which no seed adopts: both are
+  skipped. One adopted already with the same text counts as imported, so
+  the import can be run again, and changes nothing.
+
+It prints a line per media (a SHA-1 prefix, the outcome and why) and the
+counts: imported, rejected, excluded, left out and skipped (by reason).
+The lines are local output: a rejection's reason quotes the phrase the
+check matched. The import refuses a model named by an alias or none, as
+a scratch run does, and a scan in PDF when the PDF renderer is missing,
+since the check counts its pages with it.
+
+**Provenance.** An adoption's entry holds the key's components, `origin`
+`adopted`, and provenance backfilled from the archive: `backfilled:
+true`; the `role` and `call` (`transcribe`, `complete`); the archived
+`engine` field as it stands (`engine_field`), and the `engine`,
+`cli_version`, `model` and `model_identifier` it names (None where it
+names none); `made_at`, from the archive's events, else None;
+`prompt_sha256`, the SHA-256 of the prompt it was made with where its
+format tells it, else None; `media_sha1`, the `archive` and where in it
+the transcription lies (`archived_as`); the check's verdict (`check`);
+and `adopted_at`. No QID is kept: the answer adopted is the text alone.
+Its components are those of the call it stands for, and nothing else in
+it claims the current prompt or model: a hit on it reports `adopted`, and
+the transcription view the run makes from it names, in its `engine`, the
+client the archive names (`made_by`), not the one the run asked.
+
+**What the run sees.** A scratch run's transcription call for an adopted
+scan is a `cache-hit` whose reason is `adopted`, and no engine call. The
+live monitor counts the stage as reused, by reason (docs/MONITOR.md),
+`yizkr stages state` counts `hit: adopted` for the transcribe role, and
+the run report (#124) and the run-to-run diff (#198) are to count reuse
+by reason from the same events. The anomaly checks look at the view as
+at any stored output, and their alerts on it are carried
+(docs/ANOMALIES.md).
+
+**When an adoption stops applying.** An adoption stands for one call:
+the one whose key it is stored under.
+
+- *The key changes.* Anything that changes what the call sends (the
+  transcription prompt, the model, the effort, the engine's configuration,
+  a claude CLI update among them, the scan's bytes, or the transcribe
+  role's epoch) gives the run's call another key, under which nothing is
+  adopted: the call misses as `absent`, and the engine reads the scan
+  afresh. The adoption stays under its old key, never served for the new
+  one. The import run again after such a change adopts under the new key
+  only what the prompt guard and the check still pass: after a CLI
+  update, what it adopted before, the prompt being unchanged; after a
+  prompt change, nothing in the QID format.
+- *The check changes.* The run's transcriber checks every answer the
+  cache gives, adoptions included. One a stricter check fails is rejected
+  (moved aside, with a `cache-reject` event) and asked for once more, so
+  the engine reads the scan in the same run; a transcription view reused
+  in a later run is checked again as any is (Views, above). The import run
+  again rejects it too, and no seed adopts a text rejected under its key.
+- `--refresh transcribe` sends the calls to the engine whatever the cache
+  holds; the new answer displaces the adoption, which is kept aside as
+  replaced.
+
+**Running it.** Run it before the scratch run it is for, with that run's
+settings: the same `--cache` (default `var/llm-cache`) and
+`--extract-effort` (default `low`), `$YIZKR_LLM_MODEL`, the claude CLI
+the run is to use (`DISABLE_AUTOUPDATER=1`, docs/runbooks/scratch-run.md),
+and the corpus (`--corpus`, default `$YIZKR_CORPUS_DIR`). When it has
+something to adopt or withdraw it opens the cache, and so takes its lock
+(One process per cache, above): run it while no scratch run holds the
+cache. It asks the engine nothing: the claude CLI is run only for its
+version, which every key names.
 
 ## The run directory
 

@@ -79,13 +79,17 @@ stores nothing. An entry is published whole, by a link that fails where
 the key already has one, so a reader sees an entry whole or not at all,
 and the cache deletes nothing: an entry a caller rejects, and any entry
 a newer one displaces (a refresh's, a racing call's, or one damaged), is
-moved aside under a name no lookup reads, and kept for inspection.
-``<key>.session/<opening>/`` keeps the session files of a conversation's
-opening turn, for the engines that need them to resume it exactly, under
-the SHA-256 of the opening answer the session holds: a session, whether
-kept there or held in memory after a replay, serves a conversation only
-for the answer it was made on, whichever answer a racing call or a
-replay has since stored under the key.
+moved aside under a name no lookup reads, and kept for inspection. An
+answer the engine did not give (an archived transcription) is adopted
+for the call it stands for (seed), with the provenance it is given, or,
+when a check fails it, recorded under the call's key as rejected
+(record_rejected), never served. ``<key>.session/<opening>/`` keeps the
+session files of a conversation's opening turn, for the engines that
+need them to resume it exactly, under the SHA-256 of the opening answer
+the session holds: a session, whether kept there or held in memory after
+a replay, serves a conversation only for the answer it was made on,
+whichever answer a racing call or a replay has since stored under the
+key.
 
 docs/LLM_CACHE.md describes the cache, its events and the run directory.
 """
@@ -647,36 +651,100 @@ class EngineCache:
         response: str,
         provenance: Mapping[str, Any],
         reason: str = ADOPTED,
+        components: Mapping[str, Any] | None = None,
     ) -> bool:
         """Adopt `response` for the call with this key: an answer the
         engine did not give it (an archived transcription, say), stored as
         a visible equivalence. A hit on it reports `reason` rather than a
-        key match, and its provenance is the one given. Nothing is stored
-        when the key already has an entry, or when `response` is one a
-        caller rejected under it. Returns whether it was adopted."""
-        if reason == ENGINE:
-            raise ValueError(
-                f"an adoption's reason cannot be {ENGINE!r}: that origin "
-                "marks the engine's own answers"
-            )
+        key match, and its provenance is the one given. `components`, the
+        key's components when the caller has them, are kept with it as
+        they are with an answer; they must hash to the key. Nothing is
+        stored when the key already has an entry, or when `response` is
+        one a caller rejected under it. Returns whether it was adopted."""
+        entry = self._offered(key, response, provenance, reason, components)
+        if self._rejected_before(key, response):
+            return False
         path = self.path(key)
-        for aside in self.rejected(key):
-            if (_read(aside, key) or {}).get("response") == response:
-                return False
         _make_private(path.parent)
-        entry = {
-            "format": FORMAT,
-            "key": key,
-            "response": response,
-            "origin": reason,
-            "provenance": {**dict(provenance), "adopted_at": _now()},
-        }
+        entry["provenance"]["adopted_at"] = _now()
         staging = staging_path(path)
         try:
             write_synced(staging, _dump(entry))
             return _link(staging, path)
         finally:
             staging.unlink(missing_ok=True)
+
+    def record_rejected(
+        self,
+        key: str,
+        response: str,
+        provenance: Mapping[str, Any],
+        rejection: str,
+        *,
+        reason: str = ADOPTED,
+        components: Mapping[str, Any] | None = None,
+        role: str | None = None,
+    ) -> bool:
+        """Record `response`, an answer the engine did not give that a
+        check fails (an archived transcription, say), as rejected under
+        this key with the reason `rejection`, without ever serving it. It
+        is kept aside as a rejected answer is, beside whatever the key
+        holds, so a call under the key that the cache cannot answer misses
+        as rejected, and no seed adopts it. `reason` is the adoption's
+        reason it was offered under, and `provenance` and `components` are
+        kept as `seed` keeps them. An answer rejected under the key before
+        is not recorded again. Returns whether it was recorded."""
+        entry = self._offered(key, response, provenance, reason, components)
+        if self._rejected_before(key, response):
+            return False
+        path = self.path(key)
+        _make_private(path.parent)
+        rejected = {"at": _now(), "reason": rejection}
+        if role is not None:
+            rejected["role"] = role
+        entry["rejected"] = rejected
+        aside = self._aside_name(path, "rejected")
+        staging = staging_path(aside)
+        try:
+            write_synced(staging, _dump(entry))
+            return _link(staging, aside)
+        finally:
+            staging.unlink(missing_ok=True)
+
+    def _offered(
+        self,
+        key: str,
+        response: str,
+        provenance: Mapping[str, Any],
+        reason: str,
+        components: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """The entry of an answer the engine did not give, offered for
+        the call with this key under an adoption's `reason`."""
+        if reason == ENGINE:
+            raise ValueError(
+                f"an adoption's reason cannot be {ENGINE!r}: that origin "
+                "marks the engine's own answers"
+            )
+        entry: dict[str, Any] = {"format": FORMAT, "key": key}
+        if components is not None:
+            if call_key(components) != key:
+                raise ValueError(
+                    f"the components given are not those of the key {key}"
+                )
+            entry["components"] = dict(components)
+        return entry | {
+            "response": response,
+            "origin": reason,
+            "provenance": dict(provenance),
+        }
+
+    def _rejected_before(self, key: str, response: str) -> bool:
+        """Is `response` one a caller rejected under this key?"""
+        return any(
+            (_read(aside, key) or {}).get("response") == response
+            for aside in self.rejected(key)
+        )
 
     # -- kept sessions -------------------------------------------------------
 
@@ -780,20 +848,43 @@ def _link(source: Path, target: Path) -> bool:
 class CachedResponse(str):
     """A response, the key it is cached under, and whether the cache
     answered the call with it (`hit`) rather than the engine in this call;
-    in every other respect it is the text. It copies and pickles with
-    both."""
+    in every other respect it is the text. An answer the cache adopted,
+    which no engine gave this call, says what made it (`made_by`): the
+    model identifier its provenance names, else the adoption's reason;
+    None for the engine's answers. It copies and pickles with all
+    three."""
 
     key: str
     hit: bool
+    made_by: str | None
 
-    def __new__(cls, text: str, key: str, hit: bool = False) -> CachedResponse:
+    def __new__(
+        cls,
+        text: str,
+        key: str,
+        hit: bool = False,
+        made_by: str | None = None,
+    ) -> CachedResponse:
         response = super().__new__(cls, text)
         response.key = key
         response.hit = hit
+        response.made_by = made_by
         return response
 
     def __getnewargs__(self) -> tuple[str, str]:
         return str(self), self.key
+
+
+def _made_by(entry: Mapping[str, Any]) -> str:
+    """What made an adopted answer: the model identifier its provenance
+    names, else the adoption's reason."""
+    provenance = entry.get("provenance")
+    named = (
+        provenance.get("model_identifier")
+        if isinstance(provenance, dict)
+        else None
+    )
+    return named if isinstance(named, str) and named else str(entry["origin"])
 
 
 class Conversation:
@@ -979,7 +1070,12 @@ class CachingClient:
                     key=key,
                     reason=KEY_MATCH if origin == ENGINE else origin,
                 )
-                return CachedResponse(entry["response"], key, hit=True), False
+                return CachedResponse(
+                    entry["response"],
+                    key,
+                    hit=True,
+                    made_by=None if origin == ENGINE else _made_by(entry),
+                ), False
         if refresh:
             reason = REFRESH
         elif self.cache.rejected(key):
@@ -1052,9 +1148,12 @@ class CachingClient:
         response: str,
         provenance: Mapping[str, Any],
         reason: str = ADOPTED,
+        components: Mapping[str, Any] | None = None,
     ) -> bool:
         """`EngineCache.seed`, with an adoption event when it adopts."""
-        adopted = self.cache.seed(key, response, provenance, reason=reason)
+        adopted = self.cache.seed(
+            key, response, provenance, reason=reason, components=components
+        )
         if adopted:
             self._emit(ADOPT, key=key, reason=reason)
         return adopted

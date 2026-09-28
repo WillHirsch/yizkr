@@ -2017,6 +2017,89 @@ class TestSeeding:
             caching.seed(key, "text", self.PROVENANCE, reason="engine")
         assert entry_files(tmp_path) == []
 
+    def test_an_adoption_keeps_the_components_of_its_key(self, tmp_path):
+        """(#104) The components are kept with an adoption as with an
+        answer, so a later call can be compared with it component by
+        component; components of another key are refused."""
+        caching = client(tmp_path, Engine())
+        components = caching.components(COMPLETE, "Read it.")
+        other = caching.components(COMPLETE, "Read the other one.")
+        key = caching.complete_key("Read it.")
+        with pytest.raises(ValueError, match="not those of the key"):
+            caching.seed(key, "archived", self.PROVENANCE, components=other)
+        assert entry_files(tmp_path) == []
+        assert caching.seed(
+            key, "archived", self.PROVENANCE, components=components
+        )
+        (entry,) = live_entries(tmp_path)
+        assert entry["components"] == components
+        assert call_key(entry["components"]) == entry["key"]
+
+    def test_a_hit_on_an_adoption_names_what_made_it(self, tmp_path):
+        """(#104) An adopted answer says which client made it, as its
+        provenance names it, else the adoption's reason; an answer of the
+        engine's names none. It copies and pickles with it."""
+        caching = client(tmp_path, Refusing())
+        named = {"model_identifier": "claude-code/1.0.44:claude-sonnet-4"}
+        caching.seed(caching.complete_key("Read it."), "archived", named)
+        caching.seed(
+            caching.complete_key("Read the other one."),
+            "archived",
+            {},
+            reason="adopted from a test",
+        )
+        answer = caching.complete("Read it.")
+        assert answer.made_by == "claude-code/1.0.44:claude-sonnet-4"
+        for twin in (
+            copy.copy(answer),
+            copy.deepcopy(answer),
+            pickle.loads(pickle.dumps(answer)),
+        ):
+            assert twin.made_by == answer.made_by
+        other = caching.complete("Read the other one.")
+        assert other.made_by == "adopted from a test"
+        engine = client(tmp_path, Engine())
+        assert engine.complete("Read a third.").made_by is None
+        assert engine.complete("Read a third.").made_by is None
+
+    def test_a_rejected_offer_is_recorded_and_never_served(self, tmp_path):
+        """(#104) An archived answer a check fails is recorded as rejected
+        under its call's key: the call misses as rejected and goes to the
+        engine, no seed adopts it, and it is recorded once."""
+        run = RunDir(tmp_path / "run")
+        engine = Engine()
+        caching = client(tmp_path, engine, run=run)
+        components = caching.components(COMPLETE, "Read it.")
+        key = call_key(components)
+        assert caching.cache.record_rejected(
+            key,
+            "a tool failure",
+            self.PROVENANCE,
+            "the check fails it",
+            components=components,
+            role="transcribe",
+        )
+        assert not caching.cache.record_rejected(
+            key, "a tool failure", self.PROVENANCE, "again"
+        )
+        assert live_entries(tmp_path) == []
+        (path,) = caching.cache.rejected(key)
+        aside = json.loads(path.read_text())
+        assert aside["origin"] == "adopted"
+        assert aside["components"] == components
+        assert aside["provenance"] == self.PROVENANCE
+        assert aside["rejected"]["reason"] == "the check fails it"
+        assert aside["rejected"]["role"] == "transcribe"
+        assert not caching.seed(key, "a tool failure", self.PROVENANCE)
+        assert caching.complete("Read it.") == "Read it."[::-1]
+        assert kinds(engine) == [COMPLETE]
+        (miss,) = events(run, "cache-miss")
+        assert miss["reason"] == "rejected"
+        with pytest.raises(ValueError, match="engine"):
+            caching.cache.record_rejected(
+                key, "text", {}, "why", reason="engine"
+            )
+
 
 class TestUnpinnedModel:
     def test_an_unpinned_role_is_named_once(self, tmp_path, caplog):

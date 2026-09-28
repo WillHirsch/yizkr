@@ -36,6 +36,20 @@ directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and `run.json` in
 - **Keep the claude CLI still.** A run keeps the claude CLI version it
   started on. Set `DISABLE_AUTOUPDATER=1` in every shell and Claude Code
   session on the machine for the length of the run.
+- **Archived transcriptions** (optional). `uv run yizkr scratch
+  import-transcriptions <archive> [--leave-out SHA1]...` adopts the
+  vision transcriptions of an earlier `ingest run`'s state directory in
+  the LLM cache, each checked by the transcription check, so the run's
+  calls for those scans are answered from the cache, as hits whose
+  reason is `adopted`, rather than by the engine. Run it just before the
+  run, with the run's `--cache`, `--extract-effort`, `$YIZKR_LLM_MODEL`
+  and claude CLI, which its keys name: after a CLI update, run it again.
+  A transcription the check fails is rejected and the run reads its scan
+  afresh; `--leave-out` gives the start of the SHA-1 of each scan to read
+  afresh anyway. It prints what it did with each scan's transcriptions and
+  the counts (imported, rejected, excluded, left out, skipped). What it
+  adopts, what it keeps of the archive, and when an adoption stops
+  applying: docs/LLM_CACHE.md, Seeding.
 - **Preflight.** Before anything is written or called, the driver checks
   the claude CLI and its login, a full model id for every role, the
   pacing settings, 2 GiB free on the run directory's and the cache's
