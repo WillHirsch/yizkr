@@ -314,6 +314,15 @@ def wrapped_in_sentinel(claims: list[dict]) -> str:
     )
 
 
+def gap_in_sentinel(claims: list[dict]) -> str:
+    """A complete chunk answer whose claims ride in its terminal sentinel
+    under `gap`, the key of a gap line merged into it, which neither the
+    claim parser nor the gap parser reads."""
+    return json.dumps(
+        {"done": True, "claims_emitted": len(claims), "gap": claims}
+    )
+
+
 def with_predicate(claims: list[dict]) -> str:
     """A complete chunk answer whose claims name their property under
     `predicate`, which the parser does not read as a claim."""
@@ -488,10 +497,12 @@ class TestChunkResponseContract:
         `predicate` or is written flat under another key, any other object
         that holds something (a number, or a note beside the sentinel), and
         a sentinel that carries a list or object that holds something under
-        any key. Read: claims, gap lines, well formed or not, the sentinel,
-        a sentinel with a note in a string, an empty list or object, or a
-        gap line merged into it, and objects that hold nothing at any
-        depth, which say there is nothing."""
+        any key, `gap` included unless it holds a gap line that
+        parse_chunk_gaps reads (claims under `gap` would otherwise be lost
+        without a trace). Read: claims, gap lines, well formed or not, the
+        sentinel, a sentinel with a note in a string, an empty list or
+        object, or a gap line merged into it, and objects that hold nothing
+        at any depth, which say there is nothing."""
         born = claim("e1", "Hildegard Löbig", 1876)
         renamed = json.loads(with_predicate([born]).splitlines()[0])
         godparent = {"subject": "e1", "predicate": "godparent of"}
@@ -508,6 +519,7 @@ class TestChunkResponseContract:
             {"done": True, "claims_emitted": 0, "note": "nothing else"},
             {"done": True, "claims_emitted": 0, "claims": []},
             {"done": True, "claims_emitted": 0, "result": {"claims": []}},
+            {"done": True, "claims_emitted": 0, "gap": []},
             {
                 "done": True,
                 "claims_emitted": 0,
@@ -526,10 +538,15 @@ class TestChunkResponseContract:
             {"done": True, "claims_emitted": 1, "people": [born]},
             {"done": True, "claims_emitted": 1, "output": {"claims": [born]}},
             {"done": True, "claims_emitted": [born]},
+            {"done": True, "claims_emitted": 1, "gap": [born]},
+            {"done": True, "claims_emitted": 1, "gap": {"claims": [born]}},
+            {"done": True, "claims_emitted": 1, "gap": born},
             # kept on purpose: a failure that shows, which --refresh extract
             # asks again, rather than claims lost in silence
             {"done": True, "claims_emitted": 0, "notes": ["nothing else"]},
             {"done": True, "claims_emitted": 0, "lines": [1, 4]},
+            {"done": True, "claims_emitted": 0, "gaps": [godparent]},
+            {"done": True, "claims_emitted": 0, "gap": [godparent] * 2},
         ]
         response = "\n".join(json.dumps(obj) for obj in (*read, *unread))
         assert parse_chunk_unread(response) == unread
@@ -1591,18 +1608,19 @@ class TestExtractionsWithoutClaims:
 
     @pytest.mark.parametrize(
         "shape",
-        [wrapped, with_predicate, wrapped_in_sentinel],
-        ids=["wrapped", "predicate", "in-sentinel"],
+        [wrapped, with_predicate, wrapped_in_sentinel, gap_in_sentinel],
+        ids=["wrapped", "predicate", "in-sentinel", "in-sentinel-gap"],
     )
     @pytest.mark.parametrize("tier", ["entity-first", "line-range"])
     def test_answers_the_parser_cannot_read_fail_the_extraction(
         self, tmp_path, tier, shape
     ):
         """Chunks that answered in a shape the claim parser cannot read
-        (claims wrapped in one object, carried in the sentinel, or naming
-        their property `predicate`) hold no claim it reads, yet they did
-        not answer with none. The extraction fails and says so, so that no
-        view keeps the misreading and a parser fix reaches the next run."""
+        (claims wrapped in one object, carried in the sentinel, under
+        `gap` too, or naming their property `predicate`) hold no claim it
+        reads, yet they did not answer with none. The extraction fails and
+        says so, so that no view keeps the misreading and a parser fix
+        reaches the next run."""
         people = [claim("e1", "e1", 1917), claim("e2", "e2", 1917)]
         if tier == "entity-first":
             answers = [entity_manifest_json(), shape(people[:1])]
@@ -1621,6 +1639,7 @@ class TestExtractionsWithoutClaims:
             wrapped: "claims",
             with_predicate: "subject, predicate, value, source, conf…",
             wrapped_in_sentinel: "claims, done, claims_emitted",
+            gap_in_sentinel: "done, claims_emitted, gap",
         }[shape]
         plural = "" if count == 1 else "s"
         extractor = self.extractor(

@@ -453,6 +453,16 @@ def parse_chunk_response(
     return claims
 
 
+def _gap_line(gap: Any) -> bool:
+    """Whether the value under a `gap` key is one parse_chunk_gaps reads
+    as a gap: an object with a subject and a predicate."""
+    return (
+        isinstance(gap, dict)
+        and bool(gap.get("subject"))
+        and bool(gap.get("predicate"))
+    )
+
+
 def parse_chunk_gaps(response: str) -> list[dict]:
     """Gap lines (ADR-0013): relations no property expresses, surfaced
     for review, never written to the graph.
@@ -465,11 +475,7 @@ def parse_chunk_gaps(response: str) -> list[dict]:
     gaps: list[dict] = []
     for obj in scan_json_objects(response):
         gap = obj.get("gap")
-        if (
-            isinstance(gap, dict)
-            and gap.get("subject")
-            and gap.get("predicate")
-        ):
+        if _gap_line(gap):
             gaps.append(
                 {
                     "subject": str(gap.get("subject", "")),
@@ -501,13 +507,14 @@ def parse_chunk_unread(response: str) -> list[dict]:
     claim and a gap line (well formed or not) are read. The terminal
     sentinel is read too, unless one of its keys holds a list or object
     that holds something, such as claims carried inside it. A note in a
-    string on it is harmless, and so is its `gap` key, a gap line merged
-    into it, which parse_chunk_gaps reads; a list of notes or of line
-    numbers on it is unread, since a failure that shows, which `--refresh
-    extract` asks the model again for, is preferred to claims lost in
-    silence. Any other object is unread unless it holds nothing at any
-    depth, as in `{}`, `{"claims": []}` or `{"result": {"claims": [{}]}}`,
-    which say there is nothing.
+    string on it is harmless, and so is a gap line merged into it, a `gap`
+    that parse_chunk_gaps reads (_gap_line). Anything else under `gap`,
+    such as claims or a list of gap lines, is unread like a list of notes
+    or of line numbers under any other key, since a failure that shows,
+    which `--refresh extract` asks the model again for, is preferred to
+    claims lost in silence. Any other object is unread unless it holds
+    nothing at any depth, as in `{}`, `{"claims": []}` or
+    `{"result": {"claims": [{}]}}`, which say there is nothing.
 
     They are counted, never guessed at. A chunk whose answer held such
     objects and no claim reads as unreadable rather than as answered with
@@ -520,7 +527,7 @@ def parse_chunk_unread(response: str) -> list[dict]:
             carried = [
                 value
                 for key, value in obj.items()
-                if key != "gap"
+                if not (key == "gap" and _gap_line(value))
                 and isinstance(value, (list, dict))
                 and _holds(value)
             ]
