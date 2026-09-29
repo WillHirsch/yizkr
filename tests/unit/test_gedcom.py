@@ -3238,6 +3238,41 @@ class TestCitationsAndMediaNotHeld:
         assert len(claims_for(result.batch, "i1", "image")) == len(imaged)
         assert not claims_for(result.batch, "i2", "image")
 
+    def test_a_person_skipped_for_want_of_a_name_has_their_citations_counted(
+        self,
+    ):
+        # (here) the export gives the infant of 1922 no name, and cites the
+        # tree for the birth and links the studio portrait: the person is
+        # skipped, with the warning, and no claim folds the citation or
+        # maps the portrait, so the census counts both, as it does the
+        # records they point to; the birth itself is taken as read
+        text = (
+            cited(TREE)
+            + PORTRAIT
+            + "\n".join(
+                [
+                    "0 @I13@ INDI",
+                    "1 SEX U",
+                    "1 BIRT",
+                    "2 DATE 1922",
+                    "2 SOUR @S1@",
+                    "1 OBJE @O1@",
+                    "0 TRLR",
+                    "",
+                ]
+            )
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.warnings == [
+            "@I13@: no NAME gives a name; skipped entirely, with the family "
+            "links that name it"
+        ]
+        assert result.unsupported_tags == {
+            "BIRT.SOUR": 1,
+            "OBJE": 2,
+            "SOUR": 1,
+        }
+
     def test_a_citation_of_a_persons_link_to_an_object_is_folded(self):
         # (here) the export cites the tree's first sheet beneath Eugen's
         # link to the studio portrait: the link's lines come first in the
