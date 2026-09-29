@@ -705,6 +705,55 @@ not a signal to grow the schema on.
   mention (other people's claims about them, orphaned provenance nodes),
   and transcription excerpts — raw source quotations, which can name
   anyone — never enter the public tier.
+- **Who is a person fails closed too** (ADR-0020, as amended by #344).
+  An item is a person when it has any person evidence, read at every
+  rank, deprecated included: a `human` type; a statement of a property
+  only a person has (a birth, a death or a burial, kinship, a birth or
+  married name, a nickname, what they are referred to as, a sex or
+  gender, a number of children, an occupation, an employer, a school, a
+  citizenship or a residence); being the value of a kinship property or
+  of `gave refuge to`, in a statement or a qualifier; or taking part in a
+  birth, a death, a marriage, a migration, military service, a
+  deportation, an imprisonment or a release. So a deprecated or outranked
+  `human` type hides no one. An official name, a religion or a
+  membership, a part in an event of another kind, a depiction, an
+  identity judgement (said to be the same as), a perspective or any
+  other qualifier, and the values of place, organization, artifact and
+  vocabulary properties mark no one. A type is read through the
+  redirects it names, so a class a curator merged into `human` types as
+  `human`. An item typed as a vessel, a military unit or an
+  organization at normal or preferred rank is taken
+  at its type on its part in a person event: any other evidence makes it
+  a person, a `human` type at any rank included. A family is not taken
+  at its type: its label is a surname, and a person known by a surname
+  alone can be typed as one. The export reads this evidence from its own
+  dump and **keeps a person only once the check has released them**: an
+  item the check never assessed is dropped, and a redirect goes with the
+  item it redirects to.
+- **What states no type is left out of the public export**, whatever
+  else it holds, so no type at all hides no one either: an item none of
+  whose `instance of` statements at normal or preferred rank names an
+  item (an unknown or no value, or a type a curator deprecated, names
+  none). The vocabulary is kept: the manifest's items, and every item
+  that is the value of an `instance of` or `subclass of` statement. An
+  item left untyped (a write cut short between its label and its type, a
+  reference that gives no kind) is missing from the public copy until it
+  is typed.
+- **A family is never public** (ADR-0020, as amended by #344). A family
+  stands for its people, the people recorded as `member of` it, and is
+  private while any of them may be living. The model cannot state that a
+  family's membership is complete (there is no household statement
+  enumerating occupants, above), so the export leaves out every item
+  typed `family` at normal or preferred rank, whatever it holds, released
+  or not, and the site badges it. #374 holds the full rule, with a way
+  to mark a family's membership complete.
+- The check runs on the query service, so the export waits for the query
+  service to hold the dump's revision of every item and property, and
+  **refuses to run** while it does not, or when the graph changes during
+  the check. The match is exact: an entity whose revision never reaches
+  the query service keeps the export refusing, naming the entity, until
+  that entity is edited again or the query service is reloaded from a
+  full dump.
 - **Births fail closed** (ADR-0020, as amended by #334). A birth releases
   a person only at the latest year it allows, and only when every
   `date of birth` statement a curator has not deprecated does so by the
@@ -726,4 +775,9 @@ not a signal to grow the schema on.
   is unknown, unreadable or coarser than a millennium.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never in
-  public exports"), using the same runtime call.
+  public exports"), using the same runtime call, except a person with no
+  type, whom the export leaves out even when released; the site shows no
+  badge. A family it lists is always badged. Its people are the items
+  with person evidence, selected as the check selects them; the export
+  also drops what the site lists as no person, an untyped item without
+  person evidence, a family without person evidence and a redirect.

@@ -100,18 +100,30 @@ def cmd_smoke_test(args) -> int:
 
 
 def cmd_backup(args) -> int:
-    from yizkr.backup import run_backup
+    from yizkr.backup import QueryServiceLag, run_backup
 
-    manifest = run_backup(
-        Config.load(args.env_file),
-        backup_root=args.out,
-        deploy_dir=args.deploy_dir,
-        compose_files=args.compose_file or None,
-        skip_media=args.skip_media,
-        public_export=not args.no_public_export,
-        cutoff_years=args.cutoff_years,
-        keep=args.keep,
-    )
+    try:
+        manifest = run_backup(
+            Config.load(args.env_file),
+            backup_root=args.out,
+            deploy_dir=args.deploy_dir,
+            compose_files=args.compose_file or None,
+            skip_media=args.skip_media,
+            public_export=not args.no_public_export,
+            cutoff_years=args.cutoff_years,
+            keep=args.keep,
+        )
+    except QueryServiceLag as refusal:
+        # the dumps it kept, then the refusal on one line, for cron's log
+        if refusal.manifest is not None:
+            _print_backup(args, refusal.manifest)
+        print(f"public export refused: {refusal}", file=sys.stderr)
+        return 1
+    _print_backup(args, manifest)
+    return 0
+
+
+def _print_backup(args, manifest: dict) -> None:
     for name, info in manifest["components"].items():
         detail = "".join(
             f", {key}={value}" for key, value in info.items() if key != "file"
@@ -122,7 +134,6 @@ def cmd_backup(args) -> int:
         )
     if manifest["pruned"]:
         print(f"pruned old backups: {', '.join(manifest['pruned'])}")
-    return 0
 
 
 def cmd_merge_items(args) -> int:
