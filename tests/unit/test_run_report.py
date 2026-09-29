@@ -2099,7 +2099,7 @@ class TestFiles:
         on."""
         directory = run / slugify(Path(FILES[CERT][0]).stem)
         batch = json.loads((directory / "batch.json").read_text())
-        batch |= {"entities": 1, "claims": "Hildegard Laudler"}
+        batch |= {"entities": 1, "claims": 7}
         (directory / "batch.json").write_text(json.dumps(batch))
         plan = json.loads((run / "run.json").read_text())
         plan["scratch"]["corpus_stages"] = 5
