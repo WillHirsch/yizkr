@@ -29,7 +29,7 @@ from pathlib import Path
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
-from yizkr.pipeline.llm import LlmClient
+from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
 from yizkr.queries.publish import prefix_block
 
 VERDICTS = ("same", "a_within_b", "b_within_a", "distinct", "uncertain")
@@ -253,7 +253,7 @@ For every question output one NDJSON line:
 {{"qid_a": "<Q..>", "qid_b": "<Q..>", "verdict": "...",
 "confidence": <0-1>, "evidence": "<one sentence>"}}
 No wrapper object, no code fences, no prose. End with exactly:
-{{"done": true, "proposals_emitted": N}}
+{{"done": true}}
 
 Questions:
 {questions_block}
@@ -299,7 +299,9 @@ def adjudicate_places(
         valid = {
             frozenset((question.qid_a, question.qid_b)) for question in chunk
         }
-        parsed = _parse_place_proposals(response, valid)
+        parsed = _parse_place_proposals(
+            response, valid, cut_off=at_output_limit(client, response)
+        )
         print(
             f"  batch {index}/{len(batches)}: {len(chunk)} questions -> "
             f"{len(parsed)} proposals (sentinel ok)",
@@ -310,13 +312,17 @@ def adjudicate_places(
 
 
 def _parse_place_proposals(
-    response: str, valid: set[frozenset]
+    response: str, valid: set[frozenset], *, cut_off: bool = False
 ) -> list[PlaceProposal]:
+    """The proposals of a place adjudication answer on the questions it
+    was asked. Raises ValueError for an answer cut off: one the engine
+    stopped at its output limit (`cut_off`, llm.at_output_limit), or one
+    without its terminal sentinel, a line whose `done` is true."""
     proposals = []
-    sentinel = None
+    finished = False
     for obj in scan_json_objects(response):
         if obj.get("done") is True:
-            sentinel = obj.get("proposals_emitted")
+            finished = True
             continue
         if "qid_a" not in obj or "qid_b" not in obj:
             continue
@@ -334,7 +340,9 @@ def _parse_place_proposals(
                 evidence=obj.get("evidence", ""),
             )
         )
-    if sentinel is None:
+    if cut_off:
+        raise ValueError(f"place adjudication response {CUT_OFF_AT_LIMIT}")
+    if not finished:
         raise ValueError(
             "place adjudication response carried no terminal sentinel"
         )

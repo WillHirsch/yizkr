@@ -1543,13 +1543,20 @@ class Orchestrator:
                 )
 
     def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
-        """The extraction critic's findings on the batch."""
+        """The extraction critic's findings on the batch. A critique the
+        engine gave up on at its output limit has none, and needs
+        attention, so that neither this run nor one that reuses the view
+        takes it for a sound extraction's."""
         from yizkr.pipeline.critique import run_critique
 
+        attention: list[str] = []
         return self._run_stage(
             doc,
             "critique",
-            lambda: run_critique(self._llm("critique", doc), batch),
+            lambda: run_critique(
+                self._llm("critique", doc), batch, attention=attention
+            ),
+            attention=lambda _findings: attention,
         )
 
     def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
