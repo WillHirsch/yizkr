@@ -130,7 +130,7 @@ by deterministic evidence alone:
   proper name, on a shared kind with places that agree (`kind`). Places
   its `location` claims name agree when a place of one would link with a
   place of the other, or with a place that one lies in, as places do
-  (`exact` or `nested`), or is one of those (ADR-0035 §7, rule 6); a
+  (`exact` or `nested`; ADR-0035 §7, rule 6); a
   place without a record, which cannot link, leaves them unknown where it
   shares an exact name with the other's. Places its record names carry
   no containers, and agree when a place of one is among the other's
@@ -1424,14 +1424,14 @@ class _Judge:
         """Whether the places two organisations' location claims name
         agree (ADR-0035 §7, rule 6): a place of one would link with a place
         of the other, or with a place it lies in, under rule 5 (`exact` or
-        `nested`), or is one of those. They are `unknown` when neither
-        holds but a recordless place shares a name with the other's, and
-        differ otherwise."""
+        `nested`). A place is one of its own manifest's nodes, and two
+        organisations of one manifest are never a candidate pair, so a
+        place shared by node needs no test of its own. They are `unknown`
+        when neither holds but a recordless place shares a name with the
+        other's, and differ otherwise."""
         unknown = False
         for ours, theirs in ((a, b), (b, a)):
             for place_id in ours.org_places:
-                if place_id in theirs.org_closure:
-                    return "agree"
                 one = self._nodes[place_id]
                 for other_id in sorted(theirs.org_closure):
                     other = self._nodes[other_id]

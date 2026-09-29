@@ -20,8 +20,8 @@ document's own `unsplit` form keys like its typed parts. Two places that
 share a name with containers neither equal nor nested stay ambiguous.
 Rule 6's places stand as written: a place an organisation's `location`
 claims name agrees with the other's when the two would link under rule 5
-(`exact` or `nested`), or when one is a place the other lies in by the
-`part_of` and `location` claims of its manifest, or would link with one;
+(`exact` or `nested`), or when one would link so with a place the other
+lies in by the `part_of` and `location` claims of its manifest;
 a place without a record, which rule 5 cannot link, is compared by its
 exact names, which leave the places unknown when shared and differ
 otherwise. Places a record names carry no containers, and agree on a

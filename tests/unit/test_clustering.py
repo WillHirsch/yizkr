@@ -1587,6 +1587,13 @@ class TestRecordless:
         identity = identity_of(*docs)
         assert identity["summary"]["recordless_mentions"] == 2
         assert merged(docs, identity) == []
+        # an export's records are read as they stand, a record of
+        # another kind apart
+        exported = [
+            Manifest(doc.sha1, doc.manifest.batch, GEDCOM) for doc in docs
+        ]
+        summary = cluster_corpus(exported)["summary"]
+        assert summary["recordless_mentions"] == 2
 
 
 # -- blocking -----------------------------------------------------------------
@@ -2584,49 +2591,52 @@ class TestEvents:
 
 def judgment(**extra) -> Doc:
     """The divorce judgment: Leopold and Agnes's marriage, its civil
-    wedding on 8 February 1947 and its divorce on 2 January 1957."""
-    return document(
-        "divorce-judgment-1957",
-        [
-            human("e1", "Leopold Löbig"),
-            human(
-                "e2",
-                "Agnes Löbig",
-                aliases=["Agnes Löbig geb. Nertler"],
-                givens=["Agnes"],
-                surnames=["Löbig"],
-                birth=["Nertler"],
-            ),
-            entity("m1", "Marriage of Leopold and Agnes", "marriage"),
+    wedding on 8 February 1947 (unless `wedded` is false) and its divorce
+    on 2 January 1957, with a witness, Ida, when `witness` is true."""
+    wedded = extra.get("wedded", True)
+    witness = extra.get("witness", False)
+    entities = [
+        human("e1", "Leopold Löbig"),
+        human(
+            "e2",
+            "Agnes Löbig",
+            aliases=["Agnes Löbig geb. Nertler"],
+            givens=["Agnes"],
+            surnames=["Löbig"],
+            birth=["Nertler"],
+        ),
+        entity("m1", "Marriage of Leopold and Agnes", "marriage"),
+        entity("d1", "Divorce of Leopold and Agnes", "divorce"),
+    ]
+    claims = [
+        *union_of("m1", "e1", "e2"),
+        ("m1", "ended_by", item("d1")),
+        ("d1", "point_in_time", day(1957, 1, 2)),
+    ]
+    truth = {
+        "e1": "leopold-loebig",
+        "e2": "agnes-loebig",
+        "m1": "leopold-and-agnes",
+        "d1": "leopold-and-agnes-divorce",
+    }
+    if wedded:
+        entities.append(
             entity(
                 "w1",
                 "Civil wedding of Leopold and Agnes",
                 extra.get("wedding", "civil_wedding"),
-            ),
-            entity("d1", "Divorce of Leopold and Agnes", "divorce"),
-            *([human("e3", "Ida Löbig")] if extra.get("witness") else []),
-        ],
-        [
-            *union_of("m1", "e1", "e2"),
+            )
+        )
+        claims += [
             ("m1", "started_by", item("w1")),
-            ("m1", "ended_by", item("d1")),
             ("w1", "point_in_time", day(1947, 2, 8)),
-            ("d1", "point_in_time", day(1957, 1, 2)),
-            *(
-                [("m1", "participant", item("e3"), role("witness"))]
-                if extra.get("witness")
-                else []
-            ),
-        ],
-        {
-            "e1": "leopold-loebig",
-            "e2": "agnes-loebig",
-            "m1": "leopold-and-agnes",
-            "w1": "leopold-and-agnes-wedding",
-            "d1": "leopold-and-agnes-divorce",
-            **({"e3": "ida-loebig"} if extra.get("witness") else {}),
-        },
-    )
+        ]
+        truth["w1"] = "leopold-and-agnes-wedding"
+    if witness:
+        entities.append(human("e3", "Ida Löbig"))
+        claims.append(("m1", "participant", item("e3"), role("witness")))
+        truth["e3"] = "ida-loebig"
+    return document("divorce-judgment-1957", entities, claims, truth)
 
 
 def tree_union(
@@ -2698,10 +2708,11 @@ class TestUnions:
         assert_no_false_merge(docs, identity)
 
     def test_a_union_is_dated_by_its_weddings_never_its_ends(self):
-        """The judgment's marriage has its wedding in 1947; the tree's
-        names only its divorce, in 1957. An end never dates a union, so
-        nothing conflicts, and the two merge."""
-        docs = [judgment(), tree_union(end="divorce")]
+        """The tree's marriage has its wedding in 1947; a judgment that
+        names only its divorce, in 1957, dates its marriage by nothing.
+        An end never dates a union, so nothing conflicts, and the two
+        merge."""
+        docs = [judgment(wedded=False), tree_union(wedding=day(1947))]
         identity = identity_of(*docs)
         assert {"leopold-and-agnes"} in merged(docs, identity)
 
@@ -3286,6 +3297,22 @@ class TestNoFalseMerge:
         identity = identity_of(*docs)
         assert identity["summary"]["recordless_by_kind"] == {"place": 2}
         assert merged(docs, identity) == []
+        # a nameless shop at a recordless town still keys on its kind
+        # with the town's exact name, and meets one at a namesake
+        nameless = [
+            register(
+                f"nameless {n}",
+                [
+                    organization("e1", "Hutmacherei", kinds=["Hutmacherei"]),
+                    place("p0", "Flörburg", within=["Hesse"]),
+                ],
+                [("e1", "location", item("p0"))],
+                {"e1": "hat shop", "p0": "Flörburg"},
+            )
+            for n in range(2)
+        ]
+        pairs = blocked_pairs([doc.manifest for doc in nameless])
+        assert pair(nameless[0], "e1", nameless[1], "e1") in pairs
         shops = frozenset(doc.fingerprint("e1", identity) for doc in docs)
         assert links_of(identity)[shops] == (
             AMBIGUOUS,
