@@ -1046,8 +1046,12 @@ class TestLongDeckTitles:
         result = registrar.register_artifact(
             deck, "presentation", self.TITLE, pages=2
         )
+        # the shop front under two names in the archive: one medium
         record, directory = recorded(
-            tmp_path, deck, self.TITLE, [("image1.png", IMAGE, [1, 2])]
+            tmp_path,
+            deck,
+            self.TITLE,
+            [("image1.png", IMAGE, [1]), ("image3.png", IMAGE, [2])],
         )
         derived = registrar.register_derived_media(record, directory)
 
@@ -1059,9 +1063,13 @@ class TestLongDeckTitles:
             description = wiki.entities[qid]["descriptions"]["en"]["value"]
             assert description.startswith(f"page {page} of Hutmacherei")
             assert description.endswith("…") and len(description) <= 250
-        label = label_of(wiki, derived[sha1(IMAGE)])
-        assert label == self.TITLE[:236].rstrip() + "… — image1.png"
-        assert len(label) <= 250
+        medium = wiki.entities[derived[sha1(IMAGE)]]
+        cut = self.TITLE[:236].rstrip()
+        assert medium["labels"]["en"]["value"] == f"{cut}… — image1.png"
+        # its other name is an alias, cut the same way
+        assert [alias["value"] for alias in medium["aliases"]["en"]] == [
+            f"{cut}… — image3.png"
+        ]
         # the same cut every time: a second write of the deck writes nothing
         writes = wiki.writes
         again = Registrar(wiki)
