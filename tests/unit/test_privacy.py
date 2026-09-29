@@ -505,13 +505,15 @@ class TestThePeopleSelection:
 
     selection = flat(people_selection(PROPERTIES, ITEMS))
     typing = PROPERTIES["instance_of"]
+    # a type, read through the redirects it may name
+    typed = f"ps:{typing}/<http://www.w3.org/2002/07/owl#sameAs>*"
     non_person = " ".join(f"wd:{ITEMS[key]}" for key in NON_PERSON_CLASSES)
     # the type that sets a participant aside: one not deprecated
     set_aside = (
         "FILTER NOT EXISTS { "
         f"VALUES ?otherKind {{ {non_person} }} "
         f"?person p:{typing} ?otherTyping . "
-        f"?otherTyping ps:{typing} ?otherKind ; "
+        f"?otherTyping {typed} ?otherKind ; "
         "wikibase:rank ?otherRank . "
         "FILTER(?otherRank != wikibase:DeprecatedRank) }"
     )
@@ -526,7 +528,7 @@ class TestThePeopleSelection:
         typing = self.typing
         assert (
             f"{{ ?person p:{typing} ?typing . "
-            f"?typing ps:{typing} wd:{ITEMS['human']} . }} UNION"
+            f"?typing {self.typed} wd:{ITEMS['human']} . }} UNION"
         ) in self.selection
 
     def test_each_kind_of_evidence_selects(self):
@@ -554,11 +556,16 @@ class TestThePeopleSelection:
         assert (
             f"{{ VALUES ?kind {{ {events} }} "
             f"?event p:{typing} ?eventTyping . "
-            f"?eventTyping ps:{typing} ?kind . "
+            f"?eventTyping {self.typed} ?kind . "
             f"?event p:{participant} ?participation . "
             f"?participation ps:{participant} ?person . "
             f"{self.set_aside} }}"
         ) in self.selection
+
+    def test_every_type_is_read_through_its_redirects(self):
+        # a class a curator merged into `human`, an event kind or a
+        # non-person class types as the one it redirects to
+        assert self.selection.count(self.typed) == 3
 
     def test_a_non_person_type_sets_only_a_participant_aside(self):
         # once, in the participant's part of the union, and after it the

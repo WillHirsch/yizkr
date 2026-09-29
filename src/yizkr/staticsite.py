@@ -15,7 +15,9 @@ Design constraints:
   possibly-living-excluded public export instead (later rung). The
   private site still marks who that export would drop, via a badge
   computed at render time from the absence of death evidence — the same
-  runtime determination the export uses (ADR-0020, `core/privacy.py`).
+  runtime determination the export uses (ADR-0020, `core/privacy.py`) —
+  except a person with no type, whom the export leaves out even when
+  released: such a person has no badge.
 * Self-contained output: no CDN scripts, no external fonts, no
   third-party tiles — nothing about the family leaves the LAN when a
   page is opened (privacy-first). Media are hot-linked from the wiki

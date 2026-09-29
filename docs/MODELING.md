@@ -719,8 +719,10 @@ not a signal to grow the schema on.
   membership, a part in an event of another kind, a depiction, an
   identity judgement (said to be the same as), a perspective or any
   other qualifier, and the values of place, organization, artifact and
-  vocabulary properties mark no one. An item typed as a vessel, a
-  military unit or an organization at normal or preferred rank is taken
+  vocabulary properties mark no one. A type is read through the
+  redirects it names, so a class a curator merged into `human` types as
+  `human`. An item typed as a vessel, a military unit or an
+  organization at normal or preferred rank is taken
   at its type on its part in a person event: any other evidence makes it
   a person, a `human` type at any rank included. A family is not taken
   at its type: its label is a surname, and a person known by a surname
@@ -765,7 +767,8 @@ not a signal to grow the schema on.
   is unknown, unreadable or coarser than a millennium.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never in
-  public exports"), using the same runtime call. Its people are the items
-  with person evidence, selected as the check selects them; the export
-  also drops what the site lists as no person, an untyped item without
-  person evidence and a redirect.
+  public exports"), using the same runtime call, except a person with no
+  type, whom the export leaves out even when released; the site shows no
+  badge. Its people are the items with person evidence, selected as the
+  check selects them; the export also drops what the site lists as no
+  person, an untyped item without person evidence and a redirect.

@@ -136,7 +136,9 @@ is renamed **`critique_notes`** to reflect its now-single role (ADR-0013).
   badges each subject the export would drop ("possibly living — never in
   public exports"), computed at render time with the same births query
   and predicate — the private site therefore shows exactly what the
-  public export would remove, derived, never stored.
+  public export would remove, derived, never stored. (Amended by #344:
+  except a person with no type, whom the export leaves out even when
+  released; the site shows no badge. See below.)
 
 Amended by #344 (2026-09-29): the export fails closed on who is a person,
 as it does on whether they may be living. The check selected people by
@@ -151,7 +153,8 @@ from the database while the check reads the query service. Now:
   selects every item with person evidence, each read through its
   statement node at every rank, deprecated included, since a deprecated
   statement still records that a source said so:
-  - an item typed `human`;
+  - an item typed `human`, a type that names a redirect to `human` (a
+    class a curator merged into it) included;
   - the subject of a property only a person has: date or place of birth,
     date or place of death, place of burial, cause of death, father,
     mother, spouse, child, sibling, relative, birth name, married name,
@@ -172,8 +175,11 @@ from the database while the check reads the query service. Now:
   appellation's perspective; any other qualifier; and the values of
   place, organization, artifact and vocabulary properties. So places,
   artifacts and the vocabulary are not taken for people. An unknown value
-  is no item, and a redirect has no statements of its own. The check and
-  the site select people with it.
+  is no item, and a redirect has no statements of its own. A type is read
+  through the redirects it names, in the dump and at the query service
+  (`ps:P/owl:sameAs*`): a class a curator merged into `human`, an event
+  kind or a non-person class types as the one it now redirects to. The
+  check and the site select people with it.
 - **A non-person type outweighs a part in an event** (owner,
   2026-09-29). A ship or a firm takes part in a migration, so an item
   typed as a vessel, a military unit or an organization
@@ -206,16 +212,17 @@ from the database while the check reads the query service. Now:
   deprecated counts for nothing. The vocabulary is kept: the manifest's
   items, which bootstrap mints untyped, and every item that is the value
   of an `instance of` or `subclass of` statement, at any rank, a class a
-  curator makes included, so that neither the class nor the typing of
-  the items that name it is dropped. A redirect goes with its target, as
-  above. Nothing in the pipeline is untyped by design: an artifact and a
-  page fragment are typed by the registrar, derived media in the same
-  write that creates them, an entity the extraction, a GEDCOM file or a
-  face match proposes by its kind, and an extraction or place-hierarchy
-  run as a run. A write cut short between an item's label and its type,
-  or an extracted reference that gives no kind, leaves an item untyped,
-  and dropping it is right: it is missing from the public copy until it
-  is typed. So are the retired vocabulary (§5) and the smoke test's item.
+  curator makes included, and the class such a value redirects to, so
+  that neither the class nor the typing of the items that name it is
+  dropped. A redirect goes with its target, as above. Nothing in the
+  pipeline is untyped by design: an artifact and a page fragment are
+  typed by the registrar, derived media in the same write that creates
+  them, an entity the extraction, a GEDCOM file or a face match proposes
+  by its kind, and an extraction or place-hierarchy run as a run. A
+  write cut short between an item's label and its type, or an extracted
+  reference that gives no kind, leaves an item untyped, and dropping it
+  is right: it is missing from the public copy until it is typed. So are
+  the retired vocabulary (§5) and the smoke test's item.
 - **The query service must hold the dump.** The export reads the
   revision of every item and property from the dump and waits, up to
   `LAG_TIMEOUT`, for the query service to hold exactly those revisions (a
@@ -237,9 +244,13 @@ from the database while the check reads the query service. Now:
 - **The site lists the same people.** `yizkr publish-site` lists every
   item the selection finds, and badges each one the check does not
   release, so for every person it lists its badge and the export's
-  exclusion agree. The export also drops what the site lists as no
-  person: an item that states no type and has no person evidence, and a
-  redirect.
+  exclusion agree, except a person with no type, whom the export leaves
+  out even when released (an untyped item with a date of death, say);
+  the site shows no badge. The badge speaks for the check, which releases
+  them; the missing type is the export's own rule, and a badge for it
+  would need a wording of its own. The export also drops what the site
+  lists as no person: an item that states no type and has no person
+  evidence, and a redirect.
 
 The rulings dated 2026-09-29 are the owner's, on the questions this
 amendment raised.

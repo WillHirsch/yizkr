@@ -72,6 +72,7 @@ from yizkr.core.privacy import (
     PERSON_EVENTS,
     PERSON_SUBJECT_PROPERTIES,
     PERSON_VALUE_PROPERTIES,
+    SAME_AS,
     is_possibly_living,
     latest_births,
     people_selection,
@@ -292,7 +293,6 @@ _CLAIM_VALUE = re.compile(r"<[^<>]*/prop/statement/(P[1-9]\d*)>")
 _QUALIFIER_VALUE = re.compile(r"<[^<>]*/prop/qualifier/(P[1-9]\d*)>")
 _DATA_NODE = re.compile(r"<[^<>]*[/:]([QP][1-9]\d*)>")
 _VERSION = "<http://schema.org/version>"
-_SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
 _RANK = "<http://wikiba.se/ontology#rank>"
 _DEPRECATED = "<http://wikiba.se/ontology#DeprecatedRank>"
 
@@ -317,6 +317,18 @@ def _item(term: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _redirected(redirects: Mapping[str, str], qid: str) -> str:
+    """The item `qid` stands for: the one it redirects to, through a chain
+    of redirects (a cycle ends where it closes), or itself."""
+    seen = {qid}
+    while qid in redirects:
+        qid = redirects[qid]
+        if qid in seen:
+            break
+        seen.add(qid)
+    return qid
+
+
 def read_dump(
     full_dump: Path, properties: Mapping[str, str], items: Mapping[str, str]
 ) -> DumpReading:
@@ -337,7 +349,8 @@ def read_dump(
     manifest's items, which bootstrap mints untyped) and every item that
     is the value of an `instance of` or `subclass of` statement, at any
     rank, are classes, and not counted; nor is a redirect, which has no
-    statements of its own."""
+    statements of its own. A type that names a redirect is read as the
+    item the redirect leads to."""
     instance_of = properties["instance_of"]
     subclass_of = properties["subclass_of"]
     participant = properties["participant"]
@@ -370,7 +383,7 @@ def read_dump(
                 if node and version:
                     reading.revisions[node.group(1)] = int(version.group(1))
                 continue
-            if predicate == _SAME_AS:
+            if predicate == SAME_AS:
                 redirect, target = _item(subject), _item(term)
                 if redirect and target:
                     reading.redirects[redirect] = target
@@ -421,6 +434,15 @@ def read_dump(
                 classes.add(item)
             if pid == participant:
                 participants[subject] = item
+
+    # a type is read through the redirects it names: an item typed with a
+    # class a curator merged into `human` is typed human, and the class it
+    # was merged into is a class
+    kinds = {
+        statement: _redirected(reading.redirects, kind)
+        for statement, kind in kinds.items()
+    }
+    classes |= {_redirected(reading.redirects, kind) for kind in classes}
 
     def typed_as(kinds_of: set[str] | None, ranked: bool = False) -> set:
         """The items a statement types as one of `kinds_of` (any type,
@@ -480,13 +502,7 @@ def public_exclusions(
     was not released."""
 
     def target(qid: str) -> str:
-        seen = {qid}
-        while qid in reading.redirects:
-            qid = reading.redirects[qid]
-            if qid in seen:
-                break
-            seen.add(qid)
-        return qid
+        return _redirected(reading.redirects, qid)
 
     people = reading.people | report.excluded | report.included
 

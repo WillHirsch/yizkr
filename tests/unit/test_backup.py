@@ -636,6 +636,36 @@ class TestReadDump:
         assert found.revisions == export_dump(vocabulary).revisions
         assert not set(REDIRECTS) & set(found.revisions)
 
+    def test_a_type_is_read_through_its_redirects(self, tmp_path, vocabulary):
+        _, items = vocabulary
+
+        def build(dump):
+            # a curator merged a duplicate "person" class, Q452, into human
+            dump.redirect("Q452", items["human"])
+            dump.entity("Q453", "typed with the merged-away class")
+            dump.says("Q453", "instance_of", entity("Q452"))
+            # an event typed through a chain of redirects to death, whose
+            # participant (the place Q450) is so a person
+            dump.redirect("Q454", "Q455")
+            dump.redirect("Q455", items["death"])
+            dump.says("Q451", "instance_of", entity("Q454"))
+            dump.says("Q451", "participant", entity("Q450"))
+            # a vessel typed through a redirect, in that death: set aside
+            dump.redirect("Q456", items["vessel"])
+            dump.entity("Q457", "a vessel typed through a redirect")
+            dump.says("Q457", "instance_of", entity("Q456"))
+            dump.says("Q451", "participant", entity("Q457"))
+            # a curator's class, untyped, named only through a redirect
+            dump.entity("Q458", "a curator's class")
+            dump.redirect("Q459", "Q458")
+            dump.entity("Q460", "typed with the class's old id")
+            dump.says("Q460", "instance_of", entity("Q459"))
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert {"Q453", "Q450"} <= found.people
+        assert "Q457" not in found.people
+        assert "Q458" not in found.untyped
+
     def test_a_propertys_revision_is_read(self, tmp_path, vocabulary):
         def build(dump):
             dump.data_node("P1", 7)
@@ -873,11 +903,20 @@ class TestExportPublic:
     """The public export end to end, offline: a fictional dump, and the
     query service's answers."""
 
-    def export(self, tmp_path, vocabulary, selected=tuple(PEOPLE), **run):
+    def export(
+        self,
+        tmp_path,
+        vocabulary,
+        selected=tuple(PEOPLE),
+        answering=None,
+        **run,
+    ):
+        """export_public over the fictional dump, answered by `answering`
+        (ExportRun unless given), on a clock that only its naps move on."""
         dump = export_dump(vocabulary)
         dump.write(tmp_path / "full.nt.gz")
         clock = Clock()
-        runner = ExportRun(dump.revisions, selected, **run)
+        runner = (answering or ExportRun)(dump.revisions, selected, **run)
         counts = export_public(
             config(),
             tmp_path,
@@ -959,14 +998,7 @@ class TestExportPublic:
                     ]
                 return rows
 
-        dump = export_dump(vocabulary)
-        dump.write(tmp_path / "full.nt.gz")
-        counts = export_public(
-            config(),
-            tmp_path,
-            run=Released(dump.revisions, tuple(PEOPLE)),
-            vocabulary=vocabulary,
-        )
+        counts, _ = self.export(tmp_path, vocabulary, answering=Released)
         exclusions = json.loads(
             (tmp_path / "public-exclusions.json").read_text()
         )

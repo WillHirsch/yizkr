@@ -145,15 +145,22 @@ PERSON_EVENTS = (
 # person lands.
 NON_PERSON_CLASSES = ("vessel", "military_unit", "organization")
 
+# A redirect's link to the item it redirects to, as the query service and
+# the dump write it.
+SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
+
 # Every item with person evidence, once each, read through statement
 # nodes at every rank, never through the truthy wdt: values; only the
 # type that sets a participant aside must be one a curator has not
 # deprecated. A person-valued property's value counts in a statement
-# (ps:) and in a qualifier (pq:) alike. A value that is not an item (an
-# unknown value) is left out, and so is a redirect, which has no
-# statements of its own: the item it redirects to is selected for what it
-# holds. The filters test each item once, after DISTINCT, not each
-# statement that names it. `people_selection` fills in the lists.
+# (ps:) and in a qualifier (pq:) alike. A type is read through the
+# redirects it may name ({same_as}*), so a class a curator merged into
+# `human`, an event kind or a non-person class types as that one does. A
+# value that is not an item (an unknown value) is left out, and so is a
+# redirect, which has no statements of its own: the item it redirects to
+# is selected for what it holds. The filters test each item once, after
+# DISTINCT, not each statement that names it. `people_selection` fills in
+# the lists.
 PEOPLE_SELECTION = """\
   {{
     SELECT ?person WHERE {{
@@ -161,7 +168,7 @@ PEOPLE_SELECTION = """\
         SELECT DISTINCT ?person WHERE {{
           {{
             ?person p:{instance_of} ?typing .
-            ?typing ps:{instance_of} wd:{human} .
+            ?typing ps:{instance_of}/{same_as}* wd:{human} .
           }} UNION {{
             VALUES ?link {{ {subject_links} }}
             ?person ?link ?statement .
@@ -171,13 +178,13 @@ PEOPLE_SELECTION = """\
           }} UNION {{
             VALUES ?kind {{ {event_kinds} }}
             ?event p:{instance_of} ?eventTyping .
-            ?eventTyping ps:{instance_of} ?kind .
+            ?eventTyping ps:{instance_of}/{same_as}* ?kind .
             ?event p:{participant} ?participation .
             ?participation ps:{participant} ?person .
             FILTER NOT EXISTS {{
               VALUES ?otherKind {{ {non_person_kinds} }}
               ?person p:{instance_of} ?otherTyping .
-              ?otherTyping ps:{instance_of} ?otherKind ;
+              ?otherTyping ps:{instance_of}/{same_as}* ?otherKind ;
                            wikibase:rank ?otherRank .
               FILTER(?otherRank != wikibase:DeprecatedRank)
             }}
@@ -185,9 +192,7 @@ PEOPLE_SELECTION = """\
         }}
       }}
       FILTER(REGEX(STR(?person), "/entity/Q[1-9][0-9]*$"))
-      FILTER NOT EXISTS {{
-        ?person <http://www.w3.org/2002/07/owl#sameAs> ?target .
-      }}
+      FILTER NOT EXISTS {{ ?person {same_as} ?target . }}
     }}
   }}
 """
@@ -199,6 +204,7 @@ def people_selection(
     """``PEOPLE_SELECTION`` with an instance's ids: a group that binds
     ?person to each item with person evidence, for a query to join on."""
     return PEOPLE_SELECTION.format(
+        same_as=SAME_AS,
         instance_of=properties["instance_of"],
         participant=properties["participant"],
         human=items[PERSON_CLASS],
