@@ -2268,6 +2268,12 @@ class TestRunDirectory:
         orchestrator = AbortsAfterFirst(folder, tmp_path / "state", log=quiet)
         orchestrator.run()
         assert not any(c.endswith("b.txt") for c in orchestrator.calls)
+        # the second document is never dispatched: no stage of it starts,
+        # nor is held
+        second = sha1_of("Leopold was born in 1914.")
+        assert not any(
+            e.get("subject") == second for e in orchestrator.rundir.events()
+        )
         events = [e["event"] for e in orchestrator.rundir.events()]
         assert events[0] == "run-start" and events[-1] == "run-end"
 
