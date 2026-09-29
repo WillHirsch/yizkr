@@ -657,7 +657,11 @@ whole names as now.
 - **#106 (adjudication)** sees records, roles and classes rather than raw
   labels, in any language, and can weigh a married surname against a
   birth surname as ADR-0011 advises. Fewer spurious candidates reach it,
-  since keys no longer meet on a shared token.
+  since keys no longer meet on a shared token. For the same reason, it no
+  longer sees pairs that share only part of a name ("Bad Flörburg" and
+  "Flörburg", "Blauen Hut" and "zum Blauen Hut"), which #361 proposed
+  as ambiguous; a candidate rule for them is #106's to add, if the runs
+  show such pairs missed.
 - **#107 (overrides)** keeps its key. Overrides key on fingerprints, which
   a new reading does not change, and a changed record re-queues only the
   clusters whose members move.
