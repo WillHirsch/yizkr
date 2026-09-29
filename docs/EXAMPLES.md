@@ -74,7 +74,7 @@ a neighbour in Stupfield whom Nicholas calls *Nana Maisie*.
 
 ## Sources
 
-Sixteen invented documents carry transcribed text (`Source.text`), and
+Eighteen invented documents carry transcribed text (`Source.text`), and
 every assertion quotes the passage that makes it (`Assertion.excerpt`).
 
 | Key | What | Language |
@@ -94,7 +94,9 @@ every assertion quotes the passage that makes it (`Assertion.excerpt`).
 | `divorce-judgment-1957` | the Landgericht Rekau's judgment divorcing Leopold and Agnes | German |
 | `family-tree-1984` | the tree Klara drew in Australia | English |
 | `interview-2002` | oral history with Nicholas (possibly living), who says where Gustav is buried | English |
+| `family-history-2008` | *A few pages of family history*, Nicholas's two typed pages: the hatters of Flörburg, Sebastian and Hildegard's children, the other Ursula Löbig, the emigrations, "I was born in '50" and his father's grave | English |
 | `family-booklet-2011` | *Our Family from Germany*, Nicholas's compilation: the letter's excerpt beside his translation, made with translation software, and his commentary | English |
+| `library-talk-2018` | *Where the Lobigs came from*, Nicholas's three slides for a library talk, with a photograph from the family album: its text is the deck's slide text | English |
 
 ## Pattern index
 
@@ -104,7 +106,9 @@ every assertion quotes the passage that makes it (`Assertion.excerpt`).
 | German and English forms | Löbig/Lobig, Gustav/Gustave, Klara/Clara, Flörburg/Floerburg, Gerichtsgefängnis Peiltal/Peiltal court prison, Hutmacherei zum Blauen Hut/the Blue Hat, Hutmacher/hatter |
 | Diminutives | German *Wastl, Cilli, Hilde, Gustl, Rudi*; English *Gus*; pet names *Muckel, Peppi, Pünktchen* |
 | Names as sources write them (ADR-0022) | *Cäcilie Löbig geb. Tarle*; *Hildegard Löbig geborene Laudler*; *Agnes Löbig geb. Nertler*; *LÖBIG, Ida, née SÖRNE*; *Gustave LOBIG (formerly Gustav LÖBIG)*; *Löbig, Ursula, Wwe.*; *Mrs Cutmore*; *Sebastian 'Wastl'*; the placeholder *N.N. Löbig* |
-| Homonyms (ADR-0017) | two Ursula Löbigs: Sebastian's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow |
+| Homonyms (ADR-0017) | two Ursula Löbigs: Sebastian's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow. The 2008 family history names both, one line apart |
+| Mirrored kinship | Sebastian and Hildegard's children, stated from both ends: the parents' `child` claims in the 2008 family history and the 2018 talk; the children's `father` and `mother` elsewhere (the tree, the GEDCOM rendering), and the postcard's *Dein Vater* |
+| Two-digit years | *I was born in '50* (the interview, the 2008 family history) and *Dad died in '96*: the century is the reader's to supply, which the fixture corpus's recorded model gets wrong once (below) |
 | Spouses and parents, 3+ generations | four generations, Eugen to Nicholas; marriages in 1859, 1905, an undated one, 1942 and 1947 |
 | Divorce | Leopold and Agnes, married on 8 Feb 1947 and divorced on 2 Jan 1957 by the Landgericht Rekau (the judgment); the 1984 tree says *div. 1957*. The spouse statements carry it as `end_time`, the GEDCOM export as `DIV` |
 | Kinship terms and courtesy titles (ADR-0018) | literal: *Dein Vater* (the postcard, from Klara's view); *Dad*, *Aunt Pünktchen*, *Dad's cousin Leopold* (the interview, from Nicholas's view). Each is recorded as the kinship, never as `referred_to_as`: *Dein Vater* and *Dad* as `father`; the other two as `relative` + `kinship_type`, with the referent as subject and the ego as object: `Klara —relative→ Nicholas ; kinship_type = "aunt"` (and *Pünktchen* is her `nickname`) and `Leopold —relative→ Gustav ; kinship_type = "cousin"` (the ego is *Dad*). Courtesy: *Nana Maisie* (the interview), a neighbour who is no relation: `referred_to_as`, never `relative` |
@@ -146,6 +150,58 @@ follow-up B adds and `PLANNED_VOCABULARY` names. `CONTRADICTIONS` and
 points into `tests/fixtures/example-family.ged`, and
 `tests/unit/test_example_universe.py` checks that the GEDCOM file says
 nothing the sources do not.
+
+## The fixture corpus
+
+`tests/fixtures/corpus/` (#76) holds five documents of the universe for
+offline end-to-end tests, one of each kind the scratch driver plans, in
+`documents/`:
+
+| Document | What | Kind |
+|---|---|---|
+| `family-history-2008.txt` | the two-page family history | text file |
+| `library-talk-2018.pptx` | the three-slide talk, with its photograph | deck |
+| `lobig-family.ged` | a small GEDCOM export of the Lobig line | GEDCOM |
+| `naturalisation-1952.png` | the naturalisation certificate, a page | image |
+| `postcard-1938.png` | the postcard, a short German letter | image |
+
+`build.py` makes them (`uv run python -m tests.fixtures.corpus.build`),
+and a test fails when the committed files differ from what it makes. The
+two images are small stand-ins that show no text; the export is
+`example-family.ged`'s Lobig line, record for record, with the traps
+below. `engine.RecordedEngine` answers every call the stages before write
+make of them, as a faithful model would, from the universe's own
+assertions for each source (`answers.py`), with one deliberate mistake: it
+reads the family history's *'50* as 1850, and reads it right once the
+chunk prompt carries a rule about two-digit years.
+`tests/unit/test_fixture_corpus.py` takes the corpus through whole scratch
+runs under a refusing wiki, and asserts what must come of each stage and
+each trap, with no gold set.
+
+The traps (`TRAPS`):
+
+- **Two homonyms with identical source descriptions**: the export gives
+  both Ursula Löbigs a record alike (one name, one sex, no date), so only
+  their links tell them apart; the family history names both.
+- **A cross-source contradiction**: Gustav born 7 January 1919 (the
+  export) and 1 July 1919 (the certificate).
+- **Mirrored kinship**: the parents' `child` claims (the family history,
+  the talk) and the children's `father` and `mother` (the export, the
+  postcard).
+- **A death-date trap**: the export gives Nicholas a DEAT that states no
+  death (no DATE, PLAC or Y), from which no death evidence may come.
+- **A hallucination-style early birth and a later conflicting birth**:
+  Nicholas born 1850 per the recorded model's reading of the family
+  history, 1950 per the export and the talk.
+- **A cross-source merge carrying death evidence**: the certificate's
+  Gustave Lobig carries no death evidence; the family history's and the
+  export's carry his death and burial.
+
+`PRIVACY_TRAPS` gives the evidence of the four that bear on privacy, in
+the universe's terms, for the possibly-living predicate's tests (#120):
+`from tests.fixtures.corpus import PRIVACY_TRAPS`. To add a document,
+give it a source here first, then its bytes in `build.py`, its entity
+manifest in `answers.py` and an entry in `DOCUMENTS`, and build again.
 
 ## Extending
 

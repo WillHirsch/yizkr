@@ -43,6 +43,12 @@ software, which misreads the address the letter gives for Rahel,
 Angerring 11, as Angerring 71.  The two are witnesses of one text that
 disagree (ADR-0008, as amended by #289).
 
+Nicholas also typed two pages of family history in 2008, which name both
+Ursula Löbigs and give his birth and his father's death in two-digit years
+('50, '96), and gave a library talk from three slides in 2018. With the
+naturalisation certificate, the 1938 postcard and a GEDCOM export of the
+Lobig line they make the fixture corpus (tests/fixtures/corpus, #76).
+
 ``GEDCOM_FIXTURE`` renders the family as a genealogy program would
 export it from these sources; ``tests/unit/test_example_universe.py``
 checks that every name, date, place and family link in it is one the
@@ -930,6 +936,66 @@ SOURCES = (
             "The top of the first page of Sebastian's letter to Klara, as "
             "the booklet reproduces it; the archive holds the letter only "
             "as this image."
+        ),
+    ),
+    Source(
+        "family-history-2008",
+        "A few pages of family history",
+        "en",
+        2008,
+        "artifact",
+        text=(
+            "[page 1] A few pages of family history\n"
+            "Nicholas Lobig, Stupfield, 2008\n"
+            "The Löbigs were hatters in Flörburg, in Hesse. Eugen Löbig was "
+            "a master hatter, and his son Sebastian, Wastl to everyone, born "
+            "in 1862, was a hatter after him.\n"
+            "Wastl married Hildegard Laudler, Hilde, in 1905. Their children "
+            "were Ursula, Klara and Gustav.\n"
+            "Ursula Löbig, the eldest, was born in 1911 and died in 1941. "
+            "Klara, called Pünktchen, was born in 1917. Gustav, the "
+            "youngest, was Gustl at home.\n"
+            "The Flörburg address book of 1912 also lists an Ursula Löbig, "
+            "a widow at Angerring 57. Nobody in the family ever knew who "
+            "she was.\n"
+            "[page 2] Klara left Flörburg first and settled in Stupfield. "
+            "Gustl, my father, followed her in 1939 and became Gustave "
+            "Lobig here, Gus to everyone.\n"
+            "Dad married Florence Faxridge in 1942. I was born in '50.\n"
+            "Dad died in '96 and he is buried here in Stupfield."
+        ),
+        note=(
+            "Two typed pages by Nicholas, a possibly living writer: the "
+            "fixture corpus's narrative (tests/fixtures/corpus)."
+        ),
+    ),
+    Source(
+        "library-talk-2018",
+        "Where the Lobigs came from",
+        "en",
+        2018,
+        "presentation",
+        text=(
+            "[Slide 1]\n"
+            "Where the Lobigs came from\n"
+            "Nicholas Lobig · library talk, 2018\n"
+            "[Slide 2]\n"
+            "Wastl and Hilde\n"
+            "Sebastian 'Wastl' Löbig 1862–1945 = Hildegard 'Hilde' "
+            "Laudler 1876–1968\n"
+            "Their children: Ursula, Klara 'Pünktchen' and Gustav 'Gustl'\n"
+            "[Slide 2 notes]\n"
+            "Photograph from the family album\n"
+            "[Slide 3]\n"
+            "Stupfield\n"
+            "Klara came first, Gustl in 1939.\n"
+            "Gustave 'Gus' Lobig = Florence Faxridge, 1942\n"
+            "Their son: Nicholas 1950"
+        ),
+        note=(
+            "Nicholas's three slides for a talk at the library, with a "
+            "photograph from the family album on the second; the text is "
+            "the deck's slide text, as the pipeline reads it."
         ),
     ),
 )
@@ -2104,6 +2170,216 @@ ASSERTIONS = tuple(
             {"point_in_time": Date(1939, 7, 28)},
             "Rahel wohnt jetzt Angerring 11",
         ),
+    )
+    + _said(
+        "family-history-2008",
+        (
+            "family-history-2008",
+            "point_in_time",
+            Date(2008),
+            "Stupfield, 2008",
+        ),
+        (
+            "eugen-loebig",
+            "occupation",
+            "master-hatter",
+            "Eugen Löbig was a master hatter",
+        ),
+        ("sebastian-loebig", "father", "eugen-loebig", "his son Sebastian"),
+        ("sebastian-loebig", "nickname", "Wastl", "Wastl to everyone"),
+        ("sebastian-loebig", "date_of_birth", Date(1862), "born in 1862"),
+        (
+            "sebastian-loebig",
+            "occupation",
+            "hatter",
+            "was a hatter after him",
+        ),
+        ("floerburg", "part_of", "hesse", "Flörburg, in Hesse"),
+        (
+            "sebastian-loebig",
+            "spouse",
+            "hildegard-loebig",
+            {"start_time": Date(1905)},
+            "Wastl married Hildegard Laudler, Hilde, in 1905",
+        ),
+        ("hildegard-loebig", "nickname", "Hilde", "Hildegard Laudler, Hilde"),
+        # the children, from the parents' side: the mirror of the export's
+        # father and mother (the fixture corpus's mirrored kinship)
+        *(
+            (
+                parent,
+                "child",
+                child,
+                "Their children were Ursula, Klara and Gustav",
+            )
+            for parent in ("sebastian-loebig", "hildegard-loebig")
+            for child in ("ursula-loebig", "klara-loebig", "gustav-loebig")
+        ),
+        (
+            "ursula-loebig",
+            "date_of_birth",
+            Date(1911),
+            "Ursula Löbig, the eldest, was born in 1911",
+        ),
+        ("ursula-loebig", "date_of_death", Date(1941), "died in 1941"),
+        ("klara-loebig", "nickname", "Pünktchen", "Klara, called Pünktchen"),
+        (
+            "klara-loebig",
+            "date_of_birth",
+            Date(1917),
+            "Klara, called Pünktchen, was born in 1917",
+        ),
+        (
+            "gustav-loebig",
+            "nickname",
+            "Gustl",
+            "Gustav, the youngest, was Gustl at home",
+        ),
+        # the homonym, named in the same source as Sebastian's daughter
+        (
+            "ursula-loebig-angerring",
+            "residence",
+            "angerring-57",
+            {"point_in_time": Date(1912)},
+            "an Ursula Löbig, a widow at Angerring 57",
+        ),
+        (
+            "emigration-1938",
+            "participant",
+            "klara-loebig",
+            "Klara left Flörburg first",
+        ),
+        ("klara-loebig", "residence", "stupfield", "settled in Stupfield"),
+        (
+            "emigration-1939",
+            "participant",
+            "gustav-loebig",
+            "followed her in 1939",
+        ),
+        (
+            "emigration-1939",
+            "point_in_time",
+            Date(1939),
+            "followed her in 1939",
+        ),
+        ("nicholas-lobig", "father", "gustav-loebig", "Gustl, my father"),
+        (
+            "gustav-loebig",
+            "official_name",
+            "Gustave Lobig",
+            "became Gustave Lobig here",
+        ),
+        ("gustav-loebig", "nickname", "Gus", "Gus to everyone"),
+        (
+            "gustav-loebig",
+            "spouse",
+            "florence-lobig",
+            {"start_time": Date(1942)},
+            "Dad married Florence Faxridge in 1942",
+        ),
+        # a two-digit year: the century is the reader's (the fixture
+        # corpus's recorded model reads it as 1850)
+        ("nicholas-lobig", "date_of_birth", Date(1950), "I was born in '50"),
+        ("gustav-loebig", "date_of_death", Date(1996), "Dad died in '96"),
+        (
+            "gustav-loebig",
+            "burial_place",
+            "stupfield",
+            "he is buried here in Stupfield",
+        ),
+    )
+    + _said(
+        "library-talk-2018",
+        (
+            "library-talk-2018",
+            "point_in_time",
+            Date(2018),
+            "library talk, 2018",
+        ),
+        (
+            "sebastian-loebig",
+            "nickname",
+            "Wastl",
+            "Sebastian 'Wastl' Löbig",
+        ),
+        (
+            "sebastian-loebig",
+            "date_of_birth",
+            Date(1862),
+            "Sebastian 'Wastl' Löbig 1862–1945",
+        ),
+        (
+            "sebastian-loebig",
+            "date_of_death",
+            Date(1945),
+            "Sebastian 'Wastl' Löbig 1862–1945",
+        ),
+        (
+            "sebastian-loebig",
+            "spouse",
+            "hildegard-loebig",
+            "1862–1945 = Hildegard 'Hilde' Laudler",
+        ),
+        (
+            "hildegard-loebig",
+            "nickname",
+            "Hilde",
+            "Hildegard 'Hilde' Laudler",
+        ),
+        (
+            "hildegard-loebig",
+            "date_of_birth",
+            Date(1876),
+            "Laudler 1876–1968",
+        ),
+        (
+            "hildegard-loebig",
+            "date_of_death",
+            Date(1968),
+            "Laudler 1876–1968",
+        ),
+        *(
+            (parent, "child", child, excerpt)
+            for parent in ("sebastian-loebig", "hildegard-loebig")
+            for child, excerpt in (
+                ("ursula-loebig", "Their children: Ursula"),
+                ("klara-loebig", "Klara 'Pünktchen'"),
+                ("gustav-loebig", "Gustav 'Gustl'"),
+            )
+        ),
+        ("klara-loebig", "nickname", "Pünktchen", "Klara 'Pünktchen'"),
+        ("gustav-loebig", "nickname", "Gustl", "Gustav 'Gustl'"),
+        (
+            "emigration-1938",
+            "participant",
+            "klara-loebig",
+            "Klara came first",
+        ),
+        (
+            "emigration-1939",
+            "participant",
+            "gustav-loebig",
+            "Gustl in 1939",
+        ),
+        (
+            "emigration-1939",
+            "point_in_time",
+            Date(1939),
+            "Gustl in 1939",
+        ),
+        ("gustav-loebig", "nickname", "Gus", "Gustave 'Gus' Lobig"),
+        (
+            "gustav-loebig",
+            "spouse",
+            "florence-lobig",
+            {"start_time": Date(1942)},
+            "Gustave 'Gus' Lobig = Florence Faxridge, 1942",
+        ),
+        *(
+            (parent, "child", "nicholas-lobig", "Their son: Nicholas 1950")
+            for parent in ("gustav-loebig", "florence-lobig")
+        ),
+        ("nicholas-lobig", "date_of_birth", Date(1950), "Nicholas 1950"),
     )
 )
 
