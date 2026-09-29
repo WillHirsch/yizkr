@@ -47,6 +47,19 @@ itself in its own `--help`.
     starts, say). So no unit test, and no process one starts, reads or
     clears the developer's record of the instance
     (docs/runbooks/scratch-run.md, Reset the instance).
+  - No unit test reads your settings (the package-scoped
+    `_no_host_settings` fixture): every `YIZKR_*` variable but
+    `$YIZKR_INSTANCE_STATE`, and the stack's connection variables, are
+    removed from the environment, and `resolve_env_file` finds no
+    default `deploy/.env` or `.env`, as on CI, which has neither. So a
+    never-ingest list or a corpus folder your `deploy/.env` names never
+    reaches a unit test. A test that needs a setting gives it: in the
+    environment, or in an env file it names with `$YIZKR_ENV_FILE` or
+    `env_file`. A test pins the list of connection variables to the
+    keys `Config.load` reads. `yizkr backup` reads `<deploy-dir>/.env`
+    directly, so the unit tests always give it a temporary deploy dir.
+    The live tests under `tests/integration` read the real env file;
+    the fixture undoes after the last unit test.
   - The config directory, the no-op sync calls, the recorded anomaly
     timers, the removed `$YIZKR_ANOMALIES` and the instance record's
     folder are patches held by the test's own `monkeypatch`, so a test
