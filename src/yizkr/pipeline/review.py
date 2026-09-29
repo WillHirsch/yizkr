@@ -17,7 +17,8 @@ The `critique_notes` column carries the extraction critic's concerns
 (ADR-0013) — flagged mistypes, misapplied properties, role-aliases — so
 the curator sees them at this gate. Each finding is on exactly one row:
 its claim's, or for a finding about an entity, the row of a claim that
-names it (`critique.attach`).
+names it (`critique.attach`). A finding that failed its checks is shown
+on the first row, marked unchecked (`critique.sheet_notes`).
 
 There is no `living` column. Whether a person is possibly living is
 never a review decision: it is a runtime determination from the absence

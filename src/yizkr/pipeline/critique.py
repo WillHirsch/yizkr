@@ -22,6 +22,7 @@ finding's wording.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -34,7 +35,7 @@ from yizkr.claims import (
     EntityRecord,
     ItemValue,
     LocalRef,
-    MonolingualValue,
+    QuantityValue,
     load_vocabulary,
 )
 from yizkr.pipeline.extract import scan_json_objects
@@ -93,6 +94,10 @@ CATEGORIES: dict[str, str] = {
         "birth, death or burial, residence, location) takes a place; a "
         "relation of agency (employer, educated at, member of) takes an "
         "organization"
+    ),
+    "implausible_value": (
+        "a value the source is unlikely to say as read, such as a birth "
+        "year a century before the parents married"
     ),
 }
 
@@ -228,22 +233,39 @@ def _ref_id(ref: Any) -> str:
     return "?"
 
 
-def listed(claim: Claim) -> tuple[str, str, str]:
-    """(subject, property, value): the claim as the prompt lists it, and as
-    a finding names it. An item value is listed by its id, which the
-    entities block labels."""
+def _value(claim: Claim) -> str:
+    """A claim's value as the prompt lists it: an item by its id, which
+    the entities block labels; a quantity in full; a text with its
+    language; anything else as the review sheet shows it. A line break is
+    listed as a backslash and an n, so each claim is one line."""
     value = claim.value
     if isinstance(value, ItemValue):
         rendered = _ref_id(value.value)
-    elif isinstance(value, MonolingualValue):
-        rendered = value.value.text
+    elif isinstance(value, QuantityValue):
+        rendered = repr(value.amount)
     else:
         rendered = describe_value(value)
-    return _ref_id(claim.subject), claim.property, rendered
+    return rendered.replace("\\", "\\\\").replace("\n", "\\n")
+
+
+def listings(batch: ClaimBatch) -> list[tuple[str, str, str]]:
+    """(subject, property, value) for each claim of the batch, in order:
+    each claim as the prompt lists it, and as a finding names it. A claim
+    that lists as an earlier one does has its value numbered (`... (#n)`), so
+    that every listing names one claim."""
+    seen: dict[tuple[str, str, str], int] = {}
+    found = []
+    for claim in batch.claims:
+        listing = (_ref_id(claim.subject), claim.property, _value(claim))
+        seen[listing] = seen.get(listing, 0) + 1
+        if seen[listing] > 1:
+            listing = (*listing[:2], f"{listing[2]} (#{seen[listing]})")
+        found.append(listing)
+    return found
 
 
 def _claims_block(batch: ClaimBatch) -> str:
-    return "\n".join(" | ".join(listed(claim)) for claim in batch.claims)
+    return "\n".join(" | ".join(listing) for listing in listings(batch))
 
 
 def named(claim: Claim) -> list[str]:
@@ -261,8 +283,9 @@ def named(claim: Claim) -> list[str]:
 
 
 def claim_of(finding: Finding, batch: ClaimBatch) -> int | None:
-    """The index of the first claim of `batch` the finding names, as the
-    prompt lists it, that names the finding's entity; None for none."""
+    """The index of the claim of `batch` the finding names, as the prompt
+    lists it, when that claim names the finding's entity; None
+    otherwise."""
     if finding.claim is None:
         return None
     wanted = (
@@ -270,14 +293,11 @@ def claim_of(finding: Finding, batch: ClaimBatch) -> int | None:
         finding.claim.property,
         finding.claim.value,
     )
-    return next(
-        (
-            index
-            for index, claim in enumerate(batch.claims)
-            if listed(claim) == wanted and finding.entity in named(claim)
-        ),
-        None,
-    )
+    for index, listing in enumerate(listings(batch)):
+        if listing == wanted:
+            claim = batch.claims[index]
+            return index if finding.entity in named(claim) else None
+    return None
 
 
 def check(
@@ -467,63 +487,59 @@ def note(finding: Finding) -> str:
 
 def counterparts(extracted: ClaimBatch, rows: ClaimBatch) -> list[int | None]:
     """For each claim of `extracted`, the index of the claim of `rows` it
-    became, where `rows` is `extracted` resolved: each local ref either
-    kept or replaced by a QID reference, in order, and a claim resolution
-    made identical to an earlier one dropped. A local id maps to one QID
-    throughout. None for a claim no row matches."""
-    mapped: dict[str, str] = {}
+    became, where `rows` is `extracted` resolved; all None when it is not.
+
+    Resolution has two steps. The approved equivalences replace each
+    local ref to an approved entity with its QID, and set that entity's
+    `qid`, and a claim they make identical to an earlier one is dropped
+    (reconcile.apply_equivalences). Then each remaining local ref may be
+    replaced with a QID by its own label, claim for claim, in order
+    (resolve.resolve_batch). The first step is replayed here exactly, from
+    the entities whose `qid` `rows` sets; the second is checked claim by
+    claim, a local ref against the ref at its place, so one local id may
+    become different QIDs in different claims."""
+    from yizkr.pipeline.reconcile import apply_equivalences
+
+    before = {entity.id: entity.qid for entity in extracted.entities}
+    approved = {
+        entity.id: entity.qid
+        for entity in rows.entities
+        if entity.qid and before.get(entity.id) != entity.qid
+    }
+    kept: dict[str, int] = {}
+    merged: list[Claim] = []
     found: list[int | None] = []
-    at = 0
     for claim in extracted.claims:
-        if at < len(rows.claims):
-            seen = _resolved_as(claim, rows.claims[at], mapped)
-            if seen is not None:
-                mapped.update(seen)
-                found.append(at)
-                at += 1
-                continue
-        found.append(
-            next(
-                (
-                    index
-                    for index in range(at)
-                    if _resolved_as(claim, rows.claims[index], mapped)
-                    is not None
-                ),
-                None,
-            )
-        )
+        (resolved,) = apply_equivalences(
+            extracted.model_copy(update={"claims": [claim]}), approved
+        ).claims
+        key = resolved.model_dump_json()
+        if key not in kept:
+            kept[key] = len(merged)
+            merged.append(resolved)
+        found.append(kept[key])
+    if len(merged) != len(rows.claims) or not all(
+        _resolved_as(claim, row)
+        for claim, row in zip(merged, rows.claims, strict=True)
+    ):
+        return [None] * len(extracted.claims)
     return found
 
 
-def _resolved_as(
-    claim: Claim, row: Claim, mapped: Mapping[str, str]
-) -> dict[str, str] | None:
-    """The local id -> QID pairs under which `row` is `claim` resolved,
-    consistent with `mapped`; None when it is not."""
-    seen: dict[str, str] = {}
+def _resolved_as(claim: Claim, row: Claim) -> bool:
+    """Whether `row` is `claim` with none or more of its local refs
+    replaced by QID references."""
 
     def same(a: Any, b: Any) -> bool:
         if isinstance(a, dict) and isinstance(b, dict):
             if a.get("kind") == "local" and b.get("kind") == "qid":
-                local, qid = a.get("local_id"), b.get("qid")
-                if (
-                    mapped.get(local, qid) != qid
-                    or seen.get(local, qid) != qid
-                ):
-                    return False
-                seen[local] = qid
                 return True
             return a.keys() == b.keys() and all(same(a[k], b[k]) for k in a)
         if isinstance(a, list) and isinstance(b, list):
             return len(a) == len(b) and all(map(same, a, b))
         return a == b
 
-    return (
-        seen
-        if same(claim.model_dump(mode="json"), row.model_dump(mode="json"))
-        else None
-    )
+    return same(claim.model_dump(mode="json"), row.model_dump(mode="json"))
 
 
 def attach(
@@ -567,3 +583,53 @@ def _entity_row(
             if hit and where[index] is not None:
                 return where[index]
     return 0
+
+
+def unchecked(invalid: Invalid) -> str:
+    """A finding that failed its checks as the review sheet shows it:
+    marked unchecked, as the critic gave it, and why it failed."""
+    given = json.dumps(invalid.invalid, ensure_ascii=False)
+    return f"critique [unchecked] {given} (fails: {'; '.join(invalid.why)})"
+
+
+def sheet_notes(
+    entries: Iterable[Finding | Invalid],
+    extracted: ClaimBatch,
+    rows: ClaimBatch,
+) -> dict[int, str]:
+    """review row index -> the notes on that row, joined: each valid
+    finding on its row (`attach`), and each finding that failed its checks
+    on the first row, marked unchecked, since it names nothing a row can
+    be matched by. With no rows, there are no notes."""
+    if not rows.claims:
+        return {}
+    entries = list(entries)
+    valid = [entry for entry in entries if isinstance(entry, Finding)]
+    notes = {
+        row: list(map(note, attached))
+        for row, attached in attach(valid, extracted, rows).items()
+    }
+    for entry in entries:
+        if isinstance(entry, Invalid):
+            notes.setdefault(0, []).append(unchecked(entry))
+    return {row: "; ".join(texts) for row, texts in sorted(notes.items())}
+
+
+def entries(stored: Any) -> list[Finding | Invalid]:
+    """A critique view's entries, each a finding or one that failed its
+    checks. Raises ValueError when the view holds anything else: a list of
+    another shape, such as findings in an earlier format."""
+    if not isinstance(stored, list):
+        raise ValueError("a critique view holds a list of findings")
+    found = []
+    for index, item in enumerate(stored):
+        try:
+            if not isinstance(item, Mapping):
+                raise TypeError("not an object")
+            found.append(entry(item))
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"critique entry {index} is neither a finding nor one "
+                f"that failed its checks"
+            ) from exc
+    return found

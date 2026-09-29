@@ -713,7 +713,14 @@ def views() -> dict[str, dict[str, object]]:
                     claim("e1", "occupation", "Wwe.", DIRECTORY),
                 ],
             ),
-            "critique.json": [],
+            # a critique with only a finding that failed its checks: no
+            # document with findings (#386)
+            "critique.json": [
+                {
+                    "invalid": {"entity": "e1", "issue": "Wwe."},
+                    "why": ["axis: Field required"],
+                }
+            ],
             "extraction/coverage.json": coverage(
                 2, 2, fallback={"manifest": "input_value='Ursula Löbig'"}
             ),
@@ -1669,10 +1676,27 @@ class TestContent:
             "deictic_alias": 1,
             "misapplied_property": 1,
         }
-        assert (critic["findings"], critic["invalid"]) == (4, 1)
+        assert (critic["findings"], critic["invalid"]) == (4, 2)
         assert (critic["critiques"], critic["documents"]) == (4, 2)
         text = render_markdown(made["aggregate"])
         assert "| wrong_kind | 2 |" in text and "| predicate | 1 |" in text
+        # each document's own counts, in the local report
+        assert document(made, CERT)["critique"] == {
+            "findings": 3,
+            "invalid": 1,
+            "by_axis": {"value": 1, "predicate": 1, "subject": 1},
+            "by_category": {
+                "deictic_alias": 1,
+                "misapplied_property": 1,
+                "wrong_kind": 1,
+            },
+        }
+        page = report.render_html(made)
+        assert (
+            "Critic findings: 3; invalid: 1; by axis: predicate 1, subject "
+            "1, value 1; by category: deictic_alias 1, misapplied_property "
+            "1, wrong_kind 1"
+        ) in page
 
     def test_a_view_that_cannot_be_read_counts_nothing_and_is_noted(
         self, made

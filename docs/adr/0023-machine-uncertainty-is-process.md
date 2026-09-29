@@ -147,13 +147,22 @@ one of the four, given by the critic, so the existence axis is expressible;
 kind or property is a manifest key. Code checks every id against the batch the
 critic reviewed and every key against the model manifest. A record that fails
 is kept verbatim in `critique.json`, with the reasons, beside the valid ones
-(`{"invalid": ..., "why": [...]}`), and counted; it is never repaired. Each
-valid finding goes on exactly one review row, as a structured prefix within
-`critique_notes` (`critique [axis, category] entity: issue`): its claim's row,
-else the row of the first claim whose subject (then value, then a qualifier's
-value) is the entity, and the review rows are matched to the reviewed batch's
-claims through resolution, so a finding on an entity resolved to a QID keeps
-its row. The run report counts findings by axis and by category. This **is** the
+(`{"invalid": ..., "why": [...]}`), and counted; it is never repaired. The
+review sheet shows it on its first row, marked `unchecked`, with why it failed
+(the owner's default, 2026-09-29). Each valid finding goes on exactly one
+review row, as a structured prefix within `critique_notes` (`critique [axis,
+category] entity: issue`): its claim's row, else the row of the first claim
+whose subject (then value, then a qualifier's value) is the entity, else the
+first row, with the entity id in the note. The review rows are matched to the
+reviewed batch's claims by replaying the equivalence step exactly (the
+approved entities are those whose `qid` resolution set, and a claim it makes
+identical to an earlier one maps to that one's row), then checking the
+label-by-label step claim by claim, so a finding on an entity resolved to a
+QID keeps its row. A critique view whose entries are neither findings nor
+invalid ones, such as one in the `target` format, is set aside and made again
+when reused. The categories are the issue's nine plus `implausible_value` (a
+value the source is unlikely to say as read), the owner's default of the same
+date. The run report counts findings by axis and by category. This **is** the
 general form of §6 — the same review-layer mechanism, now inherited uniformly by
 every property, with the name axes as instances. `Claim.confidence` stays
 ephemeral and unchanged; the critic still only flags, never rewrites

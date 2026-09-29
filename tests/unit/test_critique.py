@@ -4,7 +4,13 @@ import json
 
 import pytest
 
-from yizkr.claims import ArtifactRef, ClaimBatch, QidRef, load_vocabulary
+from yizkr.claims import (
+    ArtifactRef,
+    ClaimBatch,
+    QidRef,
+    Qualifier,
+    load_vocabulary,
+)
 from yizkr.pipeline.critique import (
     CATEGORIES,
     CRITIQUE_PROMPT,
@@ -12,11 +18,16 @@ from yizkr.pipeline.critique import (
     Invalid,
     attach,
     check,
+    claim_of,
     counterparts,
+    entries,
+    listings,
     note,
     run_critique,
+    sheet_notes,
 )
 from yizkr.pipeline.llm import OutputLimitReached
+from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.resolve import resolve_batch
 
 # the bytes of a fictional scan, which the claims below cite by
@@ -148,6 +159,8 @@ class TestCritique:
             "office_holder_as_organization",
             "religion_as_occupation",
             "relation_kind_mismatch",
+            # the owner's default of 2026-09-29, in the review of #411
+            "implausible_value",
         ]
         assert "ADR-0031" in CATEGORIES["relation_kind_mismatch"]
 
@@ -498,6 +511,54 @@ def resolved_batch() -> ClaimBatch:
 QID = QidRef(qid="Q17")
 
 
+def household() -> ClaimBatch:
+    """Leopold, recorded twice (e02, e03), and Agnes (e04), each with a
+    residence at Angerring 57 (e09)."""
+    people = [
+        ("e02", "Leopold Löbig"),
+        ("e03", "L. Löbig"),
+        ("e04", "Agnes Nertler"),
+    ]
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "entities": [
+                {"id": local, "label": label, "kind": "human"}
+                for local, label in people
+            ]
+            + [{"id": "e09", "label": "Angerring 57", "kind": "place"}],
+            "claims": [
+                {
+                    "subject": {"kind": "local", "local_id": local},
+                    "property": "residence",
+                    "value": {
+                        "type": "item",
+                        "value": {"kind": "local", "local_id": "e09"},
+                    },
+                    "source": {"artifact": SCAN.model_dump(mode="json")},
+                }
+                for local, _label in people
+            ],
+        }
+    )
+
+
+def residence_finding(entity: str, issue: str) -> Finding:
+    return Finding.model_validate(
+        {
+            "entity": entity,
+            "claim": {
+                "subject": entity,
+                "property": "residence",
+                "value": "e09",
+            },
+            "axis": "value",
+            "category": "misapplied_property",
+            "issue": issue,
+        }
+    )
+
+
 def rendered(attached: dict[int, list[Finding]]) -> list[tuple[int, str]]:
     return sorted(
         (row, finding.issue)
@@ -563,36 +624,83 @@ class TestAttach:
         )
 
     def test_a_collapsed_claim_keeps_its_finding(self):
-        """Two claims resolution makes identical are one row: a finding on
-        the dropped one goes on the row kept."""
+        """Leopold is recorded twice in one source (e02, e03), both
+        approved to Q1, and Agnes (e04) to Q2: the equivalences collapse
+        the two Leopold residences into one row, and a finding on Agnes's
+        residence stays on her row, never Leopold's (review of #411)."""
+        extracted = household()
+        rows = apply_equivalences(
+            extracted, {"e02": "Q1", "e03": "Q1", "e04": "Q2"}
+        )
+        assert [claim.subject.qid for claim in rows.claims] == ["Q1", "Q2"]
+        assert counterparts(extracted, rows) == [0, 0, 1]
+        findings = [
+            residence_finding("e03", "the duplicate's residence"),
+            residence_finding("e04", "Agnes's residence"),
+        ]
+        assert rendered(attach(findings, extracted, rows)) == [
+            (0, "the duplicate's residence"),
+            (1, "Agnes's residence"),
+        ]
+
+    def test_one_local_id_may_resolve_to_two_qids(self):
+        """Resolution replaces each local ref by its own label, so one
+        local id can become two QIDs in two claims; every claim still
+        finds its row (review of #411)."""
         extracted = resolved_batch()
         data = extracted.model_dump(mode="json")
-        twin = json.loads(json.dumps(data["claims"][2]))
-        twin["subject"] = {"kind": "local", "local_id": "e06", "label": "S."}
-        data["claims"].append(twin)
-        data["entities"].append({"id": "e06", "label": "S.", "kind": "human"})
+        data["claims"][2]["subject"]["label"] = "Sebastian Löbig"
         extracted = ClaimBatch.model_validate(data)
-        rows = extracted.model_copy(deep=True)
-        for claim in rows.claims:
-            if getattr(claim.subject, "local_id", None) in ("e01", "e06"):
-                claim.subject = QID
-        rows.claims.pop()  # the twin, identical once both are Q17
-        assert counterparts(extracted, rows) == [0, 1, 2, 3, 2]
-        twin_finding = Finding.model_validate(
-            {
-                "entity": "e06",
-                "claim": {
-                    "subject": "e06",
-                    "property": "date_of_birth",
-                    "value": "1942",
-                },
-                "axis": "value",
-                "category": "misapplied_property",
-                "issue": "the twin's year",
-            }
+        rows = resolve_batch(
+            extracted, {"Sebastian": "Q17", "Sebastian Löbig": "Q30"}
         )
-        assert rendered(attach([twin_finding], extracted, rows)) == [
-            (2, "the twin's year")
+        assert rows.claims[0].subject.qid == "Q17"
+        assert rows.claims[2].subject.qid == "Q30"
+        assert counterparts(extracted, rows) == [0, 1, 2, 3]
+        assert (2, "a wedding year read as a birth") in rendered(
+            attach(self.FINDINGS, extracted, rows)
+        )
+
+    def test_rows_that_are_not_the_batch_resolved_match_none(self):
+        extracted = resolved_batch()
+        rows = extracted.model_copy(update={"claims": extracted.claims[1:]})
+        assert counterparts(extracted, rows) == [None] * 4
+
+    def test_a_qualifier_value_names_its_entity(self):
+        """A claim names an entity as a qualifier's value too: a finding
+        on that entity goes on that claim's row, and a finding may name
+        the claim for it."""
+        extracted = household()
+        data = extracted.model_dump(mode="json")
+        data["claims"][2]["qualifiers"] = [
+            {
+                "property": "location",
+                "value": {
+                    "type": "item",
+                    "value": {"kind": "local", "local_id": "e10"},
+                },
+            }
+        ]
+        data["entities"].append(
+            {"id": "e10", "label": "Rekau", "kind": "human"}
+        )
+        extracted = ClaimBatch.model_validate(data)
+        finding = {
+            "entity": "e10",
+            "claim": {
+                "subject": "e04",
+                "property": "residence",
+                "value": "e09",
+            },
+            "axis": "subject",
+            "category": "wrong_kind",
+            "issue": "a town typed as a person",
+        }
+        checked_ = check(finding, extracted, VOCABULARY)
+        assert isinstance(checked_, Finding)
+        bare = Finding.model_validate(finding | {"claim": None})
+        assert rendered(attach([bare], extracted, extracted)) == [
+            (2, "a town typed as a person")
         ]
 
     def test_no_rows_attach_nothing(self):
@@ -612,3 +720,152 @@ class TestAttach:
 
 def test_the_prompt_is_the_one_the_fixture_engines_recognise():
     assert CRITIQUE_PROMPT.startswith("You review a genealogical extraction")
+
+
+def monolingual(text: str, language: str) -> dict:
+    return {
+        "type": "monolingual",
+        "value": {"text": text, "language": language},
+    }
+
+
+def listing_batch(*values: dict) -> ClaimBatch:
+    """Sebastian (e01) with one claim of each of `values`."""
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": RUN,
+            "entities": [
+                {"id": "e01", "label": "Sebastian Löbig", "kind": "human"}
+            ],
+            "claims": [
+                {
+                    "subject": {"kind": "local", "local_id": "e01"},
+                    "property": prop,
+                    "value": value,
+                    "source": {"artifact": SCAN.model_dump(mode="json")},
+                }
+                for prop, value in values
+            ],
+        }
+    )
+
+
+class TestListings:
+    """Every claim lists one way, and every listing names one claim
+    (review of #411)."""
+
+    def test_a_vocabulary_value_is_listed_by_its_key(self):
+        assert listings(resolved_batch())[1] == (
+            "e04",
+            "instance_of",
+            "organization",
+        )
+
+    def test_a_text_is_listed_with_its_language(self):
+        rows = listings(
+            listing_batch(
+                ("birth_name", monolingual("Löbig", "de")),
+                ("birth_name", monolingual("Löbig", "en")),
+            )
+        )
+        assert [value for *_, value in rows] == ["Löbig [de]", "Löbig [en]"]
+
+    def test_a_quantity_is_listed_in_full(self):
+        rows = listings(
+            listing_batch(
+                (
+                    "number_of_children",
+                    {"type": "quantity", "amount": 1234567},
+                ),
+                (
+                    "number_of_children",
+                    {"type": "quantity", "amount": 1234568},
+                ),
+            )
+        )
+        assert [value for *_, value in rows] == ["1234567", "1234568"]
+
+    def test_a_repeated_listing_is_numbered(self):
+        """Two claims that differ only in what the prompt does not list
+        (here their qualifiers) list apart, and a finding names each."""
+        batch_ = listing_batch(
+            ("occupation", {"type": "string", "value": "Hutmacher"}),
+            ("occupation", {"type": "string", "value": "Hutmacher"}),
+        )
+        batch_.claims[1].qualifiers.append(
+            Qualifier.model_validate(
+                {
+                    "property": "point_in_time",
+                    "value": {"type": "time", "year": 1952},
+                }
+            )
+        )
+        assert [value for *_, value in listings(batch_)] == [
+            "Hutmacher",
+            "Hutmacher (#2)",
+        ]
+        second = Finding.model_validate(
+            {
+                "entity": "e01",
+                "claim": {
+                    "subject": "e01",
+                    "property": "occupation",
+                    "value": "Hutmacher (#2)",
+                },
+                "axis": "value",
+                "category": "misapplied_property",
+                "issue": "the later trade",
+            }
+        )
+        assert claim_of(second, batch_) == 1
+
+    def test_a_line_break_is_listed_escaped(self):
+        batch_ = listing_batch(
+            ("occupation", {"type": "string", "value": "Hutmacher\nMeister"})
+        )
+        assert listings(batch_)[0][2] == "Hutmacher\\nMeister"
+
+
+class TestSheetNotes:
+    def test_an_invalid_finding_goes_on_the_first_row_unchecked(self):
+        """The owner's default (2026-09-29, review of #411): a finding
+        that failed its checks is shown on the sheet's first row, marked
+        unchecked, with why it failed."""
+        extracted = resolved_batch()
+        given = {"target": "e04", "issue": "agent typed as place"}
+        stored = [
+            Finding.model_validate(EMPLOYER).model_dump(mode="json"),
+            Invalid(invalid=given, why=["entity: Field required"]).model_dump(
+                mode="json"
+            ),
+        ]
+        notes = sheet_notes(entries(stored), extracted, extracted)
+        assert list(notes) == [0]
+        assert notes[0].count("critique [") == 2
+        assert notes[0].endswith(
+            'critique [unchecked] {"target": "e04", "issue": "agent typed '
+            'as place"} (fails: entity: Field required)'
+        )
+
+    def test_no_rows_no_notes(self):
+        empty = ClaimBatch.model_validate({"extraction_run": RUN})
+        assert (
+            sheet_notes([Invalid(invalid={}, why=["x"])], empty, empty) == {}
+        )
+
+    @pytest.mark.parametrize(
+        "stored", [{"target": "e1"}, [{"target": "e1", "issue": "x"}], [3]]
+    )
+    def test_a_view_of_another_shape_is_refused(self, stored):
+        with pytest.raises(ValueError):
+            entries(stored)
+
+
+def test_only_a_true_done_ends_the_answer():
+    """`{"done": 1}` is not the sentinel: the answer is unfinished and is
+    rejected, its findings still given."""
+    llm = Rejecting(json.dumps(FINDING) + '\n{"done": 1}')
+    assert [f.entity for f in run_critique(llm, batch())] == ["e04"]
+    assert [reason for _, reason in llm.rejected] == [
+        "critique: no terminal sentinel"
+    ]

@@ -1836,6 +1836,59 @@ class TestViews:
         )
         assert row["critique_notes"].count("critique [") == 1
 
+    def test_a_critique_view_in_an_earlier_format_is_made_again(
+        self, tmp_path
+    ):
+        """A critique view whose entries are neither findings nor ones
+        that failed their checks, such as findings with a `target`, is
+        set aside and made again, even while it is current (review of
+        #411)."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        doc.critique.write_text(
+            json.dumps([{"target": "e1", "issue": "doubtful"}])
+        )
+        doc.derivations.record(doc.critique)
+        asked = len(orchestrator.calls)
+        orchestrator.run()
+        assert steps(orchestrator.calls[asked:])[0] == "critique"
+        assert json.loads(doc.critique.read_text()) == []
+        (aside,) = this_run(orchestrator, "set-aside")
+        assert aside["stage"] == "critique"
+        assert "neither a finding" in aside["reason"]
+
+    def test_the_log_counts_invalid_findings_apart(self, tmp_path):
+        """The run log counts the concerns flagged apart from the findings
+        that failed their checks, and shows each."""
+
+        class Mixed(SampledModel):
+            def complete(self, prompt, image_paths=()):
+                answer = super().complete(prompt, image_paths)
+                if prompt.startswith("You review a genealogical extraction"):
+                    bad = {"entity": "e7", "axis": "value", "issue": "?"}
+                    return json.dumps(bad) + "\n" + answer
+                return answer
+
+        class Logging(Sampled):
+            def _llm(self, role, doc):
+                return Mixed(self.calls, doc.source.name, self.draws)
+
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "letter.txt").write_text(
+            "Klara was born in 1917."
+        )
+        lines: list[str] = []
+        Logging(
+            tmp_path / "docs", tmp_path / "state", log=collect(lines)
+        ).run()
+        text = "\n".join(lines)
+        assert (
+            "critique: 1 concern(s) flagged for review, 1 invalid kept as "
+            "given" in text
+        )
+        assert "invalid: category: Field required" in text
+
     def test_the_views_are_recorded_by_content(self, tmp_path):
         orchestrator = make_run(tmp_path)
         orchestrator.run()

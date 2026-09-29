@@ -48,9 +48,8 @@ CLI = "9.9.9"
 # what each kind of call's prompt says, as the pipeline words it
 MANIFEST_PROMPT = "manifest of EVERY distinct entity"
 CRITIQUE_PROMPT = "You review a genealogical extraction"
-# the category the recorded critic files a misread year under, which the
-# critic's list does not have
-MISREAD = "misread_value"
+# the category the recorded critic files a misread year under
+MISREAD = "implausible_value"
 SEGMENTATION_PROMPT = "You segment a document transcription"
 ASSIGNED = "Assigned entities:"
 _SHA1 = re.compile(r"[0-9a-f]{40}")
@@ -170,10 +169,7 @@ class RecordedEngine:
 
     def _critique(self, prompt: str) -> str:
         """The critic's findings: one for each recorded mistake the batch
-        holds, on its claim as the prompt lists it, and its sentinel. The
-        recorded critic files a misread year under a category the list
-        does not have, so its finding is kept as given, and fails its
-        checks (#386)."""
+        holds, on its claim as the prompt lists it, and its sentinel."""
         recorded = self._critiqued(prompt)
         self.calls.log("critique", recorded.document)
         ids = recorded.ids()
