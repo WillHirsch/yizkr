@@ -814,12 +814,43 @@ class TestTheWriter:
         (only,) = batch.claims
         assert result.refused == [claim_id(only)]
         assert result.written == 0
+        # a refused claim's refs never resolve, so it mints nothing
+        assert result.created_items == {}
         assert any(why in warning for warning in result.warnings)
         for qid in items.values():
             assert not wiki.wbi.item.get(qid).claims.get(
                 PROPERTIES["point_in_time"]
             )
             assert not wiki.wbi.item.get(qid).claims.get("P90")
+
+    def test_a_subject_naming_an_unregistered_document_is_refused(self):
+        """Only a claim's own source is looked up before the write: a
+        claim sourced from Gustav's birth register extract (A) whose
+        subject names the 1941 death certificate (B), which has no item,
+        is refused and counted, and the rest of the batch is written."""
+        wiki = IssuingWiki()
+        artifact = wiki.wbi.item.new()
+        artifact.write()
+        wiki.media[DOC_REF.sha1] = artifact.id
+        batch = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    issued_by(DOC_REF.model_dump()),
+                    cited(
+                        subject=OTHER_REF.model_dump(),
+                        property="point_in_time",
+                        value={"type": "time", "year": 1941},
+                    ),
+                ],
+                "entities": [STANDESAMT],
+            }
+        )
+        result = BatchWriter(wiki).write_batch(batch)
+        _, foreign = batch.claims
+        assert result.refused == [claim_id(foreign)]
+        assert result.written == 1
+        assert wiki.wbi.item.get(artifact.id).claims.get("P90")
 
 
 class TestTheCritic:
