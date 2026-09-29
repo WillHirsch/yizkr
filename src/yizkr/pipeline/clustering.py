@@ -28,10 +28,12 @@ extraction are clustered; the others are each a cluster of their own
 lifted into mention space: kin (father, mother, child, spouse and
 sibling, each seen from both ends, so a father claim and a child claim
 say the same), the human participants of events, place containment
-(`part_of`, `location`), typed names and nicknames, and dates; a birth or
-death event's date is its participant's too, when it has only one. Only
-what the manifests assert is used: no containment or kinship is read
-from the graph, and none is inferred.
+(`part_of`, `location`), typed names and nicknames, and dates. A birth
+or death event is its participant's own, and its date is theirs too,
+when it has only one participant, and that person's own date of the kind
+(from their claims, never one an event passed them) does not conflict
+with it. Only what the manifests assert is used: no containment or
+kinship is read from the graph, and none is inferred.
 
 **Names.** A person's names are its label, its aliases and its typed
 birth, married and official names, each read as a name:
@@ -114,8 +116,9 @@ by deterministic evidence alone:
   named alike exactly or nested;
 - an event pair when every participant of the one with fewer is merged
   into one cluster with a participant of the other, and their dates
-  agree; two births or two deaths of one participant each need no date,
-  since a person has one of each;
+  agree; two births or two deaths, each its one participant's own, need
+  no date, since a person has one of each (so an undated birth naming
+  only a mother reads as hers: nothing in the manifest says otherwise);
 - any other pair when the names match exactly;
 - and never when the two give dates that cannot overlap, when a mention
   has no kind, or when either matches more than `max-anchors` GEDCOM
@@ -770,6 +773,15 @@ def _dates(first: list[Interval], second: list[Interval], widest: int) -> str:
     return "unknown"
 
 
+def _conflict(first: list[Interval], second: list[Interval]) -> bool:
+    """Whether two lists of dates, both stated, have no two that overlap."""
+    return (
+        bool(first)
+        and bool(second)
+        and not any(one.overlaps(other) for one in first for other in second)
+    )
+
+
 def _combine_dates(*results: str) -> str:
     if "conflict" in results:
         return "conflict"
@@ -811,6 +823,8 @@ class _Node:
     births: list[Interval] = field(default_factory=list)
     deaths: list[Interval] = field(default_factory=list)
     when: list[Interval] = field(default_factory=list)
+    # a birth or death event its one participant's own (_nodes)
+    own: bool = False
     # computed once every node of the corpus is lifted (_derive): a
     # person's name forms, each with whether it names a surname alone
     forms: list[tuple[tuple[str, ...], bool]] = field(default_factory=list)
@@ -934,15 +948,26 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
             elif prop in EVENT_DATE_PROPERTIES:
                 subject.when.append(interval)
     by_id = {node.id: node for node in by_local.values()}
+    # each person's own dates, from its claims, before any event's pass
+    own_dates = {
+        node.id: (list(node.births), list(node.deaths))
+        for node in by_local.values()
+    }
     for node in by_local.values():
-        # a birth or death event's date is its participant's, when it has
-        # one: of several (a child and a parent), none says who was born
+        # a birth or death event is its participant's own, and its date is
+        # theirs, when it has one participant (of several, a child and a
+        # parent, none says who was born) whose own date of the kind its
+        # date does not conflict with
         if node.kind not in ONE_PER_PERSON or len(node.participants) != 1:
             continue
-        for person_id in node.participants:
-            person = by_id[person_id]
-            dates = person.births if node.kind == "birth" else person.deaths
-            dates.extend(node.when)
+        (person_id,) = node.participants
+        births, deaths = own_dates[person_id]
+        if _conflict(node.when, births if node.kind == "birth" else deaths):
+            continue
+        node.own = True
+        person = by_id[person_id]
+        dates = person.births if node.kind == "birth" else person.deaths
+        dates.extend(node.when)
     return list(by_local.values())
 
 
@@ -1611,18 +1636,14 @@ class _Judge:
         whether two people ended merged: confident when every participant
         of the event with fewer is merged with one of the other's (so two
         births that name one father stay apart), and their dates agree.
-        Two births or two deaths of one participant each need no date: a
-        person has one, so their participants decide them."""
+        Two births or two deaths, each its one participant's own (_nodes),
+        need no date: a person has one of each, so their participants
+        decide them."""
         name, dates, kin = self.evidence(a, b)
         described = f"{name}/{dates}/{kin}"
         if dates == "conflict":
             return AMBIGUOUS, described
-        sole = (
-            a.kind in ONE_PER_PERSON
-            and len(a.participants) == 1
-            and len(b.participants) == 1
-        )
-        if not sole and dates != "agree":
+        if not (a.own and b.own) and dates != "agree":
             return AMBIGUOUS, described
         fewer, more = sorted(
             (sorted(a.participants), sorted(b.participants)), key=len

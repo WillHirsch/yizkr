@@ -459,8 +459,9 @@ refuses). The module docstring is the full account; in short:
   only an institution's kind ("Städtische Realschule"); for events every
   participant of the one with fewer merged into one cluster with a
   participant of the other, and dates that agree, which two births or
-  two deaths of one participant each need not have; otherwise an exact
-  name. A mention of no kind never links confidently, and nor does one
+  two deaths need not have when each is its one participant's own (its
+  date, if any, not conflicting with the date the person's own claims
+  give); otherwise an exact name. A mention of no kind never links confidently, and nor does one
   matching more than `max-anchors` GEDCOM anchors (a place counts those
   it matches exactly, and those it nests in as one).
 - **Clusters.** The closure over every candidate pair gives the candidate

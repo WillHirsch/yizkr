@@ -1599,6 +1599,122 @@ class TestEvents:
             AMBIGUOUS,
         ]
 
+    @staticmethod
+    def mother_only(key: str, year: int | None, truth: str) -> Doc:
+        """A register telling of the birth of Hildegard's child, naming
+        only her, born 1876 (placeholder)."""
+        claims = [
+            ("e1", "date_of_birth", day(1876)),
+            ("e2", "participant", item("e1")),
+        ]
+        if year:
+            claims.append(("e2", "point_in_time", day(year)))
+        return register(
+            key,
+            [
+                entity("e1", "Hildegard Löbig"),
+                entity("e2", "Birth of Hildegard's child", "birth"),
+            ],
+            claims,
+            {"e1": "hildegard-loebig", "e2": truth},
+        )
+
+    def test_a_birth_its_participants_own_date_conflicts_with_is_not_hers(
+        self,
+    ):
+        """A birth naming only Hildegard, born 1876, but dated 1911 is not
+        her own: its date does not pass to her, and it takes no no-date
+        link. So it stays apart from an undated one, and she from her
+        namesake niece, born 1911 (placeholders)."""
+        docs = [
+            self.mother_only("dated", 1911, "ursula-birth"),
+            self.mother_only("undated", None, "klara-birth"),
+        ]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == [{"hildegard-loebig"}]
+        births = [doc.fingerprint("e2", identity) for doc in docs]
+        assert [identity["mentions"][m]["method"] for m in births] == [
+            AMBIGUOUS,
+            AMBIGUOUS,
+        ]
+        niece = register(
+            "niece",
+            [entity("e1", "Hildegard Löbig"), entity("e2", "Sebastian Löbig")],
+            [
+                ("e1", "date_of_birth", day(1911)),
+                ("e1", "father", item("e2")),
+            ],
+            {"e1": "hildegard-niece", "e2": "sebastian-loebig"},
+        )
+        docs = [self.mother_only("dated", 1911, "ursula-birth"), niece]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        assert merged(docs, identity) == []
+
+    def test_a_persons_own_undated_birth_mentioned_twice_merges(self):
+        """The tree and the postcard each give Klara born 1917, and her
+        birth undated: each birth is hers, so the two merge with her."""
+        docs = [
+            document(
+                key,
+                [
+                    entity("e1", "Klara Löbig"),
+                    entity("e2", "Birth of Klara Löbig", "birth"),
+                ],
+                [
+                    ("e1", "date_of_birth", day(1917)),
+                    ("e2", "participant", item("e1")),
+                ],
+                {"e1": "klara-loebig", "e2": "klara-birth"},
+            )
+            for key in ("family-tree-1984", "postcard-1938")
+        ]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == [{"klara-birth"}, {"klara-loebig"}]
+
+    def test_a_persons_own_dates_are_their_claims_alone(self):
+        """A register gives Klara two births, of 1917 and of 1919, and no
+        birth date of her own: both are hers, in whichever order it lists
+        them, since only her claims are hers to conflict with, never a
+        date another event passed her. So she merges with a Klara born
+        1919 (placeholder register)."""
+
+        def twice(order: list[int]) -> Doc:
+            years = {1: 1917, 2: 1919}
+            return register(
+                "two births",
+                [
+                    entity("e0", "Klara Löbig"),
+                    *(
+                        entity(f"e{n}", f"Birth of Klara Löbig ({n})", "birth")
+                        for n in order
+                    ),
+                ],
+                [
+                    claim
+                    for n in order
+                    for claim in (
+                        (f"e{n}", "participant", item("e0")),
+                        (f"e{n}", "point_in_time", day(years[n])),
+                    )
+                ],
+                {
+                    "e0": "klara-loebig",
+                    **{f"e{n}": f"klara-birth-{n}" for n in order},
+                },
+            )
+
+        card = document(
+            "postcard-1938",
+            [entity("e1", "Klara Löbig")],
+            [("e1", "date_of_birth", day(1919))],
+            {"e1": "klara-loebig"},
+        )
+        for order in ([1, 2], [2, 1]):
+            docs = [twice(order), card]
+            identity = identity_of(*docs)
+            assert merged(docs, identity) == [{"klara-loebig"}], order
+
 
 # -- the reviewers' false merges ----------------------------------------------
 
@@ -1768,9 +1884,11 @@ class TestNoFalseMerge:
     def test_an_institution_named_by_its_kind_needs_a_place(self):
         """'Städtische Realschule' names a school in every town: two
         registers name one in Flörburg and one in Peiltal, which stay
-        apart; one at a street in Flörburg merges with Flörburg's, the
-        place it lies in being theirs. 'Städtische Realschule Flörburg'
-        names its town, and merges on the name alone (placeholders)."""
+        apart, and so do the schools of the rival districts' Moshausens,
+        whose names share a token but neither is the other or nests in it;
+        one at a street in Flörburg merges with Flörburg's, the place it
+        lies in being theirs. 'Städtische Realschule Flörburg' names its
+        town, and merges on the name alone (placeholders)."""
 
         def school(key: str, places: list[str], truth: str) -> Doc:
             entities = [
@@ -1806,6 +1924,15 @@ class TestNoFalseMerge:
         assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
             (AMBIGUOUS, "exact/unknown/unknown")
         ]
+        rivals = [
+            school(f"in {place}", [place], f"realschule-{n}")
+            for n, place in enumerate(
+                ["Moshausen, Kreis Peiltal", "Moshausen, Kreis Mockburg"]
+            )
+        ]
+        identity = identity_of(*rivals)
+        assert_no_false_merge(rivals, identity)
+        assert merged(rivals, identity) == []
         docs = [floerburg, street]
         identity = identity_of(*docs)
         assert {"realschule-f"} in merged(docs, identity)
