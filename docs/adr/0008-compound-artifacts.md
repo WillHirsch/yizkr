@@ -485,13 +485,22 @@ did so on 2026-09-29, in the review of its PR.
   vision. So is a page that shows text in an annotation, a free-text one
   or a form field holding text; a text-layer page's
   other annotations are left unread, and the run report counts the pages
-  that show them. Text a page hides, under an image or a filled path
-  painted after it, is never read: its page is read by vision, which
-  reads what the page shows. Were a text layer ever given without such
-  text, `[redacted]` would stand where it lies, never nothing, as the
-  owner decided; #389's transcription record is to carry the mark through
-  what the vision engine writes too. Each of these is the owner's
-  decision.
+  that show them. Text a page hides, under an image, a filled path or an
+  annotation painted after it (a box or ink a viewer draws over a line,
+  a stamp, a redaction marked and not yet applied, but not a highlight,
+  an underline, a squiggle or a strike-out, which leave the text in
+  view), is never read from the text layer: its page is read by vision,
+  which reads what the page shows. Were a text layer ever given without
+  such text, `[redacted]` would stand where it lies, never nothing, as
+  the owner decided; #389's transcription record is to carry the mark
+  through what the vision engine writes too. Each of these is the
+  owner's decision.
+- **Known limits of hidden text** (from the review of #176): text hidden
+  in ways the page does not show as covering it is read from the text
+  layer as though it showed. That is text under a thick stroked line (a
+  marker drawn over it and flattened into the page), text a clip path
+  cuts out of view, text drawn in the colour behind it (white on a white
+  page), and text drawn at a fill opacity of 0. None is handled yet.
 - **Each image placed within a text-layer page** is recorded before the
   write as a deck's derived media are: in the PDF's `derived-media.json`,
   keyed by the SHA-1 of its bytes, named for its places (`page 6, image

@@ -85,16 +85,18 @@ term; ADR-0008 as amended by #176). A page is read:
   annotation (a link or a pop-up shows nothing);
 - by one vision call of its own, when it shows text in an annotation (a
   free-text annotation, or a form field whose value is text); when it
-  hides text it draws visibly, under an image or a filled path painted
-  after it (a redaction box, a scan laid over an OCR layer, a cropped or
-  see-through picture), since such text is never read; when images cover
-  at least 60% of it and more of its visible letters and digits lie over
-  them than beside them (a scan with a stamp, or text laid over a picture
-  that fills the page); and when its text layer is empty, garbage, or
-  garbled, a replacement character standing within a word. The engine is
-  given the page's one image as the PDF holds it, where the page draws
-  nothing else, the image covers it upright, and it shows no annotation,
-  or else a rendering of it;
+  hides text it draws visibly, under an image, a filled path or an
+  annotation painted after it (a redaction box, drawn or as an
+  annotation, a scan laid over an OCR layer, a cropped or see-through
+  picture, ink), since such text is never read from the text layer
+  (ADR-0008 lists the ways of hiding text this does not see); when
+  images cover at least 60% of it and more of its visible letters and
+  digits lie over them than beside them (a scan with a stamp, or text
+  laid over a picture that fills the page); and when its text layer is
+  empty, garbage, or garbled, a replacement character standing within a
+  word. The engine is given the page's one image as the PDF holds it,
+  where the page draws nothing else, the image covers it upright, and
+  it shows no annotation, or else a rendering of it;
 - from its text layer otherwise, deterministically, with no model call
   (the method `pdf-text-layer`, version 1, read with pypdfium2, which
   pyproject.toml pins). The text layer is what the page draws visibly: an

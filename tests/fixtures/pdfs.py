@@ -193,6 +193,8 @@ class Page:
     alphas: dict[str, float] = field(default_factory=dict)
     # each annotation's dictionary; a form field's is a widget's
     annotations: list[str] = field(default_factory=list)
+    # whether it paints the grey shading (`shade`)
+    shaded: bool = False
 
     def text(
         self,
@@ -267,6 +269,15 @@ class Page:
         self.ops.append(f"q {gray} g {x} {y} {w} {h} re f Q".encode())
         return self
 
+    def shade(self, x: float, y: float, w: float, h: float) -> Page:
+        """Paint a shading, black to white from left to right, over the
+        rectangle (x, y, w, h), within whatever clip is in force: text
+        drawn as a clip (render mode 7) shows only where it lets the
+        shading through."""
+        self.shaded = True
+        self.ops.append(f"q {x} {y} {w} {h} re W n /Sh1 sh Q".encode())
+        return self
+
     def frame(self, x: float, y: float, w: float, h: float) -> Page:
         """Stroke a rectangle's outline in black (a path that fills
         nothing), as a table's borders are drawn."""
@@ -286,14 +297,21 @@ class Page:
         rect: tuple[float, float, float, float],
         *,
         kind: str = "/Tx",
+        flags: int = 0,
     ) -> Page:
         """Add a form field on the page: a text field (`kind` /Tx) holding
-        `value`, or another kind (/Btn, a check box, whose value is a
-        name such as /Yes)."""
-        shown = value if kind != "/Tx" else _literal(value).decode("cp1252")
+        `value`; a choice field (/Ch) whose one option, `value`, is
+        chosen, a list box, or a combo box by its `flags`; or a check box
+        (/Btn), whose value is a name such as /Yes."""
+        shown = value if kind == "/Btn" else _literal(value).decode("cp1252")
+        entries = f"/FT {kind} /T ({name}) /V {shown}"
+        if kind == "/Ch":
+            entries += f" /Opt [{shown}]"
+        if flags:
+            entries += f" /Ff {flags}"
         self.annotations.append(
-            f"<< /Type /Annot /Subtype /Widget /FT {kind} /T ({name}) "
-            f"/V {shown} /Rect [{' '.join(str(v) for v in rect)}] >>"
+            f"<< /Type /Annot /Subtype /Widget {entries} "
+            f"/Rect [{' '.join(str(v) for v in rect)}] >>"
         )
         return self
 
@@ -356,9 +374,16 @@ def pdf(pages: list[Page], *, font: str = "Helvetica") -> bytes:
             f"/{name} << /ca {alpha} /CA {alpha} >>"
             for name, alpha in page.alphas.items()
         )
+        shading = (
+            " /Shading << /Sh1 << /ShadingType 2 /ColorSpace /DeviceGray "
+            f"/Coords [0 0 {page.width} 0] /Function << /FunctionType 2 "
+            "/Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> >>"
+            if page.shaded
+            else ""
+        )
         resources = (
             f"<< /Font << {fonts} >> /XObject << {named} >> "
-            f"/ExtGState << {states} >> >>"
+            f"/ExtGState << {states} >>{shading} >>"
         )
         contents = add(stream("", b"\n".join(page.ops)))
         rotate = f" /Rotate {page.rotate}" if page.rotate else ""

@@ -251,6 +251,56 @@ class TestTheRoute:
             doc.sha1
         }
 
+    def test_a_pdf_named_in_capitals_is_read_page_by_page(self, tmp_path):
+        """Its suffix, in whatever case, makes a file a PDF."""
+        corpus = folder(tmp_path)
+        (corpus / "FAMILY-HISTORY-2008.PDF").write_bytes(history())
+        reader = Reader({})
+        doc = document(
+            run(tmp_path, corpus, reader), "FAMILY-HISTORY-2008.PDF"
+        )
+        assert reader.read == []
+        assert page_methods(transcription_of(doc)) == [
+            (1, "text-layer"),
+            (2, "text-layer"),
+        ]
+
+    def test_the_language_is_found_in_the_pages_text_alone(
+        self, tmp_path, monkeypatch
+    ):
+        """The page and image markers are no part of the text the
+        language is found in: only what was read from the pages is."""
+        given = []
+        resolve = transcribe.resolve_language
+
+        def resolving(text, *args, **kwargs):
+            given.append(text)
+            return resolve(text, *args, **kwargs)
+
+        monkeypatch.setattr(transcribe, "resolve_language", resolving)
+        corpus = folder(tmp_path, booklet=booklet())
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
+        transcription = transcription_of(doc)
+        read = [transcription.page_text(page) for page in transcription.pages]
+        assert "\n\n".join(text for text in read if text) in given
+        assert not any("[Page" in text for text in given)
+
+    def test_a_page_s_reading_stands_without_blank_lines_around_it(
+        self, tmp_path
+    ):
+        """What the engine reads of a page is the page's text, without the
+        blank lines it may begin or end with, so the page's markers and
+        the next page's stand where they always do."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reader = Reader({"page-2": f"\n\n{EXTRACT.strip()}\n\n"})
+        doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
+        transcription = transcription_of(doc)
+        assert transcription.page_text(transcription.pages[1]) == (
+            EXTRACT.strip()
+        )
+        assert transcription.text.endswith(f"[Page 2]\n{EXTRACT.strip()}")
+
     def test_a_page_s_unread_annotations_are_counted(self, tmp_path):
         """A text-layer page's annotations that show no text are left
         unread, and its provenance counts them for the run report."""
@@ -625,11 +675,12 @@ class TestAScratchRun:
         (corpus.folder / "booklet.pdf").write_bytes(
             pdfs.pdf([typed(TITLE), three])
         )
-        (corpus.folder / "history.pdf").write_bytes(
+        # its suffix in capitals, as a PDF's may be
+        (corpus.folder / "history.PDF").write_bytes(
             pdfs.pdf([typed(FIRST), *scans])
         )
         corpus.texts["booklet.pdf"] = TRANSLATION
-        corpus.texts["history.pdf"] = FIRST
+        corpus.texts["history.PDF"] = FIRST
         counted = estimate_of(tmp_path, corpus, engine)
         assert per_stage(counted, "known")["transcription"] == 6
         assert per_stage(counted, "known").get("extraction", 0) == 0

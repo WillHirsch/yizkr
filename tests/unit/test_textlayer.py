@@ -216,17 +216,20 @@ class TestPages:
         assert methods(result) == [TEXT_LAYER]
         assert result.pages[0].text == TITLE
 
-    def test_a_hyphen_at_a_line_end_stays(self, tmp_path):
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            ["Flörburg, Brunnen-", "ring 35, den 28. Juli 1939."],
+            ["S. Faxridge-", "van 't Nijks"],
+        ],
+        ids=["a word", "a double-barrelled name"],
+    )
+    def test_a_hyphen_at_a_line_end_stays(self, tmp_path, lines):
         """PDFium marks a hyphen that ends a line and drops the line break
         after it: the text layer gives both back, as the page prints them,
         and joins no word."""
-        page = pdfs.Page().text(
-            ["Flörburg, Brunnen-", "ring 35, den 28. Juli 1939."]
-        )
-        result = read(tmp_path, page)
-        assert result.pages[0].text == (
-            "Flörburg, Brunnen-\nring 35, den 28. Juli 1939."
-        )
+        result = read(tmp_path, pdfs.Page().text(lines))
+        assert result.pages[0].text == "\n".join(lines)
 
     def test_a_stamp_over_a_scan_leaves_it_a_scan(self, tmp_path):
         """Images cover the page, and more of its visible letters lie over
@@ -290,6 +293,15 @@ class TestPages:
         page.text(["Standesamt 1938"], y=700)
         page.text(["." * 70], y=100)
         assert methods(read(tmp_path, page)) == [VISION]
+
+    def test_text_a_shading_paints_through_is_read_by_vision(self, tmp_path):
+        """Text drawn as a clip (render mode 7) shows only as the shading
+        painted through it: the text layer holds none of it, and the page
+        is read from a rendering, never taken for one that draws nothing."""
+        page = pdfs.Page().text(["Klara Wastl"], size=40, mode=pdfs.CLIPPING)
+        page.shade(0, 0, pdfs.WIDTH, pdfs.HEIGHT)
+        result = read(tmp_path, typed(TITLE), page)
+        assert methods(result) == [TEXT_LAYER, VISION]
 
     def test_a_garbage_text_layer_is_read_by_vision(self, tmp_path):
         """A font whose codes extract as private-use characters: the text
@@ -384,6 +396,20 @@ class TestAnnotations:
         ]
 
     @pytest.mark.parametrize(
+        "flags", [1 << 17, 0], ids=["combo box", "list box"]
+    )
+    def test_a_choice_field_holding_text_sends_its_page_to_vision(
+        self, tmp_path, flags
+    ):
+        page = typed(TITLE).field(
+            "name", "Klara", (72, 500, 300, 540), kind="/Ch", flags=flags
+        )
+        assert methods(read(tmp_path, typed(TITLE), page)) == [
+            TEXT_LAYER,
+            VISION,
+        ]
+
+    @pytest.mark.parametrize(
         "annotate",
         [
             lambda page: page.field("name", "", (72, 500, 300, 540)),
@@ -413,9 +439,9 @@ class TestAnnotations:
 
 class TestHiddenText:
     """Text a page hides is never read, as the owner decided: a character
-    drawn in a visible mode that an image or a filled path painted after
-    it covers sends its page to vision, which reads what the page
-    shows."""
+    drawn in a visible mode that an image, a filled path or an annotation
+    painted after it covers sends its page to vision, which reads what the
+    page shows."""
 
     PARAGRAPH = pdfs.lines(HISTORY)[:6]
 
@@ -450,6 +476,23 @@ class TestHiddenText:
             ),
             # a black box drawn over one line, to redact it
             lambda page: page.rectangle(60, 755, 480, 20, gray=0),
+            # a black box a viewer draws over it, as an annotation
+            lambda page: page.annotate(
+                "/Subtype /Square /Rect [60 755 540 775] /IC [0 0 0]"
+            ),
+            # the same, its rectangle given by its other two corners
+            lambda page: page.annotate(
+                "/Subtype /Square /Rect [540 775 60 755] /IC [0 0 0]"
+            ),
+            # ink scribbled over it
+            lambda page: page.annotate(
+                "/Subtype /Ink /Rect [60 755 540 775] "
+                "/InkList [[60 765 540 765]] /BS << /W 20 >>"
+            ),
+            # a redaction marked and not yet applied
+            lambda page: page.annotate(
+                "/Subtype /Redact /Rect [60 755 540 775]"
+            ),
         ],
         ids=[
             "cropped photo",
@@ -457,6 +500,10 @@ class TestHiddenText:
             "stencil mask",
             "alpha overlay",
             "path redaction",
+            "square annotation",
+            "square annotation, corners reversed",
+            "ink annotation",
+            "redact annotation",
         ],
     )
     def test_its_page_is_read_by_vision(self, tmp_path, cover):
@@ -478,6 +525,35 @@ class TestHiddenText:
         result = read(tmp_path, page)
         assert methods(result) == [TEXT_LAYER]
         assert result.pages[0].text == "\n".join(self.PARAGRAPH)
+
+    @pytest.mark.parametrize(
+        "markup", ["Highlight", "Underline", "Squiggly", "StrikeOut"]
+    )
+    def test_a_text_markup_leaves_the_text_in_view(self, tmp_path, markup):
+        """A highlight, an underline, a squiggle or a strike-out marks the
+        text it lies over and leaves it in view: the page reads from its
+        text layer, and counts the annotation."""
+        page = self.hiding(
+            lambda page: page.annotate(
+                f"/Subtype /{markup} /Rect [60 755 540 775] "
+                "/QuadPoints [60 775 540 775 60 755 540 755]"
+            )
+        )
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text == "\n".join(self.PARAGRAPH)
+        assert result.pages[0].annotations == 1
+
+    def test_a_thick_underline_painted_after_the_text_hides_nothing(
+        self, tmp_path
+    ):
+        """It covers the foot of each letter, never its centre: a
+        character is hidden only where its centre is covered."""
+        page = pdfs.Page().text(["Klara Wastl"])
+        page.rectangle(60, 765, 480, 6.5, gray=0)
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text == "Klara Wastl"
 
     def test_a_frame_drawn_round_the_text_hides_nothing(self, tmp_path):
         """A box stroked round a paragraph after it, as a table's borders
@@ -543,6 +619,17 @@ class TestWhatVisionReads:
         page = scan()
         change(page)
         result = read(tmp_path, typed(TITLE), page)
+        assert result.pages[1].vision.suffix == PNG_SUFFIX
+
+    def test_a_scan_placed_through_a_form_is_rendered(self, tmp_path):
+        """A form's own matrix and bounding box can turn or cut what it
+        holds, which the image's placement within it does not show: the
+        page is rendered, never given as the image the form holds."""
+        page = pdfs.Page().form_image(
+            pdfs.jpeg(), 0, 0, pdfs.WIDTH, pdfs.HEIGHT
+        )
+        result = read(tmp_path, typed(TITLE), page)
+        assert methods(result) == [TEXT_LAYER, VISION]
         assert result.pages[1].vision.suffix == PNG_SUFFIX
 
     def test_a_mirrored_scan_is_rendered(self, tmp_path):

@@ -259,10 +259,11 @@ re-running one step in isolation — but for a normal ingest you only ever run
   usable is read **page by page** (#176, `yizkr.pipeline.textlayer`):
   such a page from its text layer, deterministically, without a model
   call (the method `pdf-text-layer`, version 1); a page that shows text
-  in an annotation, hides text under something painted after it (a
-  redaction box, say, since hidden text is never read), is a scan (images
-  cover most of it and its visible text lies over them, an OCR layer
-  being drawn invisibly), or whose text layer is empty, garbage or
+  in an annotation, hides text under something painted after it, an
+  annotation included (a redaction box, say, since hidden text is never
+  read from the text layer, within the limits ADR-0008 lists), is a scan
+  (images cover most of it and its visible text lies over them, an OCR
+  layer being drawn invisibly), or whose text layer is empty, garbage or
   garbled, by a vision call of its own; a page with nothing to read by
   nothing; and each image placed within a text-layer page by a vision
   call of its own, as a witness of its own (#178, ADR-0008), unless it is

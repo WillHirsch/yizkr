@@ -26,15 +26,26 @@ what a font without a usable Unicode map extracts as. It is **garbled**
 when the replacement character stands within a word, next to a letter or
 a digit, where a letter the font could not map should be.
 
-**Text a page hides** is never read. A character drawn in a visible mode
-that an image or a filled path painted after it covers (its centre within
-the other's bounds) cannot be seen as the text layer holds it, whether a
-box is drawn over a line to redact it, a scan is laid over an OCR layer
-drawn visibly, or the other only seems to cover it (an image clipped to
-less than its bounds, or see-through): so its page is read by vision, which
-reads what the page shows. Were a text layer ever given with such
+**Text a page hides** is never read from its text layer. A character
+drawn in a visible mode that something painted after it covers, its
+centre within the other's bounds, cannot be seen as the text layer holds
+it: an image or a filled path (a box drawn over a line to redact it, a
+scan laid over an OCR layer drawn visibly, or one that only seems to
+cover it, an image clipped to less than its bounds, or see-through), or
+an annotation, which is painted over the page's content (a box or ink a
+viewer draws over a line, a stamp, a redaction marked and not yet
+applied). Its page is read by vision, which reads what the page shows. A
+text markup (a highlight, an underline, a squiggle or a strike-out)
+leaves the text it marks in view. Were a text layer ever given with such
 characters left out, each run of them would stand as ``[redacted]``
 (`REDACTED`), never silently dropped.
+
+**What it does not see** (known limits, which ADR-0008 records): text
+hidden in other ways is read from the text layer as though it showed.
+That is text under a thick stroked line (a marker drawn over it and
+flattened into the page), text a clip path cuts out of view, text drawn
+in the colour behind it (white on a white page), and text drawn at a fill
+opacity of 0.
 
 **How each page is read** (its method, which the transcription records):
 
@@ -62,11 +73,11 @@ pages, or twice on one, is one image, read once. An image the
 never-ingest list names by its SHA-1 is neither read nor kept; one that a
 page read by vision draws, or a PDF read whole, reaches the engine with
 the page, a case ADR-0008 leaves unhandled since it does not arise. A
-page read by vision is read whole, whatever images it
-holds, as the compilation's own page (ADR-0008, the third question its
-compilation amendment leaves open): nothing is derived from it.
-Annotations a text-layer page shows (a stamp, a note, a check box) are
-not read, and the page counts them.
+page read by vision is read whole, whatever images it holds, as the
+compilation's own page (ADR-0008, the third question its compilation
+amendment leaves open): nothing is derived from it. Annotations a
+text-layer page shows that cover none of its text (a stamp in a margin, a
+check box, a highlight) are not read, and the page counts them.
 
 **The bytes of an image** are the image as the PDF holds it where that is
 a whole JPEG file (a DCTDecode stream, after any lossless filters). Any
@@ -164,6 +175,15 @@ _BITMAP_BYTES = {
 }
 # the annotations that show nothing of their own on the page
 _UNSHOWN = frozenset({pdfium_c.FPDF_ANNOT_LINK, pdfium_c.FPDF_ANNOT_POPUP})
+# the annotations that mark text up and leave it in view
+_MARKUPS = frozenset(
+    {
+        pdfium_c.FPDF_ANNOT_HIGHLIGHT,
+        pdfium_c.FPDF_ANNOT_UNDERLINE,
+        pdfium_c.FPDF_ANNOT_SQUIGGLY,
+        pdfium_c.FPDF_ANNOT_STRIKEOUT,
+    }
+)
 # the form fields whose value is text
 _TEXT_FIELDS = frozenset(
     {
@@ -536,11 +556,11 @@ def _characters(
 ) -> _Text:
     """The page's text layer (the module docstring says what it holds): a
     character drawn in a visible mode, whose centre falls on the page, is
-    part of it, unless an image or a filled path painted after its object
-    (`hiders`) covers its centre, when it is hidden and stands in the text
-    as REDACTED. Characters PDFium adds between words and lines are kept,
-    and a hyphen it finds at a line's end is given back with its line
-    break."""
+    part of it, unless something painted after its object (`hiders`: an
+    image, a filled path or an annotation) covers its centre, when it is
+    hidden and stands in the text as REDACTED. Characters PDFium adds
+    between words and lines are kept, and a hyphen it finds at a line's
+    end is given back with its line break."""
     raw = textpage.raw
     box = [ctypes.c_double() for _ in range(4)]
     # for each text object: None when its render mode draws nothing, else
@@ -647,12 +667,26 @@ def _field_text(formenv: Any, annot: Any) -> str:
     return bytes(buffer).decode("utf-16-le", errors="replace").rstrip("\x00")
 
 
-def _annotations(page: Any, formenv: Any) -> tuple[bool, int]:
-    """(whether an annotation on the page shows text: a free-text
-    annotation, or a form field whose value is text; how many annotations
-    it shows besides, which its text layer leaves unread). A link and a
-    pop-up show nothing of their own, and are neither."""
-    shows_text, others = False, 0
+@dataclass
+class _Annotations:
+    """What a page's annotations show (`_annotations`): whether one shows
+    text, how many others there are, which its text layer leaves unread,
+    and the rectangle of each that can cover the page's text."""
+
+    shows_text: bool = False
+    others: int = 0
+    covers: list[Rect] = field(default_factory=list)
+
+
+def _annotations(page: Any, formenv: Any) -> _Annotations:
+    """What the page's annotations show. A free-text annotation, and a
+    form field whose value is text, show text; a link and a pop-up show
+    nothing of their own, and are not counted. Every annotation that shows
+    something is painted over the page's content, and covers the text
+    under its rectangle, except a text markup (a highlight, an underline,
+    a squiggle or a strike-out), which leaves the text it marks in view."""
+    shown = _Annotations()
+    rect = pdfium_c.FS_RECTF()
     for index in range(pdfium_c.FPDFPage_GetAnnotCount(page.raw)):
         annot = pdfium_c.FPDFPage_GetAnnot(page.raw, index)
         if not annot:
@@ -665,30 +699,44 @@ def _annotations(page: Any, formenv: Any) -> tuple[bool, int]:
                 kind == pdfium_c.FPDF_ANNOT_WIDGET
                 and _field_text(formenv, annot).strip()
             ):
-                shows_text = True
+                shown.shows_text = True
             else:
-                others += 1
+                shown.others += 1
+            if kind not in _MARKUPS and pdfium_c.FPDFAnnot_GetRect(
+                annot, rect
+            ):
+                # a rectangle may name any two opposite corners
+                shown.covers.append(
+                    (
+                        min(rect.left, rect.right),
+                        min(rect.bottom, rect.top),
+                        max(rect.left, rect.right),
+                        max(rect.bottom, rect.top),
+                    )
+                )
         finally:
             pdfium_c.FPDFPage_CloseAnnot(annot)
-    return shows_text, others
+    return shown
 
 
 @dataclass
 class _Contents:
     """What one page draws: its box and area, its objects in paint order
     with their bounds, its images on the page by index (their bounds
-    clipped to it), and its text layer (`_characters`)."""
+    clipped to it), its text layer (`_characters`) and its annotations."""
 
     box: Rect
     area: float
     objects: list[tuple[Any, Rect]]
     images: dict[int, Rect]
     text: _Text
+    annotations: _Annotations
 
 
-def _contents(page: Any) -> _Contents:
+def _contents(page: Any, formenv: Any = None) -> _Contents:
     """What `page` draws (`_Contents`), read under the lock. An image or a
-    filled path hides the text an earlier object draws."""
+    filled path hides the text an earlier object draws, and an annotation,
+    painted over every object, the text of any that lies under it."""
     box = page.get_cropbox()
     objects = _objects(page)
     orders = {_address(obj.raw): at for at, (obj, _rect) in enumerate(objects)}
@@ -704,18 +752,21 @@ def _contents(page: Any) -> _Contents:
             clipped = _clip(rect, box)
             if clipped is not None:
                 hiders[at] = clipped
+    annotations = _annotations(page, formenv)
+    for at, rect in enumerate(annotations.covers, start=len(objects)):
+        hiders[at] = rect
     textpage = page.get_textpage()
     try:
         text = _characters(textpage, box, orders, hiders, images)
     finally:
         textpage.close()
-    return _Contents(box, _area(box), objects, images, text)
+    return _Contents(box, _area(box), objects, images, text, annotations)
 
 
 def _layout(page: Any, number: int, formenv: Any) -> _Layout:
     """Read one page and decide how it is read (the module docstring says
     how)."""
-    contents = _contents(page)
+    contents = _contents(page, formenv)
     area, objects, images = contents.area, contents.objects, contents.images
     drawn_text = contents.text
     visible = drawn_text.text
@@ -725,7 +776,8 @@ def _layout(page: Any, number: int, formenv: Any) -> _Layout:
         for at, (obj, _rect) in enumerate(objects)
         if _draws(obj, at in images, drawn_text.drawing)
     ]
-    shows_text, others = _annotations(page, formenv)
+    annotations = contents.annotations
+    shows_text, others = annotations.shows_text, annotations.others
     shows = shows_text or others > 0
     if not drawn and not shows:
         method = NONE
