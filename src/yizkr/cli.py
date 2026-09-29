@@ -1160,7 +1160,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = isub.add_parser(
         "register", help="upload media + artifact/fragment items"
     )
-    p.add_argument("--file", type=Path, help="media file (omit for none)")
+    p.add_argument(
+        "--file",
+        type=Path,
+        required=True,
+        help="the artifact's media file: the artifact is found or made by "
+        "the SHA-1 of its bytes (ADR-0010)",
+    )
     p.add_argument(
         "--type",
         required=True,
@@ -1408,8 +1414,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --serial, extract N documents in parallel during the "
         "up-front extract-all phase (default 1). Multiplies with "
         "--chunk-concurrency (N x chunks concurrent LLM calls), so keep the "
-        "product within the engine's limits; wiki writes stay serialised. "
-        "No effect without --serial",
+        "product within the engine's limits. The phase reads and writes no "
+        "wiki: each document is registered and written after it, one at a "
+        "time. No effect without --serial",
     )
     effort_choices = ["low", "medium", "high", "xhigh", "max"]
     p.add_argument(

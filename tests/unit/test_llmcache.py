@@ -15,7 +15,6 @@ import contextlib
 import copy
 import functools
 import hashlib
-import itertools
 import json
 import logging
 import os
@@ -2249,19 +2248,6 @@ class CachedRun(ScriptedOrchestrator):
         return self.engine
 
 
-class Registered(CachedRun):
-    """A cached run on an instance of its own, which registers each
-    artifact under a new QID numbered from `qids` on."""
-
-    def __init__(self, *args, qids: int, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.qids = itertools.count(qids)
-
-    def _step_register(self, doc):
-        super()._step_register(doc)
-        return f"Q{next(self.qids)}"
-
-
 class RefusingPlain(Refusing):
     """The refusing engine without conversations, as PlainEngine is."""
 
@@ -2405,9 +2391,10 @@ class TestThePipeline:
         self, tmp_path, engine, refusing
     ):
         """A reset empties the instance, and the run after it registers
-        each artifact again, under another QID (#127). No stage reads the
-        QID: the prompts and the transcriptions name each artifact by the
-        SHA-1 of its media. So a run after the reset, in a fresh state
+        each artifact again, under another QID, as it writes it (#103). No
+        stage before the write has a QID to read: the prompts and the
+        transcriptions name each artifact by the SHA-1 of its media (#127).
+        So a run after the reset, in a fresh state
         directory as a scratch run's is, sends the engine the same prompts
         word for word, under the same keys, all of which the cache
         answers, and its views hash as the first run's did. Every kind of
@@ -2418,29 +2405,34 @@ class TestThePipeline:
         folder = folder_of_three(tmp_path)
         cache = tmp_path / "cache"
 
-        def run(name, engine, qids, cache_dir):
-            orchestrator = Registered(
+        def run(name, engine, cache_dir):
+            orchestrator = CachedRun(
                 folder,
                 tmp_path / name,
                 engine=engine,
-                qids=qids,
                 cache_dir=cache_dir,
                 log=quiet,
             )
             assert orchestrator.run() == 2
             return orchestrator
 
-        before = run("before", engine(reset_answers), 100, cache)
+        before = run("before", engine(reset_answers), cache)
         # after the reset, the engine is asked again without the cache,
-        after = run("after", engine(reset_answers), 200, None)
+        after = run("after", engine(reset_answers), None)
         # and through it, every call is answered and the engine never asked
-        replay = run("replay", refusing(reset_answers), 300, cache)
+        replay = run("replay", refusing(reset_answers), cache)
 
+        # every document waits at a gate, and none has an artifact item
         registered = [
             {doc.state.artifact_qid for doc in orchestrator.documents()}
             for orchestrator in (before, after, replay)
         ]
-        assert len(set().union(*registered)) == 9, registered
+        assert registered == [{None}] * 3
+        assert "register" not in {
+            call.split(":")[0]
+            for orchestrator in (before, after, replay)
+            for call in orchestrator.calls
+        }
         # the scan's reading; each document's manifest, chunk and critique;
         # and for the note, its manifest asked for again, and its
         # segmentation
