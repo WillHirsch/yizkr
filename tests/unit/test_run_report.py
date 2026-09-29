@@ -17,6 +17,7 @@ driver writes.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -1119,14 +1120,19 @@ def scramble(path: Path, rng, odd: list, rate: float) -> None:
     for file in sorted(path.rglob("*")):
         if not file.is_file() or file.suffix not in (".json", ".jsonl"):
             continue
-        lines = file.read_text(encoding="utf-8").split("\n")
-        out = []
-        for line in lines:
-            try:
-                out.append(json.dumps(mutated(json.loads(line))))
-            except ValueError:
-                out.append(line)
-        file.write_text("\n".join(out), encoding="utf-8")
+        text = file.read_text(encoding="utf-8")
+        if file.suffix == ".jsonl":
+            out = []
+            for line in text.split("\n"):
+                try:
+                    out.append(json.dumps(mutated(json.loads(line))))
+                except ValueError:
+                    out.append(line)
+            file.write_text("\n".join(out), encoding="utf-8")
+        else:
+            with contextlib.suppress(ValueError):
+                scrambled = mutated(json.loads(text))
+                file.write_text(json.dumps(scrambled), encoding="utf-8")
 
 
 def rewritten_line(line: str) -> str:
@@ -2078,8 +2084,8 @@ class TestFiles:
         rendered every time, or refused (ReportError) when run.json itself
         holds no object."""
         base = record(tmp_path / "base")
-        odd = [None, True, 0, -1, 1.5, float("inf"), "", "x", [], {}, [1],
-               {"a": 1}, "Laudler", 10**30]  # fmt: skip
+        odd = [None, True, False, 0, -1, 1.5, float("inf"), "", "x", [],
+               {}, [1], {"a": 1}, "Laudler", 10**30]  # fmt: skip
         refused = 0
         for seed in range(50):
             rng = random.Random(seed)
