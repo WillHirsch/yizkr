@@ -30,18 +30,19 @@ closed:
 
 * The check assesses every item with person evidence, read through
   statement nodes at every rank (``privacy.PEOPLE_SELECTION``), so a
-  deprecated, outranked or missing `human` type hides no one.
+  deprecated or outranked `human` type hides no one.
 * The export reads the same evidence from its own dump (``read_dump``)
   and drops every item that has any of it and was not released: an item
   the check never assessed is dropped, not kept. A redirect goes with the
   item it redirects to.
-* It also drops every item that states no `instance of` at any rank, as
-  what such an item is cannot be told: the instance's own vocabulary and
-  the smoke test's item are the exceptions, untyped by design.
+* It also drops every item that states no type, as what such an item is
+  cannot be told, so no type at all hides no one either. The instance's
+  vocabulary and the classes its items are typed with are kept.
 * The check runs on the query service, the dump comes from the database:
   the export waits for the query service to hold exactly the dump's
-  revision of every item, and refuses to run when it does not, or when
-  the graph changes while the check runs (``QueryServiceLag``).
+  revision of every item and property, and refuses to run when it does
+  not, or when the graph changes while the check runs
+  (``QueryServiceLag``).
 
 Scheduling is the host's job (this is a home-server deployment): see
 deploy/README.md for the cron line. Retention: ``--keep N`` prunes the
@@ -76,7 +77,6 @@ from yizkr.core.privacy import (
     people_selection,
 )
 from yizkr.queries.publish import prefix_block
-from yizkr.smoke import SMOKE_LABEL
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 _QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
@@ -281,30 +281,30 @@ def exclusion_report(
 
 # The dump in N-Triples, as dumpRdf.php writes it: an item's statement
 # links it to a statement node (``<item> p:P <statement>``), which holds
-# the value (``<statement> ps:P <value>``) and the rank
-# (``wikibase:rank``); a data node (``Special:EntityData/Q1``) gives each
-# entity's revision (``schema:version``), a redirect's included; and a
-# redirect is ``owl:sameAs`` the item it redirects to.
+# the value (``<statement> ps:P <value>``), each qualifier's value
+# (``<statement> pq:P <value>``) and the rank (``wikibase:rank``); a data
+# node (``Special:EntityData/Q1``) gives each entity's revision
+# (``schema:version``), a redirect's included; and a redirect is
+# ``owl:sameAs`` the item it redirects to.
 _ENTITY = re.compile(r"<[^<>]*/entity/(Q[1-9]\d*)>")
 _CLAIM = re.compile(r"<[^<>]*/prop/(P[1-9]\d*)>")
 _CLAIM_VALUE = re.compile(r"<[^<>]*/prop/statement/(P[1-9]\d*)>")
-_DATA_NODE = re.compile(r"<[^<>]*[/:](Q[1-9]\d*)>")
+_QUALIFIER_VALUE = re.compile(r"<[^<>]*/prop/qualifier/(P[1-9]\d*)>")
+_DATA_NODE = re.compile(r"<[^<>]*[/:]([QP][1-9]\d*)>")
 _VERSION = "<http://schema.org/version>"
 _SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
 _RANK = "<http://wikiba.se/ontology#rank>"
 _DEPRECATED = "<http://wikiba.se/ontology#DeprecatedRank>"
-_LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
-# the label of `yizkr smoke-test`'s item, as the dump writes it
-_SMOKE_LABEL = f'"{SMOKE_LABEL}"@en '
 
 
 @dataclass
 class DumpReading:
     """What the public export reads from its own dump: `people`, every
     item with person evidence (the privacy module's, at every rank);
-    `untyped`, every item that states no `instance of` at any rank, the
-    exceptions aside (``read_dump``); `redirects`, each redirect's target;
-    and `revisions`, the revision of every item that is not a redirect."""
+    `untyped`, every item that states no type, the vocabulary and classes
+    aside (``read_dump``); `redirects`, each redirect's target; and
+    `revisions`, the revision of every item and property that is not a
+    redirect."""
 
     people: set[str] = field(default_factory=set)
     untyped: set[str] = field(default_factory=set)
@@ -325,18 +325,21 @@ def read_dump(
 
     Person evidence is read as ``PEOPLE_SELECTION`` reads it from the query
     service: an item typed `human`, the subject of a person-only property,
-    the value of a person-valued one, or a participant in a person event,
-    each through its statement node at every rank. A participant typed as
-    one of the non-person classes, at a rank other than deprecated, is a
-    person only on other evidence. A value that is not an item (an unknown
-    value is a blank node) is no evidence.
+    the value of a person-valued one in a statement or a qualifier, or a
+    participant in a person event, each through its statement node at
+    every rank. A participant typed as one of the non-person classes, at
+    normal or preferred rank, is a person only on other evidence. A value
+    that is not an item (an unknown value is a blank node) is no evidence.
 
-    An item is untyped when no `instance of` statement of it, at any rank,
-    names an item: an unknown or no value names none. The instance's own
-    vocabulary, which bootstrap mints untyped, and the item of `yizkr
-    smoke-test`, which holds only a label and a description, are not
-    counted, and nor is a redirect, which has no statements of its own."""
+    An item states no type when none of its `instance of` statements at
+    normal or preferred rank names an item: an unknown or no value, or a
+    type a curator deprecated, is none. The instance's vocabulary (the
+    manifest's items, which bootstrap mints untyped) and every item that
+    is the value of an `instance of` or `subclass of` statement, at any
+    rank, are classes, and not counted; nor is a redirect, which has no
+    statements of its own."""
     instance_of = properties["instance_of"]
+    subclass_of = properties["subclass_of"]
     participant = properties["participant"]
     subject_links = {properties[key] for key in PERSON_SUBJECT_PROPERTIES}
     value_links = {properties[key] for key in PERSON_VALUE_PROPERTIES}
@@ -352,7 +355,7 @@ def read_dump(
     events: dict[str, str] = {}  # statement -> the event it is part of
     participants: dict[str, str] = {}  # statement -> the participant
     deprecated: set[str] = set()  # statements a curator deprecated
-    smoke: set[str] = set()  # items labelled as the smoke test's
+    classes = set(items.values())  # the vocabulary, and every type named
     links: dict[str, tuple[str, str] | None] = {}
     with gzip.open(full_dump, "rt", encoding="utf-8") as source:
         for line in source:
@@ -376,20 +379,18 @@ def read_dump(
                 if term == _DEPRECATED:
                     deprecated.add(subject)
                 continue
-            if predicate == _LABEL:
-                labelled = _item(subject)
-                if labelled and rest.startswith(_SMOKE_LABEL):
-                    smoke.add(labelled)
-                continue
             if predicate not in links:
-                claim = _CLAIM.fullmatch(predicate)
-                value = _CLAIM_VALUE.fullmatch(predicate)
-                links[predicate] = (
-                    ("claim", claim.group(1))
-                    if claim
-                    else ("value", value.group(1))
-                    if value
-                    else None
+                links[predicate] = next(
+                    (
+                        (role, match.group(1))
+                        for role, pattern in (
+                            ("claim", _CLAIM),
+                            ("value", _CLAIM_VALUE),
+                            ("qualifier", _QUALIFIER_VALUE),
+                        )
+                        if (match := pattern.fullmatch(predicate))
+                    ),
+                    None,
                 )
             link = links[predicate]
             if link is None:
@@ -405,24 +406,30 @@ def read_dump(
                     events[term] = item
                 if pid in subject_links:
                     reading.people.add(item)
-            else:
-                item = _item(term)
-                if item is None:
-                    continue
-                if pid == instance_of:
-                    kinds[subject] = item
-                if pid == participant:
-                    participants[subject] = item
-                if pid in value_links:
-                    reading.people.add(item)
+                continue
+            item = _item(term)
+            if item is None:
+                continue
+            if pid in value_links:
+                reading.people.add(item)
+            if role == "qualifier":
+                continue
+            if pid == instance_of:
+                kinds[subject] = item
+                classes.add(item)
+            if pid == subclass_of:
+                classes.add(item)
+            if pid == participant:
+                participants[subject] = item
 
-    def typed_as(classes: set[str], ranked: bool = False) -> set[str]:
-        """The items a statement types as one of `classes`: at a rank
-        other than deprecated when `ranked`, at any rank otherwise."""
+    def typed_as(kinds_of: set[str] | None, ranked: bool = False) -> set:
+        """The items a statement types as one of `kinds_of` (any type,
+        when None): at normal or preferred rank when `ranked`, at any rank
+        otherwise."""
         return {
             typed[statement]
             for statement, kind in kinds.items()
-            if kind in classes
+            if (kinds_of is None or kind in kinds_of)
             and statement in typed
             and not (ranked and statement in deprecated)
         }
@@ -438,10 +445,9 @@ def read_dump(
     for redirect in reading.redirects:
         reading.revisions.pop(redirect, None)
     reading.untyped = (
-        set(reading.revisions)
-        - {typed[statement] for statement in kinds if statement in typed}
-        - set(items.values())
-        - smoke
+        {entity for entity in reading.revisions if entity.startswith("Q")}
+        - typed_as(None, ranked=True)
+        - classes
     )
     return reading
 
@@ -452,7 +458,10 @@ NOT_ASSESSED = (
     "person evidence in the dump, but the check did not assess this item: "
     "unknown means excluded"
 )
-NO_TYPE = "no type (no instance of at any rank): unknown means excluded"
+NO_TYPE = (
+    "no type (no instance of, at normal or preferred rank, that names an "
+    "item): unknown means excluded"
+)
 
 
 def public_exclusions(
@@ -506,10 +515,10 @@ def public_exclusions(
 # The revision of every entity the query service holds, redirects left
 # out: the dump gives a redirect a revision, which the query service need
 # not keep beside its owl:sameAs link, so the two are compared on the
-# items that are not redirects. Items alone are compared: the check reads
-# people's statements from items, and a property the query service lags
-# on can only leave a birth's value unread, which keeps its person
-# possibly living.
+# items and properties that are not redirects. Properties count as much
+# as items: the check reads a qualifier's precision through its property,
+# and an earliest date whose precision is unread can release a birth that
+# contradicts itself.
 REVISIONS_QUERY = """\
 SELECT ?entity ?version WHERE {
   ?entity <http://schema.org/version> ?version .
@@ -519,7 +528,7 @@ SELECT ?entity ?version WHERE {
 }
 """
 
-_HELD_ITEM = re.compile(r".*/entity/(Q[1-9]\d*)")
+_HELD_ENTITY = re.compile(r".*/entity/([QP][1-9]\d*)")
 
 # How long the export waits for the query service to hold the dump's
 # revisions, and how often it asks.
@@ -530,38 +539,48 @@ LAG_POLL = 5.0
 class QueryServiceLag(RuntimeError):
     """The query service does not hold the dump's revisions. The check
     assesses people there, so its release of anyone would not be about
-    what the dump holds: the public export refuses to run."""
+    what the dump holds: the public export refuses to run. `manifest` is
+    the backup's, once ``run_backup`` has recorded the refusal in it."""
+
+    manifest: dict | None = None
 
 
-def stale_items(run: sparql.Runner, revisions: Mapping[str, int]) -> list[str]:
-    """The items whose revision at the query service differs from the
-    dump's `revisions`: one it holds at an older or a newer revision, or
-    not at all, and one it holds that the dump lacks (one deleted or
-    created since). Empty when the two hold the same items."""
+def _order(entity: str) -> tuple[str, int]:
+    return entity[0], int(entity[1:])
+
+
+def stale_entities(
+    run: sparql.Runner, revisions: Mapping[str, int]
+) -> list[str]:
+    """The items and properties whose revision at the query service
+    differs from the dump's `revisions`: one it holds at an older or a
+    newer revision, at one that is no integer, or not at all, and one it
+    holds that the dump lacks (one deleted or created since). Empty when
+    the two hold the same entities."""
     held: dict[str, set[int]] = {}
     for row in run(REVISIONS_QUERY):
-        item = _HELD_ITEM.fullmatch(row.get("entity", {}).get("value", ""))
-        if item is None:
+        entity = _HELD_ENTITY.fullmatch(row.get("entity", {}).get("value", ""))
+        if entity is None:
             continue
         version = row.get("version", {}).get("value", "")
-        held.setdefault(item.group(1), set()).add(
+        held.setdefault(entity.group(1), set()).add(
             int(version) if version.isdigit() else -1
         )
     stale = {
-        item
-        for item, revision in revisions.items()
-        if held.get(item) != {revision}
+        entity
+        for entity, revision in revisions.items()
+        if held.get(entity) != {revision}
     }
     stale.update(set(held) - set(revisions))
-    return sorted(stale, key=lambda qid: int(qid[1:]))
+    return sorted(stale, key=_order)
 
 
 def _named(stale: list[str]) -> str:
-    """'3 items (Q1, Q2, Q7)', naming ten at most."""
+    """'3 entities (P7, Q1, Q2)', naming ten at most."""
     shown = ", ".join(stale[:10])
     if len(stale) > 10:
         shown += f" and {len(stale) - 10} more"
-    return f"{len(stale)} item{'' if len(stale) == 1 else 's'} ({shown})"
+    return f"{len(stale)} entit{'y' if len(stale) == 1 else 'ies'} ({shown})"
 
 
 def await_query_service(
@@ -573,14 +592,14 @@ def await_query_service(
     clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Wait until the query service holds exactly the dump's `revisions`
-    (``stale_items``), asking every `poll` seconds; raise
+    (``stale_entities``), asking every `poll` seconds; raise
     QueryServiceLag when it still does not after `timeout` seconds. The
-    match is exact, so an item whose revision the query service never
-    receives stops every export until that item is edited again or the
+    match is exact, so an entity whose revision the query service never
+    receives stops every export until that entity is edited again or the
     query service is reloaded; the refusal names it."""
     deadline = clock() + timeout
     while True:
-        stale = stale_items(run, revisions)
+        stale = stale_entities(run, revisions)
         if not stale:
             return
         if clock() >= deadline:
@@ -590,8 +609,8 @@ def await_query_service(
                 "export assesses people there, so it refuses to run until "
                 "the two agree. Run the backup again once the graph is at "
                 "rest and the updater has caught up (docker compose logs "
-                "wdqs-updater). An item whose revision never reaches the "
-                "query service keeps the export refusing, with the item "
+                "wdqs-updater). An entity whose revision never reaches the "
+                "query service keeps the export refusing, with the entity "
                 "named here, until it is edited again or the query service "
                 "is reloaded from a full dump (deploy/README.md)."
             )
@@ -740,7 +759,7 @@ def export_public(
     report = exclusion_report(
         config, cutoff_years=cutoff_years, run=run, vocabulary=vocabulary
     )
-    changed = stale_items(run, reading.revisions)
+    changed = stale_entities(run, reading.revisions)
     if changed:
         raise QueryServiceLag(
             "the graph changed while the public export assessed it: the "
@@ -831,5 +850,6 @@ def run_backup(
     manifest["pruned"] = prune_old_backups(backup_root, keep) if keep else []
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     if refused is not None:
+        refused.manifest = manifest
         raise refused
     return manifest

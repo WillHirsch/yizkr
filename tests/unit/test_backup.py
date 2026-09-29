@@ -3,8 +3,9 @@ possibly-living determination itself is tested in test_privacy.py.
 
 The public export keeps only the people the check releases (#344): it
 reads person evidence from its own dump, at every rank, and drops every
-item with any that the check did not release, and it refuses to run
-while the query service, where the check runs, lags the dump."""
+item with any that the check did not release, and every item that states
+no type; and it refuses to run while the query service, where the check
+runs, lags the dump."""
 
 import datetime
 import gzip
@@ -19,7 +20,11 @@ from tests.unit.test_privacy import (
     BIRTHS,
     CASES,
     CONCEPT,
+    DOCUMENTED_PERSON_EVENTS,
+    DOCUMENTED_SUBJECT_EVIDENCE,
+    DOCUMENTED_VALUE_EVIDENCE,
     EXCLUDED,
+    MANIFEST,
     XSD,
     birth_rows,
     literal,
@@ -42,13 +47,12 @@ from yizkr.backup import (
     public_exclusions,
     read_dump,
     run_backup,
-    stale_items,
+    stale_entities,
 )
 from yizkr.core.config import Config
 from yizkr.core.privacy import BIRTHS_QUERY, people_selection
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import prefix_block
-from yizkr.smoke import SMOKE_LABEL
 
 
 @pytest.fixture(scope="module")
@@ -151,10 +155,8 @@ class TestExclusionReport:
         _, calls = self.report(vocabulary)
         (facts,) = [query for query in calls if "SAMPLE(?deathDate)" in query]
         assert people_selection(properties, items) in facts
-        assert (
-            f"?person wdt:{properties['instance_of']} wd:{items['human']}"
-            not in facts
-        )
+        # nor any truthy type beside the selection
+        assert f"?person wdt:{properties['instance_of']} " not in facts
 
 
 REF_DEAD = "a" * 40  # reference used only by the excluded person
@@ -276,8 +278,9 @@ def dated(year: int) -> str:
 class Dump:
     """A fictional dump in the N-Triples dumpRdf.php writes: each entity's
     data node with its revision, its type and label, each statement
-    through its node, with its rank and value (and the truthy triple of a
-    best-ranked one), and each redirect as owl:sameAs its target."""
+    through its node, with its rank, value and qualifiers (and the truthy
+    triple of a best-ranked one), and each redirect as owl:sameAs its
+    target."""
 
     def __init__(self, vocabulary):
         self.properties, self.items = vocabulary
@@ -303,10 +306,17 @@ class Dump:
         ]
 
     def says(
-        self, subject: str, key: str, value: str, rank="Normal", best=None
+        self,
+        subject: str,
+        key: str,
+        value: str | None,
+        rank="Normal",
+        best=None,
+        qualifiers=(),
     ) -> None:
-        """A statement of `key` about `subject`; `value` None states "no
-        value", which gives the statement no ps: triple."""
+        """A statement of `key` about `subject`, with its `qualifiers`
+        (key, value pairs); `value` None states "no value", which gives
+        the statement no ps: triple."""
         pid = self.properties[key]
         node = f"<{CONCEPT}/entity/statement/{subject}-{len(self.lines):04x}>"
         self.lines += [
@@ -316,6 +326,11 @@ class Dump:
             f"{node} <{CONCEPT}/prop/statement/{pid}> {value} ."
             if value is not None
             else f"{node} {RDF_TYPE} <{CONCEPT}/prop/novalue/{pid}> .",
+            *(
+                f"{node} <{CONCEPT}/prop/qualifier/"
+                f"{self.properties[qualifier]}> {qualified} ."
+                for qualifier, qualified in qualifiers
+            ),
         ]
         if value is not None and (
             rank != "Deprecated" if best is None else best
@@ -338,44 +353,50 @@ class Dump:
 
 
 # The fictional export: items with person evidence, each read at the rank
-# a curator left it; items without any, which the export keeps; and items
-# that state no type, which it drops (#344).
+# a curator left it; typed items without any, which the export keeps; and
+# items that state no type, which it drops (#344).
 PEOPLE = {
     "Q401": "typed human, with a death: the check releases them",
-    "Q402": "typed human at deprecated rank only",
+    "Q402": "typed human at deprecated rank only, with a religion",
     "Q403": "typed human, outranked by a preferred organization type",
     "Q404": "no type, with a birth",
     "Q405": "no type, the value of a spouse statement",
     "Q406": "no type, taking part in a death (the part deprecated)",
+    "Q414": "typed as a place, with a nickname",
     "Q415": "no type, taking part in a deportation (so typed at deprecated "
     "rank only)",
-    # a type that sets a participant aside, and other evidence
     "Q424": "a vessel with a human type at deprecated rank, taking part in "
     "a migration",
-    "Q425": "a family, so typed at deprecated rank only, taking part in a "
+    "Q425": "a vessel, so typed at deprecated rank only, taking part in a "
     "migration",
     "Q426": "an organization with a birth, taking part in a death",
     "Q427": "a military unit (preferred), the value of a spouse statement, "
     "taking part in military service",
     "Q428": "no type, taking part in a migration",
+    "Q437": "a family taking part in a migration",
+    "Q441": "no type, a mother's value in a qualifier",
+    "Q442": "an organization, referred to by a term of address",
+    "Q445": "no type, the value of a child statement",
 }
 OTHERS = {
     "Q407": "a death event",
     "Q408": "a place",
     "Q409": "a certificate",
     "Q411": "an organization taking part in an event of no person kind",
-    "Q436": "a place taking part in an event of no person kind",
     "Q412": "an event of no person kind",
     "Q413": "an occupation",
-    "Q414": "a place with a nickname",
-    "Q416": "a deportation",
     "Q423": "a vessel taking part in a migration",
     "Q430": "a migration",
     "Q431": "a military service",
-    "Q432": SMOKE_LABEL,  # yizkr smoke-test's item: untyped by design
+    "Q436": "a place taking part in an event of no person kind",
+    "Q438": "a curator's class, the type of Q439 and so a class",
+    "Q439": "an item typed as a curator's class",
+    "Q440": "the class Q438 is a subclass of",
+    "Q446": "a family, the perspective of an appellation",
 }
-# items that state no type and no person evidence
+# items that state no type and carry no person evidence
 UNTYPED = {
+    "Q416": "a deportation, typed so at deprecated rank only",
     "Q429": "a label only",
     "Q433": "typed with an unknown value only",
     "Q434": "typed with no value only",
@@ -385,7 +406,17 @@ UNTYPED = {
 # each: no person evidence of its own.
 REDIRECTS = {"Q410": "Q402", "Q418": "Q401", "Q435": "Q429"}
 # every item that states no type, people included
-NO_TYPE = {"Q404", "Q405", "Q406", "Q415", "Q428"} | set(UNTYPED)
+NO_TYPE = {
+    "Q402",
+    "Q404",
+    "Q405",
+    "Q406",
+    "Q415",
+    "Q425",
+    "Q428",
+    "Q441",
+    "Q445",
+} | set(UNTYPED)
 
 
 def export_dump(vocabulary) -> Dump:
@@ -407,8 +438,14 @@ def export_dump(vocabulary) -> Dump:
     dump.says("Q401", "spouse", entity("Q405"))
     dump.says("Q401", "spouse", entity("Q427"))
     dump.says("Q401", "father", "_:genid1")  # an unknown value
+    dump.says(
+        "Q401",
+        "child",
+        entity("Q445"),
+        qualifiers=[("mother", entity("Q441"))],
+    )
     typed("Q402", "human", rank="Deprecated")
-    dump.says("Q402", "nickname", '"Wastl"@de')
+    dump.says("Q402", "religion", '"lutherisch"@de')
     typed("Q403", "human", best=False)
     typed("Q403", "organization", rank="Preferred")
     dump.says("Q404", "date_of_birth", dated(1990))
@@ -422,8 +459,6 @@ def export_dump(vocabulary) -> Dump:
     typed("Q411", "organization")
     typed("Q412", "event")
     dump.says("Q412", "participant", entity("Q411"))
-    typed("Q436", "place")
-    dump.says("Q412", "participant", entity("Q436"))
     typed("Q413", "occupation_class")
     typed("Q414", "place")
     dump.says("Q414", "nickname", '"Gus"@en')
@@ -432,20 +467,45 @@ def export_dump(vocabulary) -> Dump:
     typed("Q423", "vessel")
     typed("Q424", "vessel")
     typed("Q424", "human", rank="Deprecated")
-    typed("Q425", "family", rank="Deprecated")
+    typed("Q425", "vessel", rank="Deprecated")
     typed("Q426", "organization")
     dump.says("Q426", "date_of_birth", dated(1990))
     typed("Q427", "military_unit", rank="Preferred")
     typed("Q430", "migration")
-    for participant in ("Q423", "Q424", "Q425", "Q428"):
+    for participant in ("Q423", "Q424", "Q425", "Q428", "Q437"):
         dump.says("Q430", "participant", entity(participant))
     typed("Q431", "military_service")
     dump.says("Q431", "participant", entity("Q427"))
+    typed("Q436", "place")
+    dump.says("Q412", "participant", entity("Q436"))
+    dump.says("Q438", "subclass_of", entity("Q440"))
+    dump.says("Q439", "instance_of", entity("Q438"))
+    typed("Q437", "family")
+    typed("Q442", "organization")
+    dump.says(
+        "Q442",
+        "referred_to_as",
+        '"Nana Maisie"@en',
+        qualifiers=[("perspective", entity("Q446"))],
+    )
+    typed("Q446", "family")
     dump.says("Q433", "instance_of", "_:genid2")
     dump.says("Q434", "instance_of", None)
     for source, target in REDIRECTS.items():
         dump.redirect(source, target, revision=int(source[1:]))
     return dump
+
+
+def evidence(vocabulary, key: str) -> str:
+    """A value for a statement of `key`, by its datatype."""
+    datatype = MANIFEST["properties"][key]["datatype"]
+    return {
+        "time": dated(1990),
+        "wikibase-item": entity("Q499"),
+        "monolingualtext": '"Fixture"@en',
+        "string": '"Fixture"',
+        "quantity": f'"+2"^^<{XSD}decimal>',
+    }[datatype]
 
 
 class TestReadDump:
@@ -470,27 +530,95 @@ class TestReadDump:
         found = self.reading(tmp_path, vocabulary)
         assert not found.people & (set(OTHERS) | set(items.values()))
 
+    @staticmethod
+    def one(tmp_path, vocabulary, build) -> DumpReading:
+        """What the dump `build` writes into gives, beside an item Q450
+        typed as a place (so that it states a type) and the vocabulary."""
+        properties, items = vocabulary
+        dump = Dump(vocabulary)
+        for key, qid in items.items():
+            dump.entity(qid, key)
+        for qid in ("Q450", "Q451", "Q499"):
+            dump.entity(qid, qid)
+        dump.says("Q450", "instance_of", entity(items["place"]))
+        build(dump)
+        return read_dump(dump.write(tmp_path / "one.nt.gz"), properties, items)
+
+    @pytest.mark.parametrize("key", DOCUMENTED_SUBJECT_EVIDENCE)
+    def test_each_person_only_property_marks_its_subject(
+        self, tmp_path, vocabulary, key
+    ):
+        found = self.one(
+            tmp_path,
+            vocabulary,
+            lambda dump: dump.says("Q450", key, evidence(vocabulary, key)),
+        )
+        assert "Q450" in found.people
+
+    @pytest.mark.parametrize("key", DOCUMENTED_VALUE_EVIDENCE)
+    @pytest.mark.parametrize("where", ["statement", "qualifier"])
+    def test_each_person_valued_property_marks_its_value(
+        self, tmp_path, vocabulary, key, where
+    ):
+        def build(dump):
+            if where == "statement":
+                dump.says("Q451", key, entity("Q450"))
+            else:
+                dump.says(
+                    "Q451",
+                    "location",
+                    entity("Q499"),
+                    qualifiers=[(key, entity("Q450"))],
+                )
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert "Q450" in found.people
+
+    @pytest.mark.parametrize("kind", DOCUMENTED_PERSON_EVENTS)
+    def test_each_person_event_marks_its_participants(
+        self, tmp_path, vocabulary, kind
+    ):
+        _, items = vocabulary
+
+        def build(dump):
+            dump.says("Q451", "instance_of", entity(items[kind]))
+            dump.says("Q451", "participant", entity("Q450"))
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert "Q450" in found.people
+
     def test_a_vessel_in_a_person_event_is_no_person_on_that_alone(
         self, tmp_path, vocabulary
     ):
         # Q423 is set aside; Q424 has a human type, if deprecated, Q425 a
-        # family type only at deprecated rank, Q426 a birth, Q427 a
-        # spouse's value, and Q428 no type at all
+        # vessel type only at deprecated rank, Q426 a birth, Q427 a
+        # spouse's value; Q428 has no type, and Q437 is a family, which
+        # sets no participant aside
         found = self.reading(tmp_path, vocabulary)
         assert "Q423" not in found.people
-        assert {"Q424", "Q425", "Q426", "Q427", "Q428"} <= found.people
+        assert {
+            "Q424",
+            "Q425",
+            "Q426",
+            "Q427",
+            "Q428",
+            "Q437",
+        } <= found.people
 
     def test_items_that_state_no_type(self, tmp_path, vocabulary):
-        # the vocabulary, the smoke test's item and redirects aside; an
-        # unknown or no value states no type, and a deprecated type is one
+        # a type a curator deprecated, or an unknown or no value, is none;
+        # the vocabulary, the classes items are typed with and redirects
+        # are not counted
         _, items = vocabulary
         found = self.reading(tmp_path, vocabulary)
         assert found.untyped == NO_TYPE
-        assert not found.untyped & (set(items.values()) | set(REDIRECTS))
+        assert not found.untyped & (
+            set(items.values()) | {"Q438", "Q440"} | set(REDIRECTS)
+        )
 
     def test_the_lines_may_come_in_any_order(self, tmp_path, vocabulary):
-        # a statement's value or rank can come before the link to its
-        # subject
+        # a statement's value, qualifier or rank can come before the link
+        # to its subject
         lines = export_dump(vocabulary).lines[::-1]
         found = self.reading(tmp_path, vocabulary, lines)
         assert found.people == set(PEOPLE)
@@ -502,6 +630,14 @@ class TestReadDump:
         # the query service need not keep a redirect's revision
         assert found.revisions == export_dump(vocabulary).revisions
         assert not set(REDIRECTS) & set(found.revisions)
+
+    def test_a_propertys_revision_is_read(self, tmp_path, vocabulary):
+        def build(dump):
+            dump.data_node("P1", 7)
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert found.revisions["P1"] == 7
+        assert "P1" not in found.untyped
 
 
 def report_of(included=(), excluded=()) -> ExclusionReport:
@@ -619,25 +755,38 @@ class TestTheQueryServiceLag:
     dump, which comes from the database: the export needs the two to hold
     the same revision of every entity (#344)."""
 
-    DUMPED = {"Q401": 11, "Q402": 12, "Q9": 3}
+    DUMPED = {"Q401": 11, "Q402": 12, "P1": 3}
 
     def test_the_same_revisions(self):
         run = lambda query: revision_rows(self.DUMPED)  # noqa: E731
-        assert stale_items(run, self.DUMPED) == []
+        assert stale_entities(run, self.DUMPED) == []
 
-    def test_an_item_behind_ahead_missing_or_extra_is_stale(self):
-        held = {"Q401": 10, "Q402": 13, "Q403": 1}  # Q9 missing
+    def test_an_entity_behind_ahead_missing_or_extra_is_stale(self):
+        held = {"Q401": 10, "Q402": 13, "Q403": 1}  # P1 missing
         run = lambda query: revision_rows(held)  # noqa: E731
-        assert stale_items(run, self.DUMPED) == ["Q9", "Q401", "Q402", "Q403"]
+        assert stale_entities(run, self.DUMPED) == [
+            "P1",
+            "Q401",
+            "Q402",
+            "Q403",
+        ]
 
-    def test_two_revisions_of_one_item_are_stale(self):
+    def test_two_revisions_of_one_entity_are_stale(self):
         rows = revision_rows(self.DUMPED) + revision_rows({"Q401": 10})
-        assert stale_items(lambda query: rows, self.DUMPED) == ["Q401"]
+        assert stale_entities(lambda query: rows, self.DUMPED) == ["Q401"]
 
-    def test_only_items_are_compared(self):
-        # a property's revision is not the check's to hold
-        rows = revision_rows(self.DUMPED) + revision_rows({"P1": 3})
-        assert stale_items(lambda query: rows, self.DUMPED) == []
+    def test_a_propertys_revision_is_compared_too(self):
+        # the check reads a qualifier's precision through its property
+        run = lambda query: revision_rows({**self.DUMPED, "P1": 4})  # noqa: E731
+        assert stale_entities(run, self.DUMPED) == ["P1"]
+
+    def test_a_version_that_is_no_integer_is_stale(self):
+        rows = [
+            {"entity": uri("Q401"), "version": literal("11")},
+            {"entity": uri("Q402"), "version": literal("12.0")},
+            {"entity": uri("P1"), "version": literal("3")},
+        ]
+        assert stale_entities(lambda query: rows, self.DUMPED) == ["Q402"]
 
     def test_the_query_leaves_redirects_out(self):
         # the dump gives a redirect a revision, the query service need not
@@ -665,7 +814,7 @@ class TestTheQueryServiceLag:
 
     def test_the_export_refuses_once_it_has_waited(self):
         clock = Clock()
-        refusal = r"after 60 s .* 1 item \(Q401\)"
+        refusal = r"after 60 s .* 1 entity \(Q401\)"
         with pytest.raises(QueryServiceLag, match=refusal) as refused:
             await_query_service(
                 lambda query: revision_rows({**self.DUMPED, "Q401": 10}),
@@ -678,8 +827,8 @@ class TestTheQueryServiceLag:
         # the match is exact: a revision the query service never gets
         # stalls every export, and the refusal says how it ends
         assert (
-            "An item whose revision never reaches the query service keeps "
-            "the export refusing, with the item named here, until it is "
+            "An entity whose revision never reaches the query service keeps "
+            "the export refusing, with the entity named here, until it is "
             "edited again or the query service is reloaded"
         ) in str(refused.value)
 
@@ -751,9 +900,8 @@ class TestExportPublic:
         assert "Q418" in mentioned
         assert not {"Q410", "Q435"} & mentioned
         # places, artifacts, events, occupations, a vessel in a migration,
-        # the smoke test's item and the vocabulary stay
+        # a curator's classes and the vocabulary stay
         assert set(OTHERS) | set(items.values()) <= mentioned
-        assert SMOKE_LABEL in text
 
     def test_an_item_that_states_no_type_is_left_out(
         self, tmp_path, vocabulary
@@ -926,7 +1074,7 @@ class TestTheBackupsPublicExport:
     ):
         (tmp_path / "20260101T000000Z").mkdir()  # an older run
         behind = {**export_dump(vocabulary).revisions, "Q404": 1}
-        with pytest.raises(QueryServiceLag, match="Q404"):
+        with pytest.raises(QueryServiceLag, match="Q404") as refused:
             backed_up(revisions=[behind], keep=1)
         (out_dir,) = tmp_path.iterdir()
         manifest = json.loads((out_dir / "manifest.json").read_text())
@@ -934,3 +1082,44 @@ class TestTheBackupsPublicExport:
         assert "Q404" in manifest["public_export_refused"]
         assert manifest["pruned"] == ["20260101T000000Z"]
         assert not (out_dir / "public.nt.gz").exists()
+        # the refusal carries the manifest, for the command to report
+        assert refused.value.manifest == manifest
+
+
+class TestTheBackupCommand:
+    """`yizkr backup` reports a refused public export on one line, after
+    the dumps it kept, and exits non-zero (#344)."""
+
+    def test_a_refusal_is_one_line_after_the_dumps_it_kept(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from yizkr import cli
+
+        refusal = QueryServiceLag("the query service lags (Q404)")
+        refusal.manifest = {
+            "timestamp": "20260929T031500Z",
+            "components": {
+                "database": {"file": "database.sql.gz", "bytes": 9},
+                "rdf": {"file": "full.nt.gz", "bytes": 7},
+            },
+            "public_export_refused": str(refusal),
+            "pruned": ["20260101T000000Z"],
+        }
+
+        def refused(*args, **options):
+            raise refusal
+
+        monkeypatch.setattr(backup, "run_backup", refused)
+        monkeypatch.setattr(cli.Config, "load", lambda env_file=None: None)
+        args = cli.build_parser().parse_args(
+            ["backup", "--out", str(tmp_path)]
+        )
+        assert args.func(args) == 1
+        out, err = capsys.readouterr()
+        run = tmp_path / "20260929T031500Z"
+        assert out.splitlines() == [
+            f"database: {run / 'database.sql.gz'}, bytes=9",
+            f"rdf: {run / 'full.nt.gz'}, bytes=7",
+            "pruned old backups: 20260101T000000Z",
+        ]
+        assert err == "public export refused: the query service lags (Q404)\n"

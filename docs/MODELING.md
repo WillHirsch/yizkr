@@ -709,34 +709,41 @@ not a signal to grow the schema on.
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
   only a person has (a birth, a death or a burial, kinship, a birth or
-  married name, a sex or gender, a number of children, an occupation, an
-  employer, a school, a citizenship or a residence); being the value of
-  a kinship statement or of `gave refuge to`; or taking part in a birth,
-  a death, a marriage, a migration, military service, a deportation, an
-  imprisonment or a release. So neither a curator's deprecated or
-  outranked `human` type nor a missing one hides anyone. Names a place
-  can have too (a nickname, an official name, what it is referred to
-  as), a religion or a membership, a part in an event of another kind,
-  and the values of place, organization, artifact and vocabulary
-  properties mark no one. A part in a person event does not make a
-  person of an item typed as a vessel, a family, a military unit or an
-  organization at normal or preferred rank; any other evidence does, a
-  `human` type at any rank included. The export reads this evidence
-  from its own dump and **keeps a person only once the check has
-  released them**: an item the check never assessed is dropped, and a
-  redirect goes with the item it redirects to.
+  married name, a nickname, what they are referred to as, a sex or
+  gender, a number of children, an occupation, an employer, a school, a
+  citizenship or a residence); being the value of a kinship property or
+  of `gave refuge to`, in a statement or a qualifier; or taking part in a
+  birth, a death, a marriage, a migration, military service, a
+  deportation, an imprisonment or a release. So a deprecated or outranked
+  `human` type hides no one. An official name, a religion or a
+  membership, a part in an event of another kind, a depiction, an
+  identity judgement (said to be the same as), a perspective or any
+  other qualifier, and the values of place, organization, artifact and
+  vocabulary properties mark no one. An item typed as a vessel, a
+  military unit or an organization at normal or preferred rank is taken
+  at its type on its part in a person event: any other evidence makes it
+  a person, a `human` type at any rank included. A family is not taken
+  at its type: its label is a surname, and a person known by a surname
+  alone can be typed as one. The export reads this evidence from its own
+  dump and **keeps a person only once the check has released them**: an
+  item the check never assessed is dropped, and a redirect goes with the
+  item it redirects to.
 - **What states no type is left out of the public export**, whatever
-  else it holds: an item with no `instance of` statement at any rank, or
-  only one whose value is unknown or none. The instance's own vocabulary
-  and `yizkr smoke-test`'s item are untyped by design and kept. An item
-  the pipeline leaves untyped (a write cut short, a reference that gives
-  no kind) is missing from the public copy until it is typed.
+  else it holds, so no type at all hides no one either: an item none of
+  whose `instance of` statements at normal or preferred rank names an
+  item (an unknown or no value, or a type a curator deprecated, names
+  none). The vocabulary is kept: the manifest's items, and every item
+  that is the value of an `instance of` or `subclass of` statement. An
+  item left untyped (a write cut short between its label and its type, a
+  reference that gives no kind) is missing from the public copy until it
+  is typed.
 - The check runs on the query service, so the export waits for the query
-  service to hold the dump's revision of every item, and **refuses to
-  run** while it does not, or when the graph changes during the check.
-  The match is exact: an item whose revision never reaches the query
-  service keeps the export refusing, naming the item, until that item is
-  edited again or the query service is reloaded.
+  service to hold the dump's revision of every item and property, and
+  **refuses to run** while it does not, or when the graph changes during
+  the check. The match is exact: an entity whose revision never reaches
+  the query service keeps the export refusing, naming the entity, until
+  that entity is edited again or the query service is reloaded from a
+  full dump.
 - **Births fail closed** (ADR-0020, as amended by #334). A birth releases
   a person only at the latest year it allows, and only when every
   `date of birth` statement a curator has not deprecated does so by the
@@ -759,4 +766,6 @@ not a signal to grow the schema on.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never in
   public exports"), using the same runtime call. Its people are the items
-  with person evidence, selected as the check selects them.
+  with person evidence, selected as the check selects them; the export
+  also drops what the site lists as no person, an untyped item without
+  person evidence and a redirect.

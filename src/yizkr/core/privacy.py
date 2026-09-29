@@ -35,14 +35,16 @@ births with this one query and this one reading.
 
 Who counts as a person fails closed too. The check assesses every item
 with person evidence (``PEOPLE_SELECTION``): a `human` type, a property
-only a person has, the value of a kinship relation (or of `gave refuge
-to`), or a part in an event that happens to people, each read through its
-statement node at every rank, so that no curator's rank and no missing or
-outranked type hides anyone. A part in such an event is no evidence for
-an item a curator has left typed as a vessel, a group or an organization
-(``NON_PERSON_CLASSES``). The public export reads the same evidence from
-its own dump, and keeps an item that has any of it only once this check
-has released it.
+only a person has, a kinship relation's value (or the value of `gave
+refuge to`), in a statement or a qualifier, or a part in an event that
+happens to people, each read through its statement node at every rank, so
+that a deprecated or outranked `human` type hides no one. An item typed,
+at normal or preferred rank, as a vessel, a military unit or an
+organization (``NON_PERSON_CLASSES``) is taken at its type on its part in
+such an event: any other evidence makes it a person. The public export
+reads the same evidence from its own dump, and keeps an item that has any
+of it only once this check has released it; it leaves out an item that
+states no type, so no type at all hides no one either.
 """
 
 from __future__ import annotations
@@ -71,15 +73,16 @@ DEATH_EVIDENCE_PROPERTIES = (
 # every rank, deprecated included, since a statement a curator deprecated
 # still records that a source said so. An item is a person when it is
 # typed `PERSON_CLASS`, is the subject of a `PERSON_SUBJECT_PROPERTIES`
-# statement, is the value of a `PERSON_VALUE_PROPERTIES` one, or takes
-# part in an event typed as one of `PERSON_EVENTS`.
+# statement, is the value of a `PERSON_VALUE_PROPERTIES` statement or
+# qualifier, or takes part in an event typed as one of `PERSON_EVENTS`.
 PERSON_CLASS = "human"
 # Properties that only a person is the subject of: a birth, a death and a
-# burial; kinship; a birth or married name; a sex or gender and a number
-# of children; and an occupation, an employer, a school, a citizenship
-# and a residence. Names that a place or an organization can have too (a
-# nickname, an official name, what it is referred to as) and ties that an
-# organization shares (a religion, a membership) are not evidence.
+# burial; kinship; the names only a person has (a birth or married name, a
+# nickname, what they are referred to as: ADR-0011, ADR-0018); a sex or
+# gender and a number of children; and an occupation, an employer, a
+# school, a citizenship and a residence. An official name, which a place
+# or an organization can have too, and the ties an organization shares
+# (a religion, a membership) are not evidence.
 PERSON_SUBJECT_PROPERTIES = (
     "date_of_birth",
     "date_of_death",
@@ -95,6 +98,8 @@ PERSON_SUBJECT_PROPERTIES = (
     "relative",
     "birth_name",
     "married_name",
+    "nickname",
+    "referred_to_as",
     "sex_or_gender",
     "number_of_children",
     "occupation",
@@ -104,7 +109,8 @@ PERSON_SUBJECT_PROPERTIES = (
     "residence",
 )
 # Properties whose value is only ever a person: kinship, and the one
-# given refuge.
+# given refuge. Their value marks a person in a statement and in a
+# qualifier alike.
 PERSON_VALUE_PROPERTIES = (
     "father",
     "mother",
@@ -128,22 +134,26 @@ PERSON_EVENTS = (
     "release",
 )
 # The types of what takes part in an event without being a person: a
-# vessel, a group (a family, a military unit) and an organization, as a
-# ship, a family or a firm takes part in a migration. An item typed so,
-# at a rank other than deprecated, is not taken for a person on its part
-# in a person event alone. It is a person on any other evidence, a
-# `human` type at any rank included; one typed so only at deprecated rank,
-# or not at all, is a person on its part alone.
-NON_PERSON_CLASSES = ("vessel", "family", "military_unit", "organization")
+# vessel, a military unit and an organization, as a ship or a firm takes
+# part in a migration. An item typed so, at normal or preferred rank, is
+# not taken for a person on its part in a person event alone. It is a
+# person on any other evidence, a `human` type at any rank included; one
+# typed so only at deprecated rank, or not at all, is a person on its part
+# alone. A family is not among them: its label is a surname and its
+# description names its members, and a person known by a surname alone
+# can be typed as one. Nor is the unclassified entity, where a mistyped
+# person lands.
+NON_PERSON_CLASSES = ("vessel", "military_unit", "organization")
 
 # Every item with person evidence, once each, read through statement
 # nodes at every rank, never through the truthy wdt: values; only the
 # type that sets a participant aside must be one a curator has not
-# deprecated. A value that is not an item (an unknown value) is left out,
-# and so is a redirect, which has no statements of its own: the item it
-# redirects to is selected for what it holds. The filters test each item
-# once, after DISTINCT, not each statement that names it.
-# `people_selection` fills in the lists.
+# deprecated. A person-valued property's value counts in a statement
+# (ps:) and in a qualifier (pq:) alike. A value that is not an item (an
+# unknown value) is left out, and so is a redirect, which has no
+# statements of its own: the item it redirects to is selected for what it
+# holds. The filters test each item once, after DISTINCT, not each
+# statement that names it. `people_selection` fills in the lists.
 PEOPLE_SELECTION = """\
   {{
     SELECT ?person WHERE {{
@@ -196,7 +206,9 @@ def people_selection(
             f"p:{properties[key]}" for key in PERSON_SUBJECT_PROPERTIES
         ),
         value_links=" ".join(
-            f"ps:{properties[key]}" for key in PERSON_VALUE_PROPERTIES
+            f"{prefix}:{properties[key]}"
+            for key in PERSON_VALUE_PROPERTIES
+            for prefix in ("ps", "pq")
         ),
         event_kinds=" ".join(f"wd:{items[key]}" for key in PERSON_EVENTS),
         non_person_kinds=" ".join(

@@ -446,10 +446,61 @@ def flat(query: str) -> str:
     return " ".join(query.split())
 
 
+# Person evidence as ADR-0020 (§4, amended by #344) and MODELING.md list
+# it: each list is pinned here, not built from the module's own tuples, so
+# that dropping an entry fails a test (test_backup.py marks a person with
+# each one in turn).
+DOCUMENTED_SUBJECT_EVIDENCE = (
+    "date_of_birth",
+    "date_of_death",
+    "place_of_birth",
+    "place_of_death",
+    "burial_place",
+    "cause_of_death",
+    "father",
+    "mother",
+    "spouse",
+    "child",
+    "sibling",
+    "relative",
+    "birth_name",
+    "married_name",
+    "nickname",
+    "referred_to_as",
+    "sex_or_gender",
+    "number_of_children",
+    "occupation",
+    "employer",
+    "educated_at",
+    "country_of_citizenship",
+    "residence",
+)
+DOCUMENTED_VALUE_EVIDENCE = (
+    "father",
+    "mother",
+    "spouse",
+    "child",
+    "sibling",
+    "relative",
+    "gave_refuge_to",
+)
+DOCUMENTED_PERSON_EVENTS = (
+    "birth",
+    "death",
+    "marriage",
+    "migration",
+    "military_service",
+    "deportation",
+    "imprisonment",
+    "release",
+)
+DOCUMENTED_NON_PERSON_CLASSES = ("vessel", "military_unit", "organization")
+
+
 class TestThePeopleSelection:
     """Who the check assesses (#344): every item with person evidence,
     read through statement nodes at every rank, so that a deprecated or
-    outranked `human` type, or none, hides no one. A vessel, a group or an
+    outranked `human` type hides no one. A vessel, a military unit or an
     organization is no person on its part in a person event alone."""
 
     selection = flat(people_selection(PROPERTIES, ITEMS))
@@ -482,8 +533,12 @@ class TestThePeopleSelection:
         subjects = " ".join(
             f"p:{PROPERTIES[key]}" for key in PERSON_SUBJECT_PROPERTIES
         )
+        # a person-valued property marks its value in a statement and in
+        # a qualifier alike
         values = " ".join(
-            f"ps:{PROPERTIES[key]}" for key in PERSON_VALUE_PROPERTIES
+            f"{prefix}:{PROPERTIES[key]}"
+            for key in PERSON_VALUE_PROPERTIES
+            for prefix in ("ps", "pq")
         )
         events = " ".join(f"wd:{ITEMS[key]}" for key in PERSON_EVENTS)
         typing, participant = (
@@ -528,15 +583,15 @@ class TestThePeopleSelection:
     def test_every_id_is_filled_in(self):
         assert not re.search(r"\{[a-z_]+\}", self.selection)
 
+    def test_the_evidence_is_the_documented_lists(self):
+        assert PERSON_CLASS == "human"
+        assert PERSON_SUBJECT_PROPERTIES == DOCUMENTED_SUBJECT_EVIDENCE
+        assert PERSON_VALUE_PROPERTIES == DOCUMENTED_VALUE_EVIDENCE
+        assert PERSON_EVENTS == DOCUMENTED_PERSON_EVENTS
+        assert NON_PERSON_CLASSES == DOCUMENTED_NON_PERSON_CLASSES
+
     def test_the_evidence_is_the_manifests_vocabulary(self):
         assert PERSON_CLASS in MANIFEST["items"]
-        # a ship, a group (a family, a military unit) and an organization
-        assert set(NON_PERSON_CLASSES) == {
-            "vessel",
-            "family",
-            "military_unit",
-            "organization",
-        }
         assert set(NON_PERSON_CLASSES) <= set(MANIFEST["items"])
         for key in (*PERSON_SUBJECT_PROPERTIES, *PERSON_VALUE_PROPERTIES):
             assert MANIFEST["properties"][key]["datatype"]
@@ -548,7 +603,9 @@ class TestThePeopleSelection:
     def test_places_artifacts_and_vocabulary_are_no_evidence(self):
         # the value of a property that names a place, an organization, an
         # artifact or a vocabulary item is never a person, and names or
-        # ties that places and organizations share mark no one
+        # ties that places and organizations share mark no one; nor does
+        # an identity judgement, a depiction or an appellation's
+        # perspective
         for key in (
             "instance_of",
             "stated_in",
@@ -567,18 +624,24 @@ class TestThePeopleSelection:
             "depicts",
             "image",
             "participant",
+            "said_to_be_the_same_as",
+            "perspective",
         ):
             assert key not in PERSON_VALUE_PROPERTIES
         for key in (
-            "nickname",
             "official_name",
-            "referred_to_as",
             "religion",
             "member_of",
             "location",
             "part_of",
             "coordinate_location",
+            "said_to_be_the_same_as",
         ):
             assert key not in PERSON_SUBJECT_PROPERTIES
-        # any group may take part in an event of no person kind
+        # any group may take part in an event of no person kind; a family
+        # can be a person known by a surname alone, and the unclassified
+        # entity is where a mistyped person lands
         assert "event" not in PERSON_EVENTS
+        assert "family" not in NON_PERSON_CLASSES
+        assert "unclassified_entity" not in NON_PERSON_CLASSES
+        assert PERSON_CLASS not in NON_PERSON_CLASSES

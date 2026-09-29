@@ -555,7 +555,8 @@ class TestThePeopleAreTheExports:
         ).build()
         properties, items = vocabulary
         selection = people_selection(properties, items)
-        truthy = f"?person wdt:{properties['instance_of']} wd:{items['human']}"
+        # no truthy type, human or other, beside the selection
+        truthy = f"?person wdt:{properties['instance_of']} "
         for marker in (
             "GROUP_CONCAT(DISTINCT ?alias",  # the roster
             "GROUP_CONCAT(DISTINCT ?qualifierText",  # their statements

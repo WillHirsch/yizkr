@@ -66,13 +66,14 @@ def qid_of(binding: dict, name: str) -> str:
 # possibly-living signal (ADR-0020). The people are the items the public
 # export's check assesses: ``{people}`` is the privacy module's selection,
 # every item with person evidence at any rank, so a person whose `human`
-# type a curator deprecated or outranked, or who has none, is listed and
-# badged too. ?deceased is true when the graph holds any death-implying
-# statement (date/place/cause of death, place of burial) or a death event
-# with the person as participant — none of which needs a date. Births, for
-# the birth-recency cutoff, are read statement by statement with the query
-# the public export reads them with (core/privacy.py). No stored "living"
-# flag is read; the badge is derived, like the public export.
+# type a curator deprecated or outranked, or who has no type but other
+# evidence, is listed and badged too. ?deceased is true when the graph
+# holds any death-implying statement (date/place/cause of death, place of
+# burial) or a death event with the person as participant — none of which
+# needs a date. Births, for the birth-recency cutoff, are read statement
+# by statement with the query the public export reads them with
+# (core/privacy.py). No stored "living" flag is read; the badge is
+# derived, like the public export.
 PEOPLE_QUERY = """\
 SELECT ?person ?personLabel ?personDescription ?deceased
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)

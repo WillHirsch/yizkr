@@ -150,79 +150,99 @@ from the database while the check reads the query service. Now:
 - **Person evidence, at every rank.** `yizkr.core.privacy.PEOPLE_SELECTION`
   selects every item with person evidence, each read through its
   statement node at every rank, deprecated included, since a deprecated
-  statement still records that a source said so: an item typed `human`;
-  the subject of a property only a person has (a birth, a death or a
-  burial, kinship, a birth or married name, a sex or gender, a number of
-  children, an occupation, an employer, a school, a citizenship or a
-  residence); the value of a kinship property or of `gave refuge to`; or
-  a participant in an event of a kind that happens to people (a birth, a
-  death, a marriage, a migration, military service, a deportation, an
-  imprisonment or a release, whatever the rank of the event's type). An
-  unknown value is no item, and a redirect has no statements of its own.
-  Names that a place or an organization can have too (a nickname, an
-  official name, what it is referred to as), ties that an organization
-  shares (a religion, a membership), a participant in an event of any
-  other kind, and the values of place, organization, artifact and
-  vocabulary properties are not evidence, so places, artifacts and the
-  vocabulary are not taken for people. The check and the site select
-  people with it.
+  statement still records that a source said so:
+  - an item typed `human`;
+  - the subject of a property only a person has: date or place of birth,
+    date or place of death, place of burial, cause of death, father,
+    mother, spouse, child, sibling, relative, birth name, married name,
+    nickname, referred to as (ADR-0011, ADR-0018), sex or gender, number
+    of children, occupation, employer, educated at, country of
+    citizenship, residence;
+  - the value of father, mother, spouse, child, sibling, relative or gave
+    refuge to, in a statement or in a qualifier;
+  - a participant in an event of a kind that happens to people: a birth,
+    a death, a marriage, a migration, military service, a deportation,
+    an imprisonment or a release, whatever the rank of the event's type
+    (but see the next point).
+
+  None of these is evidence: an official name, which a place or an
+  organization can have too; a religion or a membership, which an
+  organization shares; a part in an event of any other kind; an
+  identity judgement (said to be the same as), a depiction and an
+  appellation's perspective; any other qualifier; and the values of
+  place, organization, artifact and vocabulary properties. So places,
+  artifacts and the vocabulary are not taken for people. An unknown value
+  is no item, and a redirect has no statements of its own. The check and
+  the site select people with it.
 - **A non-person type outweighs a part in an event** (owner,
-  2026-09-29). A ship, a family or a firm takes part in a migration, so
-  an item typed as a vessel, a family, a military unit or an organization
+  2026-09-29). A ship or a firm takes part in a migration, so an item
+  typed as a vessel, a military unit or an organization
   (`NON_PERSON_CLASSES`), at normal or preferred rank, is not taken for a
   person on its part in a person event alone. Mixed signals fail closed:
   such an item is a person on any other evidence, a `human` type at any
-  rank, a person-only property or a person-valued link. A non-person type
-  a curator deprecated sets nothing aside, and a participant with no type
-  is a person.
+  rank, a person-only property or a person-valued link (a firm with an
+  occupation, say). A non-person type a curator deprecated sets nothing
+  aside, and a participant with no type is a person. A family is
+  deliberately not among these types: its label is a surname and its
+  description names its members, and a person known by a surname alone
+  can be typed as one. Nor is the unclassified entity, where a mistyped
+  person lands.
 - **Only released people leave.** The export reads the same evidence
   from its own dump (`yizkr.backup.read_dump`) and drops every item that
   has any of it, in the dump or at the query service, unless the check
   released it (`public_exclusions`). An item the check never assessed is
   dropped, and `public-exclusions.json` says so. A redirect stands for
-  the item it redirects to: it is dropped when that item is, so a link
-  to a merged-away item does not outlive the person it now names. Typed
-  items with no person evidence are kept.
+  the item it redirects to, and is dropped when that item is: every
+  triple that names the redirect goes, the link to it from another item's
+  statement included, while that statement's own dates and references
+  stay, as they do for any excluded value.
 - **What states no type is left out** (owner, 2026-09-29). What an item
-  that states no `instance of` at any rank is cannot be told, and a label
-  alone can be a living person's name, so the export drops every such
-  item, whatever else it holds, a person the check released included
-  (`public-exclusions.json`: "no type"). An `instance of` whose value is
-  unknown or none states no type. Two kinds of item are untyped by
-  design and exempt, by a positive rule: the instance's own vocabulary,
-  which bootstrap mints from the manifest without types (the manifest's
-  items), and the item of `yizkr smoke-test`, which holds only a label
-  and a description (by its label). Every other kind the pipeline
-  mints is typed: an artifact and a page fragment by the registrar,
-  derived media in the same write that creates them, an entity the
-  extraction, a GEDCOM file or a face match proposes by the kind its
-  entity record or reference gives, and an extraction or place-hierarchy
-  run as a run. Two cases leave an item untyped, and so out of the public
-  copy until it is fixed. An extracted reference that gives no kind, with
-  no entity record, mints an item with none. And a write cut short
-  between an item's label and its type leaves it untyped: a re-run of the
-  registrar or of the writer types an artifact or an entity again, but
-  finds a page fragment or a run item by its label and leaves it as it
-  is.
-- **The query service must hold the dump.** The export reads each item's
-  revision from the dump and waits, up to `LAG_TIMEOUT`, for the query
-  service to hold exactly those revisions (a redirect aside, as the dump
-  gives it a revision and the query service need not), then runs the
-  check, and compares again once it has run. If the two differ at either
-  point, the export refuses to run (`QueryServiceLag`): nothing public is
-  written, and the backup keeps its other dumps and records the refusal.
-  The export does not assess people from the dump itself, so that the
-  site and the export keep one births query and one predicate (Ruling
-  5). The match is exact (owner, 2026-09-29): an item whose revision
-  never reaches the query service makes every export refuse, naming the
-  item, until that item is edited again or the query service is reloaded
-  from a full dump.
+  that states no type is cannot be told, and a label alone can be a
+  living person's name, so the export drops every such item, whatever
+  else it holds, a person the check released included
+  (`public-exclusions.json`: "no type"). An item states no type when
+  none of its `instance of` statements at normal or preferred rank names
+  an item: an unknown or no value names none, and a type a curator
+  deprecated counts for nothing. The vocabulary is kept: the manifest's
+  items, which bootstrap mints untyped, and every item that is the value
+  of an `instance of` or `subclass of` statement, at any rank, a class a
+  curator makes included, so that neither the class nor the typing of
+  the items that name it is dropped. A redirect goes with its target, as
+  above. Nothing in the pipeline is untyped by design: an artifact and a
+  page fragment are typed by the registrar, derived media in the same
+  write that creates them, an entity the extraction, a GEDCOM file or a
+  face match proposes by its kind, and an extraction or place-hierarchy
+  run as a run. A write cut short between an item's label and its type,
+  or an extracted reference that gives no kind, leaves an item untyped,
+  and dropping it is right: it is missing from the public copy until it
+  is typed. So are the retired vocabulary (§5) and the smoke test's item.
+- **The query service must hold the dump.** The export reads the
+  revision of every item and property from the dump and waits, up to
+  `LAG_TIMEOUT`, for the query service to hold exactly those revisions (a
+  redirect aside, as the dump gives it a revision and the query service
+  need not), then runs the check, and compares again once it has run.
+  Properties count as much as items: the check reads a qualifier's
+  precision through its property, and an earliest date whose precision
+  is unread can release a birth that contradicts itself. If the two
+  differ at either point, the export refuses to run (`QueryServiceLag`):
+  nothing public is written, and the backup keeps its other dumps and
+  records the refusal. The export does not assess people from the dump
+  itself, so that the site and the export keep one births query and one
+  predicate (Ruling 5). The match is exact (owner, 2026-09-29): an entity
+  whose revision never reaches the query service makes every export
+  refuse, naming the entity, until that entity is edited again or the
+  query service is reloaded from a full dump; after a restore, or a reset
+  of the query service alone, a full reload is needed, since the updater
+  replays recent changes only.
 - **The site lists the same people.** `yizkr publish-site` lists every
   item the selection finds, and badges each one the check does not
-  release, so its badges and the export's exclusions agree.
+  release, so for every person it lists its badge and the export's
+  exclusion agree. The export also drops what the site lists as no
+  person: an item that states no type and has no person evidence, and a
+  redirect.
 
-The three rulings dated 2026-09-29 are the owner's, on the questions
-this amendment raised.
+The rulings dated 2026-09-29 are the owner's, on the questions this
+amendment raised.
 
 ### 5. Vocabulary retired
 
@@ -266,11 +286,16 @@ is strictly safer, since the determination is now absence-of-death only.
   old flow; they are inert (ignored by the new code, skipped by the site).
   A one-off cleanup can delete them, but nothing requires it.
 - The public export can refuse to run (amended by #344): while the graph
-  is being written, when the query service lacks items for good (a query
-  service reset that replayed only recent changes), or when an item's
-  revision never reaches it. The refusal names the items, and the
-  backup's other dumps are kept. An item left untyped, by a write cut
-  short or by hand, is missing from the public copy until it is typed.
+  is being written, when the query service lacks entities for good (a
+  query service reset that replayed only recent changes), or when an
+  entity's revision never reaches it. The refusal names the entities, and
+  the backup's other dumps are kept; `yizkr backup` reports it on one
+  line and exits non-zero. Pruning counts a refused run, so `--keep N`
+  after N refused nights keeps no public export. An item left untyped, by
+  a write cut short or by hand, is missing from the public copy until it
+  is typed. An item that a person-only statement marks is dropped as a
+  person (a place with a nickname, a firm with an occupation), and that
+  statement keeps it out at any rank: fail closed, accepted.
 - Docs move with the code: MODELING.md "Living persons and privacy",
   `deploy/README.md`, and `pipeline/README.md` are updated in the same
   change; ADR-0018's exclusion note now points here.
