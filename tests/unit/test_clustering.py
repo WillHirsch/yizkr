@@ -11,6 +11,7 @@ that case uses placeholder names. No wiki, no model.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import random
@@ -641,6 +642,17 @@ class TestBlocking:
         pairs = blocked_pairs([book.manifest, deck.manifest, talk.manifest])
         assert pair(book, "e1", deck, "e1") in pairs
         assert pair(book, "e1", talk, "e1") not in pairs
+        # 'Blauen Xxx' is looked up by its rarest token, which the hat shop
+        # holds, and the hat shop holds no other of its tokens: no pair
+        # (placeholders)
+        blue, *trades = [
+            register(name, [entity("e1", name, "organization")], [], {})
+            for name in ("Blauen Xxx", "Xxx Weberei", "Xxx Brauerei")
+        ]
+        pairs = blocked_pairs(
+            [book.manifest, blue.manifest, *(doc.manifest for doc in trades)]
+        )
+        assert pair(book, "e1", blue, "e1") not in pairs
 
     def test_given_names_match_by_prefix_not_by_first_letters(self):
         """Gustl and Gustav share three letters, and neither starts the
@@ -1278,6 +1290,16 @@ class TestEvents:
         identity = identity_of(*docs)
         assert {"klara-loebig"} in merged(docs, identity)
         assert methods(docs, identity, ("postcard-1938", "e3")) == [AMBIGUOUS]
+        # the pair's own link is ambiguous, so adjudication counts it
+        births = {doc.fingerprint("e3", identity) for doc in docs}
+        (review,) = [
+            entry
+            for entry in identity["review"]
+            if set(entry["members"]) == births
+        ]
+        assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
+            (AMBIGUOUS, "exact/conflict/unknown")
+        ]
 
 
 # -- the reviewers' false merges ----------------------------------------------
@@ -1492,6 +1514,11 @@ class TestNoFalseMerge:
         identity = identity_of(*docs)
         assert_no_false_merge(docs, identity)
         assert merged(docs, identity) == []
+        # two at a time too: of all five, the pairs no kin corroborates
+        # leave the one candidate cluster ambiguous, which would hide a
+        # pair that links confidently
+        for two in itertools.combinations(docs, 2):
+            assert merged(two, identity_of(*two)) == []
 
     def test_refs_of_no_kind_never_merge(self):
         """Two batches without a manifest each name a Xxx Yyy by a ref of
@@ -1609,6 +1636,34 @@ class TestHomonyms:
         )
         assert_no_false_merge(docs, identity)
         assert identity["summary"]["clusters"][AMBIGUOUS] >= 1
+
+    def test_one_ambiguous_link_leaves_the_whole_cluster_unmerged(self):
+        """Three registers give a Xxx Yyy born 1911, a fourth an undated
+        one: the three link confidently, the fourth ambiguously with each.
+        A candidate cluster merges whole or not at all, so none of the four
+        merges; its confident links alone would join the three
+        (placeholders)."""
+
+        def person(name: str, year: int | None) -> Doc:
+            claims = [("e1", "date_of_birth", day(year))] if year else []
+            return register(
+                name, [entity("e1", "Xxx Yyy")], claims, {"e1": "xxx"}
+            )
+
+        docs = [person(name, 1911) for name in ("one", "two", "three")]
+        docs.append(person("four", None))
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == []
+        (review,) = identity["review"]
+        assert review["status"] == AMBIGUOUS
+        assert sorted(p["link"] for p in review["pairs"]) == (
+            [AMBIGUOUS] * 3 + [CONFIDENT] * 3
+        )
+        assert identity["summary"]["confident_links_only"] == {
+            "clusters": 1,
+            "mentions": 3,
+            "conflicting": 0,
+        }
 
 
 # -- across sources -----------------------------------------------------------
@@ -1749,6 +1804,31 @@ class TestKinship:
         identity = identity_of(*docs)
         gustav = mention_of(docs, identity, "birth-extract-1938", "e1")
         assert identity["mentions"][gustav]["method"] == AMBIGUOUS
+
+    def test_kin_who_share_only_a_surname_do_not_corroborate(self):
+        """Two registers name a Xxx Yyy, one the child of Zzz Yyy, the
+        other of Www Yyy: the fathers share a surname, not a name, and the
+        two stay apart; a third, child of Zzz Yyy too, merges with the
+        first (placeholders)."""
+
+        def child(name: str, father: str) -> Doc:
+            return register(
+                name,
+                [entity("e1", "Xxx Yyy"), entity("e2", f"{father} Yyy")],
+                [("e1", "father", item("e2"))],
+                {"e1": f"xxx-of-{father}", "e2": father},
+            )
+
+        docs = [child("one", "Zzz"), child("two", "Www")]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == []
+        (review,) = identity["review"]
+        assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
+            (AMBIGUOUS, "exact/unknown/unknown")
+        ]
+        docs = [child("one", "Zzz"), child("three", "Zzz")]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == [{"Zzz"}, {"xxx-of-Zzz"}]
 
     def test_a_parent_and_child_of_one_name_never_merge(self):
         """Two registers each name a father and his son alike
@@ -2136,14 +2216,16 @@ class TestIdentityMap:
 
     def test_one_map_whatever_the_hash_seed(self):
         """Sets iterate in an order the hash seed sets: two processes of
-        other seeds make the same maps of two synthetic corpora, each with
-        conflicting clusters."""
+        other seeds make the same maps of two synthetic corpora and of the
+        siblings, each with conflicting clusters."""
         script = (
             "import hashlib, json, sys\n"
             "sys.path.insert(0, '.')\n"
             "from tests.unit.test_clustering import synthetic_corpus\n"
             "from yizkr.pipeline.clustering import cluster_corpus\n"
+            "from tests.unit.test_clustering import siblings_corpus\n"
             "maps = [cluster_corpus(synthetic_corpus(n)) for n in (7, 11)]\n"
+            "maps.append(cluster_corpus(siblings_corpus()))\n"
             "assert all(m['summary']['clusters']['conflicting']"
             " for m in maps)\n"
             "print(hashlib.sha256(json.dumps(maps).encode()).hexdigest())\n"
@@ -2321,6 +2403,24 @@ def synthetic_corpus(seed: int, documents: int = 40) -> list[Manifest]:
     return manifests
 
 
+def siblings_corpus() -> list[Manifest]:
+    """A register naming seven siblings all called Xxx Yyy, and another
+    naming one Xxx Yyy: the eight are one candidate cluster, and each
+    sibling in it conflicts hard with six others (placeholders)."""
+    siblings = register(
+        "siblings",
+        [entity(f"e{n}", "Xxx Yyy") for n in range(7)],
+        [
+            (f"e{n}", "sibling", item(f"e{m}"))
+            for n in range(7)
+            for m in range(n + 1, 7)
+        ],
+        {},
+    )
+    another = register("another", [entity("e1", "Xxx Yyy")], [], {})
+    return [siblings.manifest, another.manifest]
+
+
 # -- the thresholds -----------------------------------------------------------
 
 
@@ -2445,20 +2545,22 @@ class TestTheStage:
         )
 
     def test_each_documents_sha1_and_source_are_in_the_key(self, tmp_path):
-        """A batch read under another document's SHA-1, or a GEDCOM
-        export's read as a document, is other input."""
+        """A batch read under another SHA-1 (the media scanned again, the
+        extraction the same), or a GEDCOM export's read as a document, is
+        other input: a mention's fingerprint holds its document's SHA-1."""
         directory_ = tmp_path / "corpus" / "clustering"
-        documents = self.docs(tmp_path)
-        ensure_identity_map(directory_, documents)
-        moved = [
-            StoredDoc(
-                "0" * 40 if doc.kind != GEDCOM else doc.sha1,
-                doc.kind,
-                doc.batch,
-            )
-            for doc in documents
-        ]
-        assert not ensure_identity_map(directory_, moved).reused
+        documents = sorted(self.docs(tmp_path), key=lambda doc: doc.sha1)
+        made = ensure_identity_map(directory_, documents)
+        # the last document by SHA-1 moves to a SHA-1 that sorts last too:
+        # the documents keep their order, and only the SHA-1 differs
+        last = documents[-1]
+        assert last.sha1 < "f" * 40
+        moved = [*documents[:-1], StoredDoc("f" * 40, last.kind, last.batch)]
+        again = ensure_identity_map(directory_, moved)
+        assert not again.reused
+        assert set(again.identity_map["mentions"]) != set(
+            made.identity_map["mentions"]
+        )
         assert ensure_identity_map(directory_, moved).reused
         read_as = [StoredDoc(doc.sha1, "text", doc.batch) for doc in moved]
         assert not ensure_identity_map(directory_, read_as).reused
