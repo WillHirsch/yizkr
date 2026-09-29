@@ -66,18 +66,47 @@ from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 
-# the most characters Wikibase takes in a label or an alias (its default
-# limit on a term's length)
+# the most characters Wikibase takes in a label, a description or an alias
+# (its default limit on a term's length)
 TERM_LIMIT = 250
+
+# how Wikibase trims a term before it stores it: the separators and control
+# characters at either end go, and each run of control characters inside
+# becomes one space. `\s` holds every separator and the controls that are
+# whitespace; the other controls are named.
+_TERM_EDGES = re.compile(r"^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$")
+_TERM_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
 
 
 def _stored_term(term: str) -> str:
-    """`term` in the form Wikibase stores a label or alias in: Unicode NFC,
-    with the whitespace around it trimmed. The reading of the instance
-    holds labels in that form, so a title is compared with it, and set,
-    in that form too: in any other, a label another item holds would look
-    free, and an alias the item has would look missing."""
-    return unicodedata.normalize("NFC", term).strip()
+    """`term` in the form Wikibase stores a label, a description or an
+    alias in: the separators and control characters at either end
+    trimmed, each run of control characters inside made one space, and the
+    whole in Unicode NFC. The reading of the instance holds labels in that
+    form, so a title is compared with it, and set, in that form too: in any
+    other, a label another item holds would look free, and an alias the
+    item has would look missing."""
+    trimmed = _TERM_CONTROLS.sub(" ", _TERM_EDGES.sub("", term))
+    return unicodedata.normalize("NFC", trimmed)
+
+
+def _fitted(
+    text: str, suffix: str = "", *, prefix: str = "", at: str | None = None
+) -> str:
+    """`prefix + text + suffix` in the stored form (_stored_term), within
+    the TERM_LIMIT characters Wikibase takes: when the whole is longer,
+    `text` is cut, at the last `at` within the room when `at` is given,
+    and ends in "…". The same parts always give the same result. For text
+    that only displays, such as a deck's title in the labels of its slides
+    and images: nothing finds an item by it."""
+    whole = _stored_term(prefix + text + suffix)
+    room = TERM_LIMIT - len(prefix) - len(suffix) - 1
+    if len(whole) <= TERM_LIMIT or room < 1:
+        return whole
+    cut = text[:room]
+    if at is not None and at in cut:
+        cut = cut.rsplit(at, 1)[0]
+    return _stored_term(prefix + cut.rstrip() + "…" + suffix)
 
 
 class ExcludedMedia(RuntimeError):
@@ -365,23 +394,39 @@ class Registrar:
             for name in names or [None]
         )
 
-    def _free_label(self, wanted: str, content_sha1: str) -> str:
-        """`wanted`, which is in the form Wikibase stores a label in
-        (_stored_term), or, when another item has it as its label,
-        `wanted` with the media's content tag: labels stay unique per
-        kind. A label Wikibase would refuse for its length is refused
-        here, before anything is written, so that a write it would refuse
-        leaves no half-made item behind."""
+    def _free_label(
+        self,
+        title: str,
+        content_sha1: str,
+        suffix: str = "",
+        *,
+        fit: bool = False,
+    ) -> str:
+        """The label `title + suffix`, or, when another item has that as
+        its label, with the media's content tag at its end: labels stay
+        unique per kind. `title` and `suffix` are in the form Wikibase
+        stores terms in (_stored_term). With `fit`, the title is cut,
+        ending in "…", so that the label fits the TERM_LIMIT characters
+        Wikibase takes, tagged or not (_fitted). Without it, a label that
+        long is refused here, before anything is written, so that a write
+        Wikibase would refuse leaves no half-made item behind."""
+
+        def label_for(tag: str) -> str:
+            if fit:
+                return _fitted(title, suffix + tag)
+            return title + suffix + tag
+
         labels = self._read().labels
-        label = wanted
-        if wanted in labels:
-            label = f"{wanted} [{content_sha1[:8]}]"
-            if label in labels:
+        label = label_for("")
+        if label in labels:
+            tagged = label_for(f" [{content_sha1[:8]}]")
+            if tagged in labels:
                 raise RuntimeError(
-                    f"the labels {wanted!r} and {label!r} both name other "
+                    f"the labels {label!r} and {tagged!r} both name other "
                     f"items, and labels stay unique: no item was made "
                     f"under either"
                 )
+            label = tagged
         if len(label) > TERM_LIMIT:
             raise ValueError(
                 f"the label {label!r} is longer than the {TERM_LIMIT} "
@@ -554,12 +599,16 @@ class Registrar:
             return instance.fragments[key]
         properties, items = self.client.vocabulary()
         stated_in = properties["stated_in"]
+        # the artifact's label is cut to fit, if need be: the fragment's
+        # label and description only display it
         label = self._free_label(
-            f"{artifact_label}, page {page}", content_sha1
+            artifact_label, content_sha1, f", page {page}", fit=True
         )
         fragment = self.client.wbi.item.new()
         fragment.labels.set("en", label)
-        fragment.descriptions.set("en", f"page {page} of {artifact_label}")
+        fragment.descriptions.set(
+            "en", _fitted(artifact_label, prefix=f"page {page} of ")
+        )
         _append(
             fragment,
             _item_claim(
@@ -629,6 +678,7 @@ class Registrar:
             re.sub(r"[^A-Za-z0-9 _.-]+", "", record.title).strip()
             or "presentation"
         )
+        title = _stored_term(record.title)
         derived: dict[str, str] = {}
         for key, medium in sorted(record.media.items()):
             if self._excluded(medium.names, key):
@@ -639,15 +689,19 @@ class Registrar:
                     f"{medium.file} does not hold the bytes its record "
                     f"names; nothing of it was registered or uploaded"
                 )
-            labels = [
-                _stored_term(f"{record.title} — {name}")
-                for name in medium.names
-            ]
+            # the container's title is cut to fit, if need be: a medium's
+            # labels and aliases only display it
+            names = [_stored_term(name) for name in medium.names]
+            labels = [_fitted(title, f" — {name}") for name in names]
             found = instance.by_sha1.get(key)
             item = self.client.wbi.item.get(found) if found else None
             changed = item is None
             # a new item's label is settled before anything is uploaded
-            new_label = self._free_label(labels[0], key) if changed else None
+            new_label = (
+                self._free_label(title, key, f" — {names[0]}", fit=True)
+                if changed
+                else None
+            )
             held = (
                 _files_holding(
                     self.client, _existing_claim_strings(item, media_file), key
@@ -669,7 +723,12 @@ class Registrar:
                 slides = ", ".join(str(number) for number in medium.slides)
                 item.descriptions.set(
                     "en",
-                    f"media embedded in the presentation (slide {slides})",
+                    _fitted(
+                        slides,
+                        ")",
+                        prefix="media embedded in the presentation (slide ",
+                        at=", ",
+                    ),
                 )
             for name in labels:
                 if self._takes_alias(item, name, key):

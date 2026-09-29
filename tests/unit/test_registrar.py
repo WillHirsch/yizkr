@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import itertools
 import json
 import unicodedata
 from pathlib import Path
@@ -426,14 +427,34 @@ class Untouchable:
 
 
 def stored(term: str) -> str:
-    """A term as Wikibase stores it: trimmed and in Unicode NFC."""
-    return unicodedata.normalize("NFC", term).strip()
+    """A term as Wikibase stores it, emulated from the Unicode categories
+    its trimming names: separators (Z) and controls (Cc) trimmed at either
+    end, each run of controls inside made one space, and the whole in
+    NFC."""
+
+    def control(char: str) -> bool:
+        return unicodedata.category(char) == "Cc"
+
+    def edge(char: str) -> bool:
+        return control(char) or unicodedata.category(char).startswith("Z")
+
+    start, end = 0, len(term)
+    while start < end and edge(term[start]):
+        start += 1
+    while end > start and edge(term[end - 1]):
+        end -= 1
+    inner = "".join(
+        " " if is_control else "".join(run)
+        for is_control, run in itertools.groupby(term[start:end], control)
+    )
+    return unicodedata.normalize("NFC", inner)
 
 
 class StoringWiki(FakeWiki):
-    """The in-memory wiki keeping terms as Wikibase does: every label,
-    description and alias trimmed and in NFC. Like Wikibase, it refuses an
-    item whose English label and description are another item's."""
+    """The in-memory wiki keeping terms as Wikibase does (`stored`). Like
+    Wikibase, it refuses a label, description or alias longer than 250
+    characters, and an item whose English label and description are
+    another item's."""
 
     def store(self, entity):
         data = entity.get_json()
@@ -441,6 +462,12 @@ class StoringWiki(FakeWiki):
         description = stored(
             data.get("descriptions", {}).get("en", {}).get("value", "")
         )
+        aliases = [
+            stored(alias["value"])
+            for alias in data.get("aliases", {}).get("en", [])
+        ]
+        if any(len(term) > 250 for term in (label, description, *aliases)):
+            raise WriteRefused("a term is longer than 250 characters")
         if label and description:
             for qid, other in self.entities.items():
                 if qid != entity.id and (
@@ -467,6 +494,9 @@ class StoringWiki(FakeWiki):
 PORTRAIT = b"\x89PNG synthetic scan of the 1890s studio portrait"
 RESCAN = b"\x89PNG synthetic re-scan of the 1890s studio portrait"
 TITLE = "Studio portrait of the Löbig family"
+# a title of 256 characters, which Flörburg repeats, for the limit on a
+# term's length
+LONG = "Flörburg" * 32
 # two copies of Gustav's birth register extract, each scanned into a
 # folder of its own under the same file name: two artifacts, one title
 EXTRACT = b"%PDF synthetic scan of Gustav's birth register extract"
@@ -755,36 +785,60 @@ class TestRegisterArtifact:
         assert not result.created
         assert len(wiki.entities) == 2
 
-    def test_a_label_longer_than_wikibase_takes_is_refused(self, tmp_path):
-        """A title Wikibase would refuse as a label, whether too long as it
-        is or once tagged, is refused before anything is uploaded or
-        written: no half-made item is left, retry after retry."""
-        wiki = FakeWiki()
-        long = "Studio portrait " * 16  # 255 characters, trimmed
+    @pytest.mark.parametrize("length", [250, 251])
+    def test_a_label_of_250_characters_is_taken_and_251_refused(
+        self, tmp_path, length
+    ):
+        """Wikibase takes a label of 250 characters and refuses one of
+        251: so does registration, which refuses it before anything is
+        uploaded or written."""
+        wiki = StoringWiki()
+        title = LONG[:length]
+        if length == 250:
+            result = register(wiki, scan(tmp_path, PORTRAIT), title)
+            assert label_of(wiki, result.artifact_qid) == title
+            return
         with pytest.raises(ValueError, match="250 characters"):
-            register(wiki, scan(tmp_path, PORTRAIT), long)
-        # 245 characters, which another item holds: tagged, 256
-        taken = ("Studio portrait " * 16)[:245]
-        wiki.item(taken)
+            register(wiki, scan(tmp_path, PORTRAIT), title)
+        assert (wiki.writes, wiki.media.requests) == (0, [])
+
+    @pytest.mark.parametrize("length", [239, 240])
+    def test_a_tagged_label_of_250_characters_is_taken_and_251_refused(
+        self, tmp_path, length
+    ):
+        """A title another item holds is tagged, 11 characters more: 250
+        in all is taken, and 251 refused before anything is uploaded or
+        written, retry after retry, so that no half-made item is left."""
+        wiki = StoringWiki()
+        title = LONG[:length]
+        wiki.item(title)
         writes = wiki.writes
+        tagged = f"{title} [{sha1(PORTRAIT)[:8]}]"
+        if length == 239:
+            result = register(wiki, scan(tmp_path, PORTRAIT), title)
+            assert label_of(wiki, result.artifact_qid) == tagged
+            assert len(tagged) == 250
+            return
         for _ in range(2):
             with pytest.raises(ValueError, match="250 characters"):
-                register(wiki, scan(tmp_path, PORTRAIT), taken)
-        assert wiki.writes == writes
-        assert wiki.media.requests == []
+                register(wiki, scan(tmp_path, PORTRAIT), title)
+        assert (wiki.writes, wiki.media.requests) == (writes, [])
 
-    def test_a_name_longer_than_an_alias_takes_is_not_one(self, tmp_path):
-        wiki = FakeWiki()
+    @pytest.mark.parametrize("length", [250, 251])
+    def test_a_name_of_250_characters_is_an_alias_and_251_not_one(
+        self, tmp_path, length
+    ):
+        wiki = StoringWiki()
         first = register(wiki, scan(tmp_path, PORTRAIT))
-        writes = wiki.writes
+        name = LONG[:length]
         again = register(
-            wiki,
-            scan(tmp_path, PORTRAIT, name="x.png", folder="x"),
-            "Studio portrait " * 17,
+            wiki, scan(tmp_path, PORTRAIT, name="x.png", folder="x"), name
         )
         assert again.artifact_qid == first.artifact_qid
-        assert wiki.writes == writes
-        assert not wiki.entities[first.artifact_qid].get("aliases")
+        aliases = wiki.entities[first.artifact_qid].get("aliases", {})
+        assert [alias["value"] for alias in aliases.get("en", [])] == (
+            [name] if length == 250 else []
+        )
 
     def test_a_blank_title_is_refused(self, tmp_path):
         wiki = Untouchable()
@@ -887,14 +941,27 @@ FROM_FILE = "ingested by `yizkr ingest run` from portrait-1890s.png"
 
 
 class TestTermsInTheStoredForm:
-    """Wikibase keeps every label trimmed and in NFC, and the reading of
-    the instance holds them so: a title is compared, and set, in that form
-    (StoringWiki keeps terms as the instance does)."""
+    """Wikibase stores every label trimmed of separators and controls, with
+    each run of controls inside made one space, and in NFC, and the reading
+    of the instance holds them so: a title is compared, and set, in that
+    form (StoringWiki keeps terms as the instance does)."""
 
     @pytest.mark.parametrize(
         "title",
-        [NFD_TITLE, f"{TITLE} ", f"\t{TITLE}"],
-        ids=["decomposed", "trailing space", "leading tab"],
+        [
+            NFD_TITLE,
+            f"{TITLE} ",
+            f"\t{TITLE}",
+            TITLE.replace(" of", "\tof"),
+            f"{TITLE}\x7f",
+        ],
+        ids=[
+            "decomposed",
+            "trailing space",
+            "leading tab",
+            "inner tab",
+            "trailing DEL",
+        ],
     )
     def test_a_title_another_item_holds_is_tagged(self, tmp_path, title):
         wiki = StoringWiki()
@@ -959,6 +1026,79 @@ class TestTermsInTheStoredForm:
         writes = wiki.writes
         register_deck(wiki, tmp_path, "a", decomposed, media)
         assert wiki.writes == writes
+
+
+class TestLongDeckTitles:
+    """A deck's title is part of the labels of its slides and images, and
+    of its slides' descriptions, which only display it. A title near the
+    250 characters Wikibase takes would push those past it, and the deck
+    would fail after its own item was made, so the title is cut there,
+    ending in "…" (StoringWiki refuses a longer term, as the instance
+    does)."""
+
+    # 245 characters: the deck's own label takes it whole
+    TITLE = ("Hutmacherei zum Blauen Hut, Flörburg " * 7)[:245].strip()
+
+    def test_its_slides_and_images_labels_are_cut_to_fit(self, tmp_path):
+        wiki = StoringWiki()
+        registrar = Registrar(wiki)
+        deck = deck_file(tmp_path, "long")
+        result = registrar.register_artifact(
+            deck, "presentation", self.TITLE, pages=2
+        )
+        record, directory = recorded(
+            tmp_path, deck, self.TITLE, [("image1.png", IMAGE, [1, 2])]
+        )
+        derived = registrar.register_derived_media(record, directory)
+
+        assert label_of(wiki, result.artifact_qid) == self.TITLE
+        for page, qid in result.fragment_qids.items():
+            label = label_of(wiki, qid)
+            assert label == self.TITLE[:241].rstrip() + f"…, page {page}"
+            assert len(label) <= 250
+            description = wiki.entities[qid]["descriptions"]["en"]["value"]
+            assert description.startswith(f"page {page} of Hutmacherei")
+            assert description.endswith("…") and len(description) <= 250
+        label = label_of(wiki, derived[sha1(IMAGE)])
+        assert label == self.TITLE[:236].rstrip() + "… — image1.png"
+        assert len(label) <= 250
+        # the same cut every time: a second write of the deck writes nothing
+        writes = wiki.writes
+        again = Registrar(wiki)
+        again.register_artifact(deck, "presentation", self.TITLE, pages=2)
+        again.register_derived_media(record, directory)
+        assert wiki.writes == writes
+
+    def test_a_cut_label_another_item_holds_is_tagged_and_fits(self, tmp_path):
+        wiki = StoringWiki()
+        held = wiki.item(self.TITLE[:241].rstrip() + "…, page 1")
+        result = register(
+            wiki, deck_file(tmp_path, "long"), self.TITLE, "presentation", 1
+        )
+        tag = sha1(b"PK synthetic deck long")[:8]
+        label = label_of(wiki, result.fragment_qids[1])
+        assert result.fragment_qids[1] != held
+        assert label == self.TITLE[:230].rstrip() + f"…, page 1 [{tag}]"
+        assert len(label) <= 250
+
+    def test_an_image_on_many_slides_has_a_description_that_fits(
+        self, tmp_path
+    ):
+        """The slides an image is on are listed in its description, cut at
+        a slide when they would pass the limit."""
+        wiki = StoringWiki()
+        slides = list(range(1, 121))
+        _, derived = register_deck(
+            wiki, tmp_path, "a", SHOP, [("image1.png", IMAGE, slides)]
+        )
+        entity = wiki.entities[derived[sha1(IMAGE)]]
+        description = entity["descriptions"]["en"]["value"]
+        assert len(description) <= 250
+        prefix = "media embedded in the presentation (slide "
+        assert description.startswith(prefix) and description.endswith("…)")
+        listed = description[len(prefix) : -2].split(", ")
+        assert listed == [str(n) for n in slides[: len(listed)]]
+        assert len(listed) < len(slides)
 
 
 # -- the never-ingest list (#29) ----------------------------------------------
