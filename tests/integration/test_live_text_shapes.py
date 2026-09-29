@@ -139,7 +139,7 @@ ENTITIES = (
 # the instance keeps them
 PAGE = "\r\n Blatt 12,\r\nFlörburg \t"
 PAGE_KEPT = "Blatt 12, | Flörburg"
-EXCERPT = "\tGestorben:\r16. März 1909\nin Flörburg.\n"
+EXCERPT = "\tGestorben:\r16. März\t1909\nin Flörburg.\n"
 EXCERPT_KEPT = "Gestorben: | 16. März 1909 | in Flörburg."
 # (here) the register's entry quoted at length, twice, as it is copied
 # onto two leaves: the room ends inside "Gestorben" in both
