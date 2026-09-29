@@ -11,6 +11,21 @@ grammar is resolved; and the review sheet's `critique_notes` puts each
 finding on exactly one row (its claim's, else the first row naming its
 entity), not on every row of its subject.
 
+Amended by #409 (2026-09-29): clustering keys on the records as §7 says,
+and settles what §7 leaves open. A person's kin agree only on a key a
+record gives (never on a recordless kin's name), and the couple of a
+union count as each other's spouses. A lone given name, and a key only a
+GEDCOM `unsplit` form gives, pair but never make a link confident; a
+document's own `unsplit` form keys like its typed parts. Two places that
+share a name with containers neither equal nor nested stay ambiguous. An
+organisation's places agree when a place of one is among the other's
+places or the places those lie in (by `part_of` and `location` claims,
+and by `within`); one without a proper name keys and links on kind and
+place only against another without one. The alias cleanup (§8) leaves an
+entity without a standing record its aliases, blanks and duplicates
+aside. The run report counts recordless mentions; the judgement notes of
+§4 are counted once the manifest carries them.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of

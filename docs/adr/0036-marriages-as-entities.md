@@ -6,6 +6,13 @@ the owner's merge of the PR that adds it is its acceptance. It settles
 `spouse` edge, §6's deferred divorce event). #394 implements it with
 #385's extraction revision (ADR-0035, accepted), before scratch run 1.
 
+Amended by #409 (2026-09-29): §3's union that names only one of its
+couple is ambiguous with every other union of that person, whether or
+not a second union of theirs is known, since clustering cannot count a
+person's unions before it has clustered them. A union's couple are its
+participants as spouses or partners, or every participant where none
+has such a role.
+
 ## Context
 
 MODELING.md dates a marriage as Wikidata dates spouse (P26): a statement

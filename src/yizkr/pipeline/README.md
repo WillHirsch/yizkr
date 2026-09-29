@@ -459,30 +459,38 @@ refuses). The module docstring is the full account; in short:
   of one batch that are otherwise equal. A cluster id is the hash of its
   members' sorted fingerprints (#197 builds claim fingerprints and the
   run diff on the same module).
-- **Names** are read as names: a bracketed part ("formerly Gustav
-  Löbig", an inline nickname) is a form of its own, a name written
-  surname first ("Löbig, Ursula, Wwe.") is read given name first, a
-  maiden name gives a second form wherever it stands ("Löbig, Hildegard
-  geb. Laudler"), and titles, kin and courtesy words, particles and
-  initials are no name tokens. A name that is only a surname ("Frau
-  Löbig", "N.N. Löbig", or "Löbig, Hutmacher", an occupation where the
-  given names would stand) names no one: it makes no key, no name match
-  and no kin agreement.
-- **Blocking** proposes pairs by keys of each kind, never by one shared
-  token: a given name with a different surname for people (a surname may
-  come from the person's kin, and a nickname stands for a given name); a
-  token of the part of a place name before its first comma, but a
-  generic head ("Kreis", "Lager"); one organization name holding the
-  other's distinctive tokens; events through their participants; the
-  whole name otherwise. A mention that key-matches the GEDCOM export
-  pairs with those anchors only. A key more than `max-key-mentions`
-  mentions share is a hub: none of them is blocked on it, the hubs and
-  the mentions holding one are counted, and the review lists them. A
-  key that finds a mention of the export is never a hub, since each
-  mention holding it pairs with its anchors only, and nor is a person's
-  lone token, which only meets the export. Lookups go through indexes,
-  organizations included, so the work grows with the mentions and the
-  pairs proposed.
+- **Records, not wording** (ADR-0035 §7). Every key comes from a
+  mention's record (`EntityRecord.structure`): a person's given names by
+  their standard forms (never by prefix: "Gustl" meets "Gustav" only
+  where its document gives that standard form) and nicknames, each with
+  the person's own surnames and patronymics and its kin's surnames; a
+  place's names and address as written, save a short form that is
+  another name's toponym ("Klurnau" beside "Lager Klurnau"); an
+  organisation's proper names, or else each kind with each of its places;
+  a family's surnames. Only a person whose status is `name`, and a place
+  whose status is `toponym`, keys. No key pairs two parts that fold
+  alike; an `unsplit` form keys each ordered pair of its distinct words,
+  and a key only a GEDCOM `unsplit` form gives never makes a link
+  confident. Parts fold case and accents, and an umlaut keys a second
+  time written out (DIN 5007-2: "Floerburg" meets "Flörburg"). A mention
+  of those kinds without a record is *recordless*: it keys on its exact
+  normalised name, meets only mentions without a record, never links
+  confidently, and is counted. No word list and no token length remains.
+- **Blocking** proposes pairs by those keys, never by one shared token.
+  Events and unions meet through their people: a birth or a death its
+  principal's own through that principal, a union through its couple,
+  and a union's wedding or end through its union's couple; a wedding of
+  any kind is blocked with any other, and a divorce, an annulment and an
+  end of unstated kind together. A mention that key-matches the GEDCOM
+  export pairs with those anchors only, and a person with no surname
+  meets only the export's people of its given name. A key more than
+  `max-key-mentions` mentions share is a hub: none of them is blocked on
+  it, the hubs and the mentions holding one are counted, and the review
+  lists them. A key that finds a mention of the export is never a hub,
+  since each mention holding it pairs with its anchors only, and nor is a
+  person's lone given name, which only meets the export. Lookups go
+  through indexes, so the work grows with the mentions and the pairs
+  proposed.
 - **Cannot-link.** Two ids of one manifest are kept apart (soft). The
   export's places and occupations are exempt, as the adapter mints one
   per string, and so are the refs of a batch without a manifest, which
@@ -491,18 +499,26 @@ refuses). The module docstring is the full account; in short:
   and `reconcile.impossible_pair` (ADR-0017) then rules out a pair one of
   them joins (hard). Dates never rule a pair out.
 - **Links.** A pair is a confident link only on corroborated evidence:
-  for people a name match with kin that agree or dates that agree (a
-  century or an open "before" agrees with nothing); for places an exact
-  or nested name; for organizations and families a shared name of two
-  distinctive tokens or more, and a shared place too when the name is
-  only an institution's kind ("Städtische Realschule"); for events every
+  for people a shared key with kin that agree (kin that share a key,
+  never a surname alone) or dates that agree (a century or an open
+  "before" agrees with nothing), while stated sexes that differ, or a
+  civil status `unmarried` stated after a marriage another source
+  states, keep it ambiguous; for places a shared name whose containers
+  are one set or nest, compared as one set; for organisations a shared
+  proper name of two words or more, one of one word with a shared kind or
+  place, or, with no proper name, a shared kind with places that agree,
+  and never with places that differ; for families never, since a surname
+  names many; for unions a couple of two whose members merged, and
+  weddings whose dates do not conflict (ADR-0036 §3); for a union's
+  wedding or end, unions that merged, kinds that can be one and dates
+  that agree; for two births or two deaths, each its principal's own
+  (its date, if any, not conflicting with the date the person's own
+  claims give), principals that merged; for other events every
   participant of the one with fewer merged into one cluster with a
-  participant of the other, and dates that agree, which two births or
-  two deaths need not have when each is its one participant's own (its
-  date, if any, not conflicting with the date the person's own claims
-  give); otherwise an exact name. A mention of no kind never links confidently, and nor does one
-  matching more than `max-anchors` GEDCOM anchors (a place counts those
-  it matches exactly, and those it nests in as one).
+  participant of the other, and dates that agree; otherwise an exact
+  name. A recordless mention never links confidently, nor does one of no
+  kind, nor one matching more than `max-anchors` GEDCOM anchors (a place
+  counts those it matches exactly, and those it nests in as one).
 - **Clusters.** The closure over every candidate pair gives the candidate
   clusters: *conflicting* when one joins a cannot-link pair, else
   *ambiguous* when any of its links is, or when two members that were
@@ -510,8 +526,8 @@ refuses). The module docstring is the full account; in short:
   conflict, names that do not match), else *confident*. Unattended, only
   confident clusters merge; the members of the others stay apart, and are
   counted.
-- **Thresholds** live in `clustering.yaml` beside the module: the
-  minimum name and place token lengths, GEDCOM anchoring, the hub limit,
+- **Thresholds** live in `clustering.yaml` beside the module: GEDCOM
+  anchoring, the hub limit,
   how far a circa date widens, the widest date range that corroborates,
   how many GEDCOM anchors a mention may match and still link
   confidently, and the pairs per adjudication call behind the stage's

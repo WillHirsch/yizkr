@@ -558,11 +558,16 @@ recorded only where a source marks it, the marker possibly contextual). The
 LLM is the primary normalizer: its prompt carries these standards (compose
 no permutations, keep a clean label, strip embedded annotations, type only
 what is marked). A thin deterministic validator (`pipeline/names.py`) is the
-shared safety net over both the LLM and GEDCOM paths: it drops
-re-derivable short-forms (a bare given name, an initialism, a surname the
-label already carries) and keeps compound/particle surnames whole (never
-shattering `de la Cruz` / `van der Berg`), asserting no kind. Composition
-and short-form display are the frontend's to *derive*, never stored.
+shared safety net over both the LLM and GEDCOM paths: it reads an alias
+through the entity's mention record, never its token shapes (ADR-0035
+§8). A person's alias that gives no name part is dropped, as is one whose
+parts the label already gives ("Löbig, Ida" beside "Ida Löbig"); one that
+adds a part is kept ("Wastl"). A place's or an organisation's alias that
+gives no part (a deictic or generic reference) is dropped, and a short form
+kept. An entity without a record keeps its aliases, blanks and duplicates
+aside. It never splits a name, so compound/particle surnames stay whole
+(`Faxridge-van 't Nijks`), and asserts no kind. Composition and short-form
+display are the frontend's to *derive*, never stored.
 
 **Mention records (ADR-0035 §2).** Extraction's entity manifest may give
 each person, place, organisation and family a `structure`, what its names
@@ -794,6 +799,17 @@ not a signal to grow the schema on.
   **aliases** (append-only); matching quality compounds per document.
   Where a source *types* a name (birth, married, nickname, official),
   it is additionally recorded as a referenced statement — see "Names".
+- A scratch run clusters every document's mentions across the corpus
+  before any write (the clustering stage, `pipeline/clustering.py`,
+  ADR-0025). It keys and judges on each mention's record, never on a
+  label's wording (ADR-0035 §7): a person's given names by their standard
+  forms, with its surnames and its kin's; a place's names and address as
+  written, its containers compared as one set; an organisation's proper
+  names, else its kind with its places; an umlaut also written out (DIN
+  5007-2). A mention without a record meets only its exact name, and never
+  merges. A union is keyed by its couple, and its weddings and ends by
+  union, kind and date (ADR-0036 §3). A birth's or a death's date belongs
+  to its principal alone.
 - Machine-proposed equivalences (within or across documents) are
   reviewed by a human before they take effect — identity is never
   auto-confirmed. Approved matches resolve new claims to the existing

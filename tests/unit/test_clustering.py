@@ -2448,6 +2448,54 @@ class TestUnions:
         ) is one
         assert_no_false_merge(docs, identity)
 
+    def test_an_undated_wedding_agrees_with_no_date(self):
+        """A wedding is keyed by its union, its kind and a date that
+        agrees: the tree's undated wedding of the couple stays apart from
+        the judgment's, though the unions merge."""
+        docs = [judgment(), tree_union({"type": "time", "year": 1947})]
+        dated = identity_of(*docs)
+        weddings = {doc.fingerprint("w1", dated) for doc in docs}
+        assert weddings in [
+            set(e["members"]) for e in dated["clusters"].values()
+        ]
+        undated = tree_union(day(1947))
+        batch = undated.manifest.batch.model_copy(deep=True)
+        batch.claims = [
+            claim
+            for claim in batch.claims
+            if claim.property != "point_in_time"
+        ]
+        docs = [
+            judgment(),
+            Doc(undated.key, Manifest(undated.sha1, batch), undated.truth),
+        ]
+        identity = identity_of(*docs)
+        assert {"leopold-and-agnes"} in merged(docs, identity)
+        assert methods(docs, identity, ("family-tree-1984", "w1")) == [
+            AMBIGUOUS
+        ]
+
+    def test_a_unions_own_date_is_no_key(self):
+        """A directory that lists the couple as married in 1960 observes
+        the union then; its date is no wedding's, so it conflicts with
+        none, and the unions merge."""
+        observed = tree_union()
+        batch = observed.manifest.batch.model_copy(deep=True)
+        docs = [
+            judgment(),
+            document(
+                "directory-1912",
+                [e.model_dump() for e in batch.entities],
+                [
+                    *union_of("m1", "e1", "e2"),
+                    ("m1", "point_in_time", day(1960)),
+                ],
+                observed.truth,
+            ),
+        ]
+        identity = identity_of(*docs)
+        assert {"leopold-and-agnes"} in merged(docs, identity)
+
     def test_a_wedding_of_another_union_stays_apart(self):
         """Two weddings of 1947 whose unions did not merge stay apart."""
         other = register(
@@ -2514,13 +2562,22 @@ class TestUnions:
         )
         tree = register(
             "tree",
-            [human("e1", "Cäcilie Löbig")],
-            [("e1", "date_of_death", day(1902))],
-            {"e1": "caecilie-loebig"},
+            [
+                human("e1", "Cäcilie Löbig"),
+                entity("d1", "Death of Cäcilie", "death"),
+            ],
+            [
+                ("e1", "date_of_death", day(1902)),
+                ("d1", "participant", item("e1"), role("principal")),
+            ],
+            {"e1": "caecilie-loebig", "d1": "caecilie-death"},
         )
         docs = [burial, tree]
         identity = identity_of(*docs)
-        assert merged(docs, identity) == [{"caecilie-loebig"}]
+        assert merged(docs, identity) == [
+            {"caecilie-death"},
+            {"caecilie-loebig"},
+        ]
 
 
 # -- the reviewers' false merges ----------------------------------------------
