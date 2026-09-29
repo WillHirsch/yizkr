@@ -45,7 +45,7 @@ up to date once per run, each after the view it is made from:
 
 | View | Made by (stage, role) | Made from |
 |---|---|---|
-| `transcription.json` | `transcription`, `transcribe` | the correction `transcription.corrected.txt`, when there is one; otherwise the source, routed (vision, text file, slide text) |
+| `transcription.json` | `transcription`, `transcribe` | the correction `transcription.corrected.txt`, when there is one; otherwise the source, routed (vision, text file, slide text), a PDF with a text layer page by page (below) |
 | `batch.json` | `extraction`, `extract` (a GEDCOM file: `gedcom`) | `transcription.json`, by its canonical content (text, language, and the artifact's key, the SHA-1 of its media); a GEDCOM file: the source alone |
 | `critique.json` | `critique`, `critique` | `batch.json`, by its canonical content (without its run stamps) |
 
@@ -63,11 +63,68 @@ again in the same run: with the cache, the failing answer it kept is
 rejected and the engine is asked (Rejection, below). When the batch made
 from the new transcription differs, the reviews of the old one are moved
 aside, as below. A curator's correction and slide text are never checked.
-`--refresh ROLE` makes the role's views again, in place, current or not
+A PDF read page by page (below) is checked again where the vision engine
+read it: each page the engine read, and the transcription of each image
+the document's directory keeps. Text read from a text layer is the
+document's own, read without an engine, and is never checked. An image's
+transcription that the check now fails is moved aside as
+`<sha1>.transcription.superseded-<n>.json` when the transcription is made
+again. `--refresh ROLE` makes the role's views again, in place, current or not
 (their calls then go to the engine whatever the cache holds); a view made
 again with the same content invalidates nothing after it. The extractor's
 side outputs (`extraction/coverage.json`, `rejects.json`, `gaps.ndjson`)
 are written with the batch they describe.
+
+**A PDF read page by page.** The vision route reads a PDF page by page
+when any of its pages has a usable text layer, and otherwise reads it
+whole, as it reads an image (`yizkr.pipeline.textlayer` defines each
+term; ADR-0008 as amended by #176):
+
+- a page whose text layer is usable is read from it, deterministically,
+  with no model call (the method `pdf-text-layer`, version 1, read with
+  pypdfium2, which pyproject.toml records);
+- a scanned page (images cover most of it, and it draws little text
+  visibly: an OCR layer is invisible), and a page whose text layer is
+  empty or garbage, is read by one vision call of its own: the page's one
+  image as the PDF holds it, where the page is nothing else, or a
+  rendering of it;
+- a blank page is read by nothing;
+- each image placed within a text-layer page, and not smaller than the
+  module's floor for decoration, is read by one vision call of its own,
+  once however many times it is placed, unless the never-ingest list names
+  its SHA-1. It is a witness of its own (#178): its text is never part of
+  the PDF's transcription.
+
+The transcription holds the PDF's own text, page by page in order, each
+page opened by a `[Page N]` marker and by a marker for each image placed
+within it, which names the image by its SHA-1 (`[Page 6, image 1:
+sha1:…]`), so that claims read from it carry their page. Its `pages`
+record each page's method (`text-layer`, `vision` or `blank`), what made
+it (the text-layer method with the library's version, or the vision
+client) and where its text lies in `text`; its `engine` is
+`pdf-pages:pdf-text-layer/1`. Beside it, the document's directory keeps
+each image's bytes, recorded in `derived-media.json` as a deck's derived
+media are (each named "page 6, image 1" for its places, with the pages it
+is on), and each image's own transcription,
+`derived-media/<sha1>.transcription.json`, which names the image by its
+SHA-1. An image whose reading fails the transcription check has none,
+and the transcription stage's attention says so; the PDF's own text goes
+on to its batch. Nothing extracts the images' transcriptions yet, so no
+claim cites an image, and the write registers none (ADR-0008). The
+readings are made in a scratch folder of their own, and nothing is
+written to the document's directory until the stage keeps them, so the
+call estimate, which takes the stage through the same code, writes
+nothing.
+
+**What recomputes.** A page's or an image's call sends the transcription
+prompt and that page's or image's bytes, which depend only on the PDF and
+the PDFium build uv.lock pins, so it keeps its key from run to run. A PDF
+none of whose pages has a usable text layer, a scan, is read by the one
+call it has always been read with, under the same key, and its
+transcription is what it was; so are the extraction and the critique
+after it, whose calls the cache answers. Only a PDF read page by page
+makes its transcription, and everything after it, again: its text is its
+text layer now, so its extraction's prompts, and their keys, are new.
 
 The later files are recorded the same way:
 
@@ -691,6 +748,17 @@ the one whose key it is stored under.
 - `--refresh transcribe` sends the calls to the engine whatever the cache
   holds; the new answer displaces the adoption, which is kept aside as
   replaced.
+- *The PDF is read page by page.* An archived vision transcription of a
+  PDF read the PDF whole, and is adopted under the key of the call that
+  reads it whole. A PDF with a page that has a usable text layer is read
+  page by page instead (Views, above), and never makes that call: its
+  adoption stays under its key, never served, and the PDF's pages are
+  read from their text layer, or by calls of their own, which nothing
+  adopts. The import still adopts such a transcription, as it cannot tell
+  how the run will read the PDF without reading it; the adoption is
+  inert. A scan, none of whose pages has a usable text layer, is still
+  read whole, by the call its adoption answers, so its adoption is served
+  as before, and so is everything after it.
 
 **Running it.** Run it before the scratch run it is for, with that run's
 settings: the same `--cache` (default `var/llm-cache`) and
@@ -1041,7 +1109,10 @@ by the chunks the cache kept.
 document, whenever the run holds a PDF: the vision engine reads a PDF
 through it, and the transcription check counts its pages with it
 (`pdfinfo`), whether the transcription comes from the engine or the
-cache, or is a view the run reuses and checks again.
+cache, or is a view the run reuses and checks again. A PDF read page by
+page needs neither, since the engine is given its pages and images as
+image files, but whether a PDF is read whole is known only once its pages
+are read, so the check covers every PDF.
 
 The per-document path goes when the scratch driver has run the corpus
 end to end (#119). It registers each artifact as its write begins

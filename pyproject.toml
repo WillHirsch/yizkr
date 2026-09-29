@@ -10,6 +10,10 @@ dependencies = [
     "PyYAML>=6.0",
     "requests>=2.31",
     "py3langid>=0.3.0",
+    # a PDF's pages, text layer and images (yizkr.pipeline.textlayer): the
+    # Python binding of PDFium, whose wheels bundle it; offline,
+    # Apache-2.0 or BSD-3-Clause
+    "pypdfium2>=5.13,<6",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,279 @@
+"""Fictional PDFs for the tests, written byte by byte.
+
+A test builds the PDF it needs from pages: text drawn in the standard
+Helvetica font (WinAnsiEncoding, so German letters extract as written),
+drawn visibly or invisibly (render mode 3, as an OCR layer is), text whose
+font maps its codes to private-use characters (a text layer that extracts
+as garbage), and images placed anywhere, directly or inside a form
+XObject. The bytes depend on nothing but the arguments: no timestamps, no
+document ID, and images stored uncompressed or as the constant JPEG below.
+
+    from tests.fixtures import pdfs
+
+    page = pdfs.Page()
+    page.text(["Our Family from Germany"])
+    page.image(pdfs.gray(200, 100), 100, 400, 300, 150)
+    data = pdfs.pdf([page])
+
+Every text a test writes comes from the fictional universe
+(docs/EXAMPLES.md).
+"""
+
+from __future__ import annotations
+
+import base64
+import textwrap
+from dataclasses import dataclass, field
+
+# A4, in points
+WIDTH, HEIGHT = 595, 842
+
+# A 128 by 96 grey gradient, JPEG-encoded once: an image the PDF holds as
+# a whole JPEG file (DCTDecode)
+JPEG = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABsSFBcUERsXFhceHBsgKEIrKCUlKFE6PTBCYFVl"
+    "ZF9VXVtqeJmBanGQc1tdhbWGkJ6jq62rZ4C8ybqmx5moq6T/wAALCABgAIABAREA/8QAHwAA"
+    "AQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQR"
+    "BRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RF"
+    "RkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ip"
+    "qrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEB"
+    "AAA/AOcUVKoqVRUiipVFSqKlUVIoqVRUqipVFSKKlUVKoqVRVXWL3+z9OklU4kb5I/8AeP8A"
+    "hyfwriVFSKKlUVKoqVRUiipVFSqKkUVKoqVRUqipFFSqKlUVyHiW9+16iYlP7u3yg92/i/w/"
+    "Cs5RUqipFFSqKlUVKoqRRUqipVFSqKkUVKoqVRUqiqusXv8AZ+nSSqcSN8kf+8f8OT+FcMoq"
+    "dRUqipVFSqKkUVKoqVRUiipVFSqKlUVIoqVRUqiuQ8S3v2vUTEp/d2+UHu38X+H4VmKKnUVI"
+    "oqVRUqipVFSKKlUVKoqVRUiipVFSqKlUVV1i9/s/TpJVOJG+SP8A3j/hyfwrhlFSqKnUVKoq"
+    "VRUiipVFSqKkUVKoqVRUqipFFSqKlUVyHiW9+16iYlP7u3yg92/i/wAPwrMUVIoqdRUqipVF"
+    "SqKkUVKoqVRUqipFFSqKlUVKoqrrF7/Z+nSSqcSN8kf+8f8ADk/hXDKKlUVKoqdRUqipFFSq"
+    "KlUVIoqVRUqipVFSKKlUVKorkPEt79r1ExKf3dvlB7t/F/h+FZiipFFSqKnUVKoqVRUiipVF"
+    "SqKlUVIoqVRUqipVFVdYvf7P06SVTiRvkj/3j/hyfwrhlFSqKlUVIoqwoqRRUqipVFSKKlUV"
+    "KoqVRUiipVFSqK5DxLe/a9RMSn93b5Qe7fxf4fhWYoqRRUqipVFTqKlUVIoqVRUqipVFSKKl"
+    "UVKoqVRVXWL3+z9OklU4kb5I/wDeP+HJ/CuGUVKoqVRUiipVFTqKlUVKoqRRUqipVFSqKkUV"
+    "KoqVRXIeJb37XqJiU/u7fKD3b+L/AA/CsxRUiipVFSqKlUV//9k="
+)
+JPEG_SIZE = (128, 96)
+
+# the fonts every page can use: Helvetica as written (F1), and Helvetica
+# whose codes extract as private-use characters (F2), as a font with a
+# broken ToUnicode map gives them
+_GARBLING_CMAP = (
+    b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n"
+    b"/CMapName /Garbled def /CMapType 2 def\n"
+    b"1 begincodespacerange <00> <FF> endcodespacerange\n"
+    b"1 beginbfrange <20> <FF> <E020> endbfrange\n"
+    b"endcmap CMapName currentdict /CMap defineresource pop end end"
+)
+PLAIN = "F1"
+GARBLED = "F2"
+INVISIBLE = 3
+
+
+@dataclass(frozen=True)
+class Image:
+    """An image XObject: its dictionary's entries and its stream."""
+
+    entries: str
+    data: bytes
+
+
+def gray(width: int, height: int, *, shade: int = 0) -> Image:
+    """A grey image of `width` by `height` pixels, stored uncompressed: a
+    diagonal gradient, offset by `shade` so that two images of one size
+    can hold different bytes."""
+    data = bytes(
+        (x * 7 + y * 3 + shade) % 256
+        for y in range(height)
+        for x in range(width)
+    )
+    return Image(
+        f"/Width {width} /Height {height} /ColorSpace /DeviceGray "
+        "/BitsPerComponent 8",
+        data,
+    )
+
+
+def rgb(width: int, height: int) -> Image:
+    """An RGB image of `width` by `height` pixels, stored uncompressed."""
+    data = bytes(
+        channel
+        for y in range(height)
+        for x in range(width)
+        for channel in ((x * 11) % 256, (y * 13) % 256, (x + y) % 256)
+    )
+    return Image(
+        f"/Width {width} /Height {height} /ColorSpace /DeviceRGB "
+        "/BitsPerComponent 8",
+        data,
+    )
+
+
+def jpeg() -> Image:
+    """The constant JPEG, as the PDF holds it (DCTDecode)."""
+    width, height = JPEG_SIZE
+    return Image(
+        f"/Width {width} /Height {height} /ColorSpace /DeviceGray "
+        "/BitsPerComponent 8 /Filter /DCTDecode",
+        JPEG,
+    )
+
+
+def lines(*paragraphs: str, width: int = 78) -> list[str]:
+    """The paragraphs as the lines a page draws them in, wrapped to fit a
+    page at the default size: each paragraph's lines, then the next's."""
+    return [
+        line
+        for paragraph in paragraphs
+        for line in textwrap.wrap(paragraph, width) or [""]
+    ]
+
+
+def _literal(text: str) -> bytes:
+    escaped = (
+        text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    )
+    return b"(" + escaped.encode("cp1252") + b")"
+
+
+@dataclass
+class Page:
+    """One page: the operators of its content, in the order they paint,
+    and the images and forms they name."""
+
+    width: float = WIDTH
+    height: float = HEIGHT
+    rotate: int = 0
+    ops: list[bytes] = field(default_factory=list)
+    images: dict[str, Image] = field(default_factory=dict)
+    # form name -> (the image it holds, placed on the form's unit square)
+    forms: dict[str, Image] = field(default_factory=dict)
+
+    def text(
+        self,
+        lines: list[str],
+        *,
+        x: float = 72,
+        y: float = 770,
+        size: float = 10,
+        mode: int = 0,
+        font: str = PLAIN,
+    ) -> Page:
+        """Draw `lines` from (x, y) down, one line a size and a bit apart,
+        in render `mode` (0 fills them; 3 draws nothing, as an OCR layer).
+        A line drawn at the default size fits the page up to about 80
+        characters (`lines` wraps paragraphs to fit)."""
+        ops = [
+            f"BT /{font} {size} Tf {mode} Tr {x} {y} Td {size + 2} TL".encode()
+        ]
+        ops += [_literal(line) + b" Tj T*" for line in lines]
+        ops.append(b"ET")
+        self.ops.append(b"\n".join(ops))
+        return self
+
+    def image(
+        self, image: Image, x: float, y: float, w: float, h: float
+    ) -> Page:
+        """Place `image` in the rectangle (x, y, w, h)."""
+        name = f"Im{len(self.images) + 1}"
+        self.images[name] = image
+        self.ops.append(f"q {w} 0 0 {h} {x} {y} cm /{name} Do Q".encode())
+        return self
+
+    def form_image(
+        self, image: Image, x: float, y: float, w: float, h: float
+    ) -> Page:
+        """Place `image` in the rectangle (x, y, w, h), inside a form
+        XObject that the page draws scaled and moved there."""
+        name = f"Fm{len(self.forms) + 1}"
+        self.forms[name] = image
+        self.ops.append(f"q {w} 0 0 {h} {x} {y} cm /{name} Do Q".encode())
+        return self
+
+    def rectangle(self, x: float, y: float, w: float, h: float) -> Page:
+        """Fill a grey rectangle (a path)."""
+        self.ops.append(f"q 0.5 g {x} {y} {w} {h} re f Q".encode())
+        return self
+
+
+def pdf(pages: list[Page]) -> bytes:
+    """A PDF of `pages`, in order."""
+    objects: list[bytes] = []
+
+    def add(body: bytes | str) -> int:
+        objects.append(body.encode() if isinstance(body, str) else body)
+        return len(objects)
+
+    def stream(entries: str, data: bytes) -> bytes:
+        return (
+            f"<< {entries} /Length {len(data)} >>\nstream\n".encode()
+            + data
+            + b"\nendstream"
+        )
+
+    catalog = add(b"")
+    tree = add(b"")
+    plain = add(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+        "/Encoding /WinAnsiEncoding >>"
+    )
+    cmap = add(stream("", _GARBLING_CMAP))
+    garbled = add(
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
+        f"/Encoding /WinAnsiEncoding /ToUnicode {cmap} 0 R >>"
+    )
+    kids = []
+    for page in pages:
+        xobjects = {}
+        for name, image in page.images.items():
+            xobjects[name] = add(
+                stream(
+                    f"/Type /XObject /Subtype /Image {image.entries}",
+                    image.data,
+                )
+            )
+        for name, image in page.forms.items():
+            inner = add(
+                stream(
+                    f"/Type /XObject /Subtype /Image {image.entries}",
+                    image.data,
+                )
+            )
+            xobjects[name] = add(
+                stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 1 1] "
+                    f"/Resources << /XObject << /Im {inner} 0 R >> >>",
+                    b"q 1 0 0 1 0 0 cm /Im Do Q",
+                )
+            )
+        named = " ".join(
+            f"/{name} {ref} 0 R" for name, ref in xobjects.items()
+        )
+        resources = (
+            f"<< /Font << /{PLAIN} {plain} 0 R /{GARBLED} {garbled} 0 R >> "
+            f"/XObject << {named} >> >>"
+        )
+        contents = add(stream("", b"\n".join(page.ops)))
+        rotate = f" /Rotate {page.rotate}" if page.rotate else ""
+        kids.append(
+            add(
+                f"<< /Type /Page /Parent {tree} 0 R "
+                f"/MediaBox [0 0 {page.width} {page.height}]{rotate} "
+                f"/Resources {resources} /Contents {contents} 0 R >>"
+            )
+        )
+    objects[catalog - 1] = f"<< /Type /Catalog /Pages {tree} 0 R >>".encode()
+    objects[tree - 1] = (
+        f"<< /Type /Pages /Kids [{' '.join(f'{kid} 0 R' for kid in kids)}] "
+        f"/Count {len(kids)} >>"
+    ).encode()
+    out = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets)
+    out += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root {catalog} 0 R >>\n"
+        f"startxref\n{xref}\n%%EOF\n"
+    ).encode()
+    return bytes(out)

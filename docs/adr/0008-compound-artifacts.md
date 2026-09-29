@@ -7,6 +7,8 @@ embeds is an artifact of its own, `part of` the compilation, as the owner
 decided on #178: see Amendments.
 Amended by #103 (2026-09-29): the write registers the deck, its slides
 and its derived media, each by its SHA-1: see Amendments.
+Amended by #176 (2026-09-29): a PDF is read page by page, and each image
+placed within its text-layer pages is read on its own: see Amendments.
 
 ## Context
 
@@ -270,7 +272,8 @@ from one witness can cite the other.
 
 Still to do, each keeping the two witnesses separable:
 
-- **Transcription (#176).** Today the vision engine reads a PDF whole,
+- **Transcription (#176; done, see the #176 amendment below).** Today
+  the vision engine reads a PDF whole,
   so an excerpt's text is read into the compilation's transcription and
   every claim read from it cites the PDF: the two witnesses are merged.
   #176 routes a PDF by page. The compilation's transcription holds the
@@ -441,3 +444,46 @@ time"):
 
 A compilation's excerpts are registered the same way once follow-up A
 records them.
+
+Amended by #176 (2026-09-29): **a PDF is read page by page, and each
+image placed within its text-layer pages is read on its own.** This does
+the #289 amendment's transcription item, and the part of its follow-up A
+that comes before the write.
+
+- **Page by page.** The vision route reads a PDF page by page when any
+  of its pages has a usable text layer: such a page from its text layer,
+  deterministically and without a model call; a scanned page, or one whose
+  text layer is empty or garbage, by a vision call of its own; a blank
+  page by nothing. The PDF's transcription holds its own text only, page
+  by page behind `[Page N]` markers, and marks where each image sits by
+  the image's SHA-1, as the #289 amendment allows; its `pages` record
+  each page's method. A PDF none of whose pages has a usable text layer is
+  read whole, by the one vision call it has always been read with, so a
+  scanned compilation stays as that amendment's third question leaves it.
+- **The definitions** the #289 amendment's seventh question asks for, as
+  the transcription uses them (`yizkr.pipeline.textlayer`). An image is
+  the page itself, or its background, when it alone covers at least 90%
+  of the page. A page is a scan when images together cover at least 60%
+  of it, as the strips or tiles of one scan do, and the layers of a mixed
+  raster content page, and it draws fewer than 200 letters and digits
+  visibly: an OCR layer is drawn invisibly, and a stamp or a header over
+  a scan is short. An image under 24 pixels on a side, or under 10,000
+  pixels in all, is decoration, and is not read. Registration can take
+  them as they stand; a change to them is a change to the transcription
+  stage, checked by a scratch diff (ADR-0025 §4).
+- **Each image placed within a text-layer page** is recorded before the
+  write as a deck's derived media are: in the PDF's `derived-media.json`,
+  keyed by the SHA-1 of its bytes, named for its places (`page 6, image
+  1`), with the pages it is on. Its bytes are the JPEG file the PDF holds,
+  or else a PNG of its pixels, written by a deterministic encoder that a
+  test holds byte for byte. The never-ingest list is asked of its SHA-1
+  before it is read. It is read by a vision call of its own, once however
+  many times the PDF places it, and its transcription, which names it by
+  its SHA-1, is kept beside its bytes. An image on a page read by vision
+  is read with that page, as the compilation's page.
+- **Still to do** (follow-up A): extracting each image's transcription
+  into a batch of its own; registering the images at write time; and
+  content dedup across documents, since another document or excerpt that
+  brings the same bytes keeps a view of its own, though the LLM cache
+  answers its call. Until then no claim is read from an image, and every
+  claim read from a PDF cites the PDF and comes from its own text.

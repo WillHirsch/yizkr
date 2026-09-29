@@ -181,7 +181,13 @@ The machine that runs `ingest run` needs, besides the stack in `deploy/`:
   once per run, since a PDF needs the renderer even when its
   transcription comes from the LLM cache, and `pdfinfo` even when its
   transcription is a view the run reuses and checks again. Images need
-  no renderer.
+  no renderer, and neither does a PDF read page by page (below), which
+  gives the engine images, but whether a PDF is read whole is known only
+  once its pages are read, so the check covers every PDF.
+- **Nothing to install for PDF text layers.** A PDF's pages are read with
+  pypdfium2 (Apache-2.0 or BSD-3-Clause), a dependency in
+  `pyproject.toml` whose wheels bundle PDFium, Chromium's PDF engine
+  (BSD-3-Clause): offline, in the pipeline's own process.
 
 ## The corpus and the never-ingest list
 
@@ -240,11 +246,32 @@ re-running one step in isolation — but for a normal ingest you only ever run
   made again, and only the files that are not what they should be are
   written. Registering and uploading the images (ADR-0008) is left to
   write-time registration (#103). Media other than images are counted
-  and reported, not recorded.
+  and reported, not recorded. A PDF read page by page (below) records
+  the images placed within its pages in the same record, by its
+  transcription stage, each named for its places ("page 6, image 1")
+  with the pages it is on; they are not registered, since no claim cites
+  them yet.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (a Transkribus-style platform adapter, dropped as LLM
-  vision is sufficient for handwriting: a stub that raises; #171).
+  vision is sufficient for handwriting: a stub that raises; #171). In
+  `ingest run` and `scratch run`, a PDF with a page whose text layer is
+  usable is read **page by page** (#176, `yizkr.pipeline.textlayer`):
+  such a page from its text layer, deterministically, without a model
+  call (the method `pdf-text-layer`, version 1); a scanned page (images
+  cover most of it and it draws little text visibly, since an OCR layer
+  is drawn invisibly), or one whose text layer is empty or garbage, by a
+  vision call of its own; a blank page by nothing; and each image placed
+  within a text-layer page by a vision call of its own, as a witness of
+  its own (#178, ADR-0008), unless it is too small to hold text or the
+  never-ingest list names its SHA-1. The PDF's transcription holds its
+  own text, page by page behind `[Page N]` markers, with each image
+  marked where it sits by its SHA-1, never what was read from it; its
+  `pages` record each page's method, and each image's transcription is
+  kept beside the image in `derived-media/`. A PDF with no such page,
+  a scan, is read whole, by the one call it has always been read with,
+  so the LLM cache and the transcription seed answer it as before. The
+  standalone `ingest transcribe --engine llm` reads a PDF whole.
 - **transcription check** — runs on the output of the `llm` and
   `textfile` engines (in `ingest run`, the vision and text-file methods)
   before anything uses it, in `ingest run` and `ingest transcribe`
@@ -274,7 +301,11 @@ re-running one step in isolation — but for a normal ingest you only ever run
   ("Page 2 could not be read", "I couldn't read the remaining pages")
   fails wherever it stands; other wordings count only where a note
   opens. The reason is recorded and the failed output is never passed
-  on.
+  on. A PDF read page by page is checked where the vision engine read
+  it, each page and each image apart, as a single image: a page that
+  fails fails the document, while an image that fails is left without
+  a transcription of its own, which the stage's attention reports. Text
+  read from a text layer is the document's own and is never checked.
 - **extract** — engines: `llm` (prompts with the claim JSON Schema and
   the uncertainty rules; output is schema- and manifest-validated
   before it goes anywhere) or `file` (prepared claims JSON through the
