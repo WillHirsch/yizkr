@@ -125,9 +125,9 @@ level-0 OBJE record that no image claim cites is. A level-0 SOUR record
 that no folded citation cites is counted as SOUR, and each FILE of an
 object after its first as OBJE.FILE. A DIV without a DATE is counted as
 DIV: it says a marriage ended at an unknown time, and a claim has no
-unknown value to
-state that with. A family has one husband and one wife, so the adapter
-reads a family's first HUSB and first WIFE alone, and a further one is
+unknown value to state that with. A family has one husband and one
+wife, so the adapter reads a family's first HUSB and first WIFE alone,
+and a further one is
 counted with its parent's tag too (FAM.HUSB, FAM.WIFE). A family's MARR
 and DIV date the spouse claims between its HUSB and its WIFE, so in a
 family with one partner or none (its HUSB or its WIFE is missing, or
