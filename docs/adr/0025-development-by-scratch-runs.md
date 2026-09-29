@@ -47,8 +47,8 @@ Amended by #105 (2026-09-29): corpus clustering has code, the scratch
 driver's first corpus stage, and runs under §2's stub; §2 is amended in
 place. It keeps its identity map in its own directory of the run
 directory and reuses it while the documents' batches, its declared
-version, the source of its modules and its thresholds stand, as
-ADR-0032 has the views reused.
+version, the source of its modules, the Unicode version and its
+thresholds stand, as ADR-0032 has the views reused.
 
 ## Context
 

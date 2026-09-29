@@ -160,7 +160,7 @@ uv run yizkr scratch run
   alone, with no wiki and no model (src/yizkr/pipeline/README.md,
   "Corpus clustering"). Its `done` event carries its counts: the
   ambiguous and conflicting clusters it left apart, the adjudication
-  calls they would take, and any hub key it blocked no pair on.
+  calls they would take, and the count of hub keys.
 - **Options.** `--until STAGE` stops after a stage (`transcription`,
   `extraction`, `critique`, or a corpus stage; `gedcom` stops with
   `extraction`). `--cache DIR` names the LLM cache (default

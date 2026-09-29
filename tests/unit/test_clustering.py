@@ -10,6 +10,7 @@ that case uses placeholder names. No wiki, no model.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import itertools
 import json
@@ -18,6 +19,7 @@ import random
 import shutil
 import subprocess
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +35,7 @@ from yizkr.pipeline.clustering import (
     CONFLICTING,
     GEDCOM,
     HARD,
+    HUB,
     IDENTITY_MAP,
     SINGLETON,
     SOFT,
@@ -805,12 +808,80 @@ class TestBlocking:
             "hub keys not blocked on: 1 key, held by 5 mentions"
             in attention(summary)
         )
+        # the review lists the hub, with the mentions holding it
+        (listed,) = identity["review"]
+        assert listed == {
+            "status": HUB,
+            "kind": "human",
+            "members": sorted(identity["mentions"]),
+            "key": ["key", "gustav", "lobig"],
+            "pairs": [],
+            "conflict": None,
+            "contradiction": None,
+        }
         assert len(blocked_pairs(manifests)) == 10
         unguarded = cluster_corpus(manifests)
         assert {e["method"] for e in unguarded["mentions"].values()} == {
             CONFIDENT
         }
         assert unguarded["summary"]["hub_keys"] == 0
+        assert unguarded["review"] == []
+
+    def test_a_key_the_export_matches_is_never_a_hub(self):
+        """Over a hub limit of three, five registers name Gustav, born
+        1919, as the export does: each pairs with the export's Gustav
+        alone, a pair each, so the key is no hub, and the six merge. Five
+        registers naming him 'Gustl', his nickname, pair with him too: a
+        lone token only ever meets the export, and is never a hub."""
+        ged = export(
+            "0 @I8@ INDI\n1 NAME Gustav /Löbig/\n2 NICK Gustl\n"
+            "1 BIRT\n2 DATE 1919\n",
+            {"i8": "gustav-loebig"},
+        )
+        hub = load_config(overrides={"blocking": {"max-key-mentions": 3}})
+        dated = [
+            register(
+                f"gustav-{n}",
+                [entity("e1", "Gustav Löbig")],
+                [("e1", "date_of_birth", day(1919))],
+                {"e1": "gustav-loebig"},
+            )
+            for n in range(5)
+        ]
+        manifests = [ged.manifest, *(doc.manifest for doc in dated)]
+        assert len(blocked_pairs(manifests, hub)) == 5
+        identity = cluster_corpus(manifests, hub)
+        assert identity["summary"]["hub_keys"] == 0
+        assert merged([ged, *dated], identity) == [{"gustav-loebig"}]
+        (cluster,) = [
+            entry
+            for entry in identity["clusters"].values()
+            if len(entry["members"]) > 1
+        ]
+        assert (cluster["method"], len(cluster["members"])) == (CONFIDENT, 6)
+        nicknamed = [
+            register(
+                f"gustl-{n}",
+                [entity("e1", "Gustl")],
+                [],
+                {"e1": "gustav-loebig"},
+            )
+            for n in range(5)
+        ]
+        manifests = [ged.manifest, *(doc.manifest for doc in nicknamed)]
+        assert len(blocked_pairs(manifests, hub)) == 5
+        identity = cluster_corpus(manifests, hub)
+        assert identity["summary"]["hub_keys"] == 0
+        # without anchoring the export's key is a hub like any other, and
+        # nothing pairs on it
+        free = load_config(
+            overrides={
+                "blocking": {"max-key-mentions": 3, "gedcom-anchored": False}
+            }
+        )
+        manifests = [ged.manifest, *(doc.manifest for doc in dated)]
+        assert blocked_pairs(manifests, free) == set()
+        assert cluster_corpus(manifests, free)["summary"]["hub_keys"] == 1
 
 
 class TestNames:
@@ -836,6 +907,42 @@ class TestNames:
             (("hildegard", "lobig"), False),
             (("hildegard", "laudler"), False),
         ]
+
+    def test_a_maiden_name_or_an_occupation_past_the_comma(self):
+        """A maiden name inside the given names' part, or the surname's,
+        is read as one; an occupation where the given names would stand
+        gives none, so the surname is named alone, as the directory's
+        'Löbig, Hutmacher' would; a marker with no name after it gives no
+        second form."""
+        forms = person_forms
+        hildegard = [
+            (("hildegard", "lobig"), False),
+            (("hildegard", "laudler"), False),
+        ]
+        assert forms("Löbig, Hildegard geb. Laudler", 3) == hildegard
+        assert forms("Löbig geb. Laudler, Hildegard", 3) == hildegard
+        assert forms("Löbig, Hutmacher", 3) == [(("lobig",), True)]
+        assert forms("Löbig, Hutmachermeister, Brunnenring 35", 3) == [
+            (("lobig",), True)
+        ]
+        assert forms("Löbig, geb. Laudler", 3) == [
+            (("lobig",), True),
+            (("laudler",), True),
+        ]
+        assert forms("Löbig, Ursula, born 1911", 3) == [
+            (("ursula", "lobig"), False)
+        ]
+        # a surname alone keys nothing: two such entries never pair
+        entries = [
+            register(
+                f"hatter-{n}",
+                [entity("e1", "Löbig, Hutmacher")],
+                [],
+                {"e1": truth},
+            )
+            for n, truth in enumerate(("eugen-loebig", "sebastian-loebig"))
+        ]
+        assert blocked_pairs([doc.manifest for doc in entries]) == set()
 
     def test_a_comma_inverted_name_meets_the_same_name(self):
         """The card's Ida, as the card writes her, meets the export's Ida
@@ -1301,6 +1408,109 @@ class TestEvents:
             (AMBIGUOUS, "exact/conflict/unknown")
         ]
 
+    def test_the_deaths_of_a_person_held_for_review_stay_apart(self):
+        """The export gives Sebastian, 'Wastl', born 1862; the tree and a
+        register each give him born 1862 and his death, the tree's in 1945
+        and the register's undated; a photo's 'Wastl' keeps his cluster
+        ambiguous. His deaths stay apart while he does, though any two of
+        his dated mentions alone would link: an event reads the clusters
+        its participants end in, never their links."""
+        ged = export(
+            "0 @I3@ INDI\n1 NAME Sebastian /Löbig/\n2 NICK Wastl\n"
+            "1 SEX M\n1 BIRT\n2 DATE 1862\n",
+            {"i3": "sebastian-loebig"},
+        )
+
+        def death(make, key: str, dated: bool) -> Doc:
+            claims = [
+                ("e1", "date_of_birth", day(1862)),
+                ("e2", "participant", item("e1")),
+            ]
+            if dated:
+                claims.append(("e2", "point_in_time", day(1945)))
+            return make(
+                key,
+                [
+                    entity("e1", "Sebastian Löbig"),
+                    entity("e2", "Death of Sebastian Löbig", "death"),
+                ],
+                claims,
+                {"e1": "sebastian-loebig", "e2": "sebastian-death"},
+            )
+
+        tree = death(document, "family-tree-1984", True)
+        book = death(register, "a death register", False)
+        photo = register(
+            "wastl", [entity("e1", "Wastl")], [], {"e1": "sebastian-loebig"}
+        )
+        docs = [ged, tree, book, photo]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        for local_id in ("e1", "e2"):
+            assert [
+                identity["mentions"][doc.fingerprint(local_id, identity)][
+                    "method"
+                ]
+                for doc in (tree, book)
+            ] == [AMBIGUOUS, AMBIGUOUS]
+        # without the photo, Sebastian merges, and his deaths with him
+        docs = [ged, tree, book]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == [
+            {"sebastian-death"},
+            {"sebastian-loebig"},
+        ]
+
+    def test_a_birth_naming_only_the_mother_is_not_her_sons(self):
+        """A letter tells of the birth of Hildegard's first child, naming
+        only her; the extract gives Gustav's birth on 7 January 1919,
+        naming him and her. The Hildegards merge, and the births stay
+        apart: two births need dates that agree unless each names one
+        participant alone (placeholder letter)."""
+        letter = register(
+            "first child",
+            [
+                entity("e1", "Hildegard Löbig"),
+                entity("e2", "Birth of Hildegard's first child", "birth"),
+            ],
+            [
+                ("e1", "date_of_birth", day(1876)),
+                ("e2", "participant", item("e1")),
+            ],
+            {"e1": "hildegard-loebig", "e2": "ursula-birth"},
+        )
+        extract = document(
+            "birth-extract-1938",
+            [
+                entity("e1", "Hildegard Löbig"),
+                entity("e2", "Gustav Löbig"),
+                entity("e3", "Birth of Gustav Löbig", "birth"),
+            ],
+            [
+                ("e1", "date_of_birth", day(1876)),
+                ("e3", "participant", item("e2")),
+                ("e3", "participant", item("e1")),
+                ("e3", "point_in_time", day(1919, 1, 7)),
+            ],
+            {
+                "e1": "hildegard-loebig",
+                "e2": "gustav-loebig",
+                "e3": "gustav-birth",
+            },
+        )
+        docs = [letter, extract]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        assert merged(docs, identity) == [{"hildegard-loebig"}]
+        births = [
+            letter.fingerprint("e2", identity),
+            extract.fingerprint("e3", identity),
+        ]
+        assert [identity["mentions"][m]["method"] for m in births] == [
+            AMBIGUOUS,
+            AMBIGUOUS,
+        ]
+
 
 # -- the reviewers' false merges ----------------------------------------------
 
@@ -1466,6 +1676,65 @@ class TestNoFalseMerge:
         assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
             (AMBIGUOUS, "key/unknown/unknown")
         ]
+
+    def test_an_institution_named_by_its_kind_needs_a_place(self):
+        """'Städtische Realschule' names a school in every town: two
+        registers name one in Flörburg and one in Peiltal, which stay
+        apart; one at a street in Flörburg merges with Flörburg's, the
+        place it lies in being theirs. 'Städtische Realschule Flörburg'
+        names its town, and merges on the name alone (placeholders)."""
+
+        def school(key: str, places: list[str], truth: str) -> Doc:
+            entities = [
+                entity("e1", "Städtische Realschule", "organization"),
+                *(
+                    entity(f"p{n}", place, "place")
+                    for n, place in enumerate(places)
+                ),
+            ]
+            claims = [("e1", "location", item("p0"))] + [
+                (f"p{n}", "part_of", item(f"p{n + 1}"))
+                for n in range(len(places) - 1)
+            ]
+            return register(
+                key,
+                entities,
+                claims,
+                {
+                    "e1": truth,
+                    **{f"p{n}": place for n, place in enumerate(places)},
+                },
+            )
+
+        floerburg = school("in Flörburg", ["Flörburg"], "realschule-f")
+        peiltal = school("in Peiltal", ["Peiltal"], "realschule-p")
+        street = school(
+            "on a street", ["Xxxstrasse 1", "Flörburg"], "realschule-f"
+        )
+        docs = [floerburg, peiltal]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == []
+        (review,) = identity["review"]
+        assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
+            (AMBIGUOUS, "exact/unknown/unknown")
+        ]
+        docs = [floerburg, street]
+        identity = identity_of(*docs)
+        assert {"realschule-f"} in merged(docs, identity)
+        named = [
+            register(
+                f"named-{n}",
+                [
+                    entity(
+                        "e1", "Städtische Realschule Flörburg", "organization"
+                    )
+                ],
+                [],
+                {"e1": "realschule-f"},
+            )
+            for n in range(2)
+        ]
+        assert merged(named, identity_of(*named)) == [{"realschule-f"}]
 
     def test_placeholders_name_no_one(self):
         """The export's N.N. Yyy (born 1922, child of Zzz Yyy) and a
@@ -2599,6 +2868,49 @@ class TestTheStage:
             copy.write_bytes(original + b"\n")
             assert code_digest() != before, name
             copy.write_bytes(original)
+
+    def test_another_unicode_database_makes_it_again(
+        self, tmp_path, monkeypatch
+    ):
+        """Names are normalised and folded by the Unicode database the
+        interpreter ships, so its version is in the key."""
+        directory_ = tmp_path / "corpus" / "clustering"
+        documents = self.docs(tmp_path)
+        made = ensure_identity_map(directory_, documents)
+        monkeypatch.setattr(unicodedata, "unidata_version", "0.0.0")
+        again = ensure_identity_map(directory_, documents)
+        assert not again.reused
+        assert again.identity_map["hash"] == made.identity_map["hash"]
+
+    def test_every_module_it_imports_reaches_its_key(self):
+        """Every yizkr module clustering.py and fingerprints.py import is
+        in CODE, whose source is in the key, or reaches the key through
+        the batches' hashes: claims parses the batches, orchestrate says
+        what a hash leaves out, and stages makes it. A module outside both
+        could change the map and leave its key standing."""
+        through_the_batches = {
+            "yizkr.claims",
+            "yizkr.pipeline.orchestrate",
+            "yizkr.pipeline.stages",
+        }
+        in_code = {
+            f"yizkr.pipeline.{name.removesuffix('.py')}"
+            for name in clustering.CODE
+        }
+        for name in ("clustering.py", "fingerprints.py"):
+            tree = ast.parse((clustering.PACKAGE / name).read_text())
+            imported = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if node.level:
+                        module = f"yizkr.pipeline.{module}".rstrip(".")
+                    imported.add(module)
+                elif isinstance(node, ast.Import):
+                    imported.update(alias.name for alias in node.names)
+            ours = {m for m in imported if m.split(".")[0] == "yizkr"}
+            assert ours, name
+            assert ours <= in_code | through_the_batches, (name, ours)
 
     def test_other_thresholds_or_version_make_it_again(
         self, tmp_path, monkeypatch

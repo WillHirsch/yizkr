@@ -423,10 +423,12 @@ refuses). The module docstring is the full account; in short:
 - **Names** are read as names: a bracketed part ("formerly Gustav
   Löbig", an inline nickname) is a form of its own, a name written
   surname first ("Löbig, Ursula, Wwe.") is read given name first, a
-  maiden name gives a second form, and titles, kin and courtesy words,
-  particles and initials are no name tokens. A name that is only a
-  surname ("Frau Löbig", "N.N. Löbig") names no one: it makes no key, no
-  name match and no kin agreement.
+  maiden name gives a second form wherever it stands ("Löbig, Hildegard
+  geb. Laudler"), and titles, kin and courtesy words, particles and
+  initials are no name tokens. A name that is only a surname ("Frau
+  Löbig", "N.N. Löbig", or "Löbig, Hutmacher", an occupation where the
+  given names would stand) names no one: it makes no key, no name match
+  and no kin agreement.
 - **Blocking** proposes pairs by keys of each kind, never by one shared
   token: a given name with a different surname for people (a surname may
   come from the person's kin, and a nickname stands for a given name); a
@@ -435,8 +437,11 @@ refuses). The module docstring is the full account; in short:
   other's distinctive tokens; events through their participants; the
   whole name otherwise. A mention that key-matches the GEDCOM export
   pairs with those anchors only. A key more than `max-key-mentions`
-  mentions share is a hub: none of them is blocked on it, and the hubs
-  and the mentions holding one are counted. Lookups go through indexes,
+  mentions share is a hub: none of them is blocked on it, the hubs and
+  the mentions holding one are counted, and the review lists them. A
+  key that finds a mention of the export is never a hub, since each
+  mention holding it pairs with its anchors only, and nor is a person's
+  lone token, which only meets the export. Lookups go through indexes,
   organizations included, so the work grows with the mentions and the
   pairs proposed.
 - **Cannot-link.** Two ids of one manifest are kept apart (soft). The
@@ -450,9 +455,11 @@ refuses). The module docstring is the full account; in short:
   for people a name match with kin that agree or dates that agree (a
   century or an open "before" agrees with nothing); for places an exact
   or nested name; for organizations and families a shared name of two
-  distinctive tokens or more; for events every participant of the one
-  with fewer merged into one cluster with a participant of the other,
-  and, but for births and deaths, dates that agree; otherwise an exact
+  distinctive tokens or more, and a shared place too when the name is
+  only an institution's kind ("Städtische Realschule"); for events every
+  participant of the one with fewer merged into one cluster with a
+  participant of the other, and dates that agree, which two births or
+  two deaths of one participant each need not have; otherwise an exact
   name. A mention of no kind never links confidently, and nor does one
   matching more than `max-anchors` GEDCOM anchors (a place counts those
   it matches exactly, and those it nests in as one).
@@ -477,10 +484,11 @@ refuses). The module docstring is the full account; in short:
   for extraction). The map's `hash` covers those decisions alone. It also
   lists each ambiguous or conflicting candidate cluster with its pairs,
   the evidence for each, and the pair that makes it conflict or the
-  members that contradict, and a summary of counts. The stage reuses the
+  members that contradict, then each hub key with the mentions holding
+  it, and a summary of counts. The stage reuses the
   map while the documents' batches (by content), the stage's `VERSION`,
-  the source of the modules that make it, and the thresholds stand, and
-  makes it again otherwise; the same decisions give the same cluster ids
+  the source of the modules that make it, the Unicode version and the
+  thresholds stand, and makes it again otherwise; the same decisions give the same cluster ids
   and hash. What reaches the run's events is counts within fixed labels.
 - **Not yet.** Nothing reads the map to write: the writer resolves through
   it with #109, adjudication of ambiguous pairs comes with #106, and
