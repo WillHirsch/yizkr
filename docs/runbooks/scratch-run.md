@@ -159,8 +159,8 @@ uv run yizkr scratch run
   `corpus/clustering/identity-map.json`, from the documents' batches
   alone, with no wiki and no model (src/yizkr/pipeline/README.md,
   "Corpus clustering"). Its `done` event carries its counts: the
-  ambiguous and conflicting clusters it left apart, and the adjudication
-  calls they would take.
+  ambiguous and conflicting clusters it left apart, the adjudication
+  calls they would take, and any hub key it blocked no pair on.
 - **Options.** `--until STAGE` stops after a stage (`transcription`,
   `extraction`, `critique`, or a corpus stage; `gedcom` stops with
   `extraction`). `--cache DIR` names the LLM cache (default

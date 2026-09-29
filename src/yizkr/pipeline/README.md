@@ -436,8 +436,9 @@ refuses). The module docstring is the full account; in short:
   whole name otherwise. A mention that key-matches the GEDCOM export
   pairs with those anchors only. A key more than `max-key-mentions`
   mentions share is a hub: none of them is blocked on it, and the hubs
-  and the mentions holding one are counted. Lookups go through indexes, organizations included, so the
-  work grows with the mentions and the pairs proposed.
+  and the mentions holding one are counted. Lookups go through indexes,
+  organizations included, so the work grows with the mentions and the
+  pairs proposed.
 - **Cannot-link.** Two ids of one manifest are kept apart (soft). The
   export's places and occupations are exempt, as the adapter mints one
   per string, and so are the refs of a batch without a manifest, which
@@ -449,11 +450,12 @@ refuses). The module docstring is the full account; in short:
   for people a name match with kin that agree or dates that agree (a
   century or an open "before" agrees with nothing); for places an exact
   or nested name; for organizations and families a shared name of two
-  distinctive tokens or more; for events a pair of participants merged
-  into one cluster, and, but for births and deaths, dates that agree;
-  otherwise an exact name. A mention of no kind never links confidently,
-  and nor does one matching more than one GEDCOM anchor (a place counts
-  those it matches exactly, and those it nests in as one).
+  distinctive tokens or more; for events every participant of the one
+  with fewer merged into one cluster with a participant of the other,
+  and, but for births and deaths, dates that agree; otherwise an exact
+  name. A mention of no kind never links confidently, and nor does one
+  matching more than `max-anchors` GEDCOM anchors (a place counts those
+  it matches exactly, and those it nests in as one).
 - **Clusters.** The closure over every candidate pair gives the candidate
   clusters: *conflicting* when one joins a cannot-link pair, else
   *ambiguous* when any of its links is, or when two members that were
