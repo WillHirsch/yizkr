@@ -63,12 +63,12 @@ and `yizkr.reset` for the reset.
   is registered yet (below), so a run needs no stack. A refusal lists
   every problem it found.
 - **The kept-state marker** is the page `Project:Kept state` on the
-  instance: keeper mode (#118) writes it, and `yizkr scratch reset`
-  refuses while it is there (Reset the instance, below). The driver
-  takes the same reader (`yizkr.core.instance.instance_is_kept`) when the
-  write side (#200) registers its stages; until then it cannot tell a
-  kept instance from another, so it refuses every corpus stage that
-  touches the wiki.
+  instance and the file `kept.json` in the record of the instance:
+  keeper mode (#118) writes both, and `yizkr scratch reset` refuses while
+  either is there (Reset the instance, below). The driver takes the same
+  reader (`yizkr.core.instance.instance_is_kept`) when the write side
+  (#200) registers its stages; until then it cannot tell a kept instance
+  from another, so it refuses every corpus stage that touches the wiki.
 - **The estimate.** `uv run yizkr scratch estimate`, with the options
   the run is to take, counts the engine calls that `yizkr scratch run`
   would make now, per stage and in all: the calls of the stages whose
@@ -311,6 +311,9 @@ uv run yizkr scratch reset --yes    # confirmed; needed without a terminal
 make scratch-reset                  # the same; ARGS="--yes" confirms it
 ```
 
+Either way it first says which instance, compose project and volumes it
+is about to reset.
+
 - **The steps.** Each one prints how long it took, and the end lists
   them all:
   1. check the kept-state marker, and refuse on a kept instance
@@ -318,7 +321,8 @@ make scratch-reset                  # the same; ARGS="--yes" confirms it
   2. clear the write-phase state: the recorded instance-contents key is
      cleared, and the write stage's state set aside (The record of the
      instance, below);
-  3. stop the stack: `docker compose down`, which keeps the volumes;
+  3. stop the stack: `docker compose down`, which keeps the volumes,
+     after recording where the stack runs from (`stack.json`, below);
   4. remove the graph volumes: the database (`mysql-data`), the search
      index (`elasticsearch-data`), the query service (`wdqs-data`), and
      the wiki's uploaded media (`wikibase-image-data`), which only the
@@ -337,6 +341,10 @@ make scratch-reset                  # the same; ARGS="--yes" confirms it
 - **No backup.** It takes none (ADR-0024 §7): everything written to the
   instance is lost. It never touches the LLM cache, a run directory or
   its reports, or the corpus.
+- **Local settings.** Every reset installs a fresh `LocalSettings.php`,
+  so keep the wiki's local settings in `deploy/config/Extensions.php` or
+  `deploy/config/Uploads.php`, which the compose file mounts into
+  `LocalSettings.d`, never in `LocalSettings.php`.
 - **The stack.** One env file gives the reset its connection settings
   and the compose files their variables: `--env-file`, else
   `$YIZKR_ENV_FILE`, else `deploy/.env`, as for every command. The
@@ -347,16 +355,28 @@ make scratch-reset                  # the same; ARGS="--yes" confirms it
   `config/LocalSettings.php`, which is moved. From a worktree, point
   `$YIZKR_ENV_FILE` at the main checkout's `deploy/.env`: the stack runs
   from that checkout's deploy directory, and the reset refuses any
-  other.
+  other. While the stack has containers, stopped ones included, their
+  labels say where it was started from; with none, the reset checks the
+  deploy directory and compose files that the last reset recorded in
+  `stack.json`.
 - **Guards.** Before it changes anything, the reset refuses:
+  - `COMPOSE_PROJECT_NAME`, set in the environment or in the env file:
+    docker compose would take the stack for another project than its
+    compose files name, with other volumes, which the reset would remove;
+  - `DOCKER_HOST` or `DOCKER_CONTEXT`, or a docker context other than
+    `default`: the reset moves a file beside the compose files, so it
+    works on the local Docker engine only;
   - compose files that do not declare the four volumes under the keys
     Wikibase Suite Deploy gives them, or declare one external;
-  - a stack whose containers were made from another directory or other
-    compose files: starting it from these would swap its config
-    directory, and its `LocalSettings.php`, for another checkout's;
+  - a stack whose containers, stopped ones included, were made from
+    another directory or other compose files, or, with no container,
+    that the last reset ran from elsewhere (`stack.json`): starting it
+    from here would swap its config directory, and its
+    `LocalSettings.php`, for another checkout's;
   - a volume of one of those names that Docker Compose did not make for
     this project as that volume: it removes the stack's own volumes and
     nothing else;
+  - a stack that docker cannot read;
   - a reset that is not confirmed: at a terminal, by typing `reset`;
     otherwise by `--yes`.
 
@@ -364,19 +384,32 @@ make scratch-reset                  # the same; ARGS="--yes" confirms it
   live test session holds it, and holds it to the end, so no live
   session uses the instance while it is reset. Under the lock it reads
   the stack again under these guards, since it may have changed while
-  the reset waited, and reads the kept-state marker, the page
-  `Project:Kept state` on the instance, which keeper mode (#118) writes
-  once the keeper run's write completes (ADR-0025 §6). As a page it goes
-  wherever the instance's database goes, into its backups and through a
-  restore. The reset refuses on a kept instance, and on one whose marker
-  it cannot read: it starts a stopped stack to read it, and a wiki that
-  does not answer, or answers as another wiki than the env file names,
-  leaves it unable to tell. An instance with no database volume holds no
-  graph, so there is nothing to guard.
+  the reset waited, and refuses one that names another project, other
+  volumes or another config directory than the one it confirmed. Then it
+  reads the kept-state marker (below), and refuses a kept instance. It
+  asks the wiki first. A wiki that answers must be served by this
+  engine's stack, with the project's database volume and a running
+  `wikibase` container: otherwise it is served from elsewhere (another
+  Docker engine behind the local socket, say), and the reset cannot tell
+  which instance it would reset. A wiki that answers as another wiki
+  than the env file names is refused too. With the database volume
+  there and no answer, the reset starts the stack to read the marker,
+  and refuses if it still cannot. Only no answer and no database volume
+  mean the instance holds no graph to guard.
+- **The kept-state marker** is kept twice, and the reset refuses if
+  either says the instance is kept: the page `Project:Kept state` on the
+  instance, which goes wherever its database goes, into backups and
+  through a restore; and the file `kept.json` in the record of the
+  instance, which holds when the instance cannot be read, or another
+  engine answers for it. Keeper mode (#118) writes both once the keeper
+  run's write completes (ADR-0025 §6). Removing them is a deliberate
+  owner step, taken only to give up the kept state: delete the page as
+  the wiki's admin, and remove `kept.json` by hand.
 - **What it deletes**: the four volumes, and nothing else. The rest of
   what it clears it sets aside, in `reset/<UTC time>/` in the record of
-  the instance: the write stage's state, and `LocalSettings.php`. Remove
-  those folders when you no longer want them.
+  the instance: the write stage's state, and `LocalSettings.php`, which
+  holds the wiki's secret key and database password. The folder is
+  private to you; clear old ones by hand when you no longer want them.
 - **Again.** Every step is safe to repeat, so a reset that failed or
   was interrupted is finished by running it again: it removes only the
   volumes there are and sets aside only what is there, and the
@@ -385,9 +418,21 @@ make scratch-reset                  # the same; ARGS="--yes" confirms it
   installed MediaWiki can leave a half-installed database, whose wiki
   never answers; the reset then refuses, since it cannot tell whether
   the instance is kept. If you are sure it is not, finish by hand in the
-  deploy directory: `docker compose down`, `docker volume rm` the four
-  volumes, move `config/LocalSettings.php` out of the directory, and run
-  `yizkr scratch reset` again.
+  deploy directory, with the compose files the stack was started with (a
+  `-f` for each, as the reset's refusal names them), then run
+  `yizkr scratch reset` again:
+
+  ```sh
+  docker compose -f docker-compose.yml down
+  docker volume rm yizkr-wikibase_mysql-data \
+      yizkr-wikibase_elasticsearch-data yizkr-wikibase_wdqs-data \
+      yizkr-wikibase_wikibase-image-data
+  mv config/LocalSettings.php ~/.local/state/yizkr/instances/<host>/reset/
+  ```
+
+  The volume names are the project's (`yizkr-wikibase`, from the
+  compose file's `name`) and each volume's key;
+  `docker compose config --volumes` lists the keys.
 - **Exit status**: 0 when it finished; 1 when it was refused or a step
   failed, saying which; 130 on Ctrl-C.
 
@@ -407,6 +452,9 @@ set), in a private folder named after the instance's host.
   starts and ends), `yizkr bootstrap` and the reset also clear it
   outright, and the cleared record names who cleared it, when, and from
   which process.
+- `kept.json`: the host-side kept-state marker (above).
+- `stack.json`: the deploy directory, compose files and project that
+  the last reset stopped the stack from.
 - `write/`: the write stage's state between its invocations (#200),
   which the reset sets aside.
 - `reset/`: what each reset set aside.

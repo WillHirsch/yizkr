@@ -308,6 +308,16 @@ docs.)
 
 ### Resetting
 
+In the development stage, reset the instance with `yizkr scratch reset`
+(docs/runbooks/scratch-run.md, Reset the instance), the only sanctioned
+way: it refuses on a kept instance, removes the graph volumes and
+nothing else, sets `LocalSettings.php` aside rather than deleting it,
+clears the recorded instance-contents key, and repopulates the
+instance. The commands below do none of that. They read no kept-state
+marker, so they would destroy a kept instance too, and
+`down --volumes` also deletes QuickStatements' volume (and, run with
+the HTTPS overlay, traefik's certificates).
+
 Destroys all wiki content and rebuilds from `.env`. Only for a broken
 first install or a deliberate start-over — **this deletes the graph**.
 

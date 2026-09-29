@@ -132,7 +132,24 @@ class TestSyncCalls:
         assert os.sync is posix.sync
 
 
+@pytest.fixture(scope="module")
+def module_record_root() -> Path:
+    """The record of the instance a module's fixture sees: it sets up
+    before any test's own default."""
+    from yizkr.core.instance import state_root
+
+    return state_root()
+
+
 class TestInstanceRecord:
+    def test_a_modules_fixtures_keep_the_sessions_record(
+        self, module_record_root, tmp_path_factory
+    ):
+        """As test_live_lock.py's child sessions do, which it starts once
+        for its module."""
+        basetemp = tmp_path_factory.getbasetemp()
+        assert module_record_root == basetemp / "instance-records" / "session"
+
     def test_each_test_keeps_its_own_record_of_the_instance(
         self, request, tmp_path_factory
     ):

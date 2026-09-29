@@ -64,11 +64,13 @@ Amended by #199 (2026-09-29): the reset also removes the wiki's uploaded
 media, which only the database refers to, and sets the wiki's
 LocalSettings.php aside so that the wiki installs afresh; it holds the
 live-stack lock while it runs, and a reset without a terminal needs
-`--yes`. The kept-state marker is a page on the instance, and a reset
-that cannot read it refuses. The instance-contents record names the
-instance's newest revision and log entry, so any write the scratch write
-stage did not make voids it, a manual edit included; §1, §6 and §8 are
-amended in place.
+`--yes`. The kept-state marker is kept twice, as a page on the instance
+and as a record on the host, and the reset refuses if either says kept,
+if it cannot read the page, or if a wiki answers that the local engine's
+stack does not serve. The instance-contents record names the instance's
+newest revision and log entry, so any write the scratch write stage did
+not make voids it, a manual edit included; §1, §6 and §8 are amended in
+place.
 
 ## Context
 
@@ -134,7 +136,8 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   that the wiki installs afresh, starts it, bootstraps the manifest,
   publishes the queries and runs the smoke test. It holds the live-stack
   lock while it runs, refuses on an instance that carries the kept-state
-  marker (§6) or whose marker it cannot read, and needs `--yes` without a
+  marker (§6), whose marker it cannot read, or whose wiki the local
+  Docker engine's stack does not serve, and needs `--yes` without a
   terminal. It clears write-phase state but never the stage store, the
   corpus or run reports, and it takes no backup (ADR-0024 §7). There is
   no separate dev stack. The scratch write stage refuses unless its own
@@ -409,10 +412,13 @@ note.
   (ADR-0026, ADR-0027). It is the first run anyone ratifies.
 - **The kept-state stage follows.** CLAUDE.md rule 3 applies in full,
   milestone backups start (ADR-0024 §7), and keeper mode writes the
-  kept-state marker, the page `Project:Kept state` on the instance, so
-  the reset command refuses on it (#118, #199). As a page, the marker
-  goes wherever the instance's database goes, into its backups and
-  through a restore.
+  kept-state marker twice, as the page `Project:Kept state` on the
+  instance and as `kept.json` in the instance's record on the host, so
+  the reset command refuses on it (#118, #199). The page goes wherever
+  the instance's database goes, into its backups and through a restore;
+  the host-side record holds when the instance cannot be read, or
+  another Docker engine answers for it. Removing either is a deliberate
+  owner step.
 - **Development continues without an instance.** From then on,
   `needs:scratch-diff` runs stop `--until` the last stage before write,
   so they need no instance.

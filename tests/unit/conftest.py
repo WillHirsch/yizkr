@@ -36,10 +36,12 @@ changing what they check:
   operator's file of thresholds, is left out of every unit test, whose
   checks run on the defaults.
 - **No record of the real instance.** `$YIZKR_INSTANCE_STATE` names a
-  directory of each test's own (the `_no_instance_record` fixture), so a
+  directory of each test's own (the `_no_instance_record` fixture), and
+  of the session's own for fixtures that set up before any test's, of a
+  module or of the session (`_no_instance_record_in_the_session`). So a
   test that clears or records the instance-contents key
-  (yizkr.core.instance) never touches the developer's record of the one
-  instance, which scratch runs read.
+  (yizkr.core.instance), or a child process it starts, never touches the
+  developer's record of the one instance, which scratch runs read.
 
 test_conftest.py tests the first two and the last, and test_anomalies.py
 the third.
@@ -136,6 +138,23 @@ def _no_claude_config(monkeypatch, tmp_path_factory):
     and before every call). Tests that need one set their own."""
     missing = tmp_path_factory.getbasetemp() / "no-claude-config"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(missing))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_instance_record_in_the_session(tmp_path_factory):
+    """The session's own record of the instance ($YIZKR_INSTANCE_STATE),
+    for what runs before any test's own (_no_instance_record): a fixture
+    of a module or of the session, such as the child sessions that
+    test_live_lock.py starts once for its module, whose integration
+    conftest clears the instance-contents key."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(
+            "YIZKR_INSTANCE_STATE",
+            str(
+                tmp_path_factory.getbasetemp() / "instance-records" / "session"
+            ),
+        )
+        yield
 
 
 @pytest.fixture(autouse=True)

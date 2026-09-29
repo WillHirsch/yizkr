@@ -41,7 +41,10 @@ itself in its own `--help`.
     thresholds whatever the environment names. The one test that needs a
     real timer takes the real one, which test_anomalies.py saves.
   - `$YIZKR_INSTANCE_STATE` names a folder of each test's own, which
-    nothing makes until the test writes there, so no unit test reads or
+    nothing makes until the test writes there, and a folder of the
+    session's own for fixtures of a module or of the session, which set
+    up before any test's (the child sessions that test_live_lock.py
+    starts, say). So no unit test, and no process one starts, reads or
     clears the developer's record of the instance
     (docs/runbooks/scratch-run.md, Reset the instance).
   - The config directory, the no-op sync calls, the recorded anomaly
@@ -73,7 +76,9 @@ itself in its own `--help`.
   resets the instance first (docs/runbooks/scratch-run.md, Reset the
   instance). `tests/integration/test_live_scratch_reset.py` resets the
   instance, twice, so its resetting tests run only when
-  `YIZKR_LIVE_RESET=1` asks for them, in a session of their own. A PR
+  `YIZKR_LIVE_RESET=1` asks for them, and fail at once in a session that
+  runs other modules' tests too, and on a kept instance, which they read
+  with calls of their own; a reset that fails ends the session. A PR
   that changes a write path carries
   `needs:live-test`, and a substantial change to one gets a live test of
   its own (CLAUDE.md). Its live run comes as soon as the draft opens

@@ -319,9 +319,10 @@ issue whose work reads them is `exec:local-agent`:
 - backups (`yizkr backup` output and stack archives) and the exclusion
   list;
 - the record of the instance (`~/.local/state/yizkr/instances`, or
-  `$YIZKR_INSTANCE_STATE`): the instance-contents record, the write
-  stage's state, and what each scratch reset set aside, the wiki's
-  `LocalSettings.php` among it;
+  `$YIZKR_INSTANCE_STATE`): the instance-contents record, the host-side
+  kept-state marker, where the stack runs from, the write stage's state,
+  and what each scratch reset set aside, the wiki's `LocalSettings.php`
+  among it;
 - any live or dev graph: the Wikibase stack, its query service, and their
   volumes and dumps.
 

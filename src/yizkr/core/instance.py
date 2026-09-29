@@ -1,13 +1,17 @@
 """What a scratch run needs to know about the instance, and where it is
 kept (ADR-0025 §1, §2 and §6).
 
-**The kept-state marker** is the page KEPT_STATE_PAGE on the instance
-itself. Keeper mode writes it once the keeper run's write completes;
-from then on `yizkr scratch reset` refuses on the instance, and so does a
-scratch run's stage that touches the wiki (ADR-0025 §6). As a page it
-goes wherever the instance's database goes, into its backups and through
-a restore, and nothing on the host can lose it. A reader that cannot read
-the instance cannot tell whether it is kept, and refuses.
+**The kept-state marker** is kept twice: as the page KEPT_STATE_PAGE on
+the instance itself, and as the file KEPT_FILE in the instance's record
+on the host. Keeper mode writes both (mark_kept) once the keeper run's
+write completes; from then on `yizkr scratch reset` refuses on the
+instance if either says it is kept, and so does a scratch run's stage
+that touches the wiki (ADR-0025 §6). The page goes wherever the
+instance's database goes, into its backups and through a restore. The
+host-side record holds when the instance cannot be read, or when the
+Docker engine that answers is not the one that runs it. A reader that
+cannot read the page cannot tell whether the instance is kept, and
+refuses. Removing either marker is a deliberate owner step.
 
 **The instance-contents record** says what the scratch write stage wrote:
 the write stage's key (ADR-0025 §2) and the run that wrote it, with the
@@ -53,10 +57,11 @@ from yizkr.pipeline.stages import atomic_write_text
 KEPT_STATE_PAGE = "Project:Kept state"
 # the directory that holds the record of each instance
 STATE_ENV = "YIZKR_INSTANCE_STATE"
-# in an instance's directory: the instance-contents record, and the
-# write-phase state
+# in an instance's directory: the instance-contents record, the
+# write-phase state, and the host-side kept-state marker
 CONTENTS_FILE = "contents.json"
 WRITE_DIR = "write"
+KEPT_FILE = "kept.json"
 # the version of the record's layout
 RECORD_FORMAT = 1
 
@@ -307,19 +312,74 @@ def carries_kept_marker(client) -> bool:
     return False
 
 
+def kept_path(config: Config, root: Path | None = None) -> Path:
+    """The host-side kept-state marker of the instance `config` names."""
+    return instance_dir(config, root) / KEPT_FILE
+
+
+def host_kept_marker(config: Config, root: Path | None = None) -> str | None:
+    """What the host-side kept-state marker of the instance `config` names
+    says, when there is one; None when there is none. Whatever the file
+    holds, its being there marks the instance kept, so one that cannot be
+    read marks it kept too."""
+    path = kept_path(config, root)
+    if not os.path.lexists(path):
+        return None
+    try:
+        kept = json.loads(path.read_text())["kept"]
+        said = f"marked kept by {kept['by']} at {kept['at']}"
+    except (OSError, ValueError, KeyError, TypeError):
+        said = "a marker that cannot be read, which marks it kept all the same"
+    return f"{path}: {said}"
+
+
+def mark_kept(client, by: str, *, root: Path | None = None) -> None:
+    """Mark the instance `client` writes to as kept (the module
+    docstring), the host-side record first, so that a failed write to the
+    instance still leaves it marked. Keeper mode calls this once the
+    keeper run's write completes (ADR-0025 §6)."""
+    config = client.config
+    path = kept_path(config, root)
+    private_dir(path.parent)
+    at = _now()
+    atomic_write_text(
+        path,
+        json.dumps(
+            {
+                "format": RECORD_FORMAT,
+                "instance": config.concept_uri,
+                "kept": {"by": by, "at": at},
+            },
+            indent=2,
+        )
+        + "\n",
+    )
+    client.edit_page(
+        KEPT_STATE_PAGE,
+        f"This instance is kept: marked by {by} at {at}. `yizkr scratch "
+        "reset` refuses on it while this page, or the host-side record, is "
+        "there.",
+        summary="kept-state marker",
+    )
+
+
 def instance_is_kept(
     env_file: Path | None,
     *,
     client_factory: Callable[[Config], Any] | None = None,
+    root: Path | None = None,
 ) -> bool:
-    """Whether the instance the connection settings in `env_file` name
-    carries the kept-state marker, read through its API. Raises when the
-    settings or the instance cannot be read, so the caller cannot tell and
+    """Whether the instance the connection settings in `env_file` name is
+    kept: its host-side record says so, or it carries the page, read
+    through its API. Raises when the settings, or the instance with no
+    host-side record, cannot be read, so the caller cannot tell and
     refuses."""
     try:
         config = Config.load(env_file, require_admin=False)
     except SystemExit as exc:  # ConfigError: a setting is missing
         raise ValueError(str(exc)) from None
+    if host_kept_marker(config, root) is not None:
+        return True
     if client_factory is None:
         from yizkr.core.wiki import WikiClient
 

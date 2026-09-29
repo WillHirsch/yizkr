@@ -7,7 +7,8 @@ The reset runs in steps, and prints how long each took:
 1. check the kept-state marker, and refuse on a kept instance;
 2. clear the write-phase state: the instance-contents record is cleared,
    and the write stage's state set aside (yizkr.core.instance);
-3. stop the stack (`docker compose down`, which keeps every volume);
+3. stop the stack (`docker compose down`, which keeps every volume),
+   recording in the instance's record where it runs from;
 4. remove the graph volumes: the database, the search index, the query
    service, and the wiki's uploaded media, which only the database
    refers to;
@@ -22,29 +23,44 @@ It takes no backup: a scratch graph is never kept (ADR-0024 §7, ADR-0025
 §1). It never touches the LLM cache, a run directory or its reports, or
 the corpus, which all outlive the instance.
 
-**Guards.** Before it changes anything, the reset reads the stack's
-compose files and refuses:
+**Guards.** Before it changes anything, the reset reads the stack and
+refuses:
 
+- a setting that points docker compose at another project than the one
+  the compose files name (COMPOSE_PROJECT_NAME, in the environment or
+  the env file), whose volumes it would remove, or docker at another
+  engine than the local one (DOCKER_HOST, DOCKER_CONTEXT, or a context
+  other than LOCAL_CONTEXT): the reset moves a file beside the compose
+  files, so it works on the local engine only;
 - compose files that do not declare the four volumes under the keys
   Wikibase Suite Deploy gives them, or that declare one external;
 - a stack whose containers were made from another directory or other
-  compose files: starting the stack from these would swap its config
-  directory, and so its LocalSettings.php, for another's;
+  compose files, stopped ones included: starting the stack from these
+  would swap its config directory, and so its LocalSettings.php, for
+  another's. With no container to say so, the reset checks the
+  directory and compose files the last reset recorded (ORIGIN_FILE);
 - a volume of one of those names that Docker Compose did not make for
   this project as that volume: the reset removes the stack's own volumes
   and nothing else;
 - a reset that is not confirmed: interactively, by typing the word
-  CONFIRMATION, and otherwise by `--yes`.
+  CONFIRMATION, and otherwise by `--yes`. Either way it first says which
+  project and volumes it removes.
 
 It then takes the live-stack lock and holds it to the end, so no live
-test session uses the instance while it is reset, reads the stack again
-under these guards, since it may have changed while the reset waited for
-the lock, and reads the kept-state marker. A kept instance is refused,
-and so is an instance whose marker cannot be read: a stopped stack is
-started to read it, and a stack that does not answer, or answers as
-another wiki than the one these compose files serve, leaves the reset
-unable to tell. An instance with no database volume holds no graph, so
-there is nothing to guard.
+test session uses the instance while it is reset. It reads the stack
+again under the guards, since the stack may have changed while it waited
+for the lock, and refuses one that names another project, other volumes
+or another config directory than the one confirmed. Then it reads the
+kept-state marker, on the host and on the instance, and refuses a kept
+instance. It asks the wiki first. A wiki that answers must be served by
+this engine's stack, with the project's database volume and a running
+wiki container; otherwise it is served from elsewhere (another engine
+behind the local socket, say), and the reset cannot tell which instance
+it would reset. A wiki that answers as another wiki than the one these
+compose files serve is refused too. With the database volume there but
+no answer, the reset starts the stack to read the marker, and refuses
+if it still cannot. Only no answer and no database volume mean there is
+no graph to guard.
 
 **What it deletes.** The four volumes, and nothing else. The rest of what
 it clears it sets aside in the instance's record (yizkr.core.instance),
@@ -81,15 +97,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from yizkr.core.config import Config, resolve_env_file
+from yizkr.core.config import Config, read_env_file, resolve_env_file
 from yizkr.core.instance import (
     KEPT_STATE_PAGE,
     carries_kept_marker,
     clear_contents,
+    host_kept_marker,
     instance_dir,
     private_dir,
     write_state_dir,
 )
+from yizkr.pipeline.stages import atomic_write_text
 
 # the stack's volumes the reset removes: each one's key in the compose
 # files, and what it holds
@@ -109,8 +127,17 @@ DEFAULT_COMPOSE_FILES = ("docker-compose.yml",)
 # the labels Docker Compose gives what it makes for a project
 PROJECT_LABEL = "com.docker.compose.project"
 VOLUME_LABEL = "com.docker.compose.volume"
+SERVICE_LABEL = "com.docker.compose.service"
 WORKING_DIR_LABEL = "com.docker.compose.project.working_dir"
 CONFIG_FILES_LABEL = "com.docker.compose.project.config_files"
+# the setting that gives docker compose another project than the compose
+# files name, and those that give docker another engine than the local one
+PROJECT_SETTING = "COMPOSE_PROJECT_NAME"
+ENGINE_SETTINGS = ("DOCKER_HOST", "DOCKER_CONTEXT")
+# the docker context of the local engine
+LOCAL_CONTEXT = "default"
+# a container's state while it runs
+RUNNING = "running"
 # seconds: for the stack to start and be healthy; for the smoke test's
 # query-service round trip; for the wiki's API once the stack is up, and
 # between two tries of it; for a docker command that only reads; for the
@@ -123,8 +150,10 @@ QUERY_TIMEOUT = 120.0
 STOP_TIMEOUT = 600.0
 # the word an interactive reset is confirmed by
 CONFIRMATION = "reset"
-# in the instance's record: where each reset sets aside what it clears
+# in the instance's record: where each reset sets aside what it clears, and
+# where the stack ran from when a reset last stopped it
 RESET_DIR = "reset"
+ORIGIN_FILE = "stack.json"
 # who a reset's clearing of the instance-contents record names
 CLEARED_BY = "yizkr scratch reset"
 # the live-stack lock's code, in a checkout
@@ -156,6 +185,10 @@ def elapsed(seconds: float) -> str:
         return f"{seconds:.1f} s"
     minutes, rest = divmod(round(seconds), 60)
     return f"{minutes} min {rest:02d} s"
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 # -- docker -------------------------------------------------------------------
@@ -211,6 +244,13 @@ class Compose:
             command += ["-f", str(path)]
         return [*command, *arguments]
 
+    def origin(self) -> dict:
+        """Where the stack runs from, as the reset records it."""
+        return {
+            "deploy_dir": str(self.deploy_dir.resolve()),
+            "compose_files": [str(path.resolve()) for path in self.paths()],
+        }
+
 
 @dataclass(frozen=True)
 class Volume:
@@ -223,29 +263,104 @@ class Volume:
 
 
 @dataclass(frozen=True)
+class Container:
+    """One of the project's containers: its name, its service and its
+    state (running, exited, created...)."""
+
+    name: str
+    service: str
+    state: str
+
+
+@dataclass(frozen=True)
 class Plan:
     """What the reset read of the stack before changing anything: the
     compose project, the volumes it removes, those of them that exist,
-    and the directory the wiki keeps LocalSettings.php in."""
+    the directory the wiki keeps LocalSettings.php in, and the project's
+    containers."""
 
     project: str
     volumes: tuple[Volume, ...]
     present: frozenset[str]
     config_dir: Path
+    containers: tuple[Container, ...] = ()
 
     @property
     def database(self) -> Volume:
         return next(v for v in self.volumes if v.key == DATABASE_VOLUME)
+
+    @property
+    def running(self) -> frozenset[str]:
+        """The services with a running container."""
+        return frozenset(
+            c.service for c in self.containers if c.state == RUNNING
+        )
+
+    def names(self) -> dict:
+        """What a confirmation names: the project, the volumes and the
+        config directory."""
+        return {
+            "project": self.project,
+            "volumes": [volume.name for volume in self.volumes],
+            "config directory": str(self.config_dir),
+        }
 
 
 def _label(name: str) -> str:
     return f'{{{{.Label "{name}"}}}}'
 
 
+def refuse_other_targets(compose: Compose) -> None:
+    """ResetRefused for a setting that points docker compose at another
+    project than the one the compose files name, or docker at another
+    engine than the local one (the module docstring's guards)."""
+    places = [
+        where
+        for where, settings in (
+            ("the environment", os.environ),
+            (str(compose.env_file), read_env_file(compose.env_file)),
+        )
+        if settings.get(PROJECT_SETTING)
+    ]
+    if places:
+        raise ResetRefused(
+            f"{PROJECT_SETTING} is set in {' and in '.join(places)}: docker "
+            "compose would take the stack for another project than the one "
+            "its compose files name, with other volumes, which the reset "
+            "would remove. Unset it to reset the stack"
+        )
+    engines = [name for name in ENGINE_SETTINGS if os.environ.get(name)]
+    if engines:
+        raise ResetRefused(
+            f"{' and '.join(engines)} set in the environment: the reset "
+            "works on the local Docker engine only, since it moves a file "
+            "beside the compose files. Unset it to reset the stack"
+        )
+
+
 def read_plan(compose: Compose, runner: Callable[..., str]) -> Plan:
     """Read the stack's compose files, containers and volumes, changing
     nothing; ResetRefused for a stack the reset does not reset (the
-    module docstring's guards)."""
+    module docstring's guards), and for one it cannot read."""
+    refuse_other_targets(compose)
+    try:
+        return _read_plan(compose, runner)
+    except DockerFailed as exc:
+        raise ResetRefused(
+            f"the stack cannot be read ({exc}); nothing was changed"
+        ) from None
+
+
+def _read_plan(compose: Compose, runner: Callable[..., str]) -> Plan:
+    context = runner(
+        ["docker", "context", "show"], capture=True, timeout=QUERY_TIMEOUT
+    ).strip()
+    if context != LOCAL_CONTEXT:
+        raise ResetRefused(
+            f"docker uses the context {context!r}: the reset works on the "
+            f"local Docker engine only (the context {LOCAL_CONTEXT!r}), since "
+            "it moves a file beside the compose files"
+        )
     raw = runner(
         compose.command("config", "--format", "json"),
         capture=True,
@@ -297,21 +412,22 @@ def read_plan(compose: Compose, runner: Callable[..., str]) -> Plan:
             f"the {WIKIBASE_SERVICE} service mounts no directory at "
             f"{CONFIG_TARGET}, where the wiki keeps its {LOCAL_SETTINGS}"
         )
-    check_containers(compose, project, runner)
+    containers = read_containers(compose, project, runner)
     return Plan(
         project=project,
         volumes=tuple(volumes),
         present=present_volumes(project, volumes, runner),
         config_dir=config_dirs[0],
+        containers=containers,
     )
 
 
-def check_containers(
+def read_containers(
     compose: Compose, project: str, runner: Callable[..., str]
-) -> int:
-    """How many containers the project has; ResetRefused when any of them
-    was made from another directory or other compose files than
-    `compose`'s, since starting the stack from these would swap its
+) -> tuple[Container, ...]:
+    """The project's containers, stopped ones included; ResetRefused when
+    any of them was made from another directory or other compose files
+    than `compose`'s, since starting the stack from these would swap its
     config directory for another's."""
     listed = runner(
         [
@@ -326,6 +442,8 @@ def check_containers(
                     "{{.Names}}",
                     _label(WORKING_DIR_LABEL),
                     _label(CONFIG_FILES_LABEL),
+                    _label(SERVICE_LABEL),
+                    "{{.State}}",
                 ]
             ),
         ],
@@ -334,12 +452,13 @@ def check_containers(
     )
     ours = [path.resolve() for path in compose.paths()]
     here = compose.deploy_dir.resolve()
-    strangers, count = [], 0
+    strangers, containers = [], []
     for line in listed.splitlines():
         if not line.strip():
             continue
-        count += 1
-        name, working_dir, files = (line.split("\t") + ["", ""])[:3]
+        fields = (line.split("\t") + [""] * 4)[:5]
+        name, working_dir, files, service, state = fields
+        containers.append(Container(name, service, state))
         theirs = [Path(path).resolve() for path in files.split(",") if path]
         if not working_dir or Path(working_dir).resolve() != here:
             strangers.append(f"{name} (made in {working_dir or '?'})")
@@ -353,7 +472,7 @@ def check_containers(
             f"{LOCAL_SETTINGS}, for another's: run the reset with the ones "
             "that started it (--deploy-dir, --compose-file)"
         )
-    return count
+    return tuple(containers)
 
 
 def present_volumes(
@@ -508,7 +627,8 @@ def describe(report: ResetReport) -> list[str]:
     ]
     if report.set_aside is not None:
         lines.append(
-            f"What it cleared is set aside in {report.set_aside}, to remove "
+            f"What it cleared is set aside in {report.set_aside}, among it "
+            "the wiki's secret key and database password: remove the folder "
             "when you no longer want it."
         )
     return lines
@@ -578,6 +698,8 @@ class InstanceReset:
         again, since it may have changed while the reset waited for the
         lock, and run the steps."""
         plan = read_plan(self.compose, self.runner)
+        self.check_origin(plan)
+        self.check_host_marker()
         self.confirm(plan)
         with contextlib.ExitStack() as held:
             try:
@@ -587,6 +709,14 @@ class InstanceReset:
                     f"the live-stack lock cannot be held ({exc})"
                 ) from None
             held_plan = read_plan(self.compose, self.runner)
+            self.check_origin(held_plan)
+            if held_plan.names() != plan.names():
+                raise ResetRefused(
+                    "the stack changed while the reset waited for the lock: "
+                    f"it confirmed {plan.names()}, and now reads "
+                    f"{held_plan.names()}. Run the reset again, to confirm "
+                    "what it would now remove"
+                )
             self.report = ResetReport(held_plan)
             steps = self._steps(held_plan)
             for number, (name, action) in enumerate(steps, 1):
@@ -598,7 +728,7 @@ class InstanceReset:
         return [
             ("check the kept-state marker", lambda: self.check_not_kept(plan)),
             ("clear the write-phase state", self.clear_write_state),
-            ("stop the stack", self.stop),
+            ("stop the stack", lambda: self.stop(plan)),
             ("remove the graph volumes", lambda: self.remove_volumes(plan)),
             (f"set {LOCAL_SETTINGS} aside", lambda: self.set_aside(plan)),
             ("start the stack", self.start),
@@ -640,8 +770,12 @@ class InstanceReset:
         self.log(f"{tag} {elapsed(seconds)}" + (f": {note}" if note else ""))
 
     def confirm(self, plan: Plan) -> None:
-        """Nothing, when the reset is confirmed; ResetRefused otherwise."""
+        """Say what the reset removes; then nothing, when the reset is
+        confirmed, and ResetRefused otherwise."""
+        for line in describe_plan(plan, self.compose, self.config):
+            self.log(line)
         if self.yes:
+            self.log("  confirmed by --yes")
             return
         interactive = (
             sys.stdin.isatty()
@@ -654,14 +788,60 @@ class InstanceReset:
                 f"{self.config.wikibase_url}, and with no terminal to ask at "
                 "it needs --yes to confirm it"
             )
-        for line in describe_plan(plan, self.compose, self.config):
-            self.log(line)
         try:
             answer = self.ask(f'Type "{CONFIRMATION}" to reset it: ')
         except EOFError:
             answer = ""
         if answer.strip() != CONFIRMATION:
             raise ResetRefused("not confirmed; nothing was changed")
+
+    # -- where the stack runs from ----------------------------------------
+
+    def _origin_path(self) -> Path:
+        return instance_dir(self.config, self.state) / ORIGIN_FILE
+
+    def check_origin(self, plan: Plan) -> None:
+        """With no container to say where the stack runs from, refuse to
+        run it from another deploy directory or other compose files than
+        the last reset recorded."""
+        if plan.containers:
+            return
+        path = self._origin_path()
+        try:
+            recorded = json.loads(path.read_text())
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as exc:
+            raise ResetRefused(
+                f"{path}, where the last reset recorded where the stack runs "
+                f"from, cannot be read ({exc}); nothing was changed"
+            ) from None
+        ours = self.compose.origin()
+        theirs = {
+            key: recorded.get(key) if isinstance(recorded, dict) else None
+            for key in ours
+        }
+        if theirs != ours:
+            raise ResetRefused(
+                "the stack has no containers to say where it runs from, and "
+                f"the last reset ran it from {theirs['deploy_dir']} with "
+                f"{theirs['compose_files']}, not from {ours['deploy_dir']} "
+                f"with {ours['compose_files']}. Run the reset with those "
+                "(--deploy-dir, --compose-file, or the env file beside "
+                "them); if the stack has moved for good, remove "
+                f"{path} by hand. Nothing was changed"
+            )
+
+    def _record_origin(self, plan: Plan) -> Path:
+        path = self._origin_path()
+        private_dir(path.parent)
+        record = {
+            **self.compose.origin(),
+            "project": plan.project,
+            "recorded_at": _now(),
+        }
+        atomic_write_text(path, json.dumps(record, indent=2) + "\n")
+        return path
 
     # -- the wiki ---------------------------------------------------------
 
@@ -708,19 +888,59 @@ class InstanceReset:
             "instance) says what to do when it cannot start"
         )
 
+    def _kept(self, why: str) -> str:
+        return (
+            f"the instance at {self.config.wikibase_url} is kept: {why}. A "
+            "reset never touches a kept instance (ADR-0025 §6), and removing "
+            "the kept-state marker is a deliberate owner step "
+            "(docs/runbooks/scratch-run.md, Reset the instance). Nothing was "
+            "removed"
+        )
+
     # -- the steps --------------------------------------------------------
 
-    def check_not_kept(self, plan: Plan) -> str:
-        """Refuse on a kept instance, and on one whose marker cannot be
-        read; say why the reset may go on."""
-        database = plan.database
-        if database.name not in plan.present:
-            return (
-                f"there is no {database.holds} volume ({database.name}), so "
-                "the instance holds no graph to guard"
+    def check_host_marker(self) -> None:
+        """Refuse when the host-side kept-state marker says the instance
+        is kept."""
+        marker = host_kept_marker(self.config, self.state)
+        if marker is not None:
+            raise ResetRefused(
+                self._kept(
+                    f"its host-side kept-state marker says so ({marker})"
+                )
             )
+
+    def check_not_kept(self, plan: Plan) -> str:
+        """Refuse on a kept instance, on one whose marker cannot be read,
+        and on a wiki that this engine's stack does not serve (the module
+        docstring); say why the reset may go on."""
+        self.check_host_marker()
+        database = plan.database
         general = self._siteinfo()
-        if not isinstance(general, dict):
+        if isinstance(general, dict):
+            lacking = []
+            if database.name not in plan.present:
+                lacking.append(f"no {database.holds} volume ({database.name})")
+            if WIKIBASE_SERVICE not in plan.running:
+                lacking.append(
+                    f"no running {WIKIBASE_SERVICE} container of the "
+                    f"{plan.project} project"
+                )
+            if lacking:
+                raise ResetRefused(
+                    f"a wiki answers at {self.config.wikibase_url}, and this "
+                    f"Docker engine has {' and '.join(lacking)}: the wiki is "
+                    "served from elsewhere (another Docker engine behind the "
+                    "local socket, say, or another stack), so the reset "
+                    "cannot tell which instance it would reset, or whether "
+                    "that one is kept. Nothing was removed"
+                )
+        elif database.name not in plan.present:
+            return (
+                f"no wiki answers and there is no {database.holds} volume "
+                f"({database.name}), so the instance holds no graph to guard"
+            )
+        else:
             self.log(
                 f"      the wiki does not answer ({general}): starting the "
                 "stack to read its kept-state marker"
@@ -747,12 +967,12 @@ class InstanceReset:
             raise ResetRefused(self._cannot_tell(_why(exc))) from None
         if kept:
             raise ResetRefused(
-                f"the instance at {self.config.wikibase_url} carries the "
-                f"kept-state marker, the page {KEPT_STATE_PAGE}: it is the "
-                "kept instance, and a reset never touches a kept instance "
-                "(ADR-0025 §6). Nothing was removed"
+                self._kept(f"it carries the page {KEPT_STATE_PAGE}")
             )
-        return f"no page {KEPT_STATE_PAGE}: the instance is not kept"
+        return (
+            f"no page {KEPT_STATE_PAGE} and no host-side marker: the "
+            "instance is not kept"
+        )
 
     def _aside(self) -> Path:
         """This reset's directory for what it sets aside, made on first
@@ -787,11 +1007,13 @@ class InstanceReset:
             f"cleared {record}; the write-phase state is set aside in {target}"
         )
 
-    def stop(self) -> str:
+    def stop(self, plan: Plan) -> str:
+        """Record where the stack runs from, then stop it."""
+        origin = self._record_origin(plan)
         self.runner(
             self.compose.command("down"), capture=False, timeout=STOP_TIMEOUT
         )
-        return ""
+        return f"where it runs from is recorded in {origin}"
 
     def remove_volumes(self, plan: Plan) -> str:
         """Remove those of the stack's graph volumes that exist now, which
