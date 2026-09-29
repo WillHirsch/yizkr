@@ -245,6 +245,10 @@ class TestTheCorpus:
         )
         for name, content in made.items():
             assert (fc.FOLDER / name).read_bytes() == content, name
+        # the images are small stand-ins, never a scan
+        for name in IMAGES:
+            assert made[name].startswith(b"\x89PNG\r\n\x1a\n")
+            assert len(made[name]) < 4096
         # and the builder writes them where it is told
         written = build.build(tmp_path / "again")
         assert sorted(path.name for path in written) == sorted(made)
@@ -271,12 +275,6 @@ class TestTheCorpus:
         assert slide_transcript(content) == SOURCES["library-talk-2018"].text
         (photograph,) = content.media
         assert (photograph.slides, content.skipped_media) == ([2], {})
-
-    def test_the_images_are_small_pngs(self):
-        for name in IMAGES:
-            data = (fc.FOLDER / name).read_bytes()
-            assert data.startswith(b"\x89PNG\r\n\x1a\n")
-            assert len(data) < 4096
 
     def test_the_export_is_a_slice_of_the_universes_with_its_traps(self):
         """Each record of the export is the fixture's record of the same
