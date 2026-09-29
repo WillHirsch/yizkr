@@ -298,6 +298,15 @@ PAGES["in NFD, NFC at the limit"] = (
     unicodedata.normalize("NFD", UMLAUTS),
     UMLAUTS,
 )
+# given in NFD and over the limit even in NFC: it is cut in NFC, the form
+# the instance keeps, and its digest is of the whole page in NFC. The room
+# ends inside leaf 23, which the cut leaves out whole
+TOWN = _leaves(5, 40, ", Flörburg")
+assert TOWN[ROOM - 2 : ROOM + 2] == " 23,"
+PAGES["in NFD, over the limit in NFC"] = (
+    unicodedata.normalize("NFD", TOWN),
+    TOWN[: ROOM - 2] + _mark(TOWN),
+)
 
 
 class TestLocatorsOverTheLimit:
