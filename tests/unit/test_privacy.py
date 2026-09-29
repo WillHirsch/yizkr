@@ -21,6 +21,7 @@ from yizkr.core.privacy import (
     CENTURY,
     DECADE,
     MILLENNIUM,
+    NON_PERSON_CLASSES,
     PEOPLE_SELECTION,
     PERSON_CLASS,
     PERSON_EVENTS,
@@ -448,16 +449,30 @@ def flat(query: str) -> str:
 class TestThePeopleSelection:
     """Who the check assesses (#344): every item with person evidence,
     read through statement nodes at every rank, so that a deprecated or
-    outranked `human` type, or none, hides no one."""
+    outranked `human` type, or none, hides no one. A vessel, a group or an
+    organization is no person on its part in a person event alone."""
 
     selection = flat(people_selection(PROPERTIES, ITEMS))
+    typing = PROPERTIES["instance_of"]
+    non_person = " ".join(f"wd:{ITEMS[key]}" for key in NON_PERSON_CLASSES)
+    # the type that sets a participant aside: one not deprecated
+    set_aside = (
+        "FILTER NOT EXISTS { "
+        f"VALUES ?otherKind {{ {non_person} }} "
+        f"?person p:{typing} ?otherTyping . "
+        f"?otherTyping ps:{typing} ?otherKind ; "
+        "wikibase:rank ?otherRank . "
+        "FILTER(?otherRank != wikibase:DeprecatedRank) }"
+    )
 
     def test_people_are_read_through_statement_nodes_at_every_rank(self):
         # never the truthy values, which hold only the best-ranked type,
-        # and no rank filter, so a deprecated statement counts too
+        # and no rank filter on any evidence, so a deprecated statement
+        # counts too: only the type that sets a participant aside is read
+        # with its rank
         assert "wdt:" not in PEOPLE_SELECTION
-        assert "rank" not in PEOPLE_SELECTION
-        typing = PROPERTIES["instance_of"]
+        assert "rank" not in self.selection.replace(self.set_aside, "")
+        typing = self.typing
         assert (
             f"{{ ?person p:{typing} ?typing . "
             f"?typing ps:{typing} wd:{ITEMS['human']} . }} UNION"
@@ -486,8 +501,15 @@ class TestThePeopleSelection:
             f"?event p:{typing} ?eventTyping . "
             f"?eventTyping ps:{typing} ?kind . "
             f"?event p:{participant} ?participation . "
-            f"?participation ps:{participant} ?person . }}"
+            f"?participation ps:{participant} ?person . "
+            f"{self.set_aside} }}"
         ) in self.selection
+
+    def test_a_non_person_type_sets_only_a_participant_aside(self):
+        # once, in the participant's part of the union, and after it the
+        # union closes: the other evidence selects whatever the type
+        assert self.selection.count(self.set_aside) == 1
+        assert f"{self.set_aside} }} }} }} FILTER(REGEX" in self.selection
 
     def test_an_unknown_value_or_a_redirect_is_no_person(self):
         # an unknown value is a blank node or a skolem IRI, never an
@@ -508,6 +530,14 @@ class TestThePeopleSelection:
 
     def test_the_evidence_is_the_manifests_vocabulary(self):
         assert PERSON_CLASS in MANIFEST["items"]
+        # a ship, a group (a family, a military unit) and an organization
+        assert set(NON_PERSON_CLASSES) == {
+            "vessel",
+            "family",
+            "military_unit",
+            "organization",
+        }
+        assert set(NON_PERSON_CLASSES) <= set(MANIFEST["items"])
         for key in (*PERSON_SUBJECT_PROPERTIES, *PERSON_VALUE_PROPERTIES):
             assert MANIFEST["properties"][key]["datatype"]
         for key in PERSON_EVENTS:

@@ -35,6 +35,9 @@ closed:
   and drops every item that has any of it and was not released: an item
   the check never assessed is dropped, not kept. A redirect goes with the
   item it redirects to.
+* It also drops every item that states no `instance of` at any rank, as
+  what such an item is cannot be told: the instance's own vocabulary and
+  the smoke test's item are the exceptions, untyped by design.
 * The check runs on the query service, the dump comes from the database:
   the export waits for the query service to hold exactly the dump's
   revision of every item, and refuses to run when it does not, or when
@@ -63,6 +66,7 @@ from yizkr.core.config import Config, read_env_file
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
+    NON_PERSON_CLASSES,
     PERSON_CLASS,
     PERSON_EVENTS,
     PERSON_SUBJECT_PROPERTIES,
@@ -72,6 +76,7 @@ from yizkr.core.privacy import (
     people_selection,
 )
 from yizkr.queries.publish import prefix_block
+from yizkr.smoke import SMOKE_LABEL
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 _QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
@@ -276,26 +281,33 @@ def exclusion_report(
 
 # The dump in N-Triples, as dumpRdf.php writes it: an item's statement
 # links it to a statement node (``<item> p:P <statement>``), which holds
-# the value (``<statement> ps:P <value>``) whatever its rank; a data node
-# (``Special:EntityData/Q1``) gives each entity's revision
-# (``schema:version``), a redirect's included; and a redirect is
-# ``owl:sameAs`` the item it redirects to.
+# the value (``<statement> ps:P <value>``) and the rank
+# (``wikibase:rank``); a data node (``Special:EntityData/Q1``) gives each
+# entity's revision (``schema:version``), a redirect's included; and a
+# redirect is ``owl:sameAs`` the item it redirects to.
 _ENTITY = re.compile(r"<[^<>]*/entity/(Q[1-9]\d*)>")
 _CLAIM = re.compile(r"<[^<>]*/prop/(P[1-9]\d*)>")
 _CLAIM_VALUE = re.compile(r"<[^<>]*/prop/statement/(P[1-9]\d*)>")
 _DATA_NODE = re.compile(r"<[^<>]*[/:](Q[1-9]\d*)>")
 _VERSION = "<http://schema.org/version>"
 _SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
+_RANK = "<http://wikiba.se/ontology#rank>"
+_DEPRECATED = "<http://wikiba.se/ontology#DeprecatedRank>"
+_LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
+# the label of `yizkr smoke-test`'s item, as the dump writes it
+_SMOKE_LABEL = f'"{SMOKE_LABEL}"@en '
 
 
 @dataclass
 class DumpReading:
     """What the public export reads from its own dump: `people`, every
     item with person evidence (the privacy module's, at every rank);
-    `redirects`, each redirect's target; and `revisions`, the revision of
-    every item that is not a redirect."""
+    `untyped`, every item that states no `instance of` at any rank, the
+    exceptions aside (``read_dump``); `redirects`, each redirect's target;
+    and `revisions`, the revision of every item that is not a redirect."""
 
     people: set[str] = field(default_factory=set)
+    untyped: set[str] = field(default_factory=set)
     redirects: dict[str, str] = field(default_factory=dict)
     revisions: dict[str, int] = field(default_factory=dict)
 
@@ -308,19 +320,29 @@ def _item(term: str) -> str | None:
 def read_dump(
     full_dump: Path, properties: Mapping[str, str], items: Mapping[str, str]
 ) -> DumpReading:
-    """Read person evidence, redirects and revisions from a dump, by the
-    instance's ids. Person evidence is read as ``PEOPLE_SELECTION`` reads
-    it from the query service: an item typed `human`, the subject of a
-    person-only property, the value of a person-valued one, or a
-    participant in a person event, each through its statement node at
-    every rank. A value that is not an item (an unknown value is a blank
-    node) is no evidence."""
+    """Read person evidence, untyped items, redirects and revisions from
+    a dump, by the instance's ids.
+
+    Person evidence is read as ``PEOPLE_SELECTION`` reads it from the query
+    service: an item typed `human`, the subject of a person-only property,
+    the value of a person-valued one, or a participant in a person event,
+    each through its statement node at every rank. A participant typed as
+    one of the non-person classes, at a rank other than deprecated, is a
+    person only on other evidence. A value that is not an item (an unknown
+    value is a blank node) is no evidence.
+
+    An item is untyped when no `instance of` statement of it, at any rank,
+    names an item: an unknown or no value names none. The instance's own
+    vocabulary, which bootstrap mints untyped, and the item of `yizkr
+    smoke-test`, which holds only a label and a description, are not
+    counted, and nor is a redirect, which has no statements of its own."""
     instance_of = properties["instance_of"]
     participant = properties["participant"]
     subject_links = {properties[key] for key in PERSON_SUBJECT_PROPERTIES}
     value_links = {properties[key] for key in PERSON_VALUE_PROPERTIES}
     human = items[PERSON_CLASS]
     event_kinds = {items[key] for key in PERSON_EVENTS}
+    non_person_kinds = {items[key] for key in NON_PERSON_CLASSES}
 
     reading = DumpReading()
     # typing and participation statements, joined once the whole dump is
@@ -329,6 +351,8 @@ def read_dump(
     kinds: dict[str, str] = {}  # statement -> the type it gives
     events: dict[str, str] = {}  # statement -> the event it is part of
     participants: dict[str, str] = {}  # statement -> the participant
+    deprecated: set[str] = set()  # statements a curator deprecated
+    smoke: set[str] = set()  # items labelled as the smoke test's
     links: dict[str, tuple[str, str] | None] = {}
     with gzip.open(full_dump, "rt", encoding="utf-8") as source:
         for line in source:
@@ -347,6 +371,15 @@ def read_dump(
                 redirect, target = _item(subject), _item(term)
                 if redirect and target:
                     reading.redirects[redirect] = target
+                continue
+            if predicate == _RANK:
+                if term == _DEPRECATED:
+                    deprecated.add(subject)
+                continue
+            if predicate == _LABEL:
+                labelled = _item(subject)
+                if labelled and rest.startswith(_SMOKE_LABEL):
+                    smoke.add(labelled)
                 continue
             if predicate not in links:
                 claim = _CLAIM.fullmatch(predicate)
@@ -382,42 +415,60 @@ def read_dump(
                     participants[subject] = item
                 if pid in value_links:
                     reading.people.add(item)
-    reading.people.update(
-        typed[statement]
-        for statement, kind in kinds.items()
-        if kind == human and statement in typed
-    )
-    person_events = {
-        typed[statement]
-        for statement, kind in kinds.items()
-        if kind in event_kinds and statement in typed
-    }
+
+    def typed_as(classes: set[str], ranked: bool = False) -> set[str]:
+        """The items a statement types as one of `classes`: at a rank
+        other than deprecated when `ranked`, at any rank otherwise."""
+        return {
+            typed[statement]
+            for statement, kind in kinds.items()
+            if kind in classes
+            and statement in typed
+            and not (ranked and statement in deprecated)
+        }
+
+    reading.people |= typed_as({human})
+    person_events = typed_as(event_kinds)
+    set_aside = typed_as(non_person_kinds, ranked=True)
     reading.people.update(
         person
         for statement, person in participants.items()
-        if events.get(statement) in person_events
+        if events.get(statement) in person_events and person not in set_aside
     )
     for redirect in reading.redirects:
         reading.revisions.pop(redirect, None)
+    reading.untyped = (
+        set(reading.revisions)
+        - {typed[statement] for statement in kinds if statement in typed}
+        - set(items.values())
+        - smoke
+    )
     return reading
 
 
 # Why the export drops an item with person evidence that the check did
-# not assess.
+# not assess, and one that states no type.
 NOT_ASSESSED = (
     "person evidence in the dump, but the check did not assess this item: "
     "unknown means excluded"
 )
+NO_TYPE = "no type (no instance of at any rank): unknown means excluded"
 
 
 def public_exclusions(
     reading: DumpReading, report: ExclusionReport
 ) -> dict[str, str]:
-    """Every item the public export drops, with why: each item with person
-    evidence, in the dump or at the query service, that the check did not
-    release. An item it did not assess is dropped, not kept. A redirect
-    stands for the item it redirects to: it is dropped when that item has
-    person evidence and was not released, even with none of its own."""
+    """Every item the public export drops, with why:
+
+    * each item with person evidence, in the dump or at the query service,
+      that the check did not release: an item it did not assess is
+      dropped, not kept (``NOT_ASSESSED``);
+    * each item that states no type (``NO_TYPE``), even one the check
+      released.
+
+    A redirect stands for the item it redirects to: it is dropped when
+    that item is, and when it has person evidence of its own and that item
+    was not released."""
 
     def target(qid: str) -> str:
         seen = {qid}
@@ -429,20 +480,26 @@ def public_exclusions(
         return qid
 
     people = reading.people | report.excluded | report.included
-    people |= {
-        redirect
-        for redirect in reading.redirects
-        if target(redirect) in people
-    }
+
+    def why(qid: str) -> str | None:
+        if qid in report.excluded:
+            return report.reasons[qid]
+        if qid in people and qid not in report.included:
+            return NOT_ASSESSED
+        if qid in reading.untyped:
+            return NO_TYPE
+        return None
+
     excluded = {}
-    for qid in people:
+    for qid in people | reading.untyped | set(reading.redirects):
         found = target(qid)
-        if found in report.included:
-            continue
-        reason = report.reasons.get(found, NOT_ASSESSED)
-        excluded[qid] = (
-            reason if found == qid else f"a redirect to {found}: {reason}"
-        )
+        reason = why(found)
+        if reason is None and qid in people and found not in report.included:
+            reason = NOT_ASSESSED
+        if reason is not None:
+            excluded[qid] = (
+                reason if found == qid else f"a redirect to {found}: {reason}"
+            )
     return excluded
 
 
@@ -517,7 +574,10 @@ def await_query_service(
 ) -> None:
     """Wait until the query service holds exactly the dump's `revisions`
     (``stale_items``), asking every `poll` seconds; raise
-    QueryServiceLag when it still does not after `timeout` seconds."""
+    QueryServiceLag when it still does not after `timeout` seconds. The
+    match is exact, so an item whose revision the query service never
+    receives stops every export until that item is edited again or the
+    query service is reloaded; the refusal names it."""
     deadline = clock() + timeout
     while True:
         stale = stale_items(run, revisions)
@@ -530,8 +590,10 @@ def await_query_service(
                 "export assesses people there, so it refuses to run until "
                 "the two agree. Run the backup again once the graph is at "
                 "rest and the updater has caught up (docker compose logs "
-                "wdqs-updater); a query service that lacks items for good "
-                "needs reloading from a full dump (deploy/README.md)."
+                "wdqs-updater). An item whose revision never reaches the "
+                "query service keeps the export refusing, with the item "
+                "named here, until it is edited again or the query service "
+                "is reloaded from a full dump (deploy/README.md)."
             )
         sleep(poll)
 
@@ -651,8 +713,10 @@ def export_public(
 ) -> dict:
     """Write the public export of the dump ``out_dir/full.nt.gz``:
     ``public.nt.gz``, and ``public-exclusions.json``, which lists every
-    item dropped for privacy with why, and the people released. Returns
-    the counts the backup's manifest records.
+    item dropped for privacy with why (``public_exclusions``: people and
+    untyped items, redirects to them included), and the people released
+    and kept. Returns the counts the backup's manifest records: its
+    `excluded_persons` counts every item dropped.
 
     It reads the dump first, then waits for the query service to hold
     exactly the dump's revisions (``await_query_service``), runs the check
@@ -685,6 +749,7 @@ def export_public(
             "again."
         )
     excluded = public_exclusions(reading, report)
+    included = report.included - set(excluded)
     kept, dropped = filter_public_export(
         full_dump,
         out_dir / "public.nt.gz",
@@ -696,14 +761,14 @@ def export_public(
             {
                 "cutoff_years": cutoff_years,
                 "excluded": {qid: excluded[qid] for qid in sorted(excluded)},
-                "included_persons": sorted(report.included),
+                "included_persons": sorted(included),
             },
             indent=2,
         )
     )
     return {
         "excluded_persons": len(excluded),
-        "included_persons": len(report.included),
+        "included_persons": len(included),
         "triples_kept": kept,
         "triples_dropped": dropped,
     }

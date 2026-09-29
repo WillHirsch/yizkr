@@ -1,26 +1,35 @@
 """Live validation that the public export keeps only the people the check
-releases (#344; ADR-0020; docs/MODELING.md, "Living persons and privacy").
+releases, and leaves out what states no type (#344; ADR-0020;
+docs/MODELING.md, "Living persons and privacy").
 
-A fictional fixture writes four people, under labels that carry a marker
-of the fixture's content (test_live_privacy.py's write_fixture):
+A fictional fixture writes, under labels that carry a marker of the
+fixture's content (test_live_privacy.py's write_fixture):
 
-* one typed human, a type a curator then deprecated;
+* one person typed human, a type a curator then deprecated;
 * one typed human, a type a curator then outranked with a preferred
   `organization` type, so that the truthy type is that one;
 * one with no type at all, but a birth in 1990;
-* one typed human, with a death: the check releases them.
+* one typed human, with a death: the check releases them;
+* a migration, and two vessels that take part in it: one typed only as a
+  vessel, the other with a `human` type too, which a curator deprecated.
 
-The first two have no birth and no death, and the third's birth is
-recent, so the check releases none of them. The truthy `human` type
-selected none of the three, and the export dropped only the people the
-check had assessed, so each went into the public export in full.
+It also writes an item with a label and nothing else: no type, and no
+statement at all.
+
+The first three have no birth and no death, or a recent birth, so the
+check releases none of them: the truthy `human` type selected none of
+them, and the export dropped only the people the check had assessed, so
+each went into the public export in full. A vessel's part in a migration
+does not make it a person, but a `human` type at any rank does. An item
+that states no type is left out, whatever else it holds.
 
 The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes the
-public export from it, and reads public.nt.gz: none of the three is
-mentioned in any triple, by QID, and the released one is. The export
-first waits for the query service to hold the dump's revision of every
-item, so on a stack at rest the export must run, not refuse. The site
-lists all four and badges the three the export drops.
+public export from it, and reads public.nt.gz: it mentions the released
+person, the plain vessel and the migration by QID, and none of the other
+five. The export first waits for the query service to hold the dump's
+revision of every item, so on a stack at rest the export must run, not
+refuse. The site lists the five that have person evidence, and badges
+the four the export drops.
 
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
@@ -37,7 +46,7 @@ from pathlib import Path
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
-from yizkr.backup import dump_rdf, export_public
+from yizkr.backup import NO_TYPE, dump_rdf, export_public
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
 from .conftest import register_fictional, wait_for_query_service
@@ -47,31 +56,45 @@ pytestmark = pytest.mark.live
 
 DEPLOY = Path("deploy")
 QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
+LABEL_ONLY = "Export Fixture Label Only"
 
 
-def local(role: str, typed: bool = True) -> dict:
+def local(role: str, kind: str | None = "human") -> dict:
     ref = {
         "kind": "local",
         "local_id": f"export-{role.replace(' ', '-')}",
         "label": f"Export Fixture {role.title()}",
     }
-    if typed:
-        ref["instance_of"] = "human"
+    if kind:
+        ref["instance_of"] = kind
     return ref
 
 
-PEOPLE = {
+ENTITIES = {
     "deprecated type": local("deprecated type"),
     "outranked type": local("outranked type"),
-    "no type": local("no type", typed=False),
+    "no type": local("no type", kind=None),
     "released": local("released"),
+    "migration": local("migration", kind="migration"),
+    "vessel": local("vessel", kind="vessel"),
+    "vessel typed human": local("vessel typed human", kind="vessel"),
 }
-RELEASED = {"released"}
+# the roles public.nt.gz mentions; every other one, and the item with a
+# label only, it leaves out
+PRESENT = {"released", "migration", "vessel"}
+# the roles with person evidence, which the site lists
+PEOPLE = {
+    "deprecated type",
+    "outranked type",
+    "no type",
+    "released",
+    "vessel typed human",
+}
 
 
-def claim(role: str, prop: str, value: dict, artifact) -> dict:
+def claim(subject: str, prop: str, value: dict, artifact) -> dict:
     return {
-        "subject": PEOPLE[role],
+        "subject": ENTITIES[subject],
         "property": prop,
         "value": value,
         "qualifiers": [],
@@ -100,6 +123,16 @@ def nickname(role: str, artifact) -> dict:
     )
 
 
+def participant(role: str, artifact) -> dict:
+    """`role` takes part in the migration."""
+    return claim(
+        "migration",
+        "participant",
+        {"type": "item", "value": ENTITIES[role]},
+        artifact,
+    )
+
+
 def typing(client, subject: str, kind: str):
     """The `instance of` statement that types `subject` as `kind`, and
     the item it is on."""
@@ -122,10 +155,11 @@ def deprecate_type(client, subject: str) -> None:
         entity.write(summary="integration test: curator rank on a type")
 
 
-def prefer_another_type(client, subject: str, artifact_qid: str) -> None:
-    """A curator's `organization` type at preferred rank beside the
-    item's `human` type, stated in the artifact `artifact_qid` (rule 1).
-    Idempotent."""
+def add_type(
+    client, subject: str, kind: str, rank: WikibaseRank, artifact_qid: str
+) -> None:
+    """A curator's `kind` type at `rank` beside the item's own, stated in
+    the artifact `artifact_qid` (rule 1). Idempotent."""
     from wikibaseintegrator.datatypes import Item
     from wikibaseintegrator.models import Reference, References
     from wikibaseintegrator.wbi_enums import ActionIfExists
@@ -133,7 +167,7 @@ def prefer_another_type(client, subject: str, artifact_qid: str) -> None:
     properties, items = client.vocabulary()
     entity = client.wbi.item.get(subject)
     if any(
-        s.mainsnak.datavalue["value"]["id"] == items["organization"]
+        s.mainsnak.datavalue["value"]["id"] == items[kind]
         for s in entity.claims.get(properties["instance_of"])
     ):
         return
@@ -144,21 +178,34 @@ def prefer_another_type(client, subject: str, artifact_qid: str) -> None:
     entity.claims.add(
         Item(
             prop_nr=properties["instance_of"],
-            value=items["organization"],
+            value=items[kind],
             references=references,
-            rank=WikibaseRank.PREFERRED,
+            rank=rank,
         ),
         action_if_exists=ActionIfExists.FORCE_APPEND,
     )
-    entity.write(summary="integration test: a curator's preferred type")
+    entity.write(summary="integration test: a curator's type")
+
+
+def label_only(client) -> str:
+    """An item with a label and nothing else: it states no type. Written
+    through WikibaseIntegrator, as the writer writes no item without a
+    claim; a label is no statement, so it needs no reference. Idempotent:
+    re-runs find it by its label."""
+    existing = client.find_item_by_label(LABEL_ONLY)
+    if existing:
+        return existing
+    item = client.wbi.item.new()
+    item.labels.set("en", LABEL_ONLY)
+    return item.write(summary="integration test: an untyped item").id
 
 
 @pytest.fixture(scope="module")
 def fixture_graph(client, config):
     """Write the fixture under its marked labels (idempotent: re-runs
-    reuse and skip everything), set the curators' types, and wait until
-    the query service holds every fixture person's latest revision.
-    Returns the QIDs by role."""
+    reuse and skip everything), set the curators' types, write the item
+    with a label only, and wait until the query service holds every
+    fixture item's latest revision. Returns the QIDs by role."""
     source = register_fictional(client, "Export fixture source", "certificate")
     written = write_fixture(
         client,
@@ -178,14 +225,30 @@ def fixture_graph(client, config):
                 {"type": "time", "year": 1995},
                 source.ref,
             ),
+            participant("vessel", source.ref),
+            participant("vessel typed human", source.ref),
         ],
     )
     qids = {
         role: written.created_items[ref["local_id"]]
-        for role, ref in PEOPLE.items()
+        for role, ref in ENTITIES.items()
     }
     deprecate_type(client, qids["deprecated type"])
-    prefer_another_type(client, qids["outranked type"], source.qid)
+    add_type(
+        client,
+        qids["outranked type"],
+        "organization",
+        WikibaseRank.PREFERRED,
+        source.qid,
+    )
+    add_type(
+        client,
+        qids["vessel typed human"],
+        "human",
+        WikibaseRank.DEPRECATED,
+        source.qid,
+    )
+    qids["label only"] = label_only(client)
     wait_for_query_service(config, client, list(qids.values()))
     return qids
 
@@ -201,6 +264,10 @@ def exported(config, fixture_graph, tmp_path_factory):
     return out_dir
 
 
+def exclusions_of(exported: Path) -> dict:
+    return json.loads((exported / "public-exclusions.json").read_text())
+
+
 def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
     client, fixture_graph
 ):
@@ -213,8 +280,14 @@ def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
         typing(client, outranked, "organization")[1].rank
         == WikibaseRank.PREFERRED
     )
-    untyped = client.wbi.item.get(fixture_graph["no type"])
-    assert untyped.claims.get(properties["instance_of"]) == []
+    vessel = fixture_graph["vessel typed human"]
+    assert typing(client, vessel, "vessel")[1].rank == WikibaseRank.NORMAL
+    assert typing(client, vessel, "human")[1].rank == WikibaseRank.DEPRECATED
+    for role in ("no type", "label only"):
+        untyped = client.wbi.item.get(fixture_graph[role])
+        assert untyped.claims.get(properties["instance_of"]) == []
+    bare = client.wbi.item.get(fixture_graph["label only"])
+    assert not bare.claims.get_json()
 
 
 def test_only_released_people_are_in_the_public_export(
@@ -226,26 +299,31 @@ def test_only_released_people_are_in_the_public_export(
         }
     assert {
         role for role, qid in fixture_graph.items() if qid in mentioned
-    } == RELEASED
+    } == PRESENT
 
 
 def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
-    exclusions = json.loads((exported / "public-exclusions.json").read_text())
+    exclusions = exclusions_of(exported)
     for role, qid in fixture_graph.items():
-        assert (qid in exclusions["excluded"]) == (role not in RELEASED)
-        assert (qid in exclusions["included_persons"]) == (role in RELEASED)
+        assert (qid in exclusions["excluded"]) == (role not in PRESENT)
+        assert (qid in exclusions["included_persons"]) == (role == "released")
+    assert exclusions["excluded"][fixture_graph["label only"]] == NO_TYPE
 
 
 def test_the_site_badges_whom_the_export_drops(
     config, fixture_graph, exported, tmp_path
 ):
-    exclusions = json.loads((exported / "public-exclusions.json").read_text())
+    exclusions = exclusions_of(exported)
     builder = SiteBuilder(config, tmp_path / "site")
     people = {
         row["person"]["value"].rsplit("/", 1)[-1]: row
         for row in builder.run(builder._instance_query(PEOPLE_QUERY))
     }
-    for qid in fixture_graph.values():
+    assert {
+        role for role, qid in fixture_graph.items() if qid in people
+    } == PEOPLE
+    for role in PEOPLE:
+        qid = fixture_graph[role]
         badged = (
             "possibly living — never in public exports"
             in builder.person_page(people[qid], [])

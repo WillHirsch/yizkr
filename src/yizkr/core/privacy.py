@@ -38,9 +38,11 @@ with person evidence (``PEOPLE_SELECTION``): a `human` type, a property
 only a person has, the value of a kinship relation (or of `gave refuge
 to`), or a part in an event that happens to people, each read through its
 statement node at every rank, so that no curator's rank and no missing or
-outranked type hides anyone. The public export reads the same evidence
-from its own dump, and keeps an item that has any of it only once this
-check has released it.
+outranked type hides anyone. A part in such an event is no evidence for
+an item a curator has left typed as a vessel, a group or an organization
+(``NON_PERSON_CLASSES``). The public export reads the same evidence from
+its own dump, and keeps an item that has any of it only once this check
+has released it.
 """
 
 from __future__ import annotations
@@ -113,8 +115,8 @@ PERSON_VALUE_PROPERTIES = (
     "gave_refuge_to",
 )
 # The kinds of event that happen to people, so that whoever takes part in
-# one is a person (or, for a migration, a family). A participant in any
-# other event may be an organization or a group.
+# one is a person, unless one of `NON_PERSON_CLASSES` types them. A
+# participant in any other event may be an organization or a group.
 PERSON_EVENTS = (
     "birth",
     "death",
@@ -125,14 +127,23 @@ PERSON_EVENTS = (
     "imprisonment",
     "release",
 )
+# The types of what takes part in an event without being a person: a
+# vessel, a group (a family, a military unit) and an organization, as a
+# ship, a family or a firm takes part in a migration. An item typed so,
+# at a rank other than deprecated, is not taken for a person on its part
+# in a person event alone. It is a person on any other evidence, a
+# `human` type at any rank included; one typed so only at deprecated rank,
+# or not at all, is a person on its part alone.
+NON_PERSON_CLASSES = ("vessel", "family", "military_unit", "organization")
 
 # Every item with person evidence, once each, read through statement
-# nodes at every rank, never through the truthy wdt: values. A value that
-# is not an item (an unknown value) is left out, and so is a redirect,
-# which has no statements of its own: the item it redirects to is
-# selected for what it holds. The filters test each item once, after
-# DISTINCT, not each statement that names it. `people_selection` fills in
-# the lists.
+# nodes at every rank, never through the truthy wdt: values; only the
+# type that sets a participant aside must be one a curator has not
+# deprecated. A value that is not an item (an unknown value) is left out,
+# and so is a redirect, which has no statements of its own: the item it
+# redirects to is selected for what it holds. The filters test each item
+# once, after DISTINCT, not each statement that names it.
+# `people_selection` fills in the lists.
 PEOPLE_SELECTION = """\
   {{
     SELECT ?person WHERE {{
@@ -153,6 +164,13 @@ PEOPLE_SELECTION = """\
             ?eventTyping ps:{instance_of} ?kind .
             ?event p:{participant} ?participation .
             ?participation ps:{participant} ?person .
+            FILTER NOT EXISTS {{
+              VALUES ?otherKind {{ {non_person_kinds} }}
+              ?person p:{instance_of} ?otherTyping .
+              ?otherTyping ps:{instance_of} ?otherKind ;
+                           wikibase:rank ?otherRank .
+              FILTER(?otherRank != wikibase:DeprecatedRank)
+            }}
           }}
         }}
       }}
@@ -181,6 +199,9 @@ def people_selection(
             f"ps:{properties[key]}" for key in PERSON_VALUE_PROPERTIES
         ),
         event_kinds=" ".join(f"wd:{items[key]}" for key in PERSON_EVENTS),
+        non_person_kinds=" ".join(
+            f"wd:{items[key]}" for key in NON_PERSON_CLASSES
+        ),
     )
 
 

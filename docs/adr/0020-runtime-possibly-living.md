@@ -13,8 +13,9 @@ Amended by #344 (2026-09-29): the public export fails closed. It keeps a
 person only once the check has released them: the check assesses every
 item with person evidence, read at every rank; the export reads the same
 evidence from its own dump and drops every such item the check did not
-release; and it refuses to run while the query service, where the check
-runs, does not hold the dump's revisions (§4, Ruling 6).
+release, and every item that states no type; and it refuses to run while
+the query service, where the check runs, does not hold the dump's
+revisions (§4, Ruling 6).
 
 ## Context
 
@@ -165,14 +166,44 @@ from the database while the check reads the query service. Now:
   vocabulary properties are not evidence, so places, artifacts and the
   vocabulary are not taken for people. The check and the site select
   people with it.
+- **A non-person type outweighs a part in an event** (owner,
+  2026-09-29). A ship, a family or a firm takes part in a migration, so
+  an item typed as a vessel, a family, a military unit or an organization
+  (`NON_PERSON_CLASSES`), at normal or preferred rank, is not taken for a
+  person on its part in a person event alone. Mixed signals fail closed:
+  such an item is a person on any other evidence, a `human` type at any
+  rank, a person-only property or a person-valued link. A non-person type
+  a curator deprecated sets nothing aside, and a participant with no type
+  is a person.
 - **Only released people leave.** The export reads the same evidence
   from its own dump (`yizkr.backup.read_dump`) and drops every item that
   has any of it, in the dump or at the query service, unless the check
   released it (`public_exclusions`). An item the check never assessed is
   dropped, and `public-exclusions.json` says so. A redirect stands for
   the item it redirects to: it is dropped when that item is, so a link
-  to a merged-away item does not outlive the person it now names. Items
-  with no person evidence are kept.
+  to a merged-away item does not outlive the person it now names. Typed
+  items with no person evidence are kept.
+- **What states no type is left out** (owner, 2026-09-29). What an item
+  that states no `instance of` at any rank is cannot be told, and a label
+  alone can be a living person's name, so the export drops every such
+  item, whatever else it holds, a person the check released included
+  (`public-exclusions.json`: "no type"). An `instance of` whose value is
+  unknown or none states no type. Two kinds of item are untyped by
+  design and exempt, by a positive rule: the instance's own vocabulary,
+  which bootstrap mints from the manifest without types (the manifest's
+  items), and the item of `yizkr smoke-test`, which holds only a label
+  and a description (by its label). Every other kind the pipeline
+  mints is typed: an artifact and a page fragment by the registrar,
+  derived media in the same write that creates them, an entity the
+  extraction, a GEDCOM file or a face match proposes by the kind its
+  entity record or reference gives, and an extraction or place-hierarchy
+  run as a run. Two cases leave an item untyped, and so out of the public
+  copy until it is fixed. An extracted reference that gives no kind, with
+  no entity record, mints an item with none. And a write cut short
+  between an item's label and its type leaves it untyped: a re-run of the
+  registrar or of the writer types an artifact or an entity again, but
+  finds a page fragment or a run item by its label and leaves it as it
+  is.
 - **The query service must hold the dump.** The export reads each item's
   revision from the dump and waits, up to `LAG_TIMEOUT`, for the query
   service to hold exactly those revisions (a redirect aside, as the dump
@@ -182,13 +213,16 @@ from the database while the check reads the query service. Now:
   written, and the backup keeps its other dumps and records the refusal.
   The export does not assess people from the dump itself, so that the
   site and the export keep one births query and one predicate (Ruling
-  5).
+  5). The match is exact (owner, 2026-09-29): an item whose revision
+  never reaches the query service makes every export refuse, naming the
+  item, until that item is edited again or the query service is reloaded
+  from a full dump.
 - **The site lists the same people.** `yizkr publish-site` lists every
   item the selection finds, and badges each one the check does not
   release, so its badges and the export's exclusions agree.
 
-An item with no type and no person evidence at all, a label alone, is
-not recognisable as a person, and is kept.
+The three rulings dated 2026-09-29 are the owner's, on the questions
+this amendment raised.
 
 ### 5. Vocabulary retired
 
@@ -215,8 +249,9 @@ is strictly safer, since the determination is now absence-of-death only.
    its one query reads (amended by #334).
 6. **Only released people leave.** The public export drops every item
    with person evidence, read at every rank, that the check has not
-   released, and refuses to run while the query service does not hold
-   the dump's revisions (amended by #344).
+   released, and every item that states no type, and refuses to run
+   while the query service does not hold the dump's revisions (amended by
+   #344).
 
 ## Consequences
 
@@ -231,11 +266,11 @@ is strictly safer, since the determination is now absence-of-death only.
   old flow; they are inert (ignored by the new code, skipped by the site).
   A one-off cleanup can delete them, but nothing requires it.
 - The public export can refuse to run (amended by #344): while the graph
-  is being written, or when the query service lacks items for good (a
-  query service reset that replayed only recent changes). The refusal
-  names the items, and the backup's other dumps are kept. A group or a
-  vessel recorded as a participant in a person event is dropped from the
-  export as a person would be.
+  is being written, when the query service lacks items for good (a query
+  service reset that replayed only recent changes), or when an item's
+  revision never reaches it. The refusal names the items, and the
+  backup's other dumps are kept. An item left untyped, by a write cut
+  short or by hand, is missing from the public copy until it is typed.
 - Docs move with the code: MODELING.md "Living persons and privacy",
   `deploy/README.md`, and `pipeline/README.md` are updated in the same
   change; ADR-0018's exclusion note now points here.

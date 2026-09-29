@@ -48,6 +48,7 @@ from yizkr.core.config import Config
 from yizkr.core.privacy import BIRTHS_QUERY, people_selection
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import prefix_block
+from yizkr.smoke import SMOKE_LABEL
 
 
 @pytest.fixture(scope="module")
@@ -304,15 +305,21 @@ class Dump:
     def says(
         self, subject: str, key: str, value: str, rank="Normal", best=None
     ) -> None:
+        """A statement of `key` about `subject`; `value` None states "no
+        value", which gives the statement no ps: triple."""
         pid = self.properties[key]
         node = f"<{CONCEPT}/entity/statement/{subject}-{len(self.lines):04x}>"
         self.lines += [
             f"{entity(subject)} <{CONCEPT}/prop/{pid}> {node} .",
             f"{node} {RDF_TYPE} <{ONTOLOGY}Statement> .",
             f"{node} <{ONTOLOGY}rank> <{ONTOLOGY}{rank}Rank> .",
-            f"{node} <{CONCEPT}/prop/statement/{pid}> {value} .",
+            f"{node} <{CONCEPT}/prop/statement/{pid}> {value} ."
+            if value is not None
+            else f"{node} {RDF_TYPE} <{CONCEPT}/prop/novalue/{pid}> .",
         ]
-        if rank != "Deprecated" if best is None else best:
+        if value is not None and (
+            rank != "Deprecated" if best is None else best
+        ):
             self.lines.append(
                 f"{entity(subject)} <{CONCEPT}/prop/direct/{pid}> {value} ."
             )
@@ -331,7 +338,8 @@ class Dump:
 
 
 # The fictional export: items with person evidence, each read at the rank
-# a curator left it, and items without any, which the export keeps.
+# a curator left it; items without any, which the export keeps; and items
+# that state no type, which it drops (#344).
 PEOPLE = {
     "Q401": "typed human, with a death: the check releases them",
     "Q402": "typed human at deprecated rank only",
@@ -341,6 +349,15 @@ PEOPLE = {
     "Q406": "no type, taking part in a death (the part deprecated)",
     "Q415": "no type, taking part in a deportation (so typed at deprecated "
     "rank only)",
+    # a type that sets a participant aside, and other evidence
+    "Q424": "a vessel with a human type at deprecated rank, taking part in "
+    "a migration",
+    "Q425": "a family, so typed at deprecated rank only, taking part in a "
+    "migration",
+    "Q426": "an organization with a birth, taking part in a death",
+    "Q427": "a military unit (preferred), the value of a spouse statement, "
+    "taking part in military service",
+    "Q428": "no type, taking part in a migration",
 }
 OTHERS = {
     "Q407": "a death event",
@@ -349,12 +366,25 @@ OTHERS = {
     "Q411": "an organization taking part in an event of no person kind",
     "Q412": "an event of no person kind",
     "Q413": "an occupation",
-    "Q414": "an item with only a nickname",
+    "Q414": "a place with a nickname",
     "Q416": "a deportation",
+    "Q423": "a vessel taking part in a migration",
+    "Q430": "a migration",
+    "Q431": "a military service",
+    "Q432": SMOKE_LABEL,  # yizkr smoke-test's item: untyped by design
+}
+# items that state no type and no person evidence
+UNTYPED = {
+    "Q429": "a label only",
+    "Q433": "typed with an unknown value only",
+    "Q434": "typed with no value only",
 }
 # Q410 redirects to Q402, whom the check does not release; Q418 to Q401,
-# whom it does. A photograph depicts each: no person evidence of its own.
-REDIRECTS = {"Q410": "Q402", "Q418": "Q401"}
+# whom it does; Q435 to Q429, which states no type. A photograph depicts
+# each: no person evidence of its own.
+REDIRECTS = {"Q410": "Q402", "Q418": "Q401", "Q435": "Q429"}
+# every item that states no type, people included
+NO_TYPE = {"Q404", "Q405", "Q406", "Q415", "Q428"} | set(UNTYPED)
 
 
 def export_dump(vocabulary) -> Dump:
@@ -362,7 +392,7 @@ def export_dump(vocabulary) -> Dump:
     dump = Dump(vocabulary)
     for key, qid in items.items():
         dump.entity(qid, key)
-    for qid, description in {**PEOPLE, **OTHERS}.items():
+    for qid, description in {**PEOPLE, **OTHERS, **UNTYPED}.items():
         dump.entity(qid, description, revision=int(qid[1:]))
 
     def typed(qid: str, key: str, **options) -> None:
@@ -374,6 +404,7 @@ def export_dump(vocabulary) -> Dump:
     dump.says("Q401", "occupation", entity("Q413"))
     dump.says("Q401", "place_of_birth", entity("Q408"))
     dump.says("Q401", "spouse", entity("Q405"))
+    dump.says("Q401", "spouse", entity("Q427"))
     dump.says("Q401", "father", "_:genid1")  # an unknown value
     typed("Q402", "human", rank="Deprecated")
     dump.says("Q402", "nickname", '"Wastl"@de')
@@ -382,17 +413,33 @@ def export_dump(vocabulary) -> Dump:
     dump.says("Q404", "date_of_birth", dated(1990))
     typed("Q407", "death")
     dump.says("Q407", "participant", entity("Q406"), rank="Deprecated")
+    dump.says("Q407", "participant", entity("Q426"))
     typed("Q408", "place")
     typed("Q409", "certificate")
-    dump.says("Q409", "depicts", entity("Q410"))
-    dump.says("Q409", "depicts", entity("Q418"))
+    for redirect in REDIRECTS:
+        dump.says("Q409", "depicts", entity(redirect))
     typed("Q411", "organization")
     typed("Q412", "event")
     dump.says("Q412", "participant", entity("Q411"))
     typed("Q413", "occupation_class")
+    typed("Q414", "place")
     dump.says("Q414", "nickname", '"Gus"@en')
     typed("Q416", "deportation", rank="Deprecated")
     dump.says("Q416", "participant", entity("Q415"))
+    typed("Q423", "vessel")
+    typed("Q424", "vessel")
+    typed("Q424", "human", rank="Deprecated")
+    typed("Q425", "family", rank="Deprecated")
+    typed("Q426", "organization")
+    dump.says("Q426", "date_of_birth", dated(1990))
+    typed("Q427", "military_unit", rank="Preferred")
+    typed("Q430", "migration")
+    for participant in ("Q423", "Q424", "Q425", "Q428"):
+        dump.says("Q430", "participant", entity(participant))
+    typed("Q431", "military_service")
+    dump.says("Q431", "participant", entity("Q427"))
+    dump.says("Q433", "instance_of", "_:genid2")
+    dump.says("Q434", "instance_of", None)
     for source, target in REDIRECTS.items():
         dump.redirect(source, target, revision=int(source[1:]))
     return dump
@@ -420,16 +467,36 @@ class TestReadDump:
         found = self.reading(tmp_path, vocabulary)
         assert not found.people & (set(OTHERS) | set(items.values()))
 
+    def test_a_vessel_in_a_person_event_is_no_person_on_that_alone(
+        self, tmp_path, vocabulary
+    ):
+        # Q423 is set aside; Q424 has a human type, if deprecated, Q425 a
+        # family type only at deprecated rank, Q426 a birth, Q427 a
+        # spouse's value, and Q428 no type at all
+        found = self.reading(tmp_path, vocabulary)
+        assert "Q423" not in found.people
+        assert {"Q424", "Q425", "Q426", "Q427", "Q428"} <= found.people
+
+    def test_items_that_state_no_type(self, tmp_path, vocabulary):
+        # the vocabulary, the smoke test's item and redirects aside; an
+        # unknown or no value states no type, and a deprecated type is one
+        _, items = vocabulary
+        found = self.reading(tmp_path, vocabulary)
+        assert found.untyped == NO_TYPE
+        assert not found.untyped & (set(items.values()) | set(REDIRECTS))
+
     def test_the_lines_may_come_in_any_order(self, tmp_path, vocabulary):
-        # a statement's value can come before the link to its subject
+        # a statement's value or rank can come before the link to its
+        # subject
         lines = export_dump(vocabulary).lines[::-1]
         found = self.reading(tmp_path, vocabulary, lines)
         assert found.people == set(PEOPLE)
+        assert found.untyped == NO_TYPE
 
     def test_redirects_and_revisions(self, tmp_path, vocabulary):
         found = self.reading(tmp_path, vocabulary)
         assert found.redirects == REDIRECTS
-        # the query service keeps no revision for a redirect
+        # the query service need not keep a redirect's revision
         assert found.revisions == export_dump(vocabulary).revisions
         assert not set(REDIRECTS) & set(found.revisions)
 
@@ -447,10 +514,12 @@ def report_of(included=(), excluded=()) -> ExclusionReport:
 
 class TestPublicExclusions:
     """Every item with person evidence that the check did not release is
-    dropped: an item it never assessed is dropped, not kept (#344)."""
+    dropped: an item it never assessed is dropped, not kept, and so is an
+    item that states no type (#344)."""
 
     reading = DumpReading(
         people=set(PEOPLE),
+        untyped=NO_TYPE,
         # a chain to Q402, and a cycle
         redirects={
             **REDIRECTS,
@@ -459,25 +528,38 @@ class TestPublicExclusions:
             "Q422": "Q421",
         },
     )
+    DROPPED = set(PEOPLE) - {"Q401"} | set(UNTYPED) | {"Q410", "Q420", "Q435"}
 
     def test_only_released_people_are_kept(self):
         dropped = public_exclusions(
             self.reading, report_of({"Q401"}, set(PEOPLE) - {"Q401"})
         )
-        assert set(dropped) == set(PEOPLE) - {"Q401"} | {"Q410", "Q420"}
+        assert set(dropped) == self.DROPPED
         assert dropped["Q404"] == "possibly living (Q404)"
 
     def test_a_person_the_check_never_assessed_is_dropped(self):
-        # as the truthy human type selected them: none of Q402-Q406 or Q415
+        # as the truthy human type selected them: none of Q402-Q406, Q415
+        # or Q424-Q428
         dropped = public_exclusions(self.reading, report_of({"Q401"}))
-        assert set(dropped) == set(PEOPLE) - {"Q401"} | {"Q410", "Q420"}
+        assert set(dropped) == self.DROPPED
         assert dropped["Q403"] == NOT_ASSESSED
+        # person evidence explains more than a missing type
+        assert dropped["Q428"] == NOT_ASSESSED
 
     def test_a_person_only_the_check_found_is_dropped(self):
         dropped = public_exclusions(
             DumpReading(), report_of({"Q401"}, {"Q499"})
         )
         assert dropped == {"Q499": "possibly living (Q499)"}
+
+    def test_an_item_that_states_no_type_is_dropped(self):
+        dropped = public_exclusions(self.reading, report_of({"Q401"}))
+        assert dropped["Q429"] == dropped["Q434"] == backup.NO_TYPE
+
+    def test_one_the_check_released_too(self):
+        # an untyped person with a death, say: released, and still dropped
+        dropped = public_exclusions(self.reading, report_of({"Q401", "Q404"}))
+        assert dropped["Q404"] == backup.NO_TYPE
 
     def test_a_redirect_goes_with_the_item_it_redirects_to(self):
         dropped = public_exclusions(
@@ -487,6 +569,8 @@ class TestPublicExclusions:
         # of its own
         assert dropped["Q410"] == "a redirect to Q402: possibly living (Q402)"
         assert dropped["Q420"] == dropped["Q410"]
+        # to an item that states no type
+        assert dropped["Q435"] == f"a redirect to Q429: {backup.NO_TYPE}"
         # to one released
         assert "Q418" not in dropped
         # a cycle of redirects ends
@@ -579,7 +663,7 @@ class TestTheQueryServiceLag:
     def test_the_export_refuses_once_it_has_waited(self):
         clock = Clock()
         refusal = r"after 60 s .* 1 item \(Q401\)"
-        with pytest.raises(QueryServiceLag, match=refusal):
+        with pytest.raises(QueryServiceLag, match=refusal) as refused:
             await_query_service(
                 lambda query: revision_rows({**self.DUMPED, "Q401": 10}),
                 self.DUMPED,
@@ -588,6 +672,13 @@ class TestTheQueryServiceLag:
                 clock=clock,
             )
         assert clock.now == 60
+        # the match is exact: a revision the query service never gets
+        # stalls every export, and the refusal says how it ends
+        assert (
+            "An item whose revision never reaches the query service keeps "
+            "the export refusing, with the item named here, until it is "
+            "edited again or the query service is reloaded"
+        ) in str(refused.value)
 
 
 def facts_row(qid: str, died: bool = False) -> dict:
@@ -654,9 +745,23 @@ class TestExportPublic:
         assert "Q401" in mentioned and PEOPLE["Q401"] in text
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
         # a redirect goes with its target
-        assert "Q418" in mentioned and "Q410" not in mentioned
-        # places, artifacts, events, occupations and vocabulary stay
+        assert "Q418" in mentioned
+        assert not {"Q410", "Q435"} & mentioned
+        # places, artifacts, events, occupations, a vessel in a migration,
+        # the smoke test's item and the vocabulary stay
         assert set(OTHERS) | set(items.values()) <= mentioned
+        assert SMOKE_LABEL in text
+
+    def test_an_item_that_states_no_type_is_left_out(
+        self, tmp_path, vocabulary
+    ):
+        self.export(tmp_path, vocabulary)
+        _, mentioned = self.public(tmp_path)
+        assert not set(UNTYPED) & mentioned
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q429"] == backup.NO_TYPE
 
     def test_a_person_the_check_never_selected_is_dropped(
         self, tmp_path, vocabulary
@@ -676,14 +781,42 @@ class TestExportPublic:
         exclusions = json.loads(
             (tmp_path / "public-exclusions.json").read_text()
         )
-        assert set(exclusions["excluded"]) == (
-            set(PEOPLE) - {"Q401"} | {"Q410"}
-        )
+        dropped = set(PEOPLE) - {"Q401"} | set(UNTYPED) | {"Q410", "Q435"}
+        assert set(exclusions["excluded"]) == dropped
         assert "born as late as 1990" in exclusions["excluded"]["Q404"]
         assert exclusions["included_persons"] == ["Q401"]
-        assert counts["excluded_persons"] == len(PEOPLE)
+        assert counts["excluded_persons"] == len(dropped)
         assert counts["included_persons"] == 1
         assert counts["triples_dropped"] > 0
+
+    def test_a_released_person_left_out_is_not_counted_in(
+        self, tmp_path, vocabulary
+    ):
+        # Q404 states no type: released by the check, and still left out
+        class Released(ExportRun):
+            def __call__(self, query: str) -> list[dict]:
+                rows = super().__call__(query)
+                if "SAMPLE(?deathDate)" in query:
+                    rows = [
+                        facts_row(qid, qid in {"Q401", "Q404"})
+                        for qid in self.selected
+                    ]
+                return rows
+
+        dump = export_dump(vocabulary)
+        dump.write(tmp_path / "full.nt.gz")
+        counts = export_public(
+            config(),
+            tmp_path,
+            run=Released(dump.revisions, tuple(PEOPLE)),
+            vocabulary=vocabulary,
+        )
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q404"] == backup.NO_TYPE
+        assert exclusions["included_persons"] == ["Q401"]
+        assert counts["included_persons"] == 1
 
     def test_the_check_runs_once_the_query_service_holds_the_dump(
         self, tmp_path, vocabulary
@@ -779,7 +912,9 @@ class TestTheBackupsPublicExport:
         out_dir = tmp_path / manifest["timestamp"]
         export = manifest["components"]["public_export"]
         assert export["included_persons"] == 1
-        assert export["excluded_persons"] == len(PEOPLE)
+        assert export["excluded_persons"] == len(
+            set(PEOPLE) - {"Q401"} | set(UNTYPED) | {"Q410", "Q435"}
+        )
         _, mentioned = TestExportPublic.public(out_dir)
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
 

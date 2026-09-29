@@ -718,13 +718,25 @@ not a signal to grow the schema on.
   can have too (a nickname, an official name, what it is referred to
   as), a religion or a membership, a part in an event of another kind,
   and the values of place, organization, artifact and vocabulary
-  properties mark no one. The export reads this evidence from its own
-  dump and **keeps a person only once the check has released them**:
-  an item the check never assessed is dropped, and a redirect goes with
-  the item it redirects to. The check runs on the query service, so the
-  export waits for the query service to hold the dump's revision of
-  every item, and **refuses to run** while it does not, or when the
-  graph changes during the check.
+  properties mark no one. A part in a person event does not make a
+  person of an item typed as a vessel, a family, a military unit or an
+  organization at normal or preferred rank; any other evidence does, a
+  `human` type at any rank included. The export reads this evidence
+  from its own dump and **keeps a person only once the check has
+  released them**: an item the check never assessed is dropped, and a
+  redirect goes with the item it redirects to.
+- **What states no type is left out of the public export**, whatever
+  else it holds: an item with no `instance of` statement at any rank, or
+  only one whose value is unknown or none. The instance's own vocabulary
+  and `yizkr smoke-test`'s item are untyped by design and kept. An item
+  the pipeline leaves untyped (a write cut short, a reference that gives
+  no kind) is missing from the public copy until it is typed.
+- The check runs on the query service, so the export waits for the query
+  service to hold the dump's revision of every item, and **refuses to
+  run** while it does not, or when the graph changes during the check.
+  The match is exact: an item whose revision never reaches the query
+  service keeps the export refusing, naming the item, until that item is
+  edited again or the query service is reloaded.
 - **Births fail closed** (ADR-0020, as amended by #334). A birth releases
   a person only at the latest year it allows, and only when every
   `date of birth` statement a curator has not deprecated does so by the
