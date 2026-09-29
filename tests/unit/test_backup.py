@@ -310,10 +310,10 @@ class TestTheFreeText:
         f'<{W}/value/{VALUE_TIME}> <http://wikiba.se/ontology#timeValue> "1919-01-07T00:00:00Z"{TIME} .',  # noqa: E501
         f'<{W}/value/{VALUE_TIME}> <http://wikiba.se/ontology#timePrecision> "11"{INTEGER} .',  # noqa: E501
         f'<{W}/entity/Q300> <{W}/prop/direct/P14> "+2"^^<http://www.w3.org/2001/XMLSchema#decimal> .',  # noqa: E501
-        f'<{W}/entity/Q301> <{W}/prop/direct/P15> "Point(8.7 50.1)"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .',  # noqa: E501
+        f'<{W}/entity/Q301> <{W}/prop/direct/P15> "Point(0 0)"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .',  # noqa: E501
         f"<{W}/entity/Q301> <{W}/prop/P15> <{W}/entity/statement/Q301-dddd> .",
         f"<{W}/entity/statement/Q301-dddd> <{W}/prop/statement/value/P15> <{W}/value/{VALUE_PLACE}> .",  # noqa: E501
-        f'<{W}/value/{VALUE_PLACE}> <http://wikiba.se/ontology#geoLatitude> "50.1"^^<http://www.w3.org/2001/XMLSchema#double> .',  # noqa: E501
+        f'<{W}/value/{VALUE_PLACE}> <http://wikiba.se/ontology#geoLatitude> "0.0"^^<http://www.w3.org/2001/XMLSchema#double> .',  # noqa: E501
     ]
     KEPT = HEADER + TERMS + STRUCTURE
     # what goes: every other literal, typed or not
@@ -404,8 +404,8 @@ class TestTheFreeText:
             f'"1950-01-01T00:00:00Z"{TIME} .',
             f'"11"{INTEGER} .\n',
             '"+2"^^<http://www.w3.org/2001/XMLSchema#decimal> .',
-            '"50.1"^^<http://www.w3.org/2001/XMLSchema#double> .',
-            '"Point(8.7 50.1)"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .',  # noqa: E501
+            '"0.0"^^<http://www.w3.org/2001/XMLSchema#double> .',
+            '"Point(0 0)"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .',  # noqa: E501
             f'"1950"{INTEGER}.',
             "<http://w.lan/entity/Q76> .",
             "_:genid1 .",
