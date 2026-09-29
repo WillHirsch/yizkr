@@ -57,6 +57,7 @@ from tests.unit.test_registrar import (
 )
 from tests.unit.test_scratch import (  # noqa: F401
     Corpus,
+    Recorder,
     a_run,
     events,
     fakes,
@@ -64,6 +65,7 @@ from tests.unit.test_scratch import (  # noqa: F401
 )
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
+from yizkr.pipeline import scratch
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     EXCERPTS_DIR,
@@ -81,7 +83,7 @@ from yizkr.pipeline.presentation import (
 from yizkr.pipeline.registrar import ExcludedMedia
 from yizkr.pipeline.report import build, render_markdown
 from yizkr.pipeline.rundir import RunDir
-from yizkr.pipeline.scratch import EXIT_OK
+from yizkr.pipeline.scratch import EXIT_OK, CorpusStage
 from yizkr.pipeline.textlayer import png
 
 # the booklet's own text on page 6, as its text layer gives it
@@ -199,6 +201,22 @@ class TestAnExcerpt:
         )
         assert orchestrator._excerpts == {}
         assert LETTER_SHA1 not in planned(orchestrator)
+
+    def test_the_never_ingest_list_is_asked_as_excerpts_are_found(
+        self, tmp_path
+    ):
+        """An image the list names once the PDF's directory keeps its
+        reading is found no more, whatever the directory still holds."""
+        corpus = folder(tmp_path, booklet=booklet())
+        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        doc = document(orchestrator, "booklet.pdf")
+        orchestrator._excerpts = {}
+        assert [e.sha1 for e in orchestrator._excerpts_of(doc, ())] == [
+            LETTER_SHA1
+        ]
+        orchestrator._excerpts = {}
+        orchestrator.exclusions = ExclusionList.parse(f"{LETTER_SHA1}\n")
+        assert orchestrator._excerpts_of(doc, ()) == []
 
     def test_an_image_without_a_reading_is_no_excerpt(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet())
@@ -461,6 +479,40 @@ class TestAScratchRun:
         assert a_run(tmp_path, corpus, fakes).run() == EXIT_OK
         assert fakes.calls == calls
         manifest = RunDir(driver.state_dir).manifest()
+        assert LETTER_SHA1 in {d["sha1"] for d in manifest["documents"]}
+
+    def test_past_the_barrier_alone_the_excerpt_goes_with_its_pdf(
+        self,
+        tmp_path,
+        fakes,  # noqa: F811
+        monkeypatch,
+    ):
+        """An invocation on other code that only takes the run past the
+        barrier dispatches no stage, and still plans the excerpt from its
+        directory and gives it to the corpus stages."""
+        corpus = self.corpus(tmp_path, **{"a-booklet.pdf": booklet()})
+        driver = a_run(tmp_path, corpus, fakes)
+        assert driver.run() == EXIT_OK
+        run_dir = driver.state_dir
+        recorded = RunDir(run_dir).manifest()["code"]
+        other = dict(recorded, commit="f" * 40, dirty=False)
+        monkeypatch.setattr(scratch, "code_version", lambda: dict(other))
+        clustering = Recorder()
+        again = a_run(
+            tmp_path,
+            corpus,
+            fakes,
+            corpus_stages=[CorpusStage("clustering", clustering)],
+        )
+        assert again.run() == EXIT_OK
+        manifest = RunDir(run_dir).manifest()
+        assert manifest["scratch"]["past_barrier_only"] is True
+        assert started(run_dir, invocation=-1) == []
+        (context,) = clustering.contexts
+        assert {doc.sha1 for doc in context.documents} == {
+            corpus.sha1("a-booklet.pdf"),
+            LETTER_SHA1,
+        }
         assert LETTER_SHA1 in {d["sha1"] for d in manifest["documents"]}
 
     def test_the_other_excerpts_take_their_stages_rank_by_rank(
