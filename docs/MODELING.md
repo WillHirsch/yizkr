@@ -797,6 +797,24 @@ not a signal to grow the schema on.
   typed `family` at normal or preferred rank, whatever it holds, released
   or not, and the site badges it. #374 holds the full rule, with a way
   to mark a family's membership complete.
+- **An event goes with its participants** (ADR-0020, as amended by
+  #363). An event's date and place are its participants' too, and its
+  label is written after them, so the export leaves out every event,
+  whatever its kind, that has a `participant` statement at any rank
+  whose value it leaves out, a redirect to one included. An event so
+  left out may itself be a participant, and the rule applies again.
+- **No free text leaves the instance but the vocabulary's** (ADR-0020,
+  as amended by #363). A label, a description, an alias, a name, a
+  title, a cause of death, and in a reference an excerpt, a page number
+  or any other text snak can name anyone, a person the export leaves
+  out included, and the export reads no wording to tell. So the only
+  text it keeps is the terms (label, description, aliases) of the
+  vocabulary's items and properties, as the model manifest gives them,
+  and the dump header's format version; every other literal goes but a
+  time, a number or a coordinate. A statement whose value is text keeps
+  its node, rank, qualifiers and references without it. The public copy
+  therefore names no one: its items are known by QID, type, dates and
+  links alone.
 - The check runs on the query service, so the export waits for the query
   service to hold the dump's revision of every item and property, and
   **refuses to run** while it does not, or when the graph changes during
@@ -830,4 +848,5 @@ not a signal to grow the schema on.
   badge. A family it lists is always badged. Its people are the items
   with person evidence, selected as the check selects them; the export
   also drops what the site lists as no person, an untyped item without
-  person evidence, a family without person evidence and a redirect.
+  person evidence, a family without person evidence, a redirect and an
+  event that one it drops took part in.

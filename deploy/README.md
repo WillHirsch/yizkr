@@ -240,7 +240,12 @@ directory under `var/backups/` containing:
   is every item that states no type, no `instance of` at normal or
   preferred rank that names an item (the vocabulary and the classes
   items are typed with aside), and every family, whose people may
-  include a living person.
+  include a living person, and every event that any of these took part
+  in. No free text leaves but the vocabulary's own terms: no label,
+  description, alias, name, title, excerpt, page number or other text
+  that a source, the pipeline or a curator wrote, since any of it can
+  name someone the export leaves out. So the public copy names no one:
+  its items are known by QID, type, dates and links alone.
   The exclusions file records who was excluded and why, for curator
   review. Nothing here publishes anything: the file is an artifact you
   may choose to publish.

@@ -1,5 +1,6 @@
 """Live validation that the public export keeps only the people the check
-releases, and leaves out what states no type (#344; ADR-0020;
+releases, and leaves out what states no type (#344), the events of those
+it leaves out, and every free text but the vocabulary's (#363; ADR-0020;
 docs/MODELING.md, "Living persons and privacy").
 
 A fictional fixture writes, under labels that carry a marker of the
@@ -16,7 +17,14 @@ fixture's content (test_live_privacy.py's write_fixture):
 * a person typed human, born in 1990, into whom a curator merges a
   duplicate, whose item becomes a redirect to them;
 * a family with a religion, which is no person evidence: the export
-  leaves every family out, as any of its people may be living.
+  leaves every family out, as any of its people may be living;
+* a person typed human and born in 1990, "Named In Text", whom texts on
+  other items name: a birth event they take part in, labelled for them
+  and dated 1990; the family's description; the released person's
+  description; and a letter's title, its page's label and description,
+  and its file's name, which is made from the title. The letter is the
+  source of their birth, and the excerpt of the released person's death
+  names them too.
 
 The two whose type a curator deprecated or outranked carry a religion
 beside it, which is no person evidence, so that their type is what marks
@@ -29,16 +37,21 @@ dropped only the people the check had assessed, so each went into the
 public export in full. A vessel's part in a migration does not make it a
 person, but a `human` type at any rank does. An item that states no type
 is left out, whatever else it holds, and a redirect goes with the item it
-redirects to.
+redirects to. An event that one of those left out takes part in is left
+out too: the migration, for its vessel typed human, and the birth. No
+label, description, alias or other text leaves but the vocabulary's.
 
 The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes the
 public export from it, and reads public.nt.gz: it mentions the released
-person, the plain vessel and the migration by QID, and none of the other
-nine, the label-only item, the family and the redirect included. The
-export first waits for the query service to hold the dump's revision of
-every item and property, a redirect's aside, so on a stack at rest, a
-merge included, the export must run, not refuse. The site lists the
-seven that have person evidence, and badges the six the export drops.
+person, the plain vessel, the letter and its page by QID, and none of the
+others, the label-only item, the family, the redirect, the migration and
+the birth included; no text in it spells "Named In Text", in any case or
+with any separators; the kept fixture items keep no label, description
+or alias; and the vocabulary keeps its own. The export first waits for
+the query service to hold the dump's revision of every item and
+property, a redirect's aside, so on a stack at rest, a merge included,
+the export must run, not refuse. The site lists the eight that have
+person evidence, and badges the seven the export drops.
 
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
@@ -55,7 +68,13 @@ from pathlib import Path
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
-from yizkr.backup import FAMILY, NO_TYPE, dump_rdf, export_public
+from yizkr.backup import (
+    FAMILY,
+    NO_TYPE,
+    PARTICIPANT_LEFT_OUT,
+    dump_rdf,
+    export_public,
+)
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
 from .conftest import register_fictional, wait_for_query_service
@@ -67,9 +86,26 @@ DEPLOY = Path("deploy")
 QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
 LABEL_ONLY = "Export Fixture Label Only"
 MERGED_AWAY = "Export Fixture Merged Away"
+# the person whom texts on other items name, the export leaves out (born
+# in 1990); their name in any case, with any separators, as a file's name
+# made from a title spells it
+NAMED = "Export Fixture Named In Text"
+NAMED_ANYHOW = re.compile(r"named[\W_]*in[\W_]*text", re.IGNORECASE)
+LETTER = f"Export fixture letter to {NAMED}"
+# the predicates of an entity's terms: its label, under each of the three
+# names dumpRdf.php gives one, its description and its aliases
+TERMS = (
+    "<http://www.w3.org/2000/01/rdf-schema#label>",
+    "<http://www.w3.org/2004/02/skos/core#prefLabel>",
+    "<http://schema.org/name>",
+    "<http://schema.org/description>",
+    "<http://www.w3.org/2004/02/skos/core#altLabel>",
+)
 
 
-def local(role: str, kind: str | None = "human") -> dict:
+def local(
+    role: str, kind: str | None = "human", description: str | None = None
+) -> dict:
     ref = {
         "kind": "local",
         "local_id": f"export-{role.replace(' ', '-')}",
@@ -77,6 +113,8 @@ def local(role: str, kind: str | None = "human") -> dict:
     }
     if kind:
         ref["instance_of"] = kind
+    if description:
+        ref["description"] = description
     return ref
 
 
@@ -85,16 +123,20 @@ ENTITIES = {
     "outranked type": local("outranked type"),
     "no type": local("no type", kind=None),
     "organization born": local("organization born", kind="organization"),
-    "released": local("released"),
+    "released": local("released", description=f"father of {NAMED}, born 1990"),
     "migration": local("migration", kind="migration"),
     "vessel": local("vessel", kind="vessel"),
     "vessel typed human": local("vessel typed human", kind="vessel"),
     "merge target": local("merge target"),
-    "family": local("family", kind="family"),
+    "family": local(
+        "family", kind="family", description=f"the family of {NAMED}"
+    ),
+    "named in text": local("named in text"),
+    "birth of named in text": local("birth of named in text", kind="birth"),
 }
 # the roles public.nt.gz mentions; every other one (the item with a label
 # only, and the redirect a merge leaves, too) it leaves out
-PRESENT = {"released", "migration", "vessel"}
+PRESENT = {"released", "vessel", "letter", "letter page"}
 # the roles with person evidence, which the site lists
 PEOPLE = {
     "deprecated type",
@@ -104,10 +146,17 @@ PEOPLE = {
     "released",
     "vessel typed human",
     "merge target",
+    "named in text",
 }
 
 
-def claim(subject: str, prop: str, value: dict, artifact) -> dict:
+def claim(
+    subject: str,
+    prop: str,
+    value: dict,
+    artifact,
+    excerpt: str = "fictional export fixture",
+) -> dict:
     return {
         "subject": ENTITIES[subject],
         "property": prop,
@@ -116,10 +165,7 @@ def claim(subject: str, prop: str, value: dict, artifact) -> dict:
         "source": {
             "artifact": artifact.model_dump(mode="json"),
             "page_number": "1",
-            "transcription_excerpt": {
-                "text": "fictional export fixture",
-                "language": "en",
-            },
+            "transcription_excerpt": {"text": excerpt, "language": "en"},
         },
     }
 
@@ -278,9 +324,10 @@ def fixture_graph(client, config):
     service holds every fixture item's latest revision. Returns the QIDs
     by role."""
     source = register_fictional(client, "Export fixture source", "certificate")
+    letter = register_fictional(client, LETTER, "letter", pages=1)
     written = write_fixture(
         client,
-        {source.ref.sha1: "A"},
+        {source.ref.sha1: "A", letter.ref.sha1: "B"},
         [
             religion("deprecated type", source.ref),
             religion("outranked type", source.ref),
@@ -291,17 +338,33 @@ def fixture_graph(client, config):
                 "date_of_death",
                 {"type": "time", "year": 1995},
                 source.ref,
+                excerpt=f"the father of {NAMED} died in 1995",
             ),
             participant("vessel", source.ref),
             participant("vessel typed human", source.ref),
             born("merge target", source.ref),
             religion("family", source.ref),
+            born("named in text", letter.ref),
+            claim(
+                "birth of named in text",
+                "participant",
+                {"type": "item", "value": ENTITIES["named in text"]},
+                source.ref,
+            ),
+            claim(
+                "birth of named in text",
+                "point_in_time",
+                {"type": "time", "year": 1990},
+                source.ref,
+            ),
         ],
     )
     qids = {
         role: written.created_items[ref["local_id"]]
         for role, ref in ENTITIES.items()
     }
+    qids["letter"] = letter.qid
+    qids["letter page"] = letter.fragment_qids[1]
     deprecate_type(client, qids["deprecated type"])
     add_type(
         client,
@@ -365,15 +428,34 @@ def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
     assert fixture_graph["merged away"] in redirects_to(
         client, fixture_graph["merge target"]
     )
+    # the texts name the person the export leaves out: an event's label, a
+    # family's and a released person's description, a letter's title and
+    # its page's label and description
+    for role, terms in (
+        ("birth of named in text", "labels"),
+        ("family", "descriptions"),
+        ("released", "descriptions"),
+        ("letter", "labels"),
+        ("letter page", "labels"),
+        ("letter page", "descriptions"),
+    ):
+        entity = client.wbi.item.get(fixture_graph[role])
+        assert NAMED in str(getattr(entity, terms).get("en"))
+
+
+def public_lines(exported: Path) -> list[str]:
+    with gzip.open(exported / "public.nt.gz", "rt", encoding="utf-8") as dump:
+        return dump.read().splitlines()
 
 
 def test_only_released_people_are_in_the_public_export(
     fixture_graph, exported
 ):
-    with gzip.open(exported / "public.nt.gz", "rt", encoding="utf-8") as dump:
-        mentioned = {
-            token for line in dump for token in QID_TOKEN.findall(line)
-        }
+    mentioned = {
+        token
+        for line in public_lines(exported)
+        for token in QID_TOKEN.findall(line)
+    }
     assert {
         role for role, qid in fixture_graph.items() if qid in mentioned
     } == PRESENT
@@ -390,6 +472,35 @@ def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
     assert exclusions["excluded"][fixture_graph["merged away"]] == (
         f"a redirect to {target}: {exclusions['excluded'][target]}"
     )
+    # an event goes with a participant the export leaves out
+    for event, part in (
+        ("birth of named in text", "named in text"),
+        ("migration", "vessel typed human"),
+    ):
+        assert exclusions["excluded"][fixture_graph[event]] == (
+            PARTICIPANT_LEFT_OUT.format(fixture_graph[part])
+        )
+
+
+def test_no_free_text_but_the_vocabularys_leaves(
+    config, client, fixture_graph, exported
+):
+    lines = public_lines(exported)
+    # no text names the person left out: not a label, a description, a
+    # title, an excerpt or a file's name
+    assert not [line for line in lines if NAMED_ANYHOW.search(line)]
+    # the fixture's kept items keep no terms of their own
+    kept = tuple(f"/entity/{fixture_graph[role]}>" for role in PRESENT)
+    assert not [
+        line
+        for line in lines
+        if line.split(" ", 1)[0].endswith(kept)
+        and line.split(" ", 2)[1] in TERMS
+    ]
+    # while the vocabulary keeps its own
+    _, items = client.vocabulary()
+    human = f"<{config.concept_uri}/entity/{items['human']}>"
+    assert f'{human} {TERMS[0]} "human"@en .' in lines
 
 
 def test_the_site_badges_whom_the_export_drops(
