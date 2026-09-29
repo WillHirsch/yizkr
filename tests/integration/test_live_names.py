@@ -180,6 +180,14 @@ def typed_names(client, qid: str, prop_key: str) -> dict[str, set[str]]:
     return found
 
 
+def stated_in(names: dict[str, set[str]], artifact_qid: str) -> set[str]:
+    """The name texts of `names` whose statements `artifact_qid` states.
+    An earlier run's export, registered as an artifact of its own when
+    its text differed, may state the same name on the same item: the
+    two sources' statements stand side by side."""
+    return {text for text, cited in names.items() if artifact_qid in cited}
+
+
 @pytest.fixture(scope="module")
 def llm_path_person(client, tmp_path_factory):
     """Two fictional documents about one person, written through the real
@@ -310,14 +318,15 @@ def test_gedcom_path_alias_bag_and_typed_names(client, tmp_path):
     item = client.wbi.item.get(qid)
     assert str(item.labels.get("en")) == "Hildegard Rahel Namecheck"
     assert aliases_on(client, qid) == expected_aliases
-    assert typed_names(client, qid, "birth_name") == {
-        "Hildegard Rahel Namecheck": {artifact_qid}
+    assert stated_in(typed_names(client, qid, "birth_name"), artifact_qid) == {
+        "Hildegard Rahel Namecheck"
     }
-    assert typed_names(client, qid, "nickname") == {"Hilde": {artifact_qid}}
-    assert typed_names(client, qid, "married_name") == {
-        "Hildegard Probewald-Namecheck": {artifact_qid},
-        "Hildegard Probewald": {artifact_qid},
+    assert stated_in(typed_names(client, qid, "nickname"), artifact_qid) == {
+        "Hilde"
     }
+    assert stated_in(
+        typed_names(client, qid, "married_name"), artifact_qid
+    ) == {"Hildegard Probewald-Namecheck", "Hildegard Probewald"}
 
     rerun = BatchWriter(client).write_batch(
         adapt_gedcom(GEDCOM, artifact=exported).batch
