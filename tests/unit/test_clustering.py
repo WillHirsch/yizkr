@@ -827,61 +827,108 @@ class TestBlocking:
         assert unguarded["summary"]["hub_keys"] == 0
         assert unguarded["review"] == []
 
-    def test_a_key_the_export_matches_is_never_a_hub(self):
-        """Over a hub limit of three, five registers name Gustav, born
-        1919, as the export does: each pairs with the export's Gustav
-        alone, a pair each, so the key is no hub, and the six merge. Five
-        registers naming him 'Gustl', his nickname, pair with him too: a
-        lone token only ever meets the export, and is never a hub."""
-        ged = export(
+    def export_with_gustav(self) -> Doc:
+        """The export's Gustav, 'Gustl', born 1919 in Flörburg, and his
+        death, which it states undated: a death event of its own."""
+        return export(
             "0 @I8@ INDI\n1 NAME Gustav /Löbig/\n2 NICK Gustl\n"
-            "1 BIRT\n2 DATE 1919\n",
-            {"i8": "gustav-loebig"},
+            "1 BIRT\n2 DATE 1919\n2 PLAC Flörburg, Hesse, Germany\n"
+            "1 DEAT Y\n",
+            {
+                "i8": "gustav-loebig",
+                "i8-death": "gustav-death",
+                "Flörburg, Hesse, Germany": "floerburg",
+            },
         )
+
+    @pytest.mark.parametrize(
+        ("label", "kind", "born", "truth"),
+        [
+            # born as the export says: the six merge
+            ("Gustav Löbig", "human", 1919, "gustav-loebig"),
+            # a given name the export's starts with
+            ("Gus Löbig", "human", None, "gustav-loebig"),
+            # a lone token, his nickname
+            ("Gustl", "human", None, "gustav-loebig"),
+            ("Flörburg", "place", None, "floerburg"),
+        ],
+    )
+    def test_a_key_the_export_matches_is_never_a_hub(
+        self, label, kind, born, truth
+    ):
+        """Over a hub limit of three, five registers name what the export
+        names: each finds the export's mention and pairs with it alone, a
+        pair each, so their key is no hub. A person's lone token only ever
+        meets the export, and is never a hub either."""
+        ged = self.export_with_gustav()
         hub = load_config(overrides={"blocking": {"max-key-mentions": 3}})
-        dated = [
+        claims = [("e1", "date_of_birth", day(born))] if born else []
+        docs = [
             register(
-                f"gustav-{n}",
-                [entity("e1", "Gustav Löbig")],
-                [("e1", "date_of_birth", day(1919))],
-                {"e1": "gustav-loebig"},
+                f"{label}-{n}",
+                [entity("e1", label, kind)],
+                claims,
+                {"e1": truth},
             )
             for n in range(5)
         ]
-        manifests = [ged.manifest, *(doc.manifest for doc in dated)]
-        assert len(blocked_pairs(manifests, hub)) == 5
+        manifests = [ged.manifest, *(doc.manifest for doc in docs)]
+        anchor = ged.manifest.sha1
+        pairs = blocked_pairs(manifests, hub)
+        assert len(pairs) == 5
+        assert all(anchor in {sha1 for sha1, _ in pair} for pair in pairs)
         identity = cluster_corpus(manifests, hub)
         assert identity["summary"]["hub_keys"] == 0
-        assert merged([ged, *dated], identity) == [{"gustav-loebig"}]
-        (cluster,) = [
-            entry
-            for entry in identity["clusters"].values()
-            if len(entry["members"]) > 1
-        ]
-        assert (cluster["method"], len(cluster["members"])) == (CONFIDENT, 6)
-        nicknamed = [
-            register(
-                f"gustl-{n}",
-                [entity("e1", "Gustl")],
-                [],
-                {"e1": "gustav-loebig"},
-            )
-            for n in range(5)
-        ]
-        manifests = [ged.manifest, *(doc.manifest for doc in nicknamed)]
-        assert len(blocked_pairs(manifests, hub)) == 5
-        identity = cluster_corpus(manifests, hub)
-        assert identity["summary"]["hub_keys"] == 0
-        # without anchoring the export's key is a hub like any other, and
-        # nothing pairs on it
+        if born:
+            assert merged([ged, *docs], identity) == [{truth}]
+            (cluster,) = [
+                entry
+                for entry in identity["clusters"].values()
+                if len(entry["members"]) > 1
+            ]
+            assert len(cluster["members"]) == 6
+        # without anchoring the key is a hub like any other; a lone token
+        # is still none, and pairs with nothing then
         free = load_config(
             overrides={
                 "blocking": {"max-key-mentions": 3, "gedcom-anchored": False}
             }
         )
-        manifests = [ged.manifest, *(doc.manifest for doc in dated)]
         assert blocked_pairs(manifests, free) == set()
-        assert cluster_corpus(manifests, free)["summary"]["hub_keys"] == 1
+        summary = cluster_corpus(manifests, free)["summary"]
+        assert summary["hub_keys"] == (0 if label == "Gustl" else 1)
+
+    def test_the_exports_event_keys_can_be_hubs(self):
+        """Events never anchor: they meet each other through their
+        participants, the export's among them. Over a hub limit of three,
+        five registers' deaths of Gustav and the export's share a key that
+        is a hub, and no two deaths pair, while each register's Gustav
+        still pairs with the export's."""
+        ged = self.export_with_gustav()
+        hub = load_config(overrides={"blocking": {"max-key-mentions": 3}})
+        docs = [
+            register(
+                f"death-{n}",
+                [
+                    entity("e1", "Gustav Löbig"),
+                    entity("e2", "Death of Gustav Löbig", "death"),
+                ],
+                [("e2", "participant", item("e1"))],
+                {"e1": "gustav-loebig", "e2": "gustav-death"},
+            )
+            for n in range(5)
+        ]
+        manifests = [ged.manifest, *(doc.manifest for doc in docs)]
+        pairs = blocked_pairs(manifests, hub)
+        assert len(pairs) == 5
+        assert {local for pair in pairs for _, local in pair} == {"i8", "e1"}
+        identity = cluster_corpus(manifests, hub)
+        (listed,) = [e for e in identity["review"] if e["status"] == HUB]
+        assert (listed["kind"], listed["key"]) == (
+            "death",
+            ["key", "gustav", "lobig"],
+        )
+        assert len(listed["members"]) == 6
 
 
 class TestNames:
