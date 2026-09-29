@@ -1004,9 +1004,9 @@ class TestKeys:
         assert part_keys("Loebig") == {"loebig"}
         assert part_keys("Cäcilie") == {"cacilie", "caecilie"}
         # a decomposed umlaut is one too
-        assert part_keys(unicodedata.normalize("NFD", "Ülm")) == {
-            "ulm",
-            "uelm",
+        assert part_keys(unicodedata.normalize("NFD", "Pünktchen")) == {
+            "punktchen",
+            "puenktchen",
         }
         assert part_keys("Straße") == {"strasse"}
         docs = {
@@ -3343,7 +3343,7 @@ class TestAcrossSources:
         Fryslân, Nederlân'; a register gives Snylsjum in Fryslân alone,
         and another in 'Fryslan, Nederlân' spelt otherwise. Each set lies
         among the letter's, whatever its order: they nest. A Snylsjum in
-        Groningen does not."""
+        a province of another name does not."""
         letter = document(
             "letter-to-sipkje-1952",
             [
