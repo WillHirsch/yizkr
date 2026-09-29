@@ -900,6 +900,40 @@ def cmd_scratch_control(args) -> int:
     return 0
 
 
+def cmd_scratch_import_transcriptions(args) -> int:
+    from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
+    from yizkr.pipeline import import_transcriptions as imports
+    from yizkr.pipeline.llm import PassPaused
+    from yizkr.pipeline.scratch import EXIT_FAILED, EXIT_INTERRUPTED
+
+    # fail closed: no never-ingest list, nothing read
+    exclusions = load_exclusions(required=True, env_file=args.env_file)
+    folder = args.corpus or corpus_dir(args.env_file)
+    if folder is None:
+        sys.exit(
+            f"no corpus given and {CORPUS_DIR_VAR} is not set; name it with "
+            f"--corpus, or set {CORPUS_DIR_VAR} (see deploy/README.md)"
+        )
+    try:
+        report = imports.import_transcriptions(
+            args.archive,
+            folder,
+            cache_dir=args.cache,
+            exclusions=exclusions,
+            extract_effort=args.extract_effort,
+            leave_out=args.leave_out or (),
+        )
+    except (imports.ImportRefused, PassPaused) as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_FAILED
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return EXIT_INTERRUPTED
+    for line in imports.describe(report):
+        print(line)
+    return 0
+
+
 def cmd_detect_faces(args) -> int:
     from yizkr.pipeline.faces import Gallery, make_detector, proposals_to_batch
 
@@ -1550,21 +1584,70 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _scratch_parsers(sub, effort_choices) -> None:
-    """`yizkr scratch`: the scratch driver (docs/runbooks/scratch-run.md)
-    and the run monitor's commands (docs/MONITOR.md)."""
+    """`yizkr scratch`: the scratch driver and its call estimate
+    (docs/runbooks/scratch-run.md), the import of archived transcriptions
+    for its calls (docs/LLM_CACHE.md, Seeding), and the run monitor's
+    commands (docs/MONITOR.md)."""
     from yizkr.pipeline import scratch
     from yizkr.pipeline.rundir import CONTROL_ACTIONS
 
     group = sub.add_parser(
         "scratch",
-        help="whole-corpus scratch runs: estimate one's calls, run it, "
-        "follow it, pause, resume or abort it (docs/runbooks/scratch-run.md)",
+        help="whole-corpus scratch runs: import archived transcriptions for "
+        "one's calls, estimate its calls, run it, follow it, pause, resume "
+        "or abort it (docs/runbooks/scratch-run.md)",
     )
     ssub = group.add_subparsers(dest="action", required=True)
     runs_help = (
         f"the runs directory (default {scratch.DEFAULT_RUNS}); a run is "
         "named by its id there, or by its directory's path"
     )
+
+    p = ssub.add_parser(
+        "import-transcriptions",
+        help="adopt an archive's vision transcriptions in the LLM cache, "
+        "each checked, for the calls a scratch run makes, so the run "
+        "reuses them rather than asks the engine (docs/LLM_CACHE.md, "
+        "Seeding). Refuses to run unless $YIZKR_EXCLUDE_FILE names a "
+        "never-ingest list",
+    )
+    p.add_argument(
+        "archive",
+        type=Path,
+        help="the archived state directory of an `ingest run`: a folder "
+        "per document, with its state.json and transcription.json",
+    )
+    p.add_argument(
+        "--corpus",
+        type=Path,
+        help="the corpus folder the scratch run takes (default "
+        "$YIZKR_CORPUS_DIR), which must hold each scan whose transcription "
+        "is adopted",
+    )
+    p.add_argument(
+        "--cache",
+        type=Path,
+        default=DEFAULT_CACHE,
+        metavar="DIR",
+        help="the LLM cache the scratch run takes (default var/llm-cache)",
+    )
+    p.add_argument(
+        "--extract-effort",
+        choices=effort_choices,
+        default="low",
+        help="the reasoning effort the scratch run transcribes with, as "
+        "its --extract-effort (default low); the adoptions are keyed on it, "
+        "and on $YIZKR_LLM_MODEL and the claude CLI installed",
+    )
+    p.add_argument(
+        "--leave-out",
+        action="append",
+        metavar="SHA1",
+        help="leave out the transcription of the media whose SHA-1 starts "
+        "so (at least 7 hex digits), and withdraw an earlier adoption of "
+        "it, so the run transcribes it afresh (repeatable)",
+    )
+    p.set_defaults(func=cmd_scratch_import_transcriptions)
 
     p = ssub.add_parser(
         "run",
