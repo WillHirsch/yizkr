@@ -1,6 +1,11 @@
 # ADR-0009: Place hierarchy — demand-driven containment with transitive elimination
 
 Status: accepted
+Amended by [ADR-0031](0031-the-relation-decides-the-kind.md) (#202,
+2026-09-29): a camp, prison or other site that a source names as where
+something happened is a place, inside its town or region, so it joins
+this hierarchy; an organisation stays outside it, linked to a place by
+`location` (ADR-0012, Fork F).
 
 ## Context
 

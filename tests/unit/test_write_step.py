@@ -4,8 +4,9 @@ The step applies a document's reviewed sheet to its resolved batch, writes
 what the sheet approves through BatchWriter, and reports what it wrote.
 These tests run the real step against the unit tests' in-memory instance,
 with no LLM and no stack: a depicts claim goes through it only as its own
-row of the sheet decides (ADR-0005, #258), and its summary and log line
-count the type statements of items the batch found (#240).
+row of the sheet decides (ADR-0005, #258), its summary and log line
+count the type statements of items the batch found (#240), and its
+summary names the claims the writer refuses (#366).
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ from tests.unit.test_faces import (
     wiki_with_portrait,
 )
 from tests.unit.test_pipeline import (
+    DIRECTORY_SHA1,
+    FIRM_ENTRY,
     _directory_batch,
     _directory_lines_batch,
     _firm_batch,
@@ -176,3 +179,36 @@ class TestWriteStepSummary:
             "  directory.txt: entity 'firm' has the kind 'hat_shop', which "
             "the vocabulary lacks: no kind is recorded for it"
         ) in step.lines
+
+    def test_the_claims_the_writer_refuses_are_named(self, tmp_path):
+        # (here) the directory's extraction took the firm's entry, over and
+        # over, as a name the directory refers to it by: longer than a text
+        # value holds, so the writer refuses the claim, and the summary
+        # names it by its claim id beside the claim it writes
+        entry = (f"{FIRM_ENTRY}. " * 11)[:400] + "."
+        name = {
+            "property": "referred_to_as",
+            "value": {
+                "type": "monolingual",
+                "value": {"text": entry, "language": "de"},
+            },
+            "source": {
+                "artifact": {"kind": "artifact", "sha1": DIRECTORY_SHA1},
+                "transcription_excerpt": {
+                    "text": FIRM_ENTRY,
+                    "language": "de",
+                },
+            },
+        }
+        directory = _directory_batch(extra_claims=(name,))
+        step = WriteStep(tmp_path, _two_sources(), "directory.txt")
+        step.review(directory, decide=lambda row: "approve")
+
+        summary = step.write(directory)
+
+        refused = claim_id(directory.claims[1])
+        assert (summary["written"], summary["refused"]) == (1, [refused])
+        assert any(
+            line.startswith(f"  directory.txt: claim {refused} ")
+            for line in step.lines
+        )

@@ -88,6 +88,22 @@ cites (the writer's module docstring, `src/yizkr/pipeline/writer.py`,
 gives the rule). The kinds and type hints the writer records after the
 claims, from an entity manifest or a ref, follow ADR-0007 instead.
 
+Wikibase holds at most 400 characters in the text of a string,
+external-id or monolingual text value, a reference's page number and
+region among them, and refuses the whole edit that sends a longer one;
+the writer counts each text in NFC, the form the instance keeps it in
+(#366). A page number or region over the limit is cut at a break
+between words and ends with " … sha1 " and the first 12 hex digits of
+the SHA-1 of the whole text, as an excerpt over the limit is cut at a
+space and ends with "…": a locator only places the claim in its source,
+and the digest keeps two places whose locators agree up to the cut two
+references. A claim whose own text, its value or a qualifier's, is over
+the limit is refused, never cut, since a cut would narrow what the
+source says: nothing of it is written, and the write's result names it
+by its claim id (its review-sheet id, unless the review corrected it),
+with a warning that says why (the writer's module docstring). Every
+other claim of the batch is written.
+
 Curator-attributed statements (a value correction from the review CSV)
 carry the `stated in → artifact` reference only:
 process provenance is for machine writes, and a human decision's

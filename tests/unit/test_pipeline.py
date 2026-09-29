@@ -1278,11 +1278,66 @@ ITEMS = {
 }
 
 
+def _snaks(statement: dict) -> list[dict]:
+    """Every snak of a statement's JSON: its value's, then each
+    qualifier's, then each of its references'."""
+    return [
+        statement["mainsnak"],
+        *(
+            snak
+            for snaks in statement.get("qualifiers", {}).values()
+            for snak in snaks
+        ),
+        *(
+            snak
+            for block in statement.get("references", [])
+            for snaks in block["snaks"].values()
+            for snak in snaks
+        ),
+    ]
+
+
+def _refuse_over_limit(item) -> None:
+    """Refuse an edit of `item` as Wikibase does when a snak of one of its
+    statements, in a value, a qualifier or a reference, holds a text of
+    more than 400 characters (its `string-limits`): a string value (of a
+    string or external-id snak) counted in NFC, the form Wikibase puts it
+    in before it checks it, and a monolingual text as it is sent. The
+    whole edit is refused, and nothing of it is kept (#366)."""
+    from wikibaseintegrator.wbi_exceptions import ModificationFailed
+
+    for statements in item.get_json().get("claims", {}).values():
+        for statement in statements:
+            for snak in _snaks(statement):
+                datavalue = snak.get("datavalue") or {}
+                if datavalue.get("type") == "string":
+                    text = unicodedata.normalize("NFC", datavalue["value"])
+                elif datavalue.get("type") == "monolingualtext":
+                    text = datavalue["value"]["text"]
+                else:
+                    continue
+                if len(text) > 400:
+                    raise ModificationFailed(
+                        {
+                            "code": "modification-failed",
+                            "info": "Must be no more than 400 characters long",
+                            "messages": [
+                                {
+                                    "name": "wikibase-validator-too-long",
+                                    "parameters": ["400", text],
+                                }
+                            ],
+                        }
+                    )
+
+
 class FakeItems:
     """WikibaseIntegrator items held in memory; write() assigns a QID.
 
     Every get() returns the one object the store holds, so a write through
-    any copy is seen through every other (compare DetachedItems)."""
+    any copy is seen through every other (compare DetachedItems). As an
+    instance does, write() refuses an edit that sends a text over the 400
+    characters Wikibase holds in a value (_refuse_over_limit)."""
 
     def __init__(self) -> None:
         self.store: dict[str, object] = {}
@@ -1295,6 +1350,7 @@ class FakeItems:
         item = WikibaseIntegrator().item.new()
 
         def write(summary=None, **_):
+            _refuse_over_limit(item)
             self.writes += 1
             if item.id is None:
                 item.id = f"Q{self._next}"
@@ -1332,7 +1388,9 @@ class DetachedItems(FakeItems):
     Wikibase saves string and external-id values, labels, descriptions
     and aliases in NFC, and its API gives every text back in NFC,
     monolingual text included (#335, #349). `sent` keeps each write's
-    item as the writer sent it.
+    item as the writer sent it. As an instance does, a write that sends
+    a text over the 400 characters Wikibase holds in a value is refused
+    whole, and changes nothing (_refuse_over_limit, #366).
 
     Unlike an instance, the store's round trip through `get_json` and
     `from_json` ignores WikibaseIntegrator's `remove` flags: a statement
@@ -1345,6 +1403,7 @@ class DetachedItems(FakeItems):
 
     def _bound(self, item):
         def write(summary=None, **_):
+            _refuse_over_limit(item)
             self.writes += 1
             if item.id is None:
                 item.id = f"Q{self._next}"
