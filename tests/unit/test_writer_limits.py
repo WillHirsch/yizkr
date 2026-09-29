@@ -294,6 +294,24 @@ PAGES["the room ends at a stray mark on a semicolon"] = (
     STRAY,
     STRAY[: ROOM - 2] + _mark(STRAY),
 )
+# (here) a register that circles its leaf numbers, which the transcription
+# gives with a combining enclosing circle: the room ends between leaf 41
+# and its circle, which the cut keeps together, so both go
+CIRCLE = " ; ".join(f"Blatt {leaf}\u20dd" for leaf in range(10, 70))
+assert CIRCLE[ROOM - 3 : ROOM + 1] == " 41\u20dd"
+PAGES["the room ends at an enclosing mark"] = (
+    CIRCLE,
+    CIRCLE[: ROOM - 3] + _mark(CIRCLE),
+)
+# (here) a typeset index, which binds "S." to its page with a no-break
+# space: the room ends inside page 50, which the cut leaves out whole, and
+# the no-break space before it goes too
+BOUND = " ; ".join(f"S.\u00a0{page}" for page in range(2, 72))
+assert BOUND[ROOM - 4 : ROOM + 1] == "S.\u00a050"
+PAGES["a no-break space before the cut"] = (
+    BOUND,
+    BOUND[: ROOM - 2] + _mark(BOUND),
+)
 # one word fills the room: it is cut, and the letter whose bar the room
 # leaves out goes with its bar
 WORD = "Hauptregister" + STREET * 40
