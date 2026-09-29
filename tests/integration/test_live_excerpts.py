@@ -183,9 +183,25 @@ def test_a_pdf_and_its_excerpt_are_written_as_two_witnesses(
     parts = parts_of(client, pdf)
     assert parts["other"] == {"6": [image]}
     claims = entities(client, image)[image]["claims"]
-    for claim in claims[properties["part_of"]]:
-        if value(claim["mainsnak"]) == pdf:
-            assert pdf in cited(client, claim)
+    # the image's one statement that it is part of the booklet, on page 6:
+    # an earlier run's items are this run's too, so each write must leave
+    # exactly that statement, never another beside it
+    on_the_booklet = [
+        claim
+        for claim in claims[properties["part_of"]]
+        if value(claim["mainsnak"]) == pdf
+    ]
+    assert [
+        [
+            value(snak)
+            for snak in claim.get("qualifiers", {}).get(
+                properties["page_number"], []
+            )
+        ]
+        for claim in on_the_booklet
+    ] == [["6"]]
+    for claim in on_the_booklet:
+        assert pdf in cited(client, claim)
     kinds = {value(c["mainsnak"]) for c in claims[properties["instance_of"]]}
     assert items["photograph"] in kinds
     labels = client.api_get(
