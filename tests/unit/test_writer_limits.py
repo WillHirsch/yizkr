@@ -11,11 +11,16 @@ writer counts each text in NFC, the form the instance keeps it in, and
 sends none over the limit:
 
 * a reference's page number or region over the limit is cut at a break
-  between words and ends with " …", and a re-run finds the block;
+  between words and ends with " … sha1 " and 12 hex digits of the SHA-1
+  of the whole text, so a re-run finds the block, and two places whose
+  locators agree up to the cut stay two blocks (#381); an excerpt over the
+  limit is cut at a space and ends with "…";
 * a claim whose own text, its value or a qualifier's, is over the limit
   is refused, never cut (CLAUDE.md rule 5): nothing of it is written,
-  the result names it by its review-sheet id, and a warning says why.
-  Every other claim is written, with its references (rules 1 and 2);
+  the result names it by its review-sheet id, and a warning says why,
+  quoting none of its text. Every other claim is written, with its
+  references (rules 1 and 2), and a kind only a refused claim gives is
+  neither recorded nor warned of;
 * an entity's type hint over the limit is left out, with a warning.
 
 Every text comes from the fictional universe (docs/EXAMPLES.md), said
@@ -25,6 +30,7 @@ over and over where a test needs it long.
 from __future__ import annotations
 
 import copy
+import hashlib
 import unicodedata
 
 import pytest
@@ -33,6 +39,7 @@ from wikibaseintegrator.wbi_exceptions import ModificationFailed
 from tests.unit.test_pipeline import (
     DIRECTORY_SHA1,
     INTERVIEW_SHA1,
+    ITEMS,
     MEDIA_SHA1,
     PROPERTIES,
     REGISTER_SHA1,
@@ -66,6 +73,15 @@ def _said_over(phrase: str, length: int) -> str:
     text = (phrase * (length // len(phrase) + 1))[: length - 1] + "."
     assert len(unicodedata.normalize("NFC", text)) == length
     return text
+
+
+def _quotes(warnings: list[str], *texts: str) -> list[str]:
+    """The warnings that quote any of `texts`."""
+    return [
+        warning
+        for warning in warnings
+        if any(text.strip(" ,.!-") in warning for text in texts)
+    ]
 
 
 # -- the fake -----------------------------------------------------------------
@@ -163,14 +179,16 @@ def _leaves(first: int, count: int, street: str = "") -> str:
     )
 
 
-def _cause(page: str | None = None, cause: str = "Wassersucht") -> dict:
+def _cause(
+    page: str | None = None, cause: str = "Wassersucht", kind: str = "human"
+) -> dict:
     """Eugen's cause of death as the 1909 burial register gives it, on
-    `page`."""
+    `page`, his ref giving him the kind `kind`."""
     source = _cites(REGISTER_SHA1, "Todesursache: Wassersucht.")
     if page:
         source["page_number"] = page
     return {
-        "subject": _local("e07", "Eugen Löbig"),
+        "subject": _local("e07", "Eugen Löbig", kind),
         "property": "cause_of_death",
         "value": {
             "type": "monolingual",
@@ -188,12 +206,23 @@ def _stored_page(wiki: FakeWiki, qid: str) -> str:
     return page
 
 
+def _mark(page: str) -> str:
+    """What a page over the limit is cut with: CUT_MARK, then "sha1" and
+    the first 12 hex digits of the SHA-1 of the whole page in NFC."""
+    whole = unicodedata.normalize("NFC", page).encode()
+    return f"{CUT_MARK} sha1 {hashlib.sha1(whole).hexdigest()[:12]}"
+
+
+# the room a cut leaves before its mark
+ROOM = TEXT_LIMIT - len(_mark(""))
+assert ROOM == 380
+
+
 def _to_the_last_space(page: str) -> str:
     """`page`, over the limit, cut as the writer cuts a page whose words,
-    as far as the room left before the mark, each begin after a space: at
-    the last space the room holds or ends at, the mark after it."""
-    room = TEXT_LIMIT - len(CUT_MARK)
-    return page[: page.rindex(" ", 0, room + 1)].rstrip() + CUT_MARK
+    as far as the room, each begin after a space: at the last space the
+    room holds or ends at, its mark after it."""
+    return page[: page.rindex(" ", 0, ROOM + 1)].rstrip() + _mark(page)
 
 
 # a page number by what sets it apart -> (the page as a claim gives it,
@@ -204,26 +233,63 @@ AT = _leaves(6, 60)[:400]
 assert len(AT) == 400 and AT[-1].isdigit()
 PAGES["400 characters"] = (AT, AT)
 PAGES["401 characters"] = (AT + "0", _to_the_last_space(AT + "0"))
-# the room ends at a space: the page keeps all of the room, the mark after
+# the room ends at a space: the page keeps all of the room, its mark after
 # it
-BREAK = _leaves(93, 60)
-assert BREAK[398] == " " and BREAK[397].isdigit()
-PAGES["the room ends at a space"] = (BREAK, BREAK[:398] + CUT_MARK)
-# the room ends inside leaf 127: a cut there would keep "Blatt 12", another
+BREAK = _leaves(8, 60)
+assert BREAK[ROOM] == " " and BREAK[ROOM - 1].isdigit()
+PAGES["the room ends at a space"] = (BREAK, BREAK[:ROOM] + _mark(BREAK))
+# the room ends inside leaf 109: a cut there would keep "Blatt 10", another
 # leaf, so the cut leaves it out whole
-NUMBER = _leaves(94, 60)
-assert NUMBER[395:399] == " 127"
-PAGES["the room ends inside a number"] = (NUMBER, NUMBER[:395] + CUT_MARK)
+NUMBER = _leaves(76, 60)
+assert NUMBER[ROOM - 3 : ROOM + 1] == " 109"
+PAGES["the room ends inside a number"] = (
+    NUMBER,
+    NUMBER[: ROOM - 3] + _mark(NUMBER),
+)
+# the room ends just past the point of leaf 1.000, as German writes a
+# thousand: a cut there would keep "Blatt 1.", leaf 1, so the cut leaves
+# the number out whole
+POINT = " ; ".join(
+    f"Blatt {leaf:,}".replace(",", ".") for leaf in range(969, 1014)
+)
+assert POINT[ROOM - 3 : ROOM + 3] == " 1.000"
+PAGES["the room ends at a point inside a number"] = (
+    POINT,
+    POINT[: ROOM - 3] + _mark(POINT),
+)
+# (here) an index in English, which writes a thousand with a comma: the
+# room ends just past the comma of page 1,003
+COMMA = " ; ".join(f"p. {page:,}" for page in range(962, 1022))
+assert COMMA[ROOM - 3 : ROOM + 3] == " 1,003"
+PAGES["the room ends at a comma inside a number"] = (
+    COMMA,
+    COMMA[: ROOM - 3] + _mark(COMMA),
+)
+# (here) the sheets of the tree Clara drew, each marked as her copy: the
+# room ends at the apostrophe of "Clara's", written either way, so the cut
+# leaves the word out whole
+for apostrophe in ("'", "\u2019"):
+    CLARA = " ; ".join(
+        f"sheet {sheet}, Clara{apostrophe}s copy" for sheet in range(100, 130)
+    )
+    assert CLARA[ROOM - 6 : ROOM + 1] == f" Clara{apostrophe}"
+    PAGES[f"the room ends at an apostrophe ({apostrophe})"] = (
+        CLARA,
+        CLARA[: ROOM - 6] + _mark(CLARA),
+    )
 # the room ends between the register's n and its bar: the cut leaves the
 # street's name out whole, the letter with its mark
-MARK = _leaves(10, 40, f", {STREET}")
-assert MARK[393:399] == f" {STREET[:5]}" and MARK[398] == "\u0304"
-PAGES["the room ends at a combining mark"] = (MARK, MARK[:393] + CUT_MARK)
+MARK = _leaves(90, 40, f", {STREET}")
+assert MARK[ROOM - 5 : ROOM + 1] == f" {STREET[:5]}"
+PAGES["the room ends at a combining mark"] = (
+    MARK,
+    MARK[: ROOM - 5] + _mark(MARK),
+)
 # one word fills the room: it is cut, and the letter whose bar the room
 # leaves out goes with its bar
-WORD = "Hauptbuch" + STREET * 40
-assert WORD[397:399] == "n\u0304"
-PAGES["one word fills the room"] = (WORD, WORD[:397] + CUT_MARK)
+WORD = "Hauptregister" + STREET * 40
+assert WORD[ROOM - 1 : ROOM + 1] == "n\u0304"
+PAGES["one word fills the room"] = (WORD, WORD[: ROOM - 1] + _mark(WORD))
 # given decomposed (NFD), the page is longer than the limit; in NFC, the
 # form the instance keeps and counts, it is at the limit
 UMLAUTS = _said_over("Blatt 5, Flörburg ; ", 400)
@@ -236,8 +302,9 @@ PAGES["in NFD, NFC at the limit"] = (
 
 class TestLocatorsOverTheLimit:
     """A page number or region over the limit is cut, visibly, at a break
-    between words, never failing the batch; the cut depends on the page
-    alone, so a re-run finds the block and writes nothing."""
+    between words, never failing the batch. The cut depends on the page
+    alone, so a re-run finds the block and writes nothing, and its digest
+    keeps two places whose pages agree up to the cut two blocks."""
 
     @pytest.mark.parametrize(("page", "stored"), PAGES.values(), ids=PAGES)
     def test_a_page_over_the_limit_is_cut(self, page, stored):
@@ -257,12 +324,45 @@ class TestLocatorsOverTheLimit:
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
+    def test_places_that_agree_up_to_the_cut_stay_apart(self):
+        # (here) the register's index gives Eugen's entry on two lists of
+        # leaves that agree well past the room, one ending with leaf 500
+        # and one with leaf 777; and a third claim gives as its page what
+        # the first one's cut keeps, with the mark but without the digest.
+        # Each is a place of its own, and so a reference block of its own
+        common = _leaves(1, 60)
+        assert len(common) > TEXT_LIMIT
+        first, second = common + " ; Blatt 500", common + " ; Blatt 777"
+        start = _to_the_last_space(first)[: -len(_mark(first))] + CUT_MARK
+        wiki = FakeWiki(MEDIA, detached=True)
+        batch = _batch_of(_cause(first), _cause(second), _cause(start))
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        (died,) = _statements(
+            wiki, written.created_items["e07"], "cause_of_death"
+        )
+        assert [page for _, page, _, _ in _places(died)] == [
+            _to_the_last_space(first),
+            _to_the_last_space(second),
+            start,
+        ]
+        assert (written.written, written.referenced, written.skipped) == (
+            1,
+            2,
+            0,
+        )
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 3)
+        assert wiki.wbi.item.writes == writes
+
     def test_a_region_over_the_limit_is_cut(self, monkeypatch):
         # a region's form, as a percentage box gives it, is far shorter;
         # the cut applies to whatever form the region takes. The room ends
-        # between a box's last number and its percent sign
+        # just past the comma after a box's third percentage
         form = " ".join(["10%,20%,60%,10%"] * 30)
-        assert form[396:399] == "10%"
+        assert form[ROOM - 2 : ROOM + 1] == "%,1"
         monkeypatch.setattr(
             RegionPercent, "as_wikibase_string", lambda region: form
         )
@@ -282,7 +382,34 @@ class TestLocatorsOverTheLimit:
             wiki, written.created_items["e07"], "cause_of_death"
         )
         ((_, _, region, _),) = _places(died)
-        assert region == form[:398] + CUT_MARK
+        assert region == form[:ROOM] + _mark(form)
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.skipped) == (0, 1)
+        assert wiki.wbi.item.writes == writes
+
+    def test_an_excerpt_over_the_limit_is_cut_at_a_space(self):
+        # (here) the register's entry quoted whole, over and over, as the
+        # excerpt: it is cut at the last space in its first 397 characters,
+        # which falls inside a word, and ends with "…"
+        excerpt = _said_over("Gestorben: 16. März 1909 in Flörburg. ", 450)
+        assert excerpt[396] != " " and excerpt[397] != " "
+        kept = excerpt[: excerpt.rindex(" ", 0, 397)]
+        claim = _cause()
+        claim["source"]["transcription_excerpt"] = {
+            "text": excerpt,
+            "language": "de",
+        }
+        wiki = FakeWiki(MEDIA, detached=True)
+        batch = _batch_of(claim)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        (died,) = _statements(
+            wiki, written.created_items["e07"], "cause_of_death"
+        )
+        ((_, _, _, stored),) = _places(died)
+        assert stored == kept + "…"
         writes = wiki.wbi.item.writes
         again = BatchWriter(wiki).write_batch(batch)
         assert (again.written, again.skipped) == (0, 1)
@@ -344,8 +471,8 @@ class TestClaimsOverTheLimit:
     """A claim whose own text is over the limit is refused, and nothing of
     it is written, not even an item only it mentions; it is never cut
     (rule 5). The result names it by its review-sheet id, a warning says
-    why, and every other claim of the batch is written, with its
-    references (rules 1 and 2)."""
+    why without quoting it, and every other claim of the batch is written,
+    with its references (rules 1 and 2)."""
 
     @pytest.mark.parametrize("case", LONG_TEXTS, ids=LONG_TEXTS)
     def test_a_claim_over_the_limit_is_refused_and_the_rest_written(
@@ -367,6 +494,8 @@ class TestClaimsOverTheLimit:
             f"of it is written: {WHERE[case]} has 401 characters"
         )
         assert "400" in warning
+        # a warning says what, never quotes it
+        assert _quotes(written.warnings, LONG_TEXTS[case]) == []
         # the certificate's birth is written, with both its references
         assert written.written == 1
         (born,) = _statements(
@@ -406,6 +535,33 @@ class TestClaimsOverTheLimit:
         (statement,) = _statements(wiki, subject, claim["property"])
         assert _values(statement) == [text]
 
+    def test_a_later_qualifier_over_the_limit_refuses_the_claim(self):
+        # (here) the compensation file dates Hildegard's kinship to its own
+        # year, then words the kinship at length: the second qualifier is
+        # over the limit
+        claim = copy.deepcopy(TEXT_CLAIMS["string qualifier"])
+        kinship = _said_over(LONG_TEXTS["string qualifier"], 401)
+        claim["qualifiers"] = [
+            {
+                "property": "point_in_time",
+                "value": {"type": "time", "year": 1953},
+            },
+            {
+                "property": "kinship_type",
+                "value": {"type": "string", "value": kinship},
+            },
+        ]
+        batch = _batch_of(claim, BIRTH)
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.refused == [claim_id(batch.claims[0])]
+        (warning,) = written.warnings
+        assert "its kinship_type qualifier has 401 characters" in warning
+        assert written.written == 1
+        assert _with_properties(wiki, "relative") == []
+
     def test_several_claims_over_the_limit_in_one_batch(self):
         # the postcard's greeting as Klara's nickname and the compensation
         # file's sentence as Hildegard's kinship are refused; Sebastian's
@@ -444,7 +600,9 @@ class TestClaimsOverTheLimit:
         )
         sebastian = written.created_items["e01"]
         (born,) = _statements(wiki, sebastian, "date_of_birth")
-        assert _places(born) == [("Q23", NUMBER[:395] + CUT_MARK, None, None)]
+        assert _places(born) == [
+            ("Q23", NUMBER[: ROOM - 3] + _mark(NUMBER), None, None)
+        ]
         (keyed,) = _statements(
             wiki, written.created_items["pl1"], "whg_place_id"
         )
@@ -470,7 +628,50 @@ class TestClaimsOverTheLimit:
         assert planned.refused == [claim_id(batch.claims[0])]
         assert planned.written == 1
         assert len(planned.warnings) == 1
+        # the plan holds the birth's subject, and not the town, which only
+        # the refused claim mentions
+        assert set(planned.created_items) == {"e01"}
         assert wiki.wbi.item.writes == 0
+
+
+# -- the kind of an entity only a refused claim gives -------------------------
+
+
+class TestKindsBesideARefusal:
+    """A local id without a manifest record takes its kind from the first
+    ref to it in a claim the writer writes: a refused claim's refs are
+    never resolved, so the kind it gives is neither recorded nor warned
+    of, and the kind a later claim gives is."""
+
+    UNKNOWN = (
+        "entity 'e07' has the kind 'no_such_kind', which the vocabulary "
+        "lacks: no kind is recorded for it"
+    )
+
+    @pytest.mark.parametrize(
+        ("refused", "kept"),
+        [("no_such_kind", "human"), ("human", "no_such_kind")],
+        ids=["the written ref's kind is known", "it is not"],
+    )
+    def test_the_kind_is_the_first_written_refs(self, refused, kept):
+        # (here) the register's cause of death, taken at length and so
+        # refused, names Eugen first, by a kind of its own
+        cause = _said_over("Wassersucht nach langer Krankheit; ", 401)
+        batch = _batch_of(_cause(cause=cause, kind=refused), _cause(kind=kept))
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        eugen = written.created_items["e07"]
+        kinds = [
+            statement.mainsnak.datavalue["value"]["id"]
+            for statement in _statements(wiki, eugen, "instance_of")
+        ]
+        unknown = [w for w in written.warnings if "vocabulary lacks" in w]
+        if kept == "human":
+            assert (kinds, unknown) == ([ITEMS["human"]], [])
+        else:
+            assert (kinds, unknown) == ([], [self.UNKNOWN])
 
 
 # -- an entity's type hint: left out, never cut -------------------------------
@@ -482,19 +683,28 @@ HEADING = "Hutmacher und Hutgeschäfte, Mützenmacher, "
 
 class TestTypeHintsOverTheLimit:
     """An entity's type hint over the limit is left out wherever the
-    writer would record it, minted or found, with a warning; never cut.
-    The entity's kind and the batch's claims are written."""
+    writer would record it, minted or found, with a warning that does not
+    quote it; never cut. The entity's kind and the batch's claims are
+    written."""
 
-    @pytest.mark.parametrize("length", [400, 401])
+    @pytest.mark.parametrize(
+        "given",
+        ["400 characters", "401 characters", "in NFD, NFC at the limit"],
+    )
     @pytest.mark.parametrize("found", [False, True], ids=["minted", "found"])
-    def test_a_type_hint_over_the_limit_is_left_out(self, found, length):
+    def test_a_type_hint_over_the_limit_is_left_out(self, found, given):
         wiki = FakeWiki(
             {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
         )
         if found:
             BatchWriter(wiki).write_batch(_firm_batch())
+        length = TEXT_LIMIT + (given == "401 characters")
         hint = _said_over(HEADING, length)
-        directory = _directory_batch("unclassified_entity", type_hint=hint)
+        sent = hint
+        if given.startswith("in NFD"):
+            sent = unicodedata.normalize("NFD", hint)
+            assert len(sent) > TEXT_LIMIT
+        directory = _directory_batch("unclassified_entity", type_hint=sent)
 
         written = BatchWriter(wiki).write_batch(directory)
 
@@ -509,6 +719,8 @@ class TestTypeHintsOverTheLimit:
             assert warning.startswith(
                 "entity 'firm' has a type hint of 401 characters"
             )
+            assert _quotes(written.warnings, HEADING) == []
         else:
+            # at the limit in NFC, the hint is recorded whole, in NFC
             assert hints == earlier | {hint}
             assert written.warnings == []

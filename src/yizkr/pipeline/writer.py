@@ -115,7 +115,7 @@ string, external-id or monolingual text value, whether the value is a
 statement's, a qualifier's or a reference's, and refuses the whole edit
 that sends a longer one. The writer counts each text in the form the
 instance keeps it in (`_stored_string`) and sends none over the limit,
-so that no claim's text stops the batch:
+so that no text's length stops the batch:
 
 * a claim whose own text, its value or a qualifier's, is over the limit
   is refused before the first write, and nothing of it is written: no
@@ -129,10 +129,13 @@ so that no claim's text stops the batch:
 * a reference's page number and region only place the claim in its
   source, as its excerpt only helps a reader check it there, so each is
   cut to the limit rather than refused: a page number or region at a
-  break between words, ending with CUT_MARK (" …") (`_locator_text`),
+  break between words, ending with CUT_MARK (" …"), "sha1" and the
+  first 12 hex digits of the SHA-1 of the whole text (`_locator_text`),
   and an excerpt at a space, ending with "…". A cut depends on the text
-  alone, so a re-run builds the block the instance keeps, and is
-  skipped (step 4).
+  alone, so a re-run builds the block the instance keeps, and is skipped
+  (step 4). The digest keeps two page numbers or regions that agree up
+  to the cut apart, so the two places a source asserts a value in stay
+  two reference blocks.
 
 Nothing here auto-approves: the writer expects the output of
 `apply_review` and trusts the human decisions that produced it, except
@@ -145,7 +148,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 
 from yizkr.claims import (
@@ -179,8 +182,13 @@ from yizkr.pipeline.review import (
 # each qualifier and each reference, after it has put a string value in
 # NFC, and refuses the whole edit when one is longer.
 TEXT_LIMIT = 400
-# what ends a page number or region cut to TEXT_LIMIT (_locator_text)
+# what a page number or region cut to TEXT_LIMIT ends with, before the
+# digest of the whole text (_locator_text)
 CUT_MARK = " …"
+# punctuation that joins the letters or digits on its two sides into one
+# word, which a cut keeps whole: a point or comma inside a number
+# ("1.234", "1,5"), an apostrophe inside a word
+INNER_PUNCTUATION = ".,'\u2019"
 
 
 class UnapprovedDepictsError(ValueError):
@@ -322,12 +330,26 @@ def _is_mark(char: str) -> bool:
     return unicodedata.category(char).startswith("M")
 
 
-def _joined(before: str, after: str) -> bool:
-    """Whether a cut between two neighbouring characters would split what
-    reads as one: a combining mark from the character before it, or two
-    letters or digits of one word, a combining mark counting as a letter."""
-    return _is_mark(after) or (
-        (before.isalnum() or _is_mark(before)) and after.isalnum()
+def _in_word(text: str, index: int) -> bool:
+    """Whether text[index] belongs to a word: a letter, a digit or a
+    combining mark, or INNER_PUNCTUATION with a letter, digit or mark
+    before it and a letter or digit after it."""
+    char = text[index]
+    if char.isalnum() or _is_mark(char):
+        return True
+    return (
+        char in INNER_PUNCTUATION
+        and 0 < index < len(text) - 1
+        and (text[index - 1].isalnum() or _is_mark(text[index - 1]))
+        and text[index + 1].isalnum()
+    )
+
+
+def _joined(text: str, end: int) -> bool:
+    """Whether a cut of `text` before text[end] would split what reads as
+    one: a combining mark from the character before it, or a word."""
+    return _is_mark(text[end]) or (
+        _in_word(text, end - 1) and _in_word(text, end)
     )
 
 
@@ -337,21 +359,29 @@ def _locator_text(text: str) -> str:
     longer than TEXT_LIMIT, cut to it (the module docstring).
 
     A cut keeps the longest start of the text that ends at a break
-    between words and leaves room for CUT_MARK, and CUT_MARK follows it,
-    so no word is kept in part (a page "112" is never kept as "11") and
-    no letter loses a combining mark. Only when no such start holds
-    anything but spaces, as when one word fills the room, is the text
-    cut inside a word, each letter kept with its marks. The cut depends
-    on the text alone, and keeps it in NFC: a start of a text in NFC is
-    in NFC, and so is it with CUT_MARK after it. So a claim written again
-    sends the text the instance keeps, and its reference block is found
-    (step 4)."""
+    between words and leaves room for the mark, and the mark follows it:
+    CUT_MARK, then "sha1" and the first 12 hex digits of the SHA-1 of the
+    whole text in NFC. No word is kept in part, so a page "112" is never
+    kept as "11", nor "1.234" as "1" (INNER_PUNCTUATION), and no letter
+    loses a combining mark. Only when no such start holds anything but
+    spaces, as when one word fills the room, is the text cut inside a
+    word, each letter kept with its marks. The digest keeps two texts
+    that agree up to the cut apart, and apart from a text that reads as
+    the cut's start: the places a source asserts a value in stay a
+    reference block each (step 4).
+
+    The cut depends on the text alone, and keeps it in NFC: a start of a
+    text in NFC is in NFC, and so is it with the mark after it. So a claim
+    written again sends the text the instance keeps, and its reference
+    block is found (step 4)."""
     text = _stored_string(text)
     if len(text) <= TEXT_LIMIT:
         return text
-    room = TEXT_LIMIT - len(CUT_MARK)
+    digest = hashlib.sha1(text.encode()).hexdigest()[:12]
+    mark = f"{CUT_MARK} sha1 {digest}"
+    room = TEXT_LIMIT - len(mark)
     end = room
-    while end and _joined(text[end - 1], text[end]):
+    while end and _joined(text, end):
         end -= 1
     kept = text[:end].rstrip()
     if not kept:
@@ -359,7 +389,7 @@ def _locator_text(text: str) -> str:
         while end and _is_mark(text[end]):
             end -= 1
         kept = text[:end] or text[:room]
-    return kept + CUT_MARK
+    return kept + mark
 
 
 class BatchWriter:
@@ -1053,16 +1083,22 @@ class BatchWriter:
                     result,
                 )
 
-    def _unknown_kinds(self, batch: ClaimBatch) -> list[str]:
+    def _unknown_kinds(
+        self, batch: ClaimBatch, refused: Collection[int]
+    ) -> list[str]:
         """A warning for each entity whose kind the vocabulary lacks, so
         that no kind is recorded for it. An entity's kind is its manifest
         record's or, for a local id without one, that of the first ref to
-        the id, in the order the writer resolves refs: each claim's
-        subject, then its value, then its qualifiers' values."""
+        the id in a claim the writer writes, in the order the writer
+        resolves refs: each claim's subject, then its value, then its
+        qualifiers' values. `refused` holds the places in the batch of
+        the claims the writer refuses, whose refs it never resolves."""
         kinds: dict[str, str | None] = {
             record.id: record.kind for record in self._entity_records.values()
         }
-        for claim in batch.claims:
+        for index, claim in enumerate(batch.claims):
+            if index in refused:
+                continue
             refs = [claim.subject]
             if isinstance(claim.value, ItemValue):
                 refs.append(claim.value.value)
@@ -1154,14 +1190,14 @@ class BatchWriter:
         self._mentions = {}
         self._minted = set()
         self._ref_kinds = {}
-        # found before the first write; the kinds are skipped wherever the
-        # writer would record them
-        warnings = self._unknown_kinds(batch)
-        # found before the first write too, in a dry run as well: the
-        # claims whose own text the instance cannot hold, which the loop
-        # below leaves out whole, and the type hints it cannot hold, which
-        # are left out wherever the writer would record them
+        # found before the first write, in a dry run as well: the claims
+        # whose own text the instance cannot hold, which the loop below
+        # leaves out whole
         refusals = self._refusals(batch)
+        # found before the first write too: the kinds the vocabulary lacks,
+        # of the claims the writer writes, and the type hints the instance
+        # cannot hold, each skipped wherever the writer would record it
+        warnings = self._unknown_kinds(batch, refusals)
         warnings += [*refusals.values(), *self._type_hints_over_limit()]
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
