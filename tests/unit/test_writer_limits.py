@@ -285,6 +285,15 @@ PAGES["the room ends at a combining mark"] = (
     MARK,
     MARK[: ROOM - 5] + _mark(MARK),
 )
+# (here) a transcription that gives a stray diaeresis on a semicolon: the
+# room ends between the two, which the cut keeps together, so both go
+STRAY = _leaves(6, 60)
+assert STRAY[ROOM - 2 : ROOM] == " ;"
+STRAY = STRAY[:ROOM] + "\u0308" + STRAY[ROOM:]
+PAGES["the room ends at a stray mark on a semicolon"] = (
+    STRAY,
+    STRAY[: ROOM - 2] + _mark(STRAY),
+)
 # one word fills the room: it is cut, and the letter whose bar the room
 # leaves out goes with its bar
 WORD = "Hauptregister" + STREET * 40
