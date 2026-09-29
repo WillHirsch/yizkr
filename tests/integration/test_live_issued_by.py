@@ -4,8 +4,10 @@ ADR-0035 §3.4).
 `issued_by` takes the source document itself as its subject, named by the
 SHA-1 of its media as the claim's source is. The writer resolves it to the
 artifact item the registrar keyed on that hash and writes the statement
-there, with both references (ADR-0003), and a re-run adds nothing. The
-tests write fictional fixture data only (the universe's Standesamt
+there, with both references (ADR-0003), and a re-run adds nothing. A
+document subject naming another document is refused before the first
+write, so neither artifact item gains a statement. The tests write
+fictional fixture data only (the universe's Standesamt
 Flörburg, under a test label), so re-runs reuse their entities.
 """
 
@@ -17,15 +19,19 @@ import pytest
 
 from tests.integration.conftest import register_fictional
 from yizkr.claims import ClaimBatch, validate_against_manifest
+from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
 
 pytestmark = pytest.mark.live
 
 TITLE = "Yizkr Issued-By Test Birth Register Extract"
+# the refusal test's pair: a source and the other document its claim names
+SOURCE_TITLE = "Yizkr Issued-By Refusal Test Birth Register Extract"
+OTHER_TITLE = "Yizkr Issued-By Refusal Test Death Certificate"
 OFFICE = "Yizkr Issued-By Test Standesamt Flörburg"
 
 
-def _batch(sha1: str) -> ClaimBatch:
+def _batch(sha1: str, subject_sha1: str | None = None) -> ClaimBatch:
     return ClaimBatch.model_validate(
         {
             "extraction_run": {
@@ -35,7 +41,10 @@ def _batch(sha1: str) -> ClaimBatch:
             },
             "claims": [
                 {
-                    "subject": {"kind": "artifact", "sha1": sha1},
+                    "subject": {
+                        "kind": "artifact",
+                        "sha1": subject_sha1 or sha1,
+                    },
                     "property": "issued_by",
                     "value": {
                         "type": "item",
@@ -108,3 +117,20 @@ def test_a_document_subject_is_written_on_its_artifact_item(client):
     again = BatchWriter(client).write_batch(_batch(extract.ref.sha1))
     assert (again.written, again.skipped) == (0, 1)
     assert len(_issued_by(client, extract.qid)) == 1
+
+
+def test_a_subject_naming_another_document_is_refused(client):
+    """The writer holds the document-subject rule itself: `yizkr write`
+    takes a batch without validating it against the manifest."""
+    extract = register_fictional(client, SOURCE_TITLE, "certificate")
+    other = register_fictional(client, OTHER_TITLE, "certificate")
+    batch = _batch(extract.ref.sha1, subject_sha1=other.ref.sha1)
+    assert validate_against_manifest(batch) != []
+    result = BatchWriter(client).write_batch(batch)
+    (claim,) = batch.claims
+    assert result.refused == [claim_id(claim)]
+    assert (result.written, result.skipped) == (0, 0)
+    # refused before any of its refs resolves: the office is never minted
+    assert "e1" not in result.created_items
+    assert _issued_by(client, other.qid) == []
+    assert _issued_by(client, extract.qid) == []
