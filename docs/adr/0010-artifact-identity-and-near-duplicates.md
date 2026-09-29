@@ -8,6 +8,13 @@ Amended by #225 (2026-09-27): a document directory without
 `derivations.json`, or whose files have lost their `state.json`, is set
 aside like a changed source's, and no held document seeds content dedup
 (§1).
+Amended by #103 (2026-09-29): registration is part of the write, and
+finds an artifact by the SHA-1 of its media alone. The adoption of a
+same-title item without a hash and the label key for registration
+without media are removed, page fragments are keyed by their artifact,
+a container's derived media are registered from their record, and
+registration asks the never-ingest list first (§1, "Registration at
+write time").
 
 ## Context
 
@@ -59,33 +66,83 @@ media bytes), is stored on every artifact that has media, referenced
 `stated in → the artifact itself` like the other registrar statements
 (ADR-0003).
 
-Registration (`register_artifact`) resolves the target item by content,
-not by name:
+Registration (`Registrar.register_artifact` in
+`yizkr.pipeline.registrar`) resolves the target item by content alone,
+never by name (amended by #103, 2026-09-29):
 
 - compute the SHA-1 of the file's bytes (before upload — the identity is
   the bytes, independent of the name MediaWiki files them under);
-- look the hash up in a **lag-free index** built by enumerating the
-  instance via the API (`WikiClient.string_statement_index`), never the
-  search index or query service — so an artifact written moments earlier
-  is found immediately, the same discipline as the label index;
+- look the hash up in a **lag-free reading** of the instance through the
+  API (`WikiClient.iter_entities`, which `string_statement_index` reads
+  too), never the search index or query service — so an artifact written
+  moments earlier is found immediately, the same discipline as the label
+  index;
 - **hash hit →** reuse that item, whatever its title; if the incoming
   filename differs, keep it as an **alias** (name variants live in
   aliases — MODELING.md);
-- **hash miss, but a same-title item exists with no hash yet →** adopt
-  it and backfill the hash (a pre-ADR-0010 artifact);
-- **hash miss, same-title item already carries a different hash →**
-  genuinely different content under a colliding title: mint a new item
-  and disambiguate its label with a short content tag (`"<title>
-  [<sha1[:8]>]"`), so labels stay unique (the wiki's idempotency
-  convention) and the two remain separate artifacts;
-- **no media to hash** (re-registration of an existing artifact) → fall
-  back to the label key, unchanged.
+- **hash miss →** mint a new item. A title never finds an item: one that
+  carries the title but not this hash is another artifact, whatever hash
+  it carries, and even with no hash and a file that holds these bytes.
+  When the title is already another item's label, the new item's label
+  takes a short content tag (`"<title> [<sha1[:8]>]"`), so labels stay
+  unique (the wiki client's label index; #94 would scope that rule away
+  from artifacts) and homonymous files stay separate artifacts;
+- **no media to hash →** refused: there is nothing to find an artifact
+  by.
 
 Amended by #50 (2026-09-27): media derived from a compound artifact
 (ADR-0008) are artifacts with media too. They carry `media SHA-1`,
 referenced `stated in →` the deck that embeds them, and are resolved by
 it the same way, so one image embedded in several decks is one item,
 `part of` each (see ADR-0008's amendment).
+
+**Registration at write time** (amended by #103, 2026-09-29). The
+stages before the write read nothing from the wiki (ADR-0025 §2), and
+claims cite their artifact by its SHA-1 (#102), so nothing before the
+write needs an artifact item. `ingest run` registers a document as its
+write begins, just before the claims that cite it are written, and a
+write that runs again registers again, finding by SHA-1 what the earlier
+one registered. After a reset, then, the write registers everything on
+the new instance.
+
+- **One reading per registrar.** A `Registrar` reads the instance once:
+  every item's label, its `media SHA-1` values and, for an `artifact
+  fragment`, the artifact and page of its `part of`. It keeps what it
+  read current with what it writes, so one registrar can register a whole
+  corpus while nothing else writes to the instance. `ingest run` makes
+  one per write.
+- **Page fragments are keyed by their artifact** (#187, absorbed by
+  #103). A fragment is the item that is an `instance of artifact
+  fragment` and `part of` its artifact with that page's `page number`,
+  whatever its label. Fragments were keyed by the label `"<title>, page
+  <n>"`, so an artifact whose title another artifact shared took the
+  other's fragments, which are `part of` the other only. A new fragment
+  is labelled `"<artifact label>, page <n>"`, content-tagged if that
+  label is taken, and is made in one write with its statements. A
+  container's derived medium, `part of` it with a page qualifier too, is
+  never taken for a fragment, since it is no `artifact fragment` (ADR-0008,
+  as amended by #289).
+- **Derived media from their record.** A deck's images are recorded
+  before the write, each by its SHA-1 (ADR-0008, as amended by #128); the
+  write registers the deck, then its images from the record, each by its
+  own SHA-1 under the #50 rules above and the upload rules below. Their
+  bytes are uploaded from the file the record keeps, under the name
+  `"<deck title> <name in the archive>"`.
+- **The never-ingest list** (`yizkr.core.corpus`) is asked first. A file
+  it names, by name or by SHA-1, is refused before the wiki is read or
+  written and before anything is uploaded; a derived medium it names is
+  left out, neither registered nor uploaded, while the rest of its
+  container is registered. A source whose bytes are no longer those the
+  run read is refused the same way, so no item is made for bytes its
+  claims do not cite.
+- **Two writes, and a registration cut short.** An artifact's own
+  statements cite the item itself, so it is made in two writes: first
+  with its description alone, then with its label and statements. A
+  registration cut short between them leaves an item with no label and
+  no statement, which no lookup finds and which takes no label from the
+  artifact registered after it. Adopting such an item by its title,
+  which this removes, was what kept it from lingering; a curator may
+  delete it, and a scratch run's reset removes it.
 
 **Media files** (amended by #186, 2026-09-27). The blob deduplication
 the context above takes for granted was not in effect: the upload sent
@@ -119,13 +176,13 @@ now, one for the registrar and for derived media:
 - **Registration uploads only what no file of the item holds.** The
   registrar, like derived-media registration, locates the item first
   and uploads only when none of the item's `media file`s currently holds
-  its bytes (MediaWiki's own SHA-1 of each file). An item with no hash
-  is adopted by its label only when its file holds the same bytes, or
-  it has no file yet; otherwise the title names different content and
-  the new item gets a content-tagged label. A file that no longer holds
-  its item's bytes (overwritten before this rule) is not trusted: the
-  item gains a `media file` that does hold them, and the earlier
-  statement stays (CLAUDE.md rule 3).
+  its bytes (MediaWiki's own SHA-1 of each file). The item is found by
+  its hash alone (amended by #103): an item with the title and no hash
+  is never adopted, even when its file holds the same bytes, so a new
+  item with its own `media SHA-1` then shares that file. A file that no
+  longer holds its item's bytes (overwritten before this rule) is not
+  trusted: the item gains a `media file` that does hold them, and the
+  earlier statement stays (CLAUDE.md rule 3).
 - **Aliases follow the derived-media rule.** An alternate title for the
   same bytes becomes an alias only when it names no other item and is
   not the plain form of the item's own content-tagged label, so a
@@ -203,13 +260,22 @@ the hash key above is built to carry them. Tracked in #162.
 - The content hash is queryable graph data, so the deferred perceptual
   and version work has a stable anchor and can be added without
   reshaping registration.
-- **Cost.** `string_statement_index` enumerates the instance per
-  registration (like the existing label index); at archive scale this is
-  the same order as work the registrar already does, and the
-  orchestrator's hash dedup avoids most redundant registrations. A file
-  already fully ingested under a different name — whether earlier in the
-  same run or in a prior one — is now recognised and skipped before its
-  transcription/extraction pass, not merely deduped at the writer.
+- **Cost.** A registrar enumerates the instance once, labels and
+  statements in one reading (amended by #103): once per document in
+  `ingest run`, whose write makes a registrar of its own and hands the
+  writer the item it registered, and once in all for a registrar that
+  registers a whole corpus. The orchestrator's hash dedup avoids most
+  redundant registrations. A file already fully ingested under a
+  different name — whether earlier in the same run or in a prior one — is
+  now recognised and skipped before its transcription/extraction pass,
+  not merely deduped at the writer.
+- **Homonyms** (amended by #103): two files that share a title are two
+  artifacts, the later one's label content-tagged, so no artifact or
+  page fragment of one is ever the other's. An item left from before
+  the content hash, with a title and no hash, is never adopted: its
+  bytes, registered again, make an item of their own that shares its
+  file. In the development stage every instance is reset (ADR-0025), so
+  no such item exists there.
 - **Not solved yet:** re-encodes, re-scans, crops/uncrops, and the
   corroboration-inflation they cause remain until parts 2 & 3 land. The
   inconsistency report and galleries treat them as distinct artifacts

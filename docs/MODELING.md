@@ -128,6 +128,20 @@ artifact a new QID, changes neither.
   existing. Extraction-run items use the same convention for their
   `instance of`. Every registrar/writer path therefore writes only
   referenced statements (ADR-0003).
+- **Registration is part of the write** (ADR-0025 §2; ADR-0010 as
+  amended by #103). `ingest run` registers a document just before it
+  writes the claims that cite it: its artifact item, its page fragments
+  and a deck's derived media, each found or made by the SHA-1 of its
+  media. Nothing before the write has an artifact item, and a write that
+  runs again, after a reset say, registers again.
+- **A page fragment is keyed by its artifact.** The fragment for page
+  *n* is the item that is an `instance of artifact fragment` and `part
+  of` the artifact with `page number` *n*, whatever its label. A new one
+  is labelled `"<artifact label>, page <n>"` (content-tagged if that label
+  is taken) and made in one write with both statements, each stated in
+  the artifact. So same-titled artifacts never share a fragment, and a
+  derived medium, `part of` its container with a page qualifier too, is
+  never taken for one.
 - Machine-proposed entities (people, places) get their `instance of`
   statement referenced to the artifact that mentions them. A later
   source that names the entity adds its own references (the artifact and
@@ -142,13 +156,18 @@ artifact a new QID, changes neither.
   artifact with media carries a `media SHA-1` statement (hex SHA-1 of
   the bytes), referenced `stated in → the artifact itself` (for media
   derived from a compound artifact: `stated in → the container`). The
-  registrar keys on this hash — identical bytes are one artifact item
-  however they are named, and an alternate filename becomes an alias
-  unless it is another item's label.
+  registrar keys on this hash alone — identical bytes are one artifact
+  item however they are named, and an alternate filename becomes an alias
+  unless it is another item's label. A title never finds an item: two
+  files that share a title are two artifacts, and media without bytes to
+  hash cannot be registered.
   Bit-identical media is never stored, itemised, or extracted twice.
-- Labels stay unique per kind: when a title already names *different*
-  content, the new artifact's label is disambiguated with a short
-  content tag (`"<title> [<sha1[:8]>]"`) rather than colliding.
+- Labels stay unique per kind: when a title is already another item's
+  label, the new artifact's label is disambiguated with a short content
+  tag (`"<title> [<sha1[:8]>]"`) rather than colliding.
+- A file on the never-ingest list is never registered or uploaded, and
+  neither is a medium a container embeds that the list names, by name
+  or by SHA-1.
 - **Every `media file` holds the bytes its item's `media SHA-1` names.**
   A wiki file is never overwritten: bytes whose file name already holds
   different bytes are uploaded under a content-tagged file name,
@@ -307,7 +326,11 @@ and reference the artifact itself or the producing run.
   <media name>"; `instance of` photograph for raster images), with one
   `part_of` → the container per slide it appears on, slide-number
   qualified. Derived items are gallery- and faces-flow material in
-  their own right.
+  their own right. The stages before the write record them by SHA-1, and
+  the write registers them from that record, after the container
+  (ADR-0008 as amended by #128 and #103). Bytes the archive holds under
+  several names are one medium: the first name labels it, and the others
+  are aliases.
 - Every statement a container contributes to a derived item is
   referenced `stated in → that container` — a compound artifact asserts
   its own composition, the same convention as fragments and registrar
