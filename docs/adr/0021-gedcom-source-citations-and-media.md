@@ -376,7 +376,8 @@ apart:
     (`DATE.SOUR`, `CHIL.SOUR`), where GEDCOM 5.5.1 gives no citation;
   - a SOUR beneath an event or a fact that gives no claim: `BIRT.SOUR`
     beneath `1 BIRT Y`; `NAME.SOUR` beneath a NAME that gives no claim,
-    one with no TYPE and no nickname, which gives a label alone;
+    such as one with no nickname and no TYPE, or a TYPE the adapter maps
+    to no property, which gives a label alone;
     `MARR.SOUR` beneath a MARR that neither dates nor places the wedding
     when another MARR or a DIV dates or places the family's pairs;
     `DIV.SOUR` beneath a DIV whose date the grammar cannot parse. A person
@@ -437,13 +438,18 @@ apart:
   end, so a citation's lines and its resolved title could be cut off,
   and two citations of one fact with no PAGE, beneath one long NOTE, were
   one claim, the second citation lost. Now a longer excerpt keeps every
-  line of the citations folded into its claim, and their titles; then
-  the line each citation stands beneath, so that it is read as that
-  line's (a DIV's citation, not the MARR's before it); then each of its
-  other lines, in order, that still fits, so that a line after one left
-  out is kept where it fits. It marks each run it leaves out with `…`.
-  When even the citations do not fit whole, it keeps as many of all its
-  lines, from the first, as fit, cut back to a whole line where it can.
+  line of the citations folded into its claim, and their titles; then,
+  where it fits, the line each citation stands beneath, so that it is
+  read as that line's (a DIV's citation, not the MARR's before it); then
+  each of its other lines, in order, that still fits, so that a line
+  after one left out is kept where it fits. It marks each run it leaves
+  out with `…`. Its first line, which names its record, is cut to the
+  room left when its turn comes and it does not fit whole, and ends with
+  `…`, provided the cut keeps its level and tag and something of its
+  value: a long occupation keeps its start, as the clip before this
+  change kept it. When even the citations do not fit whole, it keeps as
+  many of all its lines, from the first, as fit, cut back to a whole line
+  where it can.
   Either way it ends with `clipped, sha1` and the first 12 hex digits of
   the SHA-1 of the whole excerpt, so that clipping never makes one claim
   of two that the whole excerpts keep apart: two citations of one fact,

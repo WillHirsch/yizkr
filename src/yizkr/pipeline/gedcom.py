@@ -21,13 +21,15 @@ Source-first conventions carry over unchanged:
   form the instance stores text in, and holds at most 400 characters,
   as a Wikibase text value does: a longer one keeps every line of the
   citations folded into its claim (below) and the titles they resolve
-  to, then the line each citation stands beneath, then each of its other
-  lines, in order, that still fits, marking each run it leaves out with
-  `…`, and it ends with `clipped, sha1` and the first 12 hex digits of
-  the whole excerpt's SHA-1, so that clipping never makes one claim of
-  two that the whole excerpts keep apart, such as two citations of one
-  fact. A page number holds at most 400 characters too: a longer one
-  keeps the pages that fit and ends with ` ; …`;
+  to, then, where it fits, the line each citation stands beneath, then
+  each of its other lines, in order, that still fits, marking each run it
+  leaves out with `…`; its first line, which names its record, is cut to
+  the room left rather than left out. It ends with `clipped, sha1` and
+  the first 12 hex digits of the whole excerpt's SHA-1, so that clipping
+  never makes one claim of two that the whole excerpts keep apart, such
+  as two citations of one fact. A page number holds at most 400
+  characters too: a longer one keeps the pages that fit and ends with
+  ` ; …`;
 * GEDCOM's own uncertainty vocabulary maps to the archive's structural
   uncertainty (docs/MODELING.md): ABT/EST/CAL -> `circa` sourcing
   circumstances; BEF -> `latest date`; AFT -> `earliest date`;
@@ -539,16 +541,19 @@ def _excerpt(segments: list[tuple[str, int]], cited: str) -> str:
     with `cited` after them, in NFC, the form the instance stores text in,
     so that the length counted here is the length the writer counts. An
     excerpt longer than EXCERPT_LIMIT keeps every line of the folded
-    citations and `cited`, then the line each folded citation stands
-    beneath, so that the citation is read as that line's, then each of its
-    other lines, in order, that still fits; each run of lines it leaves
-    out is marked ELIDED. Should the citations not fit whole, it keeps as
-    many of all its lines, from the first, as fit, cut back to a whole
-    line where it can. Either way it ends with "clipped, sha1" and the
-    first 12 hex digits of the SHA-1 of the whole excerpt: two claims the
-    whole excerpts keep apart stay apart once clipped, so two citations of
-    one fact are never one claim, while a claim restated line for line is
-    the same claim.
+    citations and `cited`, then, where it fits, the line each folded
+    citation stands beneath, so that the citation is read as that line's,
+    then each of its other lines, in order, that still fits; each run of
+    lines it leaves out is marked ELIDED. Its first line, which names its
+    record, is cut to the room left at its turn when it does not fit
+    whole, ending with ELIDED, provided the cut keeps its level and tag
+    and something of its value. Should the citations not fit whole, it
+    keeps as many of all its lines, from the first, as fit, cut back to a
+    whole line where it can. Either way it ends with "clipped, sha1" and
+    the first 12 hex digits of the SHA-1 of the whole excerpt: two claims
+    the whole excerpts keep apart stay apart once clipped, so two
+    citations of one fact are never one claim, while a claim restated
+    line for line is the same claim.
     """
     texts = [unicodedata.normalize("NFC", text) for text, _ in segments]
     cited = unicodedata.normalize("NFC", cited)

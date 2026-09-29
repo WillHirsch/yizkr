@@ -3182,16 +3182,28 @@ class TestCitationsAndMediaNotHeld:
                 ],
                 {"PLAC.SOUR": 1},
             ),
-            # a birth that gives no claim, and a NAME that no claim types
+            # a birth that gives no claim, and a NAME that no claim types,
+            # with no TYPE or with one the adapter maps to no property
             (["1 BIRT Y", "2 SOUR @S1@"], {"BIRT.SOUR": 1}),
             (["2 SOUR @S1@"], {"NAME.SOUR": 1}),
+            (["2 TYPE other", "2 SOUR @S1@"], {"NAME.SOUR": 1}),
             # his link to his parents' family, and to his own
             (["1 FAMC @F1@", "2 SOUR @S1@"], {"FAMC.SOUR": 1}),
             (["1 FAMS @F1@", "2 SOUR @S1@"], {"FAMS.SOUR": 1}),
             # a sex the adapter maps to none
             (["1 SEX U", "2 SOUR @S1@"], {"SEX.SOUR": 1}),
         ],
-        ids=["INDI", "DATE", "PLAC", "BIRT-Y", "NAME", "FAMC", "FAMS", "SEX"],
+        ids=[
+            "INDI",
+            "DATE",
+            "PLAC",
+            "BIRT-Y",
+            "NAME",
+            "NAME-other-TYPE",
+            "FAMC",
+            "FAMS",
+            "SEX",
+        ],
     )
     def test_a_citation_that_no_claim_holds_is_counted(self, lines, counted):
         result = adapt_gedcom(cited(TREE) + eugen(*lines), artifact=EXPORT)
