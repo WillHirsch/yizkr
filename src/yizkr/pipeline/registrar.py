@@ -1,42 +1,118 @@
-"""Artifact registrar: media upload + artifact/fragment items (ADR-0003 §4).
+"""Artifact registrar: media upload, and artifact, page-fragment and
+derived-media items, each found or made by the SHA-1 of its media
+(ADR-0003 §4, ADR-0010).
 
-Runs before the write, whose claims cite each artifact by the SHA-1 of
-its media: the writer resolves that key to the item whose `media SHA-1`
-statement the registrar writes (ADR-0010). Writes, per artifact:
+Registration is part of the write (ADR-0025 §2): `ingest run` registers
+a document just before it writes the claims that cite it. The claims cite
+an artifact by the SHA-1 of its media, and the writer resolves that key to
+the item whose `media SHA-1` statement registration writes. Per artifact,
+registration writes:
 
 * the media file, uploaded to the wiki (W1: artifacts as wiki media,
   ADR-0004);
 * an artifact item: label, description, ``instance of -> <type>``,
   ``media file -> File:...`` and ``media SHA-1 -> <hex digest>``;
 * optional page-fragment items: ``instance of -> artifact fragment``,
-  ``part of -> <artifact>`` with a ``page number`` qualifier.
+  ``part of -> <artifact>`` with a ``page number`` qualifier;
+* for a compound artifact (ADR-0008), the media it embeds, from the
+  record the stages before the write keep of them
+  (yizkr.pipeline.presentation): each an artifact item of its own, with
+  its media file and SHA-1, ``part of`` the container once per slide it is
+  on.
 
-Provenance of registrar statements: an artifact asserts its own kind
-and its own composition by existing, so `instance of`, `media file`,
-`media SHA-1` and fragment `part of` statements are referenced ``stated
-in -> the artifact item itself`` (see docs/MODELING.md, "Artifacts and
-registration"). No statement is written unreferenced (ADR-0003).
+**Identity is the SHA-1 alone.** An artifact is the item whose `media
+SHA-1` is the SHA-1 of its file's bytes, and with none a new item is made.
+A title never finds an item, so two files that share a title are two
+artifacts. Labels stay unique per kind, the wiki client's label index
+(yizkr.core.wiki), so a new item whose title is already another item's
+label takes a short content tag, ``"<title> [<sha1[:8]>]"``. A page
+fragment is keyed by its artifact: the item that is an ``instance of
+artifact fragment`` and ``part of`` that artifact with that page's number.
+So same-titled artifacts never share a fragment, and a derived medium,
+which is ``part of`` its container with a page qualifier too, is never
+taken for a page's fragment. A file on the never-ingest list
+(yizkr.core.corpus) is never registered or uploaded: registration refuses
+it before it asks anything of the wiki, and leaves out an embedded medium
+the list names.
 
-Idempotent, keyed on content (ADR-0010): when media is present the
-artifact item is matched by its SHA-1 content hash first, so the same
-bytes under a different filename reuse the one item (the alternate
-filename is kept as an alias) instead of minting a duplicate that
-shares a blob. Falls back to the exact English label when there is no
-media to hash (re-registration). Statements that already exist are
-skipped. The bytes are uploaded only when none of the item's wiki files
-holds them, and an upload never overwrites a wiki file or stores bytes
-the wiki already holds (`WikiClient.upload_file`), so every `media file`
-holds the bytes its item's `media SHA-1` names.
+Provenance: an artifact asserts its own kind and its own composition by
+existing, so its `instance of`, `media file` and `media SHA-1`, and its
+fragments' `instance of` and `part of`, are referenced ``stated in -> the
+artifact item itself``; every statement a container contributes to a
+medium it embeds is referenced ``stated in -> that container`` (see
+docs/MODELING.md, "Artifacts and registration"). No statement is written
+unreferenced (ADR-0003).
+
+Idempotent. A Registrar reads the instance once, lag-free
+(`WikiClient.iter_entities`), and keeps what it read current with what it
+writes. A statement that exists already is skipped when it cites the
+source that asserts it, and otherwise gains that source's reference, as
+an agreeing source's (ADR-0002); nothing existing is changed or removed
+(CLAUDE.md rule 3). The bytes are uploaded only when no file of
+the item holds them, and an upload never overwrites a wiki file or stores
+bytes the wiki already holds (`WikiClient.upload_file`), so every `media
+file` holds the bytes its item's `media SHA-1` names.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import re
+import unicodedata
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
+from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
+
+# the most characters Wikibase takes in a label, a description or an alias
+# (its default limit on a term's length)
+TERM_LIMIT = 250
+
+# how Wikibase trims a term before it stores it: the separators and control
+# characters at either end go, and each run of control characters inside
+# becomes one space. `\s` holds every separator and the controls that are
+# whitespace; the other controls are named.
+_TERM_EDGES = re.compile(r"^[\s\x00-\x1f\x7f-\x9f]+|[\s\x00-\x1f\x7f-\x9f]+$")
+_TERM_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
+
+
+def _stored_term(term: str) -> str:
+    """`term` in the form Wikibase stores a label, a description or an
+    alias in: the separators and control characters at either end
+    trimmed, each run of control characters inside made one space, and the
+    whole in Unicode NFC. The reading of the instance holds labels in that
+    form, so a title is compared with it, and set, in that form too: in any
+    other, a label another item holds would look free, and an alias the
+    item has would look missing."""
+    trimmed = _TERM_CONTROLS.sub(" ", _TERM_EDGES.sub("", term))
+    return unicodedata.normalize("NFC", trimmed)
+
+
+def _fitted(
+    text: str, suffix: str = "", *, prefix: str = "", at: str | None = None
+) -> str:
+    """`prefix + text + suffix`, whose parts are in the stored form
+    (_stored_term), within the TERM_LIMIT characters Wikibase takes: when
+    the whole is longer, `text` is cut, at the last `at` within the room
+    when `at` is given, and ends in "…". The result is in the stored form
+    too, and the same parts always give the same result. For text that
+    only displays, such as a deck's title in the labels of its slides and
+    images: nothing finds an item by it."""
+    whole = prefix + text + suffix
+    room = TERM_LIMIT - len(prefix) - len(suffix) - 1
+    if len(whole) <= TERM_LIMIT or room < 1:
+        return whole
+    cut = text[:room]
+    if at is not None and at in cut:
+        cut = cut.rsplit(at, 1)[0]
+    return prefix + cut.rstrip() + "…" + suffix
+
+
+class ExcludedMedia(RuntimeError):
+    """Media on the never-ingest list: registration refuses it before it
+    reads the wiki, writes to it or uploads anything."""
 
 
 @dataclass
@@ -45,6 +121,8 @@ class RegistrationResult:
     file_page: str | None
     fragment_qids: dict[int, str] = field(default_factory=dict)
     created: bool = True
+    # the SHA-1 of the media's bytes: the artifact's identity (ADR-0010)
+    content_sha1: str | None = None
 
 
 def _append(entity, claim) -> None:
@@ -157,6 +235,17 @@ def _string_claim(pid: str, value: str, stated_in_pid: str, source_qid: str):
     return String(prop_nr=pid, value=value, references=references)
 
 
+def _part_of_claim(
+    part_of: str, page_number: str, stated_in: str, whole: str, page: int
+):
+    """``part of -> whole`` on page `page`, stated in the whole."""
+    from wikibaseintegrator.datatypes import String
+
+    claim = _item_claim(part_of, whole, stated_in, whole)
+    claim.qualifiers.add(String(prop_nr=page_number, value=str(page)))
+    return claim
+
+
 def _files_holding(
     client: WikiClient, file_pages: set[str], content_sha1: str
 ) -> list[str]:
@@ -184,66 +273,500 @@ def _files_holding(
     )
 
 
-def _locate_by_content(
-    client: WikiClient,
-    hashed_qid: str | None,
-    label: str,
-    content_sha1: str,
-    *,
-    media_file: str,
-    media_sha1: str,
-):
-    """Find the artifact item that a medium's bytes are (ADR-0010).
-
-    `hashed_qid` is the item whose `media SHA-1` is `content_sha1`, if
-    any: the bytes are that item. Otherwise an item labelled `label`
-    that carries no hash is these bytes only if one of its wiki files
-    holds them, or it has no file yet (a registration interrupted before
-    its statements); it is adopted and its hash is backfilled by the
-    caller. Any other item with that label is different content.
-
-    Returns ``(item, held, label_taken)``: the item or None, its wiki
-    files that hold these bytes, and whether `label` names a different
-    artifact, so that a new item needs a content-tagged label. The
-    caller uploads the bytes only when `held` is empty; `upload_file`
-    never overwrites a file, so every `media file` it records holds the
-    bytes its `media SHA-1` names.
-    """
-    if hashed_qid is not None:
-        item = client.wbi.item.get(hashed_qid)
-        files = _existing_claim_strings(item, media_file)
-        return item, _files_holding(client, files, content_sha1), False
-    labelled = client.find_item_by_label(label)
-    if labelled is None:
-        return None, [], False
-    candidate = client.wbi.item.get(labelled)
-    files = _existing_claim_strings(candidate, media_file)
-    held = _files_holding(client, files, content_sha1)
-    if not _existing_claim_strings(candidate, media_sha1) and (
-        held or not files
-    ):
-        return candidate, held, False
-    return None, [], True
+# -- the instance, as registration finds items in it --------------------------
 
 
-def _takes_alias(
-    client: WikiClient, item, name: str, content_sha1: str
-) -> bool:
-    """Should `name`, another name for an item's bytes, become its alias?
+def _value(snak):
+    """A snak's value, or None for a snak without one (no value, some
+    value)."""
+    return ((snak or {}).get("datavalue") or {}).get("value")
 
-    Name variants live in aliases (MODELING.md), but not a name that
-    belongs to other content: another item's label, or the plain form of
-    this item's content-tagged label (tagged because that name was
-    taken). Aliasing it would cross-link two artifacts.
-    """
-    current = str(item.labels.get("en") or "")
-    aliases = {str(alias) for alias in item.aliases.get("en") or []}
-    return (
-        name != current
-        and name not in aliases
-        and current != f"{name} [{content_sha1[:8]}]"
-        and client.find_item_by_label(name) in (None, item.id)
-    )
+
+def _earliest(qids: list[str]) -> str:
+    return min(qids, key=lambda qid: int(qid[1:]))
+
+
+@dataclass
+class _Instance:
+    """What registration finds items by, read from the instance once and
+    kept current with what the registrar writes. Where two items carry
+    one key (a duplicate the keys exist to prevent), the numerically
+    earliest is taken, as `WikiClient.string_statement_index` takes it."""
+
+    # English label -> the items that carry it
+    labels: dict[str, set[str]] = field(default_factory=dict)
+    # media SHA-1 -> the item that carries it
+    by_sha1: dict[str, str] = field(default_factory=dict)
+    # (artifact, page number) -> the artifact's fragment for that page
+    fragments: dict[tuple[str, str], str] = field(default_factory=dict)
+
+    @classmethod
+    def read(
+        cls,
+        client: WikiClient,
+        properties: dict[str, str],
+        items: dict[str, str],
+    ) -> _Instance:
+        """Every item's English label, `media SHA-1` values and, for an
+        `instance of artifact fragment`, each `part of` target with each
+        `page number` of that statement."""
+        instance_of, part_of = properties["instance_of"], properties["part_of"]
+        page_number = properties["page_number"]
+        media_sha1 = properties["media_sha1"]
+        fragment_class = items["artifact_fragment"]
+        labels: dict[str, set[str]] = {}
+        hashes: dict[str, list[str]] = {}
+        fragments: dict[tuple[str, str], list[str]] = {}
+        for qid, entity in client.iter_entities("labels|claims"):
+            if not qid.startswith("Q"):
+                continue  # a property's label is of another kind
+            label = ((entity.get("labels") or {}).get("en") or {}).get("value")
+            if isinstance(label, str) and label:
+                labels.setdefault(label, set()).add(qid)
+            claims = entity.get("claims") or {}
+            for claim in claims.get(media_sha1) or []:
+                value = _value(claim.get("mainsnak"))
+                if isinstance(value, str):
+                    hashes.setdefault(value, []).append(qid)
+            kinds = {
+                value.get("id")
+                for claim in claims.get(instance_of) or []
+                if isinstance(value := _value(claim.get("mainsnak")), dict)
+            }
+            if fragment_class not in kinds:
+                continue
+            for claim in claims.get(part_of) or []:
+                whole = _value(claim.get("mainsnak"))
+                if not isinstance(whole, dict) or "id" not in whole:
+                    continue
+                qualifiers = claim.get("qualifiers") or {}
+                for snak in qualifiers.get(page_number) or []:
+                    page = _value(snak)
+                    if isinstance(page, str):
+                        fragments.setdefault((whole["id"], page), []).append(
+                            qid
+                        )
+        return cls(
+            labels=labels,
+            by_sha1={key: _earliest(qids) for key, qids in hashes.items()},
+            fragments={
+                key: _earliest(qids) for key, qids in fragments.items()
+            },
+        )
+
+    def label(self, qid: str, label: str) -> None:
+        self.labels.setdefault(label, set()).add(qid)
+
+
+# -- registration -------------------------------------------------------------
+
+
+class Registrar:
+    """Registers artifacts, their page fragments and the media a compound
+    artifact embeds on one instance, each by the SHA-1 of its media.
+
+    `exclusions` is the never-ingest list; None registers without one, as
+    the single-file steps run when none is configured. The instance is
+    read on first need, once, and what was read is kept current with what
+    this registrar writes: one registrar serves any number of artifacts,
+    while nothing else writes to the instance."""
+
+    def __init__(
+        self, client: WikiClient, *, exclusions: ExclusionList | None = None
+    ) -> None:
+        self.client = client
+        self.exclusions = exclusions
+        self._instance: _Instance | None = None
+
+    def _read(self) -> _Instance:
+        if self._instance is None:
+            properties, items = self.client.vocabulary()
+            self._instance = _Instance.read(self.client, properties, items)
+        return self._instance
+
+    def _excluded(self, names: list[str], sha1: str) -> bool:
+        """Does the never-ingest list name media with any of these file
+        names or with this SHA-1? The SHA-1 is the media's own, so the
+        file is not hashed again (is_excluded)."""
+        if self.exclusions is None:
+            return False
+        return any(
+            is_excluded(self.exclusions, name=name, sha1=sha1)
+            for name in names or [None]
+        )
+
+    def _free_label(
+        self,
+        title: str,
+        content_sha1: str,
+        suffix: str = "",
+        *,
+        fit: bool = False,
+    ) -> str:
+        """The label `title + suffix`, or, when another item has that as
+        its label, with the media's content tag at its end: labels stay
+        unique per kind. `title` and `suffix` are in the form Wikibase
+        stores terms in (_stored_term). With `fit`, the title is cut,
+        ending in "…", so that the label fits the TERM_LIMIT characters
+        Wikibase takes, tagged or not (_fitted). Without it, a label that
+        long is refused here, before anything is written, so that a write
+        Wikibase would refuse leaves no half-made item behind."""
+
+        def label_for(tag: str) -> str:
+            if fit:
+                return _fitted(title, suffix + tag)
+            return title + suffix + tag
+
+        labels = self._read().labels
+        label = label_for("")
+        if label in labels:
+            tagged = label_for(f" [{content_sha1[:8]}]")
+            if tagged in labels:
+                raise RuntimeError(
+                    f"the labels {label!r} and {tagged!r} both name other "
+                    f"items, and labels stay unique: no item was made "
+                    f"under either"
+                )
+            label = tagged
+        if len(label) > TERM_LIMIT:
+            raise ValueError(
+                f"the label {label!r} is longer than the {TERM_LIMIT} "
+                f"characters Wikibase takes: no item was made"
+            )
+        return label
+
+    def _takes_alias(self, item, name: str, content_sha1: str) -> bool:
+        """Should `name`, another name for an item's bytes, become its alias?
+
+        Name variants live in aliases (MODELING.md), but not a name that
+        belongs to other content: another item's label, or the plain form
+        of this item's content-tagged label (tagged because that name was
+        taken). Aliasing it would cross-link two artifacts. Nor does a
+        name longer than Wikibase takes. `name` is in the stored form
+        (_stored_term), as the item's terms are.
+        """
+        current = str(item.labels.get("en") or "")
+        aliases = {str(alias) for alias in item.aliases.get("en") or []}
+        return (
+            name != current
+            and name not in aliases
+            and len(name) <= TERM_LIMIT
+            and current != f"{name} [{content_sha1[:8]}]"
+            and self._read().labels.get(name, set()) <= {item.id}
+        )
+
+    def register_artifact(
+        self,
+        media_path: Path | None,
+        artifact_type: str,
+        title: str,
+        description: str | None = None,
+        pages: int = 0,
+        *,
+        sha1: str | None = None,
+    ) -> RegistrationResult:
+        """Ensure the media, the artifact item and `pages` page fragments
+        exist, found by the SHA-1 of the media's bytes, and return their
+        ids.
+
+        `artifact_type` is a manifest item key (photograph, certificate,
+        letter, census_page, newspaper_clipping, presentation,
+        genealogical_report, or artifact itself). `sha1` is the SHA-1 the
+        caller read the file's bytes as, if it did: registration refuses
+        a file that no longer has it, as it refuses media on the
+        never-ingest list, before it asks anything of the wiki. Without
+        media there is nothing to find an artifact by, so `media_path` is
+        required. The title is taken in the form Wikibase stores a label
+        in (_stored_term), and one blank in that form is refused.
+        """
+        if media_path is None:
+            raise ValueError(
+                "an artifact is registered by the SHA-1 of its media "
+                "(ADR-0010): give its media file"
+            )
+        content_sha1 = file_sha1(media_path)
+        if sha1 is not None and sha1 != content_sha1:
+            raise RuntimeError(
+                f"{media_path.name} no longer has the bytes it was read "
+                f"with (SHA-1 {sha1[:12]}, now {content_sha1[:12]}); "
+                f"nothing was registered"
+            )
+        if self._excluded([media_path.name], content_sha1):
+            raise ExcludedMedia(
+                f"{media_path.name} is on the never-ingest list; nothing "
+                f"was registered or uploaded"
+            )
+        title = _stored_term(title)
+        if not title:
+            raise ValueError(
+                f"{media_path.name} has a blank title: no label to register "
+                f"it under"
+            )
+        properties, items = self.client.vocabulary()
+        if artifact_type not in items:
+            raise ValueError(
+                f"unknown artifact type {artifact_type!r}; expected a "
+                f"manifest item key such as photograph or certificate"
+            )
+        instance_of = properties["instance_of"]
+        stated_in = properties["stated_in"]
+        media_file = properties["media_file"]
+        media_sha1 = properties["media_sha1"]
+        instance = self._read()
+
+        found = instance.by_sha1.get(content_sha1)
+        artifact = self.client.wbi.item.get(found) if found else None
+        created = changed = artifact is None
+        # a new item's label is settled before anything is uploaded or
+        # written
+        new_label = self._free_label(title, content_sha1) if created else None
+        held = (
+            _files_holding(
+                self.client,
+                _existing_claim_strings(artifact, media_file),
+                content_sha1,
+            )
+            if artifact is not None
+            else []
+        )
+        # upload before any item is made, and only when no file of the
+        # item holds the bytes already
+        file_page = held[0] if held else self.client.upload_file(media_path)
+
+        if created:
+            artifact = self._new_artifact(description)
+            artifact.labels.set("en", new_label)
+        elif self._takes_alias(artifact, title, content_sha1):
+            # the same bytes under another name: the name is an alias
+            aliases = {str(a) for a in (artifact.aliases.get("en") or [])}
+            artifact.aliases.set("en", sorted(aliases | {title}))
+            changed = True
+        artifact_qid = artifact.id
+
+        statements = [
+            _item_claim(
+                instance_of, items[artifact_type], stated_in, artifact_qid
+            ),
+            _string_claim(media_file, file_page, stated_in, artifact_qid),
+            _string_claim(media_sha1, content_sha1, stated_in, artifact_qid),
+        ]
+        for claim in statements:
+            outcome = _ensure_referenced(
+                artifact, claim, stated_in, artifact_qid
+            )
+            changed = changed or outcome != "present"
+        if changed:
+            artifact = artifact.write(summary="ingest: artifact statements")
+        label = str(artifact.labels.get("en") or title)
+        instance.label(artifact_qid, label)
+        instance.by_sha1.setdefault(content_sha1, artifact_qid)
+
+        fragment_qids = {
+            page: self._fragment(artifact_qid, label, content_sha1, page)
+            for page in range(1, pages + 1)
+        }
+        return RegistrationResult(
+            artifact_qid=artifact_qid,
+            file_page=file_page,
+            fragment_qids=fragment_qids,
+            created=created,
+            content_sha1=content_sha1,
+        )
+
+    def _new_artifact(self, description: str | None):
+        """A new artifact item, with its description alone. Its statements
+        cite the item itself, so they are written once it has an id, with
+        its label: a registration cut short between the two writes leaves
+        an item with no label and no statement, which nothing finds and
+        which takes no label from the artifact registered after it."""
+        item = self.client.wbi.item.new()
+        if description:
+            item.descriptions.set("en", description)
+        return item.write(summary="ingest: register artifact")
+
+    def _fragment(
+        self,
+        artifact_qid: str,
+        artifact_label: str,
+        content_sha1: str,
+        page: int,
+    ) -> str:
+        """The artifact's fragment for `page`: the one it has, or a new
+        one, made in a single write with its statements, each stated in
+        the artifact."""
+        instance = self._read()
+        key = (artifact_qid, str(page))
+        if key in instance.fragments:
+            return instance.fragments[key]
+        properties, items = self.client.vocabulary()
+        stated_in = properties["stated_in"]
+        # the artifact's label is cut to fit, if need be: the fragment's
+        # label and description only display it
+        label = self._free_label(
+            artifact_label, content_sha1, f", page {page}", fit=True
+        )
+        fragment = self.client.wbi.item.new()
+        fragment.labels.set("en", label)
+        fragment.descriptions.set(
+            "en", _fitted(artifact_label, prefix=f"page {page} of ")
+        )
+        _append(
+            fragment,
+            _item_claim(
+                properties["instance_of"],
+                items["artifact_fragment"],
+                stated_in,
+                artifact_qid,
+            ),
+        )
+        _append(
+            fragment,
+            _part_of_claim(
+                properties["part_of"],
+                properties["page_number"],
+                stated_in,
+                artifact_qid,
+                page,
+            ),
+        )
+        fragment = fragment.write(summary="ingest: register fragment")
+        instance.label(fragment.id, label)
+        instance.fragments[key] = fragment.id
+        return fragment.id
+
+    def register_derived_media(
+        self, record: DerivedMediaRecord, directory: Path
+    ) -> dict[str, str]:
+        """Ensure each medium a container embeds has its artifact item and
+        its file on the wiki, from the record of them kept in `directory`
+        (presentation.record_derived_media); returns {media SHA-1 -> QID}.
+
+        The container is the item whose `media SHA-1` is the record's
+        source SHA-1, registered before its media. Each medium is found by
+        its own SHA-1 (ADR-0010), so an image that several decks embed, or
+        that is also ingested on its own, is one item, `part of` each
+        container. It is labelled ``"<container title> — <name>"`` by its
+        first name in the archive (ADR-0008), and its other names become
+        aliases, unless another item has one as its label. Its bytes are
+        uploaded from the file the record keeps, under the name
+        ``"<title> <name>"``, only when no file of the item holds them.
+
+        Each container asserts its media additively: one ``part of ->
+        container`` per slide the medium is on, slide-qualified, plus
+        `instance of`, `media file` and `media SHA-1`, each referenced
+        ``stated in -> the container``. A statement another container (or
+        the artifact itself) made already gains this container's reference
+        instead of a duplicate. A medium the never-ingest list names, by
+        a name or by its SHA-1, is left out: neither registered nor
+        uploaded.
+        """
+        if not record.media:
+            return {}
+        instance = self._read()
+        container = instance.by_sha1.get(record.source_sha1)
+        if container is None:
+            raise LookupError(
+                f"no item carries media SHA-1 {record.source_sha1[:12]}: "
+                f"register the container before the media it embeds"
+            )
+        properties, items = self.client.vocabulary()
+        instance_of = properties["instance_of"]
+        stated_in = properties["stated_in"]
+        media_file = properties["media_file"]
+        media_sha1 = properties["media_sha1"]
+        # MediaWiki refuses some characters in a file name
+        prefix = (
+            re.sub(r"[^A-Za-z0-9 _.-]+", "", record.title).strip()
+            or "presentation"
+        )
+        title = _stored_term(record.title)
+        derived: dict[str, str] = {}
+        for key, medium in sorted(record.media.items()):
+            if self._excluded(medium.names, key):
+                continue
+            path = directory / medium.file
+            if path.is_symlink() or file_sha1(path) != key:
+                raise RuntimeError(
+                    f"{medium.file} does not hold the bytes its record "
+                    f"names; nothing of it was registered or uploaded"
+                )
+            # the container's title is cut to fit, if need be: a medium's
+            # labels and aliases only display it
+            names = [_stored_term(name) for name in medium.names]
+            labels = [_fitted(title, f" — {name}") for name in names]
+            found = instance.by_sha1.get(key)
+            item = self.client.wbi.item.get(found) if found else None
+            changed = item is None
+            # a new item's label is settled before anything is uploaded
+            new_label = (
+                self._free_label(title, key, f" — {names[0]}", fit=True)
+                if changed
+                else None
+            )
+            held = (
+                _files_holding(
+                    self.client, _existing_claim_strings(item, media_file), key
+                )
+                if item is not None
+                else []
+            )
+            # uploaded only when no file of the item holds the bytes, so a
+            # medium another container embeds adds no second blob
+            if not held:
+                held = [
+                    self.client.upload_file(
+                        path, filename=f"{prefix} {medium.names[0]}"
+                    )
+                ]
+            if item is None:
+                item = self.client.wbi.item.new()
+                item.labels.set("en", new_label)
+                slides = ", ".join(str(number) for number in medium.slides)
+                item.descriptions.set(
+                    "en",
+                    _fitted(
+                        slides,
+                        ")",
+                        prefix="media embedded in the presentation (slide ",
+                        at=", ",
+                    ),
+                )
+            for name in labels:
+                if self._takes_alias(item, name, key):
+                    item.aliases.set("en", name)
+                    changed = True
+            image = (
+                PurePosixPath(medium.names[0]).suffix.lower() in IMAGE_SUFFIXES
+            )
+            kind = items["photograph"] if image else items["artifact"]
+            statements = [
+                _item_claim(instance_of, kind, stated_in, container),
+                *(
+                    _string_claim(media_file, page, stated_in, container)
+                    for page in held
+                ),
+                _string_claim(media_sha1, key, stated_in, container),
+                *(
+                    _part_of_claim(
+                        properties["part_of"],
+                        properties["page_number"],
+                        stated_in,
+                        container,
+                        slide,
+                    )
+                    for slide in medium.slides
+                ),
+            ]
+            for claim in statements:
+                outcome = _ensure_referenced(item, claim, stated_in, container)
+                changed = changed or outcome != "present"
+            if changed:
+                item = item.write(summary="ingest: derived media")
+            if item.labels.get("en"):
+                instance.label(item.id, str(item.labels.get("en")))
+            instance.by_sha1.setdefault(key, item.id)
+            derived[key] = item.id
+        return derived
 
 
 def register_artifact(
@@ -253,163 +776,25 @@ def register_artifact(
     title: str,
     description: str | None = None,
     pages: int = 0,
-) -> RegistrationResult:
-    """Ensure media, artifact item, and page fragments exist. Returns ids.
-
-    `artifact_type` is a manifest item key (photograph, certificate,
-    letter, census_page, newspaper_clipping, or artifact itself).
-    """
-    properties, items = client.vocabulary()
-    if artifact_type not in items:
-        raise ValueError(
-            f"unknown artifact type {artifact_type!r}; expected a manifest "
-            f"item key such as photograph or certificate"
-        )
-    instance_of = properties["instance_of"]
-    part_of = properties["part_of"]
-    stated_in = properties["stated_in"]
-    media_file = properties["media_file"]
-    media_sha1 = properties["media_sha1"]
-    page_number = properties["page_number"]
-
-    # -- locate the artifact item: content hash is the identity key -------
-    # Identical bytes are one artifact however they are named: with media
-    # present the hash decides (see _locate_by_content), and the label is
-    # consulted only to adopt an unhashed item whose file holds these
-    # bytes. With no media to hash, the label is the key.
-    file_page: str | None = None
-    content_sha1: str | None = None
-    artifact = None
-    label_taken = reused_by_hash = False
-    if media_path is not None:
-        # the content identity is the file's bytes, independent of the
-        # name MediaWiki files them under (ADR-0010)
-        content_sha1 = hashlib.sha1(media_path.read_bytes()).hexdigest()
-        hashed_qid = client.string_statement_index(media_sha1).get(
-            content_sha1
-        )
-        artifact, held, label_taken = _locate_by_content(
-            client,
-            hashed_qid,
-            title,
-            content_sha1,
-            media_file=media_file,
-            media_sha1=media_sha1,
-        )
-        reused_by_hash = hashed_qid is not None
-        # upload before any item is minted, and only when none of the
-        # item's files holds the bytes already
-        file_page = held[0] if held else client.upload_file(media_path)
-    else:
-        existing_qid = client.find_item_by_label(title)
-        if existing_qid:
-            artifact = client.wbi.item.get(existing_qid)
-
-    if artifact is not None:
-        created = False
-    else:
-        # new content. Labels are unique per kind (the wiki's idempotency
-        # convention), so if this title already names DIFFERENT content,
-        # disambiguate with a short content tag rather than collide.
-        label = f"{title} [{content_sha1[:8]}]" if label_taken else title
-        artifact = client.wbi.item.new()
-        artifact.labels.set("en", label)
-        if description:
-            artifact.descriptions.set("en", description)
-        artifact = artifact.write(summary="ingest: register artifact")
-        created = True
-    artifact_qid = artifact.id
-
-    # same bytes under a new filename: keep the new name as an alias
-    if reused_by_hash and _takes_alias(client, artifact, title, content_sha1):
-        aliases = {str(alias) for alias in (artifact.aliases.get("en") or [])}
-        artifact.aliases.set("en", sorted(aliases | {title}))
-        artifact.write(summary="ingest: alternate filename as alias")
-
-    changed = False
-    if items[artifact_type] not in _existing_claim_targets(
-        artifact, instance_of
-    ):
-        _append(
-            artifact,
-            _item_claim(
-                instance_of, items[artifact_type], stated_in, artifact_qid
-            ),
-        )
-        changed = True
-    if file_page and file_page not in _existing_claim_strings(
-        artifact, media_file
-    ):
-        _append(
-            artifact,
-            _string_claim(media_file, file_page, stated_in, artifact_qid),
-        )
-        changed = True
-    # backfill the content hash (also covers an unhashed item matched
-    # above by label)
-    if content_sha1 and content_sha1 not in _existing_claim_strings(
-        artifact, media_sha1
-    ):
-        _append(
-            artifact,
-            _string_claim(media_sha1, content_sha1, stated_in, artifact_qid),
-        )
-        changed = True
-    if changed:
-        artifact.write(summary="ingest: artifact statements")
-
-    # -- page fragments ----------------------------------------------------
-    fragment_qids: dict[int, str] = {}
-    for page in range(1, pages + 1):
-        fragment_qids[page] = _ensure_fragment(
-            client,
-            artifact_qid,
-            title,
-            page,
-            instance_of=instance_of,
-            part_of=part_of,
-            stated_in=stated_in,
-            page_number=page_number,
-            fragment_class=items["artifact_fragment"],
-        )
-
-    return RegistrationResult(
-        artifact_qid=artifact_qid,
-        file_page=file_page,
-        fragment_qids=fragment_qids,
-        created=created,
-    )
-
-
-def _ensure_fragment(
-    client: WikiClient,
-    artifact_qid: str,
-    title: str,
-    page: int,
     *,
-    instance_of: str,
-    part_of: str,
-    stated_in: str,
-    page_number: str,
-    fragment_class: str,
-) -> str:
-    from wikibaseintegrator.datatypes import String
-
-    label = f"{title}, page {page}"
-    existing = client.find_item_by_label(label)
-    if existing:
-        return existing
-    fragment = client.wbi.item.new()
-    fragment.labels.set("en", label)
-    fragment.descriptions.set("en", f"page {page} of {title}")
-    fragment = fragment.write(summary="ingest: register fragment")
-
-    _append(
-        fragment,
-        _item_claim(instance_of, fragment_class, stated_in, artifact_qid),
+    exclusions: ExclusionList | None = None,
+) -> RegistrationResult:
+    """Register one artifact and its page fragments, reading the instance
+    afresh (Registrar.register_artifact)."""
+    return Registrar(client, exclusions=exclusions).register_artifact(
+        media_path, artifact_type, title, description, pages
     )
-    part_claim = _item_claim(part_of, artifact_qid, stated_in, artifact_qid)
-    part_claim.qualifiers.add(String(prop_nr=page_number, value=str(page)))
-    _append(fragment, part_claim)
-    fragment.write(summary="ingest: fragment statements")
-    return fragment.id
+
+
+def register_derived_media(
+    client: WikiClient,
+    record: DerivedMediaRecord,
+    directory: Path,
+    *,
+    exclusions: ExclusionList | None = None,
+) -> dict[str, str]:
+    """Register the media a registered container embeds, from their
+    record, reading the instance afresh (Registrar.register_derived_media)."""
+    return Registrar(client, exclusions=exclusions).register_derived_media(
+        record, directory
+    )

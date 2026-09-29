@@ -16,12 +16,12 @@ the SHA-1 of its bytes, with the deck it is part of and the slides it is
 on, and its bytes kept beside the record. Nothing is read from the wiki
 or written to it then (ADR-0025 §2).
 
-Registration of the derived media (`register_derived_media`) follows the
-deck-asserts-its-own-composition convention: every statement a deck
-contributes to a derived item is referenced ``stated in -> that
-presentation`` (MODELING.md; ADR-0003). Derived items are keyed on
-content (ADR-0010), so an image shared by several decks is one item that
-is ``part of`` each of them.
+The write registers them from that record
+(`Registrar.register_derived_media` in yizkr.pipeline.registrar), after
+the deck itself: every statement a deck contributes to a derived item is
+referenced ``stated in -> that presentation`` (MODELING.md; ADR-0003).
+Derived items are keyed on content (ADR-0010), so an image shared by
+several decks is one item that is ``part of`` each of them.
 """
 
 from __future__ import annotations
@@ -346,125 +346,3 @@ def _keep(path: Path, data: bytes) -> None:
     except BaseException:
         staging.unlink(missing_ok=True)
         raise
-
-
-def register_derived_media(
-    client,
-    deck_qid: str,
-    deck_title: str,
-    content: PresentationContent,
-    workdir: Path,
-) -> dict[str, str]:
-    """Ensure each embedded image has its derived artifact item and file.
-
-    Keyed on content (ADR-0010): a medium is matched by the SHA-1 of its
-    bytes first, so the same image embedded in several decks (or also
-    ingested on its own) is ONE artifact item, and its bytes are uploaded
-    only when none of the item's wiki files holds them yet. An item
-    without a hash is matched by its deck-prefixed label, and adopted
-    and backfilled when its wiki file holds the same bytes; a
-    same-label item with DIFFERENT bytes is different content, so the new
-    item gets a content-tagged label. The upload never overwrites a wiki
-    file (`WikiClient.upload_file`): bytes whose file name already holds
-    other bytes go under a content-tagged file name, so every `media
-    file` holds the bytes its item's `media SHA-1` names.
-
-    Each deck's assertions are then ensured additively (ADR-0008): one
-    `part of -> deck` per slide the medium is on, slide-qualified, plus
-    `instance of`, `media file` and `media SHA-1`, each referenced
-    `stated in -> this deck`. A statement that another deck (or the
-    artifact itself) already made gains this deck's reference instead
-    of a duplicate; nothing existing is removed or rewritten (CLAUDE.md
-    rule 3). Idempotent on re-run. Returns {media name -> QID}.
-    """
-    from wikibaseintegrator.datatypes import String
-
-    from yizkr.pipeline.registrar import (
-        _ensure_referenced,
-        _item_claim,
-        _locate_by_content,
-        _string_claim,
-        _takes_alias,
-    )
-
-    derived: dict[str, str] = {}
-    if not content.media:
-        return derived
-    properties, items = client.vocabulary()
-    instance_of = properties["instance_of"]
-    part_of = properties["part_of"]
-    stated_in = properties["stated_in"]
-    media_file = properties["media_file"]
-    media_sha1 = properties["media_sha1"]
-    page_number = properties["page_number"]
-
-    # one lag-free enumeration per deck, kept current as items are minted
-    by_hash = dict(client.string_statement_index(media_sha1))
-    prefix = (
-        re.sub(r"[^A-Za-z0-9 _.-]+", "", deck_title).strip() or "presentation"
-    )
-    workdir.mkdir(parents=True, exist_ok=True)
-    for medium in content.media:
-        content_sha1 = hashlib.sha1(medium.data).hexdigest()
-        label = f"{deck_title} — {medium.name}"
-        item, held, label_taken = _locate_by_content(
-            client,
-            by_hash.get(content_sha1),
-            label,
-            content_sha1,
-            media_file=media_file,
-            media_sha1=media_sha1,
-        )
-        if label_taken:
-            # same deck title and media name, different bytes (a deck
-            # re-exported with a changed image): a distinct artifact, so
-            # its label must differ
-            label = f"{label} [{content_sha1[:8]}]"
-
-        # the bytes are uploaded only if no file of the item holds them
-        # already, so a medium reused by another deck adds no second blob
-        if not held:
-            local = workdir / f"{prefix} {medium.name}"
-            local.write_bytes(medium.data)
-            held = [client.upload_file(local)]
-
-        if item is None:
-            item = client.wbi.item.new()
-            item.labels.set("en", label)
-            slide_list = ", ".join(str(number) for number in medium.slides)
-            item.descriptions.set(
-                "en",
-                f"media embedded in the presentation (slide {slide_list})",
-            )
-            changed = True
-        else:
-            # another deck's name for the same bytes becomes an alias, as
-            # the registrar keeps an alternate filename, unless the name
-            # belongs to other content
-            changed = _takes_alias(client, item, label, content_sha1)
-            if changed:
-                item.aliases.set("en", label)
-
-        kind = items["photograph"] if medium.is_image else items["artifact"]
-        statements = [
-            _item_claim(instance_of, kind, stated_in, deck_qid),
-            *(
-                _string_claim(media_file, page, stated_in, deck_qid)
-                for page in held
-            ),
-            _string_claim(media_sha1, content_sha1, stated_in, deck_qid),
-        ]
-        for slide in medium.slides:
-            claim = _item_claim(part_of, deck_qid, stated_in, deck_qid)
-            claim.qualifiers.add(String(prop_nr=page_number, value=str(slide)))
-            statements.append(claim)
-        for claim in statements:
-            outcome = _ensure_referenced(item, claim, stated_in, deck_qid)
-            changed = changed or outcome != "present"
-        if changed:
-            item = item.write(
-                summary="ingest: derived media from presentation"
-            )
-        by_hash[content_sha1] = item.id
-        derived[medium.name] = item.id
-    return derived

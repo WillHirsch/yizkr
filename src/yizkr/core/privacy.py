@@ -32,6 +32,22 @@ source states. A person is released by birth only when every one of those
 years is at or before the cutoff year; a statement that allows no latest
 year keeps them possibly living. The public export and the site read
 births with this one query and this one reading.
+
+Who counts as a person fails closed too. The check assesses every item
+with person evidence (``PEOPLE_SELECTION``): a `human` type, a property
+only a person has, a kinship relation's value (or the value of `gave
+refuge to`), in a statement or a qualifier, or a part in an event that
+happens to people, each read through its statement node at every rank, so
+that a deprecated or outranked `human` type hides no one. An item typed,
+at normal or preferred rank, as a vessel, a military unit or an
+organization (``NON_PERSON_CLASSES``) is taken at its type on its part in
+such an event: any other evidence makes it a person. The public export
+reads the same evidence from its own dump, and keeps an item that has any
+of it only once this check has released it; it leaves out an item that
+states no type, so no type at all hides no one either. A family
+(``FAMILY_CLASS``) stands for its people, any of whom may be living, so
+it is never public, whatever it holds: the export leaves it out and the
+site badges it.
 """
 
 from __future__ import annotations
@@ -55,6 +71,189 @@ DEATH_EVIDENCE_PROPERTIES = (
     "cause_of_death",
     "burial_place",
 )
+
+# Person evidence (manifest keys): what marks an item as a person, read at
+# every rank, deprecated included, since a statement a curator deprecated
+# still records that a source said so. An item is a person when it is
+# typed `PERSON_CLASS`, is the subject of a `PERSON_SUBJECT_PROPERTIES`
+# statement, is the value of a `PERSON_VALUE_PROPERTIES` statement or
+# qualifier, or takes part in an event typed as one of `PERSON_EVENTS`.
+PERSON_CLASS = "human"
+# Properties that only a person is the subject of: a birth, a death and a
+# burial; kinship; the names only a person has (a birth or married name, a
+# nickname, what they are referred to as: ADR-0011, ADR-0018); a sex or
+# gender and a number of children; and an occupation, an employer, a
+# school, a citizenship and a residence. An official name, which a place
+# or an organization can have too, and the ties an organization shares
+# (a religion, a membership) are not evidence.
+PERSON_SUBJECT_PROPERTIES = (
+    "date_of_birth",
+    "date_of_death",
+    "place_of_birth",
+    "place_of_death",
+    "burial_place",
+    "cause_of_death",
+    "father",
+    "mother",
+    "spouse",
+    "child",
+    "sibling",
+    "relative",
+    "birth_name",
+    "married_name",
+    "nickname",
+    "referred_to_as",
+    "sex_or_gender",
+    "number_of_children",
+    "occupation",
+    "employer",
+    "educated_at",
+    "country_of_citizenship",
+    "residence",
+)
+# Properties whose value is only ever a person: kinship, and the one
+# given refuge. Their value marks a person in a statement and in a
+# qualifier alike.
+PERSON_VALUE_PROPERTIES = (
+    "father",
+    "mother",
+    "spouse",
+    "child",
+    "sibling",
+    "relative",
+    "gave_refuge_to",
+)
+# The kinds of event that happen to people, so that whoever takes part in
+# one is a person, unless one of `NON_PERSON_CLASSES` types them. A
+# participant in any other event may be an organization or a group.
+PERSON_EVENTS = (
+    "birth",
+    "death",
+    "marriage",
+    "migration",
+    "military_service",
+    "deportation",
+    "imprisonment",
+    "release",
+)
+# The types of what takes part in an event without being a person: a
+# vessel, a military unit and an organization, as a ship or a firm takes
+# part in a migration. An item typed so, at normal or preferred rank, is
+# not taken for a person on its part in a person event alone. It is a
+# person on any other evidence, a `human` type at any rank included; one
+# typed so only at deprecated rank, or not at all, is a person on its part
+# alone. A family is not among them: its label is a surname and its
+# description names its members, and a person known by a surname alone
+# can be typed as one. Nor is the unclassified entity, where a mistyped
+# person lands.
+NON_PERSON_CLASSES = ("vessel", "military_unit", "organization")
+
+# A redirect's link to the item it redirects to, as the query service and
+# the dump write it.
+SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
+
+# The class of an item that stands for a set of people: a family, whose
+# people are those recorded as `member of` it. A family is private while
+# any of its people may be living, and the graph cannot state that a
+# family's membership is complete, so every item typed as one, at normal
+# or preferred rank (read through redirects, as every type is), stays
+# out of anything public, whatever else it holds, released or not.
+FAMILY_CLASS = "family"
+
+# Whether ?person is typed as a family, as `FAMILY_CLASS` says: a
+# condition for a query to BIND. `family_type` fills it in.
+FAMILY_TYPE = """\
+EXISTS {{
+    ?person p:{instance_of} ?familyTyping .
+    ?familyTyping ps:{instance_of}/{same_as}* wd:{family} ;
+                  wikibase:rank ?familyRank .
+    FILTER(?familyRank != wikibase:DeprecatedRank)
+  }}"""
+
+# Every item with person evidence, once each, read through statement
+# nodes at every rank, never through the truthy wdt: values; only the
+# type that sets a participant aside must be one a curator has not
+# deprecated. A person-valued property's value counts in a statement
+# (ps:) and in a qualifier (pq:) alike. A type is read through the
+# redirects it may name ({same_as}*), so a class a curator merged into
+# `human`, an event kind or a non-person class types as that one does. A
+# value that is not an item (an unknown value) is left out, and so is a
+# redirect, which has no statements of its own: the item it redirects to
+# is selected for what it holds. The filters test each item once, after
+# DISTINCT, not each statement that names it. `people_selection` fills in
+# the lists.
+PEOPLE_SELECTION = """\
+  {{
+    SELECT ?person WHERE {{
+      {{
+        SELECT DISTINCT ?person WHERE {{
+          {{
+            ?person p:{instance_of} ?typing .
+            ?typing ps:{instance_of}/{same_as}* wd:{human} .
+          }} UNION {{
+            VALUES ?link {{ {subject_links} }}
+            ?person ?link ?statement .
+          }} UNION {{
+            VALUES ?link {{ {value_links} }}
+            ?statement ?link ?person .
+          }} UNION {{
+            VALUES ?kind {{ {event_kinds} }}
+            ?event p:{instance_of} ?eventTyping .
+            ?eventTyping ps:{instance_of}/{same_as}* ?kind .
+            ?event p:{participant} ?participation .
+            ?participation ps:{participant} ?person .
+            FILTER NOT EXISTS {{
+              VALUES ?otherKind {{ {non_person_kinds} }}
+              ?person p:{instance_of} ?otherTyping .
+              ?otherTyping ps:{instance_of}/{same_as}* ?otherKind ;
+                           wikibase:rank ?otherRank .
+              FILTER(?otherRank != wikibase:DeprecatedRank)
+            }}
+          }}
+        }}
+      }}
+      FILTER(REGEX(STR(?person), "/entity/Q[1-9][0-9]*$"))
+      FILTER NOT EXISTS {{ ?person {same_as} ?target . }}
+    }}
+  }}
+"""
+
+
+def people_selection(
+    properties: Mapping[str, str], items: Mapping[str, str]
+) -> str:
+    """``PEOPLE_SELECTION`` with an instance's ids: a group that binds
+    ?person to each item with person evidence, for a query to join on."""
+    return PEOPLE_SELECTION.format(
+        same_as=SAME_AS,
+        instance_of=properties["instance_of"],
+        participant=properties["participant"],
+        human=items[PERSON_CLASS],
+        subject_links=" ".join(
+            f"p:{properties[key]}" for key in PERSON_SUBJECT_PROPERTIES
+        ),
+        value_links=" ".join(
+            f"{prefix}:{properties[key]}"
+            for key in PERSON_VALUE_PROPERTIES
+            for prefix in ("ps", "pq")
+        ),
+        event_kinds=" ".join(f"wd:{items[key]}" for key in PERSON_EVENTS),
+        non_person_kinds=" ".join(
+            f"wd:{items[key]}" for key in NON_PERSON_CLASSES
+        ),
+    )
+
+
+def family_type(
+    properties: Mapping[str, str], items: Mapping[str, str]
+) -> str:
+    """``FAMILY_TYPE`` with an instance's ids."""
+    return FAMILY_TYPE.format(
+        same_as=SAME_AS,
+        instance_of=properties["instance_of"],
+        family=items[FAMILY_CLASS],
+    )
+
 
 # Wikibase's time precisions run from 0 (a billion years) to 14 (a
 # second): 6 is a millennium, 7 a century, 8 a decade and 9 a year.

@@ -2,7 +2,9 @@
 docs/MODELING.md, "Living persons and privacy"). No stack: the rows of
 the births query are given as the query service returns them. A birth
 releases a person only at the latest year it allows, and only when every
-birth statement does so by the cutoff (#334).
+birth statement does so by the cutoff (#334). The check assesses every
+item with person evidence, read at every rank, so no type hides a person
+from it (#344).
 
 CASES is shared with the public export's tests (test_backup.py) and the
 site's (test_staticsite.py), so both paths are held to one table.
@@ -10,18 +12,31 @@ site's (test_staticsite.py), so both paths are held to one table.
 
 from __future__ import annotations
 
+import re
+
+import yaml
+
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     CENTURY,
     DECADE,
+    FAMILY_CLASS,
     MILLENNIUM,
+    NON_PERSON_CLASSES,
+    PEOPLE_SELECTION,
+    PERSON_CLASS,
+    PERSON_EVENTS,
+    PERSON_SUBJECT_PROPERTIES,
+    PERSON_VALUE_PROPERTIES,
     YEAR,
     is_possibly_living,
     latest_birth_year,
     latest_births,
+    people_selection,
     year_of,
     years_allowed,
 )
+from yizkr.model.schema import read_manifest_data
 
 CUTOFF = 1903  # as if today were 2026 with the default 123-year window
 CONCEPT = "http://wikibase.example"
@@ -418,3 +433,225 @@ class TestTheBirthsQuery:
             "wikibase:DeprecatedRank . }}\n"
             "}}\n"
         )
+
+
+MANIFEST = yaml.safe_load(read_manifest_data())
+# the instance's ids as the unit tests give them: P1.. and Q1.., in the
+# manifest's order
+PROPERTIES = {key: f"P{n}" for n, key in enumerate(MANIFEST["properties"], 1)}
+ITEMS = {key: f"Q{n}" for n, key in enumerate(MANIFEST["items"], 1)}
+
+
+def flat(query: str) -> str:
+    """A query with each run of whitespace as one space."""
+    return " ".join(query.split())
+
+
+# Person evidence as ADR-0020 (§4, amended by #344) and MODELING.md list
+# it: each list is pinned here, not built from the module's own tuples, so
+# that dropping an entry fails a test (test_backup.py marks a person with
+# each one in turn).
+DOCUMENTED_SUBJECT_EVIDENCE = (
+    "date_of_birth",
+    "date_of_death",
+    "place_of_birth",
+    "place_of_death",
+    "burial_place",
+    "cause_of_death",
+    "father",
+    "mother",
+    "spouse",
+    "child",
+    "sibling",
+    "relative",
+    "birth_name",
+    "married_name",
+    "nickname",
+    "referred_to_as",
+    "sex_or_gender",
+    "number_of_children",
+    "occupation",
+    "employer",
+    "educated_at",
+    "country_of_citizenship",
+    "residence",
+)
+DOCUMENTED_VALUE_EVIDENCE = (
+    "father",
+    "mother",
+    "spouse",
+    "child",
+    "sibling",
+    "relative",
+    "gave_refuge_to",
+)
+DOCUMENTED_PERSON_EVENTS = (
+    "birth",
+    "death",
+    "marriage",
+    "migration",
+    "military_service",
+    "deportation",
+    "imprisonment",
+    "release",
+)
+DOCUMENTED_NON_PERSON_CLASSES = ("vessel", "military_unit", "organization")
+
+
+class TestThePeopleSelection:
+    """Who the check assesses (#344): every item with person evidence,
+    read through statement nodes at every rank, so that a deprecated or
+    outranked `human` type hides no one. A vessel, a military unit or an
+    organization is no person on its part in a person event alone."""
+
+    selection = flat(people_selection(PROPERTIES, ITEMS))
+    typing = PROPERTIES["instance_of"]
+    # a type, read through the redirects it may name
+    typed = f"ps:{typing}/<http://www.w3.org/2002/07/owl#sameAs>*"
+    non_person = " ".join(f"wd:{ITEMS[key]}" for key in NON_PERSON_CLASSES)
+    # the type that sets a participant aside: one not deprecated
+    set_aside = (
+        "FILTER NOT EXISTS { "
+        f"VALUES ?otherKind {{ {non_person} }} "
+        f"?person p:{typing} ?otherTyping . "
+        f"?otherTyping {typed} ?otherKind ; "
+        "wikibase:rank ?otherRank . "
+        "FILTER(?otherRank != wikibase:DeprecatedRank) }"
+    )
+
+    def test_people_are_read_through_statement_nodes_at_every_rank(self):
+        # never the truthy values, which hold only the best-ranked type,
+        # and no rank filter on any evidence, so a deprecated statement
+        # counts too: only the type that sets a participant aside is read
+        # with its rank
+        assert "wdt:" not in PEOPLE_SELECTION
+        assert "rank" not in self.selection.replace(self.set_aside, "")
+        typing = self.typing
+        assert (
+            f"{{ ?person p:{typing} ?typing . "
+            f"?typing {self.typed} wd:{ITEMS['human']} . }} UNION"
+        ) in self.selection
+
+    def test_each_kind_of_evidence_selects(self):
+        subjects = " ".join(
+            f"p:{PROPERTIES[key]}" for key in PERSON_SUBJECT_PROPERTIES
+        )
+        # a person-valued property marks its value in a statement and in
+        # a qualifier alike
+        values = " ".join(
+            f"{prefix}:{PROPERTIES[key]}"
+            for key in PERSON_VALUE_PROPERTIES
+            for prefix in ("ps", "pq")
+        )
+        events = " ".join(f"wd:{ITEMS[key]}" for key in PERSON_EVENTS)
+        typing, participant = (
+            PROPERTIES["instance_of"],
+            PROPERTIES["participant"],
+        )
+        assert (
+            f"{{ VALUES ?link {{ {subjects} }} ?person ?link ?statement . }}"
+        ) in self.selection
+        assert (
+            f"{{ VALUES ?link {{ {values} }} ?statement ?link ?person . }}"
+        ) in self.selection
+        assert (
+            f"{{ VALUES ?kind {{ {events} }} "
+            f"?event p:{typing} ?eventTyping . "
+            f"?eventTyping {self.typed} ?kind . "
+            f"?event p:{participant} ?participation . "
+            f"?participation ps:{participant} ?person . "
+            f"{self.set_aside} }}"
+        ) in self.selection
+
+    def test_every_type_is_read_through_its_redirects(self):
+        # a class a curator merged into `human`, an event kind or a
+        # non-person class types as the one it redirects to
+        assert self.selection.count(self.typed) == 3
+
+    def test_a_non_person_type_sets_only_a_participant_aside(self):
+        # once, in the participant's part of the union, and after it the
+        # union closes: the other evidence selects whatever the type
+        assert self.selection.count(self.set_aside) == 1
+        assert f"{self.set_aside} }} }} }} FILTER(REGEX" in self.selection
+
+    def test_an_unknown_value_or_a_redirect_is_no_person(self):
+        # an unknown value is a blank node or a skolem IRI, never an
+        # item; a redirect has no statements, so its target is selected.
+        # Each item is tested once, after DISTINCT.
+        assert (
+            "SELECT ?person WHERE { { SELECT DISTINCT ?person WHERE {"
+        ) in self.selection
+        assert self.selection.endswith(
+            '} } FILTER(REGEX(STR(?person), "/entity/Q[1-9][0-9]*$")) '
+            "FILTER NOT EXISTS { "
+            "?person <http://www.w3.org/2002/07/owl#sameAs> ?target . "
+            "} } }"
+        )
+
+    def test_every_id_is_filled_in(self):
+        assert not re.search(r"\{[a-z_]+\}", self.selection)
+
+    def test_the_evidence_is_the_documented_lists(self):
+        assert PERSON_CLASS == "human"
+        # every family stays out of anything public (owner, 2026-09-29)
+        assert FAMILY_CLASS == "family"
+        assert PERSON_SUBJECT_PROPERTIES == DOCUMENTED_SUBJECT_EVIDENCE
+        assert PERSON_VALUE_PROPERTIES == DOCUMENTED_VALUE_EVIDENCE
+        assert PERSON_EVENTS == DOCUMENTED_PERSON_EVENTS
+        assert NON_PERSON_CLASSES == DOCUMENTED_NON_PERSON_CLASSES
+
+    def test_the_evidence_is_the_manifests_vocabulary(self):
+        assert PERSON_CLASS in MANIFEST["items"]
+        assert set(NON_PERSON_CLASSES) <= set(MANIFEST["items"])
+        for key in (*PERSON_SUBJECT_PROPERTIES, *PERSON_VALUE_PROPERTIES):
+            assert MANIFEST["properties"][key]["datatype"]
+        for key in PERSON_EVENTS:
+            assert MANIFEST["items"][key]["subclass_of"] == "event"
+        for key in PERSON_VALUE_PROPERTIES:
+            assert MANIFEST["properties"][key]["datatype"] == "wikibase-item"
+
+    def test_places_artifacts_and_vocabulary_are_no_evidence(self):
+        # the value of a property that names a place, an organization, an
+        # artifact or a vocabulary item is never a person, and names or
+        # ties that places and organizations share mark no one; nor does
+        # an identity judgement, a depiction or an appellation's
+        # perspective
+        for key in (
+            "instance_of",
+            "stated_in",
+            "part_of",
+            "place_of_birth",
+            "place_of_death",
+            "burial_place",
+            "residence",
+            "location",
+            "country_of_citizenship",
+            "sex_or_gender",
+            "occupation",
+            "employer",
+            "educated_at",
+            "member_of",
+            "depicts",
+            "image",
+            "participant",
+            "said_to_be_the_same_as",
+            "perspective",
+        ):
+            assert key not in PERSON_VALUE_PROPERTIES
+        for key in (
+            "official_name",
+            "religion",
+            "member_of",
+            "location",
+            "part_of",
+            "coordinate_location",
+            "said_to_be_the_same_as",
+        ):
+            assert key not in PERSON_SUBJECT_PROPERTIES
+        # any group may take part in an event of no person kind; a family
+        # can be a person known by a surname alone, and the unclassified
+        # entity is where a mistyped person lands
+        assert "event" not in PERSON_EVENTS
+        assert "family" not in NON_PERSON_CLASSES
+        assert "unclassified_entity" not in NON_PERSON_CLASSES
+        assert PERSON_CLASS not in NON_PERSON_CLASSES

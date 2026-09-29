@@ -12,7 +12,8 @@ itself in its own `--help`.
 - **Unit tests** (`tests/unit`) are offline: no stack, no network, no
   model. They are the default run, `uv run pytest -q` or `make test`,
   because `pyproject.toml` deselects the `live` marker unless `-m live`
-  asks for it. CI runs them, with ruff, on every push.
+  asks for it. CI runs them, with ruff, on every push to a pull request
+  and on every commit that lands on main.
   `tests/unit/conftest.py` sets their defaults, and
   `tests/unit/test_conftest.py` tests them, apart from the anomaly
   checks' one, which `tests/unit/test_anomalies.py` tests
@@ -45,6 +46,15 @@ itself in its own `--help`.
     loses them for the rest of its run. A test that needs a patch for
     part of its run scopes it with `with monkeypatch.context() as patch:`
     instead.
+- **The offline end-to-end scratch run**
+  (`tests/unit/test_fixture_corpus.py`, a unit test like the rest) takes
+  the fixture corpus (`tests/fixtures/corpus/`, docs/EXAMPLES.md) through
+  whole scratch runs, as far as the scratch driver goes: every
+  per-document stage, the barrier and the corpus stages. A recorded
+  engine answers behind the real LLM cache, and the wiki refuses every
+  read and write. It asserts what must come of each stage and of each of
+  the corpus's traps, and how a second run, a run invoked again and a
+  changed extraction prompt reuse the work, with no gold set.
 - **Live tests** (`tests/integration`, every module marked `live`) run
   against the deployed stack (`make up` or `make up-local`) through
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.
@@ -96,7 +106,8 @@ The full suite, `uv run pytest -q`, runs once before the push that opens
 the PR for review, and once per fix round (AGENT_PROTOCOL §4). It takes
 under a minute on an idle machine and far longer under load (#252), so
 full runs repeated by many agents slow every one of them. CI runs it on
-every push, and a reviewer reads CI's result for the commit under review
+every push to a pull request, tested merged with main, and a reviewer
+reads CI's result for the commit under review
 instead of running it again. Ruff is quick: `uv run ruff check .` and
 `uv run ruff format --check .` pass before every push, and the pre-commit
 hook (`make hooks`) runs ruff on every commit.
