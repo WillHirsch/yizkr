@@ -21,11 +21,13 @@ Source-first conventions carry over unchanged:
   form the instance stores text in, and holds at most 400 characters,
   as a Wikibase text value does: a longer one keeps every line of the
   citations folded into its claim (below) and the titles they resolve
-  to, and as many of its other lines, from the first, as fit, marking
-  each run it leaves out with `…`, and it ends with `clipped, sha1` and
-  the first 12 hex digits of the whole excerpt's SHA-1, so that clipping
-  never makes one claim of two that the whole excerpts keep apart, such
-  as two citations of one fact;
+  to, then the line each citation stands beneath, then each of its other
+  lines, in order, that still fits, marking each run it leaves out with
+  `…`, and it ends with `clipped, sha1` and the first 12 hex digits of
+  the whole excerpt's SHA-1, so that clipping never makes one claim of
+  two that the whole excerpts keep apart, such as two citations of one
+  fact. A page number holds at most 400 characters too: a longer one
+  keeps the pages that fit and ends with ` ; …`;
 * GEDCOM's own uncertainty vocabulary maps to the archive's structural
   uncertainty (docs/MODELING.md): ABT/EST/CAL -> `circa` sourcing
   circumstances; BEF -> `latest date`; AFT -> `earliest date`;
@@ -68,8 +70,9 @@ is a claim of its own. So a MARR or DIV that restates another's date and
 place under the same citations gives no pair of spouse claims of its
 own, and under other citations gives a pair of its own, which cites
 them. A family's HUSB and WIFE are still read once, and so is an
-object's FILE: a further one is counted (below). Every PAGE of a
-citation, and every TITL of a source record or of an object, is read.
+object's FILE: a further one is counted (below), its TITL with it. Every
+PAGE of a citation, and every TITL of a source record, of an object or
+of its first FILE, is read.
 
 Supported (the fields family-tree exports actually carry):
 individuals (names -> label + aliases, a NAME without a value read from
@@ -90,11 +93,12 @@ statements' start time and place) and divorces (their end time). Source
 citations (SOUR) are folded into the reference of each claim that the
 record they stand beneath gives (ADR-0021): the event, fact or NAME a
 claim cites; the family record, for its parent and spouse claims, and,
-for a pair of spouse claims, the MARR and DIV that date it; the object,
-for its image claims, and the person's OBJE link to it. Each PAGE of a
-citation is a locator of the reference's page number, and the cited
-source's title, each TITL it gives, is surfaced in the excerpt — the
-upstream source is resolved, never fetched. Multimedia objects (OBJE) of
+for a pair of spouse claims, the MARRs and DIVs that date or place it
+(each MARR, when none dates or places the family's one pair); the
+object, for its image claims, and the person's OBJE link to it. Each
+PAGE of a citation is a locator of the reference's page number, and the
+cited source's title, each TITL it gives, is surfaced in the excerpt —
+the upstream source is resolved, never fetched. Multimedia objects (OBJE) of
 an individual become lightweight un-held media items (an `artifact`)
 linked to the person with `image`, each standing for the object's first
 FILE and labelled by the object's first title, its other titles being
@@ -123,12 +127,16 @@ beneath a family or an event (FAM.OBJE, DEAT.OBJE), save a person's
 link to an object the export lacks, which is counted as OBJE, as a
 level-0 OBJE record that no image claim cites is. A level-0 SOUR record
 that no folded citation cites is counted as SOUR, and each FILE of an
-object after its first as OBJE.FILE. A DIV without a DATE is counted as
-DIV: it says a marriage ended at an unknown time, and a claim has no
-unknown value to state that with. A family has one husband and one
-wife, so the adapter reads a family's first HUSB and first WIFE alone,
-and a further one is
-counted with its parent's tag too (FAM.HUSB, FAM.WIFE). A family's MARR
+object after its first as OBJE.FILE. Within a citation the adapter
+folds, a source record a folded citation cites and an object it maps,
+which the census takes whole, a SOUR it folds into no claim and an OBJE
+it maps to no media item are counted as well (SOUR.OBJE for a scan
+beneath a citation, FILE.SOUR for a citation beneath an object's FILE).
+A DIV without a DATE is counted as DIV: it says a marriage ended at an
+unknown time, and a claim has no unknown value to state that with. A
+family has one husband and one wife, so the adapter reads a family's
+first HUSB and first WIFE alone, and a further one is counted with its
+parent's tag too (FAM.HUSB, FAM.WIFE). A family's MARR
 and DIV date the spouse claims between its HUSB and its WIFE, so in a
 family with one partner or none (its HUSB or its WIFE is missing, or
 names no person the adapter maps) they are counted as MARR and DIV: no
@@ -698,17 +706,19 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # HUSB, DATE, PLAC...) has no entry. A child read where it stands is
     # descended into, so an unmapped tag nested under a mapped event still
     # surfaces. A SOUR citation folded into a claim's reference, and an
-    # OBJE mapped to a media item, is incorporated wholesale and skipped,
-    # subtree and all: neither counted nor descended (`folded`, `mapped`).
-    # Whether one is depends on where it stands and on what the record it
-    # stands beneath gives, so the census runs once the claims are made: a
-    # SOUR directly beneath a person, beneath a DATE, PLAC, HUSB, WIFE,
-    # CHIL, FAMC or FAMS, or beneath an event that gives no claim, is
-    # folded into none, and an OBJE beneath a family or an event is mapped
-    # to no media item, and each is counted. So is a level-0 SOUR record
-    # that no folded citation cites, a level-0 OBJE record that no image
-    # claim cites, and each FILE of an object after its first, which its
-    # media item does not stand for.
+    # OBJE mapped to a media item, is incorporated wholesale (`folded`,
+    # `mapped`): it is not counted, and within it only a SOUR or an OBJE
+    # that is itself neither folded nor mapped is (`within`), as is
+    # within a source record a folded citation cites. The rest of it
+    # stands in an excerpt. Whether one is depends on where it stands and
+    # on what the record it stands beneath gives, so the census runs once
+    # the claims are made: a SOUR directly beneath a person, beneath a
+    # DATE, PLAC, HUSB, WIFE, CHIL, FAMC or FAMS, or beneath an event that
+    # gives no claim, is folded into none, and an OBJE beneath a family or
+    # an event is mapped to no media item, and each is counted. So is a
+    # level-0 SOUR record that no folded citation cites, a level-0 OBJE
+    # record that no image claim cites, and each FILE of an object after
+    # its first, which its media item does not stand for.
     # The envelope is structure, not data. Everything else is counted once
     # and its subtree left untouched, so an already-dropped branch is not
     # itemised down to its PAGE/_APID leaves. What remains reported is the
@@ -1271,7 +1281,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         nothing, gives no start or end, and so no pair beside one that
         does: the family's claims state the marriage already, and its
         citations are folded into none. When no MARR or DIV gives one, each
-        MARR gives the family's one pair, which none dates. A start or an
+        MARR gives the family's one pair, which none dates or places. A
+        start or an
         end that restates another under the same citations, line for line,
         gives no pair of its own, and its MARR or DIV joins the other's;
         under other citations, it is a pair of its own, citing them, since
