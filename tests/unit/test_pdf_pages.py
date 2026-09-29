@@ -251,6 +251,18 @@ class TestTheRoute:
             doc.sha1
         }
 
+    def test_a_page_s_unread_annotations_are_counted(self, tmp_path):
+        """A text-layer page's annotations that show no text are left
+        unread, and its provenance counts them for the run report."""
+        page = typed(TITLE).annotate("/Subtype /Stamp /Rect [400 60 540 120]")
+        corpus = folder(tmp_path, notes=pdfs.pdf([page, typed(TITLE)]))
+        doc = document(run(tmp_path, corpus, Reader({})), "notes.pdf")
+        transcription = transcription_of(doc)
+        assert [
+            (page.provenance.method, page.provenance.annotations)
+            for page in transcription.pages
+        ] == [("text-layer", 1), ("text-layer", 0)]
+
     def test_a_scanned_pdf_is_read_whole(self, tmp_path):
         """A PDF none of whose pages reads from its text layer is read by
         the one vision call it was always read with: the PDF itself. Its

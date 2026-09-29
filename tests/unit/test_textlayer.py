@@ -266,6 +266,19 @@ class TestPages:
         page.text([STAMP], y=TALL - 40)
         assert methods(read(tmp_path, page)) == [method]
 
+    @pytest.mark.parametrize(
+        "beside, method", [("Angerring", TEXT_LAYER), ("Flörburg", VISION)]
+    )
+    def test_the_boundary_of_text_over_images(self, tmp_path, beside, method):
+        """A covered page is a scan when more of its letters and digits lie
+        over its images than beside them: as many beside, and it reads
+        from its text layer."""
+        page = pdfs.Page(width=SIDE, height=TALL)
+        page.image(pdfs.gray(300, 200), 0, 200, SIDE, 600)
+        page.text(["Angerring"], y=700)
+        page.text([beside], y=100)
+        assert methods(read(tmp_path, page)) == [method]
+
     def test_punctuation_does_not_count_beside_a_scan(self, tmp_path):
         """Only letters and digits are weighed, over the images and beside
         them: a row of dots beside a scan does not outweigh its stamp."""
@@ -456,6 +469,14 @@ class TestHiddenText:
         """A shaded box behind a paragraph, as a table cell's is."""
         page = pdfs.Page().rectangle(60, 740, 480, 40, gray=0.9)
         page.text(self.PARAGRAPH)
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text == "\n".join(self.PARAGRAPH)
+
+    def test_a_frame_drawn_round_the_text_hides_nothing(self, tmp_path):
+        """A box stroked round a paragraph after it, as a table's borders
+        are: its bounds hold the text, which it leaves in view."""
+        page = pdfs.Page().text(self.PARAGRAPH).frame(60, 700, 480, 85)
         result = read(tmp_path, page)
         assert methods(result) == [TEXT_LAYER]
         assert result.pages[0].text == "\n".join(self.PARAGRAPH)

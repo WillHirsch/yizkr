@@ -267,6 +267,12 @@ class Page:
         self.ops.append(f"q {gray} g {x} {y} {w} {h} re f Q".encode())
         return self
 
+    def frame(self, x: float, y: float, w: float, h: float) -> Page:
+        """Stroke a rectangle's outline in black (a path that fills
+        nothing), as a table's borders are drawn."""
+        self.ops.append(f"q 0 G 1 w {x} {y} {w} {h} re S Q".encode())
+        return self
+
     def annotate(self, entries: str) -> Page:
         """Add an annotation, of the dictionary `entries` (a subtype and a
         rectangle, say)."""

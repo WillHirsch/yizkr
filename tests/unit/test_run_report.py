@@ -1611,7 +1611,7 @@ class TestContent:
             "pages": [
                 page(1, "text-layer", annotations=2),
                 page(2, "text-layer"),
-                page(3, "vision"),
+                page(3, "vision", annotations=1),
                 page(4, "none"),
                 page(5, HOSTILE),
                 page(6, "text-layer", annotations=True),
