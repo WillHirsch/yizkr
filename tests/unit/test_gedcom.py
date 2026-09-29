@@ -2776,7 +2776,9 @@ BIRTH_EXTRACT = "Birth register extract for Gustav Löbig"
 WEDDING = ["1 MARR", "2 DATE 8 FEB 1947", f"2 PLAC {FLOERBURG}"]
 # the lines of Leopold and Agnes's family record that name them
 PARTNERS = "0 @F5@ FAM | 1 HUSB @I11@ | 1 WIFE @I17@"
-# the studio portrait of the 1890s, as the fixture gives it
+# the studio portrait of the 1890s, as the fixture gives it, and its back
+STUDIO = "Studio portrait of the Löbig family"
+STUDIO_BACK = "Back of the studio portrait, the sitters' names pencilled"
 PORTRAIT = (
     "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n2 FORM jpg\n"
     "2 TITL Studio portrait of the Löbig family\n"
@@ -3186,7 +3188,8 @@ class TestCitationsAndMediaNotHeld:
         ("lines", "counted"),
         [
             # (here) the export gives the studio portrait beneath Eugen's
-            # death, which it says nothing more of, or his burial
+            # death, which it says nothing more of, or embeds the gravestone
+            # photograph beneath his burial
             (["1 DEAT Y", "2 OBJE @O1@"], {"DEAT.OBJE": 1}),
             (
                 [
@@ -3360,46 +3363,49 @@ class TestEveryPageAndTitle:
         ("objects", "link"),
         [
             (
-                "0 @O1@ OBJE\n1 FILE gravestone-1956.jpg\n"
-                f"2 TITL {GRAVESTONE}\n1 FILE gravestone-1956-back.jpg\n"
-                "2 TITL Back of the gravestone photograph\n",
+                "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+                f"2 TITL {STUDIO}\n1 FILE studio-portrait-1890s-back.jpg\n"
+                f"2 TITL {STUDIO_BACK}\n",
                 ["1 OBJE @O1@"],
             ),
             (
                 "",
                 [
                     "1 OBJE",
-                    "2 FILE gravestone-1956.jpg",
-                    f"3 TITL {GRAVESTONE}",
-                    "2 FILE gravestone-1956-back.jpg",
-                    "3 TITL Back of the gravestone photograph",
+                    "2 FILE studio-portrait-1890s.jpg",
+                    f"3 TITL {STUDIO}",
+                    "2 FILE studio-portrait-1890s-back.jpg",
+                    f"3 TITL {STUDIO_BACK}",
                 ],
             ),
         ],
         ids=["record", "embedded"],
     )
     def test_an_objects_further_file_is_counted(self, objects, link):
-        # the gravestone photograph's front and back: (here) one object
-        # gives both files, in a record or embedded beneath Eugen. Its
-        # item stands for the front, and the back is counted, its title
-        # with it
+        # the studio portrait and its back, where the sitters' names are
+        # pencilled: (here) one object gives both files, in a record or
+        # embedded beneath Eugen. Its item stands for the front, and the
+        # back is counted, its title with it
         result = adapt_gedcom(objects + eugen(*link), artifact=EXPORT)
         assert result.unsupported_tags == {"OBJE.FILE": 1}
         (media,) = [e for e in result.batch.entities if e.kind == "artifact"]
-        assert (media.label, media.aliases) == (GRAVESTONE, [])
+        assert (media.label, media.aliases) == (STUDIO, [])
         assert len(claims_for(result.batch, "i1", "image")) == 1
 
     def test_a_further_files_title_labels_nothing(self):
         # (here) only the back's file is titled: the item takes the front's
         # file name
         text = (
-            "0 @O1@ OBJE\n1 FILE gravestone-1956.jpg\n"
-            "1 FILE gravestone-1956-back.jpg\n"
-            "2 TITL Back of the gravestone photograph\n"
+            "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n"
+            "1 FILE studio-portrait-1890s-back.jpg\n"
+            f"2 TITL {STUDIO_BACK}\n"
         ) + eugen("1 OBJE @O1@")
         result = adapt_gedcom(text, artifact=EXPORT)
         (media,) = [e for e in result.batch.entities if e.kind == "artifact"]
-        assert (media.label, media.aliases) == ("gravestone-1956.jpg", [])
+        assert (media.label, media.aliases) == (
+            "studio-portrait-1890s.jpg",
+            [],
+        )
         assert result.unsupported_tags == {"OBJE.FILE": 1}
 
 
@@ -3488,10 +3494,10 @@ class TestExcerptClip:
         assert all(len(excerpt) <= 400 for excerpt in excerpts)
 
     def test_a_citation_outlasts_a_first_line_too_long_to_keep(self):
-        # (here) the export writes Gustav's trade at length, citing the
+        # (here) the export writes Gustav's trade over and over, citing the
         # naturalisation: the occupation's own line is left out, and its
         # citation kept
-        trade = "1 OCCU " + "Hatter and hosier, " * 25
+        trade = "1 OCCU " + "Master hatter, " * 30
         lines = [trade.strip(), "2 SOUR @S1@"]
         text = cited("Naturalisation of Gustave Lobig") + person(
             "I8", "Gustav /Löbig/", *lines
@@ -3582,7 +3588,7 @@ class TestExcerptClip:
         "lines",
         [
             # an occupation named at length
-            ["1 OCCU " + "Hatter and hosier " * 30],
+            ["1 OCCU " + "Master hatter " * 40],
             # a NOTE continued by CONT lines
             [
                 "1 BIRT",
@@ -3591,14 +3597,11 @@ class TestExcerptClip:
                 *["3 CONT " + note_of(60)[len("2 NOTE ") :]] * 6,
                 "2 SOUR @S1@",
             ],
-            # a place spelt in decomposed form, as some tools write it
-            [
-                "1 BIRT",
-                "2 DATE 7 JAN 1919",
-                "2 PLAC " + unicodedata.normalize("NFD", FLOERBURG) * 30,
-            ],
+            # a NOTE of a placeholder sign (U+2ADC) that NFC writes as two
+            # characters: longer as the instance stores it than as written
+            ["1 BIRT", "2 DATE 7 JAN 1919", "2 NOTE " + "\u2adc" * 250],
         ],
-        ids=["long-line", "CONT", "NFD"],
+        ids=["long-line", "CONT", "longer-in-NFC"],
     )
     def test_every_excerpt_fits(self, lines):
         batch = adapt_gedcom(gustavs_births(lines), artifact=EXPORT).batch
