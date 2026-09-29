@@ -155,7 +155,10 @@ TRAPS = (
         "with her. Under the whole-cluster merge rule (#361), Klara's "
         "mentions stay unmerged, in an ambiguous cluster: the postcard's "
         "own mention of her links to the export on the name alone. That is "
-        "expected under the rule, not a split to mend here (#380).",
+        "expected under the rule, not a split to mend here (#380). The "
+        "corpus thus shows no hard (kin-edge) conflict end to end: that "
+        "loss is accepted, and the clustering unit tests cover it until "
+        "the universe gains another (#407).",
     ),
     Trap(
         "death-date",

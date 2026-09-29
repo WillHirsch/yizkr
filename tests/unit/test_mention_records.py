@@ -374,11 +374,10 @@ class TestTheRelationDecidesTheKind:
             claim("divorce", "carried_out_by", item("court")),
             # the court prison is where Leopold was held: a place
             claim("imprisonment", "location", item("prison")),
-            # the register office issued the birth register extract. Only
-            # the value's kind is checked here: the subject stands in for
-            # the document, which test_extraction_records.py names as the
-            # subject
-            claim("birth", "issued_by", item("standesamt")),
+            # the register office issued the birth register extract, the
+            # claim's own source document and so its subject
+            claim("birth", "issued_by", item("standesamt"))
+            | {"subject": {"kind": "artifact", "sha1": SHA1}},
             # the escape hatch goes wherever a real kind does
             claim("leopold", "residence", item("hint")),
             claim("marriage", "started_by", item("wedding")),

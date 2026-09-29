@@ -81,6 +81,12 @@ Rules — these mirror the archive's non-negotiable conventions:
   `object_has_role` `spouse` (or `partner`), and the union is
   `started_by` its wedding and `ended_by` its end, each an event with its
   own date and place.
+- The document itself: `issued_by` names the organization that issued
+  THIS document, where the source shows it issuing (the register office
+  of a certificate, the court of a judgment). Its subject is the
+  document, given exactly as the source's artifact:
+  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, and never anything
+  else. No other property takes the document as its subject.
 - Dating a period: a residence, an occupation or a membership is dated
   by its `start_time` and `end_time` qualifiers, a move in and a move out
   as its start and end. `point_in_time` on such a claim only records a

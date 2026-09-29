@@ -49,6 +49,7 @@ from yizkr.pipeline.extract import (
     salvage_valid_claims,
     vocabulary_prompt_lines,
 )
+from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
 
 PROMPTS = {
@@ -155,7 +156,8 @@ class TestTheManifestPrompt:
         )
         assert (
             "give TWO entities, a place for the site and an organization "
-            "for the body"
+            "for the body, linked by the organization's `location` (the "
+            "site)"
         ) in self.prompt
         assert "an organization HAS a location" not in self.prompt
         assert "is an `organization` even when" not in self.prompt
@@ -197,6 +199,25 @@ class TestTheManifestPrompt:
             self.prompt
         )
 
+    def test_an_entity_note_is_a_kind_or_identity_call(self):
+        # ADR-0035 §4: an entity's note is a kind or an identity call; the
+        # other categories are a claim's
+        assert (
+            'an entity may carry "note": {"category": "<kind or identity>", '
+            '"text": "<one sentence in English>"}'
+        ) in self.prompt
+
+    def test_an_organizations_record_examples(self):
+        assert (
+            '"Standesamt Flörburg" has no proper name, the kind Standesamt '
+            "and the place Flörburg"
+        ) in self.prompt
+        assert (
+            "A generic word any organization carries (a word for a firm, a "
+            "legal form) is neither a name nor a kind."
+        ) in self.prompt
+        assert 'a named family or household ("the Löbigs")' in self.prompt
+
 
 class TestTheChunkPrompt:
     prompt = flat(CHUNK_PROMPT)
@@ -232,7 +253,10 @@ class TestTheChunkPrompt:
         )
         assert (
             '"дядя по отцу" (uncle on the father\'s side) is '
-            "kin_aunt_or_uncle on the paternal side"
+            "kin_aunt_or_uncle of degree 0 on the paternal side"
+        ) in self.prompt
+        assert (
+            'Apart from a cousin, a kinship term with no "great-" has degree 0'
         ) in self.prompt
         assert "kin_cousin of degree 1" in self.prompt
         assert '"oerbeppe" (great-grandmother) is kin_grandparent' in (
@@ -264,6 +288,17 @@ class TestTheChunkPrompt:
         assert "The couple take part in the union, not in its wedding" in (
             self.prompt
         )
+        assert (
+            "or by an `event` where the source does not say how the union "
+            "ended"
+        ) in self.prompt
+
+    def test_sex_only_where_the_source_states_it(self):
+        assert (
+            "Record `sex_or_gender` (male/female vocab) only where the "
+            'source states it, in words or in its grammar ("den Schüler"), '
+            "never from a given name."
+        ) in self.prompt
 
     def test_issued_by_names_the_document_as_its_subject(self):
         rendered = flat(
@@ -278,10 +313,33 @@ class TestTheChunkPrompt:
         )
         assert (
             "Its subject is the document, given exactly as the source's "
-            f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}'
+            f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}, '
+            "and never anything else."
         ) in rendered
         properties, _items = vocabulary_prompt_lines()
         assert re.search(r"^\s*issued_by:", properties, re.M)
+
+    def test_the_single_call_prompt_gives_issued_by_its_subject(self):
+        rendered = flat(
+            EXTRACTION_PROMPT.format(
+                artifact_sha1=DOC_REF.sha1,
+                kinds="",
+                property_keys="",
+                item_keys="",
+                schema="",
+                language="de",
+                text="",
+            )
+        )
+        assert (
+            "The document itself: `issued_by` names the organization that "
+            "issued THIS document"
+        ) in rendered
+        assert (
+            "Its subject is the document, given exactly as the source's "
+            f'artifact: {{"kind": "artifact", "sha1": "{DOC_REF.sha1}"}}, '
+            "and never anything else."
+        ) in rendered
 
     def test_judgement_notes_only_where_a_reader_could_differ(self):
         assert (
@@ -602,6 +660,25 @@ class TestTheDocumentAsSubject:
         (problem,) = validate_against_manifest(batch)
         assert "does not take the source document as its subject" in problem
 
+    def test_issued_by_takes_no_other_subject(self):
+        """An `issued_by` claim is about the document itself (ADR-0035
+        §3.4): one whose subject is a person is refused, and the
+        extraction counts it as a reject."""
+        person_issued = cited(
+            subject=item("e1", "Hildegard Löbig", "human")["value"],
+            property="issued_by",
+            value=item("e9", "Standesamt Flörburg", "organization"),
+        )
+        batch = ClaimBatch.model_validate(
+            {"extraction_run": run(), "claims": [person_issued]}
+        )
+        (problem,) = validate_against_manifest(batch)
+        assert "takes only the claim's own source document" in problem
+        kept, rejects = salvage_valid_claims([person_issued], run())
+        assert kept.claims == []
+        (reject,) = rejects
+        assert reject["claim"]["property"] == "issued_by"
+
     def test_the_extractor_never_mends_a_wrong_document_subject(
         self, tmp_path
     ):
@@ -676,6 +753,73 @@ class TestTheWriter:
         assert not wiki.wbi.item.get(artifact.id).claims.get(
             PROPERTIES["instance_of"]
         )
+
+    @pytest.mark.parametrize(
+        ("subject", "prop", "value", "why"),
+        [
+            (
+                item("e1", "Hildegard Löbig", "human")["value"],
+                "issued_by",
+                item("e9", "Standesamt Flörburg", "organization"),
+                "its property takes only its source document",
+            ),
+            (
+                OTHER_REF,
+                "point_in_time",
+                {"type": "time", "year": 1941},
+                "its subject is a document other than its own source",
+            ),
+            (
+                OTHER_REF,
+                "issued_by",
+                item("e9", "Standesamt Flörburg", "organization"),
+                "its subject is a document other than its own source",
+            ),
+            (
+                DOC_REF,
+                "point_in_time",
+                {"type": "time", "year": 1941},
+                "does not take the source document as its subject",
+            ),
+        ],
+    )
+    def test_it_refuses_a_document_subject_the_rule_forbids(
+        self, subject, prop, value, why
+    ):
+        """The writer holds the document-subject rule itself, as a batch
+        handed to `yizkr write` is never validated against the manifest:
+        a claim sourced from Gustav's birth register extract (A) whose
+        subject names the 1941 death certificate (B), or names A on a
+        property that does not take it, or an `issued_by` claim about a
+        person, is refused and counted, and no statement lands on either
+        artifact item."""
+        wiki = IssuingWiki()
+        items = {}
+        for ref in (DOC_REF, OTHER_REF):
+            artifact = wiki.wbi.item.new()
+            artifact.write()
+            wiki.media[ref.sha1] = artifact.id
+            items[ref.sha1] = artifact.id
+        if isinstance(subject, ArtifactRef):
+            subject = subject.model_dump()
+        forbidden = cited(subject=subject, property=prop, value=value)
+        batch = ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [forbidden],
+                "entities": [STANDESAMT],
+            }
+        )
+        result = BatchWriter(wiki).write_batch(batch)
+        (only,) = batch.claims
+        assert result.refused == [claim_id(only)]
+        assert result.written == 0
+        assert any(why in warning for warning in result.warnings)
+        for qid in items.values():
+            assert not wiki.wbi.item.get(qid).claims.get(
+                PROPERTIES["point_in_time"]
+            )
+            assert not wiki.wbi.item.get(qid).claims.get("P90")
 
 
 class TestTheCritic:

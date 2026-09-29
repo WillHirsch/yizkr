@@ -118,10 +118,16 @@ and the judgement note's `judgement` and `judgement_note`) are marked
 validation refuses one as a claim's or a qualifier's property, and no
 prompt offers it. A property may also be held back from the prompts with
 `offered: false` while it stays in the manifest and the bootstrap. A
-property marked `document_subject: true` (`issued_by`) may take the
+property marked `document_subject: true` (`issued_by`) takes the
 claim's own source document as its subject, named by an `artifact`
-reference to the source's media; validation refuses such a subject on
-any other property, or naming another document (ADR-0035 §3.4).
+reference to the source's media, and no other subject; validation
+refuses such a subject on any other property, or naming another
+document, and a claim of such a property with any other subject
+(ADR-0035 §3.4). The writer checks the same rule itself, since `yizkr
+write` takes a batch without validating it against the manifest: it
+refuses such a claim before the first write, names it in its `refused`
+list and warns why, as it refuses a claim whose text the instance cannot
+hold.
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
@@ -686,7 +692,9 @@ primitive network and the *same* term set describes any pair:
   states, never a guess: `side` (`paternal` or `maternal`), `degree` (how
   many "great-"s, or a cousin's number) and `removes` (a cousin's
   removes). The 1958 letter's *дядя по отцу*, "uncle on the father's
-  side", is `kin_aunt_or_uncle` on the `paternal` side; its *двоюродная
+  side", is `kin_aunt_or_uncle` of degree 0 (a term other than a
+  cousin's with no "great-" has degree 0) on the `paternal` side; its
+  *двоюродная
   сестра*, "first cousin", is `kin_cousin` of degree 1; the 1952 letter's
   *oerbeppe*, "great-grandmother", is `kin_grandparent` of degree 1. A
   literal term that reduces to a primitive stays one: *Dein Vater* is
@@ -729,7 +737,8 @@ ADR-0036 makes a marriage an entity bounded by events, and retires the
 classes"). The extraction prompts ask for marriages so: the couple take
 part in the marriage (or partnership) with the role `spouse` (or
 `partner`), the union is `started_by` its wedding and `ended_by` a
-divorce, an annulment or a partner's death, and each of those events
+divorce, an annulment, a partner's death, or an event of unstated kind
+where the source does not say how it ended, and each of those events
 carries its own date and place. Until the rest of the pipeline moves to
 marriages, the GEDCOM adapter still writes the spouse statements
 described here, and the readers of spouse statements (the disagreement

@@ -52,9 +52,10 @@ Entity references (subjects and item values) come in three kinds:
 A claim's subject may also be the document the claim comes from, named
 as its source is, by an ``artifact`` reference (ADR-0035 §3.4): the
 document itself is what a register office issued. Only a property the
-manifest marks `document_subject` takes such a subject, and it must be
-the claim's own source; the writer resolves it to the artifact item as it
-resolves the source.
+manifest marks `document_subject` takes such a subject, it must be the
+claim's own source, and such a property takes no other subject; the
+writer checks the same rule and resolves the subject to the artifact item
+as it resolves the source.
 
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
@@ -770,7 +771,8 @@ def validate_against_manifest(
     * a death's principal is never also its informant (ADR-0035 §3.2);
     * a claim whose subject is a document (an artifact reference) names
       its own source, by a property the manifest marks
-      `document_subject` (ADR-0035 §3.4).
+      `document_subject`, and a claim of such a property has that
+      subject and no other (ADR-0035 §3.4).
     """
     properties, items = (
         vocabulary
@@ -892,6 +894,12 @@ def validate_against_manifest(
                     f"take the source document as its subject (ADR-0035 "
                     f"§3.4)"
                 )
+        elif claim.property in acceptance.document_subjects:
+            errors.append(
+                f"{where}.subject: property {claim.property!r} takes only "
+                f"the claim's own source document, {claim.source.artifact}, "
+                f"as its subject (ADR-0035 §3.4)"
+            )
         check_property_value(claim.property, claim.value, where, subject_kind)
         for q_index, qualifier in enumerate(claim.qualifiers):
             check_property_value(

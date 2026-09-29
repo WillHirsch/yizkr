@@ -242,8 +242,8 @@ Rules — these mirror the archive's non-negotiable conventions:
   the date at which the source presents it as holding. It names no
   partner and makes no marriage.
 - Record `sex_or_gender` (male/female vocab) only where the source states
-  it, in words or in its grammar ("ein Knabe", "den Schüler"), never
-  from a given name.
+  it, in words or in its grammar ("den Schüler"), never from a given
+  name.
 - Kinship: use the primitives father, mother, sibling, child. Do NOT
   invent properties for compound relations. A literal kinship term that
   reduces to a primitive stays one: "Dein Vater" is `father`. A compound
@@ -255,12 +255,14 @@ Rules — these mirror the archive's non-negotiable conventions:
     where the class is unclear;
   * `side` (paternal or maternal), `degree` (how many "great-"s, or a
     cousin's number) and `removes` (a cousin's removes): ONLY where the
-    term itself states them, never guessed.
-  "дядя по отцу" (uncle on the father's side) is kin_aunt_or_uncle on
-  the paternal side; "двоюродная сестра" (first cousin) is kin_cousin of
-  degree 1; "oerbeppe" (great-grandmother) is kin_grandparent of degree
-  1; a bare "cousin" states no degree. A spousal term ("my husband")
-  gives a marriage (below), never a kinship class.
+    term itself states them, never guessed. Apart from a cousin, a
+    kinship term with no "great-" has degree 0.
+  "дядя по отцу" (uncle on the father's side) is kin_aunt_or_uncle of
+  degree 0 on the paternal side; "двоюродная сестра" (first cousin) is
+  kin_cousin of degree 1; "oerbeppe" (great-grandmother) is
+  kin_grandparent of degree 1; a bare "cousin" states no degree. A
+  spousal term ("my husband") gives a marriage (below), never a kinship
+  class.
 - Relational / perspectival appellations (ADR-0018): a reference like
   "our great grandmother", "meine Oma", "Aunt Pünktchen", "Mem" is NOT a
   name and never an alias. Two cases:
@@ -298,7 +300,8 @@ Rules — these mirror the archive's non-negotiable conventions:
   * its end is an event too: the union is `ended_by` a `divorce` or an
     `annulment` (with its own date and place, and `carried_out_by` the
     court or authority that pronounced it), or by a partner's own
-    `death` event;
+    `death` event, or by an `event` where the source does not say how
+    the union ended;
   * a source that merely names a spouse dates nothing, and the
     document's own date is no date of the marriage; a directory or a
     census that lists a couple as married gives the union a
@@ -307,8 +310,8 @@ Rules — these mirror the archive's non-negotiable conventions:
   THIS document, where the source shows it issuing (the register office
   of a certificate, the court of a judgment). Its subject is the
   document, given exactly as the source's artifact:
-  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}. No other property
-  takes the document as its subject.
+  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, and never anything
+  else. No other property takes the document as its subject.
 - Residence: an address stated on a form is asserted for the person that
   field names (e.g. the informant/applicant on a certificate), NOT for
   everyone the document mentions. Do not copy one person's stated address
@@ -444,14 +447,15 @@ the relations this source states of it call for:
   whose pupil Rudolf was; the Калдовское районное бюро ЗАГС, which issued
   the 1941 death certificate;
 - where one source uses one institution both ways, give TWO entities, a
-  place for the site and an organization for the body.
+  place for the site and an organization for the body, linked by the
+  organization's `location` (the site).
 Also:
 - a person who holds an office (a consul, a director, a rabbi, a mayor,
   a registrar) is a `human`, never the organization or the office they
   hold;
 - a religion, a denomination or an ethnicity is never an
   `occupation_class`;
-- a named family or household ("Familie Löbig", "the Löbigs") is a
+- a named family or household ("the Löbigs") is a
   `family`; a ship is a `vessel`; a cited law, decree, gazette, or
   register is a `legal_instrument`; a regiment or brigade is a
   `military_unit`;
@@ -572,9 +576,10 @@ not settle: each is optional.
   its kind of institution, and the places its names carry. "Hutmacherei
   zum Blauen Hut" has the name "zum Blauen Hut" and the kind Hutmacherei;
   "It tichelwurk fan Snylsjum" has no proper name, the kind tichelwurk
-  and the place Snylsjum. A generic word any organization carries (a
-  word for a firm, a legal form) is neither: "Firma Löbig" has the name
-  Löbig.
+  and the place Snylsjum; "Standesamt Flörburg" has no proper name, the
+  kind Standesamt and the place Flörburg. A generic word any
+  organization carries (a word for a firm, a legal form) is neither a
+  name nor a kind.
 - A family: {{"kind": "family", "surnames": [...]}}: "the Löbigs" has the
   surname Löbig.
 Other kinds take no structure.

@@ -16,12 +16,17 @@ roles, kinship classes, markers as claims, civil status, unions and
 judgement notes (§5). A claim names its own document as subject by an
 `artifact` reference, the source's own content key; validation takes one
 only on a property the manifest marks `document_subject` (`issued_by`,
-§3.4), and only naming the claim's own source, and the writer resolves it
-to the artifact item as it resolves the source. A note's categories are
-written `kind`, `relation`, `date_reading`, `identity` and `other`, each
-its manifest item's key less `judgement_`. An entity's record or note
-that fails validation is set aside and counted in `coverage.json`
-(`records`, `notes`), and a claim whose note fails is a counted reject.
+§3.4), and only naming the claim's own source, and refuses a claim of
+such a property about anything else, as a counted reject. The writer
+checks the same rule itself, since `yizkr write` takes a batch without
+validating it, refusing and counting a claim that breaks it, and
+resolves a document subject to the artifact item as it resolves the
+source. A kinship term other than a cousin's with no "great-" has degree
+0 (§3.3). A note's categories are written `kind`, `relation`,
+`date_reading`, `identity` and `other`, each its manifest item's key
+less `judgement_`. An entity's record or note that fails validation is
+set aside and counted in `coverage.json` (`records`, `notes`), and a
+claim whose note fails is a counted reject.
 
 **Decided by the owner (2026-09-29):**
 

@@ -78,9 +78,9 @@ class ManifestProperty(BaseModel):
     # A retired or reference property is never offered, whatever this
     # says.
     offered: bool = True
-    # Whether a claim of the property may take its own source document as
-    # its subject, named by the document's content key (`issued_by`,
-    # ADR-0035 §3.4).
+    # Whether a claim of the property has its own source document as its
+    # subject, named by the document's content key, and no other subject
+    # (`issued_by`, ADR-0035 §3.4).
     document_subject: bool = False
 
     @property
@@ -226,7 +226,8 @@ class Acceptance:
     entity_kinds: frozenset[str] = frozenset()
     # the properties written only in references
     references: frozenset[str] = frozenset()
-    # the properties whose claims may take their source document as subject
+    # the properties whose claims take their source document, and only it,
+    # as subject
     document_subjects: frozenset[str] = frozenset()
 
     def refusal(
