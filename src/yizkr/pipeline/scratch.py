@@ -257,11 +257,14 @@ class CorpusStage:
     `touches_wiki` marks a stage that reads or writes the wiki: the driver
     runs one only when the stack is reachable and the instance carries no
     kept-state marker, which it checks before the run starts and again
-    before the stage."""
+    before the stage. `calls_engine` marks a stage that may call the
+    engine; the call estimate (yizkr.pipeline.estimate) says a stage that
+    does not makes no call."""
 
     name: str
     run: Callable[[CorpusContext], Sequence[str] | None]
     touches_wiki: bool = False
+    calls_engine: bool = True
 
 
 def _clustering(context: CorpusContext) -> Sequence[str]:
@@ -275,7 +278,7 @@ def _clustering(context: CorpusContext) -> Sequence[str]:
 
 # the corpus stages, in the order they run after the barrier
 CORPUS_STAGES: tuple[CorpusStage, ...] = (
-    CorpusStage("clustering", _clustering),
+    CorpusStage("clustering", _clustering, calls_engine=False),
 )
 
 # whether the instance carries the kept-state marker (ADR-0025 §6): a

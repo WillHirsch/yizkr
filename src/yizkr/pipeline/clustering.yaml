@@ -2,9 +2,8 @@
 #
 # The module docstring says what the stage does with each. This file is
 # the one place the thresholds live, and every value below is the
-# default, calibrated on the corpus-clustering experiment
-# (scripts/experiments/cluster_calibration.py) until scratch runs
-# recalibrate them.
+# default. The defaults come from the corpus-clustering experiment
+# (scripts/experiments/cluster_calibration.py).
 #
 # A key this file does not have is refused, so a misspelt key never passes
 # silently. The identity map records the digest of the thresholds it was
@@ -24,15 +23,23 @@ blocking:
   # those GEDCOM anchors only, never with other mentions, and a person
   # named by one token only is blocked against GEDCOM people alone.
   gedcom-anchored: true
+  # A key more mentions of one kind share than this is blocked on by
+  # none of them: the mentions it would join stay apart, and are counted.
+  max-key-mentions: 200
 
 evidence:
   # Years a circa date is widened by, each way, before dates are
   # compared.
   circa-years: 5
+  # A date range wider than this many years (a century, an open "before"
+  # or "after") never corroborates a pair; it can still conflict.
+  max-corroborating-years: 20
 
 confident:
   # The most GEDCOM anchors a mention may match and still link
-  # confidently to one: a mention matching more is ambiguous with each.
+  # confidently to one: a person matching more is ambiguous with each.
+  # A place counts only the anchors it matches exactly, and those it
+  # nests in as one.
   max-anchors: 1
 
 adjudication:

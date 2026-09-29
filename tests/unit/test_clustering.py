@@ -12,6 +12,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import random
+import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,10 +44,13 @@ from yizkr.pipeline.clustering import (
     attention,
     blocked_pairs,
     cluster_corpus,
+    code_digest,
     date_interval,
     ensure_identity_map,
     identity_hash,
+    keys_match,
     load_config,
+    person_forms,
     run_stage,
 )
 from yizkr.pipeline.fingerprints import cluster_id
@@ -430,6 +438,42 @@ def pair(first: Doc, first_id: str, second: Doc, second_id: str):
     return frozenset({(first.sha1, first_id), (second.sha1, second_id)})
 
 
+def register(name: str, entities, claims, truth) -> Doc:
+    """A placeholder document, cited by the SHA-1 of its name, for a
+    pattern the universe's sources do not show."""
+    sha1 = hashlib.sha1(name.encode()).hexdigest()
+    return document("a register", entities, claims, truth, sha1=sha1)
+
+
+def export(records: str, truth: dict[str, str], key: str = "gedcom") -> Doc:
+    """A GEDCOM export of `records`, adapted by the pipeline's adapter;
+    `truth` names who each person (by id) or place (by string) is."""
+    text = "0 HEAD\n1 CHAR UTF-8\n" + records + "0 TRLR\n"
+    artifact = ArtifactRef.from_bytes(text.encode())
+    batch = adapt_gedcom(text, artifact).batch
+    return Doc(
+        key,
+        Manifest(artifact.sha1, batch, GEDCOM),
+        {
+            record.id: truth.get(record.id) or truth[record.label]
+            for record in batch.entities
+        },
+    )
+
+
+def methods(docs, identity, *mentions: tuple[str, str]) -> list[str]:
+    return [
+        identity["mentions"][mention_of(docs, identity, key, local_id)][
+            "method"
+        ]
+        for key, local_id in mentions
+    ]
+
+
+def nickname(text: str) -> dict:
+    return {"type": "monolingual", "value": {"text": text, "language": "de"}}
+
+
 # -- blocking -----------------------------------------------------------------
 
 
@@ -598,6 +642,271 @@ class TestBlocking:
         assert pair(book, "e1", deck, "e1") in pairs
         assert pair(book, "e1", talk, "e1") not in pairs
 
+    def test_given_names_match_by_prefix_not_by_first_letters(self):
+        """Gustl and Gustav share three letters, and neither starts the
+        other: no key match, and no pair; Hilde starts Hildegard."""
+        assert keys_match(
+            {"lobig": frozenset({"hilde"})},
+            {"lobig": frozenset({"hildegard"})},
+        )
+        assert not keys_match(
+            {"lobig": frozenset({"gustl"})},
+            {"lobig": frozenset({"gustav"})},
+        )
+        short = register(
+            "gustl", [entity("e1", "Gustl Löbig")], [], {"e1": "gustav"}
+        )
+        full = register(
+            "gustav", [entity("e1", "Gustav Löbig")], [], {"e1": "gustav"}
+        )
+        hilde = register(
+            "hilde", [entity("e1", "Hilde Löbig")], [], {"e1": "hildegard"}
+        )
+        hildegard = register(
+            "hildegard",
+            [entity("e1", "Hildegard Löbig")],
+            [],
+            {"e1": "hildegard"},
+        )
+        pairs = blocked_pairs(
+            [doc.manifest for doc in (short, full, hilde, hildegard)]
+        )
+        assert pair(short, "e1", full, "e1") not in pairs
+        assert pair(hilde, "e1", hildegard, "e1") in pairs
+
+    def test_a_lone_name_keys_on_its_kins_surnames_only(self):
+        """A person named by one token keys with the surname of its kin,
+        never with the kin's given name (placeholders)."""
+        first = register(
+            "lone",
+            [entity("e1", "Xxx"), entity("e2", "Yyy Zzz")],
+            [("e1", "mother", item("e2"))],
+            {"e1": "xxx", "e2": "yyy"},
+        )
+        by_surname = register(
+            "surname", [entity("e1", "Xxx Zzz")], [], {"e1": "xxx"}
+        )
+        by_given = register(
+            "given", [entity("e1", "Xxx Yyy")], [], {"e1": "xxx-yyy"}
+        )
+        pairs = blocked_pairs(
+            [first.manifest, by_surname.manifest, by_given.manifest]
+        )
+        assert pair(first, "e1", by_surname, "e1") in pairs
+        assert pair(first, "e1", by_given, "e1") not in pairs
+
+    def test_a_surname_named_alone_keys_nothing(self):
+        """'Frau Löbig', mother of Gustav, and 'Herr Löbig', father of
+        Klara: a surname alone, whose only key would pair it with its own
+        surname, one shared token."""
+        mother = register(
+            "frau",
+            [entity("e1", "Frau Löbig"), entity("e2", "Gustav Löbig")],
+            [("e2", "mother", item("e1"))],
+            {"e1": "hildegard-loebig", "e2": "gustav-loebig"},
+        )
+        father = register(
+            "herr",
+            [entity("e1", "Herr Löbig"), entity("e2", "Klara Löbig")],
+            [("e2", "father", item("e1"))],
+            {"e1": "sebastian-loebig", "e2": "klara-loebig"},
+        )
+        pairs = blocked_pairs([mother.manifest, father.manifest])
+        assert pair(mother, "e1", father, "e1") not in pairs
+
+    def test_generic_place_heads_key_nothing(self):
+        """The districts of Mockburg and Peiltal share only their head,
+        'Kreis', and never pair; the camp still pairs with Klurnau."""
+        certificate = document(
+            "marriage-cert-1905",
+            [entity("e1", "Kreis Mockburg", "place")],
+            [],
+            {"e1": "kreis-mockburg"},
+        )
+        tree = document(
+            "family-tree-1984",
+            [entity("e1", "Kreis Peiltal", "place")],
+            [],
+            {"e1": "kreis-peiltal"},
+        )
+        card = document(
+            "registration-card-1945",
+            [entity("e1", "Klurnau", "place")],
+            [],
+            {"e1": "klurnau"},
+        )
+        compensation = document(
+            "compensation-file-1953",
+            [entity("e1", "Lager Klurnau", "place")],
+            [],
+            {"e1": "klurnau-camp"},
+        )
+        pairs = blocked_pairs(
+            [doc.manifest for doc in (certificate, tree, card, compensation)]
+        )
+        assert pair(certificate, "e1", tree, "e1") not in pairs
+        assert pair(card, "e1", compensation, "e1") in pairs
+
+    def test_a_key_too_many_mentions_share_is_blocked_on_by_none(self):
+        """Five registers name Gustav alike. Over a hub limit of three,
+        the key they share proposes no pair, and the summary and the
+        reasons count them; under it they pair and merge."""
+        docs = [
+            register(
+                f"hub-{n}",
+                [entity("e1", "Gustav Löbig")],
+                [("e1", "date_of_birth", day(1919))],
+                {"e1": "gustav-loebig"},
+            )
+            for n in range(5)
+        ]
+        manifests = [doc.manifest for doc in docs]
+        hub = load_config(overrides={"blocking": {"max-key-mentions": 3}})
+        assert blocked_pairs(manifests, hub) == set()
+        identity = cluster_corpus(manifests, hub)
+        summary = identity["summary"]
+        assert (summary["hub_keys"], summary["hub_mentions"]) == (1, 5)
+        assert {e["method"] for e in identity["mentions"].values()} == {
+            SINGLETON
+        }
+        assert (
+            "hub keys not blocked on: 1 key, 5 mentions kept apart"
+            in attention(summary)
+        )
+        assert len(blocked_pairs(manifests)) == 10
+        unguarded = cluster_corpus(manifests)
+        assert {e["method"] for e in unguarded["mentions"].values()} == {
+            CONFIDENT
+        }
+        assert unguarded["summary"]["hub_keys"] == 0
+
+
+class TestNames:
+    def test_a_name_written_surname_first_is_read_given_name_first(self):
+        """The directory writes 'Löbig, Ursula, Wwe.', the card 'LÖBIG,
+        Ida, née SÖRNE', the burial register 'Löbig, Eugen,
+        Hutmachermeister': given name first, the widow's title and the
+        trade dropped, and the maiden name read as one."""
+        forms = person_forms
+        assert forms("Löbig, Ursula, Wwe.", 3) == [
+            (("ursula", "lobig"), False)
+        ]
+        assert forms("LÖBIG, Ida, née SÖRNE", 3) == [
+            (("ida", "lobig"), False),
+            (("ida", "sorne"), False),
+        ]
+        assert forms("Löbig, Eugen, Hutmachermeister", 3) == [
+            (("eugen", "lobig"), False)
+        ]
+        # a first part of two tokens is no surname: past the comma only a
+        # maiden name stays
+        assert forms("Hildegard Löbig, geb. Laudler", 3) == [
+            (("hildegard", "lobig"), False),
+            (("hildegard", "laudler"), False),
+        ]
+
+    def test_a_comma_inverted_name_meets_the_same_name(self):
+        """The card's Ida, as the card writes her, meets the export's Ida
+        Sörne (her nickname written inline) and merges on her son."""
+        docs = [gedcom(), registration_card()]
+        identity = identity_of(*docs)
+        assert {"ida-loebig"} in merged(docs, identity)
+        assert_no_false_merge(docs, identity)
+
+    def test_brackets_and_markers_give_forms_of_their_own(self):
+        forms = person_forms
+        assert forms("Gustave LOBIG (formerly Gustav LÖBIG)", 3) == [
+            (("gustave", "lobig"), False),
+            (("gustav", "lobig"), False),
+        ]
+        assert forms("Ida (Peppi) Sörne", 3) == [
+            (("ida", "sorne"), False),
+            (("peppi",), False),
+        ]
+
+    def test_titles_kin_words_and_placeholders_name_no_one(self):
+        forms = person_forms
+        # a surname alone, after a title, a placeholder or an initial
+        assert forms("Frau Löbig", 3) == [(("lobig",), True)]
+        assert forms("N.N. Löbig", 3) == [(("lobig",), True)]
+        assert forms("Mrs Cutmore", 3) == [(("cutmore",), True)]
+        assert forms("G. Löbig", 3) == [(("lobig",), True)]
+        # a given name, after a kin or courtesy word
+        assert forms("Nana Maisie", 3) == [(("maisie",), False)]
+        assert forms("Aunt Pünktchen", 3) == [(("punktchen",), False)]
+        # kin words alone are no name at all
+        assert forms("Dad", 3) == []
+        assert forms("Dein Vater", 3) == []
+        # a title before a whole name drops out
+        assert forms("Frau Hildegard Löbig", 3) == [
+            (("hildegard", "lobig"), False)
+        ]
+
+    def test_a_maiden_name_alone_keys_its_bearer(self):
+        """The extract's 'Hildegard Löbig geborene Laudler' meets the
+        certificate's 'Hildegard Laudler' through its maiden form, with no
+        kin to lend a surname."""
+        extract = document(
+            "birth-extract-1938",
+            [entity("e1", "Hildegard Löbig geborene Laudler")],
+            [],
+            {"e1": "hildegard-loebig"},
+        )
+        certificate = document(
+            "marriage-cert-1905",
+            [entity("e1", "Hildegard Laudler")],
+            [],
+            {"e1": "hildegard-loebig"},
+        )
+        assert pair(extract, "e1", certificate, "e1") in blocked_pairs(
+            [extract.manifest, certificate.manifest]
+        )
+
+    def test_a_nickname_keys_with_the_surnames(self):
+        """The tree gives Sebastian's nickname Wastl; a register names him
+        'Wastl Löbig'."""
+        tree = document(
+            "family-tree-1984",
+            [entity("e1", "Sebastian Löbig")],
+            [("e1", "nickname", nickname("Wastl"))],
+            {"e1": "sebastian-loebig"},
+        )
+        book = register(
+            "wastl",
+            [entity("e1", "Wastl Löbig")],
+            [],
+            {"e1": "sebastian-loebig"},
+        )
+        assert pair(tree, "e1", book, "e1") in blocked_pairs(
+            [tree.manifest, book.manifest]
+        )
+
+    def test_kin_and_courtesy_words_make_no_key_or_name_match(self):
+        """Nicholas calls Gustave 'Dad', and Klara Sebastian: an alias of
+        a kin word keys nothing and matches nothing, so the two fathers
+        never meet."""
+        talk = document(
+            "interview-2002",
+            [
+                entity("e1", "Gustave Lobig", aliases=["Dad"]),
+                entity("e2", "Nicholas Lobig"),
+            ],
+            [("e2", "father", item("e1"))],
+            {"e1": "gustav-loebig", "e2": "nicholas-lobig"},
+        )
+        card = document(
+            "postcard-1938",
+            [
+                entity("e1", "Sebastian Löbig", aliases=["Dad"]),
+                entity("e2", "Klara Löbig"),
+            ],
+            [("e2", "father", item("e1"))],
+            {"e1": "sebastian-loebig", "e2": "klara-loebig"},
+        )
+        assert pair(talk, "e1", card, "e1") not in blocked_pairs(
+            [talk.manifest, card.manifest]
+        )
+
 
 # -- dates --------------------------------------------------------------------
 
@@ -649,6 +958,532 @@ class TestDates:
         assert after.overlaps(Interval(1960, 1960))
         assert not before.overlaps(Interval(1927, 1927))
 
+    def test_a_wide_or_open_range_never_corroborates(self):
+        """A birth in 'the 19th century' or 'before 1920' fits 1850 and
+        1911, and says no more: the pair stays ambiguous. A decade is
+        narrow enough to agree (placeholder names)."""
+
+        def born(name: str, value: dict, *qualifiers) -> Doc:
+            return register(
+                name,
+                [entity("e1", "Xxx Yyy")],
+                [("e1", "date_of_birth", value, *qualifiers)],
+                {"e1": name},
+            )
+
+        century = {"type": "time", "year": 1801, "precision": "century"}
+        wide = identity_of(born("century", century), born("fifty", day(1850)))
+        assert {e["method"] for e in wide["mentions"].values()} == {AMBIGUOUS}
+        before = identity_of(
+            born("before", day(1920), ("latest_date", day(1920))),
+            born("eleven", day(1911)),
+        )
+        assert {e["method"] for e in before["mentions"].values()} == {
+            AMBIGUOUS
+        }
+        decade = {"type": "time", "year": 1910, "precision": "decade"}
+        narrow = identity_of(born("decade", decade), born("ten", day(1911)))
+        assert {e["method"] for e in narrow["mentions"].values()} == {
+            CONFIDENT
+        }
+
+    def test_births_and_deaths_are_compared_apart(self):
+        """One register gives a birth in 1911, another a death in 1911:
+        nothing agrees, since a birth is never held against a death."""
+        born = register(
+            "born",
+            [entity("e1", "Xxx Yyy")],
+            [("e1", "date_of_birth", day(1911))],
+            {"e1": "born-1911"},
+        )
+        died = register(
+            "died",
+            [entity("e1", "Xxx Yyy")],
+            [("e1", "date_of_death", day(1911))],
+            {"e1": "died-1911"},
+        )
+        docs = [born, died]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        assert {e["method"] for e in identity["mentions"].values()} == {
+            AMBIGUOUS
+        }
+
+    def test_a_birth_events_date_is_its_only_participants(self):
+        """The tree dates Klara's birth by an event; the postcard's Klara
+        is born in 1917: the event's date agrees, and they merge. A birth
+        event naming the mother too gives her no birth date: she merges
+        with herself, born 1876, through her daughter."""
+        tree = document(
+            "family-tree-1984",
+            [
+                entity("e1", "Klara Löbig"),
+                entity("e2", "Birth of Klara Löbig", "birth"),
+            ],
+            [
+                ("e2", "participant", item("e1")),
+                ("e2", "point_in_time", day(1917)),
+            ],
+            {"e1": "klara-loebig", "e2": "klara-loebig"},
+        )
+        card = document(
+            "postcard-1938",
+            [entity("e1", "Klara Löbig")],
+            [("e1", "date_of_birth", day(1917))],
+            {"e1": "klara-loebig"},
+        )
+        docs = [tree, card]
+        identity = identity_of(*docs)
+        assert {"klara-loebig"} in merged(docs, identity)
+
+        both = register(
+            "birth",
+            [
+                entity("e1", "Klara Löbig"),
+                entity("e2", "Hildegard Löbig"),
+                entity("e3", "Birth of Klara Löbig", "birth"),
+            ],
+            [
+                ("e1", "mother", item("e2")),
+                ("e3", "participant", item("e1")),
+                ("e3", "participant", item("e2")),
+                ("e3", "point_in_time", day(1917)),
+            ],
+            {
+                "e1": "klara-loebig",
+                "e2": "hildegard-loebig",
+                "e3": "klara-loebig",
+            },
+        )
+        mother = document(
+            "marriage-cert-1905",
+            [entity("e1", "Hildegard Löbig"), entity("e2", "Klara Löbig")],
+            [
+                ("e2", "mother", item("e1")),
+                ("e1", "date_of_birth", day(1876)),
+            ],
+            {"e1": "hildegard-loebig", "e2": "klara-loebig"},
+        )
+        docs = [both, mother]
+        identity = identity_of(*docs)
+        assert {"hildegard-loebig"} in merged(docs, identity)
+
+
+# -- events -------------------------------------------------------------------
+
+
+def arrest_and_visit(*, dated: bool) -> list[Doc]:
+    """Leopold's arrest (the card, 1939) and a visit of his (the
+    interview): two events of kind `event`, whose one participants merge
+    on their mother Ida."""
+    card = document(
+        "registration-card-1945",
+        [
+            entity("e1", "Leopold Löbig"),
+            entity("e2", "Ida Löbig"),
+            entity("e3", "Arrest of Leopold Löbig", "event"),
+        ],
+        [
+            ("e1", "mother", item("e2")),
+            ("e3", "participant", item("e1")),
+            ("e3", "point_in_time", day(1939, 9, 3)),
+        ],
+        {"e1": "leopold-loebig", "e2": "ida-loebig", "e3": "arrest-1939"},
+    )
+    claims = [("e1", "mother", item("e2")), ("e3", "participant", item("e1"))]
+    if dated:
+        claims.append(("e3", "point_in_time", day(1939, 9)))
+    talk = document(
+        "interview-2002",
+        [
+            entity("e1", "Leopold Löbig"),
+            entity("e2", "Ida Löbig"),
+            entity("e3", "Leopold taken", "event"),
+        ],
+        claims,
+        {
+            "e1": "leopold-loebig",
+            "e2": "ida-loebig",
+            "e3": "arrest-1939" if dated else "visit",
+        },
+    )
+    return [card, talk]
+
+
+class TestEvents:
+    def test_an_event_is_one_when_its_participants_merge(self):
+        """Two registers each record a death of a Xxx Yyy in 1941; their
+        people, born 1880 and 1920, stay apart, and so do the deaths,
+        though their participants' names match (placeholders)."""
+
+        def death(name: str, born: int) -> Doc:
+            return register(
+                name,
+                [
+                    entity("e1", "Xxx Yyy"),
+                    entity("e2", "Death of Xxx Yyy", "death"),
+                ],
+                [
+                    ("e1", "date_of_birth", day(born)),
+                    ("e2", "participant", item("e1")),
+                    ("e2", "point_in_time", day(1941)),
+                ],
+                {"e1": name, "e2": f"{name} death"},
+            )
+
+        docs = [death("elder", 1880), death("younger", 1920)]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        deaths = [doc.fingerprint("e2", identity) for doc in docs]
+        assert [identity["mentions"][m]["method"] for m in deaths] == [
+            AMBIGUOUS,
+            AMBIGUOUS,
+        ]
+
+    def test_other_events_need_dates_that_agree(self):
+        """Leopold's arrest and an undated event of his stay apart, though
+        the two Leopolds merge; dated alike, they merge too."""
+        docs = arrest_and_visit(dated=False)
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        assert {"leopold-loebig"} in merged(docs, identity)
+        assert methods(
+            docs,
+            identity,
+            ("registration-card-1945", "e3"),
+            ("interview-2002", "e3"),
+        ) == [AMBIGUOUS, AMBIGUOUS]
+        docs = arrest_and_visit(dated=True)
+        identity = identity_of(*docs)
+        assert {"arrest-1939"} in merged(docs, identity)
+
+    def test_a_birth_or_death_is_decided_by_its_person(self):
+        """A person dies once: Felix's death in the card and in the tree,
+        one of them undated, is one death when the two Felixes merge."""
+
+        def death(key: str, dated: bool) -> Doc:
+            claims = [
+                ("e1", "spouse", item("e2")),
+                ("e3", "participant", item("e1")),
+            ]
+            if dated:
+                claims.append(("e3", "point_in_time", day(1931)))
+            return document(
+                key,
+                [
+                    entity("e1", "Felix Löbig"),
+                    entity("e2", "Ida Löbig"),
+                    entity("e3", "Death of Felix Löbig", "death"),
+                ],
+                claims,
+                {
+                    "e1": "felix-loebig",
+                    "e2": "ida-loebig",
+                    "e3": "felix-death",
+                },
+            )
+
+        docs = [
+            death("registration-card-1945", True),
+            death("family-tree-1984", False),
+        ]
+        identity = identity_of(*docs)
+        assert {"felix-death"} in merged(docs, identity)
+        assert {"felix-loebig"} in merged(docs, identity)
+
+    def test_two_births_that_name_one_father_stay_apart(self):
+        """Klara's birth and Gustav's each name their father as a
+        participant: the Sebastians merge, the children do not, and nor do
+        the births."""
+
+        def birth(key: str, child: str, truth: str) -> Doc:
+            return document(
+                key,
+                [
+                    entity("e1", child),
+                    entity("e2", "Sebastian Löbig"),
+                    entity("e3", "Hildegard Löbig"),
+                    entity("e4", f"Birth of {child}", "birth"),
+                ],
+                [
+                    ("e1", "father", item("e2")),
+                    ("e2", "spouse", item("e3")),
+                    ("e4", "participant", item("e1")),
+                    ("e4", "participant", item("e2")),
+                ],
+                {
+                    "e1": truth,
+                    "e2": "sebastian-loebig",
+                    "e3": "hildegard-loebig",
+                    "e4": f"{truth} birth",
+                },
+            )
+
+        docs = [
+            birth("postcard-1938", "Klara Löbig", "klara-loebig"),
+            birth("birth-extract-1938", "Gustav Löbig", "gustav-loebig"),
+        ]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        assert {"sebastian-loebig"} in merged(docs, identity)
+        assert methods(docs, identity, ("postcard-1938", "e4")) == [AMBIGUOUS]
+
+    def test_births_of_one_child_with_dates_that_conflict_stay_apart(self):
+        """Two records of Klara's birth, each naming her mother too, give
+        1917 and 1919: the dates conflict, and the births stay apart,
+        though their people merge."""
+
+        def birth(key: str, year: int) -> Doc:
+            return document(
+                key,
+                [
+                    entity("e1", "Klara Löbig"),
+                    entity("e2", "Hildegard Löbig"),
+                    entity("e3", "Birth of Klara Löbig", "birth"),
+                ],
+                [
+                    ("e1", "mother", item("e2")),
+                    ("e3", "participant", item("e1")),
+                    ("e3", "participant", item("e2")),
+                    ("e3", "point_in_time", day(year)),
+                ],
+                {
+                    "e1": "klara-loebig",
+                    "e2": "hildegard-loebig",
+                    "e3": "klara-birth",
+                },
+            )
+
+        docs = [birth("postcard-1938", 1917), birth("family-tree-1984", 1919)]
+        identity = identity_of(*docs)
+        assert {"klara-loebig"} in merged(docs, identity)
+        assert methods(docs, identity, ("postcard-1938", "e3")) == [AMBIGUOUS]
+
+
+# -- the reviewers' false merges ----------------------------------------------
+
+
+class TestNoFalseMerge:
+    """Each case a review found merging two entities of the universe or
+    of placeholders; each must stay apart."""
+
+    def test_an_anchor_joins_two_dates_that_conflict(self):
+        """The export gives one undated Xxx Yyy, child of Zzz Yyy; two
+        registers give a Xxx Yyy, child of Zzz Yyy, born 1911 and 1945.
+        Each links to the export's, never to the other."""
+        ged = export(
+            "0 @I1@ INDI\n1 NAME Zzz /Yyy/\n1 FAMS @F1@\n"
+            "0 @I2@ INDI\n1 NAME Xxx /Yyy/\n1 FAMC @F1@\n"
+            "0 @F1@ FAM\n1 HUSB @I1@\n1 CHIL @I2@\n",
+            {"i1": "zzz", "i2": "xxx-1911"},
+        )
+
+        def child(name: str, year: int) -> Doc:
+            return register(
+                name,
+                [entity("e1", "Xxx Yyy"), entity("e2", "Zzz Yyy")],
+                [
+                    ("e1", "father", item("e2")),
+                    ("e1", "date_of_birth", day(year)),
+                ],
+                {"e1": f"xxx-{year}", "e2": "zzz" if year < 1940 else "zzz-2"},
+            )
+
+        docs = [ged, child("elder", 1911), child("younger", 1945)]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        (review,) = [
+            entry
+            for entry in identity["review"]
+            if mention_of(docs, identity, "gedcom", "i2") in entry["members"]
+        ]
+        assert review["status"] == AMBIGUOUS
+        assert review["contradiction"]["evidence"] == "exact/conflict/agree"
+        assert identity["summary"]["contradicted_clusters"] >= 1
+
+    def test_given_name_prefixes_chain_two_names(self):
+        """'Xxx. Yyy' starts both 'Xxxa Yyy' and 'Xxxb Yyy', which never
+        match each other: the closure's third member joins them."""
+
+        def child(name: str, given: str, truth: str) -> Doc:
+            return register(
+                name,
+                [entity("e1", f"{given} Yyy"), entity("e2", "Zzz Yyy")],
+                [("e1", "father", item("e2"))],
+                {"e1": truth, "e2": "zzz"},
+            )
+
+        docs = [
+            child("a", "Xxxa", "xxxa"),
+            child("b", "Xxxb", "xxxb"),
+            child("c", "Xxx.", "xxxa-or-xxxb"),
+        ]
+        identity = identity_of(*docs)
+        people = [
+            entry["members"]
+            for entry in identity["clusters"].values()
+            if len(entry["members"]) > 1
+            and identity["mentions"][entry["members"][0]]["label"] != "Zzz Yyy"
+        ]
+        assert people == []
+
+    def test_an_anchor_joins_two_districts(self):
+        """The export gives a bare 'Xxxdorf'; two registers place a
+        Xxxdorf in two districts. Each nests in the export's, and never in
+        the other (placeholders)."""
+        ged = export(
+            "0 @I1@ INDI\n1 NAME Zzz /Yyy/\n1 BIRT\n2 PLAC Xxxdorf\n",
+            {"i1": "zzz", "Xxxdorf": "xxxdorf"},
+        )
+        one = register(
+            "one",
+            [entity("e1", "Xxxdorf, Kreis Yyy", "place")],
+            [],
+            {"e1": "xxxdorf"},
+        )
+        two = register(
+            "two",
+            [entity("e1", "Xxxdorf, Kreis Zzz", "place")],
+            [],
+            {"e1": "xxxdorf-2"},
+        )
+        docs = [ged, one, two]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+
+    def test_organizations_and_families_named_by_a_surname(self):
+        """Two firms called 'Firma Löbig' (the second a placeholder), two
+        called 'Löbig', and two families called 'Familie Löbig': a name of
+        one distinctive token merges none of them."""
+        firm = document(
+            "directory-1912",
+            [
+                entity(
+                    "e1",
+                    "Hutmacherei zum Blauen Hut",
+                    "organization",
+                    aliases=["Firma Löbig"],
+                )
+            ],
+            [],
+            {"e1": "zum-blauen-hut"},
+        )
+        other = register(
+            "weaver",
+            [
+                entity(
+                    "e1",
+                    "Xxx Weberei",
+                    "organization",
+                    aliases=["Firma Löbig"],
+                )
+            ],
+            [],
+            {"e1": "weberei"},
+        )
+        bare = [
+            register(
+                f"bare-{n}",
+                [entity("e1", "Löbig", "organization")],
+                [],
+                {"e1": f"firm-{n}"},
+            )
+            for n in range(2)
+        ]
+        families = [
+            register(
+                f"family-{n}",
+                [entity("e1", "Familie Löbig", "family")],
+                [],
+                {"e1": f"family-{n}"},
+            )
+            for n in range(2)
+        ]
+        docs = [firm, other, *bare, *families]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        assert merged(docs, identity) == []
+
+    def test_placeholders_name_no_one(self):
+        """The export's N.N. Yyy (born 1922, child of Zzz Yyy) and a
+        register's N.N. Yyy, child of Zzz Yyy too, are two unnamed
+        children; so are two registers' own."""
+        ged = export(
+            "0 @I1@ INDI\n1 NAME Zzz /Yyy/\n1 FAMS @F1@\n"
+            "0 @I2@ INDI\n1 NAME N.N. /Yyy/\n1 BIRT\n2 DATE 1922\n"
+            "1 FAMC @F1@\n0 @F1@ FAM\n1 HUSB @I1@\n1 CHIL @I2@\n",
+            {"i1": "zzz", "i2": "infant-1922"},
+        )
+
+        def infant(name: str) -> Doc:
+            return register(
+                name,
+                [entity("e1", "N.N. Yyy"), entity("e2", "Zzz Yyy")],
+                [("e1", "father", item("e2"))],
+                {"e1": f"infant-{name}", "e2": "zzz"},
+            )
+
+        docs = [ged, infant("one"), infant("two")]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+
+    def test_kin_named_by_a_surname_alone_agree_on_nothing(self):
+        """Two registers name a Xxx Yyy whose mother is 'Frau Yyy'; a
+        third names one whose father is 'Herr Yyy', and a fourth one whose
+        parent is 'Yyy' alone. No two mothers, fathers or children merge
+        on those names (placeholders)."""
+
+        def child(name: str, parent: str, relation: str, truth: str) -> Doc:
+            return register(
+                name,
+                [entity("e1", "Xxx Yyy"), entity("e2", parent)],
+                [("e1", relation, item("e2"))],
+                {"e1": truth, "e2": f"{truth} {relation}"},
+            )
+
+        docs = [
+            child("one", "Frau Yyy", "mother", "xxx-one"),
+            child("two", "Frau Yyy", "mother", "xxx-two"),
+            child("three", "Herr Yyy", "father", "xxx-three"),
+            child("four", "Yyy", "mother", "xxx-four"),
+            child("five", "Yyy", "father", "xxx-five"),
+        ]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        assert merged(docs, identity) == []
+
+    def test_refs_of_no_kind_never_merge(self):
+        """Two batches without a manifest each name a Xxx Yyy by a ref of
+        no kind: nothing says what they are."""
+
+        def fallback(name: str) -> Manifest:
+            sha1 = hashlib.sha1(name.encode()).hexdigest()
+            batch = ClaimBatch.model_validate(
+                {
+                    "extraction_run": RUN,
+                    "claims": [
+                        {
+                            "subject": {
+                                "kind": "local",
+                                "local_id": "c1:e1",
+                                "label": "Xxx Yyy",
+                            },
+                            "property": "date_of_birth",
+                            "value": day(1911),
+                            "source": {
+                                "artifact": {"kind": "artifact", "sha1": sha1}
+                            },
+                        }
+                    ],
+                }
+            )
+            return Manifest(sha1, batch)
+
+        identity = cluster_corpus([fallback("one"), fallback("two")])
+        entries = list(identity["mentions"].values())
+        assert {entry["method"] for entry in entries} == {AMBIGUOUS}
+        assert len({entry["cluster"] for entry in entries}) == 2
+
 
 # -- the homonym --------------------------------------------------------------
 
@@ -685,6 +1520,38 @@ class TestHomonyms:
         # Hildegard, whom the tree and the export both give Ursula as a
         # child, does merge
         assert {"hildegard-loebig"} in merged(docs, identity)
+
+    def test_a_mention_matching_two_anchors_links_to_neither(self):
+        """The export holds two Ursula Löbigs, one born 1911; six
+        registers each name an Ursula Löbig born 1911. Each matches both
+        anchors, and links to neither confidently, on whichever side of
+        the pair its fingerprint sorts."""
+        ged = export(
+            "0 @I10@ INDI\n1 NAME Ursula /Löbig/\n1 BIRT\n2 DATE 1911\n"
+            "0 @I16@ INDI\n1 NAME Ursula /Löbig/\n",
+            {"i10": "ursula-loebig", "i16": "ursula-loebig-angerring"},
+        )
+        registers = [
+            register(
+                f"ursula-{n}",
+                [entity("e1", "Ursula Löbig")],
+                [("e1", "date_of_birth", day(1911))],
+                {"e1": "ursula-loebig"},
+            )
+            for n in range(6)
+        ]
+        identity = identity_of(ged, *registers)
+        daughter = ged.fingerprint("i10", identity)
+        pairs = [
+            p
+            for entry in identity["review"]
+            for p in entry["pairs"]
+            if daughter in p["mentions"]
+        ]
+        assert len(pairs) == 6
+        assert {p["link"] for p in pairs} == {AMBIGUOUS}
+        # the anchor sorts first in some pairs and second in others
+        assert {p["mentions"][0] == daughter for p in pairs} == {True, False}
 
     def test_an_uncorroborated_name_match_stays_apart(self):
         """Without the export, the tree's Ursula and the directory's widow
@@ -945,6 +1812,25 @@ class TestCannotLink:
         assert identity["summary"]["within_manifest_pairs"] == 1
         assert identity["summary"]["confident_links_only"]["conflicting"] == 1
 
+    def test_an_exports_death_events_are_kept_apart(self):
+        """An export saying of each of its two Ursula Löbigs only that she
+        died makes two death events: two ids of one export, never a
+        candidate pair, as its people are not."""
+        ged = export(
+            "0 @I10@ INDI\n1 NAME Ursula /Löbig/\n1 DEAT Y\n"
+            "0 @I16@ INDI\n1 NAME Ursula /Löbig/\n1 DEAT Y\n",
+            {
+                "i10": "ursula-loebig",
+                "i16": "ursula-loebig-angerring",
+                "i10-death": "ursula-loebig death",
+                "i16-death": "ursula-loebig-angerring death",
+            },
+        )
+        identity = identity_of(ged)
+        assert identity["summary"]["within_manifest_pairs"] == 2
+        assert identity["review"] == []
+        assert_no_false_merge([ged], identity)
+
 
 # -- containment --------------------------------------------------------------
 
@@ -962,6 +1848,94 @@ class TestContainment:
         summary = identity["summary"]
         assert summary["pruned_pairs"] == {"place-containment": 1}
         assert summary["within_manifest_kin_or_containment"] == 1
+
+    def test_location_lifts_containment_too(self):
+        """The card may put the prison in Peiltal by `location`: the
+        prison is ruled out of Peiltal's cluster all the same."""
+        card = document(
+            "registration-card-1945",
+            [
+                entity("e3", "Peiltal court prison", "place"),
+                entity("e4", "Peiltal", "place"),
+            ],
+            [("e3", "location", item("e4"))],
+            {"e3": "peiltal-court-prison", "e4": "peiltal"},
+        )
+        docs = [card, interview()]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == [{"peiltal"}]
+        assert identity["summary"]["pruned_pairs"] == {"place-containment": 1}
+
+    def test_a_closure_joining_a_place_and_its_container_conflicts_hard(
+        self,
+    ):
+        """A register puts Lager Klurnau in Klurnau; the card names
+        Klurnau, the compensation file Lager Klurnau. The closure joins
+        all four, the camp and its container among them: a hard
+        conflict."""
+        record = register(
+            "camp",
+            [
+                entity("e1", "Lager Klurnau", "place"),
+                entity("e2", "Klurnau", "place"),
+            ],
+            [("e1", "part_of", item("e2"))],
+            {"e1": "klurnau-camp", "e2": "klurnau"},
+        )
+        card = document(
+            "registration-card-1945",
+            [entity("e1", "Klurnau", "place")],
+            [],
+            {"e1": "klurnau"},
+        )
+        compensation = document(
+            "compensation-file-1953",
+            [entity("e1", "Lager Klurnau", "place")],
+            [],
+            {"e1": "klurnau-camp"},
+        )
+        docs = [record, card, compensation]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        (review,) = identity["review"]
+        assert (review["status"], review["conflict"]["how"]) == (
+            CONFLICTING,
+            HARD,
+        )
+        # the camp, and a Klurnau: its container, or one named like it
+        camp = record.fingerprint("e1", identity)
+        (other,) = set(review["conflict"]["mentions"]) - {camp}
+        assert identity["mentions"][other]["label"] == "Klurnau"
+
+    def test_a_place_counts_the_anchors_it_nests_in_as_one(self):
+        """The export gives Hildegard's birthplace two ways; the tree's
+        bare 'Fläckfeld' nests in both, which count as one anchor, and the
+        three merge."""
+        ged = export(
+            "0 @I4@ INDI\n1 NAME Hildegard /Laudler/\n"
+            "1 BIRT\n2 PLAC Fläckfeld, Kreis Mockburg, Hesse, Germany\n"
+            "1 BIRT\n2 PLAC Fläckfeld, Hesse, Germany\n",
+            {
+                "i4": "hildegard-loebig",
+                "Fläckfeld, Kreis Mockburg, Hesse, Germany": "flaeckfeld",
+                "Fläckfeld, Hesse, Germany": "flaeckfeld",
+            },
+        )
+        tree = document(
+            "family-tree-1984",
+            [entity("e1", "Fläckfeld", "place")],
+            [],
+            {"e1": "flaeckfeld"},
+        )
+        docs = [ged, tree]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == [{"flaeckfeld"}]
+        (cluster,) = [
+            entry
+            for entry in identity["clusters"].values()
+            if len(entry["members"]) > 1
+        ]
+        assert len(cluster["members"]) == 3
 
     def test_the_manifests_own_places_are_exempt_in_an_export(self):
         """The export makes one place per place string, so two of them
@@ -1035,6 +2009,57 @@ class TestIdentityMap:
         reordered = cluster_corpus(shuffled)
         assert reordered["hash"] == first["hash"]
         assert reordered["clusters"] == first["clusters"]
+
+    def test_the_whole_map_stands_when_it_is_made_again(self):
+        """Every part of the map, the review and its conflicting pairs
+        included, is the same whatever order the manifests and their
+        records come in; only the inputs key follows the batches."""
+        docs = self.corpus()
+        first = identity_of(*docs)
+        shuffled = [
+            Manifest(
+                doc.sha1,
+                doc.manifest.batch.model_copy(
+                    update={
+                        "entities": list(reversed(doc.manifest.batch.entities))
+                    }
+                ),
+                doc.manifest.source,
+            )
+            for doc in reversed(docs)
+        ]
+        again = cluster_corpus(shuffled)
+        del first["inputs"], again["inputs"]
+        assert again == first
+        assert json.dumps(again) == json.dumps(first)
+
+    def test_one_map_whatever_the_hash_seed(self):
+        """Sets iterate in an order the hash seed sets: two processes of
+        other seeds make the same maps of two synthetic corpora, each with
+        conflicting clusters."""
+        script = (
+            "import hashlib, json, sys\n"
+            "sys.path.insert(0, '.')\n"
+            "from tests.unit.test_clustering import synthetic_corpus\n"
+            "from yizkr.pipeline.clustering import cluster_corpus\n"
+            "maps = [cluster_corpus(synthetic_corpus(n)) for n in (7, 11)]\n"
+            "assert all(m['summary']['clusters']['conflicting']"
+            " for m in maps)\n"
+            "print(hashlib.sha256(json.dumps(maps).encode()).hexdigest())\n"
+        )
+        root = Path(__file__).resolve().parents[2]
+        digests = {
+            subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=root,
+                env=dict(os.environ, PYTHONHASHSEED=seed),
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            for seed in ("0", "4242")
+        }
+        assert len(digests) == 1
 
     def test_the_hash_covers_the_decisions_alone(self):
         docs = self.corpus()
@@ -1149,6 +2174,52 @@ def test_adjudication_keeps_a_clusters_pairs_together():
     assert adjudication_calls([], 40) == 0
 
 
+SYLLABLES = ("ka", "lo", "mi", "ne", "ru", "ta", "vi", "zo", "pe", "fu")
+
+
+def synthetic_corpus(seed: int, documents: int = 40) -> list[Manifest]:
+    """Registers of invented syllable names, drawn with a fixed seed:
+    homonyms, kin and places enough for clusters that conflict."""
+    rng = random.Random(seed)
+
+    def name(parts: int) -> str:
+        return "".join(rng.choice(SYLLABLES) for _ in range(parts)).title()
+
+    givens = [name(2) for _ in range(6)]
+    surnames = [name(3) for _ in range(3)]
+    towns = [name(3) for _ in range(4)]
+    manifests = []
+    for number in range(documents):
+        sha1 = hashlib.sha1(f"synthetic {seed} {number}".encode()).hexdigest()
+        entities, claims = [], []
+        for index in range(rng.randint(3, 7)):
+            if rng.random() < 0.75:
+                label, kind = (
+                    f"{rng.choice(givens)} {rng.choice(surnames)}",
+                    "human",
+                )
+            else:
+                label, kind = rng.choice(towns), "place"
+            entities.append(entity(f"e{index}", label, kind))
+        people = [e["id"] for e in entities if e["kind"] == "human"]
+        places = [e["id"] for e in entities if e["kind"] == "place"]
+        for _ in range(rng.randint(1, 4)):
+            if len(people) >= 2:
+                first, second = rng.sample(people, 2)
+                relation = rng.choice(["father", "mother", "spouse", "child"])
+                claims.append((first, relation, item(second)))
+        for person in people:
+            if rng.random() < 0.5:
+                claims.append(
+                    (person, "date_of_birth", day(rng.randint(1880, 1920)))
+                )
+        if len(places) >= 2:
+            claims.append((places[0], "part_of", item(places[1])))
+        doc = document("a register", entities, claims, {}, sha1=sha1)
+        manifests.append(doc.manifest)
+    return manifests
+
+
 # -- the thresholds -----------------------------------------------------------
 
 
@@ -1239,14 +2310,92 @@ class TestTheStage:
         directory_ = tmp_path / "corpus" / "clustering"
         documents = self.docs(tmp_path)
         made = ensure_identity_map(directory_, documents)
+        inode = made.path.stat().st_ino
         batch = ClaimBatch.model_validate_json(documents[2].batch.read_text())
         batch.entities[0].aliases.append("the Blue Hat")
         documents[2].batch.write_text(batch.model_dump_json())
         again = ensure_identity_map(directory_, documents)
         assert not again.reused
         assert again.identity_map["inputs"] != made.identity_map["inputs"]
+        # written whole, as a new file put in the old one's place
+        assert again.path.stat().st_ino != inode
         # a document more, or one fewer, too
         assert not ensure_identity_map(directory_, documents[:-1]).reused
+
+    def test_a_change_of_claims_alone_makes_it_again(self, tmp_path):
+        """The tree's dates dropped, its records untouched: kin, dates and
+        containment are claims, and the map reads them."""
+        directory_ = tmp_path / "corpus" / "clustering"
+        documents = self.docs(tmp_path)
+        ensure_identity_map(directory_, documents)
+        batch = ClaimBatch.model_validate_json(documents[1].batch.read_text())
+        entities = batch.entities
+        batch.claims = [
+            claim for claim in batch.claims if claim.value.type != "time"
+        ]
+        documents[1].batch.write_text(batch.model_dump_json())
+        again = ensure_identity_map(directory_, documents)
+        assert not again.reused
+        assert (
+            ClaimBatch.model_validate_json(
+                documents[1].batch.read_text()
+            ).entities
+            == entities
+        )
+
+    def test_each_documents_sha1_and_source_are_in_the_key(self, tmp_path):
+        """A batch read under another document's SHA-1, or a GEDCOM
+        export's read as a document, is other input."""
+        directory_ = tmp_path / "corpus" / "clustering"
+        documents = self.docs(tmp_path)
+        ensure_identity_map(directory_, documents)
+        moved = [
+            StoredDoc(
+                "0" * 40 if doc.kind != GEDCOM else doc.sha1,
+                doc.kind,
+                doc.batch,
+            )
+            for doc in documents
+        ]
+        assert not ensure_identity_map(directory_, moved).reused
+        assert ensure_identity_map(directory_, moved).reused
+        read_as = [StoredDoc(doc.sha1, "text", doc.batch) for doc in moved]
+        assert not ensure_identity_map(directory_, read_as).reused
+
+    def test_other_code_makes_it_again(self, tmp_path, monkeypatch):
+        """Another source of the modules that make the map, VERSION
+        unchanged: made again, and the same decisions keep their hash."""
+        directory_ = tmp_path / "corpus" / "clustering"
+        documents = self.docs(tmp_path)
+        made = ensure_identity_map(directory_, documents)
+        assert ensure_identity_map(directory_, documents).reused
+        monkeypatch.setattr(clustering, "code_digest", lambda: "0" * 64)
+        again = ensure_identity_map(directory_, documents)
+        assert not again.reused
+        assert again.identity_map["hash"] == made.identity_map["hash"]
+        assert ensure_identity_map(directory_, documents).reused
+
+    def test_the_code_digest_reads_each_module_it_names(
+        self, tmp_path, monkeypatch
+    ):
+        """The digest is of the bytes of clustering.py, fingerprints.py
+        and reconcile.py: a byte changed in any of them changes it."""
+        assert clustering.CODE == (
+            "clustering.py",
+            "fingerprints.py",
+            "reconcile.py",
+        )
+        before = code_digest()
+        for name in clustering.CODE:
+            shutil.copy(clustering.PACKAGE / name, tmp_path / name)
+        monkeypatch.setattr(clustering, "PACKAGE", tmp_path)
+        assert code_digest() == before
+        for name in clustering.CODE:
+            copy = tmp_path / name
+            original = copy.read_bytes()
+            copy.write_bytes(original + b"\n")
+            assert code_digest() != before, name
+            copy.write_bytes(original)
 
     def test_other_thresholds_or_version_make_it_again(
         self, tmp_path, monkeypatch
@@ -1258,6 +2407,9 @@ class TestTheStage:
         remade = ensure_identity_map(directory_, documents, other)
         assert not remade.reused
         assert remade.identity_map["config"] == other.digest()
+        # the estimate's threshold too
+        calls = load_config(overrides={"adjudication": {"pairs-per-call": 7}})
+        assert not ensure_identity_map(directory_, documents, calls).reused
         made = ensure_identity_map(directory_, documents)
         assert not made.reused
         assert ensure_identity_map(directory_, documents).reused
@@ -1287,13 +2439,14 @@ class TestTheStage:
         made.path.write_text('{"format": 1, "mentions": ')
         assert not ensure_identity_map(directory_, documents).reused
         # a whole map, its decisions hashing to its hash, without the
-        # summary the stage reports from
-        data = json.loads(made.path.read_text())
-        del data["summary"]
-        made.path.write_text(json.dumps(data))
-        again = ensure_identity_map(directory_, documents)
-        assert not again.reused
-        assert again.identity_map["summary"] == made.identity_map["summary"]
+        # summary the stage reports from, or without its review
+        for section in ("summary", "review"):
+            data = json.loads(made.path.read_text())
+            del data[section]
+            made.path.write_text(json.dumps(data))
+            again = ensure_identity_map(directory_, documents)
+            assert not again.reused, section
+            assert again.identity_map[section] == made.identity_map[section]
 
     def test_run_stage_says_what_needs_attention(self, tmp_path):
         logged: list[str] = []

@@ -6,10 +6,11 @@ every document whose stages completed.
 `cluster_corpus` is a pure function of the manifests and the thresholds
 (clustering.yaml beside this module, load_config). It reads nothing but
 its arguments: no wiki, no query service, no graph, and no model. Its
-output changes only with them and with VERSION, which a change to what it
-makes of the same manifests bumps. The stage (`run_stage`) keeps that
-output in its directory as `identity-map.json`, and reuses it while the
-documents' manifests (by content), VERSION and the thresholds stand.
+output changes only with them, with VERSION, which a change to what it
+makes of the same manifests bumps, and with the source of the modules
+that make it (CODE). The stage (`run_stage`) keeps that output in its
+directory as `identity-map.json`, and reuses it while the documents'
+manifests (by content), VERSION, that source and the thresholds stand.
 
 **Mentions.** Every entity of every manifest is a mention, named by its
 fingerprint (yizkr.pipeline.fingerprints): its artifact's SHA-1, its
@@ -24,24 +25,42 @@ extraction are clustered; the others are each a cluster of their own
 lifted into mention space: kin (father, mother, child, spouse and
 sibling, each seen from both ends, so a father claim and a child claim
 say the same), the human participants of events, place containment
-(`part_of`, `location`), typed names and nicknames, and dates. Only what
-the manifests assert is used: no containment or kinship is read from the
-graph, and none is inferred.
+(`part_of`, `location`), typed names and nicknames, and dates; a birth or
+death event's date is its participant's too, when it has only one. Only
+what the manifests assert is used: no containment or kinship is read
+from the graph, and none is inferred.
+
+**Names.** A person's names are its label, its aliases and its typed
+birth, married and official names, each read as a name:
+
+- a bracketed part is a form of its own, and a marker at its start
+  ("formerly", "later", "genannt") is dropped: "Gustave Lobig (formerly
+  Gustav Löbig)" gives "Gustave Lobig" and "Gustav Löbig";
+- a name written surname first is read given name first, and past its
+  first comma only a maiden part stays: "Löbig, Ursula, Wwe." gives
+  "Ursula Löbig", "LÖBIG, Ida, née SÖRNE" "Ida Löbig née Sörne";
+- "X Y née Z" gives the forms "X Y" and "X Z", and "X née Z" gives "X"
+  and "X Z";
+- accents are folded, and titles ("Frau", "Dr"), kin and courtesy words
+  ("Tante", "Dad", "Nana"), particles and initials are no name tokens.
+
+A form of one token after a title, a placeholder ("N.N.") or an initial
+names a surname alone, and so does a lone token that the person's other
+forms or its kin use as a surname. A surname alone names no one: it
+makes no key, no name match and no kin agreement ("Frau Löbig", "N.N.
+Löbig").
 
 **Blocking** proposes candidate pairs by keys of their own kind, never
 by one shared token:
 
-- *People*: a given-name token with a surname token. Name forms are the
-  label, the aliases and the typed birth, married and official names;
-  accents are folded, titles and kin words dropped, and a name written
-  "X Y née Z" gives the forms "X Y" and "X Z". The surname is any later
-  token of the same form, or a surname of the person's lifted kin, taken
-  with the first token of each form. Nicknames stand in for given names.
-  Two keys match on the same surname and given names one of which starts
-  with the other ("Hilde", "Hildegard").
+- *People*: a given-name token with another, surname token. The surname
+  is any later token of the same form, or a surname of the person's
+  lifted kin, taken with the first token of each form. Nicknames stand
+  in for given names. Two keys match on the same surname and given names
+  one of which starts with the other ("Hilde", "Hildegard").
 - *Places*: each token of `min-place-token` characters or more in the
-  part of a name before its first comma. Region and country parts after
-  it never key.
+  part of a name before its first comma, but a generic head ("Kreis",
+  "Lager", "Friedhof"). Region and country parts after it never key.
 - *Organizations*: one name's distinctive tokens all in the other's.
 - *Events* (births, deaths, marriages, migrations, deportations,
   imprisonments, releases, military service, other events and legal
@@ -53,47 +72,68 @@ With `gedcom-anchored`, a mention (of any kind but an event's) that
 key-matches a mention of a GEDCOM export pairs with those GEDCOM anchors
 only, never with other mentions, so the export is the roster documents
 meet. A person named by one token only, with no kin to key a surname,
-pairs only with GEDCOM people whose given name is compatible. Blocking
-looks keys up in indexes, so its work grows with the mentions and the
-pairs it proposes, never with every pair of mentions.
+pairs only with GEDCOM people whose given name is compatible. A key that
+more than `max-key-mentions` mentions of one kind share (a hub) is
+blocked on by none of them: the mentions it would join stay apart, and
+the summary counts them. Blocking looks keys up in indexes, so its work
+grows with the mentions and the pairs it proposes, never with every pair
+of mentions.
 
 **Cannot-link.** Two ids of one manifest are kept apart (soft): the
 manifest already unified what it could. The places and occupations of a
 GEDCOM export are exempt, since the adapter makes one per distinct
-string, and so are the refs of a batch without a manifest. A blocked pair
-the impossibility filter rules out (`reconcile.impossible_pair`,
-ADR-0017), given the lifted facts, is pruned (hard): a kin edge between
-the two, or one place inside the other. The filter is reused only after
-the lift: a manifest's kin are local ids until then, and it would see
-none. Dates never prune a pair (ADR-0002, ADR-0017).
+string, and so are the refs of a batch without a manifest, whose ids are
+chunk-scoped and never unified. A blocked pair the impossibility filter
+rules out (`reconcile.impossible_pair`, ADR-0017), given the lifted
+facts, is pruned (hard): a kin edge between the two, or one place inside
+the other. The filter is reused only after the lift: a manifest's kin
+are local ids until then, and it would see none. Dates never prune a
+pair (ADR-0002, ADR-0017).
 
-**Classification.** Each candidate pair is a confident link or an
-ambiguous one, by deterministic evidence alone:
+**Links.** Each candidate pair is a confident link or an ambiguous one,
+by deterministic evidence alone:
 
 - a person pair is confident when the names match (exactly, or by key)
-  and an agreeing kin name or an overlapping date corroborates it;
+  and kin that agree, or dates that agree, corroborate it;
 - a place pair when the names match exactly, or one name's
   comma-separated parts are all among the other's ("Fläckfeld" and
   "Fläckfeld, Kreis Mockburg");
-- an event pair when a pair of their participants is confident;
+- an organization or a family pair when they share a name of two
+  distinctive tokens or more ("Familie Löbig" has one);
+- an event pair when every participant of the one with fewer is merged
+  into one cluster with a participant of the other, and, but for a birth
+  or a death, which a person has only one of, when their dates agree;
 - any other pair when the names match exactly;
-- and never when the two give dates that cannot overlap, or when either
-  mention matches more than `max-anchors` GEDCOM anchors.
+- and never when the two give dates that cannot overlap, when a mention
+  has no kind, or when either matches more than `max-anchors` GEDCOM
+  anchors (a place counting only the anchors it matches exactly, and
+  those it nests in as one).
 
-Dates are compared at the precision their source states, as ranges: a
+Dates are compared as ranges, at the precision their source states: a
 decade is ten years, a circa date is widened by `circa-years`, a range's
-bounds widen it, and a bound on one side only leaves the other open. So
-a date is never narrowed to be compared (rule 5).
+bounds widen it, and a bound on one side only leaves the other open, so
+a date is never narrowed to be compared (rule 5). Two dates agree when
+their ranges overlap and both are at most `max-corroborating-years`
+wide; a wider one (a century, a lone "before") agrees with nothing, and
+conflicts only when it cannot overlap. Kin agree on a relation when a
+kin's names match by more than a surname and their dates do not
+conflict.
 
 **Clusters.** The closure over every candidate pair gives the candidate
 clusters, the units a review takes. A cluster is *conflicting* when it
 joins a cannot-link pair: *hard* when the impossibility filter rules the
 two out, *soft* when they are only two ids of one manifest. Otherwise it
-is *ambiguous* when any of its pairs is, and *confident* when all are.
-Only confident clusters merge: their members share one cluster. The
-members of ambiguous and conflicting clusters stay apart, each a cluster
-of its own, and are counted. A mention with no candidate pair is a
-singleton.
+is *ambiguous* when any of its links is, or when two of its members that
+were never a pair contradict each other: dates that cannot overlap, kin
+of one relation and one name whose dates conflict, or names that do not
+match at all (for places, neither exactly nor nested). Blocking is not
+transitive, through anchors, given-name prefixes and kin surnames, so
+the closure can join what no pair of its members says. Otherwise it is
+*confident*. Only confident clusters merge: their members share one
+cluster. The members of ambiguous and conflicting clusters stay apart,
+each a cluster of its own, and are counted. A mention with no candidate
+pair is a singleton. Events are clustered after everything else, since
+their links read the clusters their participants end in.
 
 **The identity map** (`identity-map.json`, format FORMAT):
 
@@ -106,23 +146,27 @@ singleton.
   else, so equal decisions hash equal whatever else the file holds;
 - `clusters`: cluster id -> its kind, method and members;
 - `review`: each ambiguous or conflicting candidate cluster, with its
-  members, its pairs (the link and the evidence of each) and, when it
-  conflicts, the pair that makes it conflict and how;
+  members, its pairs (the link and the evidence of each), and the pair
+  that makes it conflict and how, or the two members never linked that
+  contradict each other;
 - `summary`: counts only, the adjudication-call estimate among them;
-- `inputs`: the key it is reused under (VERSION, the thresholds' digest
-  and each document's SHA-1 and batch content hash); `config`: the
-  thresholds' digest.
+- `inputs`: the key it is reused under (VERSION, the digest of CODE's
+  source, the thresholds' digest, and each document's SHA-1, source and
+  batch content hash); `config`: the thresholds' digest.
 
 The map holds labels, so it stays in the run directory, which is
 local-only data. What the stage returns, and so what reaches the run's
-events, is counts and labels of its own, never a document's words.
+events, is counts within labels of its own, never a document's words.
 """
 
 from __future__ import annotations
 
 import bisect
+import functools
+import hashlib
 import json
 import os
+import re
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -163,8 +207,12 @@ VERSION = 1
 FORMAT = 1
 STAGE = "clustering"
 IDENTITY_MAP = "identity-map.json"
+PACKAGE = files("yizkr.pipeline")
 # the thresholds shipped with the package
-DEFAULTS = files("yizkr.pipeline") / "clustering.yaml"
+DEFAULTS = PACKAGE / "clustering.yaml"
+# the modules whose source makes the identity map: a map another source
+# made is made again, whatever VERSION says
+CODE = ("clustering.py", "fingerprints.py", "reconcile.py")
 
 # what a manifest is the extraction of
 DOCUMENT = "document"
@@ -183,6 +231,7 @@ SOFT = "soft"
 
 HUMAN = "human"
 ORGANIZATION = "organization"
+FAMILY = "family"
 # kinds whose identity is anchored by who took part, not by a name
 EVENT_KINDS = frozenset(
     {
@@ -198,6 +247,8 @@ EVENT_KINDS = frozenset(
         "legal_instrument",
     }
 )
+# the events a person takes part in once: their participants decide them
+ONE_PER_PERSON = frozenset({"birth", "death"})
 # the kinds the GEDCOM adapter makes one entity of per distinct string:
 # two of them in one export never say that they differ
 GEDCOM_STRING_KINDS = frozenset({PLACE_KIND, "occupation_class"})
@@ -216,28 +267,64 @@ CONTAINMENT_PROPERTIES = ("part_of", "location")
 # dies in
 EVENT_DATE_PROPERTIES = ("point_in_time", "start_time")
 _STRIP = ".,;:()\"'[]"
-# titles and kin words, which are no given names ("Frau", "Tante")
-NOT_GIVEN = frozenset(
+# titles, which stand before a surname named alone ("Frau Löbig") or a
+# whole name
+TITLES = frozenset(
     {
         "mr", "mrs", "ms", "miss", "mister", "dr", "doctor", "prof",
-        "professor", "herr", "frau", "fraulein", "rabbi", "rev",
-        "reverend", "sir", "lady", "lord", "mme", "monsieur",
-        "mlle", "dame", "uncle", "aunt", "auntie", "tante", "onkel", "oma",
-        "opa", "grandpa", "grandmother", "grandfather", "great",
-        "mother", "father", "mutter", "vater", "brother", "sister",
-        "cousin", "sen", "jun", "senior", "junior", "the", "and", "von",
-        "van", "der", "den", "del", "della", "les", "ben", "bat", "bar",
-        "ibn", "zur", "auf", "verw", "widow", "witwe", "wwe",
+        "professor", "herr", "frau", "fraulein", "frl", "rabbi", "rev",
+        "reverend", "sir", "lady", "lord", "mme", "madame", "monsieur",
+        "mlle", "dame", "widow", "witwe", "wwe", "verw",
+    }
+)  # fmt: skip
+# kin and courtesy words, which stand before a given name ("Tante Ida",
+# "Nana Maisie") or for a person on their own ("Dad", "Dein Vater")
+KIN_WORDS = frozenset(
+    {
+        "uncle", "aunt", "auntie", "tante", "onkel", "oma", "opa", "omi",
+        "opi", "nana", "nan", "granny", "grandma", "grandpa", "grandmother",
+        "grandfather", "great", "mother", "father", "mutter", "vater",
+        "mutti", "vati", "mama", "papa", "mum", "mom", "dad", "daddy",
+        "brother", "sister", "bruder", "schwester", "cousin", "cousine",
+        "vetter", "son", "sohn", "daughter", "tochter", "dein", "deine",
+        "mein", "meine", "unser", "unsere", "my", "your", "our",
+    }
+)  # fmt: skip
+# particles and words a name is not known by
+PARTICLES = frozenset(
+    {
+        "the", "and", "und", "von", "van", "der", "den", "del", "della",
+        "les", "ben", "bat", "bar", "ibn", "zur", "auf", "sen", "jun",
+        "senior", "junior",
+    }
+)  # fmt: skip
+# words that start another form of the same name ("formerly Gustav
+# Löbig"); the form after one is read without it
+FORM_MARKERS = frozenset(
+    {
+        "formerly", "later", "previously", "alias", "aka", "called",
+        "fruher", "vormals", "spater", "genannt", "gen",
     }
 )  # fmt: skip
 # a name form "X née Y" carries a second surname
 MAIDEN_MARKERS = frozenset({"nee", "geb", "geborene", "born"})
-# words no organization is known by
+NOT_A_NAME = TITLES | KIN_WORDS | PARTICLES | FORM_MARKERS | MAIDEN_MARKERS
+# words no organization or family is known by
 ORG_GENERIC = frozenset(
     {
         "the", "and", "und", "der", "die", "das", "des", "von", "for",
         "company", "firm", "firma", "gmbh", "inc", "ltd", "limited",
         "co", "cie", "bros", "brothers", "sons", "sohn", "sohne",
+        "family", "familie",
+    }
+)  # fmt: skip
+# the generic heads of place names, which key no place
+PLACE_GENERIC = frozenset(
+    {
+        "kreis", "landkreis", "stadtkreis", "bezirk", "gemeinde", "stadt",
+        "dorf", "lager", "friedhof", "county", "district", "province",
+        "provinz", "region", "parish", "road", "street", "strasse",
+        "gasse", "platz", "allee", "lane", "avenue", "camp", "cemetery",
     }
 )  # fmt: skip
 # the shortest token an organization's distinctive tokens hold
@@ -246,6 +333,10 @@ _MIN_ORG_TOKEN = 3
 _OPEN = float("inf")
 
 Pair = tuple[str, str]
+# a key a mention is blocked on: ("key", given name, surname) for a
+# person, ("lone", token) for a person of one name token, ("token",
+# token) for a place or an organization, ("name", name) otherwise
+BlockingKey = tuple[str, ...]
 
 
 # -- the thresholds -----------------------------------------------------------
@@ -273,10 +364,12 @@ class Blocking(_Settings):
     min_name_token: int = Field(ge=1)
     min_place_token: int = Field(ge=1)
     gedcom_anchored: bool
+    max_key_mentions: int = Field(ge=2)
 
 
 class Evidence(_Settings):
     circa_years: int = Field(ge=0)
+    max_corroborating_years: int = Field(ge=0)
 
 
 class Confident(_Settings):
@@ -357,6 +450,7 @@ def load_config(
 # -- names --------------------------------------------------------------------
 
 
+@functools.lru_cache(maxsize=1 << 16)
 def fold(text: str) -> str:
     """Case- and accent-insensitive form: "Cäcilie" and "cacilie" are one."""
     decomposed = unicodedata.normalize("NFKD", text)
@@ -365,9 +459,14 @@ def fold(text: str) -> str:
 
 
 def _folded_tokens(name: str) -> list[str]:
-    return [
+    return list(_folded(name))
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _folded(name: str) -> tuple[str, ...]:
+    return tuple(
         token for raw in name.split() if (token := fold(raw.strip(_STRIP)))
-    ]
+    )
 
 
 def normal(name: str) -> str:
@@ -381,33 +480,76 @@ def _letters(token: str) -> bool:
     return token.replace("-", "").replace("'", "").isalpha()
 
 
-def name_forms(name: str, min_token: int) -> list[list[str]]:
-    """The significant tokens of one name, as one form, or as two when the
-    name carries a maiden surname ("X Y née Z" gives [X, Y] and [X, Z],
-    and "X née Z" gives [X] and [X, Z]). A significant token is
-    `min_token` letters or more, and no title or kin word."""
-    tokens = _folded_tokens(name)
-    marker = next(
-        (i for i, token in enumerate(tokens) if token in MAIDEN_MARKERS),
-        None,
+_BRACKETED = re.compile(r"[(\[]([^()\[\]]*)[)\]]")
+
+
+def _segments(name: str) -> list[str]:
+    """A name's parts: the text outside its brackets, and each bracketed
+    part ("Ida (Peppi) Sörne" gives "Ida Sörne" and "Peppi")."""
+    return [_BRACKETED.sub(" ", name), *_BRACKETED.findall(name)]
+
+
+def _starts_maiden(part: str) -> bool:
+    tokens = _folded_tokens(part)
+    return bool(tokens) and tokens[0] in MAIDEN_MARKERS
+
+
+def _given_first(segment: str) -> str:
+    """A name written surname first ("Löbig, Ursula, Wwe."), given names
+    first ("Ursula Löbig"). Past a name's first comma only a maiden part
+    ("née Sörne") stays; an occupation or a title there is dropped."""
+    parts = [part.strip() for part in segment.split(",")]
+    if len(parts) == 1:
+        return segment
+    head, rest = parts[0], [part for part in parts[1:] if part]
+    maiden = [part for part in rest if _starts_maiden(part)]
+    if len(_folded_tokens(head)) == 1 and rest and not _starts_maiden(rest[0]):
+        return " ".join([rest[0], head, *maiden])
+    return " ".join([head, *maiden])
+
+
+def _significant(token: str, min_token: int) -> bool:
+    return (
+        len(token) >= min_token and _letters(token) and token not in NOT_A_NAME
     )
-    if marker is None:
-        parts = [tokens]
-    else:
-        before = tokens[:marker]
-        given = before[:-1] if len(before) >= 2 else before
-        parts = [before, given + tokens[marker + 1 :][-1:]]
+
+
+def _before_a_surname(token: str) -> bool:
+    """A title, a placeholder or an initial: what stands before a surname
+    named alone ("Frau Löbig", "N.N. Löbig", "J. Löbig")."""
+    return token in TITLES or not _letters(token) or len(token) == 1
+
+
+def person_forms(
+    name: str, min_token: int
+) -> list[tuple[tuple[str, ...], bool]]:
+    """The forms of one person's name (the module docstring says how a
+    name is read): each form's significant tokens, and whether the form
+    names a surname alone."""
     forms = []
-    for part in parts:
-        significant = [
-            token
-            for token in part
-            if len(token) >= min_token
-            and token not in NOT_GIVEN
-            and _letters(token)
-        ]
-        if significant:
-            forms.append(significant)
+    for segment in _segments(name):
+        tokens = _folded_tokens(_given_first(segment))
+        while tokens and tokens[0] in FORM_MARKERS:
+            tokens = tokens[1:]
+        marker = next(
+            (i for i, token in enumerate(tokens) if token in MAIDEN_MARKERS),
+            None,
+        )
+        if marker is None:
+            parts = [tokens]
+        else:
+            before = tokens[:marker]
+            given = before[:-1] if len(before) >= 2 else before
+            parts = [before, given + tokens[marker + 1 :][-1:]]
+        for part in parts:
+            significant = tuple(
+                token for token in part if _significant(token, min_token)
+            )
+            if significant:
+                surname = len(significant) == 1 and any(
+                    _before_a_surname(token) for token in part
+                )
+                forms.append((significant, surname))
     return forms
 
 
@@ -436,6 +578,16 @@ def keys_match(
     )
 
 
+def _distinctive(name: str) -> frozenset[str]:
+    """An organization's or a family's normal name, as the tokens it is
+    known by."""
+    return frozenset(
+        token
+        for token in name.split()
+        if len(token) >= _MIN_ORG_TOKEN and token not in ORG_GENERIC
+    )
+
+
 # -- dates --------------------------------------------------------------------
 
 
@@ -450,6 +602,14 @@ class Interval:
     def overlaps(self, other: Interval) -> bool:
         return self.start <= other.end and other.start <= self.end
 
+    @property
+    def width(self) -> float:
+        return self.end - self.start
+
+
+def _span(value: TimeValue) -> int:
+    return {"century": 99, "decade": 9}.get(value.precision or "", 0)
+
 
 def date_interval(
     value: TimeValue, qualifiers: Iterable[Any], circa_years: int
@@ -459,16 +619,15 @@ def date_interval(
     earliest and latest dates, open on the side a lone bound leaves open,
     and widened by `circa_years` each way when the source gives it as
     circa. Never narrower than what the source says."""
-    span = {"century": 99, "decade": 9}.get(value.precision or "", 0)
     start: float = value.year
-    end: float = value.year + span
+    end: float = value.year + _span(value)
     earliest = [
         q.value.year
         for q in qualifiers
         if q.property == "earliest_date" and isinstance(q.value, TimeValue)
     ]
     latest = [
-        q.value.year + {"century": 99, "decade": 9}.get(q.value.precision, 0)
+        q.value.year + _span(q.value)
         for q in qualifiers
         if q.property == "latest_date" and isinstance(q.value, TimeValue)
     ]
@@ -491,12 +650,25 @@ def date_interval(
     return Interval(start, end)
 
 
-def _dates(first: list[Interval], second: list[Interval]) -> str:
+def _dates(first: list[Interval], second: list[Interval], widest: int) -> str:
+    """Whether two lists of dates agree (two overlap, and neither is wider
+    than `widest` years), conflict (none overlaps) or say nothing."""
     if not first or not second:
         return "unknown"
-    if any(a.overlaps(b) for a in first for b in second):
+    overlapping = [
+        (one, other)
+        for one in first
+        for other in second
+        if one.overlaps(other)
+    ]
+    if not overlapping:
+        return "conflict"
+    if any(
+        one.width <= widest and other.width <= widest
+        for one, other in overlapping
+    ):
         return "agree"
-    return "conflict"
+    return "unknown"
 
 
 def _combine_dates(*results: str) -> str:
@@ -538,31 +710,33 @@ class _Node:
     births: list[Interval] = field(default_factory=list)
     deaths: list[Interval] = field(default_factory=list)
     when: list[Interval] = field(default_factory=list)
-    # computed once every node of the corpus is lifted (_derive)
-    forms: list[list[str]] = field(default_factory=list)
+    # computed once every node of the corpus is lifted (_derive): a
+    # person's name forms, each with whether it names a surname alone
+    forms: list[tuple[tuple[str, ...], bool]] = field(default_factory=list)
     keys: dict[str, frozenset[str]] = field(default_factory=dict)
     lone: frozenset[str] = frozenset()
     givens: frozenset[str] = frozenset()
     place_keys: frozenset[str] = frozenset()
     place_parts: tuple[frozenset[str], ...] = ()
     org_sets: tuple[frozenset[str], ...] = ()
+    # every name, normalised, and those that match another's exactly (for
+    # a person, those that name more than a surname)
     label_keys: frozenset[str] = frozenset()
+    named_keys: frozenset[str] = frozenset()
+    # the keys it is blocked on, hub keys left out (_hubs)
+    blocking: frozenset[BlockingKey] = frozenset()
+    # the mention's fingerprint, artifact, kind and label, read on every
+    # pair
+    id: str = field(init=False)
+    sha1: str = field(init=False)
+    kind: str = field(init=False)
+    label: str = field(init=False)
 
-    @property
-    def id(self) -> str:
-        return self.mention.fingerprint
-
-    @property
-    def sha1(self) -> str:
-        return self.mention.artifact
-
-    @property
-    def kind(self) -> str:
-        return self.mention.kind
-
-    @property
-    def label(self) -> str:
-        return self.mention.label
+    def __post_init__(self) -> None:
+        self.id = self.mention.fingerprint
+        self.sha1 = self.mention.artifact
+        self.kind = self.mention.kind
+        self.label = self.mention.label
 
     @property
     def names(self) -> list[str]:
@@ -653,36 +827,42 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
                 subject.when.append(interval)
     by_id = {node.id: node for node in by_local.values()}
     for node in by_local.values():
-        # a birth or death event's date is its participant's
-        if node.kind in ("birth", "death"):
-            for person_id in node.participants:
-                person = by_id[person_id]
-                dates = (
-                    person.births if node.kind == "birth" else person.deaths
-                )
-                dates.extend(node.when)
+        # a birth or death event's date is its participant's, when it has
+        # one: of several (a child and a parent), none says who was born
+        if node.kind in ONE_PER_PERSON and len(node.participants) == 1:
+            (person_id,) = node.participants
+            person = by_id[person_id]
+            dates = person.births if node.kind == "birth" else person.deaths
+            dates.extend(node.when)
     return list(by_local.values())
 
 
 def _surnames(node: _Node) -> set[str]:
-    """The final tokens of a person's forms of two tokens or more."""
-    return {form[-1] for form in node.forms if len(form) >= 2}
+    """The surnames a person's forms give: the final token of each form of
+    two tokens or more, and each surname named alone."""
+    return {
+        tokens[-1] for tokens, alone in node.forms if alone or len(tokens) >= 2
+    }
 
 
 def _derive(nodes: Sequence[_Node], config: ClusteringConfig) -> None:
     """Every key a node is blocked and compared by. A person's keys take
-    the surnames of its lifted kin, so every node's forms come first."""
+    the surnames of its lifted kin, so every person's forms come first."""
     min_name = config.blocking.min_name_token
     min_place = config.blocking.min_place_token
     by_id = {node.id: node for node in nodes}
     for node in nodes:
-        node.forms = [
-            form for name in node.names for form in name_forms(name, min_name)
-        ]
+        if node.kind == HUMAN:
+            node.forms = [
+                form
+                for name in node.names
+                for form in person_forms(name, min_name)
+            ]
     for node in nodes:
         node.label_keys = frozenset(
             key for name in node.names if (key := normal(name))
         )
+        node.named_keys = node.label_keys
         if node.kind == HUMAN:
             _derive_person(node, by_id, min_name)
         elif node.kind == PLACE_KIND:
@@ -691,7 +871,9 @@ def _derive(nodes: Sequence[_Node], config: ClusteringConfig) -> None:
                 token
                 for first in firsts
                 for token in _folded_tokens(first)
-                if len(token) >= min_place and _letters(token)
+                if len(token) >= min_place
+                and _letters(token)
+                and token not in PLACE_GENERIC
             )
             node.place_parts = tuple(
                 parts
@@ -722,34 +904,44 @@ def _derive(nodes: Sequence[_Node], config: ClusteringConfig) -> None:
 def _derive_person(
     node: _Node, by_id: Mapping[str, _Node], min_name: int
 ) -> None:
-    keys: set[tuple[str, str]] = set()
-    own: set[str] = set()
-    firsts: set[str] = set()
-    for form in node.forms:
-        firsts.add(form[0])
-        for position, given in enumerate(form[:-1]):
-            for surname in form[position + 1 :]:
-                keys.add((given, surname))
-                own.add(surname)
-    nicknames = {
-        form[0]
-        for nickname in node.nicknames
-        for form in name_forms(nickname, min_name)
-    }
-    keys.update((nick, surname) for nick in nicknames for surname in own)
     kin_surnames = set().union(
         *(_surnames(by_id[kin_id]) for kin_id in node.kin_ids)
     )
-    keys.update(
+    own = {tokens[-1] for tokens, _alone in node.forms if len(tokens) >= 2}
+    # the forms that name someone: not a surname alone, nor a lone token
+    # the person's forms or kin use as a surname
+    named = [
+        tokens
+        for tokens, alone in node.forms
+        if not alone
+        and not (len(tokens) == 1 and tokens[0] in own | kin_surnames)
+    ]
+    nicknames = {
+        tokens[0]
+        for nickname in node.nicknames
+        for tokens, alone in person_forms(nickname, min_name)
+        if not alone
+    }
+    firsts = {tokens[0] for tokens in named} | nicknames
+    keys = {
         (given, surname)
-        for surname in kin_surnames
-        for given in firsts | nicknames
+        for tokens in named
+        for position, given in enumerate(tokens[:-1])
+        for surname in tokens[position + 1 :]
+    }
+    keys.update((nick, surname) for nick in nicknames for surname in own)
+    keys.update(
+        (given, surname) for surname in kin_surnames for given in firsts
     )
-    node.keys = _key_map(keys)
-    node.lone = frozenset(form[0] for form in node.forms if len(form) == 1)
+    # a given name that is its own surname keys on one shared token
+    node.keys = _key_map(
+        (given, surname) for given, surname in keys if given != surname
+    )
+    node.named_keys = frozenset(" ".join(tokens) for tokens in named)
+    node.lone = frozenset(tokens[0] for tokens in named if len(tokens) == 1)
     givens = set(nicknames)
-    for form in node.forms:
-        givens.update(form[:-1] if len(form) >= 2 else form)
+    for tokens in named:
+        givens.update(tokens[:-1] if len(tokens) >= 2 else tokens)
     node.givens = frozenset(givens)
 
 
@@ -758,6 +950,61 @@ def _derive_person(
 
 def _pair(first: str, second: str) -> Pair:
     return (first, second) if first < second else (second, first)
+
+
+def _raw_keys(node: _Node, index: Mapping[str, _Node]) -> set[BlockingKey]:
+    """The keys a mention would be blocked on (BlockingKey)."""
+    if node.kind == HUMAN:
+        return {
+            ("key", given, surname)
+            for surname, givens in node.keys.items()
+            for given in givens
+        } | {("lone", token) for token in node.lone}
+    if node.kind == PLACE_KIND:
+        return {("token", token) for token in node.place_keys}
+    if node.kind == ORGANIZATION:
+        return {
+            ("token", token) for tokens in node.org_sets for token in tokens
+        }
+    if node.kind in EVENT_KINDS and node.participants:
+        return {
+            ("key", given, surname)
+            for person_id in node.participants
+            for surname, givens in index[person_id].keys.items()
+            for given in givens
+        }
+    return {("name", name) for name in node.label_keys}
+
+
+def _hubs(
+    nodes: Sequence[_Node], index: Mapping[str, _Node], limit: int
+) -> tuple[int, int]:
+    """Give each mention the keys it is blocked on: its own, but for the
+    keys more than `limit` mentions of its kind share (the hubs). Returns
+    the number of hub keys, and of the mentions that lost one."""
+    by_kind: dict[str, list[_Node]] = defaultdict(list)
+    for node in nodes:
+        by_kind[node.kind].append(node)
+    hub_keys = held = 0
+    for group in by_kind.values():
+        own = {node.id: _raw_keys(node, index) for node in group}
+        counts = Counter(key for keys in own.values() for key in keys)
+        hubs = {key for key, count in counts.items() if count > limit}
+        hub_keys += len(hubs)
+        for node in group:
+            node.blocking = frozenset(own[node.id] - hubs)
+            held += bool(own[node.id] & hubs)
+    return hub_keys, held
+
+
+def _blocking(node: _Node, tag: str) -> list[BlockingKey]:
+    return sorted(key for key in node.blocking if key[0] == tag)
+
+
+def _blocking_keys(node: _Node) -> dict[str, frozenset[str]]:
+    return _key_map(
+        (given, surname) for _, given, surname in _blocking(node, "key")
+    )
 
 
 class _GivenIndex:
@@ -808,22 +1055,23 @@ class _People:
         self._lone = lone
         self._givens = _GivenIndex()
         for node in nodes:
-            self._keys.add(node.id, node.keys)
+            self._keys.add(node.id, _blocking_keys(node))
             if lone:
                 self._givens.add(node.id, {"": node.givens})
 
     def find(self, node: _Node) -> set[str]:
-        if node.keys:
+        keys = _blocking_keys(node)
+        if keys:
             found = {
                 other
-                for surname, givens in node.keys.items()
+                for surname, givens in keys.items()
                 for given in givens
                 for other in self._keys.find(given, surname)
             }
         elif self._lone and node.source != GEDCOM:
             found = {
                 other
-                for token in node.lone
+                for _, token in _blocking(node, "lone")
                 for other in self._givens.find(token, "")
             }
         else:
@@ -833,68 +1081,87 @@ class _People:
 
 
 class _Tokens:
-    """Nodes by keys they must share one of."""
+    """Nodes by the blocking keys of one tag they must share one of."""
 
-    def __init__(
-        self,
-        nodes: Sequence[_Node],
-        keys: Callable[[_Node], Iterable[str]],
-    ) -> None:
-        self._keys = keys
-        self._buckets: dict[str, list[str]] = defaultdict(list)
+    def __init__(self, nodes: Sequence[_Node], tag: str) -> None:
+        self._tag = tag
+        self._buckets: dict[BlockingKey, list[str]] = defaultdict(list)
         for node in nodes:
-            for key in keys(node):
+            for key in _blocking(node, tag):
                 self._buckets[key].append(node.id)
 
     def find(self, node: _Node) -> set[str]:
         found = {
             other
-            for key in self._keys(node)
+            for key in _blocking(node, self._tag)
             for other in self._buckets.get(key, ())
         }
         found.discard(node.id)
         return found
 
 
-def _contained(first: _Node, second: _Node) -> bool:
-    return any(
-        one <= other or other <= one
-        for one in first.org_sets
-        for other in second.org_sets
-    )
-
-
 class _Organizations:
     """Organizations one of whose distinctive token sets holds all of the
-    other's."""
+    other's. The sets that hold every token of a set hold its rarest
+    token, and a set whose tokens are all among another's has its own
+    rarest there too, so each lookup reads two small buckets, never every
+    organization that shares a token."""
 
     def __init__(self, nodes: Sequence[_Node]) -> None:
         self._nodes = {node.id: node for node in nodes}
-        self._tokens = _Tokens(nodes, lambda node: set().union(*node.org_sets))
+        self._count = Counter(
+            key[1] for node in nodes for key in _blocking(node, "token")
+        )
+        self._holding: dict[str, list[str]] = defaultdict(list)
+        self._rarest: dict[str, list[str]] = defaultdict(list)
+        for node in nodes:
+            usable = {key[1] for key in _blocking(node, "token")}
+            for token in sorted(usable):
+                self._holding[token].append(node.id)
+            for tokens in node.org_sets:
+                if tokens & usable:
+                    self._rarest[self._rarest_of(tokens & usable)].append(
+                        node.id
+                    )
+
+    def _rarest_of(self, tokens: Iterable[str]) -> str:
+        return min(tokens, key=lambda token: (self._count[token], token))
 
     def find(self, node: _Node) -> set[str]:
-        return {
-            other
-            for other in self._tokens.find(node)
-            if _contained(node, self._nodes[other])
-        }
+        usable = {key[1] for key in _blocking(node, "token")}
+        found: set[str] = set()
+        for tokens in node.org_sets:
+            if not tokens & usable:
+                continue
+            for other in self._holding.get(
+                self._rarest_of(tokens & usable), ()
+            ):
+                if any(
+                    tokens <= theirs for theirs in self._nodes[other].org_sets
+                ):
+                    found.add(other)
+            for token in tokens & usable:
+                for other in self._rarest.get(token, ()):
+                    if any(
+                        theirs <= tokens
+                        for theirs in self._nodes[other].org_sets
+                    ):
+                        found.add(other)
+        found.discard(node.id)
+        return found
 
 
 class _Events:
     """Events of one kind whose participants' keys match; an event without
     participants, by its whole name, among those without."""
 
-    def __init__(
-        self, nodes: Sequence[_Node], people: Mapping[str, _Node]
-    ) -> None:
-        self._people = people
+    def __init__(self, nodes: Sequence[_Node]) -> None:
         self._keys = _GivenIndex()
         for node in nodes:
-            for person_id in node.participants:
-                self._keys.add(node.id, people[person_id].keys)
+            if node.participants:
+                self._keys.add(node.id, _blocking_keys(node))
         self._named = _Tokens(
-            [node for node in nodes if not node.participants],
-            lambda node: node.label_keys,
+            [node for node in nodes if not node.participants], "name"
         )
 
     def find(self, node: _Node) -> set[str]:
@@ -902,8 +1169,7 @@ class _Events:
             return self._named.find(node)
         found = {
             other
-            for person_id in node.participants
-            for surname, givens in self._people[person_id].keys.items()
+            for surname, givens in _blocking_keys(node).items()
             for given in givens
             for other in self._keys.find(given, surname)
         }
@@ -918,12 +1184,10 @@ def _matcher(kind: str) -> Callable[[Sequence[_Node], bool], _Matcher]:
     if kind == HUMAN:
         return lambda nodes, gedcom: _People(nodes, lone=gedcom)
     if kind == PLACE_KIND:
-        return lambda nodes, gedcom: _Tokens(
-            nodes, lambda node: node.place_keys
-        )
+        return lambda nodes, gedcom: _Tokens(nodes, "token")
     if kind == ORGANIZATION:
         return lambda nodes, gedcom: _Organizations(nodes)
-    return lambda nodes, gedcom: _Tokens(nodes, lambda node: node.label_keys)
+    return lambda nodes, gedcom: _Tokens(nodes, "name")
 
 
 def _within(nodes: Sequence[_Node], matcher: _Matcher) -> set[Pair]:
@@ -959,13 +1223,10 @@ def _block_kind(
 
 
 def _block(
-    nodes: Sequence[_Node],
-    index: Mapping[str, _Node],
-    config: ClusteringConfig,
+    nodes: Sequence[_Node], config: ClusteringConfig
 ) -> tuple[set[Pair], dict[str, frozenset[str]]]:
     """Every blocked pair of the mentions to cluster, and the GEDCOM
-    anchors each anchored mention found. `index` holds every mention, an
-    event's participants among them, whether they are clustered or not."""
+    anchors each anchored mention found."""
     by_kind: dict[str, list[_Node]] = defaultdict(list)
     for node in nodes:
         by_kind[node.kind].append(node)
@@ -975,7 +1236,7 @@ def _block(
         if kind in EVENT_KINDS:
             # events meet through their participants, an export's death
             # events among them, and never through an anchor
-            pairs |= _within(group, _Events(group, index))
+            pairs |= _within(group, _Events(group))
             continue
         found, anchored = _block_kind(
             group, _matcher(kind), config.blocking.gedcom_anchored
@@ -1039,9 +1300,19 @@ class _Judge:
         self._nodes = nodes
         self._anchors = anchors
         self._max_anchors = config.confident.max_anchors
+        self._widest = config.evidence.max_corroborating_years
+        self._counted: dict[str, int] = {}
+
+    def life(self, a: _Node, b: _Node) -> str:
+        """Whether two people's births and deaths, each compared with
+        each, agree, conflict or say nothing."""
+        return _combine_dates(
+            _dates(a.births, b.births, self._widest),
+            _dates(a.deaths, b.deaths, self._widest),
+        )
 
     def name_level(self, a: _Node, b: _Node) -> str:
-        if a.label_keys & b.label_keys:
+        if a.named_keys & b.named_keys:
             return "exact"
         if a.kind == HUMAN and keys_match(a.keys, b.keys):
             return "key"
@@ -1052,29 +1323,50 @@ class _Judge:
                 for other in b.place_parts
             )
             return "nested" if nested else "key"
-        if a.kind == ORGANIZATION and _contained(a, b):
+        if a.kind == ORGANIZATION and any(
+            one <= other or other <= one
+            for one in a.org_sets
+            for other in b.org_sets
+        ):
             return "key"
         return "none"
 
-    def kin_agree(self, a: _Node, b: _Node) -> bool:
-        for relation, first_id in a.kin:
+    def _kin_pairs(self, a: _Node, b: _Node) -> Iterator[tuple[_Node, _Node]]:
+        """Each kin of `a` and kin of `b` in one relation to them."""
+        for relation, first_id in sorted(a.kin):
             first = self._nodes.get(first_id)
             if first is None:
                 continue
-            for other_relation, second_id in b.kin:
+            for other_relation, second_id in sorted(b.kin):
                 second = self._nodes.get(second_id)
-                if second is None or relation != other_relation:
-                    continue
-                if first.label_keys & second.label_keys or keys_match(
-                    first.keys, second.keys
-                ):
-                    return True
-        return False
+                if second is not None and relation == other_relation:
+                    yield first, second
+
+    def kin_agree(self, a: _Node, b: _Node) -> bool:
+        """Whether a kin of each, in one relation, is named alike (by more
+        than a surname), without dates that conflict."""
+        return any(
+            (
+                first.named_keys & second.named_keys
+                or keys_match(first.keys, second.keys)
+            )
+            and self.life(first, second) != "conflict"
+            for first, second in self._kin_pairs(a, b)
+        )
+
+    def kin_conflict(self, a: _Node, b: _Node) -> bool:
+        """Whether kin of one relation and one name give dates that
+        conflict, while no kin agree."""
+        return not self.kin_agree(a, b) and any(
+            first.named_keys & second.named_keys
+            and self.life(first, second) == "conflict"
+            for first, second in self._kin_pairs(a, b)
+        )
 
     def evidence(self, a: _Node, b: _Node) -> tuple[str, str, str]:
         """(name, dates, kin): how the names match (exact, nested, key or
-        none), whether the dates agree, conflict or are unknown, and
-        whether a kin name agrees."""
+        none), whether the dates agree, conflict or say nothing, and
+        whether kin agree."""
         if a.kind in EVENT_KINDS:
             best = "none"
             for first_id in sorted(a.participants):
@@ -1084,54 +1376,166 @@ class _Judge:
                     )
                     if level == "exact" or (level == "key" and best == "none"):
                         best = level
-            return best, _dates(a.when, b.when), "unknown"
+            return best, _dates(a.when, b.when, self._widest), "unknown"
         return (
             self.name_level(a, b),
-            _combine_dates(
-                _dates(a.births, b.births), _dates(a.deaths, b.deaths)
-            ),
+            self.life(a, b),
             "agree" if self.kin_agree(a, b) else "unknown",
         )
 
-    def _person_link(self, a: _Node, b: _Node) -> str:
-        name, dates, kin = self.evidence(a, b)
-        if dates == "conflict":
-            return AMBIGUOUS
-        corroborated = kin == "agree" or dates == "agree"
-        if name in ("exact", "key") and corroborated:
-            return CONFIDENT
-        return AMBIGUOUS
+    def _anchors_counted(self, node: _Node) -> int:
+        """The GEDCOM anchors a mention matched: for a place, those it
+        matches exactly, and those it nests in as one."""
+        if node.id not in self._counted:
+            found = sorted(self._anchors.get(node.id, ()))
+            if node.kind == PLACE_KIND:
+                levels = [
+                    self.name_level(node, self._nodes[anchor])
+                    for anchor in found
+                ]
+                count = levels.count("exact") + ("nested" in levels)
+            else:
+                count = len(found)
+            self._counted[node.id] = count
+        return self._counted[node.id]
 
     def link(self, a: _Node, b: _Node) -> tuple[str, str]:
-        """(the link, the evidence as name/dates/kin) of a candidate
-        pair."""
+        """(the link, the evidence as name/dates/kin) of a candidate pair
+        of any kind but an event's."""
+        name, dates, kin = self.evidence(a, b)
+        described = f"{name}/{dates}/{kin}"
+        if dates == "conflict" or not a.kind:
+            return AMBIGUOUS, described
+        if any(
+            self._anchors_counted(node) > self._max_anchors for node in (a, b)
+        ):
+            return AMBIGUOUS, described
+        if a.kind == HUMAN:
+            corroborated = kin == "agree" or dates == "agree"
+            confident = (
+                name in ("exact", "key")
+                and corroborated
+                and not self.kin_conflict(a, b)
+            )
+        elif a.kind == PLACE_KIND:
+            confident = name in ("exact", "nested")
+        elif a.kind in (ORGANIZATION, FAMILY):
+            confident = any(
+                len(_distinctive(shared)) >= 2
+                for shared in a.named_keys & b.named_keys
+            )
+        else:
+            confident = name == "exact"
+        return (CONFIDENT if confident else AMBIGUOUS), described
+
+    def event_link(
+        self, a: _Node, b: _Node, merged: Callable[[str, str], bool]
+    ) -> tuple[str, str]:
+        """(the link, the evidence) of a candidate pair of events, given
+        whether two people ended merged: confident when every participant
+        of the event with fewer is merged with one of the other's (so two
+        births that name one father stay apart), and, but for a birth or
+        a death, their dates agree."""
         name, dates, kin = self.evidence(a, b)
         described = f"{name}/{dates}/{kin}"
         if dates == "conflict":
             return AMBIGUOUS, described
-        if any(
-            len(self._anchors.get(node.id, ())) > self._max_anchors
-            for node in (a, b)
+        if a.kind not in ONE_PER_PERSON and dates != "agree":
+            return AMBIGUOUS, described
+        fewer, more = sorted(
+            (sorted(a.participants), sorted(b.participants)), key=len
+        )
+        if fewer and all(
+            any(merged(first, second) for second in more) for first in fewer
         ):
-            return AMBIGUOUS, described
-        if a.kind == HUMAN:
-            return self._person_link(a, b), described
+            return CONFIDENT, described
+        return AMBIGUOUS, described
+
+    def contradicts(self, a: _Node, b: _Node) -> str | None:
+        """The evidence of two members of one cluster that were never a
+        pair, when it says they differ; None when it does not."""
+        name, dates, kin = self.evidence(a, b)
+        described = f"{name}/{dates}/{kin}"
+        if dates == "conflict":
+            return described
         if a.kind in EVENT_KINDS:
-            for first_id in sorted(a.participants):
-                for second_id in sorted(b.participants):
-                    first = self._nodes[first_id]
-                    second = self._nodes[second_id]
-                    if (
-                        first.kind == second.kind == HUMAN
-                        and self._person_link(first, second) == CONFIDENT
-                    ):
-                        return CONFIDENT, described
-            return AMBIGUOUS, described
+            return None
         if a.kind == PLACE_KIND:
-            return (
-                CONFIDENT if name in ("exact", "nested") else AMBIGUOUS
-            ), described
-        return (CONFIDENT if name == "exact" else AMBIGUOUS), described
+            return None if name in ("exact", "nested") else described
+        if a.kind == HUMAN and self.kin_conflict(a, b):
+            return described
+        return described if name == "none" else None
+
+    def _signature(self, node: _Node) -> tuple:
+        """Everything the evidence of a pair reads of one of its members:
+        two members of one signature give every pair the same evidence."""
+
+        def keys(of: _Node) -> tuple:
+            return tuple(
+                sorted(
+                    (surname, tuple(sorted(g)))
+                    for surname, g in of.keys.items()
+                )
+            )
+
+        def dates(intervals: list[Interval]) -> tuple:
+            return tuple(sorted((i.start, i.end) for i in intervals))
+
+        return (
+            node.named_keys,
+            keys(node),
+            node.place_keys,
+            frozenset(node.place_parts),
+            frozenset(node.org_sets),
+            dates(node.births),
+            dates(node.deaths),
+            dates(node.when),
+            frozenset(
+                (
+                    relation,
+                    kin.named_keys,
+                    keys(kin),
+                    dates(kin.births),
+                    dates(kin.deaths),
+                )
+                for relation, kin_id in node.kin
+                if (kin := self._nodes.get(kin_id)) is not None
+            ),
+            frozenset(
+                (person.named_keys, keys(person))
+                for person_id in node.participants
+                if (person := self._nodes.get(person_id)) is not None
+            ),
+        )
+
+    def contradiction(self, members: Sequence[str]) -> dict[str, Any] | None:
+        """The first two members, in order, whose evidence says they
+        differ, looked for among members of distinct signatures, and
+        within each signature once: a confident link never contradicts,
+        and members of one signature pair alike with every other."""
+        groups: dict[tuple, list[str]] = {}
+        for member in sorted(members):
+            groups.setdefault(self._signature(self._nodes[member]), []).append(
+                member
+            )
+        firsts = sorted(group[0] for group in groups.values())
+        pairs = sorted(
+            [
+                (group[0], group[1])
+                for group in groups.values()
+                if len(group) > 1
+            ]
+            + [
+                (first, second)
+                for position, first in enumerate(firsts)
+                for second in firsts[position + 1 :]
+            ]
+        )
+        for first, second in pairs:
+            found = self.contradicts(self._nodes[first], self._nodes[second])
+            if found is not None:
+                return {"mentions": [first, second], "evidence": found}
+        return None
 
 
 # -- closure ------------------------------------------------------------------
@@ -1189,21 +1593,22 @@ class _Conflicts:
     def find(self, members: Sequence[str]) -> tuple[str, Pair] | None:
         """(hard or soft, the pair that makes it so) for a conflicting
         cluster, None otherwise: hard when the impossibility filter rules
-        two members out, soft when they are only two ids of one
+        two members out (a kin edge, or a member named like a place
+        containing another), soft when they are only two ids of one
         manifest."""
         inside = set(members)
         nodes = [self._nodes[member] for member in sorted(members)]
-        places: dict[str, list[_Node]] = defaultdict(list)
+        places: dict[str, list[str]] = defaultdict(list)
         for node in nodes:
             if node.kind == PLACE_KIND:
-                places[node.label].append(node)
+                places[node.label].append(node.id)
         for node in nodes:
-            related = (node.kin_ids | node.containers) & inside
-            related |= {
-                other.id
+            related = node.kin_ids & inside
+            related.update(
+                other
                 for label in self._containment.container_labels(node.id)
                 for other in places.get(label, ())
-            }
+            )
             for other_id in sorted(related - {node.id}):
                 if self._impossible(node, self._nodes[other_id]):
                     return HARD, _pair(node.id, other_id)
@@ -1215,6 +1620,51 @@ class _Conflicts:
                 return SOFT, _pair(first_of[node.sha1], node.id)
             first_of[node.sha1] = node.id
         return None
+
+
+@dataclass(frozen=True)
+class _Settled:
+    """A candidate cluster: its members, its status, its pairs, and the
+    pair that makes it conflict, or the pair never linked that
+    contradicts."""
+
+    members: list[str]
+    status: str
+    pairs: list[Pair]
+    conflict: tuple[str, Pair] | None = None
+    contradiction: dict[str, Any] | None = None
+
+
+def _settle(
+    ids: Iterable[str],
+    links: Mapping[Pair, tuple[str, str]],
+    judge: _Judge,
+    conflicts: _Conflicts,
+) -> list[_Settled]:
+    """The candidate clusters the links join among `ids`, each settled
+    (the module docstring says how)."""
+    candidates = _components(ids, links)
+    pairs_of: dict[str, list[Pair]] = defaultdict(list)
+    for pair in links:
+        pairs_of[candidates.find(pair[0])].append(pair)
+    settled = []
+    for members in candidates.groups():
+        if len(members) == 1:
+            settled.append(_Settled(members, SINGLETON, []))
+            continue
+        own = sorted(pairs_of[candidates.find(members[0])])
+        conflict = conflicts.find(members)
+        if conflict is not None:
+            settled.append(_Settled(members, CONFLICTING, own, conflict))
+        elif any(links[pair][0] == AMBIGUOUS for pair in own):
+            settled.append(_Settled(members, AMBIGUOUS, own))
+        else:
+            contradiction = judge.contradiction(members)
+            status = AMBIGUOUS if contradiction else CONFIDENT
+            settled.append(
+                _Settled(members, status, own, contradiction=contradiction)
+            )
+    return settled
 
 
 # -- the identity map ---------------------------------------------------------
@@ -1255,6 +1705,19 @@ def batch_hash(batch: ClaimBatch) -> str:
     return content_hash(batch.model_dump(mode="json"), volatile=BATCH_VOLATILE)
 
 
+def code_digest() -> str:
+    """The SHA-256 of the source of CODE, the modules that make the
+    identity map, as the package holds it."""
+    return sha256_text(
+        canonical_json(
+            {
+                name: hashlib.sha256((PACKAGE / name).read_bytes()).hexdigest()
+                for name in CODE
+            }
+        )
+    )
+
+
 def _distinct(manifests: Iterable[Manifest]) -> list[Manifest]:
     """One manifest per document, in SHA-1 order: two manifests of one
     SHA-1 are one document, and the first is taken."""
@@ -1265,13 +1728,15 @@ def _distinct(manifests: Iterable[Manifest]) -> list[Manifest]:
 
 
 def inputs_key(manifests: Sequence[Manifest], config: ClusteringConfig) -> str:
-    """The key an identity map is reused under: VERSION, the thresholds'
-    digest, and each document's SHA-1, source and batch content."""
+    """The key an identity map is reused under: VERSION, the digest of
+    CODE's source, the thresholds' digest, and each document's SHA-1,
+    source and batch content."""
     return sha256_text(
         canonical_json(
             {
                 "stage": STAGE,
                 "version": VERSION,
+                "code": code_digest(),
                 "config": config.digest(),
                 "documents": [
                     [
@@ -1289,12 +1754,15 @@ def inputs_key(manifests: Sequence[Manifest], config: ClusteringConfig) -> str:
 @dataclass(frozen=True)
 class _Corpus:
     """The manifests, one per document in SHA-1 order, and their mentions
-    lifted and keyed: every mention by fingerprint, and those to cluster."""
+    lifted and keyed: every mention by fingerprint, those to cluster, and
+    the hub keys none of them is blocked on."""
 
     manifests: list[Manifest]
     nodes: list[_Node]
     index: dict[str, _Node]
     clustered: list[_Node]
+    hub_keys: int
+    hub_mentions: int
 
 
 def _corpus(
@@ -1307,11 +1775,18 @@ def _corpus(
         for node in _nodes(manifest, config.evidence.circa_years)
     ]
     _derive(nodes, config)
+    index = {node.id: node for node in nodes}
+    clustered = [node for node in nodes if node.mention.extract]
+    hub_keys, hub_mentions = _hubs(
+        clustered, index, config.blocking.max_key_mentions
+    )
     return _Corpus(
         manifests=ordered,
         nodes=nodes,
-        index={node.id: node for node in nodes},
-        clustered=[node for node in nodes if node.mention.extract],
+        index=index,
+        clustered=clustered,
+        hub_keys=hub_keys,
+        hub_mentions=hub_mentions,
     )
 
 
@@ -1323,7 +1798,7 @@ def blocked_pairs(
     (document SHA-1, local id) of its two mentions."""
     config = config or load_config()
     corpus = _corpus(manifests, config)
-    blocked, _anchors = _block(corpus.clustered, corpus.index, config)
+    blocked, _anchors = _block(corpus.clustered, config)
     named = {
         node.id: (node.sha1, node.mention.local_id) for node in corpus.nodes
     }
@@ -1345,12 +1820,13 @@ def cluster_corpus(
     index, clustered = corpus.index, corpus.clustered
     containment = _containment(nodes)
 
-    blocked, anchors = _block(clustered, index, config)
+    blocked, anchors = _block(clustered, config)
     judge = _Judge(index, anchors, config)
+    conflicts = _Conflicts(index, containment)
     within: set[Pair] = set()
     pruned: Counter[str] = Counter()
     within_related = 0
-    links: dict[Pair, tuple[str, str]] = {}
+    candidates: list[Pair] = []
     for pair in sorted(blocked):
         first, second = index[pair[0]], index[pair[1]]
         reason = impossible_pair(
@@ -1362,72 +1838,98 @@ def cluster_corpus(
         elif reason is not None:
             pruned[reason] += 1
         else:
-            links[pair] = judge.link(first, second)
+            candidates.append(pair)
 
-    candidates = _components((node.id for node in clustered), links)
-    conflicts = _Conflicts(index, containment)
+    # everything but events first: an event's link reads the clusters its
+    # participants end in
+    links = {
+        pair: judge.link(index[pair[0]], index[pair[1]])
+        for pair in candidates
+        if index[pair[0]].kind not in EVENT_KINDS
+    }
+    settled = _settle(
+        (node.id for node in clustered if node.kind not in EVENT_KINDS),
+        links,
+        judge,
+        conflicts,
+    )
+    together = {
+        member: position
+        for position, entry in enumerate(settled)
+        if entry.status == CONFIDENT
+        for member in entry.members
+    }
+
+    def merged(first: str, second: str) -> bool:
+        return first in together and together[first] == together.get(second)
+
+    event_links = {
+        pair: judge.event_link(index[pair[0]], index[pair[1]], merged)
+        for pair in candidates
+        if index[pair[0]].kind in EVENT_KINDS
+    }
+    settled += _settle(
+        (node.id for node in clustered if node.kind in EVENT_KINDS),
+        event_links,
+        judge,
+        conflicts,
+    )
+    links.update(event_links)
+
+    clusters: dict[str, dict[str, Any]] = {}
+    assigned: dict[str, str] = {}
     status: dict[str, str] = {}
     review: list[dict[str, Any]] = []
-    pairs_of: dict[str, list[Pair]] = defaultdict(list)
-    for pair in links:
-        pairs_of[candidates.find(pair[0])].append(pair)
-    groups = candidates.groups()
     ambiguous_groups: list[int] = []
     all_groups: list[int] = []
-    for members in groups:
-        if len(members) == 1:
-            status[members[0]] = SINGLETON
+    for entry in sorted(settled, key=lambda entry: entry.members):
+        merged_whole = entry.status == CONFIDENT
+        for part in (
+            [entry.members] if merged_whole else [[m] for m in entry.members]
+        ):
+            cid = cluster_id(part)
+            clusters[cid] = {
+                "kind": index[part[0]].kind,
+                "method": entry.status,
+                "members": part,
+            }
+            for member in part:
+                assigned[member] = cid
+                status[member] = entry.status
+        if entry.status == SINGLETON:
             continue
-        own = sorted(pairs_of[candidates.find(members[0])])
-        conflict = conflicts.find(members)
-        ambiguous = [pair for pair in own if links[pair][0] == AMBIGUOUS]
-        if conflict is not None:
-            verdict = CONFLICTING
-        elif ambiguous:
-            verdict = AMBIGUOUS
-        else:
-            verdict = CONFIDENT
-        for member in members:
-            status[member] = verdict
-        all_groups.append(len(own))
+        ambiguous = [
+            pair for pair in entry.pairs if links[pair][0] == AMBIGUOUS
+        ]
+        all_groups.append(len(entry.pairs))
         if ambiguous:
             ambiguous_groups.append(len(ambiguous))
-        if verdict == CONFIDENT:
+        if entry.status == CONFIDENT:
             continue
         review.append(
             {
-                "status": verdict,
-                "kind": index[members[0]].kind,
-                "members": members,
+                "status": entry.status,
+                "kind": index[entry.members[0]].kind,
+                "members": entry.members,
                 "pairs": [
                     {
                         "mentions": list(pair),
                         "link": links[pair][0],
                         "evidence": links[pair][1],
                     }
-                    for pair in own
+                    for pair in entry.pairs
                 ],
                 "conflict": (
-                    {"how": conflict[0], "mentions": list(conflict[1])}
-                    if conflict
+                    {
+                        "how": entry.conflict[0],
+                        "mentions": list(entry.conflict[1]),
+                    }
+                    if entry.conflict
                     else None
                 ),
+                "contradiction": entry.contradiction,
             }
         )
-
-    clusters: dict[str, dict[str, Any]] = {}
-    assigned: dict[str, str] = {}
-    for members in groups:
-        merged = status[members[0]] == CONFIDENT
-        for part in [members] if merged else [[m] for m in members]:
-            cid = cluster_id(part)
-            clusters[cid] = {
-                "kind": index[part[0]].kind,
-                "method": status[part[0]],
-                "members": part,
-            }
-            for member in part:
-                assigned[member] = cid
     for node in nodes:
         if not node.mention.extract:
             cid = cluster_id([node.id])
@@ -1456,17 +1958,16 @@ def cluster_corpus(
     # what merging the confident links alone would give, for the summary:
     # their closure, and how many of its clusters join a cannot-link pair
     confident_links = [
-        p for p, (link, _) in links.items() if link == CONFIDENT
+        pair for pair, (link, _evidence) in links.items() if link == CONFIDENT
     ]
     linked = _components((node.id for node in clustered), confident_links)
     linked_clusters = [m for m in linked.groups() if len(m) > 1]
     linked_conflicting = [m for m in linked_clusters if conflicts.find(m)]
 
-    by_status = Counter(
-        status[members[0]] for members in groups if len(members) > 1
-    )
+    candidate_groups = [entry for entry in settled if len(entry.members) > 1]
+    by_status = Counter(entry.status for entry in candidate_groups)
     mentions_by_status = Counter(
-        status[members[0]] for members in groups for _ in members
+        entry.status for entry in settled for _ in entry.members
     )
     per_call = config.adjudication.pairs_per_call
     summary = {
@@ -1481,6 +1982,8 @@ def cluster_corpus(
         "clustered_by_kind": dict(
             sorted(Counter(node.kind for node in clustered).items())
         ),
+        "hub_keys": corpus.hub_keys,
+        "hub_mentions": corpus.hub_mentions,
         "blocked_pairs": len(blocked),
         "blocked_by_kind": dict(
             sorted(Counter(index[pair[0]].kind for pair in blocked).items())
@@ -1509,8 +2012,13 @@ def cluster_corpus(
             for entry in review
             if entry["conflict"]
         ),
+        "contradicted_clusters": sum(
+            entry.contradiction is not None for entry in candidate_groups
+        ),
         "singletons": mentions_by_status[SINGLETON],
-        "largest_candidate_cluster": max(map(len, groups), default=0),
+        "largest_candidate_cluster": max(
+            (len(entry.members) for entry in settled), default=0
+        ),
         "identity_clusters": len(clusters),
         "merged_mentions": mentions_by_status[CONFIDENT],
         "confident_links_only": {
@@ -1584,25 +2092,31 @@ def read_manifests(documents: Iterable[_Document]) -> list[Manifest]:
     return manifests
 
 
-# what an identity map of FORMAT holds, each a mapping
-_SECTIONS = ("mentions", "clusters", "summary")
+# the sections an identity map of FORMAT holds, and what each is
+_SECTIONS = {
+    "mentions": dict,
+    "clusters": dict,
+    "review": list,
+    "summary": dict,
+}
 
 
 def read_identity_map(path: Path) -> dict[str, Any] | None:
-    """The identity map at `path`, or None when there is none, or one of
-    another format or without a section of its format, or one whose
-    decisions do not hash to its hash."""
+    """The identity map at `path`, or None when there is none, when it
+    cannot be read, when it is of another format or lacks a section of
+    its format, or when its decisions do not hash to its hash."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         return None
-    if not all(isinstance(data.get(name), dict) for name in _SECTIONS):
+    if not all(
+        isinstance(data.get(name), kind) for name, kind in _SECTIONS.items()
+    ):
         return None
-    mentions = data.get("mentions")
     try:
-        if identity_hash(mentions) != data.get("hash"):
+        if identity_hash(data["mentions"]) != data.get("hash"):
             return None
     except (AttributeError, KeyError, TypeError):
         return None
@@ -1648,7 +2162,7 @@ def _counted(count: int, noun: str) -> str:
 
 def attention(summary: Mapping[str, Any]) -> list[str]:
     """The reasons an identity map needs attention, from its summary:
-    counts and labels only."""
+    counts within labels of its own."""
     clusters = summary["clusters"]
     mentions = summary["cluster_mentions"]
     reasons = []
@@ -1674,6 +2188,12 @@ def attention(summary: Mapping[str, Any]) -> list[str]:
             f"{_counted(adjudication['calls_ambiguous_pairs'], 'call')} "
             f"of up to {adjudication['pairs_per_call']} pairs"
         )
+    if summary["hub_keys"]:
+        reasons.append(
+            "hub keys not blocked on: "
+            f"{_counted(summary['hub_keys'], 'key')}, "
+            f"{_counted(summary['hub_mentions'], 'mention')} kept apart"
+        )
     return reasons
 
 
@@ -1683,18 +2203,20 @@ def run_stage(context: Any) -> list[str]:
     reasons it needs attention."""
     output = ensure_identity_map(context.directory, context.documents)
     summary = output.identity_map["summary"]
+    adjudication = summary["adjudication"]
     context.log(
         f"{STAGE}: identity map "
         + ("reused, its inputs unchanged" if output.reused else "made")
-        + f": {summary['clustered_mentions']} mentions of "
-        f"{summary['documents']} documents in "
-        f"{summary['identity_clusters']} clusters, "
-        f"{summary['merged_mentions']} mentions merged; "
+        + f": {_counted(summary['clustered_mentions'], 'mention')} of "
+        f"{_counted(summary['documents'], 'document')} in "
+        f"{_counted(summary['identity_clusters'], 'cluster')}, "
+        f"{_counted(summary['merged_mentions'], 'mention')} merged; "
         f"{summary['clusters'][AMBIGUOUS]} ambiguous and "
         f"{summary['clusters'][CONFLICTING]} conflicting clusters not "
         "merged; adjudication: about "
-        f"{summary['adjudication']['calls_ambiguous_pairs']} calls for the "
-        f"ambiguous pairs, {summary['adjudication']['calls_all_pairs']} "
-        "for every candidate pair"
+        f"{_counted(adjudication['calls_ambiguous_pairs'], 'call')} for "
+        "the ambiguous pairs, "
+        f"{_counted(adjudication['calls_all_pairs'], 'call')} for every "
+        "candidate pair"
     )
     return attention(summary)

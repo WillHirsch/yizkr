@@ -131,6 +131,13 @@ def test_the_label_and_span_are_canonical():
     assert mention_fingerprint(
         BIRTH, "Gustav LÖBIG", "human", [1]
     ) != mention_fingerprint(BIRTH, "Gustav Löbig", "human", [1])
+    # and so is a compatibility character (a ligature, as a scan may
+    # give "Stupfield"): NFC keeps it, where NFKC would rewrite it
+    ligature = "Stup\ufb01eld"
+    assert canonical_label(ligature) == ligature
+    assert mention_fingerprint(
+        BIRTH, ligature, "place"
+    ) != mention_fingerprint(BIRTH, "Stupfield", "place")
 
 
 def test_a_manifest_numbered_otherwise_keeps_every_fingerprint():

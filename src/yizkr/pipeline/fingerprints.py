@@ -6,9 +6,10 @@ says about it, and never the id its manifest gives it:
 
 - the **artifact**: the SHA-1 of the document's media (ADR-0010);
 - its **canonical label**: the manifest record's label (the fullest form
-  the document gives), in Unicode NFC with every run of whitespace made
-  one space and the ends trimmed. Case and accents are kept: they are the
-  document's own spelling;
+  the document gives), in Unicode NFC, with every run of the characters
+  `str.isspace` counts as whitespace made one space and the ends trimmed.
+  Case, accents and compatibility characters (a ligature, a superscript)
+  are kept: they are the document's own spelling;
 - its **kind**: the manifest key the record is typed with;
 - its **excerpt span**: the lines of the numbered transcription that the
   manifest says mention it (`EntityRecord.mention_lines`), sorted, each
@@ -66,8 +67,9 @@ _CLUSTER = "cluster"
 
 
 def canonical_label(label: str | None) -> str:
-    """A label as a fingerprint takes it: NFC, whitespace runs made one
-    space, the ends trimmed; empty for none."""
+    """A label as a fingerprint takes it: NFC (never NFKC, which would
+    rewrite compatibility characters), runs of `str.isspace` characters
+    made one space, the ends trimmed; empty for none."""
     if not label:
         return ""
     return " ".join(unicodedata.normalize("NFC", label).split())

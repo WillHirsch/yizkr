@@ -420,43 +420,66 @@ refuses). The module docstring is the full account; in short:
   of one batch that are otherwise equal. A cluster id is the hash of its
   members' sorted fingerprints (#197 builds claim fingerprints and the
   run diff on the same module).
+- **Names** are read as names: a bracketed part ("formerly Gustav
+  Löbig", an inline nickname) is a form of its own, a name written
+  surname first ("Löbig, Ursula, Wwe.") is read given name first, a
+  maiden name gives a second form, and titles, kin and courtesy words,
+  particles and initials are no name tokens. A name that is only a
+  surname ("Frau Löbig", "N.N. Löbig") names no one: it makes no key, no
+  name match and no kin agreement.
 - **Blocking** proposes pairs by keys of each kind, never by one shared
-  token: a given name with a surname for people (a surname may come from
-  the person's kin, and a nickname stands for a given name); a token of
-  the part of a place name before its first comma; one organization name
-  holding the other's tokens; events through their participants; the
+  token: a given name with a different surname for people (a surname may
+  come from the person's kin, and a nickname stands for a given name); a
+  token of the part of a place name before its first comma, but a
+  generic head ("Kreis", "Lager"); one organization name holding the
+  other's distinctive tokens; events through their participants; the
   whole name otherwise. A mention that key-matches the GEDCOM export
-  pairs with those anchors only.
-- **Cannot-link.** Two ids of one manifest are kept apart (soft; the
-  export's places and occupations are exempt). Kin and place containment
-  that the manifests state between their own ids are lifted into mention
-  space, and `reconcile.impossible_pair` (ADR-0017) then rules out a pair
-  one of them joins (hard). Dates never rule a pair out.
-- **Classification.** A pair is a confident link only on corroborated
-  evidence: for people a name match with an agreeing kin name or
-  overlapping dates, for places an exact or nested name, for events a
-  confident pair of participants, otherwise an exact name. The closure
-  over every candidate pair gives the candidate clusters: *conflicting*
-  when one joins a cannot-link pair, else *ambiguous* when any of its
-  pairs is, else *confident*. Unattended, only confident clusters merge;
-  the members of the others stay apart, and are counted.
+  pairs with those anchors only. A key more than `max-key-mentions`
+  mentions share is a hub: none of them is blocked on it, and they are
+  counted. Lookups go through indexes, organizations included, so the
+  work grows with the mentions and the pairs proposed.
+- **Cannot-link.** Two ids of one manifest are kept apart (soft). The
+  export's places and occupations are exempt, as the adapter mints one
+  per string, and so are the refs of a batch without a manifest, which
+  are chunk-scoped and never unified. Kin and place containment that the
+  manifests state between their own ids are lifted into mention space,
+  and `reconcile.impossible_pair` (ADR-0017) then rules out a pair one of
+  them joins (hard). Dates never rule a pair out.
+- **Links.** A pair is a confident link only on corroborated evidence:
+  for people a name match with kin that agree or dates that agree (a
+  century or an open "before" agrees with nothing); for places an exact
+  or nested name; for organizations and families a shared name of two
+  distinctive tokens or more; for events a pair of participants merged
+  into one cluster, and, but for births and deaths, dates that agree;
+  otherwise an exact name. A mention of no kind never links confidently,
+  and nor does one matching more than one GEDCOM anchor (a place counts
+  those it matches exactly, and those it nests in as one).
+- **Clusters.** The closure over every candidate pair gives the candidate
+  clusters: *conflicting* when one joins a cannot-link pair, else
+  *ambiguous* when any of its links is, or when two members that were
+  never a pair contradict each other (dates, kin of one name whose dates
+  conflict, names that do not match), else *confident*. Unattended, only
+  confident clusters merge; the members of the others stay apart, and are
+  counted.
 - **Thresholds** live in `clustering.yaml` beside the module: the
-  minimum name and place token lengths, GEDCOM anchoring, how far a
-  circa date widens, how many GEDCOM anchors a mention may match and
-  still link confidently, and the pairs per adjudication call behind the
-  stage's estimate of the calls. The defaults come from the corpus
-  clustering experiment (#71, `scripts/experiments/cluster_calibration.py`);
-  #74 settles them on scratch runs.
+  minimum name and place token lengths, GEDCOM anchoring, the hub limit,
+  how far a circa date widens, the widest date range that corroborates,
+  how many GEDCOM anchors a mention may match and still link
+  confidently, and the pairs per adjudication call behind the stage's
+  estimate of the calls. The defaults come from the corpus clustering
+  experiment (#71, `scripts/experiments/cluster_calibration.py`); #74
+  settles them on scratch runs.
 - **The map.** Each mention's fingerprint maps to its cluster and the
   method that put it there (`confident`, `ambiguous`, `conflicting`,
   `singleton`, or `unclustered` for a mention its manifest does not mark
   for extraction). The map's `hash` covers those decisions alone. It also
   lists each ambiguous or conflicting candidate cluster with its pairs,
-  the evidence for each and the pair that makes it conflict, and a
-  summary of counts. The stage reuses the map while the documents'
-  batches (by content), the stage's `VERSION` and the thresholds stand,
-  and makes it again otherwise; the same decisions give the same cluster
-  ids and hash. What reaches the run's events is counts only.
+  the evidence for each, and the pair that makes it conflict or the
+  members that contradict, and a summary of counts. The stage reuses the
+  map while the documents' batches (by content), the stage's `VERSION`,
+  the source of the modules that make it, and the thresholds stand, and
+  makes it again otherwise; the same decisions give the same cluster ids
+  and hash. What reaches the run's events is counts within fixed labels.
 - **Not yet.** Nothing reads the map to write: the writer resolves through
   it with #109, adjudication of ambiguous pairs comes with #106, and
   overrides with never-re-ask with #107. The owner reviews ambiguous and

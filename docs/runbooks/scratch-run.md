@@ -154,8 +154,13 @@ uv run yizkr scratch run
   completed. It runs every one in each invocation that goes past the
   barrier, so a corpus stage keeps its outputs in `corpus/<stage>/` in
   the run directory and reuses them while their inputs stand, as the
-  documents' views are reused. None is registered yet: a run finishes at
-  the barrier.
+  documents' views are reused. The one registered is clustering (#105):
+  it writes the corpus's identity map to
+  `corpus/clustering/identity-map.json`, from the documents' batches
+  alone, with no wiki and no model (src/yizkr/pipeline/README.md,
+  "Corpus clustering"). Its `done` event carries its counts: the
+  ambiguous and conflicting clusters it left apart, and the adjudication
+  calls they would take.
 - **Options.** `--until STAGE` stops after a stage (`transcription`,
   `extraction`, `critique`, or a corpus stage; `gedcom` stops with
   `extraction`). `--cache DIR` names the LLM cache (default
@@ -315,9 +320,10 @@ Nothing from them goes into the repository, GitHub or a cloud session.
 
 ## Not yet
 
-- No corpus stage is registered: clustering (#105), the reset,
-  register, write and site stages (#200, with #199 and #103), and
-  place-hierarchy reconciliation (#201) register themselves as they land.
-  Until then a run finishes at the barrier, and needs no stack. The
-  estimate counts the per-document stages' calls, and names any corpus
-  stage it does not count.
+- Of the corpus stages only clustering (#105) is registered, and it
+  touches no wiki. The stages that do, the reset, register, write and
+  site stages (#200, with #199 and #103) and place-hierarchy
+  reconciliation (#201), register themselves as they land. Until then a
+  run finishes after clustering, and needs no stack. The estimate counts
+  the per-document stages' calls, says that clustering makes none, and
+  names any corpus stage it does not count.

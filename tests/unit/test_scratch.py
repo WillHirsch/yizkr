@@ -32,7 +32,7 @@ from tests.unit.test_no_wiki_before_write import (  # noqa: F401
 from yizkr import cli
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
-from yizkr.pipeline import llm, monitor, orchestrate, scratch
+from yizkr.pipeline import clustering, llm, monitor, orchestrate, scratch
 from yizkr.pipeline.llm import CliVersionMismatch, UsageLimitReached
 from yizkr.pipeline.orchestrate import directory_names
 from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
@@ -1492,10 +1492,24 @@ class TestCorpusStages:
             if len(entry["members"]) > 1
         ]
         assert (merged["method"], len(merged["members"])) == ("confident", 5)
+        assert identity["summary"]["gedcom_documents"] == 1
+        # the stage's reasons reach its `done` event
+        (done,) = [
+            e
+            for e in events(driver.state_dir, "done")
+            if e["stage"] == "clustering"
+        ]
+        assert done.get("attention") == (
+            clustering.attention(identity["summary"]) or None
+        )
+        assert done["attention"]
         before = (path / "identity-map.json").read_bytes()
+        inode = (path / "identity-map.json").stat().st_ino
         again = Driver(corpus.folder, driver.state_dir)
         assert again.run() == EXIT_OK
+        # reused, not made again
         assert (path / "identity-map.json").read_bytes() == before
+        assert (path / "identity-map.json").stat().st_ino == inode
         assert scratch.is_complete(driver.state_dir)
 
     def test_corpus_stages_need_names_of_their_own(self, tmp_path):
