@@ -48,18 +48,27 @@ whose pages has one is read whole by the vision engine. The PDF renderer
 the vision engine and the transcription check need is checked once,
 before any document.
 
+Each image a PDF's transcription reads on its own, with a reading that
+passes the check, is then a document of its own, an excerpt
+(ExcerptRun): its identity is the SHA-1 of its bytes, its directory is in
+the state directory's EXCERPTS_DIR, its transcription is the reading the
+PDF kept, and its claims cite the image. An image several PDFs place is
+one excerpt; one whose bytes a document of the folder has, or that the
+never-ingest list names, is none. The run takes each excerpt after the
+folder's documents, as its PDF's transcription finds it.
+
 Two steps use the wiki: resolve, which matches labels to the graph's
 items, and the write, which registers the document first
 (yizkr.pipeline.registrar): its artifact item, a deck's slides as page
-fragments, and a deck's derived media, each found or made by the SHA-1
-of its bytes, just before the claims that cite them are written.
-Everything else reads nothing from the wiki and writes nothing to it
-(ADR-0025 §2): the stages before the gates; a deck's derived media,
-which are recorded in its directory (`derived-media.json`) for the write
-to register, and a PDF's images, recorded there by its transcription and
-not registered, since no claim cites them; and the reconcile step, which
-has no roster to match a document's entities against, so it proposes
-nothing and the first gate has nothing to review.
+fragments, and a deck's derived media or a PDF's images, each found or
+made by the SHA-1 of its bytes, just before the claims that cite them
+are written; an excerpt's write registers each PDF that places it, with
+its images. Everything else reads nothing from the wiki and writes
+nothing to it (ADR-0025 §2): the stages before the gates; a deck's
+derived media and a PDF's images, which are recorded in its directory
+(`derived-media.json`) for the write to register; and the reconcile
+step, which has no roster to match a document's entities against, so it
+proposes nothing and the first gate has nothing to review.
 
 Dependencies are make-style by content hash (`derivations.json`): the
 transcription is made from the correction, when there is one; the batch
@@ -126,6 +135,7 @@ that asks for other settings than the run recorded is refused.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import os
@@ -197,6 +207,13 @@ DUPLICATE = "duplicate"
 # the run's control file held the document's next stage
 PAUSED = "paused"
 
+# the kind of an image a PDF places within one of its text-layer pages,
+# taken as a document of its own (ExcerptRun), and the directory of the
+# state directory that holds such documents' directories, each named for
+# its image's SHA-1
+EXCERPT = "excerpt"
+EXCERPTS_DIR = "excerpts"
+
 # the stages each kind of document runs before the gates, in order
 _EXTRACTED = ("transcription", "extraction", "critique")
 DOCUMENT_STAGES = {
@@ -204,6 +221,7 @@ DOCUMENT_STAGES = {
     "presentation": _EXTRACTED,
     "text": _EXTRACTED,
     "media": _EXTRACTED,
+    EXCERPT: _EXTRACTED,
 }
 # the roles the engine is called in: each has its own effort and model,
 # and its own epoch and refresh setting in the LLM cache
@@ -424,9 +442,12 @@ def slugify(name: str) -> str:
 # (yizkr.pipeline.rundir), the directory the run monitor writes its live
 # status page into (yizkr.pipeline.monitor.STATUS_DIR), and the one a
 # scratch run's corpus stages keep their outputs in
-# (yizkr.pipeline.scratch.CORPUS_DIR): no document directory may take
+# (yizkr.pipeline.scratch.CORPUS_DIR), and the one that holds the
+# excerpts' directories (EXCERPTS_DIR): no document directory may take
 # their names
-_RUN_FILES = frozenset({MANIFEST, EVENTS, ALERTS, CONTROL, "status", "corpus"})
+_RUN_FILES = frozenset(
+    {MANIFEST, EVENTS, ALERTS, CONTROL, "status", "corpus", EXCERPTS_DIR}
+)
 # how much of a whole file name's slug a hashed directory name keeps, so
 # that with its hash it stays well inside a filesystem's 255-byte limit
 _HASHED_PREFIX = 200
@@ -697,6 +718,44 @@ class DocumentRun:
             self.state.save(self.state_path)
 
 
+class ExcerptRun(DocumentRun):
+    """An image a PDF places within one of its text-layer pages, taken as
+    a document of its own: a witness apart from the PDF, whose claims cite
+    the image alone (ADR-0008).
+
+    Its identity is the SHA-1 of its bytes, and so is its directory's
+    name, in the state directory's EXCERPTS_DIR: an image that several
+    PDFs place is one document, whichever of them places it first.
+    `containers` are the PDFs that place it, each keeping the image's
+    bytes and its reading in its own directory (presentation.
+    derived_transcription); the first one's copy of the bytes is its
+    source. Its transcription is the reading the PDF's transcription made
+    of it (Orchestrator._transcribe_excerpt), so no model is asked again.
+    Its title names its first place: "<the PDF's title> — page 6, image
+    1"."""
+
+    def __init__(
+        self, sha1: str, container: DocumentRun, medium: Any, state_dir: Path
+    ) -> None:
+        super().__init__(
+            container.dir / medium.file,
+            state_dir,
+            dirname=f"{EXCERPTS_DIR}/{sha1}",
+        )
+        self.containers = [container]
+        if not self.state_path.exists():
+            self.state.title = f"{container.state.title} — {medium.names[0]}"
+
+    @property
+    def kind(self) -> str:
+        return EXCERPT
+
+    def placed_by(self, container: DocumentRun) -> None:
+        """Add a PDF that places the image too."""
+        if all(known.dir != container.dir for known in self.containers):
+            self.containers.append(container)
+
+
 def _write_view(path: Path, text: str) -> bool:
     """Refresh a plain-file view, leaving an identical one untouched;
     returns whether the file changed. A file that cannot be read, or is
@@ -807,6 +866,9 @@ class Orchestrator:
         # run: each view is decided once per run, a refreshed one made
         # again once
         self._views: dict[tuple[str, str], Any] = {}
+        # image SHA-1 -> the excerpt found for it in this run
+        # (_excerpts_of): one document however many PDFs place the image
+        self._excerpts: dict[str, ExcerptRun] = {}
         # the run's engine client per role, and its LLM cache, each made
         # on first use and closed when the run ends
         self._engines: dict[str, Any] = {}
@@ -1130,14 +1192,34 @@ class Orchestrator:
         """Register the document as its write begins (ADR-0025 §2): its
         artifact item, found or made by the SHA-1 of the source's bytes
         (ADR-0010), and for a deck its slides as page fragments and the
-        images it embeds, from the record of them in its directory, each
+        images it embeds, and for a PDF read page by page the images placed
+        within its pages, from the record of them in its directory, each
         by the SHA-1 of its own bytes (ADR-0008). A source that no longer
         has the bytes the run read, or that is on the never-ingest list,
         is refused before anything is registered or uploaded, and an
         embedded image the list names is left out
-        (yizkr.pipeline.registrar). Returns the artifact's QID."""
-        from yizkr.pipeline.registrar import Registrar
+        (yizkr.pipeline.registrar). An excerpt is registered as the
+        derived medium of each PDF that places it, each PDF registered
+        first. Returns the artifact's QID."""
+        from yizkr.pipeline.registrar import ExcludedMedia, Registrar
 
+        registrar = Registrar(self.client, exclusions=self.exclusions)
+        if not isinstance(doc, ExcerptRun):
+            return self._register(registrar, doc)[0]
+        found = None
+        for container in doc.containers:
+            derived = self._register(registrar, container)[1]
+            found = found or derived.get(doc.sha1)
+        if found is None:
+            raise ExcludedMedia(
+                f"image {doc.sha1[:12]} is on the never-ingest list, or no "
+                "PDF that places it records it: nothing of it was registered"
+            )
+        return found
+
+    def _register(self, registrar: Any, doc: DocumentRun) -> tuple[str, dict]:
+        """(the document's QID, its derived media's QIDs by SHA-1), as
+        `_step_register` registers a document that is not an excerpt."""
         artifact_type = self.artifact_type
         pages = 0
         if doc.kind == "presentation":
@@ -1147,7 +1229,6 @@ class Orchestrator:
             pages = len(self._presentation(doc).slides)
         elif doc.kind == "gedcom":
             artifact_type = "genealogical_report"
-        registrar = Registrar(self.client, exclusions=self.exclusions)
         result = registrar.register_artifact(
             doc.source,
             artifact_type=artifact_type,
@@ -1158,8 +1239,13 @@ class Orchestrator:
             pages=pages,
             sha1=doc.sha1,
         )
-        if doc.kind == "presentation":
-            record = self._derived_media(doc)
+        record = (
+            self._derived_media(doc)
+            if doc.kind == "presentation"
+            else self._placed_images(doc)
+        )
+        derived: dict[str, str] = {}
+        if record is not None:
             derived = registrar.register_derived_media(record, doc.dir)
             left_out = len(record.media) - len(derived)
             self.log(
@@ -1170,7 +1256,28 @@ class Orchestrator:
                     else ""
                 )
             )
-        return result.artifact_qid
+        return result.artifact_qid, derived
+
+    def _placed_images(self, doc: DocumentRun):
+        """The record of the images a PDF read page by page places within
+        its pages, kept in its directory by its transcription
+        (_keep_reading), when it is there whole and made for the PDF's
+        bytes as they are now; None for any other document, and for a PDF
+        whose record is not there. A reused transcription that marks
+        images has its record whole, or is made again
+        (_transcription_failure)."""
+        from yizkr.pipeline.presentation import read_derived_media
+
+        if doc.kind != "media":
+            return None
+        record = read_derived_media(doc.dir)
+        if (
+            record is None
+            or record.container != "pdf"
+            or record.source_sha1 != doc.sha1
+        ):
+            return None
+        return record
 
     def _presentation(self, doc: DocumentRun):
         """The deck unpacked, kept by the SHA-1 of its bytes: a deck is
@@ -1290,10 +1397,7 @@ class Orchestrator:
         memo = (doc.sha1, doc.transcription.name)
         if memo in self._views:
             return self._views[memo]
-        checked = route_transcription(doc.source, doc.correction) in (
-            "vision",
-            "text-file",
-        )
+        checked = self._route(doc) in ("vision", "text-file", EXCERPT)
         transcription = self._reused_view(
             doc,
             doc.transcription,
@@ -1320,6 +1424,15 @@ class Orchestrator:
         self._views[memo] = transcription
         return transcription
 
+    def _route(self, doc: DocumentRun) -> str:
+        """The route the document's transcription takes: an excerpt's is
+        the reading its PDF made of it (EXCERPT), unless a curator's
+        correction routes it to the correction."""
+        route = route_transcription(doc.source, doc.correction)
+        if isinstance(doc, ExcerptRun) and route == "vision":
+            return EXCERPT
+        return route
+
     def _transcription_failure(
         self, doc: DocumentRun, transcription
     ) -> str | None:
@@ -1329,7 +1442,9 @@ class Orchestrator:
         read, as the reading of one image, and the transcription of each
         image placed within a page that the document's directory keeps
         (`_image_failure`). Its text-layer pages are the document's own
-        text and are never checked. It reads files only, and writes none."""
+        text and are never checked. It is made again, too, when what it
+        marks is not kept whole beside it (`_reading_failure`). It reads
+        files only, and writes none."""
         from yizkr.pipeline.textlayer import VISION
         from yizkr.pipeline.transcription_check import (
             TranscriptionCheckFailed,
@@ -1357,6 +1472,55 @@ class Orchestrator:
                 failure = self._image_failure(doc, sha1)
                 if failure is not None:
                     return failure
+        return self._reading_failure(doc, transcription)
+
+    def _reading_failure(self, doc: DocumentRun, transcription) -> str | None:
+        """Why a PDF's transcription read page by page is to be made again
+        although it passes the check, or None: an image it marks that the
+        never-ingest list names now, since such an image is never kept or
+        marked; a record of the images it marks that is missing, damaged,
+        made for other bytes, or names other images, or an image's bytes
+        that are not kept whole (presentation.read_derived_media), since
+        the write registers them from it; or an image it marks that has no
+        transcription of its own, since its reading failed or was lost, so
+        that the image is read again. Its pages the vision engine read are
+        read again through the LLM cache, which answers the calls it
+        answered before."""
+        from yizkr.pipeline.presentation import (
+            derived_transcription,
+            read_derived_media,
+        )
+
+        images = list(
+            dict.fromkeys(
+                sha1 for page in transcription.pages for sha1 in page.images
+            )
+        )
+        for sha1 in images:
+            if self._excluded_image(sha1):
+                return (
+                    f"the never-ingest list names image {sha1[:12]}, which "
+                    "it marks"
+                )
+        if not images:
+            return None
+        record = read_derived_media(doc.dir)
+        if (
+            record is None
+            or record.container != "pdf"
+            or record.source_sha1 != doc.sha1
+            or set(record.media) != set(images)
+        ):
+            return (
+                "the record of the images it marks is missing, damaged or "
+                "names others, or an image's bytes are not kept whole"
+            )
+        for sha1 in images:
+            if not derived_transcription(doc.dir, sha1).exists():
+                return (
+                    f"image {sha1[:12]} has no transcription of its own, so "
+                    "it is read again"
+                )
         return None
 
     def _image_failure(self, doc: DocumentRun, sha1: str) -> str | None:
@@ -1392,7 +1556,7 @@ class Orchestrator:
         read page by page made beside its transcription, its images and
         their transcriptions, is kept first (`_keep_reading`), and what
         of it needs attention is the stage's attention."""
-        method = route_transcription(doc.source, doc.correction)
+        method = self._route(doc)
         transcription, resolution = self._run_stage(
             doc,
             "transcription",
@@ -1432,8 +1596,36 @@ class Orchestrator:
             "text-file": self._transcribe_text_file,
             "slide-text": self._transcribe_slides,
             "correction": self._transcribe_correction,
+            EXCERPT: self._transcribe_excerpt,
         }[method]
         return transcribe(doc)
+
+    def _transcribe_excerpt(self, doc: DocumentRun):
+        """(transcription, language resolution) of an excerpt: the reading
+        of its image that a PDF placing it keeps (presentation.
+        derived_transcription), the first of them whose reading names the
+        image and passes the check (`_image_failure`). No model is asked:
+        the PDF's transcription read the image, through the LLM cache.
+        RuntimeError when none keeps one."""
+        from yizkr.pipeline.language import resolve_language
+        from yizkr.pipeline.presentation import derived_transcription
+        from yizkr.pipeline.transcribe import Transcription
+
+        for container in doc.containers:
+            path = derived_transcription(container.dir, doc.sha1)
+            if not path.is_file() or self._image_failure(container, doc.sha1):
+                continue
+            kept = Transcription.model_validate_json(path.read_text())
+            resolution = resolve_language(
+                kept.text, self.language, fallback=self.fallback_language
+            )
+            return kept.model_copy(update={"language": resolution.code}), (
+                resolution
+            )
+        raise RuntimeError(
+            f"no PDF that places image {doc.sha1[:12]} keeps a reading of it "
+            "that passes the transcription check"
+        )
 
     def _transcribe_vision(self, doc: DocumentRun):
         """(transcription, language resolution) by the vision route: a PDF
@@ -1483,7 +1675,9 @@ class Orchestrator:
         transcription beside its bytes (presentation.
         derived_transcription). A kept transcription of an image that the
         check fails now is moved aside first, never deleted, whether or
-        not a new one takes its place."""
+        not a new one takes its place. An image the never-ingest list names
+        now is not in the record, so nothing registers or extracts what an
+        earlier reading kept of it."""
         from yizkr.pipeline.presentation import (
             DERIVED_MEDIA_DIR,
             DerivedMediaRecord,
@@ -1495,6 +1689,7 @@ class Orchestrator:
         reading = transcription.reading
         record = DerivedMediaRecord(
             source_sha1=transcription.artifact.sha1,
+            container="pdf",
             title=doc.state.title,
             media={
                 image.sha1: DerivedMedium(
@@ -1788,6 +1983,68 @@ class Orchestrator:
             "refused": result.refused,
             "approved_claims": len(approved.claims),
         }
+
+    # -- excerpts -----------------------------------------------------------
+
+    def _excerpts_of(
+        self, doc: DocumentRun, corpus: Collection[str]
+    ) -> list[ExcerptRun]:
+        """The excerpts of a PDF read page by page (ExcerptRun), by their
+        SHA-1s, from what its directory keeps: each image the record of
+        its images names (_placed_images) that has a reading of its own
+        which passes the check (`_image_failure`). An image the
+        never-ingest list names is left out, asked again here, and so is
+        one whose bytes a document of the corpus has (`corpus`, their
+        SHA-1s): that document is the witness, and its bytes are not
+        extracted again (ADR-0010). Each is found or made by its SHA-1
+        among the run's excerpts, so an image that several PDFs place is
+        one excerpt, with each of them among its containers. Reads files
+        only, and writes none."""
+        from yizkr.pipeline.presentation import derived_transcription
+
+        record = self._placed_images(doc)
+        if record is None:
+            return []
+        found = []
+        for sha1, medium in sorted(record.media.items()):
+            if (
+                sha1 in corpus
+                or self._excluded_image(sha1)
+                or not derived_transcription(doc.dir, sha1).is_file()
+                or self._image_failure(doc, sha1) is not None
+            ):
+                continue
+            excerpt = self._excerpts.get(sha1)
+            if excerpt is None:
+                excerpt = self._excerpts[sha1] = ExcerptRun(
+                    sha1, doc, medium, self.state_dir
+                )
+            else:
+                excerpt.placed_by(doc)
+            found.append(excerpt)
+        return found
+
+    def _plan_excerpts(self, excerpts: Sequence[ExcerptRun]) -> None:
+        """Add the excerpts the run plan does not hold yet to it, as the
+        documents they are, each with its stages (docs/RUN_MANIFEST.md):
+        they are found as their PDFs' transcriptions are made."""
+        manifest = self.rundir.manifest()
+        planned = list(manifest.get("documents") or [])
+        known = {
+            entry.get("sha1") for entry in planned if isinstance(entry, dict)
+        }
+        added = [
+            {
+                "sha1": excerpt.sha1,
+                "file": excerpt.source.name,
+                "kind": excerpt.kind,
+                "stages": list(DOCUMENT_STAGES[excerpt.kind]),
+            }
+            for excerpt in excerpts
+            if excerpt.sha1 not in known
+        ]
+        if added:
+            self.rundir.update_manifest(documents=planned + added)
 
     # -- views and derivations ----------------------------------------------
 
@@ -2155,7 +2412,9 @@ class Orchestrator:
         self, docs: Sequence[DocumentRun] = ()
     ) -> dict[str, str]:
         """content SHA-1 -> filename of a document already ingested to
-        completion in a prior run (ADR-0010).
+        completion in a prior run, an excerpt among them (ADR-0010): the
+        excerpts' directories, in EXCERPTS_DIR, are read too, so a file of
+        the folder with an excerpt's bytes is that excerpt's duplicate.
 
         Lets a renamed identical file be recognised and skipped BEFORE any
         expensive step, not merely deduped at the graph by the writer.
@@ -2174,10 +2433,13 @@ class Orchestrator:
         seen: dict[str, str] = {}
         if not self.state_dir.exists():
             return seen
-        current: dict[str, set[str]] = {}
+        current: dict[Path, set[str]] = {}
         for doc in docs:
-            current.setdefault(doc.dir.name, set()).add(doc.sha1)
-        for sub in sorted(self.state_dir.iterdir()):
+            current.setdefault(doc.dir, set()).add(doc.sha1)
+        subs = sorted(self.state_dir.iterdir())
+        with contextlib.suppress(OSError):
+            subs += sorted((self.state_dir / EXCERPTS_DIR).iterdir())
+        for sub in subs:
             if sub.name.startswith("."):  # set aside
                 continue
             state_file = sub / "state.json"
@@ -2193,8 +2455,7 @@ class Orchestrator:
             ):  # unreadable or foreign
                 continue
             if (
-                sub.name in current
-                and state.content_sha1 not in current[sub.name]
+                sub in current and state.content_sha1 not in current[sub]
             ):  # its source changed: it is set aside in this run
                 continue
             if state.status == WRITTEN and state.content_sha1:
@@ -2293,6 +2554,8 @@ class Orchestrator:
         self._seen_hashes = self._prior_written_hashes(docs)
         self._derived = {}
         self._views = {}
+        self._excerpts = {}
+        corpus = {doc.sha1 for doc in docs}
         # each run is an invocation of its own in the run directory
         self.rundir = RunDir(self.state_dir)
         self._start_run(docs)
@@ -2305,7 +2568,10 @@ class Orchestrator:
             for doc in unread:
                 self._fail(doc, doc.unreadable)
             if self.serial:
-                docs = self._serial_sequence(docs)
+                docs = self._serial_sequence(docs, corpus)
+                found.extend(doc for doc in docs if doc not in found)
+            # an excerpt joins the documents once its PDF's transcription
+            # has read it, after the documents of the folder
             for doc in docs:
                 control = self.rundir.control()
                 stopped = control.stopped()
@@ -2318,6 +2584,14 @@ class Orchestrator:
                     continue
                 self.log(f"{doc.source.name} [{doc.state.status}]")
                 status = self.advance(doc)
+                arrived = [
+                    excerpt
+                    for excerpt in self._excerpts_of(doc, corpus)
+                    if excerpt not in docs
+                ]
+                self._plan_excerpts(arrived)
+                docs.extend(arrived)
+                found.extend(arrived)
                 # serial (ADR-0019): the next artifact must not reconcile
                 # until this one is written, so stop at the first that isn't
                 # done. The human clears its gate and re-runs to advance.
@@ -2386,12 +2660,16 @@ class Orchestrator:
             statuses=statuses,
         )
 
-    def _serial_sequence(self, docs: list[DocumentRun]) -> list[DocumentRun]:
+    def _serial_sequence(
+        self, docs: list[DocumentRun], corpus: Collection[str] = ()
+    ) -> list[DocumentRun]:
         """Extract every document, then order them by greedy entity overlap.
 
         Extraction must run for all documents up front (the sequencer reads
-        their manifests); the actual reconcile/review/write then proceeds in
-        the returned order, hubs first (ADR-0019)."""
+        their manifests), the excerpts their PDFs' transcriptions find
+        (`_excerpts_of`, `corpus` the folder's SHA-1s) after them; the
+        actual reconcile/review/write then proceeds in the returned order,
+        hubs first (ADR-0019)."""
         from yizkr.pipeline.sequencing import sequence_documents
 
         # Settle content-dedup (ADR-0010) BEFORE any parallel extraction, so
@@ -2406,6 +2684,16 @@ class Orchestrator:
             self._seen_hashes.setdefault(sha1, doc.source.name)
 
         self._extract_all(docs)
+        excerpts = list(
+            {
+                id(excerpt): excerpt
+                for doc in docs
+                for excerpt in self._excerpts_of(doc, corpus)
+            }.values()
+        )
+        self._plan_excerpts(excerpts)
+        self._extract_all(excerpts)
+        docs = [*docs, *excerpts]
         keyed = {doc.source.name: self._entity_keys(doc) for doc in docs}
         by_name = {doc.source.name: doc for doc in docs}
         ordered = [

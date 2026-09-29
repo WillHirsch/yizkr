@@ -256,8 +256,18 @@ re-running one step in isolation — but for a normal ingest you only ever run
   and reported, not recorded. A PDF read page by page (below) records
   the images placed within its pages in the same record, by its
   transcription stage, each named for its places ("page 6, image 1")
-  with the pages it is on; they are not registered, since no claim cites
-  them yet.
+  with the pages it is on; the write registers them after the PDF, each
+  `part of` it once per page (ADR-0008).
+- **excerpts** — each image a PDF places within a text-layer page, with
+  a reading of its own that passes the check, is a document of its own
+  (kind `excerpt`, `ExcerptRun`), in `excerpts/<sha1>/` of the state
+  directory: its transcription is that reading, taken without a call,
+  and its extraction and critique cite the image. The same image in
+  several PDFs is one excerpt; one whose bytes a document of the corpus
+  has, or that the never-ingest list names, is none. `ingest run` takes
+  excerpts after the folder's documents; the scratch driver as their
+  PDF's transcription ends, the first as the excerpts' canary. An
+  excerpt's write registers each PDF that places it, with its images.
 - **transcribe** — engines: `llm` (LLM-vision, ADR-0004), `textfile`
   (wrap an existing/manual transcription; keeps the pipeline fully
   local), `htr` (a Transkribus-style platform adapter, dropped as LLM

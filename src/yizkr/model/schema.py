@@ -76,9 +76,12 @@ class ManifestProperty(BaseModel):
     reference: bool = False
     # Whether the prompts rendered from the manifest offer the property.
     # A retired or reference property is never offered, whatever this
-    # says; `issued_by` is held back, since a claim has no way to name
-    # the document it comes from as its subject (ADR-0035 §3.4).
+    # says.
     offered: bool = True
+    # Whether a claim of the property has its own source document as its
+    # subject, named by the document's content key, and no other subject
+    # (`issued_by`, ADR-0035 §3.4).
+    document_subject: bool = False
 
     @property
     def in_prompts(self) -> bool:
@@ -223,6 +226,9 @@ class Acceptance:
     entity_kinds: frozenset[str] = frozenset()
     # the properties written only in references
     references: frozenset[str] = frozenset()
+    # the properties whose claims take their source document, and only it,
+    # as subject
+    document_subjects: frozenset[str] = frozenset()
 
     def refusal(
         self,
@@ -297,6 +303,11 @@ def _acceptance(text: str) -> Acceptance:
         ),
         references=frozenset(
             key for key, spec in manifest.properties.items() if spec.reference
+        ),
+        document_subjects=frozenset(
+            key
+            for key, spec in manifest.properties.items()
+            if spec.document_subject
         ),
     )
 

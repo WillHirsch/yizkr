@@ -17,6 +17,8 @@ the wiki, the engine, the LLM cache or the corpus:
     <document>/      a document's state.json and its views:
                      transcription.json, batch.json, critique.json and
                      the extraction's extraction/coverage.json
+    excerpts/<sha1>/ the same, for an image a PDF places within a page
+                     read as a document of its own (ADR-0008)
     corpus/<stage>/  a corpus stage's outputs: the clustering stage's
                      identity-map.json
 
@@ -115,7 +117,12 @@ from yizkr.pipeline.monitor import (
     failure_label,
     reason_label,
 )
-from yizkr.pipeline.orchestrate import DOCUMENT_STAGES, MODEL_ROLES
+from yizkr.pipeline.orchestrate import (
+    DOCUMENT_STAGES,
+    EXCERPT,
+    EXCERPTS_DIR,
+    MODEL_ROLES,
+)
 from yizkr.pipeline.rundir import (
     ALERTS,
     CACHE_EVENTS,
@@ -848,8 +855,14 @@ def _directories(path: Path) -> dict[str, tuple[Path, dict]]:
         entries = sorted(path.iterdir())
     except OSError:
         return found
+    # an excerpt's directory is in EXCERPTS_DIR, named for its image
+    with contextlib.suppress(OSError):
+        entries += sorted((path / EXCERPTS_DIR).iterdir())
     for entry in entries:
-        if entry.name.startswith(".") or entry.name == CORPUS_DIR:
+        if entry.name.startswith(".") or entry.name in (
+            CORPUS_DIR,
+            EXCERPTS_DIR,
+        ):
             continue
         state = _json(entry / "state.json")
         if not isinstance(state, dict):
@@ -880,12 +893,22 @@ def _view(document: Document, stage: str, path: Path, kind: type) -> Any:
 
 def _pages(pages: Any) -> dict[str, Any]:
     """A PDF read page by page, as its transcription's `pages` give it:
-    its pages by the method that read them, and how many of its
-    text-layer pages show annotations the text layer leaves unread. Pages
-    whose provenance cannot be read are not counted."""
+    its pages by the method that read them, how many of its text-layer
+    pages show annotations the text layer leaves unread, and the images
+    placed within its pages that were read on their own, by their SHA-1s,
+    each once: its derived images (ADR-0008). Pages whose provenance
+    cannot be read are not counted, and neither is a name of an image that
+    is no SHA-1."""
     methods: Counter = Counter()
     annotated = 0
+    images: set[str] = set()
     for page in _list(pages):
+        if isinstance(page, dict):
+            images.update(
+                sha1
+                for sha1 in _list(page.get("images"))
+                if isinstance(sha1, str) and re.fullmatch("[0-9a-f]{40}", sha1)
+            )
         provenance = page.get("provenance") if isinstance(page, dict) else None
         if not isinstance(provenance, dict):
             continue
@@ -899,7 +922,11 @@ def _pages(pages: Any) -> dict[str, Any]:
             and unread > 0
         ):
             annotated += 1
-    return {"page_methods": dict(methods), "annotated_pages": annotated}
+    return {
+        "page_methods": dict(methods),
+        "annotated_pages": annotated,
+        "images": sorted(images),
+    }
 
 
 def _read_views(document: Document, directory: Path, state: dict) -> None:
@@ -1708,6 +1735,10 @@ def _aggregate_documents(
     resolved: Counter = Counter()
     page_methods: Counter = Counter()
     annotated_pages = 0
+    # each PDF's derived images: how many PDFs place how many images, and
+    # the images themselves, each once however many PDFs place it
+    images_per_pdf: Counter = Counter()
+    images: set[str] = set()
     untranscribed = 0
     for document in planned:
         if "transcription" not in document.stages:
@@ -1726,6 +1757,10 @@ def _aggregate_documents(
             resolved[_known(transcription["resolved"], RESOLUTIONS)] += 1
         page_methods.update(transcription.get("page_methods") or {})
         annotated_pages += transcription.get("annotated_pages") or 0
+        placed = transcription.get("images") or []
+        if placed:
+            images_per_pdf[str(len(placed))] += 1
+            images.update(placed)
     return {
         "planned": len(planned),
         "files": entries,
@@ -1748,6 +1783,20 @@ def _aggregate_documents(
         # the text layer leaves unread
         "pdf_pages": _by_count(page_methods),
         "pdf_pages_annotated": annotated_pages,
+        # the images placed within the pages of the PDFs read page by page
+        # and read on their own, per PDF (ADR-0008): the PDFs that place
+        # any, the images they place (an image counted once per PDF, and
+        # once however many PDFs place it), how many PDFs place how many,
+        # and how many of the images are documents of their own, excerpts
+        "pdf_images": {
+            "pdfs": sum(images_per_pdf.values()),
+            "placed": sum(int(n) * c for n, c in images_per_pdf.items()),
+            "distinct": len(images),
+            "per_pdf": dict(
+                sorted(images_per_pdf.items(), key=lambda item: int(item[0]))
+            ),
+            "excerpts": sum(d.kind == EXCERPT for d in planned),
+        },
         "failed": len(failed),
         # the planned documents that failed, by the kind the plan gives
         # each; the others (a source that could not be read has no SHA-1
@@ -2413,10 +2462,25 @@ def _documents_section(documents: Mapping[str, Any]) -> _Section:
             "Pages of PDFs read page by page, by method: "
             f"{_listed(documents['pdf_pages'])}; with annotations the text "
             f"layer leaves unread: {_n(documents['pdf_pages_annotated'])}",
+            _images_line(documents["pdf_images"]),
             f"Language resolved: {_listed(documents['language_resolved'])}",
         ]
     )
     return _Section("Documents", blocks)
+
+
+def _images_line(images: Mapping[str, Any]) -> str:
+    """The derived images of the PDFs read page by page, as one line."""
+    per_pdf = ", ".join(
+        f"{count} in {_n(pdfs)}" for count, pdfs in images["per_pdf"].items()
+    )
+    return (
+        "Images placed within PDFs read page by page and read on their own: "
+        f"{_n(images['placed'])} in {_n(images['pdfs'])} PDFs "
+        f"({_n(images['distinct'])} distinct; images per PDF: "
+        f"{per_pdf or 'none'}); documents of their own (excerpts): "
+        f"{_n(images['excerpts'])}"
+    )
 
 
 def _stage_sections(

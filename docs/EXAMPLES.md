@@ -222,7 +222,14 @@ its own. `engine.RecordedEngine` answers every call the stages before
 write make of them, as a faithful model would, from the universe's own
 assertions for each source (`answers.py`), with one deliberate mistake: it
 reads the family history's *'50* as 1850, and reads it right once the
-chunk prompt carries a rule about two-digit years.
+chunk prompt carries a rule about two-digit years. Its answers take the
+form the extraction prompts ask for (ADR-0035, ADR-0036; #407): each
+person, place and organisation of a manifest has its mention record (the
+postcard's writer, whom it names only as *Dein Vater*, is labelled so,
+with the status `kinship`); each event's participant has a role; and each
+of the universe's spouse assertions is answered as a marriage whose
+couple take part in it as spouses, started by a wedding where the source
+dates the start.
 `tests/unit/test_fixture_corpus.py` takes the corpus through whole scratch
 runs under a refusing wiki, and asserts what must come of each stage and
 each trap, with no gold set. Past the driver it holds the run report

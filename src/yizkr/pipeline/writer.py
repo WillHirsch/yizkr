@@ -17,7 +17,13 @@ Per batch, the writer:
    to the artifact item carrying that `media SHA-1` (ADR-0010). This
    happens before anything is written: a batch that cites media no item
    carries is refused whole, since its statements would have no source
-   to reference;
+   to reference. A claim whose subject is its own source document (an
+   `artifact` subject, such as an `issued_by` claim; ADR-0035 §3.4) is
+   written on that artifact item. A document subject that names any
+   other document, or sits on a property the manifest does not mark
+   `document_subject`, and a claim of such a property whose subject is
+   anything but its own source document, are refused before the first
+   write, as a claim whose text the instance cannot hold is (below);
 1. mints an extraction-run item from the batch metadata (idempotent:
    matched by a deterministic label containing the batch content hash),
    with its run details in the label/description — items describe
@@ -207,6 +213,7 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.wiki import WikiClient
+from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.review import (
     claim_id,
     entity_records,
@@ -645,12 +652,15 @@ class BatchWriter:
 
     def _resolve_ref(
         self,
-        ref: EntityRef,
+        ref: EntityRef | ArtifactRef,
         result: WriteResult,
         source_artifact_qid: str | None,
     ) -> str:
         if isinstance(ref, VocabRef):
             return self.items[ref.key]
+        if isinstance(ref, ArtifactRef):
+            # a claim's own source document, resolved in step 0
+            return self._artifact_qids[ref.sha1]
         if isinstance(ref, QidRef):
             qid = ref.qid
         elif isinstance(ref, LocalRef):
@@ -1320,15 +1330,44 @@ class BatchWriter:
 
     @staticmethod
     def _refusals(batch: ClaimBatch) -> dict[int, str]:
-        """The claims of `batch` whose own text the instance cannot hold as
-        it is, by their place in the batch, each with the warning that
-        names it by its claim id and property and says, for each of its
-        texts, its value or a qualifier's, what keeps the instance from
-        holding it in the form the writer sends it in (_faults): its
-        length, a line break or a tab, whitespace at either end (the module
-        docstring). The warning quotes none of the texts."""
+        """The claims of `batch` the writer refuses, by their place in the
+        batch, each with the warning that names it by its claim id and
+        property and says why (the module docstring):
+
+        * a document subject that is not the claim's own source, or on a
+          property the manifest does not mark `document_subject`, and a
+          claim of such a property with any other subject (ADR-0035
+          §3.4): the statement would go on the wrong item;
+        * a claim whose own text the instance cannot hold as it is: for
+          each of its texts, its value or a qualifier's, what keeps the
+          instance from holding it in the form the writer sends it in
+          (_faults): its length, a line break or a tab, whitespace at
+          either end. The warning quotes none of the texts."""
+        document_subjects = load_acceptance().document_subjects
         refusals = {}
         for index, claim in enumerate(batch.claims):
+            if isinstance(claim.subject, ArtifactRef):
+                reasons = []
+                if claim.subject.sha1 != claim.source.artifact.sha1:
+                    reasons.append(
+                        "its subject is a document other than its own source"
+                    )
+                if claim.property not in document_subjects:
+                    reasons.append(
+                        "its property does not take the source document as "
+                        "its subject"
+                    )
+            elif claim.property in document_subjects:
+                reasons = ["its property takes only its source document"]
+            else:
+                reasons = []
+            if reasons:
+                refusals[index] = (
+                    f"claim {claim_id(claim)} ({claim.property}) is "
+                    f"refused, and nothing of it is written: "
+                    f"{'; '.join(reasons)} (ADR-0035 §3.4)"
+                )
+                continue
             texts = [("its value", claim.value)]
             texts.extend(
                 (f"its {qualifier.property} qualifier", qualifier.value)

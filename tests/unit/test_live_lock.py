@@ -15,6 +15,7 @@ tries a held lock more often than a real session does.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import http.server
 import json
 import os
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +62,14 @@ live_lock.POLL_INTERVAL = {POLL}
 with live_lock.hold(announce=lambda message: print(message, flush=True)):
     print("acquired", flush=True)
     sys.stdin.readline()
+print("released", flush=True)
+sys.stdin.readline()
+"""
+
+# Says that it released the lock, and exits on a line from stdin.
+HOLDER_SAYS_RELEASED = """\
+import sys
+
 print("released", flush=True)
 sys.stdin.readline()
 """
@@ -138,6 +148,15 @@ class Child:
     def wait_for(self, text: str) -> None:
         until(lambda: text in self.output(), f"{text!r}", self)
 
+    def said(self, line: str) -> bool:
+        """Whether the process has printed `line` as a whole line. A cue
+        such as "released" is matched whole, as the announcement before
+        it quotes paths and a command line that may hold the word."""
+        return line in self.output().splitlines()
+
+    def wait_for_line(self, line: str) -> None:
+        until(lambda: self.said(line), f"the line {line!r}", self)
+
     def stop(self) -> None:
         if self.running():
             self.process.kill()
@@ -161,6 +180,25 @@ def until(
         time.sleep(0.01)
     output = f"\noutput of pid {child.pid}:\n{child.output()}" if child else ""
     pytest.fail(f"gave up waiting for {what}{output}")
+
+
+def until_empty(path: Path, what: str, child: Child) -> None:
+    """Wait until the file at `path` is empty, as a lock record goes with
+    the lock that `child` released. A holder empties its record before it
+    releases the lock, so the first read should find the file empty. On
+    one machine a read across processes once found the record still
+    there (#379), with no cause found, so the file is read again within
+    PATIENCE rather than failing at once. A first read that finds the
+    record is warned about, naming the child's output, so a recurrence
+    stays visible."""
+    if path.read_text() != "":
+        warnings.warn(
+            f"{what}: {path} was not empty at the first read after the "
+            f"release; waiting for it\noutput of pid {child.pid}:\n"
+            f"{child.output()}",
+            stacklevel=2,
+        )
+    until(lambda: path.read_text() == "", what, child)
 
 
 @contextlib.contextmanager
@@ -314,7 +352,7 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Runs]:
     with stand_in_stack() as stack, spawner(root) as start:
         held_lock = root / "held" / "live-stack.lock"
         holder = start("holder", holder_args(root), child_env(held_lock))
-        holder.wait_for("acquired")
+        holder.wait_for_line("acquired")
 
         pair_lock = root / "pair" / "live-stack.lock"
         pair_a, pair_b = (
@@ -370,8 +408,13 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Runs]:
 
 @pytest.fixture
 def lock(tmp_path: Path) -> Path:
-    """A lock file in a folder that does not exist yet."""
-    return tmp_path / "cache" / "yizkr" / "live-stack.lock"
+    """A lock file in a folder that does not exist yet. The folder's
+    path holds both cues that a holder prints, so the announcement that
+    quotes it holds them too: only a cue matched as a whole line
+    (Child.said) tells a holder's state."""
+    return (
+        tmp_path / "released acquired" / "cache" / "yizkr" / "live-stack.lock"
+    )
 
 
 @pytest.fixture
@@ -412,7 +455,7 @@ def test_a_live_session_holds_the_lock_from_its_first_stack_test_to_its_end(
     assert "session ended: 0" in second.output(), second.output()
     assert second.output().count("is held by") == 1
     # each emptied its record as it released the lock
-    assert runs.pair_lock.read_text() == ""
+    until_empty(runs.pair_lock, "the pair's record to go", second)
     with hold(runs.pair_lock, timeout=0):
         pass
 
@@ -463,38 +506,103 @@ def test_a_second_holder_waits_until_the_first_releases_the_lock(
     lock, start_holder
 ):
     first = start_holder("first")
-    first.wait_for("acquired")
+    first.wait_for_line("acquired")
     assert record(lock)["pid"] == first.pid
 
     second = start_holder("second")
     second.wait_for(f"held by pid {first.pid} ")
     time.sleep(WATCH)
-    assert "acquired" not in second.output()
+    assert not second.said("acquired")
 
     first.cue()  # release the lock, and stay running
-    first.wait_for("released")
-    second.wait_for("acquired")
+    first.wait_for_line("released")
+    second.wait_for_line("acquired")
     assert first.running()
     assert record(lock)["pid"] == second.pid
     # the holder is announced once, however many times the second tried
     assert second.output().count("is held by") == 1
 
     second.cue()
-    second.wait_for("released")
-    assert lock.read_text() == ""  # the record goes with the lock
+    second.wait_for_line("released")
+    # The record goes with the lock. The holder empties it before it
+    # releases the lock and so before it prints "released", as the next
+    # test checks step by step, in this process.
+    until_empty(lock, "the record to go", second)
+
+
+def test_the_record_is_emptied_before_the_lock_is_released(lock, monkeypatch):
+    """A holder empties its record, then releases the lock, then returns
+    from hold(): so no holder that takes the lock next finds the record
+    of one that released it, and whatever a holder does after its hold,
+    such as announcing the release, comes after both.
+
+    The release watched is the explicit LOCK_UN call. Closing the file
+    alone would release the lock as well, and in order, but hold()'s
+    order is empty, unlock, close, and a hold() that leaves the release
+    to the close fails here on purpose."""
+    at_release: list[str] = []
+    flock = fcntl.flock
+
+    def watched(fd: int, operation: int) -> None:
+        if operation == fcntl.LOCK_UN:
+            at_release.append(lock.read_text())
+        flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, "flock", watched)
+    with hold(lock, timeout=0):
+        assert record(lock)["pid"] == os.getpid()
+        assert at_release == []
+    assert at_release == [""]  # released once, with the record emptied
+    assert lock.read_text() == ""
+    # and the lock is free: another open file description takes it at once
+    with hold(lock, timeout=0):
+        pass
+
+
+def test_a_record_that_empties_late_is_warned_about_then_waited_for(
+    tmp_path,
+):
+    record_file = tmp_path / "live-stack.lock"
+    record_file.write_text("")
+    with spawner(tmp_path) as start:
+        holder = start(
+            "holder",
+            [sys.executable, "-c", HOLDER_SAYS_RELEASED],
+            dict(os.environ),
+        )
+        holder.wait_for_line("released")
+        # an empty file passes at the first read, with no warning
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            until_empty(record_file, "the record to go", holder)
+
+        record_file.write_text('{"pid": 1}')
+        emptier = threading.Timer(0.1, record_file.write_text, args=("",))
+        emptier.start()
+        try:
+            with pytest.warns(UserWarning) as warned:
+                until_empty(record_file, "the record to go", holder)
+        finally:
+            emptier.join()
+    assert record_file.read_text() == ""
+    [warning] = warned
+    message = str(warning.message)
+    assert message.startswith("the record to go: ")
+    # it names the holder and gives its output
+    assert f"output of pid {holder.pid}:\nreleased\n" in message
 
 
 def test_a_holder_killed_with_sigkill_releases_the_lock(lock, start_holder):
     # The first holder's record is the longer, so a record written over it
     # without emptying the file first would not parse.
     first = start_holder("first", "x" * 200)
-    first.wait_for("acquired")
+    first.wait_for_line("acquired")
     second = start_holder("second")
     second.wait_for(f"held by pid {first.pid} ")
 
     first.process.send_signal(signal.SIGKILL)
     first.process.wait(timeout=PATIENCE)
-    second.wait_for("acquired")
+    second.wait_for_line("acquired")
     holder = record(lock)
     assert holder["pid"] == second.pid
     assert holder["cwd"] == str(second.cwd)
@@ -503,7 +611,7 @@ def test_a_holder_killed_with_sigkill_releases_the_lock(lock, start_holder):
 def test_giving_up_names_the_holder(lock, start_holder, monkeypatch):
     monkeypatch.setattr(live_lock, "POLL_INTERVAL", POLL)
     first = start_holder("first", "--an-argument")
-    first.wait_for("acquired")
+    first.wait_for_line("acquired")
 
     announced: list[str] = []
     started = time.monotonic()
