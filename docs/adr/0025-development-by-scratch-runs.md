@@ -47,6 +47,12 @@ Amended by #103 (2026-09-29): the per-document path registers each
 document as its write begins, by the SHA-1 of its bytes, instead of
 before its stages; §2 is amended in place.
 
+Amended by #124 (2026-09-29): the run report reads the run directory, and
+never the LLM cache, so it gives what the cache's events record of each
+recompute (each miss's reason, and replays), and the run-to-run diff
+(#198) attributes a recompute to the key component that changed; §3 is
+amended in place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -314,10 +320,10 @@ futile, and explain itself afterwards.
   for its calls, which keep their keys' components (the prompt, a file,
   the model, the config hash, the attempt, the epoch), compared with the
   baseline's calls (ADR-0032 §11). Amended by #124 (2026-09-29): the
-  report reads the run directory alone, so it gives what the cache's
-  events record of each recompute (each miss's reason, and replays), and
-  the run-to-run diff (§4, #198) attributes a recompute to the key
-  component that changed.
+  report reads the run directory, and never the LLM cache, so it gives
+  what the cache's events record of each recompute (each miss's reason,
+  and replays), and the run-to-run diff (§4, #198) attributes a recompute
+  to the key component that changed.
 
 ### 4. Checking prompt, schema and model changes: `needs:scratch-diff`
 

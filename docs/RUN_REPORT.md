@@ -35,9 +35,13 @@ directory's `.report` folder and prints where:
 
 Run again, it replaces each file whole. The folder is made private to its
 owner (mode 700) every time, one there already included; a `.report` that
-is a symbolic link, or no folder, is refused. No document's directory can
-take the name: the orchestrator names them by slugs, which never start
-with a dot, and a directory it sets aside by `.<name>.superseded-<n>`.
+is a symbolic link, or no folder, is refused. The folder is opened once,
+and each file is written through it as it was opened, never through its
+path again, so a folder swapped for another, or for a link, once opened
+takes none of them; each file is private to its owner (mode 600). No
+document's directory can take the name: the orchestrator names them by
+slugs, which never start with a dot, and a directory it sets aside by
+`.<name>.superseded-<n>`.
 
 A run directory is refused, with a message, when it holds no `run.json`,
 when its `run.json` cannot be read or holds no JSON object, or when its

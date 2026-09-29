@@ -808,6 +808,8 @@ def identity_map() -> dict:
             "conflicting_hard": 1,
             "singletons": 2,
             "identity_clusters": 9,
+            "hub_keys": 3,
+            "hub_mentions": 40,
             "merged_mentions": 5,
             "adjudication": {
                 "pairs_per_call": 40,
@@ -1473,6 +1475,8 @@ class TestCorpusStages:
         assert counts["ambiguous, left split"] == 1
         assert counts["conflicting"] == 1
         assert counts["singletons"] == 2
+        assert counts["hub keys, not blocked on"] == 3
+        assert counts["mentions holding them"] == 40
         assert clusters["by_kind"] == {"human": 8, "place": 3, OTHER: 1}
 
     def test_a_run_without_the_stage_says_not_run(self, tmp_path):
@@ -1971,6 +1975,8 @@ class TestFiles:
         assert set(written) == {"report.json", "report.html", "report.md"}
         assert all(path.parent == folder for path in written.values())
         assert os.stat(folder).st_mode & 0o777 == 0o700
+        for path in written.values():
+            assert os.stat(path).st_mode & 0o777 == 0o600
         loaded = json.loads(written["report.json"].read_text())
         assert loaded["aggregate"]["run"]["run_id"] == RUN_ID
         # written again, each is replaced whole
@@ -2020,6 +2026,32 @@ class TestFiles:
         page = write_report(path, now=NOW)["report.html"].read_text()
         assert "<script>" not in page
         assert "&lt;script&gt;Löbig&lt;/script&gt;.jpg" in page
+
+    def test_a_folder_swapped_once_opened_takes_no_file(
+        self, run, tmp_path, monkeypatch
+    ):
+        """The folder, swapped for a link to another just after it was
+        opened and made private: the files go into the folder that was
+        opened, and none into the one the link names."""
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        opened = run / ".report-opened"
+        private = report._private_folder
+
+        def then_swapped(folder):
+            descriptor = private(folder)
+            folder.rename(opened)
+            folder.symlink_to(elsewhere)
+            return descriptor
+
+        monkeypatch.setattr(report, "_private_folder", then_swapped)
+        write_report(run, now=NOW)
+        assert list(elsewhere.iterdir()) == []
+        assert sorted(path.name for path in opened.iterdir()) == [
+            "report.html",
+            "report.json",
+            "report.md",
+        ]
 
     def test_a_folder_that_is_a_link_is_refused(self, run, tmp_path):
         elsewhere = tmp_path / "elsewhere"

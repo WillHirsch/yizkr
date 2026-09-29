@@ -50,7 +50,9 @@ call's key are kept in the cache's entry, not in the run directory, and
 which of them changed shows only against a baseline run (ADR-0032 §11).
 
 **Outputs.** `write_report` writes three files into the run directory's
-REPORT_DIR. No document's directory can take that name: the orchestrator
+REPORT_DIR, a folder made private to its owner and opened once: each file
+is written through the folder as it was opened, never through its path
+again. No document's directory can take that name: the orchestrator
 names them by slugs, which never start with a dot, and a directory it
 sets aside by `.<name>.superseded-<n>`.
 
@@ -85,6 +87,7 @@ stage makes; and flags by tier and class, until a stage makes them
 
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import os
@@ -138,7 +141,7 @@ from yizkr.pipeline.rundir import (
     invocation_records,
 )
 from yizkr.pipeline.scratch import BARRIER, CORPUS_DIR, CORPUS_STAGES
-from yizkr.pipeline.stages import atomic_write_text, read_jsonl
+from yizkr.pipeline.stages import read_jsonl, staging_path
 
 # the version of report.json's layout
 FORMAT = 1
@@ -3166,35 +3169,41 @@ def write_report(
     """Build the report of the run directory at `path`, and write
     report.json, report.html and report.md into its REPORT_DIR, each
     replaced whole, in a folder private to its owner (_private_folder).
+    The files are written through the folder as it was opened and made
+    private, never through its path again (_write_in), so a folder swapped
+    for another, or for a link, once opened takes none of them.
     ReportError for a folder that cannot be made, opened or written.
     Returns each file's path by its name."""
     path = Path(path)
     report = build(path, now=now)
+    texts = {
+        JSON_FILE: render_json(report),
+        HTML_FILE: render_html(report),
+        MARKDOWN_FILE: render_markdown(report["aggregate"]),
+    }
     folder = path / REPORT_DIR
-    _private_folder(folder)
-    written = {}
-    for name, text in (
-        (JSON_FILE, render_json(report)),
-        (HTML_FILE, render_html(report)),
-        (MARKDOWN_FILE, render_markdown(report["aggregate"])),
-    ):
-        try:
-            atomic_write_text(folder / name, text)
-        except OSError as exc:
-            raise ReportError(
-                f"{folder / name} cannot be written: {exc}"
-            ) from None
-        written[name] = folder / name
-    return written
+    descriptor = _private_folder(folder)
+    try:
+        for name, text in texts.items():
+            try:
+                _write_in(descriptor, name, text)
+            except OSError as exc:
+                raise ReportError(
+                    f"{folder / name} cannot be written: {exc}"
+                ) from None
+    finally:
+        os.close(descriptor)
+    return {name: folder / name for name in texts}
 
 
-def _private_folder(folder: Path) -> None:
+def _private_folder(folder: Path) -> int:
     """Make `folder` when it is not there, and make it private to its
     owner (mode 700) every time, a folder there already included: it is
     opened as a folder, never through a symbolic link, and its mode is
-    set through what was opened. ReportError for a symbolic link,
-    anything else that is no folder, and a folder that cannot be made,
-    opened or made private."""
+    set through what was opened. Returns the open folder, a descriptor
+    the caller closes. ReportError for a symbolic link, anything else
+    that is no folder, and a folder that cannot be made, opened or made
+    private."""
     try:
         folder.mkdir(mode=0o700)
     except FileExistsError:
@@ -3211,6 +3220,31 @@ def _private_folder(folder: Path) -> None:
     try:
         os.fchmod(descriptor, 0o700)
     except OSError as exc:
-        raise ReportError(f"{folder} cannot be made private: {exc}") from None
-    finally:
         os.close(descriptor)
+        raise ReportError(f"{folder} cannot be made private: {exc}") from None
+    return descriptor
+
+
+def _write_in(folder: int, name: str, text: str) -> None:
+    """Replace the file `name` in the folder open as `folder` with `text`,
+    whole: it is written under a fresh name beside it (stages.
+    staging_path's), private to its owner (mode 600), and then moved into
+    place, all through the folder's descriptor. A reader sees the old file
+    or the new one, and a write cut short leaves the file as it was."""
+    staging = staging_path(Path(name)).name
+    descriptor = os.open(
+        staging,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+        dir_fd=folder,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staging, name, src_dir_fd=folder, dst_dir_fd=folder)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(staging, dir_fd=folder)
+        raise

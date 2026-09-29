@@ -51,6 +51,11 @@ the same but the session, which names a session of the account and so
 stays out of the event log the run report reads; a replay's event says
 it is one (§3, §8).
 
+Amended by #124 (2026-09-29): the run-to-run diff (#198) compares a
+recompute's calls with the baseline's, component by component; the run
+report, which reads the run directory, and never the LLM cache, gives
+each recompute's miss reasons and replays from the cache's events (§11).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -508,8 +513,8 @@ longer wrapping the client.
   (the prompt, a file, the model, the config hash, the attempt, the
   epoch), where ADR-0025 named the key component of a stage. Amended by
   #124 (2026-09-29): the diff makes that comparison, and the run report,
-  which reads the run directory alone, gives each recompute's miss
-  reasons from the cache's events.
+  which reads the run directory, and never the LLM cache, gives each
+  recompute's miss reasons and replays from the cache's events.
 
 ### 12. What goes
 
