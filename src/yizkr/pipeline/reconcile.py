@@ -44,7 +44,7 @@ from yizkr.claims import ClaimBatch, EntityRecord, ItemValue, LocalRef, QidRef
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.extract import scan_json_objects
-from yizkr.pipeline.llm import LlmClient
+from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
 from yizkr.queries.publish import prefix_block
 
 
@@ -558,7 +558,7 @@ For every (entity, candidate) pair below, output one NDJSON line:
 "confidence": <0-1>, "evidence": "<one sentence naming the deciding facts>"}}
 No wrapper object, no code fences, no prose. After the last line, end
 with exactly one final line:
-{{"done": true, "proposals_emitted": N}}
+{{"done": true}}
 
 Entities from the new document:
 {entities_block}
@@ -609,12 +609,21 @@ def _batch_candidates(
     return batches
 
 
-def _parse_proposals(response: str, valid_pairs: set[tuple[str, str]]):
+def _parse_proposals(
+    response: str,
+    valid_pairs: set[tuple[str, str]],
+    *,
+    cut_off: bool = False,
+):
+    """The proposals of an adjudication answer on the pairs it was given.
+    Raises ValueError for an answer cut off: one the engine stopped at its
+    output limit (`cut_off`, llm.at_output_limit), or one without its
+    terminal sentinel, a line whose `done` is true."""
     proposals: list[Proposal] = []
-    sentinel = None
+    finished = False
     for obj in scan_json_objects(response):
         if obj.get("done") is True:
-            sentinel = obj.get("proposals_emitted")
+            finished = True
             continue
         if "entity_id" not in obj or "qid" not in obj:
             continue
@@ -628,7 +637,9 @@ def _parse_proposals(response: str, valid_pairs: set[tuple[str, str]]):
         pair = (proposal.entity_id, proposal.qid)
         if pair in valid_pairs or pair[::-1] in valid_pairs:
             proposals.append(proposal)
-    if sentinel is None:
+    if cut_off:
+        raise ValueError(f"adjudication response {CUT_OFF_AT_LIMIT}")
+    if not finished:
         raise ValueError("adjudication response carried no terminal sentinel")
     return proposals
 
@@ -683,7 +694,11 @@ def adjudicate(
             for entity_id, matches in chunk.items()
             for roster_entity in matches
         }
-        parsed = _parse_proposals(response, valid_pairs)
+        parsed = _parse_proposals(
+            response,
+            valid_pairs,
+            cut_off=at_output_limit(client, response),
+        )
         print(
             f"  batch {index}/{len(chunks)}: {len(valid_pairs)} pairs -> "
             f"{len(parsed)} proposals (sentinel ok)",
@@ -927,7 +942,7 @@ may be missing, for a separate review. Only add it for two places where
 one genuinely contains the other; never for people or organizations.
 
 After the last line, end with exactly one final line:
-{{"done": true, "proposals_emitted": N}}
+{{"done": true}}
 
 Pairs:
 {pairs_block}
@@ -986,7 +1001,13 @@ def propose_graph_pairs(
             GRAPH_ADJUDICATION_PROMPT.format(pairs_block=pairs_block)
         )
         valid_pairs = {(first.qid, second.qid) for first, second in chunk}
-        proposals.extend(_parse_proposals(response, valid_pairs))
+        proposals.extend(
+            _parse_proposals(
+                response,
+                valid_pairs,
+                cut_off=at_output_limit(client, response),
+            )
+        )
     return proposals
 
 
