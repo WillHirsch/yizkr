@@ -3264,6 +3264,24 @@ class TestMentionRecords:
         assert entity.aliases == ["Xy Bcd"]
         assert structure_problems(entity) == []
 
+    def test_a_record_that_adds_a_name_is_a_bug_the_adapter_refuses(
+        self, monkeypatch
+    ):
+        # deterministic code whose record adds a part no name form holds
+        # is a bug, refused before any batch leaves the adapter (§5)
+        from yizkr.pipeline import gedcom
+
+        real = gedcom.read_name
+
+        def adding(name):
+            reading = real(name)
+            reading.given.append("Zyx")
+            return reading
+
+        monkeypatch.setattr(gedcom, "read_name", adding)
+        with pytest.raises(ValueError, match="addition: 'Zyx'"):
+            adapt_gedcom(person("I1", "Eugen /Löbig/"), artifact=EXPORT)
+
     def test_a_place_is_named_by_its_first_component(self):
         batch = fixture_result().batch
         (place,) = [
