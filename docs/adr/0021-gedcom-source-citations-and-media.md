@@ -29,6 +29,16 @@ are counted; every PAGE and TITL is read, and a page number holds at
 most 400 characters; and a clipped excerpt keeps its citations and the
 lines they stand beneath, and ends with a key of its whole text: see
 Amendments.
+Amended by #408 (2026-09-29): a family's MARR, DIV and ANUL are events of
+its union (ADR-0036 §5), so a SOUR beneath one is folded into that
+event's claims and the union's claim that points to it, and the family
+record's own SOURs into its couple's claims; each such claim's excerpt
+holds the family's own line, its HUSB and WIFE, and the lines of the
+record that gives it. A divorce's PLAC is read as its location, and an
+ANUL is read; a MARR's TYPE is read where it names the ceremony's kind;
+a DIV Y is an undated divorce; a DIV or ANUL that states no event is
+counted, as a DEAT is. The HEAD's LANG gives the language of the
+excerpts and names (ADR-0035 §6).
 
 ## Context
 

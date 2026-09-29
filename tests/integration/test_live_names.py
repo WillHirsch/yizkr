@@ -281,7 +281,8 @@ GEDCOM = """\
 
 def test_gedcom_path_alias_bag_and_typed_names(client, tmp_path):
     """The adapter's names are hygiened like the LLM path's: the derivable
-    'Hildegard Namecheck' is dropped, the compound forms land whole, and the
+    'Hildegard Namecheck' is dropped, the compound forms land whole, a
+    NICK and a `_MARNM` are name forms too (ADR-0035 §6, #408), and the
     structured tags become typed, referenced name statements."""
     export = tmp_path / "integration-names-tree.ged"
     export.write_text(GEDCOM)
@@ -296,6 +297,8 @@ def test_gedcom_path_alias_bag_and_typed_names(client, tmp_path):
     expected_aliases = {
         "Hildegard Probewald-Namecheck",
         "Hildegard van der Probewald",
+        "Hilde",
+        "Hildegard Probewald",
     }
     result = adapt_gedcom(GEDCOM, artifact=exported)
     # checked BEFORE writing: aliases are append-only, so a validator

@@ -10,9 +10,17 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
+from yizkr.claims import (
+    ArtifactRef,
+    ClaimBatch,
+    MonolingualText,
+    structure_problems,
+    validate_against_manifest,
+)
 from yizkr.pipeline.gedcom import (
     ADAPTER_IDENTIFIER,
+    GEDCOM_LANGUAGES,
+    UNDETERMINED,
     adapt_gedcom,
     format_unsupported_tags,
     parse_gedcom,
@@ -134,25 +142,27 @@ class TestDates:
         assert quals[0]["property"] == "sourcing_circumstances"
 
 
-# The one retired property the adapter still states (ADR-0036 §5 has it
-# make marriages instead).
-RETIRED_SPOUSE = frozenset({"spouse"})
+def item_of(value) -> str:
+    """The local id or vocabulary key an item value names."""
+    ref = value.value
+    return getattr(ref, "local_id", None) or ref.key
+
+
+def roles(claim) -> list[str]:
+    return [
+        q.value.value.key
+        for q in claim.qualifiers
+        if q.property == "object_has_role"
+    ]
 
 
 class TestAdapter:
     def test_batch_is_manifest_valid_and_deterministic(self):
         first = fixture_result()
-        assert (
-            validate_against_manifest(
-                first.batch, allow_retired=RETIRED_SPOUSE
-            )
-            == []
-        )
-        # the couples' spouse claims are all the adapter's own check lets
-        # through (ADR-0036 retires the property)
-        problems = validate_against_manifest(first.batch)
-        assert problems
-        assert all("'spouse' is retired" in p for p in problems)
+        # the batch holds no claim of a retired property, so the manifest
+        # check passes as it stands (ADR-0036 retires `spouse`)
+        assert validate_against_manifest(first.batch) == []
+        assert not [c for c in first.batch.claims if c.property == "spouse"]
         second = fixture_result()
         assert first.batch.claims == second.batch.claims
         assert first.batch.entities == second.batch.entities
@@ -164,7 +174,7 @@ class TestAdapter:
         batch = fixture_result().batch
         caecilie = next(e for e in batch.entities if e.id == "i2")
         assert caecilie.label == "Cäcilie Tarle"
-        assert caecilie.aliases == ["Cäcilie Löbig"]
+        assert caecilie.aliases == ["Cäcilie Löbig", "Cilli"]
         assert caecilie.kind == "human"
         # places become entities too, deduplicated by name
         floerburg = [
@@ -192,25 +202,72 @@ class TestAdapter:
         assert father.value.value.local_id == "i3"
         (mother,) = claims_for(batch, "i8", "mother")
         assert mother.value.value.local_id == "i4"
-        (marriage,) = [
-            c
-            for c in claims_for(batch, "i3", "spouse")
-            if c.value.value.local_id == "i4"
+        # Sebastian and Hildegard's family is a marriage, whose couple
+        # take part in it as spouses, started by its civil wedding
+        kinds = {e.id: e.kind for e in batch.entities}
+        assert kinds["f2"] == "marriage"
+        spouses = claims_for(batch, "f2", "participant")
+        assert [(item_of(c.value), roles(c)) for c in spouses] == [
+            ("i3", ["spouse"]),
+            ("i4", ["spouse"]),
         ]
-        quals = {q.property for q in marriage.qualifiers}
-        assert {"start_time", "location"} <= quals
+        (started,) = claims_for(batch, "f2", "started_by")
+        assert item_of(started.value) == "f2-civil-wedding"
+        assert kinds["f2-civil-wedding"] == "civil_wedding"
+        (date,) = claims_for(batch, "f2-civil-wedding", "point_in_time")
+        assert (date.value.year, date.value.month, date.value.day) == (
+            1905,
+            12,
+            15,
+        )
+        (place,) = claims_for(batch, "f2-civil-wedding", "location")
+        places = {e.id: e.label for e in batch.entities}
+        assert places[item_of(place.value)] == "Flörburg, Hesse, Germany"
 
-    def test_divorce_becomes_end_time(self):
+    def test_divorce_is_an_event_that_ends_the_marriage(self):
         # Leopold (i11) and Agnes (i17): married 8 Feb 1947, divorced
-        # 2 Jan 1957; each spouse claim carries both dates
+        # 2 Jan 1957; the union is ended by its divorce, which the DIV
+        # dates
         batch = fixture_result().batch
-        for subject, other in (("i11", "i17"), ("i17", "i11")):
-            (spouse,) = claims_for(batch, subject, "spouse")
-            assert spouse.value.value.local_id == other
-            quals = {q.property: q.value for q in spouse.qualifiers}
-            start, end = quals["start_time"], quals["end_time"]
-            assert (start.year, start.month, start.day) == (1947, 2, 8)
-            assert (end.year, end.month, end.day) == (1957, 1, 2)
+        (ended,) = claims_for(batch, "f5", "ended_by")
+        assert item_of(ended.value) == "f5-divorce"
+        (date,) = claims_for(batch, "f5-divorce", "point_in_time")
+        assert (date.value.year, date.value.month, date.value.day) == (
+            1957,
+            1,
+            2,
+        )
+        assert date.qualifiers == []
+
+    def test_felix_and_idas_family_is_a_partnership(self):
+        # the export gives Felix and Ida no MARR (ADR-0036 §4)
+        batch = fixture_result().batch
+        (union,) = [e for e in batch.entities if e.id == "f3"]
+        assert union.kind == "partnership"
+        assert union.label == "Partnership of Felix Löbig and Ida Sörne"
+        partners = claims_for(batch, "f3", "participant")
+        assert [(item_of(c.value), roles(c)) for c in partners] == [
+            ("i6", ["partner"]),
+            ("i7", ["partner"]),
+        ]
+        assert claims_for(batch, "f3", "started_by") == []
+
+    def test_no_end_is_inferred_from_a_partners_death(self):
+        # Eugen's and Cäcilie's deaths end no union: only the divorce of
+        # Leopold and Agnes ends one
+        batch = fixture_result().batch
+        ended = [c for c in batch.claims if c.property == "ended_by"]
+        assert [c.subject.local_id for c in ended] == ["f5"]
+
+    def test_the_fixture_counts_its_unions(self):
+        assert fixture_result().outcomes == {
+            "NAME bracketed part": 1,
+            "union: marriage": 4,
+            "union: wedding": 2,
+            "union: civil wedding": 2,
+            "union: partnership": 1,
+            "union: divorce": 1,
+        }
 
     def test_every_claim_carries_verbatim_gedcom_excerpt(self):
         batch = fixture_result().batch
@@ -366,12 +423,28 @@ class TestTypedNames:
         batch = fixture_result().batch
         assert self._name(batch, "i2", "nickname") == ["Cilli"]
 
-    def test_inline_parenthetical_nickname_extracted(self):
-        # "Ida (Peppi) Sörne" -> nickname "Peppi", label keeps it all
+    def test_a_bracketed_part_is_an_alias_and_no_nickname(self):
+        # "Ida (Peppi) Sörne": a bracket may hold a nickname, a maiden
+        # name or a note, so "Peppi" is an alias and an unsplit form of
+        # Ida's record, and no typed-name claim (ADR-0035 §6)
         batch = fixture_result().batch
-        assert self._name(batch, "i7", "nickname") == ["Peppi"]
+        assert self._name(batch, "i7", "nickname") == []
         ida = next(e for e in batch.entities if e.id == "i7")
-        assert ida.label == "Ida (Peppi) Sörne"
+        assert ida.label == "Ida Sörne"
+        assert "Peppi" in ida.aliases
+        assert ida.structure.unsplit == ["Peppi"]
+        assert ida.structure.nicknames == []
+
+    def test_a_quoted_part_stays_a_nickname(self):
+        batch = adapt_gedcom(
+            "0 @I1@ INDI\n1 NAME Cäcilie 'Cilli' /Tarle/\n0 TRLR\n",
+            artifact=EXPORT,
+        ).batch
+        assert self._name(batch, "i1", "nickname") == ["Cilli"]
+        (caecilie,) = batch.entities
+        assert caecilie.label == "Cäcilie 'Cilli' Tarle"
+        assert caecilie.structure.nicknames == ["Cilli"]
+        assert [g.written for g in caecilie.structure.given] == ["Cäcilie"]
 
     def test_name_type_immigrant_is_official(self):
         batch = fixture_result().batch
@@ -414,11 +487,12 @@ class TestTypedNames:
 
     def test_label_and_aliases_unchanged_by_typing(self):
         # the two-layer design: typing adds claims, never disturbs the
-        # label/alias match index
+        # label/alias match index, which holds every name form, a NICK's
+        # included
         batch = fixture_result().batch
         caecilie = next(e for e in batch.entities if e.id == "i2")
         assert caecilie.label == "Cäcilie Tarle"
-        assert caecilie.aliases == ["Cäcilie Löbig"]
+        assert caecilie.aliases == ["Cäcilie Löbig", "Cilli"]
 
     def test_explicit_type_gedcom_maiden_and_aka(self):
         batch = adapt_gedcom(
@@ -653,10 +727,7 @@ class TestMediaObjects:
 
     def test_batch_stays_manifest_valid(self):
         batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
-        assert (
-            validate_against_manifest(batch, allow_retired=RETIRED_SPOUSE)
-            == []
-        )
+        assert validate_against_manifest(batch) == []
 
     def test_shared_object_is_one_media_item(self):
         gedcom = (
@@ -742,201 +813,282 @@ def couple(marriage: str | None = None, divorce: str | None = None) -> str:
 
 def shown(value) -> tuple | str:
     """A qualifier's value: a time as (year, month, day, precision), a
-    vocabulary item by its key."""
+    vocabulary item by its key, a local entity by its id."""
     if value.type == "time":
         return value.year, value.month, value.day, value.precision
-    return value.value.key
-
-
-def spouse_qualifiers(text: str) -> list[tuple]:
-    """The qualifiers of the couple's spouse claims, which agree, as
-    (property, value) pairs in property order."""
-    batch = adapt_gedcom(text, artifact=EXPORT).batch
-    found = []
-    for subject in ("i11", "i17"):
-        (spouse,) = claims_for(batch, subject, "spouse")
-        found.append(
-            sorted((q.property, shown(q.value)) for q in spouse.qualifiers)
-        )
-    assert found[0] == found[1]
-    return found[0]
+    return item_of(value)
 
 
 def year(number: int) -> tuple:
     return number, None, None, "year"
 
 
-class TestMarriageDates:
-    """A marriage's date is its spouse claims' start time and a divorce's
-    their end time, each with the range its date states as the bounds of
-    that end (docs/MODELING.md, "Marriages, residences and other
-    periods")."""
+# the kinds of a union and its events (ADR-0036)
+UNION_KINDS = {
+    "partnership", "marriage", "wedding", "civil_wedding",
+    "religious_wedding", "divorce", "annulment", "event",
+}  # fmt: skip
 
-    def test_no_spouse_claim_carries_a_point_in_time(self):
-        spouses = [
-            claim
-            for claim in fixture_result().batch.claims
-            if claim.property == "spouse"
-        ]
-        assert spouses
-        for claim in spouses:
-            assert "point_in_time" not in {
-                q.property for q in claim.qualifiers
-            }
 
-    def test_a_marriage_date_is_the_start_time(self):
-        # Sebastian and Hildegard, married on 15 December 1905
-        batch = fixture_result().batch
-        (marriage,) = [
-            c
-            for c in claims_for(batch, "i3", "spouse")
-            if c.value.value.local_id == "i4"
+def unions(batch) -> dict[str, str]:
+    """Each union entity and union event of the batch: id -> kind."""
+    return {e.id: e.kind for e in batch.entities if e.kind in UNION_KINDS}
+
+
+def on(batch, subject: str, prop: str | None = None) -> list[tuple]:
+    """The claims on `subject` (of `prop`), each as (property, value,
+    qualifiers), the qualifiers as sorted (property, value) pairs."""
+    return [
+        (
+            claim.property,
+            shown(claim.value),
+            sorted((q.property, shown(q.value)) for q in claim.qualifiers),
+        )
+        for claim in claims_for(batch, subject, prop)
+    ]
+
+
+def dates(text: str, event: str) -> list[tuple]:
+    """The date claims of one event of Leopold and Agnes's union, as
+    `stated` gives them."""
+    batch = adapt_gedcom(text, artifact=EXPORT).batch
+    return [
+        entry
+        for entry in on(batch, event)
+        if entry[0] in ("point_in_time", "start_time", "end_time")
+    ]
+
+
+class TestUnions:
+    """A family with two partners is a union, bounded by the events its
+    MARR, DIV and ANUL give (ADR-0036 §5)."""
+
+    def test_a_family_with_a_marriage_is_a_marriage_of_spouses(self):
+        batch = adapt_gedcom(couple("8 FEB 1947"), artifact=EXPORT).batch
+        assert unions(batch) == {"f5": "marriage", "f5-wedding": "wedding"}
+        (union,) = [e for e in batch.entities if e.id == "f5"]
+        assert union.label == "Marriage of Leopold Löbig and Agnes Löbig"
+        assert on(batch, "f5", "participant") == [
+            ("participant", "i11", [("object_has_role", "spouse")]),
+            ("participant", "i17", [("object_has_role", "spouse")]),
         ]
-        (start,) = [
-            q for q in marriage.qualifiers if q.property == "start_time"
+        assert on(batch, "f5", "started_by") == [
+            ("started_by", "f5-wedding", [])
         ]
-        assert shown(start.value) == (1905, 12, 15, "day")
+        # the couple take part in the union alone
+        assert on(batch, "f5-wedding", "participant") == []
+
+    def test_a_family_without_a_marriage_is_a_partnership(self):
+        # the export's Felix and Ida have no MARR (ADR-0036 §4), nor here
+        # Leopold and Agnes
+        result = adapt_gedcom(family(), artifact=EXPORT)
+        assert unions(result.batch) == {"f5": "partnership"}
+        assert on(result.batch, "f5", "participant") == [
+            ("participant", "i11", [("object_has_role", "partner")]),
+            ("participant", "i17", [("object_has_role", "partner")]),
+        ]
+        assert result.outcomes == {
+            "HEAD.LANG absent: und": 1,
+            "union: partnership": 1,
+        }
+
+    @pytest.mark.parametrize(
+        ("kind", "wedding"),
+        [
+            ("civil", "civil_wedding"),
+            ("Civil", "civil_wedding"),
+            ("Standesamt", "civil_wedding"),
+            ("religious", "religious_wedding"),
+            ("Church", "religious_wedding"),
+            ("kirchlich", "religious_wedding"),
+        ],
+    )
+    def test_a_type_that_names_the_ceremony_gives_its_kind(
+        self, kind, wedding
+    ):
+        # the judgment has the marriage concluded before the registrar in
+        # Flörburg; (here) the family record names the ceremony's kind
+        result = adapt_gedcom(
+            family("1 MARR", f"2 TYPE {kind}", "2 DATE 8 FEB 1947"),
+            artifact=EXPORT,
+        )
+        event = f"f5-{wedding.replace('_', '-')}"
+        assert unions(result.batch) == {"f5": "marriage", event: wedding}
+        assert on(result.batch, "f5", "started_by") == [
+            ("started_by", event, [])
+        ]
+        assert result.unsupported_tags == {}
+
+    def test_any_other_type_stays_in_the_excerpt_and_is_counted(self):
+        result = adapt_gedcom(
+            family("1 MARR", "2 TYPE Elopement", "2 DATE 8 FEB 1947"),
+            artifact=EXPORT,
+        )
+        assert unions(result.batch) == {
+            "f5": "marriage",
+            "f5-wedding": "wedding",
+        }
+        assert result.unsupported_tags == {"MARR.TYPE": 1}
+        (date,) = claims_for(result.batch, "f5-wedding", "point_in_time")
+        assert "2 TYPE Elopement" in date.source.transcription_excerpt.text
+
+    def test_a_further_type_of_another_kind_is_counted(self):
+        # the first TYPE that names a ceremony gives the kind
+        result = adapt_gedcom(
+            family("1 MARR", "2 TYPE civil", "2 TYPE religious"),
+            artifact=EXPORT,
+        )
+        assert unions(result.batch) == {
+            "f5": "marriage",
+            "f5-civil-wedding": "civil_wedding",
+        }
+        assert result.unsupported_tags == {"MARR.TYPE": 1}
+
+    def test_marriages_of_one_kind_are_one_wedding(self):
+        # (here) two MARRs date the one wedding two ways, and a third, a
+        # religious ceremony, is a wedding of its own
+        batch = adapt_gedcom(
+            family(
+                "1 MARR",
+                "2 DATE 8 FEB 1947",
+                "1 MARR",
+                "2 DATE 1947",
+                "2 PLAC Flörburg, Hesse, Germany",
+                "1 MARR",
+                "2 TYPE religious",
+                "2 DATE 9 FEB 1947",
+            ),
+            artifact=EXPORT,
+        ).batch
+        assert unions(batch) == {
+            "f5": "marriage",
+            "f5-wedding": "wedding",
+            "f5-religious-wedding": "religious_wedding",
+        }
+        assert on(batch, "f5", "started_by") == [
+            ("started_by", "f5-wedding", []),
+            ("started_by", "f5-wedding", []),
+            ("started_by", "f5-religious-wedding", []),
+        ]
+        assert [entry[:2] for entry in on(batch, "f5-wedding")] == [
+            ("point_in_time", (1947, 2, 8, "day")),
+            ("point_in_time", year(1947)),
+            ("location", "pl1"),
+        ]
+        assert on(batch, "f5-religious-wedding") == [
+            ("point_in_time", (1947, 2, 9, "day"), [])
+        ]
 
     @pytest.mark.parametrize(
         ("date", "expected"),
         [
             (
                 "BET 1946 AND 1947",
-                [
-                    ("earliest_date", year(1946)),
-                    ("latest_start_date", year(1947)),
-                    ("start_time", year(1946)),
-                ],
+                [("earliest_date", year(1946)), ("latest_date", year(1947))],
             ),
-            (
-                "BEF 1947",
-                [
-                    ("latest_start_date", year(1947)),
-                    ("start_time", year(1947)),
-                ],
-            ),
-            (
-                "AFT 1946",
-                [("earliest_date", year(1946)), ("start_time", year(1946))],
-            ),
-            (
-                "ABT 1947",
-                [
-                    ("sourcing_circumstances", "circa"),
-                    ("start_time", year(1947)),
-                ],
-            ),
+            ("BEF 1947", [("latest_date", year(1947))]),
+            ("AFT 1946", [("earliest_date", year(1946))]),
+            ("ABT 1947", [("sourcing_circumstances", "circa")]),
         ],
     )
-    def test_a_marriage_range_bounds_the_start(self, date, expected):
-        assert spouse_qualifiers(couple(marriage=date)) == expected
+    def test_a_weddings_range_and_circa_are_its_own(self, date, expected):
+        ((prop, _, quals),) = dates(couple(marriage=date), "f5-wedding")
+        assert (prop, quals) == ("point_in_time", expected)
 
     @pytest.mark.parametrize(
         ("date", "expected"),
         [
             (
                 "BET 1956 AND 1957",
-                [
-                    ("earliest_end_date", year(1956)),
-                    ("end_time", year(1956)),
-                    ("latest_date", year(1957)),
-                ],
+                [("earliest_date", year(1956)), ("latest_date", year(1957))],
             ),
-            (
-                "AFT 1956",
-                [("earliest_end_date", year(1956)), ("end_time", year(1956))],
-            ),
-            (
-                "BEF 1957",
-                [("end_time", year(1957)), ("latest_date", year(1957))],
-            ),
-            (
-                "ABT 1957",
-                [
-                    ("end_time", year(1957)),
-                    ("sourcing_circumstances", "circa"),
-                ],
-            ),
+            ("AFT 1956", [("earliest_date", year(1956))]),
+            ("BEF 1957", [("latest_date", year(1957))]),
+            ("ABT 1957", [("sourcing_circumstances", "circa")]),
         ],
     )
-    def test_a_divorce_range_bounds_the_end(self, date, expected):
-        # the range and the circa a divorce date states are never dropped
-        assert spouse_qualifiers(couple(divorce=date)) == expected
+    def test_a_divorces_range_and_circa_are_its_own(self, date, expected):
+        ((prop, _, quals),) = dates(couple(divorce=date), "f5-divorce")
+        assert (prop, quals) == ("point_in_time", expected)
 
-    def test_each_end_keeps_its_own_range(self):
-        # (here) married "between 1946 and 1947" and divorced "after 1956":
-        # no bound of one end is read as the other's
-        assert spouse_qualifiers(couple("BET 1946 AND 1947", "AFT 1956")) == [
-            ("earliest_date", year(1946)),
-            ("earliest_end_date", year(1956)),
-            ("end_time", year(1956)),
-            ("latest_start_date", year(1947)),
-            ("start_time", year(1946)),
+    def test_each_event_keeps_its_own_circa(self):
+        # (here) married about 1947 and divorced in 1957: the circa is the
+        # wedding's alone
+        text = couple("ABT 1947", "1957")
+        assert dates(text, "f5-wedding") == [
+            (
+                "point_in_time",
+                year(1947),
+                [("sourcing_circumstances", "circa")],
+            )
+        ]
+        assert dates(text, "f5-divorce") == [("point_in_time", year(1957), [])]
+
+    def test_a_marriage_period_is_a_wedding_and_an_end(self):
+        # (here) the MARR reads FROM 1947 TO 1957: the wedding is dated by
+        # the FROM and an end of unstated kind by the TO
+        result = adapt_gedcom(
+            couple(marriage="FROM 1947 TO ABT 1957"), artifact=EXPORT
+        )
+        batch = result.batch
+        assert unions(batch) == {
+            "f5": "marriage",
+            "f5-wedding": "wedding",
+            "f5-event": "event",
+        }
+        (end,) = [e for e in batch.entities if e.id == "f5-event"]
+        assert end.label == (
+            "End of the marriage of Leopold Löbig and Agnes Löbig"
+        )
+        assert on(batch, "f5", "ended_by") == [("ended_by", "f5-event", [])]
+        assert on(batch, "f5-wedding") == [("point_in_time", year(1947), [])]
+        assert on(batch, "f5-event") == [
+            (
+                "point_in_time",
+                year(1957),
+                [("sourcing_circumstances", "circa")],
+            )
+        ]
+        assert result.outcomes["union: event"] == 1
+
+    @pytest.mark.parametrize(
+        ("date", "wedding", "end"),
+        [
+            ("FROM 1947", [("point_in_time", year(1947), [])], None),
+            ("TO 1957", [], [("point_in_time", year(1957), [])]),
+        ],
+    )
+    def test_a_marriage_period_of_one_end_dates_that_end(
+        self, date, wedding, end
+    ):
+        batch = adapt_gedcom(couple(marriage=date), artifact=EXPORT).batch
+        assert on(batch, "f5", "started_by") == [
+            ("started_by", "f5-wedding", [])
+        ]
+        assert on(batch, "f5-wedding") == wedding
+        if end is None:
+            assert "f5-event" not in unions(batch)
+        else:
+            assert on(batch, "f5-event") == end
+
+    def test_a_divorce_period_is_its_own_start_and_end(self):
+        # (here) the proceedings ran from 1956 to 2 January 1957, as an
+        # imprisonment is dated
+        assert dates(
+            couple(divorce="FROM BET 1955 AND 1956 TO 2 JAN 1957"),
+            "f5-divorce",
+        ) == [
+            (
+                "start_time",
+                year(1955),
+                [("earliest_date", year(1955)), ("latest_date", year(1956))],
+            ),
+            ("end_time", (1957, 1, 2, "day"), []),
         ]
 
-    def test_one_circa_stands_for_two_approximate_ends(self):
-        # (here) married about 1947 and divorced about 1957
-        assert spouse_qualifiers(couple("ABT 1947", "ABT 1957")) == [
-            ("end_time", year(1957)),
-            ("sourcing_circumstances", "circa"),
-            ("start_time", year(1947)),
-        ]
-
-    def test_an_undated_marriage_and_divorce_keep_the_wedding_place(self):
-        # (here) the family record names where Leopold and Agnes married and
-        # where they were divorced, but dates neither
-        result = adapt_gedcom(
-            "0 @I11@ INDI\n1 NAME Leopold /Löbig/\n"
-            "0 @I17@ INDI\n1 NAME Agnes /Löbig/\n"
-            "0 @F5@ FAM\n1 HUSB @I11@\n1 WIFE @I17@\n"
-            "1 MARR\n2 PLAC Flörburg, Hesse, Germany\n"
-            "1 DIV\n2 PLAC Rekau, Hesse, Germany\n"
-            "0 TRLR\n",
-            artifact=EXPORT,
-        )
-        assert result.warnings == []
-        # the undated DIV is counted, its PLAC with it; the MARR's PLAC is
-        # read, dated or not
-        assert result.unsupported_tags == {"DIV": 1}
-        labels = {e.id: e.label for e in result.batch.entities}
-        for subject in ("i11", "i17"):
-            (spouse,) = claims_for(result.batch, subject, "spouse")
-            assert not {"start_time", "end_time"} & {
-                q.property for q in spouse.qualifiers
-            }
-            (place,) = [
-                q.value.value.local_id
-                for q in spouse.qualifiers
-                if q.property == "location"
-            ]
-            assert labels[place] == "Flörburg, Hesse, Germany"
-
-    def test_an_unparsed_date_warns_and_omits_its_end(self):
-        result = adapt_gedcom(
-            couple("SOMEDAY MAYBE", "NEVER EVER"), artifact=EXPORT
-        )
-        assert any(
-            "marriage date 'SOMEDAY MAYBE' — start_time omitted" in warning
-            for warning in result.warnings
-        )
-        assert any(
-            "divorce date 'NEVER EVER' — end_time omitted" in warning
-            for warning in result.warnings
-        )
-        (spouse,) = claims_for(result.batch, "i11", "spouse")
-        assert spouse.qualifiers == []
-
-
-class TestMarriageAndDivorceTags:
-    """What a family's MARR or DIV says that the model has no property for
-    is counted by the unsupported-tag census, never dropped silently
-    (ADR-0021, #308): a divorce's place, an undated divorce and the kind of
-    marriage a MARR's TYPE names."""
-
-    def test_a_divorce_place_is_counted_and_is_no_location(self):
+    def test_a_divorce_place_is_the_divorces_location(self):
         # (here) the family record places the divorce in Rekau, where the
-        # Landgericht Rekau gave its judgment: the spouse statement's
-        # location is the wedding's place alone
+        # Landgericht Rekau gave its judgment
         result = adapt_gedcom(
             family(
                 "1 MARR",
@@ -948,76 +1100,185 @@ class TestMarriageAndDivorceTags:
             ),
             artifact=EXPORT,
         )
-        assert result.unsupported_tags == {"DIV.PLAC": 1}
+        assert result.unsupported_tags == {}
         assert result.warnings == []
         labels = {e.id: e.label for e in result.batch.entities}
-        assert "Rekau, Hesse, Germany" not in labels.values()
-        for subject in ("i11", "i17"):
-            (spouse,) = claims_for(result.batch, subject, "spouse")
-            assert [
-                labels[q.value.value.local_id]
-                for q in spouse.qualifiers
-                if q.property == "location"
-            ] == ["Flörburg, Hesse, Germany"]
-            (end,) = [q for q in spouse.qualifiers if q.property == "end_time"]
-            assert shown(end.value) == (1957, 1, 2, "day")
+        ((_, place, _),) = on(result.batch, "f5-divorce", "location")
+        assert labels[place] == "Rekau, Hesse, Germany"
+        ((_, place, _),) = on(result.batch, "f5-wedding", "location")
+        assert labels[place] == "Flörburg, Hesse, Germany"
+
+    def test_an_undated_divorce_is_a_divorce(self):
+        # (here) the family record says that Leopold and Agnes divorced,
+        # but not when: an undated divorce, as an undated death is a death
+        # event (ADR-0020 §2)
+        result = adapt_gedcom(family("1 DIV Y"), artifact=EXPORT)
+        assert result.unsupported_tags == {}
+        assert unions(result.batch) == {
+            "f5": "partnership",
+            "f5-divorce": "divorce",
+        }
+        assert on(result.batch, "f5", "ended_by") == [
+            ("ended_by", "f5-divorce", [])
+        ]
+        assert on(result.batch, "f5-divorce") == []
+        assert result.outcomes["union: undated divorce"] == 1
+
+    def test_a_placed_divorce_is_a_divorce(self):
+        result = adapt_gedcom(
+            family("1 DIV", "2 PLAC Rekau, Hesse, Germany"), artifact=EXPORT
+        )
+        assert result.unsupported_tags == {}
+        assert [e[0] for e in on(result.batch, "f5-divorce")] == ["location"]
 
     @pytest.mark.parametrize(
-        "lines",
-        [
-            ["1 DIV Y"],
-            ["1 DIV"],
-            ["1 DIV", "2 PLAC Rekau, Hesse, Germany"],
-        ],
+        "lines", [["1 DIV"], ["1 DIV N"], ["1 DIV", "2 NOTE contested"]]
     )
-    def test_an_undated_divorce_is_counted_whole(self, lines):
-        # (here) the family record says that Leopold and Agnes divorced,
-        # and at most where, but not when: the marriage ended at a time
-        # no claim can state, so the census counts the DIV, which stands
-        # for its PLAC too
+    def test_a_div_that_states_no_divorce_is_counted_whole(self, lines):
+        # GEDCOM 5.5.1 asserts an event by a DATE, a PLAC or a Y: a DIV
+        # with none says nothing of an end
         result = adapt_gedcom(family(*lines), artifact=EXPORT)
         assert result.unsupported_tags == {"DIV": 1}
-        assert result.warnings == []
-        for subject in ("i11", "i17"):
-            (spouse,) = claims_for(result.batch, subject, "spouse")
-            assert spouse.qualifiers == []
+        assert unions(result.batch) == {"f5": "partnership"}
 
-    def test_a_dated_divorce_leaves_nothing_uncounted(self):
-        result = adapt_gedcom(couple(divorce="2 JAN 1957"), artifact=EXPORT)
-        assert result.unsupported_tags == {}
-
-    def test_an_unparsed_divorce_date_warns_and_its_place_is_counted(self):
-        result = adapt_gedcom(
-            family(
-                "1 DIV", "2 DATE NEVER EVER", "2 PLAC Rekau, Hesse, Germany"
-            ),
+    def test_a_familys_divorces_are_one_divorce(self):
+        batch = adapt_gedcom(
+            family("1 DIV", "2 DATE 2 JAN 1957", "1 DIV", "2 DATE 1957"),
             artifact=EXPORT,
-        )
-        assert result.warnings == [
-            "line 9: unparsed divorce date 'NEVER EVER' — end_time omitted"
+        ).batch
+        assert unions(batch) == {"f5": "partnership", "f5-divorce": "divorce"}
+        assert dates(
+            family("1 DIV", "2 DATE 2 JAN 1957", "1 DIV", "2 DATE 1957"),
+            "f5-divorce",
+        ) == [
+            ("point_in_time", (1957, 1, 2, "day"), []),
+            ("point_in_time", year(1957), []),
         ]
-        assert result.unsupported_tags == {"DIV.PLAC": 1}
 
-    def test_a_marriage_type_is_counted(self):
-        # the judgment has the marriage concluded before the registrar in
-        # Flörburg; (here) the family record calls it civil
+    def test_an_annulment_is_an_event_of_its_own(self):
         result = adapt_gedcom(
             family(
                 "1 MARR",
-                "2 TYPE Civil",
                 "2 DATE 8 FEB 1947",
-                "2 PLAC Flörburg, Hesse, Germany",
+                "1 ANUL",
+                "2 DATE ABT 1948",
+                "2 PLAC Rekau, Hesse, Germany",
             ),
             artifact=EXPORT,
         )
-        assert result.unsupported_tags == {"MARR.TYPE": 1}
-        # the marriage's date and place are read as ever
-        for subject in ("i11", "i17"):
-            (spouse,) = claims_for(result.batch, subject, "spouse")
-            assert sorted(q.property for q in spouse.qualifiers) == [
-                "location",
-                "start_time",
+        assert unions(result.batch) == {
+            "f5": "marriage",
+            "f5-wedding": "wedding",
+            "f5-annulment": "annulment",
+        }
+        assert on(result.batch, "f5", "ended_by") == [
+            ("ended_by", "f5-annulment", [])
+        ]
+        assert [e[:2] for e in on(result.batch, "f5-annulment")] == [
+            ("point_in_time", year(1948)),
+            ("location", "pl1"),
+        ]
+        assert result.unsupported_tags == {}
+
+    def test_no_end_is_inferred_from_a_partners_death(self):
+        # (here) Leopold's record gives his death: it ends no union, as
+        # GEDCOM does not say that the marriage lasted until then
+        text = "\n".join(
+            [
+                "0 @I11@ INDI",
+                "1 NAME Leopold /Löbig/",
+                "1 DEAT",
+                "2 DATE 1960",
+                "0 @I17@ INDI",
+                "1 NAME Agnes /Löbig/",
+                "0 @F5@ FAM",
+                "1 HUSB @I11@",
+                "1 WIFE @I17@",
+                "1 MARR",
+                "2 DATE 8 FEB 1947",
+                "0 TRLR",
+                "",
             ]
+        )
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        assert on(batch, "f5", "ended_by") == []
+
+    def test_an_undated_marriage_is_an_undated_wedding(self):
+        for lines in (["1 MARR Y"], ["1 MARR"]):
+            result = adapt_gedcom(family(*lines), artifact=EXPORT)
+            assert unions(result.batch) == {
+                "f5": "marriage",
+                "f5-wedding": "wedding",
+            }
+            assert on(result.batch, "f5-wedding") == []
+            assert result.unsupported_tags == {}
+
+    def test_an_unparsed_date_warns_and_gives_no_date(self):
+        result = adapt_gedcom(
+            couple("SOMEDAY MAYBE", "NEVER EVER"), artifact=EXPORT
+        )
+        assert result.warnings == [
+            "line 9: unparsed date 'SOMEDAY MAYBE' — no point_in_time "
+            "claim emitted",
+            "line 11: unparsed date 'NEVER EVER' — no point_in_time "
+            "claim emitted",
+        ]
+        batch = result.batch
+        assert unions(batch) == {
+            "f5": "marriage",
+            "f5-wedding": "wedding",
+            "f5-divorce": "divorce",
+        }
+        assert on(batch, "f5-wedding") == []
+        assert on(batch, "f5-divorce") == []
+
+    def test_two_unions_of_one_couple_have_labels_of_their_own(self):
+        # (here) the export gives Leopold and Agnes two family records: the
+        # writer finds an item by its label, so each union keeps its own
+        text = family("1 MARR", "2 DATE 8 FEB 1947").replace(
+            "0 TRLR\n",
+            "0 @F6@ FAM\n1 HUSB @I11@\n1 WIFE @I17@\n1 MARR\n"
+            "2 DATE 1958\n0 TRLR\n",
+        )
+        labels = {
+            e.id: e.label for e in adapt_gedcom(text, EXPORT).batch.entities
+        }
+        assert labels["f5"] == "Marriage of Leopold Löbig and Agnes Löbig"
+        assert labels["f6"] == "Marriage of Leopold Löbig and Agnes Löbig (2)"
+        assert labels["f6-wedding"] == (
+            "Wedding of Leopold Löbig and Agnes Löbig (2)"
+        )
+
+    def test_each_union_claims_excerpt_names_the_couple(self):
+        batch = adapt_gedcom(
+            couple("8 FEB 1947", "2 JAN 1957"), artifact=EXPORT
+        ).batch
+        for claim in batch.claims:
+            if claim.subject.local_id.startswith("f5"):
+                excerpt = claim.source.transcription_excerpt.text
+                assert excerpt.startswith(
+                    "0 @F5@ FAM | 1 HUSB @I11@ | 1 WIFE @I17@"
+                )
+        (divorce,) = claims_for(batch, "f5-divorce", "point_in_time")
+        assert divorce.source.transcription_excerpt.text == (
+            "0 @F5@ FAM | 1 HUSB @I11@ | 1 WIFE @I17@ | 1 DIV | "
+            "2 DATE 2 JAN 1957"
+        )
+
+    def test_every_union_batch_is_manifest_valid(self):
+        batch = adapt_gedcom(
+            family(
+                "1 MARR",
+                "2 TYPE civil",
+                "2 DATE FROM 1947 TO 1957",
+                "2 PLAC Flörburg, Hesse, Germany",
+                "1 DIV",
+                "2 DATE FROM 1956 TO 1957",
+                "1 ANUL Y",
+            ),
+            artifact=EXPORT,
+        ).batch
+        assert validate_against_manifest(batch) == []
 
     def test_a_partners_age_at_the_wedding_is_counted_with_its_partner(
         self,
@@ -1074,8 +1335,8 @@ CIRCA = ("sourcing_circumstances", "circa")
 class TestPeriods:
     """A residence's or an occupation's date period (FROM x TO y, FROM x,
     TO y) is its statement's start and end time, each with the range its
-    own phrase states, as a marriage's date is a spouse statement's start
-    and a divorce's its end; any other date is a point in time
+    own phrase states, as a divorce's date period is the divorce's own
+    start and end (TestUnions); any other date is a point in time
     (docs/MODELING.md, "Marriages, residences and other periods"; #308)."""
 
     @pytest.mark.parametrize(
@@ -1341,36 +1602,15 @@ class TestPeriods:
             ],
             id="OBJE",
         ),
-        pytest.param(
-            couple(marriage="FROM 1946 TO 1947"),
-            "i11",
-            "spouse",
-            [
-                ("earliest_date", year(1946)),
-                ("latest_start_date", year(1947)),
-                ("start_time", year(1946)),
-            ],
-            id="MARR",
-        ),
-        pytest.param(
-            couple(divorce="FROM 1956 TO 1957"),
-            "i11",
-            "spouse",
-            [
-                ("earliest_end_date", year(1956)),
-                ("end_time", year(1956)),
-                ("latest_date", year(1957)),
-            ],
-            id="DIV",
-        ),
     ],
 )
 def test_a_period_on_another_event_is_one_dates_range(
     text, subject, prop, expected
 ):
     """FROM x TO y on any other event keeps the reading parse_gedcom_date
-    gives it, the range of one date: only a residence's or an occupation's
-    period is a start and an end (#308)."""
+    gives it, the range of one date: only a residence's, an occupation's,
+    a marriage's and a divorce's period is a start and an end (#308;
+    TestUnions)."""
     result = adapt_gedcom(text, artifact=EXPORT)
     assert result.warnings == []
     (claim,) = claims_for(result.batch, subject, prop)
@@ -1411,16 +1651,31 @@ def stated(text: str, subject: str, prop: str) -> list[tuple]:
     ]
 
 
-def spouse_pairs(text: str) -> list[list[tuple]]:
-    """The qualifiers of Leopold and Agnes's spouse claims, a list for each
-    pair of claims in the batch's order: each of Leopold's claims names
-    Agnes, and each of Agnes's mirrors his."""
-    leopold = stated(text, "i11", "spouse")
-    agnes = stated(text, "i17", "spouse")
-    assert {value for value, _ in leopold} == {"Agnes Löbig"}
-    assert {value for value, _ in agnes} == {"Leopold Löbig"}
-    assert [quals for _, quals in agnes] == [quals for _, quals in leopold]
-    return [quals for _, quals in leopold]
+def union_events(text: str) -> dict[str, list[tuple]]:
+    """Each event of the batch's unions, by id, with its claims in the
+    batch's order, each as its property, its value and its qualifiers,
+    which are (property, value) pairs in property order."""
+    batch = adapt_gedcom(text, artifact=EXPORT).batch
+    labels = {entity.id: entity.label for entity in batch.entities}
+    events = [
+        e.id
+        for e in batch.entities
+        if e.kind in UNION_KINDS - {"partnership", "marriage"}
+    ]
+    return {
+        event: [
+            (
+                claim.property,
+                described(claim.value, labels),
+                sorted(
+                    (q.property, described(q.value, labels))
+                    for q in claim.qualifiers
+                ),
+            )
+            for claim in claims_for(batch, event)
+        ]
+        for event in events
+    }
 
 
 def day(y: int, m: int, d: int) -> tuple:
@@ -1703,9 +1958,9 @@ class TestRepeatedDetails:
             ),
             (
                 family("1 MARR", "2 DATE 8 FEB 1947", "2 PLAC , , ,"),
-                "i11",
-                "spouse",
-                [("Agnes Löbig", [("start_time", day(1947, 2, 8))])],
+                "f5-wedding",
+                "location",
+                [],
                 [],
                 [],
             ),
@@ -1851,13 +2106,12 @@ class TestRepeatedDetails:
 
 
 class TestRepeatedMarriages:
-    """A family that repeats a MARR or a DIV states alternatives: its first
-    marriage (a date with a place) and its first divorce date one pair of
-    spouse claims, as its only MARR and DIV do, and every other one dates a
-    pair of its own, with its own date, place and circa (docs/MODELING.md,
-    "Marriages, residences and other periods"; #322)."""
+    """A family that repeats a MARR or a DIV states alternatives: the MARRs
+    of one kind are one wedding and the DIVs one divorce, and each date and
+    place of each is a claim of its own on that event, with its own circa
+    (ADR-0021, ADR-0036 §5; #322)."""
 
-    def test_each_marriage_and_divorce_dates_a_pair_of_its_own(self):
+    def test_each_marriage_and_divorce_dates_its_event_again(self):
         # Leopold and Agnes married on 8 February 1947 in Flörburg and were
         # divorced on 2 January 1957, per the judgment, and married in 1947
         # and divorced in 1957 per the tree: (here) the export gives both
@@ -1872,15 +2126,17 @@ class TestRepeatedMarriages:
             "1 DIV",
             "2 DATE 1957",
         )
-        assert spouse_pairs(text) == [
-            [
-                ("end_time", day(1957, 1, 2)),
-                ("location", FLOERBURG),
-                ("start_time", day(1947, 2, 8)),
+        assert union_events(text) == {
+            "f5-wedding": [
+                ("point_in_time", day(1947, 2, 8), []),
+                ("location", FLOERBURG, []),
+                ("point_in_time", year(1947), []),
             ],
-            [("start_time", year(1947))],
-            [("end_time", year(1957))],
-        ]
+            "f5-divorce": [
+                ("point_in_time", day(1957, 1, 2), []),
+                ("point_in_time", year(1957), []),
+            ],
+        }
         # every MARR and DIV is read, so the census counts none of them
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
 
@@ -1892,96 +2148,94 @@ class TestRepeatedMarriages:
             "2 DATE 8 FEB 1947",
             "1 MARR",
             "2 DATE ABT 1946",
-            "1 DIV",
-            "2 DATE 2 JAN 1957",
         )
-        assert spouse_pairs(text) == [
-            [("end_time", day(1957, 1, 2)), ("start_time", day(1947, 2, 8))],
-            [CIRCA, ("start_time", year(1946))],
-        ]
+        assert union_events(text) == {
+            "f5-wedding": [
+                ("point_in_time", day(1947, 2, 8), []),
+                ("point_in_time", year(1946), [CIRCA]),
+            ]
+        }
 
     @pytest.mark.parametrize(
-        ("lines", "expected", "counted"),
+        ("lines", "expected"),
         [
             (
                 ["1 MARR Y", "1 MARR", "2 DATE 8 FEB 1947"],
-                [[("start_time", day(1947, 2, 8))]],
-                {},
+                {"f5-wedding": [("point_in_time", day(1947, 2, 8), [])]},
             ),
-            # the undated DIV is counted, as ever
             (
                 ["1 DIV Y", "1 DIV", "2 DATE 2 JAN 1957"],
-                [[("end_time", day(1957, 1, 2))]],
-                {"DIV": 1},
+                {"f5-divorce": [("point_in_time", day(1957, 1, 2), [])]},
             ),
         ],
     )
     def test_an_undated_marriage_or_divorce_hides_no_dated_one(
-        self, lines, expected, counted
+        self, lines, expected
     ):
         # (here) the family record says first that Leopold and Agnes
-        # married, or divorced, and then when: the undated one adds no
-        # undated pair beside the dated one
+        # married, or divorced, and then when: both give the one event,
+        # which the dated one dates
         text = family(*lines)
-        assert spouse_pairs(text) == expected
-        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == counted
+        assert union_events(text) == expected
+        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
 
     @pytest.mark.parametrize(
-        ("tag", "date", "warning", "expected"),
+        ("tag", "date", "expected"),
         [
             (
                 "MARR",
                 "8 FEB 1947",
-                "line 9: unparsed marriage date 'SOMEDAY MAYBE' — "
-                "start_time omitted",
-                [[("start_time", day(1947, 2, 8))]],
+                {"f5-wedding": [("point_in_time", day(1947, 2, 8), [])]},
             ),
             (
                 "DIV",
                 "2 JAN 1957",
-                "line 9: unparsed divorce date 'SOMEDAY MAYBE' — "
-                "end_time omitted",
-                [[("end_time", day(1957, 1, 2))]],
+                {"f5-divorce": [("point_in_time", day(1957, 1, 2), [])]},
             ),
         ],
     )
     def test_an_unparsed_date_hides_no_parsed_one_of_the_same_event(
-        self, tag, date, warning, expected
+        self, tag, date, expected
     ):
         # (here) one MARR, or one DIV, gives a date the grammar cannot parse
         # before one it can: the one it cannot is warned of, and the one it
-        # can still dates the pair
+        # can still dates the event
         text = family(f"1 {tag}", "2 DATE SOMEDAY MAYBE", f"2 DATE {date}")
         result = adapt_gedcom(text, artifact=EXPORT)
-        assert result.warnings == [warning]
+        assert result.warnings == [
+            "line 9: unparsed date 'SOMEDAY MAYBE' — no point_in_time "
+            "claim emitted"
+        ]
         assert result.unsupported_tags == {}
-        assert spouse_pairs(text) == expected
+        assert union_events(text) == expected
 
     def test_an_undated_marriage_keeps_its_place_beside_a_dated_one(self):
         # (here) one MARR places the wedding in Flörburg and another dates it
         text = family(
             "1 MARR", f"2 PLAC {FLOERBURG}", "1 MARR", "2 DATE 8 FEB 1947"
         )
-        assert spouse_pairs(text) == [
-            [("location", FLOERBURG)],
-            [("start_time", day(1947, 2, 8))],
-        ]
+        assert union_events(text) == {
+            "f5-wedding": [
+                ("location", FLOERBURG, []),
+                ("point_in_time", day(1947, 2, 8), []),
+            ]
+        }
 
-    def test_a_restated_marriage_adds_no_pair(self):
+    def test_a_restated_marriage_adds_nothing(self):
         # (here) the export gives the wedding twice, as the judgment does
         wedding = ["1 MARR", "2 DATE 8 FEB 1947", f"2 PLAC {FLOERBURG}"]
-        text = family(*wedding, *wedding, "1 DIV", "2 DATE 2 JAN 1957")
-        assert spouse_pairs(text) == [
-            [
-                ("end_time", day(1957, 1, 2)),
-                ("location", FLOERBURG),
-                ("start_time", day(1947, 2, 8)),
-            ],
-        ]
+        text = family(*wedding, *wedding)
+        assert union_events(text) == {
+            "f5-wedding": [
+                ("point_in_time", day(1947, 2, 8), []),
+                ("location", FLOERBURG, []),
+            ]
+        }
+        assert len(stated(text, "f5", "started_by")) == 1
 
     def test_each_date_or_place_beneath_one_marriage_is_an_alternative(self):
         # (here) one MARR gives both dates and two places, and one DIV both
-        # dates: each date is paired with each place
+        # dates: each is a claim of its own
         rekau = "Rekau, Hesse, Germany"
         text = family(
             "1 MARR",
@@ -1993,17 +2247,18 @@ class TestRepeatedMarriages:
             "2 DATE 2 JAN 1957",
             "2 DATE 1957",
         )
-        assert spouse_pairs(text) == [
-            [
-                ("end_time", day(1957, 1, 2)),
-                ("location", FLOERBURG),
-                ("start_time", day(1947, 2, 8)),
+        assert union_events(text) == {
+            "f5-wedding": [
+                ("point_in_time", day(1947, 2, 8), []),
+                ("point_in_time", year(1947), []),
+                ("location", FLOERBURG, []),
+                ("location", rekau, []),
             ],
-            [("location", FLOERBURG), ("start_time", year(1947))],
-            [("location", rekau), ("start_time", day(1947, 2, 8))],
-            [("location", rekau), ("start_time", year(1947))],
-            [("end_time", year(1957))],
-        ]
+            "f5-divorce": [
+                ("point_in_time", day(1957, 1, 2), []),
+                ("point_in_time", year(1957), []),
+            ],
+        }
 
     @pytest.mark.parametrize("tag", ["HUSB", "WIFE"])
     def test_a_further_husband_or_wife_is_counted(self, tag):
@@ -2030,8 +2285,10 @@ class TestRepeatedMarriages:
         )
         result = adapt_gedcom(text, artifact=EXPORT)
         assert result.unsupported_tags == {f"FAM.{tag}": 1}
-        assert not claims_for(result.batch, "i99", "spouse")
-        assert spouse_pairs(text) == [[("start_time", day(1947, 2, 8))]]
+        assert stated(text, "f5", "participant") == [
+            ("Leopold Löbig", [("object_has_role", "spouse")]),
+            ("Agnes Löbig", [("object_has_role", "spouse")]),
+        ]
 
 
 class TestRepeatedAttributes:
@@ -2100,15 +2357,22 @@ def death_events(batch) -> list[tuple[str, str]]:
 
 
 def participations(batch) -> list[tuple[str, str, str]]:
-    """Every participant claim, as (event, participant, excerpt)."""
+    """Every participant claim of a death event, as (event, participant,
+    excerpt); each names its person as the death's principal."""
+    deaths = {event for event, _ in death_events(batch)}
+    found = [
+        claim
+        for claim in batch.claims
+        if claim.property == "participant" and claim.subject.local_id in deaths
+    ]
+    assert all(roles(claim) == ["principal"] for claim in found)
     return [
         (
             claim.subject.local_id,
             claim.value.value.local_id,
             claim.source.transcription_excerpt.text,
         )
-        for claim in batch.claims
-        if claim.property == "participant"
+        for claim in found
     ]
 
 
@@ -2428,11 +2692,11 @@ WEDDING_AND_DIVORCE = [
 
 
 class TestOnePartnerFamily:
-    """A family's MARR and DIV date the spouse claims between its HUSB and
-    its WIFE. A family with one partner or none has no such claims to
-    date: no claim names the other partner, and a claim has no unknown
-    value to name them with. So its MARR and DIV are counted, each
-    standing for its branch, as an undated DIV is (ADR-0021; #323)."""
+    """A family's MARR, DIV and ANUL are events of the union of its HUSB
+    and its WIFE. A family with one partner or none has no union: no claim
+    names the other partner, and a claim has no unknown value to name them
+    with. So its MARR, DIV and ANUL are counted, each standing for its
+    branch, as a DIV that states no divorce is (ADR-0021, ADR-0036; #323)."""
 
     @pytest.mark.parametrize(
         "partners",
@@ -2443,12 +2707,12 @@ class TestOnePartnerFamily:
         # (here) the family record names Leopold alone, Agnes alone, or
         # neither of them
         result = adapt_gedcom(
-            leopold_and_agnes(*partners, *WEDDING_AND_DIVORCE),
+            leopold_and_agnes(*partners, *WEDDING_AND_DIVORCE, "1 ANUL Y"),
             artifact=EXPORT,
         )
-        assert result.unsupported_tags == {"MARR": 1, "DIV": 1}
+        assert result.unsupported_tags == {"MARR": 1, "DIV": 1, "ANUL": 1}
         assert result.warnings == []
-        assert not [c for c in result.batch.claims if c.property == "spouse"]
+        assert unions(result.batch) == {}
         # the wedding's place is no place of the batch
         assert FLOERBURG not in {e.label for e in result.batch.entities}
 
@@ -2478,7 +2742,7 @@ class TestOnePartnerFamily:
         result = adapt_gedcom(text, artifact=EXPORT)
         assert result.warnings == warnings
         assert result.unsupported_tags == {"MARR": 1}
-        assert not [c for c in result.batch.claims if c.property == "spouse"]
+        assert unions(result.batch) == {}
 
     def test_the_one_partner_is_still_a_parent(self):
         # (here) Felix and Ida's family record names Ida alone, with
@@ -2567,8 +2831,9 @@ def leopold_in_his_families(*leopold: str) -> str:
 class TestNameParts:
     """A NAME without a value is read from its parts, in the order GEDCOM
     writes a name, as the census takes them as read, provided a given name
-    or a surname is among them; a NAME with a value is read from the value,
-    which the parts are taken to restate. A NAME whose value and parts give
+    or a surname is among them; a NAME with a value is labelled by the
+    value, and its parts reach its mention record (TestMentionRecords).
+    A NAME whose value and parts give
     no name gives none, and a person none of whose NAMEs gives one is
     skipped, with a warning, and so are the family links that name them
     (#323)."""
@@ -2683,7 +2948,7 @@ class TestNameParts:
         (gustav,) = adapt_gedcom(text, artifact=EXPORT).batch.entities
         assert (gustav.label, gustav.aliases) == (
             "Gustav Löbig",
-            ["Gustave Lobig"],
+            ["Gustave Lobig", "Gus"],
         )
 
     def test_a_person_named_by_parts_keeps_their_family_links(self):
@@ -2696,8 +2961,9 @@ class TestNameParts:
         assert result.warnings == []
         assert result.unsupported_tags == {}
         assert stated(text, "i11", "father") == [("Felix Löbig", [])]
-        assert stated(text, "i11", "spouse") == [
-            ("Agnes Löbig", [("start_time", year(1947))])
+        assert stated(text, "f5", "participant") == [
+            ("Leopold Löbig", [("object_has_role", "spouse")]),
+            ("Agnes Löbig", [("object_has_role", "spouse")]),
         ]
 
     @pytest.mark.parametrize(
@@ -2718,9 +2984,10 @@ class TestNameParts:
         assert not [
             c
             for c in result.batch.claims
-            if c.property in ("father", "mother", "spouse")
+            if c.property in ("father", "mother", "participant")
         ]
-        # the family has one partner the batch holds: its MARR is counted
+        # the family has one partner the batch holds, and so no union: its
+        # MARR is counted
         assert result.unsupported_tags == {"MARR": 1}
 
     def test_a_name_that_gives_no_name_types_nothing_but_keeps_its_nick(
@@ -2744,7 +3011,321 @@ class TestNameParts:
         for prop in ("birth_name", "married_name", "official_name"):
             assert stated(text, "i12", prop) == []
         (rudolf_entity,) = result.batch.entities
-        assert rudolf_entity.aliases == []
+        assert rudolf_entity.aliases == ["Rudi"]
+
+
+def record_of(text: str, entity_id: str):
+    """The mention record of one entity of the batch, and the outcomes."""
+    result = adapt_gedcom(text, artifact=EXPORT)
+    (entity,) = [e for e in result.batch.entities if e.id == entity_id]
+    return entity, result.outcomes
+
+
+def parts(structure) -> dict:
+    """A person's mention record as plain lists, empty fields left out."""
+    found = {
+        "given": [g.written for g in structure.given],
+        "surnames": [(s.written, s.type) for s in structure.surnames],
+        "nicknames": structure.nicknames,
+        "titles": structure.titles,
+        "suffixes": structure.suffixes,
+        "unsplit": structure.unsplit,
+    }
+    return {key: value for key, value in found.items() if value}
+
+
+class TestMentionRecords:
+    """Each person's and place's entity carries the mention record its tags
+    give (ADR-0035 §6): the adapter reads them and guesses nothing, and no
+    NAME part is dropped without a count (#352)."""
+
+    def test_every_record_of_the_fixture_stands(self):
+        batch = fixture_result().batch
+        for entity in batch.entities:
+            if entity.kind in ("human", "place"):
+                assert entity.structure is not None, entity.id
+                assert structure_problems(entity) == [], entity.id
+
+    def test_a_name_gives_its_given_names_surname_and_nickname(self):
+        eugen_entity = next(
+            e for e in fixture_result().batch.entities if e.id == "i1"
+        )
+        assert parts(eugen_entity.structure) == {
+            "given": ["Eugen"],
+            "surnames": [("Löbig", "birth")],
+            "nicknames": ["Muckel"],
+        }
+        # an export's given name is its own standard form
+        assert [g.standard for g in eugen_entity.structure.given] == ["Eugen"]
+
+    def test_each_names_surname_is_typed_by_its_type(self):
+        caecilie = next(
+            e for e in fixture_result().batch.entities if e.id == "i2"
+        )
+        assert parts(caecilie.structure)["surnames"] == [
+            ("Tarle", "birth"),
+            ("Löbig", "married"),
+        ]
+
+    def test_a_prefix_the_value_starts_with_is_a_title(self):
+        # Fräulein Klara Löbig, as the postcard addresses her, and the
+        # directory's Ursula Löbig, Wwe.
+        klara, _ = record_of(
+            person("I9", "Fräulein Klara /Löbig/", "2 NPFX Fräulein"), "i9"
+        )
+        assert parts(klara.structure) == {
+            "given": ["Klara"],
+            "surnames": [("Löbig", "other")],
+            "titles": ["Fräulein"],
+        }
+        ursula, _ = record_of(person("I16", "Ursula /Löbig/ Wwe."), "i16")
+        assert parts(ursula.structure) == {
+            "given": ["Ursula"],
+            "surnames": [("Löbig", "other")],
+            "suffixes": ["Wwe."],
+        }
+
+    def test_a_suffix_part_gives_the_suffixes(self):
+        ursula, _ = record_of(
+            person("I16", "Ursula /Löbig/ Wwe.", "2 NSFX Wwe."), "i16"
+        )
+        assert parts(ursula.structure)["suffixes"] == ["Wwe."]
+
+    @pytest.mark.parametrize(
+        ("lines", "expected", "alias"),
+        [
+            # (here) Rudolf's NAME gives his given name as Rudi in its GIVN
+            (
+                ["2 GIVN Rudi", "2 SURN Löbig"],
+                {
+                    "given": ["Rudolf", "Rudi"],
+                    "surnames": [("Löbig", "other")],
+                },
+                "Rudi Löbig",
+            ),
+            # (here) a prefix his value does not restate
+            (
+                ["2 NPFX Schüler", "2 GIVN Rudolf", "2 SURN Löbig"],
+                {
+                    "given": ["Rudolf"],
+                    "surnames": [("Löbig", "other")],
+                    "titles": ["Schüler"],
+                },
+                "Schüler Rudolf Löbig",
+            ),
+            # (here) a second surname his value does not restate
+            (
+                ["2 SURN Löbig, Sörne"],
+                {
+                    "given": ["Rudolf"],
+                    "surnames": [("Löbig", "other"), ("Sörne", "other")],
+                },
+                "Löbig Sörne",
+            ),
+        ],
+        ids=["given", "prefix", "surname"],
+    )
+    def test_a_part_the_value_does_not_restate_is_kept_and_counted(
+        self, lines, expected, alias
+    ):
+        rudolf_entity, outcomes = record_of(
+            person("I12", "Rudolf /Löbig/", *lines), "i12"
+        )
+        assert rudolf_entity.label == "Rudolf Löbig"
+        assert parts(rudolf_entity.structure) == expected
+        # the name the parts give is a name form of his, so the record
+        # divides his names and adds none
+        assert alias in rudolf_entity.aliases
+        assert structure_problems(rudolf_entity) == []
+        assert outcomes["NAME parts not restated"] == 1
+
+    @pytest.mark.parametrize(
+        ("parts_lines", "counted"),
+        [(["2 NPFX Fräulein"], 1), (["2 NPFX Fräulein", "2 NSFX Wwe."], 2)],
+    )
+    def test_the_parts_of_a_name_that_gives_none_are_counted(
+        self, parts_lines, counted
+    ):
+        # (here) Klara's second NAME has no value, and its parts give a
+        # prefix, or a prefix and a suffix, and no name: they are counted,
+        # and reach no field
+        klara, outcomes = record_of(
+            person("I9", "Klara /Löbig/", "1 NAME", *parts_lines), "i9"
+        )
+        assert parts(klara.structure) == {
+            "given": ["Klara"],
+            "surnames": [("Löbig", "other")],
+        }
+        assert outcomes["NAME part without a name"] == counted
+
+    def test_a_particle_stays_in_its_surname(self):
+        entity, _ = record_of(
+            person("I1", "A /de B/", "2 SPFX de", "2 SURN B"), "i1"
+        )
+        assert parts(entity.structure)["surnames"] == [("de B", "other")]
+
+    def test_a_particle_with_no_surname_is_counted(self):
+        entity, outcomes = record_of(person("I1", "A /B/", "2 SPFX de"), "i1")
+        assert parts(entity.structure)["surnames"] == [("B", "other")]
+        assert outcomes["SPFX without a surname"] == 1
+
+    def test_a_name_without_slashes_is_unsplit_and_untyped(self):
+        # (here) the export gives Ida a second NAME, "Peppi", typed aka,
+        # with no slashes: the export does not say which part is which
+        text = person("I7", "Ida /Sörne/", "1 NAME Peppi", "2 TYPE aka")
+        ida, outcomes = record_of(text, "i7")
+        assert parts(ida.structure) == {
+            "given": ["Ida"],
+            "surnames": [("Sörne", "other")],
+            "unsplit": ["Peppi"],
+        }
+        assert "Peppi" in ida.aliases
+        assert stated(text, "i7", "nickname") == []
+        assert outcomes["NAME without slashes"] == 1
+
+    def test_a_name_without_slashes_whose_parts_say_which_is_which(self):
+        text = person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 NAME Gustave Lobig",
+            "2 GIVN Gustave",
+            "2 SURN Lobig",
+            "2 TYPE immigrant",
+        )
+        gustav_entity, outcomes = record_of(text, "i8")
+        assert parts(gustav_entity.structure) == {
+            "given": ["Gustav", "Gustave"],
+            "surnames": [("Löbig", "other"), ("Lobig", "other")],
+        }
+        assert stated(text, "i8", "official_name") == [("Gustave Lobig", [])]
+        assert "NAME without slashes" not in outcomes
+
+    @pytest.mark.parametrize("kind", ["aka", "nick", "nickname"])
+    def test_an_aka_names_given_names_are_nicknames(self, kind):
+        text = person("I4", "Hildegard /Laudler/", "1 NAME Hilde /Löbig/",
+                      f"2 TYPE {kind}")  # fmt: skip
+        hildegard, _ = record_of(text, "i4")
+        assert parts(hildegard.structure) == {
+            "given": ["Hildegard"],
+            "surnames": [("Laudler", "other"), ("Löbig", "other")],
+            "nicknames": ["Hilde"],
+        }
+        assert stated(text, "i4", "nickname") == [("Hilde Löbig", [])]
+
+    @pytest.mark.parametrize("kind", ["married", "marriage"])
+    def test_a_married_names_surname_is_married(self, kind):
+        text = person(
+            "I4",
+            "Hildegard /Laudler/",
+            "2 TYPE maiden",
+            "1 NAME Hildegard /Löbig/",
+            f"2 TYPE {kind}",
+        )
+        hildegard, _ = record_of(text, "i4")
+        assert parts(hildegard.structure)["surnames"] == [
+            ("Laudler", "birth"),
+            ("Löbig", "married"),
+        ]
+
+    def test_a_married_name_tag_gives_a_married_surname(self):
+        ida = next(e for e in fixture_result().batch.entities if e.id == "i7")
+        assert ("Löbig", "married") in parts(ida.structure)["surnames"]
+        assert "Ida Löbig" in ida.aliases
+
+    def test_a_married_name_tag_without_slashes_is_unsplit(self):
+        text = person("I7", "Ida /Sörne/", "1 _MARNM Ida Löbig")
+        ida, outcomes = record_of(text, "i7")
+        assert parts(ida.structure)["unsplit"] == ["Ida Löbig"]
+        assert outcomes["_MARNM without slashes"] == 1
+        assert stated(text, "i7", "married_name") == [("Ida Löbig", [])]
+
+    def test_a_bracketed_note_is_an_alias_and_an_unsplit_form(self):
+        # (here) the export notes Hildegard's maiden name in brackets
+        text = person("I4", "Hildegard (geb. Laudler) /Löbig/")
+        hildegard, outcomes = record_of(text, "i4")
+        assert hildegard.label == "Hildegard Löbig"
+        assert hildegard.aliases == ["geb. Laudler"]
+        assert parts(hildegard.structure) == {
+            "given": ["Hildegard"],
+            "surnames": [("Löbig", "other")],
+            "unsplit": ["geb. Laudler"],
+        }
+        assert outcomes["NAME bracketed part"] == 1
+        for prop in ("nickname", "birth_name"):
+            assert stated(text, "i4", prop) == []
+
+    def test_a_form_that_alone_carries_a_part_stays_an_alias(self):
+        # the alias hygiene drops a form whose match tokens the label
+        # holds; a form that carries a part of the record no other form
+        # holds stays, however short the part
+        entity, _ = record_of(
+            person("I1", "Abc /Bcd/", "1 NAME Xy /Bcd/"), "i1"
+        )
+        assert entity.aliases == ["Xy Bcd"]
+        assert structure_problems(entity) == []
+
+    def test_a_place_is_named_by_its_first_component(self):
+        batch = fixture_result().batch
+        (place,) = [
+            e
+            for e in batch.entities
+            if e.label == "Fläckfeld, Kreis Mockburg, Hesse, Germany"
+        ]
+        assert [n.written for n in place.structure.names] == ["Fläckfeld"]
+        assert place.structure.within == ["Kreis Mockburg", "Hesse", "Germany"]
+
+
+class TestLanguage:
+    """HEAD.LANG, a GEDCOM 5.5.1 language name mapped to BCP 47, is the
+    language of the adapter's texts; with none the map knows, they are
+    undetermined (`und`), counted (ADR-0035 §6)."""
+
+    def languages(self, text: str) -> set[str]:
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        found = {c.source.transcription_excerpt.language for c in batch.claims}
+        found |= {
+            c.value.value.language
+            for c in batch.claims
+            if c.value.type == "monolingual"
+        }
+        return found
+
+    def test_the_fixture_is_in_english(self):
+        result = fixture_result()
+        assert self.languages(FIXTURE.read_text()) == {"en"}
+        assert not [k for k in result.outcomes if k.startswith("HEAD.LANG")]
+
+    @pytest.mark.parametrize(
+        ("name", "code"),
+        [("German", "de"), ("Russian", "ru"), ("dutch", "nl"),
+         ("Yiddish", "yi")],
+    )  # fmt: skip
+    def test_a_stated_language_is_mapped(self, name, code):
+        text = f"0 HEAD\n1 LANG {name}\n" + eugen(
+            "2 NICK Muckel", "1 DEAT", "2 DATE 1909", "2 CAUS Dropsy"
+        )
+        assert self.languages(text) == {code}
+        assert adapt_gedcom(text, artifact=EXPORT).outcomes == {}
+
+    @pytest.mark.parametrize(
+        ("head", "outcome"),
+        [
+            ("0 HEAD\n", "HEAD.LANG absent: und"),
+            ("", "HEAD.LANG absent: und"),
+            ("0 HEAD\n1 LANG Pahari\n", "HEAD.LANG unmapped: und"),
+            ("0 HEAD\n1 LANG Frisian\n", "HEAD.LANG unmapped: und"),
+        ],
+    )
+    def test_an_absent_or_unmapped_language_is_undetermined(
+        self, head, outcome
+    ):
+        text = head + eugen("2 NICK Muckel", "1 BIRT", "2 DATE 1836")
+        assert self.languages(text) == {"und"}
+        assert adapt_gedcom(text, artifact=EXPORT).outcomes == {outcome: 1}
+
+    def test_every_mapped_code_is_a_language_a_text_takes(self):
+        for code in {*GEDCOM_LANGUAGES.values(), UNDETERMINED}:
+            MonolingualText(text="x", language=code)
 
 
 class TestRepeatedNicknames:
@@ -2822,20 +3403,14 @@ def text_of(length: int, ending: str = "") -> str:
     return text + ending
 
 
-def spouse_sources(text: str) -> list[tuple[str | None, str]]:
-    """The references of Leopold and Agnes's spouse claims, as (page
-    number, excerpt), a pair of claims at a time in the batch's order:
-    Agnes's cite as Leopold's do."""
+def sources(text: str, subject: str, prop: str) -> list[tuple]:
+    """The references of `subject`'s `prop` claims, as (page number,
+    excerpt), in the batch's order."""
     batch = adapt_gedcom(text, artifact=EXPORT).batch
-    found = [
-        [
-            (claim.source.page_number, claim.source.transcription_excerpt.text)
-            for claim in claims_for(batch, subject, "spouse")
-        ]
-        for subject in ("i11", "i17")
+    return [
+        (claim.source.page_number, claim.source.transcription_excerpt.text)
+        for claim in claims_for(batch, subject, prop)
     ]
-    assert found[0] == found[1]
-    return found[0]
 
 
 def ida_and_felix(*family_lines: str) -> str:
@@ -2861,13 +3436,13 @@ def ida_and_felix(*family_lines: str) -> str:
 
 
 class TestMarriageCitations:
-    """A SOUR beneath a MARR or a DIV is folded into the reference of the
-    spouse claims that the MARR or DIV gives, as the family record's own
-    SOURs are, and a pair of spouse claims holds, of the family record, the
-    lines that give it: the family's own, its HUSB and WIFE, its own
-    citations and its MARRs and DIVs (ADR-0021; #324)."""
+    """A SOUR beneath a MARR, a DIV or an ANUL is folded into the reference
+    of that event's claims, and of the union's claim that points to it; a
+    SOUR of the family record, into its couple's claims. Each claim holds,
+    of the family record, its own line, its HUSB and WIFE, and the lines
+    of the record that gives it (ADR-0021, ADR-0036 §5; #324)."""
 
-    def test_a_marriage_citation_is_folded_into_its_spouse_claims(self):
+    def test_a_marriage_citation_is_folded_into_its_weddings_claims(self):
         # Leopold and Agnes married on 8 February 1947 in Flörburg, per the
         # judgment: (here) the export cites its second sheet beneath the
         # MARR
@@ -2875,12 +3450,18 @@ class TestMarriageCitations:
             *WEDDING, "2 SOUR @S1@", "3 PAGE Bl. 2"
         )
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
-        assert spouse_sources(text) == [
-            (
-                "Bl. 2",
-                f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947 | 2 PLAC {FLOERBURG}"
-                f" | 2 SOUR @S1@ | 3 PAGE Bl. 2 | cited: {JUDGMENT}",
-            )
+        wedding = (
+            "Bl. 2",
+            f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947 | 2 PLAC {FLOERBURG}"
+            f" | 2 SOUR @S1@ | 3 PAGE Bl. 2 | cited: {JUDGMENT}",
+        )
+        assert sources(text, "f5", "started_by") == [wedding]
+        assert sources(text, "f5-wedding", "point_in_time") == [wedding]
+        assert sources(text, "f5-wedding", "location") == [wedding]
+        # the couple's claims cite the family record, which cites nothing
+        assert sources(text, "f5", "participant") == [
+            (None, PARTNERS),
+            (None, PARTNERS),
         ]
 
     def test_the_familys_and_the_divorces_citations_are_folded_in_too(self):
@@ -2895,20 +3476,41 @@ class TestMarriageCitations:
             "3 PAGE Bl. 1",
         )
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
-        assert spouse_sources(text) == [
+        couple_source = (None, f"{PARTNERS} | 1 SOUR @S1@ | cited: {TREE}")
+        assert sources(text, "f5", "participant") == [couple_source] * 2
+        divorce = (
+            "Bl. 1",
+            f"{PARTNERS} | 1 DIV | 2 DATE 2 JAN 1957 | 2 SOUR @S2@"
+            f" | 3 PAGE Bl. 1 | cited: {JUDGMENT}",
+        )
+        assert sources(text, "f5", "ended_by") == [divorce]
+        assert sources(text, "f5-divorce", "point_in_time") == [divorce]
+        # the wedding's claims cite neither
+        assert sources(text, "f5-wedding", "point_in_time") == [
             (
-                "Bl. 1",
-                f"{PARTNERS} | 1 SOUR @S1@ | 1 MARR | 2 DATE 8 FEB 1947"
-                f" | 2 PLAC {FLOERBURG} | 1 DIV | 2 DATE 2 JAN 1957"
-                f" | 2 SOUR @S2@ | 3 PAGE Bl. 1 | cited: {TREE}; {JUDGMENT}",
+                None,
+                f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947"
+                f" | 2 PLAC {FLOERBURG}",
             )
         ]
 
-    def test_each_pair_holds_its_own_marriage_and_citations(self):
+    def test_an_annulments_citation_is_folded_into_its_claims(self):
+        text = cited(JUDGMENT) + family(
+            "1 ANUL", "2 DATE 1948", "2 SOUR @S1@", "3 PAGE Bl. 1"
+        )
+        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
+        assert [page for page, _ in sources(text, "f5", "ended_by")] == [
+            "Bl. 1"
+        ]
+        assert [
+            page for page, _ in sources(text, "f5-annulment", "point_in_time")
+        ] == ["Bl. 1"]
+
+    def test_each_marriage_holds_its_own_lines_and_citations(self):
         # Leopold and Agnes married on 8 February 1947 per the judgment,
         # and in 1947 per the tree, and were divorced on 2 January 1957:
         # (here) the export gives both weddings, each citing its source,
-        # and a NOTE on the divorce
+        # and a NOTE on the family
         text = cited(JUDGMENT, TREE) + family(
             *WEDDING,
             "2 SOUR @S1@",
@@ -2920,21 +3522,12 @@ class TestMarriageCitations:
             "2 DATE 2 JAN 1957",
             "1 NOTE Divorced by the Landgericht Rekau",
         )
-        assert spouse_pairs(text) == [
-            [
-                ("end_time", day(1957, 1, 2)),
-                ("location", FLOERBURG),
-                ("start_time", day(1947, 2, 8)),
-            ],
-            [("start_time", year(1947))],
-        ]
         # neither holds the other's marriage, nor the family's NOTE
-        assert spouse_sources(text) == [
+        assert sources(text, "f5-wedding", "point_in_time") == [
             (
                 "Bl. 2",
                 f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947 | 2 PLAC {FLOERBURG}"
-                " | 2 SOUR @S1@ | 3 PAGE Bl. 2 | 1 DIV | 2 DATE 2 JAN 1957"
-                f" | cited: {JUDGMENT}",
+                f" | 2 SOUR @S1@ | 3 PAGE Bl. 2 | cited: {JUDGMENT}",
             ),
             (
                 None,
@@ -2957,7 +3550,7 @@ class TestMarriageCitations:
         ],
         ids=["records", "inline"],
     )
-    def test_a_marriage_restated_under_another_citation_is_a_pair_of_its_own(
+    def test_a_marriage_restated_under_another_citation_is_its_own_claim(
         self, citations
     ):
         # Leopold and Agnes married on 8 February 1947 in Flörburg, per the
@@ -2968,13 +3561,16 @@ class TestMarriageCitations:
         text = cited(JUDGMENT, TREE) + family(
             *WEDDING, first, *WEDDING, second
         )
-        wedding = [("location", FLOERBURG), ("start_time", day(1947, 2, 8))]
-        assert spouse_pairs(text) == [wedding, wedding]
-        excerpts = [excerpt for _, excerpt in spouse_sources(text)]
+        assert [
+            value for value, _ in stated(text, "f5-wedding", "point_in_time")
+        ] == [day(1947, 2, 8)] * 2
+        excerpts = [
+            excerpt for _, excerpt in sources(text, "f5-wedding", "location")
+        ]
         assert [first in excerpts[0], second in excerpts[1]] == [True, True]
         assert [first in excerpts[1], second in excerpts[0]] == [False, False]
 
-    def test_a_marriage_restated_at_another_page_is_a_pair_of_its_own(self):
+    def test_a_marriage_restated_at_another_page_is_its_own_claim(self):
         # (here) the export gives the wedding twice, each citing the
         # judgment, at its second sheet and at its third: the same source,
         # but not the same citation, line for line
@@ -2982,42 +3578,29 @@ class TestMarriageCitations:
             *WEDDING, "2 SOUR @S1@", "3 PAGE Bl. 2",
             *WEDDING, "2 SOUR @S1@", "3 PAGE Bl. 3",
         )  # fmt: skip
-        assert [page for page, _ in spouse_sources(text)] == ["Bl. 2", "Bl. 3"]
+        assert [
+            page for page, _ in sources(text, "f5-wedding", "point_in_time")
+        ] == ["Bl. 2", "Bl. 3"]
 
-    def test_a_marriage_restated_under_the_same_citation_adds_no_pair(self):
+    def test_a_marriage_restated_under_the_same_citation_adds_no_claim(self):
         # (here) the export gives the wedding twice, line for line, each
-        # citing the judgment's second sheet, and the divorce once: one
-        # pair, which holds both
+        # citing the judgment's second sheet: one claim of each
         wedding = [*WEDDING, "2 SOUR @S1@", "3 PAGE Bl. 2"]
-        text = cited(JUDGMENT) + family(
-            *wedding, *wedding, "1 DIV", "2 DATE 2 JAN 1957"
-        )
-        assert spouse_pairs(text) == [
-            [
-                ("end_time", day(1957, 1, 2)),
-                ("location", FLOERBURG),
-                ("start_time", day(1947, 2, 8)),
-            ]
-        ]
+        text = cited(JUDGMENT) + family(*wedding, *wedding)
         lines = " | ".join(wedding)
-        assert spouse_sources(text) == [
-            (
-                "Bl. 2",
-                f"{PARTNERS} | {lines} | {lines} | 1 DIV | 2 DATE 2 JAN 1957"
-                f" | cited: {JUDGMENT}",
-            )
-        ]
+        once = [("Bl. 2", f"{PARTNERS} | {lines} | cited: {JUDGMENT}")]
+        assert sources(text, "f5", "started_by") == once
+        assert sources(text, "f5-wedding", "point_in_time") == once
 
     @pytest.mark.parametrize("marriage", ["1 MARR Y", "1 MARR"])
-    def test_an_undated_marriages_citation_is_folded_into_the_one_pair(
+    def test_an_undated_marriages_citation_is_folded_into_its_wedding(
         self, marriage
     ):
         # (here) the family record says that Leopold and Agnes married,
         # citing the tree's second sheet, and not when or where
         text = cited(TREE) + family(marriage, "2 SOUR @S1@", "3 PAGE sheet 2")
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {}
-        assert spouse_pairs(text) == [[]]
-        assert spouse_sources(text) == [
+        assert sources(text, "f5", "started_by") == [
             (
                 "sheet 2",
                 f"{PARTNERS} | {marriage} | 2 SOUR @S1@ | 3 PAGE sheet 2"
@@ -3025,62 +3608,58 @@ class TestMarriageCitations:
             )
         ]
 
-    def test_an_undated_marriages_citation_beside_a_dated_one_is_counted(
-        self,
-    ):
+    def test_an_undated_marriages_citation_beside_a_dated_one_is_kept(self):
         # (here) one MARR says that Leopold and Agnes married, citing the
-        # tree, and another dates the wedding, citing the judgment: the
-        # dated pair is the judgment's alone, and the tree's citation,
-        # which dates nothing, is counted, as is the tree's record, which
-        # no claim cites
+        # tree, and another dates the wedding, citing the judgment: each
+        # gives the wedding, citing its own source
         text = cited(TREE, JUDGMENT) + family(
             "1 MARR Y", "2 SOUR @S1@", "1 MARR", "2 DATE 8 FEB 1947",
             "2 SOUR @S2@",
         )  # fmt: skip
         result = adapt_gedcom(text, artifact=EXPORT)
-        assert result.unsupported_tags == {"MARR.SOUR": 1, "SOUR": 1}
-        assert spouse_sources(text) == [
+        assert result.unsupported_tags == {}
+        assert sources(text, "f5", "started_by") == [
+            (None, f"{PARTNERS} | 1 MARR Y | 2 SOUR @S1@ | cited: {TREE}"),
             (
                 None,
                 f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947 | 2 SOUR @S2@"
                 f" | cited: {JUDGMENT}",
-            )
+            ),
         ]
 
     @pytest.mark.parametrize(
-        ("divorce", "counted", "warnings"),
+        ("divorce", "warnings"),
         [
-            # an undated DIV is counted whole, its citation with it
-            (["1 DIV Y"], {"DIV": 1}, []),
-            # a DIV whose date the grammar cannot parse dates no pair
+            (["1 DIV Y"], []),
             (
                 ["1 DIV", "2 DATE NEVER EVER"],
-                {"DIV.SOUR": 1},
                 [
-                    "line 14: unparsed divorce date 'NEVER EVER' — end_time "
-                    "omitted"
+                    "line 14: unparsed date 'NEVER EVER' — no point_in_time "
+                    "claim emitted"
                 ],
             ),
         ],
         ids=["undated", "unparsed"],
     )
-    def test_a_divorce_that_dates_nothing_has_its_citation_counted(
-        self, divorce, counted, warnings
+    def test_an_undated_divorces_citation_is_folded_into_its_end(
+        self, divorce, warnings
     ):
         # (here) the family record says that Leopold and Agnes divorced,
         # citing the judgment, and not when
         text = cited(JUDGMENT) + family(*WEDDING, *divorce, "2 SOUR @S1@")
         result = adapt_gedcom(text, artifact=EXPORT)
-        # the judgment's record, which no folded citation cites, is counted
-        assert result.unsupported_tags == {**counted, "SOUR": 1}
+        assert result.unsupported_tags == {}
         assert result.warnings == warnings
-        assert spouse_sources(text) == [
-            (
-                None,
-                f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947"
-                f" | 2 PLAC {FLOERBURG}",
-            )
+        lines = " | ".join([*divorce, "2 SOUR @S1@"])
+        assert sources(text, "f5", "ended_by") == [
+            (None, f"{PARTNERS} | {lines} | cited: {JUDGMENT}")
         ]
+
+    def test_a_divs_citation_is_counted_when_it_states_no_divorce(self):
+        text = cited(JUDGMENT) + family(*WEDDING, "1 DIV", "2 SOUR @S1@")
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.unsupported_tags == {"DIV": 1, "SOUR": 1}
+        assert sources(text, "f5", "ended_by") == []
 
     @pytest.mark.parametrize(
         ("partners", "counted"),
@@ -3120,9 +3699,9 @@ class TestMarriageCitations:
         ]
 
     @pytest.mark.parametrize("tag", ["HUSB", "WIFE"])
-    def test_a_further_partner_is_left_out_of_a_pairs_excerpt(self, tag):
+    def test_a_further_partner_is_left_out_of_a_unions_excerpts(self, tag):
         # (here) Leopold and Agnes's family record names a further HUSB or
-        # WIFE, which the census counts: the pair's excerpt names the
+        # WIFE, which the census counts: the union's excerpts name the
         # partners its claims name, and no other
         text = (
             "0 @I99@ INDI\n1 NAME A /B/\n"
@@ -3132,7 +3711,8 @@ class TestMarriageCitations:
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {
             f"FAM.{tag}": 1
         }
-        assert spouse_sources(text) == [
+        assert sources(text, "f5", "participant") == [(None, PARTNERS)] * 2
+        assert sources(text, "f5", "started_by") == [
             (
                 None,
                 f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947 | 2 PLAC {FLOERBURG}"
@@ -3156,25 +3736,31 @@ class TestMarriageCitations:
                 "0 @F3@ FAM | 1 HUSB @I6@ | 1 WIFE @I7@ | 1 CHIL @I11@"
                 " | 1 MARR | 2 SOUR @S1@ | 3 PAGE Bl. 4"
             )
-        (spouse,) = claims_for(batch, "i6", "spouse")
-        assert spouse.source.page_number == "Bl. 4"
+        (started,) = claims_for(batch, "f3", "started_by")
+        assert started.source.page_number == "Bl. 4"
 
-    def test_the_fixtures_spouse_claims_hold_the_lines_that_give_them(self):
-        # Sebastian and Hildegard's family record: their spouse claims hold
-        # no CHIL line, and their children's parent claims hold every line
+    def test_the_fixtures_union_claims_hold_the_lines_that_give_them(self):
+        # Sebastian and Hildegard's family record: their union's claims
+        # hold no CHIL line, and their children's parent claims hold every
+        # line
         batch = fixture_result().batch
+        partners = "0 @F2@ FAM | 1 HUSB @I3@ | 1 WIFE @I4@"
         wedding = (
-            "0 @F2@ FAM | 1 HUSB @I3@ | 1 WIFE @I4@ | 1 MARR"
-            f" | 2 DATE 15 DEC 1905 | 2 PLAC {FLOERBURG}"
+            f"{partners} | 1 MARR | 2 TYPE civil | 2 DATE 15 DEC 1905"
+            f" | 2 PLAC {FLOERBURG}"
         )
-        for subject in ("i3", "i4"):
-            (spouse,) = claims_for(batch, subject, "spouse")
-            assert spouse.source.transcription_excerpt.text == wedding
+        for claim in claims_for(batch, "f2", "participant"):
+            assert claim.source.transcription_excerpt.text == partners
+        for claim in [
+            *claims_for(batch, "f2", "started_by"),
+            *claims_for(batch, "f2-civil-wedding"),
+        ]:
+            assert claim.source.transcription_excerpt.text == wedding
         (father,) = claims_for(batch, "i8", "father")
         assert father.source.transcription_excerpt.text == (
             "0 @F2@ FAM | 1 HUSB @I3@ | 1 WIFE @I4@ | 1 CHIL @I10@"
-            " | 1 CHIL @I9@ | 1 CHIL @I8@ | 1 MARR | 2 DATE 15 DEC 1905"
-            f" | 2 PLAC {FLOERBURG}"
+            " | 1 CHIL @I9@ | 1 CHIL @I8@ | 1 MARR | 2 TYPE civil"
+            f" | 2 DATE 15 DEC 1905 | 2 PLAC {FLOERBURG}"
         )
 
 
@@ -3234,8 +3820,8 @@ class TestCitationsAndMediaNotHeld:
     @pytest.mark.parametrize("link", ["1 CHIL @I11@", "1 HUSB @I6@"])
     def test_a_citation_of_a_familys_link_to_a_person_is_counted(self, link):
         # (here) Felix and Ida's family record cites the compensation file
-        # beneath its line that names Leopold, or Felix: the parent and
-        # spouse claims cite the family, and neither folds it
+        # beneath its line that names Leopold, or Felix: the parent claims
+        # and the union's cite the family, and none folds it
         text = cited(COMPENSATION) + ida_and_felix().replace(
             f"{link}\n", f"{link}\n2 SOUR @S1@\n"
         )
@@ -3896,23 +4482,25 @@ class TestExcerptClip:
 
     def test_a_continuation_of_a_citing_line_waits_its_turn(self):
         # (here) the DIV line the judgment's citation stands beneath runs
-        # on over a CONT line, after a NOTE on the wedding: the clip keeps
-        # the DIV line before any other, but its continuation only in its
-        # turn, after the NOTE, where it no longer fits
-        note = f"2 NOTE {text_of(100)}"
+        # on over a CONT line, after a NOTE on Leopold's line in the family
+        # record: the clip keeps the DIV line before any other, but its
+        # continuation only in its turn, after the NOTE, where it no longer
+        # fits
+        note = f"2 NOTE {text_of(170)}"
         divorce = "1 DIV Divorced by the Landgericht Rekau"
         more = "by its judgment of 2 January 1957"
         after = ["2 DATE 2 JAN 1957", "2 SOUR @S1@", f"2 NOTE {text_of(300)}"]
-        text = cited(JUDGMENT) + family(
-            *WEDDING, note, divorce, f"2 CONT {more}", *after
+        head = ["1 HUSB @I11@", note, "1 WIFE @I17@"]
+        text = cited(JUDGMENT) + leopold_and_agnes(
+            *head, divorce, f"2 CONT {more}", *after
         )
         # the CONT line is a line of the excerpt of its own
-        pieces = [PARTNERS, *WEDDING, note, divorce, more, *after]
+        pieces = ["0 @F5@ FAM", *head, divorce, more, *after]
         whole = " | ".join(pieces) + f" | cited: {JUDGMENT}"
-        ((_, excerpt),) = spouse_sources(text)
+        ((_, excerpt),) = sources(text, "f5", "ended_by")
         assert excerpt == (
-            f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947 | 2 PLAC {FLOERBURG}"
-            f" | {note} | {divorce} | … | 2 SOUR @S1@ | … | cited: {JUDGMENT}"
+            f"0 @F5@ FAM | 1 HUSB @I11@ | {note} | 1 WIFE @I17@"
+            f" | {divorce} | … | 2 SOUR @S1@ | … | cited: {JUDGMENT}"
             + clipped(whole)
         )
 
@@ -4080,22 +4668,23 @@ class TestExcerptClip:
             )
 
     def test_a_citation_keeps_the_line_it_stands_beneath(self):
-        # (here) the family record's MARR carries a NOTE of each length up
-        # to 330 characters, and its DIV cites the judgment, with a long
+        # (here) the family record's HUSB line carries a NOTE of each length
+        # up to 330 characters, and its DIV cites the judgment, with a long
         # NOTE after the citation: the clip keeps the DIV line the
         # citation stands beneath before any other line it could keep, so
-        # the citation is never read as the MARR's
+        # the citation is never read as the HUSB's
         for length in range(1, 331):
-            text = cited(JUDGMENT) + family(
-                *WEDDING,
+            text = cited(JUDGMENT) + leopold_and_agnes(
+                "1 HUSB @I11@",
                 f"2 NOTE {text_of(length)}",
+                "1 WIFE @I17@",
                 "1 DIV",
                 "2 DATE 2 JAN 1957",
                 "2 SOUR @S1@",
                 "3 PAGE Bl. 1",
                 f"2 NOTE {text_of(300)}",
             )
-            ((_, excerpt),) = spouse_sources(text)
+            ((_, excerpt),) = sources(text, "f5", "ended_by")
             lines = excerpt.split(" | ")
             assert "1 DIV" in lines, length
             assert lines.index("1 DIV") < lines.index("2 SOUR @S1@"), length

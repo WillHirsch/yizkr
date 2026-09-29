@@ -124,9 +124,9 @@ from as its subject (ADR-0035 §3.4).
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
 the manifest renders offers it. `spouse` is retired (ADR-0036): the spouse
-link is derived from a marriage's participants. The GEDCOM adapter still
-states a couple as a pair of spouse claims, which its own check lets
-through, until it makes marriages (ADR-0036 §5).
+link is derived from a marriage's participants. The GEDCOM adapter makes
+marriages and partnerships (ADR-0036 §5, "Marriages, residences and other
+periods" below), so no batch carries a spouse claim.
 
 ## Reference pattern (see ADR-0003)
 
@@ -543,8 +543,15 @@ Names are modelled in **two layers**:
   it never narrows or infers (a maiden name is recorded only when the
   source says so, never derived from gender + marriage).
 - The GEDCOM adapter emits these from NAME TYPE, the NICK and `_MARNM`
-  tags, and the universal inline convention (a quoted or parenthetical
-  token is a nickname). Typed names also feed reconciliation: a married
+  tags, and the inline convention that a quoted part is a nickname
+  ("Cäcilie 'Cilli' Tarle"). A bracketed part ("Ida (Peppi) Sörne") may
+  hold a nickname, a maiden name or a note, so it is an alias and an
+  unsplit form of the mention record, typed as nothing and counted, and
+  the label leaves it out; a NAME without slashes, whose parts no GIVN or
+  SURN gives, is an unsplit form too, and its TYPE gives no claim
+  (ADR-0035 §6). The adapter's texts are in the export's language
+  (HEAD.LANG, mapped to BCP 47), or undetermined (`und`) where it states
+  none. Typed names also feed reconciliation: a married
   name matching another's birth name (a marriage name change) is strong
   identity evidence.
 
@@ -597,7 +604,14 @@ data. A record may divide and label a name, never add to it: every part
 must occur in the label or an alias, folded, as whole words (a standard
 form and an organisation's places aside). A record that fails that, or
 that does not parse, is set aside and counted, and the entity keeps its
-label, aliases and kind. What a marker in a name asserts (a widow's
+label, aliases and kind. The GEDCOM adapter fills each person's record
+from the NAME's value and its GIVN, SURN, SPFX, NPFX, NSFX, NICK and
+`_MARNM` (ADR-0035 §6): a part the value does not restate reaches its
+field and the name the parts give becomes an alias, counted, and a part
+that gives no name of its own is counted, so none is dropped silently. A
+NICK and a `_MARNM` are aliases too. A place's record takes its PLAC's
+first component as its name and the rest as the places it is within.
+What a marker in a name asserts (a widow's
 marker, "the late", a patronymic's father, a married-name marker) is a
 claim: a `civil_status`, a death, a `father`, a `married_name`.
 
@@ -674,6 +688,8 @@ primitive network and the *same* term set describes any pair:
   `informant` who reported it, a `witness` or the `officiant`; in a
   partnership or marriage, a `partner` or a `spouse`. One claim may carry
   several roles, but a death's principal is never also its informant.
+  The GEDCOM adapter makes each death event it makes with the person as
+  its `principal`, and each union's couple its `spouse`s or `partner`s.
 
 ## Residence and co-residence (see ADR-0014)
 
@@ -698,11 +714,29 @@ subject; there is no household statement enumerating occupants.
 
 ADR-0036 makes a marriage an entity bounded by events, and retires the
 `spouse` statement below; its vocabulary is in the manifest ("Core
-classes"). Until the rest of the pipeline moves to marriages, the GEDCOM
-adapter still writes the spouse statements described here, the readers
+classes"). Until the rest of the pipeline moves to marriages, the readers
 of spouse statements (the disagreement report, the timeline, the kinship
 query) still read them, and the chunk prompt's own text still names
 `spouse`, whose claims extraction now refuses and counts.
+
+**The GEDCOM adapter makes unions (ADR-0036 §5).** A family with two
+partners is a `marriage` when it has a `MARR`, otherwise a `partnership`
+(the export gives Felix and Ida no `MARR`, so theirs is a partnership);
+its couple are its participants with the role `spouse` or `partner`. The
+family's `MARR`s of one kind are one wedding, which the union is
+`started_by`: a `civil_wedding` or a `religious_wedding` where the `MARR`'s
+`TYPE` names the ceremony (`civil`, `religious`, `church`, and their
+German forms), else a `wedding`, any other `TYPE` counted. Its `DIV`s are
+one divorce and its `ANUL`s one annulment, which the union is `ended_by`,
+each `PLAC` the event's `location`, and a `DIV Y` an undated divorce. Each
+date and place of each record is a claim of its own on that event: its
+`point_in_time`, with the range and circa its `DATE` states. A `FROM … TO
+…` on a `MARR` dates the wedding by the `FROM` and an end of unstated kind
+(an `event`) by the `TO`; on a `DIV` or an `ANUL` it is the event's own
+`start_time` and `end_time`, as an imprisonment is dated. No end is
+inferred from a partner's `DEAT`. A `SOUR` beneath a `MARR`, `DIV` or
+`ANUL` cites that event's claims and the union's claim that points to
+it; the family record's own `SOUR`s cite the couple's claims.
 
 A statement that holds for a period, such as a marriage (`spouse`), a
 residence, an occupation or a membership, is dated as Wikidata dates
@@ -713,16 +747,9 @@ spouse (P26):
   source dates the end itself) is its `end_time`: Leopold and Agnes's
   marriage, from 8 February 1947 until the divorce of 2 January 1957 per
   the judgment, is a spouse statement with that start time and end time.
-  Each partner's spouse statement carries the dates its source gives, and
-  the GEDCOM adapter writes a family's `MARR` date as the start time of
-  both partners' statements and its `DIV` date as their end time. A
-  family that repeats a `MARR` or a `DIV`, as GEDCOM states an
-  alternative, gets a pair of statements of its own for each alternative
-  date or place it gives, with its own circa, beside the pair that its
-  first marriage and first divorce date: an export that dates Leopold and
-  Agnes's marriage both 8 February 1947 and 1947 gives one pair that
-  starts on 8 February 1947 and one that starts in 1947. A move
-  in and a move out date a residence the same way, and the adapter reads
+  Each partner's spouse statement carries the dates its source gives. A
+  move in and a move out date a residence the same way, and the GEDCOM
+  adapter reads
   a residence's or an occupation's date period (`FROM 1939 TO 1952`) as
   its start and end time, each with the range its own date gives, and
   with one circa when either end is approximate.
@@ -744,7 +771,7 @@ spouse (P26):
   `earliest_date` and `latest_date` are thus the outer bounds of the
   period: the earliest it can have begun and the latest it can still have
   held. A marriage "between 1946 and 1947" is a start time of 1946 (the
-  first date, as the GEDCOM adapter stores a range) with an earliest date
+  first date, as a range is stored) with an earliest date
   of 1946 and a latest start date of 1947; a divorce "before 1958" is an
   end time of 1958 with a latest date of 1958. An earliest date never
   bounds an end, nor a latest date a start.
@@ -762,9 +789,8 @@ spouse (P26):
   range, since there those dates bound the period.
 - **Circa** (`sourcing_circumstances`) qualifies the whole statement. On
   a spouse statement with a start and an end, it says that the source
-  gives at least one of them approximately, and cannot say which: the
-  GEDCOM adapter writes one circa when the marriage's or the divorce's
-  date is approximate, rather than drop it (rule 5).
+  gives at least one of them approximately, and cannot say which, rather
+  than drop it (rule 5).
 
 The disagreement report compares a residence's or a spouse's start and
 end times, each through its own range ("Contradictions" below); the

@@ -8,6 +8,9 @@ Amended by [ADR-0035](0035-mention-records.md) (owner decision
 a name as a nickname, since a bracket may hold a maiden name, a later
 name or a note; it becomes an alias with no type, counted, and only a
 quoted part stays a nickname (ADR-0035 §6).
+Amended by #408 (2026-09-29): implemented as ADR-0035 §6 says; the label
+leaves the bracketed part out, and the language tag of a GEDCOM name is
+the export's HEAD.LANG, or `und`, no longer a fixed "en".
 
 ## Context
 

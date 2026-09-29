@@ -13,9 +13,10 @@ Source-first conventions carry over unchanged:
   SHA-1 of its bytes (ADR-0010; the writer resolves it to the artifact
   item), with the record's verbatim GEDCOM lines as the transcription
   excerpt — the human reviewer sees exactly the lines that assert the
-  claim. Of a family record, a pair of spouse claims holds the lines
-  that give it: the family's own line, its HUSB and WIFE, its own
-  citations, and the MARRs and DIVs that give the pair. A person's image
+  claim. Of a family record, a claim of its union holds the lines that
+  give it: the family's own line, its HUSB and WIFE, and its own
+  citations for the couple's claims, or the MARR, DIV or ANUL that gives
+  an event's claims. A person's image
   claim holds the object's lines, after those of the person's OBJE link
   when the link holds any beneath it. An excerpt is given in NFC, the
   form the instance stores text in, and holds at most 400 characters,
@@ -34,20 +35,21 @@ Source-first conventions carry over unchanged:
   uncertainty (docs/MODELING.md): ABT/EST/CAL -> `circa` sourcing
   circumstances; BEF -> `latest date`; AFT -> `earliest date`;
   BET .. AND .. -> both; missing day/month -> reduced precision. A
-  marriage's or a divorce's range bounds the one end of the spouse
-  statement it dates: a marriage's BEF is its `latest start date`, a
-  divorce's AFT its `earliest end date` (docs/MODELING.md, "Marriages,
-  residences and other periods"). A residence's or an occupation's
+  wedding's, a divorce's or an annulment's range and circa are those of
+  its own date (ADR-0036 §5). A residence's or an occupation's
   date period (FROM x TO y, FROM x, TO y) is its statement's start and
   end time, each dated by its own phrase, which may be approximate or
   a range of its own: FROM BET 1938 AND 1939 is a start between 1938
-  and 1939. Any other date on them is a point in time.
+  and 1939. Any other date on them is a point in time. A divorce's or an
+  annulment's period is its own start and end time, and a marriage's
+  period dates its wedding by the FROM and an end of unstated kind by
+  the TO.
   A date the grammar cannot parse yields NO date claim and a warning —
   never a guess.
 
 Every occurrence of an event, of a DATE, PLAC or CAUS beneath one where
-the adapter reads that tag (a divorce's PLAC and a CAUS beneath any
-event but a death are counted instead, below), of a TYPE or NICK beneath
+the adapter reads that tag (a CAUS beneath any event but a death is
+counted instead, below), of a TYPE or NICK beneath
 a NAME, and of a person's SEX or NCHI, is read, not only the first. A
 record that repeats an event (a second BIRT, DEAT, MARR or DIV) or a
 detail (a second DATE, PLAC, CAUS, TYPE or NICK), or that gives a
@@ -55,48 +57,46 @@ person's SEX or NCHI twice, states alternatives, and each gives claims
 of its own, with its own date, place and circa, so that the alternatives
 coexist (ADR-0002): Gustav's birth on 7 JAN 1919 and on 1 JUL 1919 is
 two date of birth claims. Where one claim holds both an event's date and
-its place (a burial, a residence, an occupation, a marriage), each of
-the event's dates is paired with each of its places, and each DATE of a
-media object dates an image claim of its own. A family's first marriage
-(a date with a place) and its first divorce date one pair of spouse
-claims, as a family's only MARR and DIV do, and every other marriage or
-divorce dates a pair of its own. What gives nothing to claim
-(`1 BIRT Y`, `1 MARR Y`, a date the grammar cannot parse) never hides
-what does: it adds no claim beside one that does, while an undated MARR
-that gives a place keeps it on a pair of its own, and a DEAT that states
-the death with no date, place or cause (`1 DEAT Y`) still gives a
-`death` event (below), beside what another DEAT gives. An event that
-restates another line for line, its citation included, gives the same
-claim, which the batch holds once; the same value under another citation
-is a claim of its own. So a MARR or DIV that restates another's date and
-place under the same citations gives no pair of spouse claims of its
-own, and under other citations gives a pair of its own, which cites
-them. A family's HUSB and WIFE are still read once, and so is an
-object's FILE: a further one is counted (below), its TITL with it. Every
-PAGE of a citation, and every TITL of a source record, of an object or
-of its first FILE, is read.
+its place (a burial, a residence, an occupation), each of the event's
+dates is paired with each of its places, and each DATE of a media object
+dates an image claim of its own. A family's MARRs of one kind are one
+wedding and its DIVs one divorce, and each date and place of each is a
+claim of its own on that event. What gives nothing to claim (`1 BIRT Y`,
+a date the grammar cannot parse) never hides what does: it adds no claim
+beside one that does, while a DEAT that states the death with no date,
+place or cause (`1 DEAT Y`) still gives a `death` event (below), beside
+what another DEAT gives, and a `1 MARR Y` or a `1 DIV Y` still gives its
+wedding or divorce. An event that restates another line for line, its
+citation included, gives the same claim, which the batch holds once; the
+same value under another citation is a claim of its own. A family's HUSB
+and WIFE are still read once, and so is an object's FILE: a further one
+is counted (below), its TITL with it. Every PAGE of a citation, and
+every TITL of a source record, of an object or of its first FILE, is
+read.
 
 Supported (the fields family-tree exports actually carry):
 individuals (names -> label + aliases, a NAME without a value read from
-its parts, PLUS typed referenced name claims: NAME TYPE
-birth/maiden/married/aka/official, the NICK subtag, the non-standard
-_MARNM tag, and the universal inline convention where a quoted or
-parenthetical token is a nickname — "Ida (Peppi) Sörne", "Cäcilie
-'Cilli' Tarle"; docs/MODELING.md "Names"; a nickname that several NAMEs
+its parts, each person's mention record (read_name; ADR-0035 §6), PLUS
+typed referenced name claims: NAME TYPE birth/maiden/married/aka/
+official, the NICK subtag, the non-standard _MARNM tag, and the inline
+convention where a quoted part is a nickname — "Cäcilie 'Cilli' Tarle";
+a bracketed part, "Ida (Peppi) Sörne", is an alias and an unsplit form
+and no nickname; docs/MODELING.md "Names"; a nickname that several NAMEs
 give is a claim of each, citing its own NAME), birth/death dates and
 places, a death the export states with no date, place or cause (by a Y
 alone, or by a DATE the grammar cannot parse), which is a `death` event
-with the person as participant (ADR-0020),
+with the person as its principal (ADR-0020, ADR-0035 §3.2),
 cause of death (DEAT.CAUS, verbatim), burials (BURI place, dated when
 the record is), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
-when the record is), parent-child relations, marriages (the spouse
-statements' start time and place) and divorces (their end time). Source
-citations (SOUR) are folded into the reference of each claim that the
-record they stand beneath gives (ADR-0021): the event, fact or NAME a
-claim cites; the family record, for its parent and spouse claims, and,
-for a pair of spouse claims, the MARRs and DIVs that date or place it
-(each MARR, when none dates or places the family's one pair); the
+when the record is), parent-child relations, and unions (union_claims;
+ADR-0036 §5): a family with two partners is a partnership, or a marriage
+when it has a MARR, started by its weddings and ended by its divorce or
+annulment. Source citations (SOUR) are folded into the reference of each
+claim that the record they stand beneath gives (ADR-0021): the event,
+fact or NAME a claim cites; the family record, for its parent claims and
+its couple's; each MARR, DIV or ANUL, for its event's claims and the
+union's claim that points to the event; the
 object, for its image claims, and the person's OBJE link to it. Each
 PAGE of a citation is a locator of the reference's page number, and the
 cited source's title, each TITL it gives, is surfaced in the excerpt —
@@ -117,10 +117,11 @@ REPO, SUBM, tool-specific `_` tags) are counted and reported, not
 silently dropped: the census walks every record and nesting level and
 names the top-most unmapped tag in each branch, leaving an already-
 handled or already-dropped subtree unitemised (ADR-0021). Whether a tag
-is mapped depends on where it stands: a PLAC is read under a marriage
-but not under a divorce, and a TYPE under a NAME but not under a MARR,
-so such a tag is named with its parent's tag where it goes unread
-(DIV.PLAC, MARR.TYPE). A SOUR that the adapter folds into no claim's
+is mapped depends on where it stands: a CAUS is read under a death but
+not under a burial, and a TYPE under a NAME, and under a MARR only where
+it names a civil or a religious ceremony, so such a tag is named with
+its parent's tag where it goes unread (BURI.CAUS, MARR.TYPE). A SOUR
+that the adapter folds into no claim's
 reference is counted so too: one directly beneath a person (INDI.SOUR),
 beneath a DATE, PLAC, HUSB, WIFE, CHIL, FAMC or FAMS (DATE.SOUR,
 CHIL.SOUR), or beneath an event or a NAME that gives no claim
@@ -134,23 +135,31 @@ folds, a source record a folded citation cites and an object it maps,
 which the census takes whole, a SOUR it folds into no claim and an OBJE
 it maps to no media item are counted as well (SOUR.OBJE for a scan
 beneath a citation, FILE.SOUR for a citation beneath an object's FILE).
-A DIV without a DATE is counted as DIV: it says a marriage ended at an
-unknown time, and a claim has no unknown value to state that with. A
-family has one husband and one wife, so the adapter reads a family's
+A family has one husband and one wife, so the adapter reads a family's
 first HUSB and first WIFE alone, and a further one is counted with its
-parent's tag too (FAM.HUSB, FAM.WIFE). A family's MARR
-and DIV date the spouse claims between its HUSB and its WIFE, so in a
-family with one partner or none (its HUSB or its WIFE is missing, or
-names no person the adapter maps) they are counted as MARR and DIV: no
-claim names the other partner, and a claim has no unknown value to name
-them with. A DEAT states the death only as GEDCOM 5.5.1 has an event
-asserted, by a DATE or PLAC with a value (a DATE the grammar cannot
-parse, only when the DEAT's own line has none), or else by a Y on that
-line: one that states none (a bare DEAT, or one with only a SOUR, NOTE,
-AGE or CAUS) gives no claim, since a death event or a cause of death
-would mark the person as not possibly living (ADR-0020), and is counted
-as DEAT. A person none of whose NAMEs gives a name is skipped, with a
-warning, and the family links that name them give no claim.
+parent's tag too (FAM.HUSB, FAM.WIFE). A family's MARR, DIV and ANUL are
+events of the union of its HUSB and its WIFE, so in a family with one
+partner or none (its HUSB or its WIFE is missing, or names no person the
+adapter maps) they are counted as MARR, DIV and ANUL: no claim names the
+other partner, and a claim has no unknown value to name them with. A DIV
+or an ANUL states its event as a DEAT does (below); one that states none
+is counted as DIV or ANUL. A DEAT states the death only as GEDCOM 5.5.1
+has an event asserted, by a DATE or PLAC with a value (a DATE the
+grammar cannot parse, only when the DEAT's own line has none), or else
+by a Y on that line: one that states none (a bare DEAT, or one with only
+a SOUR, NOTE, AGE or CAUS) gives no claim, since a death event or a
+cause of death would mark the person as not possibly living (ADR-0020),
+and is counted as DEAT. A person none of whose NAMEs gives a name is
+skipped, with a warning, and the family links that name them give no
+claim.
+
+The texts the adapter writes (excerpts, names, causes of death) are in
+the language HEAD.LANG names, mapped to BCP 47 (GEDCOM_LANGUAGES), or
+undetermined (`und`) where it names none the map knows. What it maps in
+a way worth reporting is counted in the outcomes (AdapterResult): each
+union and union event by kind, an undated divorce or annulment, a name
+part kept as an unsplit form or counted rather than placed, and an
+undetermined language.
 """
 
 from __future__ import annotations
@@ -162,8 +171,16 @@ import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
+from yizkr.claims import (
+    ArtifactRef,
+    ClaimBatch,
+    _occurs,
+    _words,
+    structure_problems,
+    validate_against_manifest,
+)
 from yizkr.pipeline.extract import run_metadata
+from yizkr.pipeline.names import normalize_aliases
 
 MONTHS = {
     "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
@@ -433,17 +450,10 @@ def _clean_name(name: str) -> str:
 _NAME_PARTS = ("NPFX", "GIVN", "SPFX", "SURN", "NSFX")
 
 
-def _name_text(name: Record) -> str:
-    """A NAME's display form: its value, cleaned ('Eugen /Löbig/' ->
-    'Eugen Löbig'), which its parts are taken to restate. When the value
-    gives none (it is empty, or '//'), the parts give it, in the order
-    GEDCOM writes a name, each part's comma-separated pieces in turn (a
-    GIVN 'Eugen' and a SURN 'Löbig' give 'Eugen Löbig'), provided a given
-    name or a surname is among them: a prefix or a suffix alone ('Wwe.')
-    names no one, and the writer, which finds an item by its label, would
-    make everyone it stood for one item. Empty when neither gives a
-    name."""
-    pieces = {
+def _name_pieces(name: Record) -> dict[str, list[str]]:
+    """Each part tag of a NAME (_NAME_PARTS) -> its comma-separated
+    pieces, cleaned, in order."""
+    return {
         tag: [
             text
             for part in name.all(tag)
@@ -452,11 +462,223 @@ def _name_text(name: Record) -> str:
         ]
         for tag in _NAME_PARTS
     }
+
+
+def _parts_text(pieces: dict[str, list[str]]) -> str:
+    """The name a NAME's parts give, in the order GEDCOM writes a name,
+    each part's pieces in turn (a GIVN 'Eugen' and a SURN 'Löbig' give
+    'Eugen Löbig'), provided a given name or a surname is among them: a
+    prefix or a suffix alone ('Wwe.') names no one, and the writer, which
+    finds an item by its label, would make everyone it stood for one
+    item. Empty when they give none."""
     if not (pieces["GIVN"] or pieces["SURN"]):
-        return _clean_name(name.value)
-    return _clean_name(name.value) or " ".join(
-        text for tag in _NAME_PARTS for text in pieces[tag]
-    )
+        return ""
+    return " ".join(text for tag in _NAME_PARTS for text in pieces[tag])
+
+
+# The inline convention of the people who keep trees, the one heuristic
+# the adapter keeps for names (ADR-0035 §6, §10): a quoted part of a NAME
+# value marks a nickname ("Cäcilie 'Cilli' Tarle"), and a bracketed part
+# may hold a nickname, a maiden or a later name, or a note ("Ida (Peppi)
+# Sörne", "(geb. Laudler)"), so it is kept as an alias and an unsplit
+# form, typed as nothing. A quote opens a word and closes one, so an
+# apostrophe inside a name ("O'Neil") is no quote.
+_QUOTED_NAME = re.compile(r"(?:(?<=\s)|^)[‘'\"“]([^‘’'\"“”]+)[’'\"”](?=\s|$)")
+_BRACKETED_NAME = re.compile(r"\(([^()]*)\)")
+# a NAME value's given part, its surname between slashes, and what follows
+_SLASHED_NAME = re.compile(r"^([^/]*)/([^/]*)/([^/]*)$")
+
+
+def _name_display(value: str) -> str:
+    """A NAME value's display form: cleaned, without its bracketed parts
+    ('Ida (Peppi) /Sörne/' -> 'Ida Sörne')."""
+    return _clean_name(_BRACKETED_NAME.sub(" ", value))
+
+
+def _name_text(name: Record) -> str:
+    """A NAME's display form: its value, cleaned, without its bracketed
+    parts ('Eugen /Löbig/' -> 'Eugen Löbig'). When the value gives none
+    (it is empty, '//', or a bracket alone), the parts give it
+    (_parts_text). Empty when neither gives a name."""
+    return _name_display(name.value) or _parts_text(_name_pieces(name))
+
+
+# GEDCOM NAME TYPE -> the surname type of the NAME's mention record
+# (ADR-0035 §6); any other TYPE, or none, gives `other`
+_NAME_TYPE_SURNAME = {
+    "birth_name": "birth",
+    "married_name": "married",
+}
+
+
+@dataclass
+class NameReading:
+    """What one NAME, or one `_MARNM`, gives a person's mention record
+    (ADR-0035 §6): the fields it fills, the name forms that carry them
+    (its display form, the name its parts give where the value does not
+    restate them, each bracketed part), whether its TYPEs give typed-name
+    claims, and what it counts."""
+
+    display: str = ""
+    forms: list[str] = field(default_factory=list)
+    given: list[str] = field(default_factory=list)
+    surnames: list[tuple[str, str]] = field(default_factory=list)
+    nicknames: list[str] = field(default_factory=list)
+    # the nicknames a quoted part gives
+    quoted: list[str] = field(default_factory=list)
+    titles: list[str] = field(default_factory=list)
+    suffixes: list[str] = field(default_factory=list)
+    unsplit: list[str] = field(default_factory=list)
+    typed: bool = True
+    counts: list[str] = field(default_factory=list)
+
+
+def _restated(part: str, text: str) -> bool:
+    """Whether `text` holds `part`, folded, as whole words."""
+    return _occurs(part, [_words(text)])
+
+
+def read_name(name: Record) -> NameReading:
+    """A NAME's reading for its person's mention record (ADR-0035 §6).
+
+    * The value's part before the slashes gives given names, less an NPFX
+      it starts with and less its quoted parts, which are nicknames; the
+      part between them a surname, typed by the NAME's TYPE; the part
+      after them a suffix, unless an NSFX gives the suffixes.
+    * A value without slashes, where no GIVN or SURN gives the parts, is
+      an `unsplit` form, and gives no typed-name claim.
+    * GIVN gives given names, SURN surnames (each whole with the SPFX
+      particle before it), NPFX titles and NSFX suffixes; NICK and a
+      quoted part give nicknames. Given names are separated by spaces, as
+      the NAME value writes them, and pieces by commas.
+    * TYPE birth or maiden types the surname `birth`, married or marriage
+      `married`, and aka, nick or nickname makes the given names
+      nicknames.
+    * Each bracketed part is an alias and an `unsplit` form, counted.
+    * A part the value does not restate still reaches its field, and the
+      name the parts give becomes a name form of the person's, counted;
+      a part that gives no name of its own there (a prefix, a suffix or a
+      particle with no given name or surname beside it) is counted
+      instead. So is a particle with no surname.
+    """
+    reading = NameReading()
+    value = name.value
+    pieces = _name_pieces(name)
+    props = [
+        _NAME_TYPE_PROPERTY.get(kind.value.strip().lower())
+        for kind in name.all("TYPE")
+    ]
+    types = list(
+        dict.fromkeys(
+            _NAME_TYPE_SURNAME[prop]
+            for prop in props
+            if prop in _NAME_TYPE_SURNAME
+        )
+    ) or ["other"]
+    nickname_type = "nickname" in props
+
+    for bracket in _BRACKETED_NAME.findall(value):
+        if text := _clean_name(bracket):
+            reading.forms.append(text)
+            reading.unsplit.append(text)
+            reading.counts.append("NAME bracketed part")
+    bare = _BRACKETED_NAME.sub(" ", value)
+    display = _clean_name(bare)
+    given: list[str] = []
+    slashed = _SLASHED_NAME.match(bare)
+    if slashed:
+        before, surname, after = (_clean_name(p) for p in slashed.groups())
+        reading.quoted += _QUOTED_NAME.findall(before)
+        words = _QUOTED_NAME.sub(" ", before).split()
+        for prefix in pieces["NPFX"]:
+            head = prefix.split()
+            if words[: len(head)] == head:
+                words = words[len(head) :]
+        given += words
+        if surname:
+            reading.surnames += [(surname, kind) for kind in types]
+        if after and not pieces["NSFX"]:
+            reading.suffixes.append(after)
+    else:
+        reading.quoted += _QUOTED_NAME.findall(bare)
+        unsplit = _clean_name(_QUOTED_NAME.sub(" ", bare))
+        # where a GIVN or a SURN gives the parts, they say which is which
+        if unsplit and not (pieces["GIVN"] or pieces["SURN"]):
+            reading.unsplit.append(unsplit)
+            reading.typed = False
+            reading.counts.append("NAME without slashes")
+
+    # the parts, each a piece of its field
+    parts_given = [word for piece in pieces["GIVN"] for word in piece.split()]
+    particle = " ".join(pieces["SPFX"])
+    parts_surnames = [
+        surname
+        if not particle or _restated(particle, surname)
+        else f"{particle} {surname}"
+        for surname in pieces["SURN"]
+    ]
+    if pieces["SPFX"] and not pieces["SURN"]:
+        reading.counts.append("SPFX without a surname")
+    parts_text = _parts_text(pieces)
+    if display:
+        unrestated = [
+            piece
+            for tag in _NAME_PARTS
+            for piece in pieces[tag]
+            if not _restated(piece, display)
+        ]
+    else:
+        unrestated = [piece for tag in _NAME_PARTS for piece in pieces[tag]]
+    if parts_text:
+        given += parts_given
+        reading.surnames += [
+            (s, kind) for s in parts_surnames for kind in types
+        ]
+        reading.titles += pieces["NPFX"]
+        reading.suffixes += pieces["NSFX"]
+        if display and unrestated:
+            reading.forms.append(parts_text)
+            reading.counts.append("NAME parts not restated")
+    else:
+        # a prefix or a suffix that no given name or surname stands beside
+        # is kept where the value restates it, and counted where it does
+        # not; a particle is counted as one with no surname
+        for tag, field_name in (("NPFX", "titles"), ("NSFX", "suffixes")):
+            for piece in pieces[tag]:
+                if display and _restated(piece, display):
+                    getattr(reading, field_name).append(piece)
+        for piece in unrestated:
+            if piece not in pieces["SPFX"]:
+                reading.counts.append("NAME part without a name")
+    reading.display = display or parts_text
+    reading.quoted = [_clean_name(text) for text in reading.quoted]
+    reading.nicknames += [text for text in reading.quoted if text]
+    if nickname_type:
+        reading.nicknames += given
+    else:
+        reading.given += given
+    for nick in name.all("NICK"):
+        if text := " ".join(nick.value.split()):
+            reading.nicknames.append(text)
+            reading.forms.append(text)
+    return reading
+
+
+def read_married_name(marnm: Record) -> NameReading:
+    """A `_MARNM`'s reading (ADR-0035 §6): the part between its slashes is
+    a `married` surname, and a value without them is `unsplit`, counted;
+    either way its display form is a name form of the person's."""
+    reading = NameReading(display=_clean_name(marnm.value))
+    if not reading.display:
+        return reading
+    reading.forms.append(reading.display)
+    slashed = _SLASHED_NAME.match(marnm.value)
+    if slashed and (surname := _clean_name(slashed.group(2))):
+        reading.surnames.append((surname, "married"))
+    elif not slashed:
+        reading.unsplit.append(reading.display)
+        reading.counts.append("_MARNM without slashes")
+    return reading
 
 
 def _names_a_place(plac: str) -> bool:
@@ -643,37 +865,97 @@ _NAME_TYPE_PROPERTY = {
     "adopted": "official_name",
 }
 
-# a quoted or single-word parenthetical token inside a name is the near-
-# universal genealogy convention for a nickname ("Ida (Peppi) Sörne",
-# "Cäcilie 'Cilli' Tarle") — the only way this data expresses them.
-_QUOTED_NAME = re.compile(r"[‘'\"“]([^‘’'\"“”]+)[’'\"”]")
-_PAREN_NAME = re.compile(r"\(([^)]+)\)")
+# GEDCOM 5.5.1's language names (LANGUAGE_ID) -> BCP 47 codes, for the
+# language of the adapter's texts (ADR-0035 §6). A name left out here
+# (Braj, Dogri, Lahnda, Mewari, Pahari, Prakrit, Rajasthani, Wendic) has no
+# code the instance is known to take for a text, so it gives UNDETERMINED,
+# counted, as an absent HEAD.LANG does.
+GEDCOM_LANGUAGES = {
+    "afrikaans": "af", "albanian": "sq", "anglo-saxon": "ang",
+    "catalan": "ca", "catalan_spn": "ca", "czech": "cs", "danish": "da",
+    "dutch": "nl", "english": "en", "esperanto": "eo", "estonian": "et",
+    "faroese": "fo", "finnish": "fi", "french": "fr", "german": "de",
+    "hawaiian": "haw", "hungarian": "hu", "icelandic": "is",
+    "indonesian": "id", "italian": "it", "latvian": "lv",
+    "lithuanian": "lt", "navaho": "nv", "norwegian": "no", "polish": "pl",
+    "portuguese": "pt", "romanian": "ro", "serbo_croa": "sh",
+    "slovak": "sk", "slovene": "sl", "spanish": "es", "swedish": "sv",
+    "turkish": "tr", "amharic": "am", "arabic": "ar", "armenian": "hy",
+    "assamese": "as", "belorusian": "be", "bengali": "bn",
+    "bulgarian": "bg", "burmese": "my", "cantonese": "yue",
+    "church-slavic": "cu", "georgian": "ka", "greek": "el",
+    "gujarati": "gu", "hebrew": "he", "hindi": "hi", "japanese": "ja",
+    "kannada": "kn", "khmer": "km", "konkani": "kok", "korean": "ko",
+    "lao": "lo", "macedonian": "mk", "maithili": "mai", "malayalam": "ml",
+    "mandrin": "zh", "manipuri": "mni", "marathi": "mr", "nepali": "ne",
+    "oriya": "or", "pali": "pi", "panjabi": "pa", "persian": "fa",
+    "pusto": "ps", "russian": "ru", "sanskrit": "sa", "serb": "sr",
+    "tagalog": "tl", "tamil": "ta", "telugu": "te", "thai": "th",
+    "tibetan": "bo", "ukrainian": "uk", "urdu": "ur", "vietnamese": "vi",
+    "yiddish": "yi",
+}  # fmt: skip
+# the language of a text whose language the export does not state
+UNDETERMINED = "und"
+
+# A MARR TYPE that names a civil or a religious ceremony -> the wedding's
+# kind (ADR-0036 §5). Any other TYPE stays in the excerpt and is counted
+# (MARR.TYPE), and the wedding's kind stays unstated.
+WEDDING_TYPES = {
+    "civil": "civil_wedding",
+    "civil ceremony": "civil_wedding",
+    "civil marriage": "civil_wedding",
+    "standesamt": "civil_wedding",
+    "standesamtlich": "civil_wedding",
+    "religious": "religious_wedding",
+    "religious ceremony": "religious_wedding",
+    "religious marriage": "religious_wedding",
+    "church": "religious_wedding",
+    "church wedding": "religious_wedding",
+    "kirchlich": "religious_wedding",
+}
 
 
-def _inline_nicknames(name: str) -> list[str]:
-    """Quoted / parenthetical nickname tokens within a display name."""
-    found = [m.group(1).strip() for m in _QUOTED_NAME.finditer(name)]
-    found += [m.group(1).strip() for m in _PAREN_NAME.finditer(name)]
-    # conservative: a real nickname is short and not a date/note like
-    # "(born 1900)" — at most two words, no digits
-    return [
-        token
-        for token in found
-        if token
-        and len(token.split()) <= 2
-        and not any(c.isdigit() for c in token)
-    ]
+def wedding_type(marriage: Record) -> Record | None:
+    """The TYPE of a MARR that gives its wedding's kind: the first that
+    names a civil or a religious ceremony (WEDDING_TYPES), or None."""
+    return next(
+        (
+            kind
+            for kind in marriage.all("TYPE")
+            if " ".join(kind.value.split()).lower() in WEDDING_TYPES
+        ),
+        None,
+    )
+
+
+# each union event's kind -> the words its label starts with; an end of
+# unstated kind (an `event`) is labelled as the end of its union
+EVENT_WORDS = {
+    "wedding": "Wedding",
+    "civil_wedding": "Civil wedding",
+    "religious_wedding": "Religious wedding",
+    "divorce": "Divorce",
+    "annulment": "Annulment",
+}
 
 
 @dataclass
 class AdapterResult:
+    """The batch, the warnings, the census of what the adapter does not
+    map (`unsupported_tags`), and the count of each outcome it maps in a
+    way worth reporting (`outcomes`): a union and each of its events by
+    kind, a name part kept as an unsplit form or counted, and a text
+    language the export does not state."""
+
     batch: ClaimBatch
     warnings: list[str]
     unsupported_tags: dict[str, int]
+    outcomes: dict[str, int] = field(default_factory=dict)
 
 
 def format_unsupported_tags(unsupported: dict[str, int]) -> str:
-    """One-line census for logs: ``EDUC ×1, NOTE ×1``.
+    """One-line census for logs: ``EDUC ×1, NOTE ×1``, for the unsupported
+    tags or, alike, the outcomes.
 
     The count is kept visibly apart from the tag (a ``×`` behind a space)
     so it never reads as part of the tag name: ``EDUCx1`` would look like
@@ -707,12 +989,26 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     people = {xref for xref, names in names_of.items() if names}
     warnings: list[str] = []
     unsupported: dict[str, int] = {}
+    outcomes: dict[str, int] = {}
+
+    def outcome(key: str) -> None:
+        outcomes[key] = outcomes.get(key, 0) + 1
+
+    # the language of the adapter's texts: HEAD.LANG's, mapped to BCP 47,
+    # or undetermined where the export states none the map knows
+    head = next((root for root in roots if root.tag == "HEAD"), None)
+    stated_language = " ".join(head.text("LANG").split()) if head else ""
+    language = GEDCOM_LANGUAGES.get(stated_language.lower(), UNDETERMINED)
+    if not stated_language:
+        outcome("HEAD.LANG absent: und")
+    elif language == UNDETERMINED:
+        outcome("HEAD.LANG unmapped: und")
 
     HANDLED_INDI = {
         "NAME", "_MARNM", "SEX", "BIRT", "DEAT", "BURI", "OCCU", "NCHI",
         "RESI", "FAMC", "FAMS",
     }  # fmt: skip
-    HANDLED_FAM = {"HUSB", "WIFE", "CHIL", "MARR", "DIV"}
+    HANDLED_FAM = {"HUSB", "WIFE", "CHIL", "MARR", "DIV", "ANUL"}
     # Unsupported-tag census (ADR-0021). Name the top-most tag the adapter
     # does not map in EVERY branch of EVERY record — not merely the direct
     # children of INDI/FAM. `reads` holds what the adapter reads beneath
@@ -754,8 +1050,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         "BURI": {"DATE", "PLAC"},
         "OCCU": {"DATE", "PLAC"},
         "RESI": {"DATE", "PLAC"},
-        "MARR": {"DATE", "PLAC"},
-        "DIV": {"DATE"},
+        "MARR": {"DATE", "PLAC", "TYPE"},
+        "DIV": {"DATE", "PLAC"},
+        "ANUL": {"DATE", "PLAC"},
     }
     # the tags the adapter reads only the first of beneath a tag: a family
     # has one husband and one wife
@@ -765,13 +1062,13 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     for parent, tags in reads.items():
         for tag in tags:
             read_beneath.setdefault(tag, set()).add(parent)
-    # a SOUR is folded beneath the records that claims cite and the events
-    # that date a family's spouse claims, and an OBJE is mapped beneath a
-    # person alone, so one that is not is named with its parent's tag
-    # (DATE.SOUR, FAM.OBJE) where the other tags hold it
+    # a SOUR is folded beneath the records that claims cite, a family's
+    # union events among them, and an OBJE is mapped beneath a person
+    # alone, so one that is not is named with its parent's tag (DATE.SOUR,
+    # FAM.OBJE) where the other tags hold it
     read_beneath["SOUR"] = {
         "NAME", "_MARNM", "SEX", "BIRT", "DEAT", "BURI", "OCCU", "NCHI",
-        "RESI", "OBJE", "FAM", "MARR", "DIV",
+        "RESI", "OBJE", "FAM", "MARR", "DIV", "ANUL",
     }  # fmt: skip
     read_beneath["OBJE"] = {"INDI"}
     envelope = {"HEAD", "TRLR"}  # GEDCOM structure, not genealogy
@@ -788,22 +1085,23 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
 
     def coupled(fam: Record) -> bool:
         """Whether a family's first HUSB and first WIFE each name a person
-        the batch holds, so that its spouse claims name the one to the
-        other."""
+        the batch holds, so that its union has a couple."""
         return fam.text("HUSB") in people and fam.text("WIFE") in people
 
-    def states_death(death: Record) -> bool:
-        """Whether a DEAT states that the person died. GEDCOM 5.5.1 has an
-        event asserted by a DATE or a PLAC with a value, or else by a Y
-        on the event's own line, and lets a SOUR or a NOTE be attached to
-        a DEAT without asserting the death. A DATE the grammar parses, or
+    def states_event(death: Record) -> bool:
+        """Whether an event record (a DEAT, a DIV, an ANUL) states that the
+        event happened. GEDCOM 5.5.1 has an event asserted by a DATE or a
+        PLAC with a value, or else by a Y on the event's own line, and
+        lets a SOUR or a NOTE be attached to an event without asserting
+        it. A DATE the grammar parses, or
         a PLAC, states it whatever that line says, as each gives a claim
         of its own; a DATE the grammar cannot parse states it only when
         the line has no value, so that a date the adapter cannot read
-        never overrules another value, such as an N denying the death.
-        What else a DEAT holds (a CAUS, an AGE, a SOUR, a NOTE) states
+        never overrules another value, such as an N denying the event.
+        What else it holds (a CAUS, an AGE, a SOUR, a NOTE) states
         nothing: a death event or a cause of death is death evidence,
-        which marks the person as not possibly living (ADR-0020)."""
+        which marks the person as not possibly living (ADR-0020), and a
+        divorce or an annulment ends a union."""
         value = death.value.strip()
         dates = [
             date.value for date in death.all("DATE") if date.value.strip()
@@ -818,18 +1116,16 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     def unread(parent: Record, child: Record) -> bool:
         """Whether `child`, of a tag the adapter reads beneath `parent`'s,
         goes unread for what it says there."""
-        if child.tag == "DIV" and child.first("DATE") is None:
-            # a DIV dates the marriage's end only by its DATE: an undated
-            # one says it ended at an unknown time, and a claim has no
-            # unknown value to state that with
+        if child.tag in ("DEAT", "DIV", "ANUL") and not states_event(child):
+            # an event record that states no event gives no claim
             return True
-        if child.tag == "DEAT":
-            # a DEAT that states no death gives no claim
-            return not states_death(child)
-        # a family's MARR and DIV date the spouse claims between its two
-        # partners: with one or none, no claim names the other, and a claim
-        # has no unknown value to name them with
-        return child.tag in ("MARR", "DIV") and not coupled(parent)
+        if parent.tag == "MARR" and child.tag == "TYPE":
+            # a MARR's TYPE is read where it gives the wedding's kind
+            return wedding_type(parent) is not child
+        # a family's MARR, DIV and ANUL are events of its union: with one
+        # partner or none, it has no couple, and a claim has no unknown
+        # value to name the other with
+        return child.tag in ("MARR", "DIV", "ANUL") and not coupled(parent)
 
     def within(record: Record, whole: Sequence[Record] = ()) -> None:
         """Count, beneath `record`, which the census takes as incorporated
@@ -979,7 +1275,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             "artifact": artifact.model_dump(mode="json"),
             "transcription_excerpt": {
                 "text": _excerpt(segments, cited),
-                "language": "en",
+                "language": language,
             },
         }
         if pages:
@@ -991,14 +1287,26 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         return xref.strip("@").lower()
 
     def place_entity(name: str) -> str:
+        """A place's entity, labelled by its PLAC. Its mention record
+        (ADR-0035 §6) takes the PLAC's first non-empty component as the
+        place's name and the rest as the places it is within, each as
+        written: GEDCOM lists jurisdictions from the lowest."""
         if name not in place_ids:
             place_ids[name] = f"pl{len(place_ids) + 1}"
+            own, *within = [
+                part for piece in name.split(",") if (part := piece.strip())
+            ]
             entities.append(
                 {
                     "id": place_ids[name],
                     "label": name,
                     "kind": "place",
                     "summary": "place named in the GEDCOM export",
+                    "structure": {
+                        "kind": "place",
+                        "names": [{"written": own}],
+                        "within": within,
+                    },
                 }
             )
         return place_ids[name]
@@ -1058,9 +1366,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # that restates another line for line, its citation included, gives
     # the same claim again, which is not added twice, while the same value
     # under another citation has a source of its own, and so is a claim of
-    # its own (a MARR or DIV that restates another's date and place under
-    # the same citations gives no pair of spouse claims of its own; see
-    # spouse_pairs)
+    # its own
     made: set[str] = set()
 
     def claim(
@@ -1124,19 +1430,6 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             return []
         return [{"property": "point_in_time", "value": value}, *date_quals]
 
-    def dated_end(date_record: Record, end: str, context: str) -> list[dict]:
-        """The qualifiers that date one end of a period, `end` (start_time
-        or end_time), from an event's DATE: a marriage's date is the
-        spouse statements' start, a divorce's their end."""
-        value, date_quals = parse_gedcom_date(date_record.value)
-        if value is None:
-            warnings.append(
-                f"line {date_record.line_number}: unparsed {context} "
-                f"date {date_record.value!r} — {end} omitted"
-            )
-            return []
-        return period_end(value, date_quals, end)
-
     def period_qualifiers(date_record: Record, context: str) -> list[dict]:
         """The qualifiers that date a statement which holds for a period (a
         residence, an occupation) from its event's DATE. A date period is
@@ -1166,7 +1459,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 )
                 continue
             for qualifier in period_end(value, date_quals, end):
-                # one circa stands for both ends, as on a spouse statement
+                # one circa stands for both ends, as on Wikidata's spouse
                 if qualifier not in quals:
                     quals.append(qualifier)
         return quals
@@ -1213,24 +1506,32 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             )
         return death_ids[xref]
 
+    def role(key: str) -> dict:
+        """The object_has_role qualifier of a participant role."""
+        return {
+            "property": "object_has_role",
+            "value": {"type": "item", "value": {"kind": "vocab", "key": key}},
+        }
+
     def died(xref: str, label: str, death: Record) -> None:
-        """A DEAT that states the death (`states_death`) but gives no
+        """A DEAT that states the death (`states_event`) but gives no
         date, place or cause, by its Y alone or by a DATE the grammar
         cannot parse, says that the person died and nothing else: a
-        `death` event with the person as participant (ADR-0020 §2,
-        docs/MODELING.md "Living persons and privacy"), which the
-        participant claim states, citing this DEAT."""
+        `death` event with the person as its principal (ADR-0020 §2,
+        ADR-0035 §3.2, docs/MODELING.md "Living persons and privacy"),
+        which the participant claim states, citing this DEAT."""
         claim(
             death_event(xref, label, death),
             "participant",
             {"type": "item", "value": local(person_id(xref))},
             death,
+            [role("principal")],
         )
 
     def monolingual(text: str) -> dict:
         return {
             "type": "monolingual",
-            "value": {"text": text, "language": "en"},
+            "value": {"text": text, "language": language},
         }
 
     def name_claims(xref: str, record: Record) -> None:
@@ -1238,10 +1539,13 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
 
         The item's label/aliases remain the flat match index; this adds
         the source's OWN name typing (NAME TYPE, NICK, _MARNM) plus the
-        universal inline-nickname convention, each attributed to the
+        inline convention's quoted nickname, each attributed to the
         GEDCOM record that states it. A nickname that several NAMEs give is
         thus a claim of each, with its own citation, while one NAME that
-        gives it twice (a NICK and its inline form) gives the one claim.
+        gives it twice (a NICK and its quoted form) gives the one claim. A
+        NAME without slashes, whose parts no GIVN or SURN gives, is an
+        unsplit form, and its TYPE gives no claim; a bracketed part gives
+        none either (read_name).
         """
 
         def add_nickname(text: str, name_record: Record) -> None:
@@ -1251,10 +1555,14 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 )
 
         for name_record in record.all("NAME"):
-            cleaned = _name_text(name_record)
+            reading = read_name(name_record)
+            cleaned = reading.display
             # a further TYPE types the name a further way, a claim of its
             # own; a NAME that gives no name has none to type
-            for name_type in name_record.all("TYPE") if cleaned else []:
+            typing = (
+                name_record.all("TYPE") if cleaned and reading.typed else []
+            )
+            for name_type in typing:
                 prop = _NAME_TYPE_PROPERTY.get(name_type.value.strip().lower())
                 if prop == "nickname":
                     add_nickname(
@@ -1269,8 +1577,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     )
             for nick in name_record.all("NICK"):
                 add_nickname(nick.value.strip(), name_record)
-            for inline in _inline_nicknames(cleaned):
-                add_nickname(inline, name_record)
+            for quoted in reading.quoted:
+                add_nickname(quoted, name_record)
         # non-standard married-name tag some tools emit at the INDI level
         for marnm in record.all("_MARNM"):
             if married := _clean_name(marnm.value):
@@ -1281,73 +1589,295 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     marnm,
                 )
 
-    def spouse_pairs(fam: Record) -> list[tuple[list[dict], list[Record]]]:
-        """The pairs of a family's spouse claims, each as its qualifiers and
-        the MARRs and DIVs that give them. A MARR's date is the claims'
-        start time and its place their location, and a DIV's date is their
-        end time (docs/MODELING.md, "Marriages, residences and other
-        periods"); the SOUR citations of the MARRs and DIVs that give a
-        pair are folded into its claims' reference.
+    def person_entity(xref: str, record: Record, summary: str) -> dict:
+        """A person's entity: its label, the first name form its NAMEs
+        give; its aliases, every other name form of its NAMEs and
+        `_MARNM`s (their display forms, the names their parts give where
+        a value does not restate them, their bracketed parts and NICKs),
+        hygiened as the LLM path's are (ADR-0022 §4) save a form that
+        alone carries a part of its record; and its mention record
+        (ADR-0035 §6), whose counts join the outcomes."""
+        readings = [read_name(name) for name in record.all("NAME")]
+        readings += [read_married_name(m) for m in record.all("_MARNM")]
+        names = names_of[xref]
+        forms = list(
+            dict.fromkeys(
+                [
+                    *names,
+                    *(form for reading in readings for form in reading.forms),
+                ]
+            )
+        )
+        label, aliases = forms[0], forms[1:]
 
-        Each MARR gives a start for each of its dates with each of its
-        places, and each DIV an end for each of its dates. The family's
-        first start and first end date one pair of claims, as its only MARR
-        and DIV do; every other start or end is an alternative the record
-        states, and dates a pair of its own, with its own circa (ADR-0002).
-        A MARR that neither dates nor places anything, or a DIV that dates
-        nothing, gives no start or end, and so no pair beside one that
-        does: the family's claims state the marriage already, and its
-        citations are folded into none. When no MARR or DIV gives one, each
-        MARR gives the family's one pair, which none dates or places. A
-        start or an end that restates another under the same citations,
-        line for line, gives no pair of its own, and its MARR or DIV joins
-        the other's; under other citations, it is a pair of its own,
-        citing them, since the same value under another citation is a
-        claim of its own."""
+        def once(values) -> list:
+            return list(dict.fromkeys(values))
 
-        def cites(event: Record) -> str:
-            """An event's SOUR citations, line for line."""
-            return "\n".join(c.lines() for c in event.all("SOUR"))
-
-        def given(
-            found: list[tuple[list[dict], str, list[Record]]],
-            quals: list[dict],
-            event: Record,
-        ) -> None:
-            """Note that `event` gives the start or end `quals`."""
-            for known, citing, events in found:
-                if known == quals and citing == cites(event):
-                    if not any(other is event for other in events):
-                        events.append(event)
-                    return
-            found.append((quals, cites(event), [event]))
-
-        starts: list[tuple[list[dict], str, list[Record]]] = []
-        for marriage in fam.all("MARR"):
-            dates = each_date(marriage, dated_end, "start_time", "marriage")
-            locations = [[located(place)] for place in places(marriage)]
-            for location in locations or [[]]:
-                for quals in dates:
-                    if start := quals + location:
-                        given(starts, start, marriage)
-        ends: list[tuple[list[dict], str, list[Record]]] = []
-        for divorce in fam.all("DIV"):
-            for end in each_date(divorce, dated_end, "end_time", "divorce"):
-                if end:
-                    given(ends, end, divorce)
-        if not starts and not ends:
-            return [([], fam.all("MARR"))]
-        first, events = (starts[0][0], starts[0][2]) if starts else ([], [])
-        if ends:
-            # a circa the marriage's date gave the statement already stands
-            # for the divorce's too
-            first = first + [q for q in ends[0][0] if q not in first]
-            events = [*events, *ends[0][2]]
-        return [
-            (first, events),
-            *((quals, given_by) for quals, _, given_by in starts[1:]),
-            *((quals, given_by) for quals, _, given_by in ends[1:]),
+        structure = {
+            "kind": "human",
+            "given": [
+                {"written": given, "standard": given}
+                for given in once(g for r in readings for g in r.given)
+            ],
+            "surnames": [
+                {"written": written, "type": kind}
+                for written, kind in once(
+                    pair for r in readings for pair in r.surnames
+                )
+            ],
+            "nicknames": once(n for r in readings for n in r.nicknames),
+            "titles": once(t for r in readings for t in r.titles),
+            "suffixes": once(t for r in readings for t in r.suffixes),
+            "unsplit": once(u for r in readings for u in r.unsplit),
+        }
+        for reading in readings:
+            for key in reading.counts:
+                outcome(key)
+        parts = [
+            *(given["written"] for given in structure["given"]),
+            *(surname["written"] for surname in structure["surnames"]),
+            *structure["nicknames"],
+            *structure["titles"],
+            *structure["suffixes"],
+            *structure["unsplit"],
         ]
+        # the alias hygiene drops a form that adds no match token to the
+        # label; one that alone carries a part of the record stays, so
+        # that the record divides the names and adds none (ADR-0035 §5)
+        kept = normalize_aliases(label, aliases)
+        for alias in aliases:
+            carried = [label, *kept]
+            if alias not in kept and any(
+                _restated(part, alias)
+                and not any(_restated(part, form) for form in carried)
+                for part in parts
+            ):
+                kept.append(alias)
+        return {
+            "id": person_id(xref),
+            "label": label,
+            "aliases": kept,
+            "kind": "human",
+            "summary": summary,
+            "mention_lines": [record.line_number],
+            "structure": structure,
+        }
+
+    # the labels of the unions and their events
+    union_labels: set[str] = set()
+
+    def union_entity(local_id: str, kind: str, label: str, record: Record):
+        """An entity of a union (the union itself or one of its events),
+        made once, whose label no other of them holds: the writer finds
+        an item by its label, so two unions of one couple, or their
+        events, are told apart by a number."""
+        if any(entity["id"] == local_id for entity in entities):
+            return local_id
+        unique, number = label, 1
+        while unique in union_labels:
+            number += 1
+            unique = f"{label} ({number})"
+        union_labels.add(unique)
+        entities.append(
+            {
+                "id": local_id,
+                "label": unique,
+                "kind": kind,
+                "summary": f"{kind.replace('_', ' ')} stated in the GEDCOM "
+                "export",
+                "mention_lines": [record.line_number],
+            }
+        )
+        outcome(f"union: {kind.replace('_', ' ')}")
+        return local_id
+
+    def event_date(
+        event_id: str,
+        date_record: Record,
+        phrase: str,
+        prop: str,
+        record: Record,
+        passage: Sequence[Record],
+    ) -> None:
+        """A claim of `prop` (point_in_time, start_time or end_time) on an
+        event, from one date `phrase` of `date_record`, with the range and
+        circa the phrase states as the claim's own qualifiers, citing the
+        event record `record`. A phrase the grammar cannot parse, a period
+        among them, gives no claim and a warning."""
+        value, quals = (
+            (None, [])
+            if split_gedcom_period(phrase) is not None
+            else parse_gedcom_date(phrase)
+        )
+        if value is None:
+            warnings.append(
+                f"line {date_record.line_number}: unparsed date "
+                f"{date_record.value!r} — no {prop} claim emitted"
+            )
+            return
+        claim(event_id, prop, value, record, quals, passage=passage)
+
+    def union_claims(fam: Record) -> None:
+        """A coupled family's union and its events (ADR-0036 §5).
+
+        * The union is a `marriage` when the family has a MARR, otherwise
+          a `partnership`; its couple take part in it with the role
+          `spouse` or `partner`, each claim citing the family record.
+        * The MARRs of one kind (civil or religious, where a TYPE names
+          it, else unstated) are one wedding, which the union is
+          `started_by`; each date and place of each is a claim of its own
+          on the wedding, citing its MARR.
+        * The family's DIVs that state a divorce are one divorce, and its
+          ANULs one annulment, which the union is `ended_by`, each PLAC the
+          event's `location`; a DIV Y gives an undated divorce.
+        * A DATE's range and circa go on that event's own date claim. A
+          date period (FROM … TO …) on a MARR gives the wedding the FROM
+          and an end of unstated kind (an `event`) the TO; on a DIV or an
+          ANUL it is the event's own start and end time.
+        * A partner's DEAT gives no end: GEDCOM does not say that the
+          union lasted until the death.
+
+        Each claim's excerpt holds the family's own line, its HUSB and
+        WIFE, and the lines of the record that gives the claim; the SOUR
+        citations of that record, the family's for the couple and each
+        event's for its claims, are folded into its reference."""
+        couple = [fam.first("HUSB"), fam.first("WIFE")]
+        family_passage = [
+            fam,
+            *(node for part in couple for node in part.walk()),
+        ]
+        family_citations = [
+            node for part in fam.all("SOUR") for node in part.walk()
+        ]
+        names = " and ".join(names_of[part.value][0] for part in couple)
+        marriages = fam.all("MARR")
+        kind, partner_role = (
+            ("marriage", "spouse") if marriages else ("partnership", "partner")
+        )
+        base = person_id(fam.xref or f"@fam{fam.line_number}@")
+        union = union_entity(base, kind, f"{kind.title()} of {names}", fam)
+        for part in couple:
+            claim(
+                union,
+                "participant",
+                {"type": "item", "value": local(person_id(part.value))},
+                fam,
+                [role(partner_role)],
+                passage=[*family_passage, *family_citations],
+            )
+
+        def event(key: str, record: Record) -> str:
+            """The union's event of kind `key`, made once."""
+            label = (
+                f"End of the {kind} of {names}"
+                if key == "event"
+                else f"{EVENT_WORDS[key]} of {names}"
+            )
+            return union_entity(
+                f"{base}-{key.replace('_', '-')}", key, label, record
+            )
+
+        def linked(prop: str, event_id: str, record: Record, passage) -> None:
+            claim(
+                union,
+                prop,
+                {"type": "item", "value": local(event_id)},
+                record,
+                passage=passage,
+            )
+
+        for marriage in marriages:
+            passage = [*family_passage, *marriage.walk()]
+            typed = wedding_type(marriage)
+            wedding = event(
+                WEDDING_TYPES[" ".join(typed.value.split()).lower()]
+                if typed
+                else "wedding",
+                marriage,
+            )
+            linked("started_by", wedding, marriage, passage)
+            for date_record in marriage.all("DATE"):
+                phrases = split_gedcom_period(date_record.value)
+                if phrases is None:
+                    event_date(
+                        wedding,
+                        date_record,
+                        date_record.value,
+                        "point_in_time",
+                        marriage,
+                        passage,
+                    )
+                    continue
+                start, end = phrases
+                if start is not None:
+                    event_date(
+                        wedding,
+                        date_record,
+                        start,
+                        "point_in_time",
+                        marriage,
+                        passage,
+                    )
+                if end is not None:
+                    ending = event("event", marriage)
+                    linked("ended_by", ending, marriage, passage)
+                    event_date(
+                        ending,
+                        date_record,
+                        end,
+                        "point_in_time",
+                        marriage,
+                        passage,
+                    )
+            for place in places(marriage):
+                claim(
+                    wedding,
+                    "location",
+                    place_item(place),
+                    marriage,
+                    passage=passage,
+                )
+        for tag, key in (("DIV", "divorce"), ("ANUL", "annulment")):
+            for ended in fam.all(tag):
+                if not states_event(ended):
+                    continue  # the census counts it
+                passage = [*family_passage, *ended.walk()]
+                end_event = event(key, ended)
+                linked("ended_by", end_event, ended, passage)
+                if not any(d.value.strip() for d in ended.all("DATE")):
+                    outcome(f"union: undated {key}")
+                for date_record in ended.all("DATE"):
+                    phrases = split_gedcom_period(date_record.value)
+                    dated = (
+                        [(date_record.value, "point_in_time")]
+                        if phrases is None
+                        else [
+                            (phrase, prop)
+                            for phrase, prop in zip(
+                                phrases,
+                                ("start_time", "end_time"),
+                                strict=True,
+                            )
+                            if phrase is not None
+                        ]
+                    )
+                    for phrase, prop in dated:
+                        event_date(
+                            end_event,
+                            date_record,
+                            phrase,
+                            prop,
+                            ended,
+                            passage,
+                        )
+                for place in places(ended):
+                    claim(
+                        end_event,
+                        "location",
+                        place_item(place),
+                        ended,
+                        passage=passage,
+                    )
 
     # individuals -> entities + birth/death claims
     for xref, record in individuals.items():
@@ -1365,7 +1895,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             dates = [
                 date.value
                 for event in record.all(tag)
-                if tag != "DEAT" or states_death(event)
+                if tag != "DEAT" or states_event(event)
                 for date in event.all("DATE")
                 if date.value
             ]
@@ -1373,16 +1903,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 summary_bits.append(
                     f"{mark} " + " or ".join(dict.fromkeys(dates))
                 )
-        entities.append(
-            {
-                "id": person_id(xref),
-                "label": names[0],
-                "aliases": names[1:],
-                "kind": "human",
-                "summary": "; ".join(summary_bits),
-                "mention_lines": [record.line_number],
-            }
-        )
+        entities.append(person_entity(xref, record, "; ".join(summary_bits)))
         name_claims(xref, record)
         # SEX -> sex_or_gender (the kinship calculus needs it for gendered
         # terms, ADR-0014); only the unambiguous M/F are mapped, and a
@@ -1406,11 +1927,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         for death in record.all("DEAT"):
             # a DEAT that states no death gives no claim, not even its
             # cause, and the census counts it
-            if not states_death(death):
+            if not states_event(death):
                 continue
             gave = event_claims(xref, death, "date_of_death", "place_of_death")
-            # cause of death stays verbatim prose (docs/MODELING.md);
-            # "en" matches the export's language, like the excerpts
+            # cause of death stays verbatim prose (docs/MODELING.md), in
+            # the export's language, like the excerpts
             for cause in death.all("CAUS"):
                 if cause.value:
                     gave = True
@@ -1532,7 +2053,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                     events=link,
                 )
 
-    # families -> parentage and spouse claims, between people the batch
+    # families -> parentage claims and unions, between people the batch
     # holds: a HUSB, WIFE or CHIL that names no one it holds gives none
     for fam in families.values():
         husband = fam.text("HUSB")
@@ -1549,36 +2070,10 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         },
                         fam,
                     )
-        # a family with one partner or none gives no spouse claims, and the
-        # census counts its MARR and DIV
+        # a family with one partner or none gives no union, and the census
+        # counts its MARR, DIV and ANUL
         if coupled(fam):
-            partners = (fam.first("HUSB"), fam.first("WIFE"))
-            for quals, events in spouse_pairs(fam):
-                # of the family record, a pair's excerpt holds the lines
-                # that give it: the family's own, its HUSB and WIFE, its
-                # own citations, and the MARRs and DIVs that give the pair,
-                # each whole. Another pair's MARR, with its citations,
-                # would blur which citations are this pair's
-                passage = [
-                    fam,
-                    *(
-                        node
-                        for part in fam.children
-                        if part.tag == "SOUR"
-                        or any(part is held for held in (*partners, *events))
-                        for node in part.walk()
-                    ),
-                ]
-                for subject, other in ((husband, wife), (wife, husband)):
-                    claim(
-                        person_id(subject),
-                        "spouse",
-                        {"type": "item", "value": local(person_id(other))},
-                        fam,
-                        quals,
-                        passage=passage,
-                        events=events,
-                    )
+            union_claims(fam)
 
     # the census, once the claims show which citations are folded and
     # which objects mapped
@@ -1596,12 +2091,6 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         else:
             count(root.tag)
 
-    # ADR-0022 §4: the same alias hygiene the LLM path runs — GEDCOM's
-    # structured NAME/TYPE tags already do the typing; this only drops
-    # derivable short-forms and keeps compound surnames whole.
-    from yizkr.pipeline.names import normalize_entity_dict
-
-    entities = [normalize_entity_dict(entity) for entity in entities]
     batch = ClaimBatch.model_validate(
         {
             "extraction_run": run_metadata(ADAPTER_IDENTIFIER).model_dump(
@@ -1611,12 +2100,12 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             "entities": entities,
         }
     )
-    # The adapter states a couple as a pair of spouse claims, a property
-    # ADR-0036 retires; it makes no marriage entity (ADR-0036 §5), so its
-    # own check lets those claims through.
-    problems = validate_against_manifest(
-        batch, allow_retired=frozenset({"spouse"})
-    )
+    problems = validate_against_manifest(batch)
+    problems += [
+        f"entity {entity.id!r}: {problem}"
+        for entity in batch.entities
+        for problem in structure_problems(entity)
+    ]
     if problems:
         # deterministic code emitting invalid claims is a bug, not input noise
         raise ValueError(
@@ -1624,5 +2113,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             + "\n  ".join(problems)
         )
     return AdapterResult(
-        batch=batch, warnings=warnings, unsupported_tags=unsupported
+        batch=batch,
+        warnings=warnings,
+        unsupported_tags=unsupported,
+        outcomes=outcomes,
     )

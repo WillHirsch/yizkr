@@ -6,6 +6,20 @@ the owner's merge of the PR that adds it is its acceptance. It settles
 `spouse` edge, §6's deferred divorce event). #394 implements it with
 #385's extraction revision (ADR-0035, accepted), before scratch run 1.
 
+Amended by #408 (2026-09-29): the GEDCOM adapter makes unions as §5
+says. A MARR TYPE names a civil ceremony by `civil`, `civil ceremony`,
+`civil marriage`, `Standesamt` or `standesamtlich`, and a religious one
+by `religious`, `religious ceremony`, `religious marriage`, `church`,
+`church wedding` or `kirchlich`, in any case; a further TYPE of another
+kind is counted, as any other TYPE is. A DIV or an ANUL states its event
+as GEDCOM 5.5.1 has one asserted, by a DATE or a PLAC with a value or a
+Y, and one that states none is counted. An end of unstated kind is
+labelled as the end of its union. Two unions of one couple, or their
+events, get labels of their own, told apart by a number, since the
+writer finds an item by its label. Each union and each event is counted
+by kind in the adapter's outcomes, and so is an undated divorce or
+annulment.
+
 ## Context
 
 MODELING.md dates a marriage as Wikidata dates spouse (P26): a statement

@@ -719,6 +719,11 @@ class TestTheTraps:
         }
         # the adapter counts the DEAT it did not map
         assert export.state.detail["gedcom_unsupported"].get("DEAT", 0) >= 1
+        # and what it did map worth reporting: the export's two marriages,
+        # and the language it does not state (ADR-0035 §6, ADR-0036 §5)
+        outcomes = export.state.detail["gedcom_outcomes"]
+        assert outcomes["union: marriage"] == 2
+        assert outcomes["HEAD.LANG absent: und"] == 1
 
     def test_an_early_birth_and_the_later_ones_stand_side_by_side(self, runs):
         run = runs.run("first")
@@ -1168,8 +1173,9 @@ class TestTheTrapsInTheIdentityMap:
         """The certificate's Gustave Lobig links confidently to the
         export's Gustav Löbig, which carries his death, and so do the
         family history's and the talk's mentions of him. The postcard's
-        'Gustl' links to the same anchor on nothing: one token, no name
-        match, no date and no kin. The merge rule takes the candidate
+        'Gustl' links to the same anchor on its name alone: one token,
+        which meets the export's NICK and nothing else, with no date and
+        no kin. The merge rule takes the candidate
         cluster whole, so that one ambiguous link leaves every mention of
         him apart, and no merge carries his death to the certificate."""
         gustav = identity.of("gustav-loebig")
@@ -1189,7 +1195,7 @@ class TestTheTrapsInTheIdentityMap:
             fc.CERTIFICATE: (clustering.CONFIDENT, "exact/agree/unknown"),
             fc.NARRATIVE: (clustering.CONFIDENT, "exact/agree/agree"),
             fc.DECK: (clustering.CONFIDENT, "exact/unknown/agree"),
-            fc.LETTER: (clustering.AMBIGUOUS, "none/unknown/unknown"),
+            fc.LETTER: (clustering.AMBIGUOUS, "exact/unknown/unknown"),
         }
         # the death the merge would carry is stated by the documents the
         # certificate's mention links to confidently, and by no other
@@ -1561,6 +1567,8 @@ class TestTheRunReport:
         assert set(clusters["by_kind"]) == {
             "human",
             "place",
+            "marriage",
+            "wedding",
             "migration",
             "occupation_class",
             "vessel",

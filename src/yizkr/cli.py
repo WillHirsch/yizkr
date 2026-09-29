@@ -478,6 +478,12 @@ def cmd_gedcom(args) -> int:
             + format_unsupported_tags(result.unsupported_tags),
             file=sys.stderr,
         )
+    if result.outcomes:
+        print(
+            "GEDCOM outcomes (counted): "
+            + format_unsupported_tags(result.outcomes),
+            file=sys.stderr,
+        )
     return 0
 
 

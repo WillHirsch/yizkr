@@ -567,10 +567,6 @@ class TestRetiredProperty:
         (problem,) = problems(claim("leopold", "spouse", existing))
         assert "is retired" in problem
 
-    def test_a_caller_may_let_it_through(self):
-        spouse = claim("leopold", "spouse", item("agnes"))
-        assert problems(spouse, allow_retired=frozenset({"spouse"})) == []
-
     def test_and_salvage_counts_it(self):
         valid, rejects = salvage_valid_claims(
             [claim("leopold", "spouse", item("agnes"))], RUN, entities=ENTITIES

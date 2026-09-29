@@ -3669,7 +3669,7 @@ class TestWriterTextInNfc:
         assert _not_in_nfc(wiki) == []
         ida = first.created_items["i5"]
         assert _labelled(wiki, "Ida Löbig") == [ida]
-        assert _aliases(wiki, ida) == ["Ida Sörne"]
+        assert _aliases(wiki, ida) == ["Ida Sörne", "Peppi"]
         (married,) = _statements(wiki, ida, "married_name")
         (born,) = _statements(wiki, ida, "birth_name")
         assert (_values(married), _values(born)) == (

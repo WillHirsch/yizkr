@@ -11,6 +11,21 @@ grammar is resolved; and the review sheet's `critique_notes` puts each
 finding on exactly one row (its claim's, else the first row naming its
 entity), not on every row of its subject.
 
+Amended by #408 (2026-09-29): the GEDCOM adapter fills §6 as follows.
+The label of a NAME leaves out its bracketed parts, each of which is an
+alias and an `unsplit` form; a NAME without slashes, whose parts no GIVN
+or SURN gives, gives no typed-name claim, whatever its TYPE. Given names
+are the words of the part before the slashes and of each GIVN piece; a
+NICK and a `_MARNM` are aliases, so the record adds no name (§5); the
+alias hygiene keeps a form that alone carries a part of the record. A
+prefix or a suffix with no given name or surname beside it reaches its
+field only where the value restates it. HEAD.LANG maps GEDCOM 5.5.1's
+language names to BCP 47 where the instance is known to take the code,
+and an absent or unmapped one gives `und`, which the live GEDCOM test
+checks the instance accepts. What §6 counts is counted in the adapter's
+outcomes, beside its census of unmapped tags, and reaches the run's
+document state and log.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of

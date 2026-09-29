@@ -172,7 +172,7 @@ comment above it.
 | A person without name or sex | the infant of 1922, *N.N. Löbig* (`SEX U`) |
 | People named only by a kinship term | Sipkje and Sybren's parents, *Mem* (mother) and *heit* (father) in the 1952 letter: each has a sex, a placeholder name (*N.N. van 't Nijks*) and the letter's `mother` or `father` claims |
 | Privacy (ADR-0020) | Nicholas Lobig (b. 1950, no death asserted) is possibly living; he is dated to the year only, and the 1952 letter, which names him as a baby, gives no date |
-| GEDCOM rendering (ADR-0021) | `tests/fixtures/example-family.ged`: typed names, `NICK`, an inline `(Peppi)`, `_MARNM`, `TYPE immigrant`, a dated burial and an undated one, cause of death, child count, residences at street addresses, a `DIV`, an `EDUC` and a `NOTE` the adapter reports as unsupported, and the studio portrait as a shared `OBJE` |
+| GEDCOM rendering (ADR-0021) | `tests/fixtures/example-family.ged`: `LANG English` in its header, typed names, `NICK`, an inline `(Peppi)` (an alias and an unsplit form, ADR-0035 §6), `_MARNM`, `TYPE immigrant`, a dated burial and an undated one, cause of death, child count, residences at street addresses, four marriages (two `MARR`s of `TYPE civil`, the 1905 certificate's and the judgment's) and Felix and Ida's family with no `MARR` (a partnership, ADR-0036 §4), a `DIV`, an `EDUC` and a `NOTE` the adapter reports as unsupported, and the studio portrait as a shared `OBJE` |
 
 ## Using it
 
