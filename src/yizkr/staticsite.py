@@ -15,7 +15,10 @@ Design constraints:
   possibly-living-excluded public export instead (later rung). The
   private site still marks who that export would drop, via a badge
   computed at render time from the absence of death evidence — the same
-  runtime determination the export uses (ADR-0020, `core/privacy.py`).
+  runtime determination the export uses (ADR-0020, `core/privacy.py`) —
+  except a person with no type, whom the export leaves out even when
+  released: such a person has no badge. A family, which the export
+  always leaves out, is always badged.
 * Self-contained output: no CDN scripts, no external fonts, no
   third-party tiles — nothing about the family leaves the LAN when a
   page is opened (privacy-first). Media are hot-linked from the wiki
@@ -43,8 +46,10 @@ from yizkr.core.config import Config
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
+    family_type,
     is_possibly_living,
     latest_births,
+    people_selection,
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import Disagreement, Side
@@ -62,19 +67,26 @@ def qid_of(binding: dict, name: str) -> str:
 
 
 # people roster with labels/descriptions/aliases and a RUNTIME
-# possibly-living signal (ADR-0020): ?deceased is true when the graph
-# holds any death-implying statement (date/place/cause of death, place
-# of burial) or a death event with the person as participant — none of
-# which needs a date. Births, for the birth-recency cutoff, are read
-# statement by statement with the query the public export reads them with
-# (core/privacy.py). No stored "living" flag is read; the badge is
-# derived, like the public export.
+# possibly-living signal (ADR-0020). The people are the items the public
+# export's check assesses: ``{people}`` is the privacy module's selection,
+# every item with person evidence at any rank, so a person whose `human`
+# type a curator deprecated or outranked, or who has no type but other
+# evidence, is listed and badged too. ?deceased is true when the graph
+# holds any death-implying statement (date/place/cause of death, place of
+# burial) or a death event with the person as participant — none of which
+# needs a date. Births, for the birth-recency cutoff, are read statement
+# by statement with the query the public export reads them with
+# (core/privacy.py). ?family is true for a family (``{family_type}``, the
+# privacy module's test), which is never public, released or not. No
+# stored "living" flag is read; the badge is derived, like the public
+# export.
 PEOPLE_QUERY = """\
-SELECT ?person ?personLabel ?personDescription ?deceased
+SELECT ?person ?personLabel ?personDescription ?deceased ?family
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
 WHERE {{
-  ?person wdt:{instance_of} wd:{human} .
+{people}
   OPTIONAL {{ ?person skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
+  BIND({family_type} AS ?family)
   BIND((
         EXISTS {{ ?person wdt:{date_of_death} [] }}
      || EXISTS {{ ?person wdt:{place_of_death} [] }}
@@ -85,19 +97,20 @@ WHERE {{
        ) AS ?deceased)
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
-GROUP BY ?person ?personLabel ?personDescription ?deceased
+GROUP BY ?person ?personLabel ?personDescription ?deceased ?family
 ORDER BY ?personLabel
 """
 
-# every statement about every human: value, time precision, sources,
-# qualifiers — the raw material of the plural-by-default person page
+# every statement about every person the roster lists (``{people}``, as
+# above): value, time precision, sources, qualifiers — the raw material
+# of the plural-by-default person page
 STATEMENTS_QUERY = """\
 SELECT ?person ?propLabel ?st ?value ?valueLabel ?precision
        (GROUP_CONCAT(DISTINCT ?sourceLabel; separator="|") AS ?sources)
        (GROUP_CONCAT(DISTINCT ?qualifierText; separator="|")
         AS ?qualifierTexts)
 WHERE {{
-  ?person wdt:{instance_of} wd:{human} .
+{people}
   ?person ?p ?st .
   ?prop wikibase:claim ?p ;
         wikibase:statementProperty ?ps ;
@@ -357,15 +370,24 @@ class SiteBuilder:
         """Runtime privacy determination (ADR-0020): possibly living
         unless the graph holds death evidence, or every birth it records
         lies beyond the cutoff. The same call the public export makes —
-        here it only decides a display badge on the (private) site."""
+        here it only decides a display badge on the (private) site. A
+        family is badged whatever its evidence, as the export leaves every
+        family out: any of its people may be living."""
+        if cell(person, "family") == "true":
+            return True
         births = self._latest_births.get(qid_of(person, "person"), [])
         has_death = cell(person, "deceased") == "true"
         return is_possibly_living(births, has_death, self._cutoff_year)[0]
 
     def _instance_query(self, template: str) -> str:
+        """`template` with this instance's ids, its ``{people}`` and
+        ``{family_type}`` (where it has them) the privacy module's
+        selection of people and its test for a family."""
         vocabulary = {**self.items, **self.properties}
         return prefix_block(self.config.concept_uri) + template.format(
-            **vocabulary
+            people=people_selection(self.properties, self.items),
+            family_type=family_type(self.properties, self.items),
+            **vocabulary,
         )
 
     def _library_query(self, name: str) -> str:

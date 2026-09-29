@@ -43,6 +43,10 @@ the LLM cache (ADR-0032 §9), and the archived transcriptions are
 adopted by `yizkr scratch import-transcriptions`; §2 is amended in
 place.
 
+Amended by #103 (2026-09-29): the per-document path registers each
+document as its write begins, by the SHA-1 of its bytes, instead of
+before its stages; §2 is amended in place.
+
 Amended by #105 (2026-09-29): corpus clustering has code, the scratch
 driver's first corpus stage, and runs under §2's stub; §2 is amended in
 place. It keeps its identity map in its own directory of the run
@@ -212,7 +216,16 @@ a second store of assertions: the graph stays the system of record.
   per-document adjudication (`reconcile.adjudicate`) given a roster ask
   nothing of it, and nor does corpus clustering (#105), over the batches
   they make. Cluster adjudication and flags have no code yet; their
-  issues (#106, #112) require them to run under the same stub.
+  issues (#106, #112) require them to run under the same stub. Amended
+  by #103 (2026-09-29): registration is part of the write in the
+  per-document path too. The write registers the document's artifact, a
+  deck's slides as page fragments and a deck's derived media from their
+  record, each by its SHA-1, just before it writes the claims that cite
+  them (ADR-0010, "Registration at write time"), so the one step before
+  the write that still uses the wiki is the resolve step's read, until
+  #109. The stub test shows that nothing is registered before the
+  write, and the registrar is the write path a scratch run's register
+  stage calls after its reset (#200).
 - **A stage-version registry declares the version of each stage and of
   each method.** A unit test checks the registry against each stage's
   source hash and fails when the source changed without a version bump.

@@ -16,13 +16,35 @@ everything needed to rebuild the instance, plus a public export:
   of someone else's claim — is dropped.
 
 Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
-no stored "living" flag (ADR-0020). A human is excluded unless the graph
+no stored "living" flag (ADR-0020). A person is excluded unless the graph
 gives positive evidence they are not living: any death evidence (a date,
 place, or cause of death, a place of burial, or a death event), or births
 that all lie more than ``cutoff_years`` ago (``DEFAULT_CUTOFF_YEARS`` by
 default), every birth statement a curator has not deprecated read at the
 latest year it allows. Unknown means excluded. The determination, and the
-query that reads births for it, live in ``yizkr.core.privacy``.
+queries that select people and read their births for it, live in
+``yizkr.core.privacy``.
+
+The export keeps only the people that check releases, and so fails
+closed:
+
+* The check assesses every item with person evidence, read through
+  statement nodes at every rank (``privacy.PEOPLE_SELECTION``), so a
+  deprecated or outranked `human` type hides no one.
+* The export reads the same evidence from its own dump (``read_dump``)
+  and drops every item that has any of it and was not released: an item
+  the check never assessed is dropped, not kept. A redirect goes with the
+  item it redirects to.
+* It also drops every item that states no type, as what such an item is
+  cannot be told, so no type at all hides no one either. The instance's
+  vocabulary and the classes its items are typed with are kept.
+* It drops every family too, released or not: a family stands for its
+  people, any of whom may be living (``privacy.FAMILY_CLASS``).
+* The check runs on the query service, the dump comes from the database:
+  the export waits for the query service to hold exactly the dump's
+  revision of every item and property, and refuses to run when it does
+  not, or when the graph changes while the check runs
+  (``QueryServiceLag``).
 
 Scheduling is the host's job (this is a home-server deployment): see
 deploy/README.md for the cron line. Retention: ``--keep N`` prunes the
@@ -37,6 +59,8 @@ import json
 import re
 import shutil
 import subprocess
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,8 +69,16 @@ from yizkr.core.config import Config, read_env_file
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
+    FAMILY_CLASS,
+    NON_PERSON_CLASSES,
+    PERSON_CLASS,
+    PERSON_EVENTS,
+    PERSON_SUBJECT_PROPERTIES,
+    PERSON_VALUE_PROPERTIES,
+    SAME_AS,
     is_possibly_living,
     latest_births,
+    people_selection,
 )
 from yizkr.queries.publish import prefix_block
 
@@ -166,19 +198,20 @@ def dump_rdf(deploy_dir: Path, out_path: Path, compose_files=None) -> None:
 # ---------------------------------------------------------------------------
 
 
-# One row per human with a value per death signal, bound when the person
-# has that signal: only whether it is bound counts, so any value sampled
-# does. A death event needs only the person as participant — no date — so
-# an undated death marks a person deceased just like a burial place or a
-# cause of death does. Births are read apart, statement by statement
-# (``yizkr.core.privacy.BIRTHS_QUERY``).
+# One row per item with person evidence (``{people}``: the privacy
+# module's selection, at every rank), with a value per death signal,
+# bound when the person has that signal: only whether it is bound counts,
+# so any value sampled does. A death event needs only the person as
+# participant — no date — so an undated death marks a person deceased
+# just like a burial place or a cause of death does. Births are read
+# apart, statement by statement (``yizkr.core.privacy.BIRTHS_QUERY``).
 PERSON_FACTS_QUERY = """\
 SELECT ?person
        (SAMPLE(?deathDate) AS ?death) (SAMPLE(?deathPlace) AS ?deathPlace)
        (SAMPLE(?deathCause) AS ?deathCause) (SAMPLE(?burial) AS ?burial)
        (SAMPLE(?deathEventItem) AS ?deathEvent)
 WHERE {{
-  ?person wdt:{instance_of} wd:{human} .
+{people}
   OPTIONAL {{ ?person wdt:{date_of_death} ?deathDate . }}
   OPTIONAL {{ ?person wdt:{place_of_death} ?deathPlace . }}
   OPTIONAL {{ ?person wdt:{cause_of_death} ?deathCause . }}
@@ -194,6 +227,10 @@ _DEATH_BINDINGS = ("death", "deathPlace", "deathCause", "burial", "deathEvent")
 
 @dataclass
 class ExclusionReport:
+    """The check's call on every item with person evidence: `excluded`
+    holds those it takes for possibly living, `included` those it
+    releases, and `reasons` says why, for each of them."""
+
     excluded: set[str] = field(default_factory=set)
     included: set[str] = field(default_factory=set)
     reasons: dict[str, str] = field(default_factory=dict)
@@ -205,9 +242,10 @@ def exclusion_report(
     run: sparql.Runner | None = None,
     vocabulary: tuple[dict[str, str], dict[str, str]] | None = None,
 ) -> ExclusionReport:
-    """Which humans the public export must not mention, and why. The
-    queries go to the instance's query service, with its vocabulary,
-    unless `run` and `vocabulary` are given."""
+    """Which people the public export must not mention, and why: every
+    item the privacy module's selection finds. The queries go to the
+    instance's query service, with its vocabulary, unless `run` and
+    `vocabulary` are given."""
     if vocabulary is None:
         from yizkr.core.wiki import WikiClient
 
@@ -218,13 +256,13 @@ def exclusion_report(
     bindings = run(
         prefixes
         + PERSON_FACTS_QUERY.format(
+            people=people_selection(properties, items),
             instance_of=properties["instance_of"],
             date_of_death=properties["date_of_death"],
             place_of_death=properties["place_of_death"],
             cause_of_death=properties["cause_of_death"],
             burial_place=properties["burial_place"],
             participant=properties["participant"],
-            human=items["human"],
             death=items["death"],
         )
     )
@@ -245,6 +283,372 @@ def exclusion_report(
     return report
 
 
+# The dump in N-Triples, as dumpRdf.php writes it: an item's statement
+# links it to a statement node (``<item> p:P <statement>``), which holds
+# the value (``<statement> ps:P <value>``), each qualifier's value
+# (``<statement> pq:P <value>``) and the rank (``wikibase:rank``); a data
+# node (``Special:EntityData/Q1``) gives each entity's revision
+# (``schema:version``), a redirect's included; and a redirect is
+# ``owl:sameAs`` the item it redirects to.
+_ENTITY = re.compile(r"<[^<>]*/entity/(Q[1-9]\d*)>")
+_CLAIM = re.compile(r"<[^<>]*/prop/(P[1-9]\d*)>")
+_CLAIM_VALUE = re.compile(r"<[^<>]*/prop/statement/(P[1-9]\d*)>")
+_QUALIFIER_VALUE = re.compile(r"<[^<>]*/prop/qualifier/(P[1-9]\d*)>")
+_DATA_NODE = re.compile(r"<[^<>]*[/:]([QP][1-9]\d*)>")
+_VERSION = "<http://schema.org/version>"
+_RANK = "<http://wikiba.se/ontology#rank>"
+_DEPRECATED = "<http://wikiba.se/ontology#DeprecatedRank>"
+
+
+@dataclass
+class DumpReading:
+    """What the public export reads from its own dump: `people`, every
+    item with person evidence (the privacy module's, at every rank);
+    `untyped`, every item that states no type, the vocabulary and classes
+    aside, and `families`, every item typed as a family (``read_dump``);
+    `redirects`, each redirect's target; and `revisions`, the revision of
+    every item and property that is not a redirect."""
+
+    people: set[str] = field(default_factory=set)
+    untyped: set[str] = field(default_factory=set)
+    families: set[str] = field(default_factory=set)
+    redirects: dict[str, str] = field(default_factory=dict)
+    revisions: dict[str, int] = field(default_factory=dict)
+
+
+def _item(term: str) -> str | None:
+    match = _ENTITY.fullmatch(term)
+    return match.group(1) if match else None
+
+
+def _redirected(redirects: Mapping[str, str], qid: str) -> str:
+    """The item `qid` stands for: the one it redirects to, through a chain
+    of redirects (a cycle ends where it closes), or itself."""
+    seen = {qid}
+    while qid in redirects:
+        qid = redirects[qid]
+        if qid in seen:
+            break
+        seen.add(qid)
+    return qid
+
+
+def read_dump(
+    full_dump: Path, properties: Mapping[str, str], items: Mapping[str, str]
+) -> DumpReading:
+    """Read person evidence, untyped items, redirects and revisions from
+    a dump, by the instance's ids.
+
+    Person evidence is read as ``PEOPLE_SELECTION`` reads it from the query
+    service: an item typed `human`, the subject of a person-only property,
+    the value of a person-valued one in a statement or a qualifier, or a
+    participant in a person event, each through its statement node at
+    every rank. A participant typed as one of the non-person classes, at
+    normal or preferred rank, is a person only on other evidence. A value
+    that is not an item (an unknown value is a blank node) is no evidence.
+
+    An item states no type when none of its `instance of` statements at
+    normal or preferred rank names an item: an unknown or no value, or a
+    type a curator deprecated, is none. The instance's vocabulary (the
+    manifest's items, which bootstrap mints untyped) and every item that
+    is the value of an `instance of` or `subclass of` statement, at any
+    rank, are classes, and not counted; nor is a redirect, which has no
+    statements of its own. A type that names a redirect is read as the
+    item the redirect leads to.
+
+    An item is a family when an `instance of` statement of it at normal or
+    preferred rank names the family class."""
+    instance_of = properties["instance_of"]
+    subclass_of = properties["subclass_of"]
+    participant = properties["participant"]
+    subject_links = {properties[key] for key in PERSON_SUBJECT_PROPERTIES}
+    value_links = {properties[key] for key in PERSON_VALUE_PROPERTIES}
+    human = items[PERSON_CLASS]
+    event_kinds = {items[key] for key in PERSON_EVENTS}
+    non_person_kinds = {items[key] for key in NON_PERSON_CLASSES}
+
+    reading = DumpReading()
+    # typing and participation statements, joined once the whole dump is
+    # read, whatever order its lines come in
+    typed: dict[str, str] = {}  # statement -> the item it types
+    kinds: dict[str, str] = {}  # statement -> the type it gives
+    events: dict[str, str] = {}  # statement -> the event it is part of
+    participants: dict[str, str] = {}  # statement -> the participant
+    deprecated: set[str] = set()  # statements a curator deprecated
+    classes = set(items.values())  # the vocabulary, and every type named
+    links: dict[str, tuple[str, str] | None] = {}
+    with gzip.open(full_dump, "rt", encoding="utf-8") as source:
+        for line in source:
+            parts = line.split(" ", 2)
+            if len(parts) < 3:
+                continue
+            subject, predicate, rest = parts
+            term = rest[: rest.find(">") + 1] if rest.startswith("<") else ""
+            if predicate == _VERSION:
+                node = _DATA_NODE.fullmatch(subject)
+                version = re.match(r'"(\d+)"', rest)
+                if node and version:
+                    reading.revisions[node.group(1)] = int(version.group(1))
+                continue
+            if predicate == SAME_AS:
+                redirect, target = _item(subject), _item(term)
+                if redirect and target:
+                    reading.redirects[redirect] = target
+                continue
+            if predicate == _RANK:
+                if term == _DEPRECATED:
+                    deprecated.add(subject)
+                continue
+            if predicate not in links:
+                links[predicate] = next(
+                    (
+                        (role, match.group(1))
+                        for role, pattern in (
+                            ("claim", _CLAIM),
+                            ("value", _CLAIM_VALUE),
+                            ("qualifier", _QUALIFIER_VALUE),
+                        )
+                        if (match := pattern.fullmatch(predicate))
+                    ),
+                    None,
+                )
+            link = links[predicate]
+            if link is None:
+                continue
+            role, pid = link
+            if role == "claim":
+                item = _item(subject)
+                if item is None:
+                    continue
+                if pid == instance_of:
+                    typed[term] = item
+                if pid == participant:
+                    events[term] = item
+                if pid in subject_links:
+                    reading.people.add(item)
+                continue
+            item = _item(term)
+            if item is None:
+                continue
+            if pid in value_links:
+                reading.people.add(item)
+            if role == "qualifier":
+                continue
+            if pid == instance_of:
+                kinds[subject] = item
+                classes.add(item)
+            if pid == subclass_of:
+                classes.add(item)
+            if pid == participant:
+                participants[subject] = item
+
+    # a type is read through the redirects it names: an item typed with a
+    # class a curator merged into `human` is typed human, and the class it
+    # was merged into is a class
+    kinds = {
+        statement: _redirected(reading.redirects, kind)
+        for statement, kind in kinds.items()
+    }
+    classes |= {_redirected(reading.redirects, kind) for kind in classes}
+
+    def typed_as(kinds_of: set[str] | None, ranked: bool = False) -> set:
+        """The items a statement types as one of `kinds_of` (any type,
+        when None): at normal or preferred rank when `ranked`, at any rank
+        otherwise."""
+        return {
+            typed[statement]
+            for statement, kind in kinds.items()
+            if (kinds_of is None or kind in kinds_of)
+            and statement in typed
+            and not (ranked and statement in deprecated)
+        }
+
+    reading.people |= typed_as({human})
+    person_events = typed_as(event_kinds)
+    set_aside = typed_as(non_person_kinds, ranked=True)
+    reading.people.update(
+        person
+        for statement, person in participants.items()
+        if events.get(statement) in person_events and person not in set_aside
+    )
+    for redirect in reading.redirects:
+        reading.revisions.pop(redirect, None)
+    reading.untyped = (
+        {entity for entity in reading.revisions if entity.startswith("Q")}
+        - typed_as(None, ranked=True)
+        - classes
+    )
+    reading.families = typed_as({items[FAMILY_CLASS]}, ranked=True)
+    return reading
+
+
+# Why the export drops an item with person evidence that the check did
+# not assess, one that states no type, and a family.
+NOT_ASSESSED = (
+    "person evidence in the dump, but the check did not assess this item: "
+    "unknown means excluded"
+)
+FAMILY = (
+    "family: its membership is not known to be complete, so any of its "
+    "people may be living"
+)
+NO_TYPE = (
+    "no type (no instance of, at normal or preferred rank, that names an "
+    "item): unknown means excluded"
+)
+
+
+def public_exclusions(
+    reading: DumpReading, report: ExclusionReport
+) -> dict[str, str]:
+    """Every item the public export drops, with why:
+
+    * each item with person evidence, in the dump or at the query service,
+      that the check did not release: an item it did not assess is
+      dropped, not kept (``NOT_ASSESSED``);
+    * each item that states no type (``NO_TYPE``), even one the check
+      released;
+    * each family (``FAMILY``), whatever it holds, released or not.
+
+    A redirect stands for the item it redirects to: it is dropped when
+    that item is, and when it has person evidence of its own and that item
+    was not released."""
+
+    def target(qid: str) -> str:
+        return _redirected(reading.redirects, qid)
+
+    people = reading.people | report.excluded | report.included
+
+    def why(qid: str) -> str | None:
+        if qid in reading.families:
+            return FAMILY
+        if qid in report.excluded:
+            return report.reasons[qid]
+        if qid in people and qid not in report.included:
+            return NOT_ASSESSED
+        if qid in reading.untyped:
+            return NO_TYPE
+        return None
+
+    excluded = {}
+    candidates = people | reading.untyped | reading.families
+    for qid in candidates | set(reading.redirects):
+        found = target(qid)
+        reason = why(found)
+        if reason is None and qid in people and found not in report.included:
+            reason = NOT_ASSESSED
+        if reason is not None:
+            excluded[qid] = (
+                reason if found == qid else f"a redirect to {found}: {reason}"
+            )
+    return excluded
+
+
+# The revision of every entity the query service holds, redirects left
+# out: the dump gives a redirect a revision, which the query service need
+# not keep beside its owl:sameAs link, so the two are compared on the
+# items and properties that are not redirects. Properties count as much
+# as items: the check reads a qualifier's precision through its property,
+# and an earliest date whose precision is unread can release a birth that
+# contradicts itself.
+REVISIONS_QUERY = """\
+SELECT ?entity ?version WHERE {
+  ?entity <http://schema.org/version> ?version .
+  FILTER NOT EXISTS {
+    ?entity <http://www.w3.org/2002/07/owl#sameAs> ?target .
+  }
+}
+"""
+
+_HELD_ENTITY = re.compile(r".*/entity/([QP][1-9]\d*)")
+
+# How long the export waits for the query service to hold the dump's
+# revisions, and how often it asks.
+LAG_TIMEOUT = 180.0
+LAG_POLL = 5.0
+
+
+class QueryServiceLag(RuntimeError):
+    """The query service does not hold the dump's revisions. The check
+    assesses people there, so its release of anyone would not be about
+    what the dump holds: the public export refuses to run. `manifest` is
+    the backup's, once ``run_backup`` has recorded the refusal in it."""
+
+    manifest: dict | None = None
+
+
+def _order(entity: str) -> tuple[str, int]:
+    return entity[0], int(entity[1:])
+
+
+def stale_entities(
+    run: sparql.Runner, revisions: Mapping[str, int]
+) -> list[str]:
+    """The items and properties whose revision at the query service
+    differs from the dump's `revisions`: one it holds at an older or a
+    newer revision, at one that is no integer, or not at all, and one it
+    holds that the dump lacks (one deleted or created since). Empty when
+    the two hold the same entities."""
+    held: dict[str, set[int]] = {}
+    for row in run(REVISIONS_QUERY):
+        entity = _HELD_ENTITY.fullmatch(row.get("entity", {}).get("value", ""))
+        if entity is None:
+            continue
+        version = row.get("version", {}).get("value", "")
+        held.setdefault(entity.group(1), set()).add(
+            int(version) if version.isdigit() else -1
+        )
+    stale = {
+        entity
+        for entity, revision in revisions.items()
+        if held.get(entity) != {revision}
+    }
+    stale.update(set(held) - set(revisions))
+    return sorted(stale, key=_order)
+
+
+def _named(stale: list[str]) -> str:
+    """'3 entities (P7, Q1, Q2)', naming ten at most."""
+    shown = ", ".join(stale[:10])
+    if len(stale) > 10:
+        shown += f" and {len(stale) - 10} more"
+    return f"{len(stale)} entit{'y' if len(stale) == 1 else 'ies'} ({shown})"
+
+
+def await_query_service(
+    run: sparql.Runner,
+    revisions: Mapping[str, int],
+    timeout: float = LAG_TIMEOUT,
+    poll: float = LAG_POLL,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Wait until the query service holds exactly the dump's `revisions`
+    (``stale_entities``), asking every `poll` seconds; raise
+    QueryServiceLag when it still does not after `timeout` seconds. The
+    match is exact, so an entity whose revision the query service never
+    receives stops every export until that entity is edited again or the
+    query service is reloaded; the refusal names it."""
+    deadline = clock() + timeout
+    while True:
+        stale = stale_entities(run, revisions)
+        if not stale:
+            return
+        if clock() >= deadline:
+            raise QueryServiceLag(
+                f"after {timeout:.0f} s the query service still does not "
+                f"hold the dump's revision of {_named(stale)}. The public "
+                "export assesses people there, so it refuses to run until "
+                "the two agree. Run the backup again once the graph is at "
+                "rest and the updater has caught up (docker compose logs "
+                "wdqs-updater). An entity whose revision never reaches the "
+                "query service keeps the export refusing, with the entity "
+                "named here, until it is edited again or the query service "
+                "is reloaded from a full dump (deploy/README.md)."
+            )
+        sleep(poll)
+
+
 _PROVENANCE_NODE = re.compile(r"<[^>]*/(?:reference|value)/([0-9a-f]{16,})>")
 
 
@@ -255,6 +659,9 @@ def filter_public_export(
     excerpt_pids: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[int, int]:
     """Produce the public dump: three privacy filters over N-triples.
+    `excluded` holds every item to drop: for the public export, every
+    item with person evidence that the check did not release
+    (``public_exclusions``).
 
     1. Drop every triple that mentions an excluded entity: entity URIs,
        statement node URIs (entity/statement/Q76-...), and object
@@ -345,6 +752,79 @@ def prune_old_backups(backup_root: Path, keep: int) -> list[str]:
     return doomed
 
 
+def export_public(
+    config: Config,
+    out_dir: Path,
+    cutoff_years: int = DEFAULT_CUTOFF_YEARS,
+    run: sparql.Runner | None = None,
+    vocabulary: tuple[dict[str, str], dict[str, str]] | None = None,
+    lag_timeout: float = LAG_TIMEOUT,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict:
+    """Write the public export of the dump ``out_dir/full.nt.gz``:
+    ``public.nt.gz``, and ``public-exclusions.json``, which lists every
+    item dropped for privacy with why (``public_exclusions``: people and
+    untyped items, redirects to them included), and the people released
+    and kept. Returns the counts the backup's manifest records: its
+    `excluded_persons` counts every item dropped.
+
+    It reads the dump first, then waits for the query service to hold
+    exactly the dump's revisions (``await_query_service``), runs the check
+    there, and asks again once it has run: a graph that changed meanwhile
+    raises QueryServiceLag, and nothing is written. Every item with person
+    evidence that the check did not release is then dropped
+    (``public_exclusions``). The queries go to the instance's query
+    service, with its vocabulary, unless `run` and `vocabulary` are
+    given."""
+    if vocabulary is None:
+        from yizkr.core.wiki import WikiClient
+
+        vocabulary = WikiClient(config).vocabulary()
+    properties, items = vocabulary
+    run = run or sparql.runner(config)
+    full_dump = out_dir / "full.nt.gz"
+    reading = read_dump(full_dump, properties, items)
+    await_query_service(
+        run, reading.revisions, timeout=lag_timeout, sleep=sleep, clock=clock
+    )
+    report = exclusion_report(
+        config, cutoff_years=cutoff_years, run=run, vocabulary=vocabulary
+    )
+    changed = stale_entities(run, reading.revisions)
+    if changed:
+        raise QueryServiceLag(
+            "the graph changed while the public export assessed it: the "
+            "query service now holds another revision than the dump of "
+            f"{_named(changed)}. The export refuses to run; run the backup "
+            "again."
+        )
+    excluded = public_exclusions(reading, report)
+    included = report.included - set(excluded)
+    kept, dropped = filter_public_export(
+        full_dump,
+        out_dir / "public.nt.gz",
+        set(excluded),
+        excerpt_pids={properties["transcription_excerpt"]},
+    )
+    (out_dir / "public-exclusions.json").write_text(
+        json.dumps(
+            {
+                "cutoff_years": cutoff_years,
+                "excluded": {qid: excluded[qid] for qid in sorted(excluded)},
+                "included_persons": sorted(included),
+            },
+            indent=2,
+        )
+    )
+    return {
+        "excluded_persons": len(excluded),
+        "included_persons": len(included),
+        "triples_kept": kept,
+        "triples_dropped": dropped,
+    }
+
+
 def run_backup(
     config: Config,
     backup_root: Path,
@@ -355,7 +835,11 @@ def run_backup(
     cutoff_years: int = DEFAULT_CUTOFF_YEARS,
     keep: int = 0,
 ) -> dict:
-    """Full backup run; returns the manifest that is also written to disk."""
+    """Full backup run; returns the manifest that is also written to disk.
+
+    A public export that refuses to run (QueryServiceLag) leaves the other
+    dumps in place: the manifest records them and the refusal, old runs
+    are pruned, and the refusal is raised."""
     stamp = datetime.datetime.now(datetime.UTC).strftime(TIMESTAMP_FORMAT)
     out_dir = backup_root / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -378,44 +862,26 @@ def run_backup(
     dump_rdf(deploy_dir, out_dir / "full.nt.gz", compose_files)
     record("rdf", out_dir / "full.nt.gz")
 
+    refused = None
     if public_export:
         if not config.sparql_url:
             raise RuntimeError(
                 "public export needs the query service (WDQS_PUBLIC_HOST) to "
                 "compute possibly-living exclusions"
             )
-        from yizkr.core.wiki import WikiClient
-
-        report = exclusion_report(config, cutoff_years=cutoff_years)
-        properties, _ = WikiClient(config).vocabulary()
-        kept, dropped_lines = filter_public_export(
-            out_dir / "full.nt.gz",
-            out_dir / "public.nt.gz",
-            report.excluded,
-            excerpt_pids={properties["transcription_excerpt"]},
-        )
-        (out_dir / "public-exclusions.json").write_text(
-            json.dumps(
-                {
-                    "cutoff_years": cutoff_years,
-                    "excluded": {
-                        qid: report.reasons[qid]
-                        for qid in sorted(report.excluded)
-                    },
-                    "included_persons": sorted(report.included),
-                },
-                indent=2,
+        try:
+            record(
+                "public_export",
+                out_dir / "public.nt.gz",
+                **export_public(config, out_dir, cutoff_years=cutoff_years),
             )
-        )
-        record(
-            "public_export",
-            out_dir / "public.nt.gz",
-            excluded_persons=len(report.excluded),
-            included_persons=len(report.included),
-            triples_kept=kept,
-            triples_dropped=dropped_lines,
-        )
+        except QueryServiceLag as refusal:
+            manifest["public_export_refused"] = str(refusal)
+            refused = refusal
 
     manifest["pruned"] = prune_old_backups(backup_root, keep) if keep else []
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    if refused is not None:
+        refused.manifest = manifest
+        raise refused
     return manifest

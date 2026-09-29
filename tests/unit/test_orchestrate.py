@@ -35,6 +35,7 @@ from yizkr.pipeline.orchestrate import (
     DUPLICATE,
     FAILED,
     PAUSED,
+    PENDING,
     TRANSCRIPTION_VOLATILE,
     WRITTEN,
     DocumentRun,
@@ -455,9 +456,9 @@ class TestResume:
         second.run()
         (doc,) = second.documents()
         assert doc.state.status == AWAITING_CLAIMS
-        assert doc.state.artifact_qid == "Q100"
-        # register was not repeated
-        assert "register:letter.txt" not in second.calls
+        # nothing is registered before the write (#103)
+        assert doc.state.artifact_qid is None
+        assert "register:letter.txt" not in first.calls + second.calls
 
     def test_cached_batch_rerun_clears_stale_failed(self, tmp_path):
         # serial mode extracts every doc up front (stop_after_extract),
@@ -482,6 +483,29 @@ class TestResume:
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES
+
+    @pytest.mark.parametrize(
+        "fresh", [True, False], ids=["view reused", "batch of the run"]
+    )
+    def test_a_pending_state_beside_a_batch_reads_batched(
+        self, tmp_path, fresh
+    ):
+        """A new directory's state is saved as `pending` before any view,
+        so a run stopped before it saved the state again leaves `pending`
+        beside a batch that stands. The extract-only pass says `batched`,
+        whether it reuses the batch view (a new orchestrator) or takes the
+        batch its run derived already."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        if fresh:
+            orchestrator = ScriptedOrchestrator(
+                orchestrator.folder, orchestrator.state_dir, log=quiet
+            )
+        (doc,) = orchestrator.documents()
+        doc.state.status = PENDING
+        doc.save()
+        (doc,) = orchestrator.documents()
+        assert orchestrator.advance(doc, stop_after_extract=True) == BATCHED
 
 
 class TestIsolationAndDiscovery:
@@ -646,7 +670,7 @@ class TestUnreadableDocuments:
         )
         # what it recorded stays, and nothing else in its directory moved
         assert (state["artifact_qid"], state["content_sha1"]) == (
-            "Q100",
+            None,
             doc.sha1,
         )
         assert snapshot(doc.dir) == files
@@ -690,10 +714,10 @@ class TestUnreadableDocuments:
         folder = letters(tmp_path)
 
         class RemovesTheNext(ScriptedOrchestrator):
-            def _step_register(self, doc):
+            def _step_reconcile(self, doc, batch):
                 if doc.source.name == "a-letter.txt":
                     (folder / "b-letter.txt").unlink()
-                return super()._step_register(doc)
+                return super()._step_reconcile(doc, batch)
 
         orchestrator = RemovesTheNext(folder, tmp_path / "state", log=quiet)
         assert orchestrator.run() == 1
@@ -1028,7 +1052,6 @@ class TestContentDedup:
         orchestrator.run()
         original, copy = orchestrator.documents()
         # the alphabetically-first file is canonical; only it is worked on
-        assert "register:a-original.txt" in orchestrator.calls
         assert "manifest:a-original.txt" in orchestrator.calls
         assert not any(c.endswith("b-copy.txt") for c in orchestrator.calls)
         assert copy.state.status == DUPLICATE
@@ -1126,7 +1149,6 @@ class TestContentDedup:
         again.run()
         (doc,) = again.documents()
         # the stale WRITTEN state was set aside and the document re-worked
-        assert "register:record.txt" in again.calls
         assert "manifest:record.txt" in again.calls
         assert doc.state.status != DUPLICATE
 
@@ -1153,7 +1175,6 @@ class TestContentDedup:
         kept = doc.dir.with_name(".letter.superseded-1")
         assert snapshot(kept, skip=()) == before
         assert steps(orchestrator.calls[calls:]) == [
-            "register",
             "manifest",
             "chunk",
             "critique",
@@ -1191,7 +1212,7 @@ class TestContentDedup:
         (folder / "old-copy.txt").write_bytes(old)
         again = ScriptedOrchestrator(folder, orchestrator.state_dir, log=quiet)
         assert again.run() == 2
-        assert "register:old-copy.txt" in again.calls
+        assert "manifest:old-copy.txt" in again.calls
         statuses = {d.source.name: d.state.status for d in again.documents()}
         assert statuses["old-copy.txt"] == AWAITING_EQUIVALENCES
 
@@ -1206,7 +1227,7 @@ class TestContentDedup:
         (folder / "old-copy.txt").write_bytes(old)
         again = ScriptedOrchestrator(folder, orchestrator.state_dir, log=quiet)
         assert again.run() == 2
-        assert "register:old-copy.txt" in again.calls
+        assert "manifest:old-copy.txt" in again.calls
         statuses = {d.source.name: d.state.status for d in again.documents()}
         assert statuses == {
             "letter.txt": AWAITING_EQUIVALENCES,
@@ -1272,8 +1293,8 @@ class TestStateDirectories:
             ".letter.md.superseded-1",
         )
         assert [
-            call for call in again.calls if call.startswith("register")
-        ] == ["register:letter.md"]
+            call for call in again.calls if call.startswith("manifest")
+        ] == ["manifest:letter.md"]
 
     def test_a_source_that_joins_or_leaves_moves_no_other(self, tmp_path):
         orchestrator = make_run(tmp_path)
@@ -1444,7 +1465,7 @@ class TestStateDirectories:
         assert not any(
             c.endswith("letter.txt") for c in orchestrator.calls[calls:]
         )
-        assert "register:letter.md" in orchestrator.calls[calls:]
+        assert "manifest:letter.md" in orchestrator.calls[calls:]
         assert self.dirs(orchestrator) == {
             "letter.md": "letter.md",
             "letter.txt": "letter",
@@ -1922,9 +1943,9 @@ class TestViews:
         assert engine_steps(serial.calls) == ["manifest", "chunk"]
 
     def test_views_without_their_state_are_set_aside(self, tmp_path):
-        """Views whose state.json is lost were made for a registration
-        nothing records: the directory is set aside whole, and the
-        document starts afresh."""
+        """Views whose state.json is lost were made for bytes nothing
+        records: the directory is set aside whole, and the document starts
+        afresh."""
         orchestrator = make_run(tmp_path)
         orchestrator.run()
         (doc,) = orchestrator.documents()
@@ -1937,7 +1958,6 @@ class TestViews:
         (event,) = this_run(orchestrator, "set-aside")
         assert "no state.json" in event["reason"]
         assert steps(orchestrator.calls[asked:]) == [
-            "register",
             "manifest",
             "chunk",
             "critique",
@@ -1969,9 +1989,8 @@ class TestUnrecordedDirectory:
         assert orchestrator.run() == 2
         kept = doc.dir.with_name(".letter.superseded-1")
         assert snapshot(kept, skip=()) == before
-        # the document is registered and derived again, in a new directory
+        # the document is derived again, in a new directory
         assert steps(orchestrator.calls[calls:]) == [
-            "register",
             "manifest",
             "chunk",
             "critique",
@@ -2238,9 +2257,9 @@ class TestRunDirectory:
         and the next run resumes."""
 
         class PausesCritique(ScriptedOrchestrator):
-            def _step_register(self, doc):
+            def _derive(self, doc):
                 self.rundir.request("pause", stage="critique", by="test")
-                return super()._step_register(doc)
+                return super()._derive(doc)
 
         folder = tmp_path / "docs"
         folder.mkdir()
@@ -2262,9 +2281,9 @@ class TestRunDirectory:
 
     def test_run_abort_stops_dispatch(self, tmp_path):
         class AbortsAfterFirst(ScriptedOrchestrator):
-            def _step_register(self, doc):
+            def _derive(self, doc):
                 self.rundir.request("abort", by="test", reason="futile")
-                return super()._step_register(doc)
+                return super()._derive(doc)
 
         folder = tmp_path / "docs"
         folder.mkdir()
@@ -2273,6 +2292,12 @@ class TestRunDirectory:
         orchestrator = AbortsAfterFirst(folder, tmp_path / "state", log=quiet)
         orchestrator.run()
         assert not any(c.endswith("b.txt") for c in orchestrator.calls)
+        # the second document is never dispatched: no stage of it starts,
+        # nor is held
+        second = sha1_of("Leopold was born in 1914.")
+        assert not any(
+            e.get("subject") == second for e in orchestrator.rundir.events()
+        )
         events = [e["event"] for e in orchestrator.rundir.events()]
         assert events[0] == "run-start" and events[-1] == "run-end"
 
@@ -2323,12 +2348,12 @@ class TestInvocationEnd:
         last = "b-letter.txt"
 
         class Ends(ScriptedOrchestrator):
-            def _step_register(self, doc):
+            def _derive(self, doc):
                 if how == "abort the run early":
                     self.rundir.request("abort", by="test", reason="a test")
                 if how.startswith("pause the run") and doc.source.name == last:
                     self.rundir.request("pause", by="test", reason="a test")
-                return super()._step_register(doc)
+                return super()._derive(doc)
 
             def advance(self, doc, **kwargs):
                 if how == "fail" and doc.source.name == last:
@@ -2655,10 +2680,8 @@ class TestTranscribeLanguage:
         (folder / name).write_text(text)
         source = folder / name
         doc = DocumentRun(source, tmp_path / "state")
-        doc.dir.mkdir(
-            parents=True, exist_ok=True
-        )  # register does this in the real flow
-        doc.state.artifact_qid = "Q1"
+        # the run makes the document's directory before any stage
+        doc.dir.mkdir(parents=True, exist_ok=True)
         return doc
 
     def test_auto_detects_per_document(self, tmp_path):
@@ -2700,31 +2723,6 @@ class TestTranscribeLanguage:
         transcription = orch._step_transcribe(doc)
         assert transcription.language == "de"
         assert doc.state.detail["language"]["source"] == "fallback"
-
-
-class TestRegisterArtifactType:
-    """Suffix-specific artifact classes at registration."""
-
-    def test_ged_registers_as_genealogical_report(self, tmp_path, monkeypatch):
-        import yizkr.pipeline.registrar as registrar
-
-        seen = []
-
-        class Result:
-            artifact_qid = "Q1"
-
-        def fake_register(client, **kwargs):
-            seen.append(kwargs["artifact_type"])
-            return Result()
-
-        monkeypatch.setattr(registrar, "register_artifact", fake_register)
-        source = tmp_path / "tree.ged"
-        source.write_text("0 HEAD\n0 TRLR\n")
-        orchestrator = Orchestrator(tmp_path, tmp_path / "state")
-        orchestrator._client = object()  # the fake never touches the wiki
-        doc = DocumentRun(source, tmp_path / "state")
-        assert orchestrator._step_register(doc) == "Q1"
-        assert seen == ["genealogical_report"]
 
 
 class TestSerialMode:
@@ -2887,8 +2885,8 @@ class TestNeverIngestList:
         excluded = [line for line in logged if "never-ingest" in line]
         assert len(excluded) == 4
         assert not any("unsupported" in line for line in logged)
-        assert [c for c in orch.calls if c.startswith("register:")] == [
-            "register:naturalisation-1952.txt"
+        assert [c for c in orch.calls if c.startswith("manifest:")] == [
+            "manifest:naturalisation-1952.txt"
         ]
         # document directories only: the run files sit beside them
         assert sorted(
@@ -2897,3 +2895,180 @@ class TestNeverIngestList:
         assert [d.source.name for d in orch.documents()] == [
             "naturalisation-1952.txt"
         ]
+
+
+class TestWriteTimeRegistration:
+    """Registration is part of the write (#103; ADR-0025 §2): a document
+    is registered, by the SHA-1 of its bytes, just before its claims are
+    written, and at no other point. Its directory records the bytes its
+    views are made for from the start, so nothing before the write needs
+    an artifact item."""
+
+    @staticmethod
+    def rewrite(orchestrator) -> None:
+        """Decide the written document's claims again, with a note."""
+        (doc,) = orchestrator.documents()
+        with open(doc.review_reviewed, newline="") as f:
+            rows = list(csv.DictReader(f))
+        rows[0]["notes"] = "checked against the scan"
+        with open(doc.review_reviewed, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def test_the_write_registers_the_document_first(self, tmp_path):
+        orchestrator = completed_run(tmp_path)
+        (doc,) = orchestrator.documents()
+        assert wiki_steps(orchestrator.calls) == [
+            "reconcile",
+            "resolve",
+            "export",
+            "register",
+            "write",
+        ]
+        assert doc.state.artifact_qid == "Q100"
+        assert json.loads(doc.state_path.read_text())["artifact_qid"] == "Q100"
+
+    def test_a_document_at_a_gate_is_not_registered(self, tmp_path):
+        orchestrator = make_run(tmp_path)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == AWAITING_CLAIMS
+        assert "register" not in steps(orchestrator.calls)
+        assert json.loads(doc.state_path.read_text())["artifact_qid"] is None
+
+    def test_a_failed_registration_writes_nothing(self, tmp_path):
+        orchestrator = make_run(tmp_path, fail_step="register")
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 1
+        (doc,) = orchestrator.documents()
+        assert (doc.state.status, doc.state.error) == (
+            FAILED,
+            "RuntimeError: wiki down",
+        )
+        assert "write" not in steps(orchestrator.calls)
+        assert not doc.write_result.exists()
+        # with the wiki back, the next run registers and writes, and
+        # every view stands
+        orchestrator.fail_step = None
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 0
+        assert steps(orchestrator.calls[calls:]) == ["register", "write"]
+        (doc,) = orchestrator.documents()
+        assert (doc.state.status, doc.state.artifact_qid) == (WRITTEN, "Q100")
+
+    def test_every_write_registers_again(self, tmp_path):
+        """A write registers what it writes about each time: the registrar
+        finds by SHA-1 what an earlier write registered, and a write that
+        runs on a reset instance registers there."""
+        orchestrator = completed_run(tmp_path)
+        self.rewrite(orchestrator)
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 0
+        assert steps(orchestrator.calls[calls:]) == ["register", "write"]
+        # a run with nothing to write registers nothing
+        calls = len(orchestrator.calls)
+        assert orchestrator.run() == 0
+        assert orchestrator.calls[calls:] == []
+
+    def test_the_writer_is_given_the_registered_artifact(
+        self, tmp_path, monkeypatch
+    ):
+        """The claims cite the document by the SHA-1 of its bytes, and the
+        write hands the writer the item registration found or made for
+        it."""
+        from yizkr.pipeline import writer
+
+        given = []
+
+        class Writer:
+            def __init__(self, client, dry_run=False, artifact_qids=None):
+                given.append(dict(artifact_qids or {}))
+
+            def write_batch(self, batch, bulk_accepted=False):
+                return writer.WriteResult(
+                    run_qid="Q999", written=len(batch.claims)
+                )
+
+        monkeypatch.setattr(writer, "BatchWriter", Writer)
+
+        class RealWrite(ScriptedOrchestrator):
+            _step_write = Orchestrator._step_write
+
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "letter.txt").write_text("Rahel was born in 1871.")
+        orchestrator = RealWrite(folder, tmp_path / "state", log=quiet)
+        orchestrator._client = object()  # the writer here never uses it
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_claims(doc)
+        assert orchestrator.run() == 0
+        assert given == [{doc.sha1: "Q100"}]
+
+    def test_a_new_directory_records_its_bytes_before_any_view(
+        self, tmp_path, monkeypatch
+    ):
+        """A run killed after a new directory's first view, before the
+        document's state is saved at its end, leaves a directory that
+        still says which bytes its views were made for: the next run
+        reuses them, and sets nothing aside."""
+        with monkeypatch.context() as patch:
+            # the kill: nothing saves the state after the stages
+            patch.setattr(Orchestrator, "_save", lambda self, doc: None)
+            orchestrator = make_run(tmp_path, fail_step="manifest")
+            orchestrator.run()
+        (doc,) = orchestrator.documents()
+        assert doc.transcription.exists()
+        state = json.loads(doc.state_path.read_text())
+        assert state["content_sha1"] == doc.sha1
+        orchestrator.fail_step = None
+        assert orchestrator.run() == 2
+        assert this_run(orchestrator, "set-aside") == []
+        assert [e["stage"] for e in this_run(orchestrator, "reused")] == [
+            "transcription"
+        ]
+
+    def test_a_new_deck_directory_records_its_bytes_before_its_media(
+        self, tmp_path, monkeypatch
+    ):
+        """A deck's derived media are recorded in its directory before any
+        view: its state comes first, so a run killed as it records them
+        leaves a directory the next run takes up, not one it sets aside."""
+        from tests.unit.test_presentation import build_deck
+
+        class Recorded(Exception):
+            """The kill, just after the media were recorded."""
+
+        class KilledAfterTheMedia(ScriptedOrchestrator):
+            def _step_derive_media(self, doc):
+                super()._step_derive_media(doc)
+                raise Recorded
+
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        build_deck(folder / "Family Deck.pptx")
+        with monkeypatch.context() as patch:
+            # nothing saves the state after the kill
+            patch.setattr(Orchestrator, "_save", lambda self, doc: None)
+            killed = KilledAfterTheMedia(folder, tmp_path / "state", log=quiet)
+            killed.run()
+        (doc,) = killed.documents()
+        assert (doc.dir / "derived-media.json").exists()
+        assert json.loads(doc.state_path.read_text())["content_sha1"] == (
+            doc.sha1
+        )
+        again = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        again.run()
+        assert this_run(again, "set-aside") == []

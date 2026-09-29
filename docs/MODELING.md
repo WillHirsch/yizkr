@@ -128,6 +128,22 @@ artifact a new QID, changes neither.
   existing. Extraction-run items use the same convention for their
   `instance of`. Every registrar/writer path therefore writes only
   referenced statements (ADR-0003).
+- **Registration is part of the write** (ADR-0025 §2; ADR-0010 as
+  amended by #103). `ingest run` registers a document just before it
+  writes the claims that cite it: its artifact item, its page fragments
+  and a deck's derived media, each found or made by the SHA-1 of its
+  media. Nothing before the write has an artifact item, and a write that
+  runs again (a changed review, say) registers again, finding by SHA-1
+  what the earlier write registered.
+- **A page fragment is keyed by its artifact.** The fragment for page
+  *n* is the item that is an `instance of artifact fragment` and `part
+  of` the artifact with `page number` *n*, whatever its label. A new one
+  is labelled `"<artifact label>, page <n>"` (content-tagged if that label
+  is taken, and the artifact's label cut to end in "…" if the whole would
+  pass 250 characters) and made in one write with both statements, each
+  stated in the artifact. So same-titled artifacts never share a
+  fragment, and a derived medium, `part of` its container with a page
+  qualifier too, is never taken for one.
 - Machine-proposed entities (people, places) get their `instance of`
   statement referenced to the artifact that mentions them. A later
   source that names the entity adds its own references (the artifact and
@@ -142,13 +158,26 @@ artifact a new QID, changes neither.
   artifact with media carries a `media SHA-1` statement (hex SHA-1 of
   the bytes), referenced `stated in → the artifact itself` (for media
   derived from a compound artifact: `stated in → the container`). The
-  registrar keys on this hash — identical bytes are one artifact item
-  however they are named, and an alternate filename becomes an alias
-  unless it is another item's label.
+  registrar keys on this hash alone — identical bytes are one artifact
+  item however they are named, and an alternate filename becomes an alias
+  unless it is another item's label. A title never finds an item: two
+  files that share a title are two artifacts, and media without bytes to
+  hash cannot be registered.
   Bit-identical media is never stored, itemised, or extracted twice.
-- Labels stay unique per kind: when a title already names *different*
-  content, the new artifact's label is disambiguated with a short
-  content tag (`"<title> [<sha1[:8]>]"`) rather than colliding.
+- Labels stay unique per kind: when a title is already another item's
+  label, the new artifact's label is disambiguated with a short content
+  tag (`"<title> [<sha1[:8]>]"`) rather than colliding. Titles are
+  compared in the form Wikibase stores labels in (separators and control
+  characters trimmed at either end, each run of control characters
+  inside made one space, then NFC), and one longer than the 250
+  characters Wikibase takes, as it is or once tagged, is refused. The tag
+  is a stopgap until labels need not be unique for artifacts (#94), and
+  which homonym bears it depends on registration order: nothing may key
+  on an artifact's label, only on its `media SHA-1`.
+- A file on the never-ingest list is never registered or uploaded, and
+  neither is a medium a container embeds that the list names, by name
+  or by SHA-1. The container's own file is uploaded as it is, with
+  whatever it embeds.
 - **Every `media file` holds the bytes its item's `media SHA-1` names.**
   A wiki file is never overwritten: bytes whose file name already holds
   different bytes are uploaded under a content-tagged file name,
@@ -307,7 +336,12 @@ and reference the artifact itself or the producing run.
   <media name>"; `instance of` photograph for raster images), with one
   `part_of` → the container per slide it appears on, slide-number
   qualified. Derived items are gallery- and faces-flow material in
-  their own right.
+  their own right. The stages before the write record them by SHA-1, and
+  the write registers them from that record, after the container
+  (ADR-0008 as amended by #128 and #103). Bytes the archive holds under
+  several names are one medium: the first name labels it, and the others
+  are aliases. A deck title that would push the label past 250 characters
+  is cut there, ending in "…": the label only displays it.
 - Every statement a container contributes to a derived item is
   referenced `stated in → that container` — a compound artifact asserts
   its own composition, the same convention as fragments and registrar
@@ -705,6 +739,55 @@ not a signal to grow the schema on.
   mention (other people's claims about them, orphaned provenance nodes),
   and transcription excerpts — raw source quotations, which can name
   anyone — never enter the public tier.
+- **Who is a person fails closed too** (ADR-0020, as amended by #344).
+  An item is a person when it has any person evidence, read at every
+  rank, deprecated included: a `human` type; a statement of a property
+  only a person has (a birth, a death or a burial, kinship, a birth or
+  married name, a nickname, what they are referred to as, a sex or
+  gender, a number of children, an occupation, an employer, a school, a
+  citizenship or a residence); being the value of a kinship property or
+  of `gave refuge to`, in a statement or a qualifier; or taking part in a
+  birth, a death, a marriage, a migration, military service, a
+  deportation, an imprisonment or a release. So a deprecated or outranked
+  `human` type hides no one. An official name, a religion or a
+  membership, a part in an event of another kind, a depiction, an
+  identity judgement (said to be the same as), a perspective or any
+  other qualifier, and the values of place, organization, artifact and
+  vocabulary properties mark no one. A type is read through the
+  redirects it names, so a class a curator merged into `human` types as
+  `human`. An item typed as a vessel, a military unit or an
+  organization at normal or preferred rank is taken
+  at its type on its part in a person event: any other evidence makes it
+  a person, a `human` type at any rank included. A family is not taken
+  at its type: its label is a surname, and a person known by a surname
+  alone can be typed as one. The export reads this evidence from its own
+  dump and **keeps a person only once the check has released them**: an
+  item the check never assessed is dropped, and a redirect goes with the
+  item it redirects to.
+- **What states no type is left out of the public export**, whatever
+  else it holds, so no type at all hides no one either: an item none of
+  whose `instance of` statements at normal or preferred rank names an
+  item (an unknown or no value, or a type a curator deprecated, names
+  none). The vocabulary is kept: the manifest's items, and every item
+  that is the value of an `instance of` or `subclass of` statement. An
+  item left untyped (a write cut short between its label and its type, a
+  reference that gives no kind) is missing from the public copy until it
+  is typed.
+- **A family is never public** (ADR-0020, as amended by #344). A family
+  stands for its people, the people recorded as `member of` it, and is
+  private while any of them may be living. The model cannot state that a
+  family's membership is complete (there is no household statement
+  enumerating occupants, above), so the export leaves out every item
+  typed `family` at normal or preferred rank, whatever it holds, released
+  or not, and the site badges it. #374 holds the full rule, with a way
+  to mark a family's membership complete.
+- The check runs on the query service, so the export waits for the query
+  service to hold the dump's revision of every item and property, and
+  **refuses to run** while it does not, or when the graph changes during
+  the check. The match is exact: an entity whose revision never reaches
+  the query service keeps the export refusing, naming the entity, until
+  that entity is edited again or the query service is reloaded from a
+  full dump.
 - **Births fail closed** (ADR-0020, as amended by #334). A birth releases
   a person only at the latest year it allows, and only when every
   `date of birth` statement a curator has not deprecated does so by the
@@ -726,4 +809,9 @@ not a signal to grow the schema on.
   is unknown, unreadable or coarser than a millennium.
 - The private static site (`yizkr publish-site`) includes everyone but
   badges each subject the export would drop ("possibly living — never in
-  public exports"), using the same runtime call.
+  public exports"), using the same runtime call, except a person with no
+  type, whom the export leaves out even when released; the site shows no
+  badge. A family it lists is always badged. Its people are the items
+  with person evidence, selected as the check selects them; the export
+  also drops what the site lists as no person, an untyped item without
+  person evidence, a family without person evidence and a redirect.

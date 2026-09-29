@@ -1,8 +1,9 @@
 """Live PPTX compound-artifact flow (ADR-0008): deck registration with
 slide fragments, derived-media items with deck-referenced provenance,
-one derived item per distinct image across decks (ADR-0010, #50), and
-idempotent re-registration. No LLM involved — the adapter is
-deterministic; claim extraction is covered elsewhere.
+registered from the record the stages before the write keep of them
+(#128, #103), one derived item per distinct image across decks
+(ADR-0010, #50), and idempotent re-registration. No LLM involved — the
+adapter is deterministic; claim extraction is covered elsewhere.
 
 Re-runnable against a non-empty graph: the synthetic decks are built
 byte-for-byte identically on every run (fixed ZIP timestamps), so re-runs
@@ -25,8 +26,8 @@ from tests.unit.test_presentation import (
     rels_xml,
     slide_xml,
 )
-from yizkr.pipeline.presentation import register_derived_media, unpack_pptx
-from yizkr.pipeline.registrar import register_artifact
+from yizkr.pipeline.presentation import record_derived_media, unpack_pptx
+from yizkr.pipeline.registrar import Registrar
 
 pytestmark = pytest.mark.live
 
@@ -105,25 +106,28 @@ def build_live_deck(path, image_slide: int = 1, slides: int = 1):
 
 
 def register_deck(client, tmp_path, title, **layout):
+    """Register a deck as the write does: the deck with its slides, then
+    its derived media from their record. Returns (the deck's registration,
+    {media SHA-1 -> QID})."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     deck_path = build_live_deck(tmp_path / f"{title}.pptx", **layout)
     content = unpack_pptx(deck_path)
-    deck = register_artifact(
-        client,
-        media_path=deck_path,
+    registrar = Registrar(client)
+    deck = registrar.register_artifact(
+        deck_path,
         artifact_type="presentation",
         title=title,
         description="written by tests/integration; safe to delete",
         pages=len(content.slides),
     )
-    derived = register_derived_media(
-        client,
-        deck_qid=deck.artifact_qid,
-        deck_title=title,
-        content=content,
-        workdir=tmp_path / "media" / deck.artifact_qid,
+    directory = tmp_path / "state" / title
+    record = record_derived_media(
+        content,
+        source_sha1=deck.content_sha1,
+        title=title,
+        directory=directory,
     )
-    return deck, derived
+    return deck, registrar.register_derived_media(record, directory)
 
 
 def cited(claim, stated_in: str) -> set[str]:
