@@ -16,6 +16,10 @@ evidence from its own dump and drops every such item the check did not
 release, every item that states no type, and every family; and it
 refuses to run while the query service, where the check runs, does not
 hold the dump's revisions (§4, Ruling 6).
+Amended by [ADR-0035](0035-mention-records.md) (owner decision
+2026-09-29, #385): a stated
+civil status (`civil_status`) is person evidence for the check (ADR-0035
+§3.1).
 Amended by #363 (2026-09-29): the export is a non-privileged view, not
 a public copy (the owner, 2026-09-29). It keeps everything recorded about
 a person the check releases, and about every item that is no person,

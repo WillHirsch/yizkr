@@ -109,10 +109,11 @@ class RejectingLlmClient(Protocol):
     """Optional capability: a caller rejects a response it cannot use.
 
     A transcription that fails the transcription check, or an answer cut
-    off before its terminal sentinel (a chunk's, the critic's, a
-    single-call extraction's), is rejected, so that the next identical
-    call asks the engine again rather than being answered with the same
-    text. Only a client that keeps responses has anything to reject; see
+    off, at the engine's output limit (`at_output_limit`) or before its
+    terminal sentinel (a chunk's, the critic's, a single-call
+    extraction's), is rejected, so that the next identical call asks the
+    engine again rather than being answered with the same text. Only a
+    client that keeps responses has anything to reject; see
     `reject_response`.
 
     `reject` returns whether the response was one the client kept from an
@@ -249,7 +250,9 @@ class AnthropicClient:
 
     def last_report(self) -> dict[str, Any]:
         """What the API reported about the calling thread's last
-        successful request: the model that answered it."""
+        successful request: the model that answered it, and why the model
+        stopped (`stop_reason`: end_turn, or max_tokens for an answer cut
+        off at MAX_TOKENS) when the response says so as a plain token."""
         return dict(getattr(self._reports, "value", {}))
 
     def complete(self, prompt: str, image_paths: Sequence[Path] = ()) -> str:
@@ -280,7 +283,13 @@ class AnthropicClient:
         )
         if not text.strip():
             raise RuntimeError("the Anthropic API returned no text")
-        self._reports.value = {"model": getattr(response, "model", None)}
+        report = {"model": getattr(response, "model", None)}
+        stop_reason = _token(
+            getattr(response, "stop_reason", None), _STOP_REASON
+        )
+        if stop_reason is not None:
+            report["stop_reason"] = stop_reason
+        self._reports.value = report
         return text
 
     @staticmethod
@@ -808,17 +817,37 @@ def _as_text(output: str | bytes | None) -> str:
 #   runs in (session_id);
 # * the result event says how the call ended (subtype: success,
 #   error_max_turns, error_during_execution, ...; the CLI reports an API
-#   error as a success with is_error), how many turns it took (num_turns)
-#   and the tokens it used (usage: input_tokens, output_tokens,
+#   error as a success with is_error), why the model stopped generating on
+#   its final turn (stop_reason: end_turn; max_tokens when that turn hit
+#   the output token limit; refusal, ...), how many turns it took
+#   (num_turns) and the tokens it used (usage: input_tokens, output_tokens,
 #   cache_creation_input_tokens and cache_read_input_tokens, beside details
-#   this engine does not keep).
+#   this engine does not keep);
+# * an assistant event that stands for an API error names its class (its
+#   error: max_output_tokens, rate_limit, overloaded, ...), and the last
+#   assistant event's is the call's (api_error).
+#
+# The stop reason is the result event's: an assistant event is printed as
+# its content block completes, before the API's message_delta says why the
+# model stopped, so its message's stop_reason tells nothing of it.
+#
+# When its model's answer passed the output token limit (at a limit of 40
+# tokens), the pinned CLI handed back no answer. Its stream ended with an
+# assistant event whose error is max_output_tokens (OUTPUT_LIMIT_ERROR),
+# holding an API-error notice as its one text block, and a result that
+# reports is_error, with the notice as its result and stop_sequence as its
+# stop reason. Such a stream is read by its structure, never by the
+# notice's text (output_limit_reached), and the call raises
+# OutputLimitReached. A stop reason of max_tokens on a result that answers
+# is read too (at_output_limit): either way the answer is cut off.
 #
 # A stream cut off before its result event (a timeout, a crash) reports no
-# usage, turns or subtype, and one cut off before its init event names no
-# model. Each field is kept only in the form expected of it, since each
-# flows into cache entries, call events and alerts: a model id or a subtype
-# that is not a plain token, a count that is not a whole number of at least
-# 0, and a session that is not a UUID are left out.
+# usage, turns, subtype or stop reason, and one cut off before its init
+# event names no model. Each field is kept only in the form expected of it,
+# since each flows into cache entries, call events and alerts: a model id,
+# a subtype, a stop reason or an error class that is not a plain token, a
+# count that is not a whole number of at least 0, and a session that is not
+# a UUID are left out.
 
 # the token counts of a call's usage, by the CLI's names for them
 USAGE_TOKENS = (
@@ -828,13 +857,35 @@ USAGE_TOKENS = (
     "cache_read_input_tokens",
 )
 # the fields of a stream report (stream_report), besides the usage
-STREAM_FIELDS = ("model", "cli_version", "session_id", "num_turns", "subtype")
+STREAM_FIELDS = (
+    "model",
+    "cli_version",
+    "session_id",
+    "num_turns",
+    "subtype",
+    "stop_reason",
+    "api_error",
+)
 
 # a model id (claude-sonnet-5-20260901, claude-opus-5-5[1m]), a CLI version
-# (2.1.237) and a result subtype (error_max_turns), as plain tokens
+# (2.1.237), a result subtype (error_max_turns), a stop reason (max_tokens)
+# and an API error's class (max_output_tokens), as plain tokens
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}")
 _VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}")
 _SUBTYPE = re.compile(r"[a-z0-9_]{1,64}")
+_STOP_REASON = re.compile(r"[a-z0-9_]{1,64}")
+_ERROR = re.compile(r"[a-z0-9_]{1,64}")
+
+# the stop reason an engine reports of an answer it cut off at its output
+# limit (at_output_limit): the API on its response, and a CLI that answers
+# on its result event
+OUTPUT_LIMIT = "max_tokens"
+# the class of API error the claude CLI's last assistant event names when
+# it gave up on an answer at the output token limit (output_limit_reached)
+OUTPUT_LIMIT_ERROR = "max_output_tokens"
+# what a caller says of an answer cut off at the output limit, the one it
+# rejects or the one the CLI gave up on (OutputLimitReached)
+CUT_OFF_AT_LIMIT = f"cut off at {OUTPUT_LIMIT}"
 
 
 def _token(value: Any, pattern: re.Pattern[str]) -> str | None:
@@ -863,15 +914,27 @@ def _session_id(value: Any) -> str | None:
         return None
 
 
+def _last_event(
+    events: Sequence[Mapping[str, Any]], kind: str
+) -> Mapping[str, Any]:
+    """The last event of type `kind` in a stream, or an empty one."""
+    return next(
+        (event for event in reversed(events) if event.get("type") == kind),
+        {},
+    )
+
+
 def stream_report(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     """What a call's stream-json events report of the call: from its init
     event, the `model` it ran on, the `cli_version` and the `session_id`;
     from its result event, its `usage` (each of USAGE_TOKENS the event
-    gives), `num_turns` and `subtype`. A field the stream does not give, or
-    gives in another form than expected, is left out; so is a usage that
-    gives no token count. The session is the init event's, else the result
-    event's. Of several, the first init event counts, and the last result
-    event, the one the call ended on."""
+    gives), `num_turns`, `subtype` and `stop_reason`; and from its last
+    assistant event, the class of API error it stands for (`api_error`),
+    when it stands for one. A field the stream does not give, or gives in
+    another form than expected, is left out; so is a usage that gives no
+    token count. The session is the init event's, else the result event's.
+    Of several, the first init event counts, and the last result event, the
+    one the call ended on."""
     events = list(events)
     init = next(
         (
@@ -881,10 +944,8 @@ def stream_report(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         ),
         {},
     )
-    result = next(
-        (event for event in reversed(events) if event.get("type") == "result"),
-        {},
-    )
+    result = _last_event(events, "result")
+    assistant = _last_event(events, "assistant")
     usage = result.get("usage")
     tokens = {
         name: count
@@ -900,6 +961,8 @@ def stream_report(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "usage": tokens or None,
         "num_turns": _whole(result.get("num_turns")),
         "subtype": _token(result.get("subtype"), _SUBTYPE),
+        "stop_reason": _token(result.get("stop_reason"), _STOP_REASON),
+        "api_error": _token(assistant.get("error"), _ERROR),
     }
     return {name: value for name, value in report.items() if value is not None}
 
@@ -920,6 +983,70 @@ def _add_report(call: dict[str, Any], attempt: Mapping[str, Any]) -> None:
     )
     if usage:
         call["usage"] = usage
+
+
+def output_limit_reached(events: Sequence[Mapping[str, Any]]) -> bool:
+    """Whether a call's stream-json events say the claude CLI gave up on
+    its answer at the output token limit: its result reports is_error, and
+    its last assistant event names the API error max_output_tokens
+    (OUTPUT_LIMIT_ERROR). The structure decides, never the text of the
+    notice that event holds."""
+    return (
+        _last_event(events, "result").get("is_error") is True
+        and _last_event(events, "assistant").get("error") == OUTPUT_LIMIT_ERROR
+    )
+
+
+class OutputLimitReached(RuntimeError):
+    """The claude CLI gave up on a call's answer at the output token limit
+    (output_limit_reached), and handed back none. It is an answer cut off
+    at the limit, not a failure of the engine: a caller handles it as it
+    handles an answer cut off (at_output_limit), with nothing of it to
+    keep, and the anomaly checks count it as a truncation, never as a
+    failed call. Like any error, it leaves the LLM cache nothing to keep,
+    so the next call asks the engine again."""
+
+    def __init__(self, message: str = CUT_OFF_AT_LIMIT) -> None:
+        super().__init__(message)
+
+
+# how many clients deep at_output_limit looks for the engine's report: a
+# cached client over an observed one over the engine's, and one wrapper more
+_REPORTERS = 4
+
+
+def at_output_limit(client: Any, response: str) -> bool:
+    """Whether the engine cut `response` off at its output limit: whether
+    the stop reason the engine reported of the call that made it is
+    max_tokens (OUTPUT_LIMIT), as the Anthropic API says on its response
+    and a CLI that answers may say on its result. `response` is the answer
+    `client` has just given the calling thread, and the stop reason is what
+    the engine's report of that thread's last answered call gives
+    (`last_report`, which an ObservedClient passes on), read from `client`,
+    else from the client it makes its calls through (its `client`, as the
+    LLM cache's has), and so on down, _REPORTERS deep at most.
+
+    Such an answer is incomplete whatever it holds, a terminal sentinel
+    included: its caller handles it as an answer without its sentinel. The
+    pinned claude CLI gives no such answer: the call raises
+    OutputLimitReached, which its callers handle alike. An answer the LLM
+    cache gave from an entry (a hit, an adoption among them) was made by no
+    call of the engine's now, and the entry keeps no stop reason: it is
+    judged by its text alone. So is the answer of a client that reports no
+    stop reason."""
+    if getattr(response, "hit", False):
+        return False
+    reporter = client
+    for _ in range(_REPORTERS):
+        last_report = getattr(reporter, "last_report", None)
+        if callable(last_report):
+            report = last_report()
+            return (
+                isinstance(report, Mapping)
+                and report.get("stop_reason") == OUTPUT_LIMIT
+            )
+        reporter = getattr(reporter, "client", None)
+    return False
 
 
 # -- tool errors ------------------------------------------------------------
@@ -1955,10 +2082,12 @@ class ClaudeCodeClient:
     record and for the LLM cache's keys (ADR-0032), beside the text a call
     sends (``call_text``, ``system_prompt``). What a call's stream reports
     (``stream_report``: the model it ran on, the CLI version, the session,
-    the tokens it used, its turns and how it ended) is never part of
-    either: ``last_report`` gives it for the calling thread's last answered
-    call, which the LLM cache keeps beside the answer, and ``last_stream``
-    for its last call, answered or not, which its call event carries.
+    the tokens it used, its turns, how it ended, why its model stopped and
+    any API error's class) is never part of either: ``last_report`` gives
+    it for the calling thread's last answered call, which the LLM cache
+    keeps beside the answer but for the stop reason and the error class,
+    and ``last_stream`` for its last call, answered or not, which its call
+    event carries.
 
     **Transcripts.** The CLI stores every session under its projects
     directory, and forks resume from there, so sessions stay persistent
@@ -2194,7 +2323,8 @@ class ClaudeCodeClient:
         """What the streams reported about the calling thread's last
         answered call (``last_stream``), with the CLI version the pass is
         pinned to when they reported none: the model that answered it, the
-        CLI version, the session, the usage, the turns and the subtype."""
+        CLI version, the session, the usage, the turns, the subtype, the
+        stop reason and any API error's class."""
         return copy.deepcopy(getattr(self._reports, "value", {}))
 
     def last_stream(self) -> dict[str, Any]:
@@ -2388,10 +2518,12 @@ class ClaudeCodeClient:
         it is an attempt at. Its sessions' transcripts are released when it
         ends, unless ``hold`` keeps a successful call's session open for
         forking. A call the subscription refused for a limit raises
-        _Refused, before any other check. A call whose terminal result
-        reports an error that is not a limit (refusal already ruled it
-        out) raises RuntimeError, whatever the exit status: it is never
-        assembled and returned as the answer. A call whose stream
+        _Refused, before any other check. A call whose stream says the CLI
+        gave up on its answer at the output token limit raises
+        OutputLimitReached next (output_limit_reached), whatever the exit
+        status. A call whose terminal result reports another error that is
+        not a limit raises RuntimeError, whatever the exit status: it is
+        never assembled and returned as the answer. A call whose stream
         reports the Read tool failing on one of its ``inputs`` raises
         EngineToolError, after the version and tool checks."""
         stdout = ""
@@ -2418,6 +2550,8 @@ class ClaudeCodeClient:
             refused = refusal(events, result.returncode)
             if refused is not None:
                 raise _Refused(refused)
+            if output_limit_reached(events):
+                raise OutputLimitReached()
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout).strip()[-500:]
                 raise RuntimeError(
@@ -2563,7 +2697,15 @@ PAUSED = "paused"
 INTERRUPTED = "interrupted"
 # what a call event carries of its streams' report (stream_report): all of
 # it but the session, which names a session of the account (ObservedClient)
-CALL_STREAM_FIELDS = ("model", "cli_version", "usage", "num_turns", "subtype")
+CALL_STREAM_FIELDS = (
+    "model",
+    "cli_version",
+    "usage",
+    "num_turns",
+    "subtype",
+    "stop_reason",
+    "api_error",
+)
 # the stage each role's calls are made in (yizkr.pipeline.orchestrate)
 ROLE_STAGES = {
     "transcribe": "transcription",
@@ -2587,11 +2729,15 @@ class ObservedClient:
     when the pass can go on (`resumes_at`). From an engine whose streams
     report its calls (`last_stream`), it adds what the call's streams
     reported: the `model` it ran on, the `cli_version`, its `usage`, its
-    `num_turns` and its `subtype`. The session a call ran in is never in
-    its event: it names a session of the account, and the event log is
-    what the monitor and the run report read; the LLM cache keeps it
-    beside the answer. A replay of a conversation's opening turn is
-    marked `replay`. A field with nothing to say is left out.
+    `num_turns`, its `subtype`, its `stop_reason`, which is max_tokens for
+    an answer cut off at the output limit (at_output_limit), and the class
+    of API error its last assistant event stands for (`api_error`), which
+    is max_output_tokens when the CLI gave up on the answer at that limit
+    (the call's `error` is then OutputLimitReached). The session a call ran
+    in is never in its event: it names a session of the account, and the
+    event log is what the monitor and the run report read; the LLM cache
+    keeps it beside the answer. A replay of a conversation's opening turn
+    is marked `replay`. A field with nothing to say is left out.
 
     It wraps the engine's own client, behind the LLM cache when there is
     one, so it reports the calls that reach the engine, the cache's

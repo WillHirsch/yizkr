@@ -28,6 +28,14 @@ The family, in four generations:
   Maisie Cutmore, "Nana Maisie", though she is no relation.
 * An unrelated widow in Flörburg shares the name Ursula Löbig with
   Sebastian's daughter: the homonym.
+* Felix's son Rudolf goes to the Soviet Union in 1936, marries Nina
+  Sartina there in 1938 and dies there, at Koshnovka, in 1941.  In 1958
+  Nina writes to Leopold, in Russian, and sends him Rudolf's death
+  certificate.
+* Florence's mother, Sipkje Faxridge, born van 't Nijks, came from
+  Snylsjum in Friesland.  Her brother Sybren writes to her in Stupfield in
+  1952, in West Frisian: their widowed mother has become Nicholas's
+  great-grandmother.
 
 Flörburg became Bad Flörburg in 1954, so it is named two ways over
 time, and the town of Rekau lies in the urban district of the same
@@ -49,6 +57,14 @@ Ursula Löbigs and give his birth and his father's death in two-digit years
 naturalisation certificate, the 1938 postcard and a GEDCOM export of the
 Lobig line they make the fixture corpus (tests/fixtures/corpus, #76).
 
+The Russian and West Frisian sources (#387) carry the naming patterns that
+extraction's mention records must handle (#385), and ``NAMING_PATTERNS``
+says where each one is: a surname written first, a patronymic, a
+married-name marker (one of them a suffix), a surname's masculine and
+feminine forms, a name particle, widow and "the late" markers, kinship
+terms with a side and a degree, an institution named by its kind and its
+place, and a place named with its containers.
+
 ``GEDCOM_FIXTURE`` renders the family as a genealogy program would
 export it from these sources; ``tests/unit/test_example_universe.py``
 checks that every name, date, place and family link in it is one the
@@ -56,7 +72,9 @@ data here asserts.
 
 Every specific was invented blind, by seeded random draws from broad
 tables of period names, ordinary trades, large regions and syllables,
-not recalled from any real record.
+not recalled from any real record.  The languages beyond German and
+English were drawn the same way, for their naming patterns:
+``LANGUAGE_TABLE`` and ``LANGUAGE_SEED`` record the table and the seed.
 """
 
 from __future__ import annotations
@@ -137,9 +155,9 @@ class Name:
     """One form of a name.
 
     ``form`` for people: birth, married, nickname, diminutive,
-    anglicised, as_written (whole, as one source writes it) or
-    placeholder; for places: official, historical, transliterated or
-    translated.
+    anglicised, as_written (whole, as one source writes it), given (a
+    given name alone, as a child's patronymic gives it) or placeholder;
+    for places: official, historical, transliterated or translated.
     """
 
     text: str
@@ -377,8 +395,13 @@ PEOPLE = (
         _names(
             ("Rudolf Löbig", "birth", "de"),
             ("Rudi", "diminutive", "de"),
+            ("Лёбиг Рудольф Феликсович", "as_written", "ru"),
         ),
         gedcom_xref="@I12@",
+        note=(
+            "Went to the Soviet Union in 1936, married Nina Sartina there "
+            "in 1938 and died there in 1941."
+        ),
     ),
     Person(
         "infant-loebig",
@@ -399,6 +422,7 @@ PEOPLE = (
             ("Florence Lobig", "married", "en"),
         ),
         gedcom_xref="@I14@",
+        note="Her mother, Sipkje Faxridge, came from Friesland.",
     ),
     Person(
         "nicholas-lobig",
@@ -446,6 +470,89 @@ PEOPLE = (
         note=(
             "A neighbour in Stupfield whom Nicholas called Nana Maisie: "
             "a courtesy title, not kinship."
+        ),
+    ),
+    Person(
+        "nina-sartina",
+        "Nina Sartina",
+        "female",
+        3,
+        _names(
+            ("Нина Сартина", "birth", "ru"),
+            ("Нина Лёбиг", "married", "ru"),
+            ("Нина Васильевна Сартина", "as_written", "ru"),
+        ),
+        note=(
+            "Rudolf's wife from 1938, in the Soviet Union, and his widow; "
+            "her village calls her Рудольфиха, colloquial for Rudolf's wife."
+        ),
+    ),
+    Person(
+        "pavel-sartin",
+        "Pavel Sartin",
+        "male",
+        3,
+        _names(("Павел Сартин", "birth", "ru")),
+        note="Nina's brother: his surname is the masculine form of hers.",
+    ),
+    Person(
+        "vasily-sartin",
+        "Vasily Sartin",
+        "male",
+        2,
+        _names(("Василий", "given", "ru")),
+        note=(
+            "Nina's father, named only in her patronymic, Васильевна "
+            "(daughter of Vasily); no source gives his surname or dates."
+        ),
+    ),
+    Person(
+        "sipkje-faxridge",
+        "Sipkje Faxridge",
+        "female",
+        2,
+        _names(
+            ("Sipkje van 't Nijks", "birth", "fy"),
+            ("Sipkje Faxridge", "married", "en"),
+            ("S. Faxridge-van 't Nijks", "as_written", "fy"),
+        ),
+        note=(
+            "Florence's mother, from Snylsjum in Friesland; she lived in "
+            "Stupfield."
+        ),
+    ),
+    Person(
+        "sybren-van-t-nijks",
+        "Sybren van 't Nijks",
+        "male",
+        2,
+        _names(
+            ("Sybren van 't Nijks", "birth", "fy"),
+            ("S. van 't Nijks", "as_written", "fy"),
+        ),
+        note="Sipkje's brother in Snylsjum, who wrote to her in 1952.",
+    ),
+    Person(
+        "mr-van-t-nijks",
+        "Mr Van 't Nijks",
+        "male",
+        1,
+        _names(("N.N. van 't Nijks", "placeholder", None)),
+        note=(
+            "Sipkje and Sybren's father, whom Sybren's letter names only "
+            "as heit (father), and late; he worked at the Snylsjum "
+            "brickworks."
+        ),
+    ),
+    Person(
+        "mrs-van-t-nijks",
+        "Mrs Van 't Nijks",
+        "female",
+        1,
+        _names(("N.N. van 't Nijks", "placeholder", None)),
+        note=(
+            "Sipkje and Sybren's mother, whom Sybren's letter names only as "
+            "Mem (mother): a widow, and Nicholas's great-grandmother."
         ),
     ),
 )
@@ -584,7 +691,10 @@ PLACES = (
         "Australia",
         "country",
         (),
-        _names(("Australia", "official", "en")),
+        _names(
+            ("Australia", "official", "en"),
+            ("Austraalje", "translated", "fy"),
+        ),
     ),
     Place("victoria", "Victoria", "region", ("australia",)),
     Place("stupfield", "Stupfield", "town", ("victoria",)),
@@ -596,6 +706,66 @@ PLACES = (
         "31 Juniper Street",
         "address",
         ("juniper-street",),
+    ),
+    Place("linden-grove", "Linden Grove", "street", ("stupfield",)),
+    Place(
+        "linden-grove-1",
+        "1 Linden Grove",
+        "address",
+        ("linden-grove",),
+        note="Sipkje Faxridge's address in 1952.",
+    ),
+    Place(
+        "russia",
+        "Russia",
+        "country",
+        (),
+        _names(("РСФСР", "historical", "ru")),
+        note="The death certificate names it as the RSFSR, a republic.",
+    ),
+    Place(
+        "chadsk-oblast",
+        "Chadsk Oblast",
+        "region",
+        ("russia",),
+        _names(("Чадская область", "official", "ru")),
+    ),
+    Place(
+        "kaldovsky-district",
+        "Kaldovsky District",
+        "district",
+        ("chadsk-oblast",),
+        _names(("Калдовский район", "official", "ru")),
+    ),
+    Place(
+        "koshnovka",
+        "Koshnovka",
+        "village",
+        ("kaldovsky-district",),
+        _names(("Кошновка", "official", "ru")),
+        note="Where Rudolf lived from 1936 and died in 1941.",
+    ),
+    Place(
+        "netherlands",
+        "Netherlands",
+        "country",
+        (),
+        _names(("Nederlân", "translated", "fy")),
+    ),
+    Place(
+        "friesland",
+        "Friesland",
+        "region",
+        ("netherlands",),
+        _names(("Fryslân", "official", "fy")),
+    ),
+    Place("drakeradiel", "Drakeradiel", "municipality", ("friesland",)),
+    Place(
+        "snylsjum",
+        "Snylsjum",
+        "village",
+        ("drakeradiel",),
+        note="Sipkje's family's village, with its brickworks.",
     ),
 )
 
@@ -677,7 +847,78 @@ ENTITIES = (
         "vessel",
         note="Named in the naturalisation certificate.",
     ),
+    Entity(
+        "emigration-1936",
+        "Emigration of Rudolf Löbig",
+        "migration",
+        note="To Koshnovka, in the Soviet Union.",
+    ),
+    Entity("fitter", "Fitter", "occupation_class", ("слесарь",)),
+    Entity(
+        "kaldovsky-registry",
+        "Kaldovsky district civil registry",
+        "organization",
+        ("Калдовское районное бюро ЗАГС",),
+        note=(
+            "Registered Rudolf's death: named by its kind and by its "
+            "district, whose name it takes as an adjective."
+        ),
+    ),
+    Entity(
+        "snylsjum-brickworks",
+        "Snylsjum brickworks",
+        "organization",
+        ("tichelwurk fan Snylsjum",),
+        note="Where Sipkje's father worked; closed by 1952.",
+    ),
 )
+
+# The sources beyond German and English are in languages drawn for their
+# naming patterns (#387), at random with a fixed seed from this table of
+# European languages (ISO 639-1 code, name):
+# random.Random(LANGUAGE_SEED).sample(LANGUAGE_TABLE, 2) draws LANGUAGES.
+LANGUAGE_SEED = 387
+LANGUAGE_TABLE = (
+    ("sq", "Albanian"),
+    ("eu", "Basque"),
+    ("be", "Belarusian"),
+    ("br", "Breton"),
+    ("bg", "Bulgarian"),
+    ("ca", "Catalan"),
+    ("hr", "Croatian"),
+    ("cs", "Czech"),
+    ("da", "Danish"),
+    ("nl", "Dutch"),
+    ("et", "Estonian"),
+    ("fo", "Faroese"),
+    ("fi", "Finnish"),
+    ("fy", "Frisian"),
+    ("gl", "Galician"),
+    ("el", "Greek"),
+    ("hu", "Hungarian"),
+    ("is", "Icelandic"),
+    ("ga", "Irish"),
+    ("la", "Latin"),
+    ("lv", "Latvian"),
+    ("lt", "Lithuanian"),
+    ("mk", "Macedonian"),
+    ("mt", "Maltese"),
+    ("no", "Norwegian"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("ro", "Romanian"),
+    ("ru", "Russian"),
+    ("gd", "Scottish Gaelic"),
+    ("sr", "Serbian"),
+    ("sk", "Slovak"),
+    ("sl", "Slovene"),
+    ("es", "Spanish"),
+    ("sv", "Swedish"),
+    ("uk", "Ukrainian"),
+    ("cy", "Welsh"),
+    ("yi", "Yiddish"),
+)
+LANGUAGES = ("ru", "fy")
 
 SOURCES = (
     Source(
@@ -996,6 +1237,109 @@ SOURCES = (
             "Nicholas's three slides for a talk at the library, with a "
             "photograph from the family album on the second; the text is "
             "the deck's slide text, as the pipeline reads it."
+        ),
+    ),
+    # English gloss: "Death certificate. Citizen Löbig Rudolf Feliksovich
+    # died on 6 March 1941, aged 24, and the entry was made in the civil
+    # register of deaths on 7 March 1941 as no. 113. Cause of death: heart
+    # defect. Place of death: town, village: the village of Koshnovka;
+    # district: Kaldovsky; oblast, krai: Chadsk; republic: RSFSR. Place of
+    # registration: the Kaldovsky district civil registry bureau. Issued on
+    # 7 March 1941."
+    Source(
+        "death-certificate-1941",
+        "Death certificate of Rudolf Löbig",
+        "ru",
+        1941,
+        "certificate",
+        text=(
+            "Свидетельство о смерти.\n"
+            "Гр. Лёбиг Рудольф Феликсович умер 6 марта 1941 г. в возрасте "
+            "24 лет, о чём в книге записей актов гражданского состояния о "
+            "смерти 1941 г. марта месяца 7 числа произведена "
+            "соответствующая запись за № 113.\n"
+            "Причина смерти: порок сердца.\n"
+            "Место смерти: город, селение д. Кошновка; район Калдовский; "
+            "область, край Чадская; республика РСФСР.\n"
+            "Место регистрации: Калдовское районное бюро ЗАГС.\n"
+            "Дата выдачи: 7 марта 1941 г."
+        ),
+        note=(
+            "A Soviet form: the name surname first, with a patronymic, and "
+            "the place of death in fields, with its district, oblast and "
+            "republic. Nina sent it to Leopold with her 1958 letter."
+        ),
+    ),
+    # English gloss: "Koshnovka village, Kaldovsky district, Chadsk
+    # oblast, 25 December 1958. Dear Leopold! Nina Vasilyevna Sartina,
+    # Löbig by her husband, the widow of your late brother Rudolf, writes to
+    # you. You asked for his death certificate: I enclose it. Rudolf came
+    # to Koshnovka in 1936 and worked as a fitter on the collective farm.
+    # We married in 1938. In the village they call me just that: Rudolfikha
+    # (Rudolf's wife). Is Sebastian, his uncle on his father's side, alive?
+    # And where is Klara now, his first cousin, who went to Australia? My
+    # brother Pavel Sartin sends you his regards. Nina Sartina"
+    Source(
+        "letter-to-leopold-1958",
+        "Letter from Nina Sartina, Rudolf's widow, to Leopold Löbig",
+        "ru",
+        1958,
+        "letter",
+        text=(
+            "д. Кошновка Калдовского района Чадской области, 25 декабря "
+            "1958 г.\n"
+            "Дорогой Леопольд!\n"
+            "Пишет Вам Нина Васильевна Сартина, по мужу Лёбиг, вдова Вашего "
+            "покойного брата Рудольфа. Вы просили прислать свидетельство о "
+            "его смерти, посылаю.\n"
+            "Рудольф приехал в Кошновку в 1936 году и работал слесарем в "
+            "колхозе. В 1938 году мы поженились. В деревне меня так и "
+            "зовут: Рудольфиха.\n"
+            "Жив ли Себастьян, его дядя по отцу? И где теперь Клара, его "
+            "двоюродная сестра, что уехала в Австралию?\n"
+            "Мой брат Павел Сартин кланяется Вам.\n"
+            "Нина Сартина"
+        ),
+        note=(
+            "Kept with Leopold's papers. Rudolf is its ego: the kinship "
+            "terms say what Sebastian and Klara were to him."
+        ),
+    ),
+    # English gloss: "Snylsjum, 24 January 1952. Dear Sipkje, Many thanks
+    # for your letter and for the photograph of your daughter Florence's
+    # little Nicholas. Mem (mother) is so proud: now she is a
+    # great-grandmother! She has been a widow since our late father died,
+    # but she is still in good health and lives with us. The Snylsjum
+    # brickworks, where Father worked so long, is closed now. Warm
+    # greetings to you, and to Florence and Gus too, your brother Sybren.
+    # [envelope] Mrs S. Faxridge-van 't Nijks, 1 Linden Grove, Stupfield,
+    # Victoria, Australia. [envelope, back] Sender: S. van 't Nijks,
+    # Snylsjum, municipality of Drakeradiel, Friesland, the Netherlands."
+    Source(
+        "letter-to-sipkje-1952",
+        "Letter from Sybren van 't Nijks to his sister Sipkje Faxridge",
+        "fy",
+        1952,
+        "letter",
+        text=(
+            "Snylsjum, 24 jannewaris 1952\n"
+            "Leave Sipkje,\n"
+            "Tige tank foar dyn brief en foar it portret fan dyn dochter "
+            "Florence har lytse Nicholas. Mem is sa grutsk: no is se "
+            "oerbeppe! Se is widdo sûnt ús sillige heit stoarn is, mar se "
+            "is noch goed sûn en wennet by ús.\n"
+            "It tichelwurk fan Snylsjum, dêr't heit sa lang wurke hat, is "
+            "no ticht.\n"
+            "Hertlike groetnis oan dy, en ek oan Florence en Gus,\n"
+            "dyn broer Sybren\n"
+            "[envelope] Mefrou S. Faxridge-van 't Nijks, 1 Linden Grove, "
+            "Stupfield, Victoria, Austraalje\n"
+            "[envelope, back] Ôfstjoerder: S. van 't Nijks, Snylsjum, "
+            "gemeente Drakeradiel, Fryslân, Nederlân"
+        ),
+        note=(
+            "Kept with Florence's mother's papers. It names her parents only "
+            "as Mem and heit, and gives no date for Nicholas."
         ),
     ),
 )
@@ -2381,6 +2725,334 @@ ASSERTIONS = tuple(
         ),
         ("nicholas-lobig", "date_of_birth", Date(1950), "Nicholas 1950"),
     )
+    + _said(
+        "death-certificate-1941",
+        (
+            "death-certificate-1941",
+            "point_in_time",
+            Date(1941, 3, 7),
+            "Дата выдачи: 7 марта 1941 г.",
+        ),
+        # surname, given name, patronymic: Feliksovich, son of Felix
+        (
+            "rudolf-loebig",
+            "father",
+            "felix-loebig",
+            "Лёбиг Рудольф Феликсович",
+        ),
+        (
+            "rudolf-loebig",
+            "date_of_death",
+            Date(1941, 3, 6),
+            "умер 6 марта 1941 г.",
+        ),
+        ("rudolf-loebig", "age_at_death", "24 лет", "в возрасте 24 лет"),
+        (
+            "rudolf-loebig",
+            "cause_of_death",
+            "порок сердца",
+            "Причина смерти: порок сердца",
+        ),
+        (
+            "rudolf-loebig",
+            "place_of_death",
+            "koshnovka",
+            "Место смерти: город, селение д. Кошновка",
+        ),
+        (
+            "kaldovsky-registry",
+            "location",
+            "kaldovsky-district",
+            "Калдовское районное бюро ЗАГС",
+        ),
+        # the place of death with its containers, in the form's fields
+        (
+            "koshnovka",
+            "part_of",
+            "kaldovsky-district",
+            "д. Кошновка; район Калдовский; область, край Чадская; "
+            "республика РСФСР",
+        ),
+        (
+            "kaldovsky-district",
+            "part_of",
+            "chadsk-oblast",
+            "д. Кошновка; район Калдовский; область, край Чадская; "
+            "республика РСФСР",
+        ),
+        (
+            "chadsk-oblast",
+            "part_of",
+            "russia",
+            {"referred_to_as": "РСФСР"},
+            "д. Кошновка; район Калдовский; область, край Чадская; "
+            "республика РСФСР",
+        ),
+    )
+    + _said(
+        "letter-to-leopold-1958",
+        (
+            "letter-to-leopold-1958",
+            "point_in_time",
+            Date(1958, 12, 25),
+            "25 декабря 1958 г.",
+        ),
+        # "по мужу" (by her husband) marks the married name, and so the
+        # other as her own
+        (
+            "nina-sartina",
+            "birth_name",
+            "Нина Сартина",
+            "Нина Васильевна Сартина, по мужу Лёбиг",
+        ),
+        ("nina-sartina", "married_name", "Нина Лёбиг", "по мужу Лёбиг"),
+        # her patronymic: Vasilyevna, daughter of Vasily
+        (
+            "nina-sartina",
+            "father",
+            "vasily-sartin",
+            "Нина Васильевна Сартина",
+        ),
+        # "вдова" (widow) states the marriage, and "покойного" (the late)
+        # a death before the letter: claims, not parts of a name
+        (
+            "nina-sartina",
+            "spouse",
+            "rudolf-loebig",
+            "вдова Вашего покойного брата Рудольфа",
+        ),
+        (
+            "rudolf-loebig",
+            "date_of_death",
+            Date(1958, 12, 25, qualifier="before"),
+            "покойного брата Рудольфа",
+        ),
+        (
+            "rudolf-loebig",
+            "sibling",
+            "leopold-loebig",
+            "Вашего покойного брата Рудольфа",
+        ),
+        (
+            "emigration-1936",
+            "participant",
+            "rudolf-loebig",
+            "Рудольф приехал в Кошновку в 1936 году",
+        ),
+        (
+            "emigration-1936",
+            "point_in_time",
+            Date(1936),
+            "Рудольф приехал в Кошновку в 1936 году",
+        ),
+        ("emigration-1936", "location", "koshnovka", "приехал в Кошновку"),
+        (
+            "rudolf-loebig",
+            "residence",
+            "koshnovka",
+            {"start_time": Date(1936)},
+            "Рудольф приехал в Кошновку в 1936 году",
+        ),
+        (
+            "rudolf-loebig",
+            "occupation",
+            "fitter",
+            "работал слесарем в колхозе",
+        ),
+        (
+            "nina-sartina",
+            "spouse",
+            "rudolf-loebig",
+            {"start_time": Date(1938)},
+            "В 1938 году мы поженились",
+        ),
+        # a married-name marker written as a suffix: Rudolf + -иха, his
+        # wife, as her village calls her (colloquial; never an official name)
+        # ADR-0018 routes a relational reference one way, as kinship or as
+        # an appellation; this one gives two claims: what she is called, an
+        # appellation and no kinship term (referred_to_as), and, since its
+        # suffix is a married-name marker, whose wife she is (spouse)
+        (
+            "nina-sartina",
+            "referred_to_as",
+            "Рудольфиха",
+            "меня так и зовут: Рудольфиха",
+        ),
+        (
+            "nina-sartina",
+            "spouse",
+            "rudolf-loebig",
+            "меня так и зовут: Рудольфиха",
+        ),
+        # kinship terms with a side ("uncle on the father's side") and a
+        # degree ("first cousin"), verbatim; Rudolf is the ego
+        (
+            "sebastian-loebig",
+            "relative",
+            "rudolf-loebig",
+            {"kinship_type": "дядя по отцу"},
+            "Себастьян, его дядя по отцу",
+        ),
+        (
+            "klara-loebig",
+            "relative",
+            "rudolf-loebig",
+            {"kinship_type": "двоюродная сестра"},
+            "Клара, его двоюродная сестра",
+        ),
+        (
+            "emigration-1938",
+            "participant",
+            "klara-loebig",
+            "Клара, его двоюродная сестра, что уехала в Австралию",
+        ),
+        # one surname, masculine (Сартин) and feminine (Сартина)
+        ("pavel-sartin", "sibling", "nina-sartina", "Мой брат Павел Сартин"),
+        (
+            "nina-sartina",
+            "residence",
+            "koshnovka",
+            {"point_in_time": Date(1958, 12, 25)},
+            "д. Кошновка Калдовского района Чадской области",
+        ),
+        # the village, with its district and oblast in the genitive
+        (
+            "koshnovka",
+            "part_of",
+            "kaldovsky-district",
+            "д. Кошновка Калдовского района Чадской области",
+        ),
+        (
+            "kaldovsky-district",
+            "part_of",
+            "chadsk-oblast",
+            "д. Кошновка Калдовского района Чадской области",
+        ),
+    )
+    + _said(
+        "letter-to-sipkje-1952",
+        (
+            "letter-to-sipkje-1952",
+            "point_in_time",
+            Date(1952, 1, 24),
+            "Snylsjum, 24 jannewaris 1952",
+        ),
+        (
+            "florence-lobig",
+            "mother",
+            "sipkje-faxridge",
+            "dyn dochter Florence",
+        ),
+        (
+            "nicholas-lobig",
+            "mother",
+            "florence-lobig",
+            "Florence har lytse Nicholas",
+        ),
+        # a kinship term with a degree: Mem is Nicholas's great-grandmother
+        (
+            "mrs-van-t-nijks",
+            "relative",
+            "nicholas-lobig",
+            {"kinship_type": "oerbeppe"},
+            "no is se oerbeppe",
+        ),
+        # people named only by a kinship term: Mem (mother), heit (father)
+        ("sipkje-faxridge", "mother", "mrs-van-t-nijks", "Mem is sa grutsk"),
+        (
+            "sybren-van-t-nijks",
+            "mother",
+            "mrs-van-t-nijks",
+            "Mem is sa grutsk",
+        ),
+        ("sipkje-faxridge", "father", "mr-van-t-nijks", "ús sillige heit"),
+        ("sybren-van-t-nijks", "father", "mr-van-t-nijks", "ús sillige heit"),
+        # "widdo" (widow) and "sillige" (the late)
+        (
+            "mrs-van-t-nijks",
+            "spouse",
+            "mr-van-t-nijks",
+            "Se is widdo sûnt ús sillige heit stoarn is",
+        ),
+        (
+            "mr-van-t-nijks",
+            "date_of_death",
+            Date(1952, 1, 24, qualifier="before"),
+            "ús sillige heit",
+        ),
+        # an employer named by its kind and its village
+        (
+            "snylsjum-brickworks",
+            "location",
+            "snylsjum",
+            "It tichelwurk fan Snylsjum",
+        ),
+        (
+            "mr-van-t-nijks",
+            "employer",
+            "snylsjum-brickworks",
+            "It tichelwurk fan Snylsjum, dêr't heit sa lang wurke hat",
+        ),
+        (
+            "snylsjum-brickworks",
+            "end_time",
+            Date(1952, 1, 24, qualifier="before"),
+            "is no ticht",
+        ),
+        ("gustav-loebig", "nickname", "Gus", "Florence en Gus"),
+        (
+            "sybren-van-t-nijks",
+            "sibling",
+            "sipkje-faxridge",
+            "dyn broer Sybren",
+        ),
+        # the husband's surname, a hyphen, then her own, particle and all
+        (
+            "sipkje-faxridge",
+            "married_name",
+            "Sipkje Faxridge",
+            "Mefrou S. Faxridge-van 't Nijks",
+        ),
+        (
+            "sipkje-faxridge",
+            "birth_name",
+            "Sipkje van 't Nijks",
+            "Mefrou S. Faxridge-van 't Nijks",
+        ),
+        (
+            "sipkje-faxridge",
+            "residence",
+            "linden-grove-1",
+            {"point_in_time": Date(1952, 1, 24)},
+            "1 Linden Grove, Stupfield, Victoria, Austraalje",
+        ),
+        (
+            "sybren-van-t-nijks",
+            "residence",
+            "snylsjum",
+            {"point_in_time": Date(1952, 1, 24)},
+            "S. van 't Nijks, Snylsjum",
+        ),
+        # the sender's village with its municipality, province and country
+        (
+            "snylsjum",
+            "part_of",
+            "drakeradiel",
+            "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân",
+        ),
+        (
+            "drakeradiel",
+            "part_of",
+            "friesland",
+            "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân",
+        ),
+        (
+            "friesland",
+            "part_of",
+            "netherlands",
+            "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân",
+        ),
+    )
 )
 
 # (subject, property) pairs where two sources disagree and nothing in
@@ -2416,7 +3088,66 @@ REFINEMENTS = (
     ("leopold-loebig", "date_of_birth"),
     # 1912 (tree) narrowed to 20 April 1912 (divorce judgment).
     ("agnes-loebig", "date_of_birth"),
+    # 1941 (tree) narrowed to 6 March 1941 (certificate), and bounded by
+    # the 1958 letter's "the late".
+    ("rudolf-loebig", "date_of_death"),
 )
+
+# The naming patterns that extraction's mention records must handle
+# (#385), each with the sources and the passages that show it (#387).
+# A marker of a marriage, a widow or a death is a claim, never part of a
+# name: each passage lies in the excerpt of an assertion its source makes.
+NAMING_PATTERNS = {
+    "surname first, no comma": (
+        ("death-certificate-1941", "Лёбиг Рудольф Феликсович"),
+    ),
+    "married-name marker": (
+        ("letter-to-leopold-1958", "по мужу Лёбиг"),
+        ("letter-to-sipkje-1952", "S. Faxridge-van 't Nijks"),
+    ),
+    "married-name suffix": (("letter-to-leopold-1958", "Рудольфиха"),),
+    "masculine and feminine surname": (
+        ("letter-to-leopold-1958", "Нина Васильевна Сартина"),
+        ("letter-to-leopold-1958", "Павел Сартин"),
+    ),
+    "name particle": (("letter-to-sipkje-1952", "van 't Nijks"),),
+    "widow": (
+        ("letter-to-leopold-1958", "вдова"),
+        ("letter-to-sipkje-1952", "widdo"),
+    ),
+    "the late": (
+        ("letter-to-leopold-1958", "покойного"),
+        ("letter-to-sipkje-1952", "sillige"),
+    ),
+    "patronymic": (
+        ("death-certificate-1941", "Феликсович"),
+        ("letter-to-leopold-1958", "Васильевна"),
+    ),
+    "kinship side": (("letter-to-leopold-1958", "дядя по отцу"),),
+    "kinship degree": (
+        ("letter-to-leopold-1958", "двоюродная сестра"),
+        ("letter-to-sipkje-1952", "oerbeppe"),
+    ),
+    "institution by kind and place": (
+        ("death-certificate-1941", "Калдовское районное бюро ЗАГС"),
+        ("letter-to-sipkje-1952", "tichelwurk fan Snylsjum"),
+    ),
+    "place with containers": (
+        (
+            "death-certificate-1941",
+            "д. Кошновка; район Калдовский; область, край Чадская; "
+            "республика РСФСР",
+        ),
+        (
+            "letter-to-leopold-1958",
+            "д. Кошновка Калдовского района Чадской области",
+        ),
+        (
+            "letter-to-sipkje-1952",
+            "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân",
+        ),
+    ),
+}
 
 
 def by_key() -> dict[str, Person | Place | Entity | Source]:
