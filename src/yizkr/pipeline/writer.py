@@ -127,10 +127,12 @@ so that no claim's text stops the batch:
   (rules 1 and 2). An entity's type hint over the limit is left out in
   the same way, with a warning, wherever the writer would record it;
 * a reference's page number and region only place the claim in its
-  source: one over the limit is cut at a break between words and ends
-  with CUT_MARK (" …"), as an excerpt over the limit is cut
-  (`_locator_text`). The cut depends on the text alone, so a re-run
-  builds the block the instance keeps, and is skipped (step 4).
+  source, as its excerpt only helps a reader check it there, so each is
+  cut to the limit rather than refused: a page number or region at a
+  break between words, ending with CUT_MARK (" …") (`_locator_text`),
+  and an excerpt at a space, ending with "…". A cut depends on the text
+  alone, so a re-run builds the block the instance keeps, and is
+  skipped (step 4).
 
 Nothing here auto-approves: the writer expects the output of
 `apply_review` and trusts the human decisions that produced it, except

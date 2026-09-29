@@ -91,7 +91,6 @@ ENTITIES = (
         "summary": "fixture: Hildegard Löbig, Eugen's daughter-in-law",
     },
 )
-KEYS = [entity["id"] for entity in ENTITIES]
 # the cause of death as (here) the physician's note in the register gives
 # it, over and over: over the limit, and at it
 CAUSE = "Wassersucht nach langer Krankheit, Herzschwäche; "
