@@ -528,9 +528,9 @@ def person_forms(
     names a surname alone."""
     forms = []
     for segment in _segments(name):
+        # a form marker ("formerly") is no name token, so the form after
+        # one is read as it stands
         tokens = _folded_tokens(_given_first(segment))
-        while tokens and tokens[0] in FORM_MARKERS:
-            tokens = tokens[1:]
         marker = next(
             (i for i, token in enumerate(tokens) if token in MAIDEN_MARKERS),
             None,
@@ -829,8 +829,9 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
     for node in by_local.values():
         # a birth or death event's date is its participant's, when it has
         # one: of several (a child and a parent), none says who was born
-        if node.kind in ONE_PER_PERSON and len(node.participants) == 1:
-            (person_id,) = node.participants
+        if node.kind not in ONE_PER_PERSON or len(node.participants) != 1:
+            continue
+        for person_id in node.participants:
             person = by_id[person_id]
             dates = person.births if node.kind == "birth" else person.deaths
             dates.extend(node.when)
@@ -1102,10 +1103,10 @@ class _Tokens:
 
 class _Organizations:
     """Organizations one of whose distinctive token sets holds all of the
-    other's. The sets that hold every token of a set hold its rarest
-    token, and a set whose tokens are all among another's has its own
-    rarest there too, so each lookup reads two small buckets, never every
-    organization that shares a token."""
+    other's. The sets that hold every token of a set hold its rarest one,
+    so a lookup reads one small bucket, never every organization that
+    shares a token; of two sets one of which holds the other, the smaller
+    one's lookup finds the pair."""
 
     def __init__(self, nodes: Sequence[_Node]) -> None:
         self._nodes = {node.id: node for node in nodes}
@@ -1113,19 +1114,9 @@ class _Organizations:
             key[1] for node in nodes for key in _blocking(node, "token")
         )
         self._holding: dict[str, list[str]] = defaultdict(list)
-        self._rarest: dict[str, list[str]] = defaultdict(list)
         for node in nodes:
-            usable = {key[1] for key in _blocking(node, "token")}
-            for token in sorted(usable):
+            for _, token in _blocking(node, "token"):
                 self._holding[token].append(node.id)
-            for tokens in node.org_sets:
-                if tokens & usable:
-                    self._rarest[self._rarest_of(tokens & usable)].append(
-                        node.id
-                    )
-
-    def _rarest_of(self, tokens: Iterable[str]) -> str:
-        return min(tokens, key=lambda token: (self._count[token], token))
 
     def find(self, node: _Node) -> set[str]:
         usable = {key[1] for key in _blocking(node, "token")}
@@ -1133,20 +1124,15 @@ class _Organizations:
         for tokens in node.org_sets:
             if not tokens & usable:
                 continue
-            for other in self._holding.get(
-                self._rarest_of(tokens & usable), ()
-            ):
+            rarest = min(
+                tokens & usable,
+                key=lambda token: (self._count[token], token),
+            )
+            for other in self._holding.get(rarest, ()):
                 if any(
                     tokens <= theirs for theirs in self._nodes[other].org_sets
                 ):
                     found.add(other)
-            for token in tokens & usable:
-                for other in self._rarest.get(token, ()):
-                    if any(
-                        theirs <= tokens
-                        for theirs in self._nodes[other].org_sets
-                    ):
-                        found.add(other)
         found.discard(node.id)
         return found
 
@@ -1510,31 +1496,22 @@ class _Judge:
 
     def contradiction(self, members: Sequence[str]) -> dict[str, Any] | None:
         """The first two members, in order, whose evidence says they
-        differ, looked for among members of distinct signatures, and
-        within each signature once: a confident link never contradicts,
-        and members of one signature pair alike with every other."""
-        groups: dict[tuple, list[str]] = {}
+        differ. Members of one signature pair alike with every other, so
+        each signature is judged by its first member only. Two of one
+        signature never differ: their names match, as any member's must
+        to be blocked at all, and their dates overlap. Nor does a
+        confident link."""
+        firsts: dict[tuple, str] = {}
         for member in sorted(members):
-            groups.setdefault(self._signature(self._nodes[member]), []).append(
-                member
-            )
-        firsts = sorted(group[0] for group in groups.values())
-        pairs = sorted(
-            [
-                (group[0], group[1])
-                for group in groups.values()
-                if len(group) > 1
-            ]
-            + [
-                (first, second)
-                for position, first in enumerate(firsts)
-                for second in firsts[position + 1 :]
-            ]
-        )
-        for first, second in pairs:
-            found = self.contradicts(self._nodes[first], self._nodes[second])
-            if found is not None:
-                return {"mentions": [first, second], "evidence": found}
+            firsts.setdefault(self._signature(self._nodes[member]), member)
+        ordered = sorted(firsts.values())
+        for position, first in enumerate(ordered):
+            for second in ordered[position + 1 :]:
+                found = self.contradicts(
+                    self._nodes[first], self._nodes[second]
+                )
+                if found is not None:
+                    return {"mentions": [first, second], "evidence": found}
         return None
 
 

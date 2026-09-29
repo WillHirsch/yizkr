@@ -714,6 +714,26 @@ class TestBlocking:
         pairs = blocked_pairs([mother.manifest, father.manifest])
         assert pair(mother, "e1", father, "e1") not in pairs
 
+    def test_a_given_name_never_keys_on_its_own_surname(self):
+        """Two registers write their people surname first without a
+        comma, 'Löbig Ursula' and 'Löbig Gustav', each with kin named
+        Löbig: 'Löbig' taken for a given name would key on 'Löbig' as the
+        kin's surname, one shared token."""
+        ursula = register(
+            "ursula",
+            [entity("e1", "Löbig Ursula"), entity("e2", "Hildegard Löbig")],
+            [("e1", "mother", item("e2"))],
+            {"e1": "ursula-loebig", "e2": "hildegard-loebig"},
+        )
+        gustav = register(
+            "gustav",
+            [entity("e1", "Löbig Gustav"), entity("e2", "Sebastian Löbig")],
+            [("e1", "father", item("e2"))],
+            {"e1": "gustav-loebig", "e2": "sebastian-loebig"},
+        )
+        pairs = blocked_pairs([ursula.manifest, gustav.manifest])
+        assert pair(ursula, "e1", gustav, "e1") not in pairs
+
     def test_generic_place_heads_key_nothing(self):
         """The districts of Mockburg and Peiltal share only their head,
         'Kreis', and never pair; the camp still pairs with Klurnau."""
@@ -1404,6 +1424,27 @@ class TestNoFalseMerge:
         assert_no_false_merge(docs, identity)
         assert merged(docs, identity) == []
 
+    def test_an_organization_holding_anothers_name_is_not_it(self):
+        """'Blauen Hut' holds tokens of 'Hutmacherei zum Blauen Hut': a
+        candidate, never a confident link on that alone."""
+        book = directory()
+        short = register(
+            "short",
+            [entity("e1", "Blauen Hut", "organization")],
+            [],
+            {"e1": "zum-blauen-hut"},
+        )
+        docs = [book, short]
+        identity = identity_of(*docs)
+        (review,) = [
+            entry
+            for entry in identity["review"]
+            if entry["kind"] == "organization"
+        ]
+        assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
+            (AMBIGUOUS, "key/unknown/unknown")
+        ]
+
     def test_placeholders_name_no_one(self):
         """The export's N.N. Yyy (born 1922, child of Zzz Yyy) and a
         register's N.N. Yyy, child of Zzz Yyy too, are two unnamed
@@ -1748,6 +1789,66 @@ class TestKinship:
             "mentions": 4,
             "conflicting": 0,
         }
+
+    def test_dates_that_conflict_keep_a_pair_apart_whatever_the_kin(self):
+        """Two registers name a Xxx Yyy, child of Zzz Yyy, born 1880 and
+        1920: the kin agree, the dates conflict, and the pair stays
+        ambiguous (placeholders)."""
+
+        def child(name: str, year: int) -> Doc:
+            return register(
+                name,
+                [entity("e1", "Xxx Yyy"), entity("e2", "Zzz Yyy")],
+                [
+                    ("e1", "father", item("e2")),
+                    ("e1", "date_of_birth", day(year)),
+                ],
+                {"e1": f"xxx-{year}", "e2": "zzz"},
+            )
+
+        docs = [child("elder", 1880), child("younger", 1920)]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        children = [doc.fingerprint("e1", identity) for doc in docs]
+        (review,) = [
+            entry
+            for entry in identity["review"]
+            if children[0] in entry["members"]
+        ]
+        assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
+            (AMBIGUOUS, "exact/conflict/agree")
+        ]
+
+    def test_kin_of_one_name_whose_dates_conflict_keep_a_pair_apart(self):
+        """Two registers name a Xxx Yyy born 1919, one's father a Zzz Yyy
+        born 1862, the other's a Zzz Yyy born 1890: the children's dates
+        agree, and their fathers, of one name, differ. The link is
+        ambiguous (placeholders)."""
+
+        def child(name: str, father_born: int) -> Doc:
+            return register(
+                name,
+                [entity("e1", "Xxx Yyy"), entity("e2", "Zzz Yyy")],
+                [
+                    ("e1", "father", item("e2")),
+                    ("e1", "date_of_birth", day(1919)),
+                    ("e2", "date_of_birth", day(father_born)),
+                ],
+                {"e1": f"xxx-{father_born}", "e2": f"zzz-{father_born}"},
+            )
+
+        docs = [child("one", 1862), child("two", 1890)]
+        identity = identity_of(*docs)
+        assert_no_false_merge(docs, identity)
+        children = [doc.fingerprint("e1", identity) for doc in docs]
+        (review,) = [
+            entry
+            for entry in identity["review"]
+            if children[0] in entry["members"]
+        ]
+        assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
+            (AMBIGUOUS, "exact/agree/unknown")
+        ]
 
     def test_dates_that_cannot_overlap_never_prune_a_pair(self):
         """Contradictory dates are a resting state (ADR-0002): the pair
