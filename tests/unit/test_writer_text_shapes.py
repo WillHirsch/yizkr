@@ -660,8 +660,9 @@ class TestTerms:
     @pytest.mark.parametrize("found", [False, True], ids=["minted", "found"])
     def test_aliases_go_as_the_instance_keeps_them(self, found):
         # (here) the tree gives Sebastian's pet name as a transcription
-        # can: after a line break, with spaces around it, as a blank, and
-        # twice at length, under two headings that agree past the room
+        # can: with a line break after it, with spaces around it, as a
+        # blank, and twice at length, under two headings that agree past
+        # the room
         aliases = [
             "Wastl\n",
             " Wastl ",

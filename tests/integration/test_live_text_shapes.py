@@ -26,7 +26,7 @@ back through the API:
   holds a block for each;
 * Eugen's label, his summary and two of his aliases are over the 250
   characters Wikibase holds in a term, and his other aliases are his pet
-  name after a line break, with spaces around it, and a blank: the
+  name with a line break after it, with spaces around it, and a blank: the
   instance keeps the label, the description and the two aliases cut, with
   their digests, the pet name once, and no blank. Hildegard's label, given
   with a line break before it, a tab inside and a space after it, agrees
