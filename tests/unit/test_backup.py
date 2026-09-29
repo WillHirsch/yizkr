@@ -392,7 +392,11 @@ OTHERS = {
     "Q438": "a curator's class, the type of Q439 and so a class",
     "Q439": "an item typed as a curator's class",
     "Q440": "the class Q438 is a subclass of",
+}
+# families without person evidence, which the export drops all the same
+FAMILIES = {
     "Q446": "a family, the perspective of an appellation",
+    "Q461": "a family, typed through a redirect to the family class",
 }
 # items that state no type and carry no person evidence
 UNTYPED = {
@@ -401,11 +405,22 @@ UNTYPED = {
     "Q433": "typed with an unknown value only",
     "Q434": "typed with no value only",
     "Q462": "named in an instance of qualifier, which makes no class",
+    "Q463": "a family, typed so at deprecated rank only",
 }
 # Q410 redirects to Q402, whom the check does not release; Q418 to Q401,
-# whom it does; Q435 to Q429, which states no type. A photograph depicts
-# each: no person evidence of its own.
-REDIRECTS = {"Q410": "Q402", "Q418": "Q401", "Q435": "Q429"}
+# whom it does; Q435 to Q429, which states no type; Q464 to Q446, a
+# family. A photograph depicts each: no person evidence of its own. Q465
+# is the class a curator merged into the family class.
+REDIRECTS = {"Q410": "Q402", "Q418": "Q401", "Q435": "Q429", "Q464": "Q446"}
+# the families of the fixture: those above, and Q437, a person-like one
+ALL_FAMILIES = set(FAMILIES) | {"Q437"}
+# what the export drops when the check releases only Q401
+DROPPED = (
+    set(PEOPLE) - {"Q401"}
+    | set(FAMILIES)
+    | set(UNTYPED)
+    | {"Q410", "Q435", "Q464"}
+)
 # every item that states no type, people included
 NO_TYPE = {
     "Q402",
@@ -425,7 +440,12 @@ def export_dump(vocabulary) -> Dump:
     dump = Dump(vocabulary)
     for key, qid in items.items():
         dump.entity(qid, key)
-    for qid, description in {**PEOPLE, **OTHERS, **UNTYPED}.items():
+    for qid, description in {
+        **PEOPLE,
+        **OTHERS,
+        **FAMILIES,
+        **UNTYPED,
+    }.items():
         dump.entity(qid, description, revision=int(qid[1:]))
 
     def typed(qid: str, key: str, **options) -> None:
@@ -494,6 +514,9 @@ def export_dump(vocabulary) -> Dump:
         qualifiers=[("perspective", entity("Q446"))],
     )
     typed("Q446", "family")
+    dump.redirect("Q465", items["family"], revision=465)
+    dump.says("Q461", "instance_of", entity("Q465"))
+    typed("Q463", "family", rank="Deprecated")
     dump.says("Q433", "instance_of", "_:genid2")
     dump.says("Q434", "instance_of", None)
     for source, target in REDIRECTS.items():
@@ -630,8 +653,9 @@ class TestReadDump:
         assert found.untyped == NO_TYPE
 
     def test_redirects_and_revisions(self, tmp_path, vocabulary):
+        _, items = vocabulary
         found = self.reading(tmp_path, vocabulary)
-        assert found.redirects == REDIRECTS
+        assert found.redirects == {**REDIRECTS, "Q465": items["family"]}
         # the query service need not keep a redirect's revision
         assert found.revisions == export_dump(vocabulary).revisions
         assert not set(REDIRECTS) & set(found.revisions)
@@ -666,6 +690,13 @@ class TestReadDump:
         assert "Q457" not in found.people
         assert "Q458" not in found.untyped
 
+    def test_families(self, tmp_path, vocabulary):
+        # typed at normal or preferred rank, through a redirect too; one
+        # typed so only at deprecated rank states no type
+        found = self.reading(tmp_path, vocabulary)
+        assert found.families == ALL_FAMILIES
+        assert "Q463" in found.untyped
+
     def test_a_propertys_revision_is_read(self, tmp_path, vocabulary):
         def build(dump):
             dump.data_node("P1", 7)
@@ -689,11 +720,12 @@ def report_of(included=(), excluded=()) -> ExclusionReport:
 class TestPublicExclusions:
     """Every item with person evidence that the check did not release is
     dropped: an item it never assessed is dropped, not kept, and so is an
-    item that states no type (#344)."""
+    item that states no type, and every family (#344)."""
 
     reading = DumpReading(
         people=set(PEOPLE),
         untyped=NO_TYPE,
+        families=ALL_FAMILIES,
         # a chain to Q402, and a cycle
         redirects={
             **REDIRECTS,
@@ -702,7 +734,7 @@ class TestPublicExclusions:
             "Q422": "Q421",
         },
     )
-    DROPPED = set(PEOPLE) - {"Q401"} | set(UNTYPED) | {"Q410", "Q420", "Q435"}
+    DROPPED = DROPPED | {"Q420"}
 
     def test_only_released_people_are_kept(self):
         dropped = public_exclusions(
@@ -753,6 +785,16 @@ class TestPublicExclusions:
     def test_items_without_person_evidence_are_kept(self):
         dropped = public_exclusions(self.reading, report_of({"Q401"}))
         assert not set(OTHERS) & set(dropped)
+
+    def test_a_family_is_dropped_whatever_it_holds(self):
+        # released or not, with person evidence (Q437) or none (Q446), and
+        # a redirect to one goes with it
+        dropped = public_exclusions(
+            self.reading, report_of({"Q401", "Q437"}, {"Q446"})
+        )
+        assert dropped["Q437"] == dropped["Q446"] == backup.FAMILY
+        assert dropped["Q461"] == backup.FAMILY
+        assert dropped["Q464"] == f"a redirect to Q446: {backup.FAMILY}"
 
 
 def revision_rows(revisions: dict[str, int]) -> list[dict]:
@@ -940,9 +982,11 @@ class TestExportPublic:
         text, mentioned = self.public(tmp_path)
         assert "Q401" in mentioned and PEOPLE["Q401"] in text
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
+        # a family, with person evidence or none, never leaves
+        assert not set(FAMILIES) & mentioned
         # a redirect goes with its target
         assert "Q418" in mentioned
-        assert not {"Q410", "Q435"} & mentioned
+        assert not {"Q410", "Q435", "Q464"} & mentioned
         # places, artifacts, events, occupations, a vessel in a migration,
         # a curator's classes and the vocabulary stay
         assert set(OTHERS) | set(items.values()) <= mentioned
@@ -976,11 +1020,11 @@ class TestExportPublic:
         exclusions = json.loads(
             (tmp_path / "public-exclusions.json").read_text()
         )
-        dropped = set(PEOPLE) - {"Q401"} | set(UNTYPED) | {"Q410", "Q435"}
-        assert set(exclusions["excluded"]) == dropped
+        assert set(exclusions["excluded"]) == DROPPED
         assert "born as late as 1990" in exclusions["excluded"]["Q404"]
+        assert exclusions["excluded"]["Q446"] == backup.FAMILY
         assert exclusions["included_persons"] == ["Q401"]
-        assert counts["excluded_persons"] == len(dropped)
+        assert counts["excluded_persons"] == len(DROPPED)
         assert counts["included_persons"] == 1
         assert counts["triples_dropped"] > 0
 
@@ -1100,9 +1144,7 @@ class TestTheBackupsPublicExport:
         out_dir = tmp_path / manifest["timestamp"]
         export = manifest["components"]["public_export"]
         assert export["included_persons"] == 1
-        assert export["excluded_persons"] == len(
-            set(PEOPLE) - {"Q401"} | set(UNTYPED) | {"Q410", "Q435"}
-        )
+        assert export["excluded_persons"] == len(DROPPED)
         _, mentioned = TestExportPublic.public(out_dir)
         assert not (set(PEOPLE) - {"Q401"}) & mentioned
 

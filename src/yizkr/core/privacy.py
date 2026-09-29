@@ -44,7 +44,10 @@ organization (``NON_PERSON_CLASSES``) is taken at its type on its part in
 such an event: any other evidence makes it a person. The public export
 reads the same evidence from its own dump, and keeps an item that has any
 of it only once this check has released it; it leaves out an item that
-states no type, so no type at all hides no one either.
+states no type, so no type at all hides no one either. A family
+(``FAMILY_CLASS``) stands for its people, any of whom may be living, so
+it is never public, whatever it holds: the export leaves it out and the
+site badges it.
 """
 
 from __future__ import annotations
@@ -149,6 +152,24 @@ NON_PERSON_CLASSES = ("vessel", "military_unit", "organization")
 # the dump write it.
 SAME_AS = "<http://www.w3.org/2002/07/owl#sameAs>"
 
+# The class of an item that stands for a set of people: a family, whose
+# people are those recorded as `member of` it. A family is private while
+# any of its people may be living, and the graph cannot state that a
+# family's membership is complete, so every item typed as one, at normal
+# or preferred rank (read through redirects, as every type is), stays
+# out of anything public, whatever else it holds, released or not.
+FAMILY_CLASS = "family"
+
+# Whether ?person is typed as a family, as `FAMILY_CLASS` says: a
+# condition for a query to BIND. `family_type` fills it in.
+FAMILY_TYPE = """\
+EXISTS {{
+    ?person p:{instance_of} ?familyTyping .
+    ?familyTyping ps:{instance_of}/{same_as}* wd:{family} ;
+                  wikibase:rank ?familyRank .
+    FILTER(?familyRank != wikibase:DeprecatedRank)
+  }}"""
+
 # Every item with person evidence, once each, read through statement
 # nodes at every rank, never through the truthy wdt: values; only the
 # type that sets a participant aside must be one a curator has not
@@ -220,6 +241,17 @@ def people_selection(
         non_person_kinds=" ".join(
             f"wd:{items[key]}" for key in NON_PERSON_CLASSES
         ),
+    )
+
+
+def family_type(
+    properties: Mapping[str, str], items: Mapping[str, str]
+) -> str:
+    """``FAMILY_TYPE`` with an instance's ids."""
+    return FAMILY_TYPE.format(
+        same_as=SAME_AS,
+        instance_of=properties["instance_of"],
+        family=items[FAMILY_CLASS],
     )
 
 

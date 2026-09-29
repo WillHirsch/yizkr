@@ -239,7 +239,8 @@ directory under `var/backups/` containing:
   part in a death...), is dropped unless the check released it, and so
   is every item that states no type, no `instance of` at normal or
   preferred rank that names an item (the vocabulary and the classes
-  items are typed with aside).
+  items are typed with aside), and every family, whose people may
+  include a living person.
   The exclusions file records who was excluded and why, for curator
   review. Nothing here publishes anything: the file is an artifact you
   may choose to publish.

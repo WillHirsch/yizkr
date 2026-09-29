@@ -38,6 +38,8 @@ closed:
 * It also drops every item that states no type, as what such an item is
   cannot be told, so no type at all hides no one either. The instance's
   vocabulary and the classes its items are typed with are kept.
+* It drops every family too, released or not: a family stands for its
+  people, any of whom may be living (``privacy.FAMILY_CLASS``).
 * The check runs on the query service, the dump comes from the database:
   the export waits for the query service to hold exactly the dump's
   revision of every item and property, and refuses to run when it does
@@ -67,6 +69,7 @@ from yizkr.core.config import Config, read_env_file
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
     DEFAULT_CUTOFF_YEARS,
+    FAMILY_CLASS,
     NON_PERSON_CLASSES,
     PERSON_CLASS,
     PERSON_EVENTS,
@@ -302,12 +305,13 @@ class DumpReading:
     """What the public export reads from its own dump: `people`, every
     item with person evidence (the privacy module's, at every rank);
     `untyped`, every item that states no type, the vocabulary and classes
-    aside (``read_dump``); `redirects`, each redirect's target; and
-    `revisions`, the revision of every item and property that is not a
-    redirect."""
+    aside, and `families`, every item typed as a family (``read_dump``);
+    `redirects`, each redirect's target; and `revisions`, the revision of
+    every item and property that is not a redirect."""
 
     people: set[str] = field(default_factory=set)
     untyped: set[str] = field(default_factory=set)
+    families: set[str] = field(default_factory=set)
     redirects: dict[str, str] = field(default_factory=dict)
     revisions: dict[str, int] = field(default_factory=dict)
 
@@ -350,7 +354,10 @@ def read_dump(
     is the value of an `instance of` or `subclass of` statement, at any
     rank, are classes, and not counted; nor is a redirect, which has no
     statements of its own. A type that names a redirect is read as the
-    item the redirect leads to."""
+    item the redirect leads to.
+
+    An item is a family when an `instance of` statement of it at normal or
+    preferred rank names the family class."""
     instance_of = properties["instance_of"]
     subclass_of = properties["subclass_of"]
     participant = properties["participant"]
@@ -471,14 +478,19 @@ def read_dump(
         - typed_as(None, ranked=True)
         - classes
     )
+    reading.families = typed_as({items[FAMILY_CLASS]}, ranked=True)
     return reading
 
 
 # Why the export drops an item with person evidence that the check did
-# not assess, and one that states no type.
+# not assess, one that states no type, and a family.
 NOT_ASSESSED = (
     "person evidence in the dump, but the check did not assess this item: "
     "unknown means excluded"
+)
+FAMILY = (
+    "family: its membership is not known to be complete, so any of its "
+    "people may be living"
 )
 NO_TYPE = (
     "no type (no instance of, at normal or preferred rank, that names an "
@@ -495,7 +507,8 @@ def public_exclusions(
       that the check did not release: an item it did not assess is
       dropped, not kept (``NOT_ASSESSED``);
     * each item that states no type (``NO_TYPE``), even one the check
-      released.
+      released;
+    * each family (``FAMILY``), whatever it holds, released or not.
 
     A redirect stands for the item it redirects to: it is dropped when
     that item is, and when it has person evidence of its own and that item
@@ -507,6 +520,8 @@ def public_exclusions(
     people = reading.people | report.excluded | report.included
 
     def why(qid: str) -> str | None:
+        if qid in reading.families:
+            return FAMILY
         if qid in report.excluded:
             return report.reasons[qid]
         if qid in people and qid not in report.included:
@@ -516,7 +531,8 @@ def public_exclusions(
         return None
 
     excluded = {}
-    for qid in people | reading.untyped | set(reading.redirects):
+    candidates = people | reading.untyped | reading.families
+    for qid in candidates | set(reading.redirects):
         found = target(qid)
         reason = why(found)
         if reason is None and qid in people and found not in report.included:

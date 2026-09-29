@@ -739,6 +739,14 @@ not a signal to grow the schema on.
   item left untyped (a write cut short between its label and its type, a
   reference that gives no kind) is missing from the public copy until it
   is typed.
+- **A family is never public** (ADR-0020, as amended by #344). A family
+  stands for its people, the people recorded as `member of` it, and is
+  private while any of them may be living. The model cannot state that a
+  family's membership is complete (there is no household statement
+  enumerating occupants, above), so the export leaves out every item
+  typed `family` at normal or preferred rank, whatever it holds, released
+  or not, and the site badges it. #374 holds the full rule, with a way
+  to mark a family's membership complete.
 - The check runs on the query service, so the export waits for the query
   service to hold the dump's revision of every item and property, and
   **refuses to run** while it does not, or when the graph changes during
@@ -769,6 +777,7 @@ not a signal to grow the schema on.
   badges each subject the export would drop ("possibly living — never in
   public exports"), using the same runtime call, except a person with no
   type, whom the export leaves out even when released; the site shows no
-  badge. Its people are the items with person evidence, selected as the
-  check selects them; the export also drops what the site lists as no
-  person, an untyped item without person evidence and a redirect.
+  badge. A family it lists is always badged. Its people are the items
+  with person evidence, selected as the check selects them; the export
+  also drops what the site lists as no person, an untyped item without
+  person evidence, a family without person evidence and a redirect.

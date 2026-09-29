@@ -20,6 +20,7 @@ from yizkr.core.privacy import (
     BIRTHS_QUERY,
     CENTURY,
     DECADE,
+    FAMILY_CLASS,
     MILLENNIUM,
     NON_PERSON_CLASSES,
     PEOPLE_SELECTION,
@@ -592,6 +593,8 @@ class TestThePeopleSelection:
 
     def test_the_evidence_is_the_documented_lists(self):
         assert PERSON_CLASS == "human"
+        # every family stays out of anything public (owner, 2026-09-29)
+        assert FAMILY_CLASS == "family"
         assert PERSON_SUBJECT_PROPERTIES == DOCUMENTED_SUBJECT_EVIDENCE
         assert PERSON_VALUE_PROPERTIES == DOCUMENTED_VALUE_EVIDENCE
         assert PERSON_EVENTS == DOCUMENTED_PERSON_EVENTS

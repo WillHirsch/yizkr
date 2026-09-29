@@ -14,7 +14,9 @@ fixture's content (test_live_privacy.py's write_fixture):
 * a migration, and two vessels that take part in it: one typed only as a
   vessel, the other with a `human` type too, which a curator deprecated;
 * a person typed human, born in 1990, into whom a curator merges a
-  duplicate, whose item becomes a redirect to them.
+  duplicate, whose item becomes a redirect to them;
+* a family with a religion, which is no person evidence: the export
+  leaves every family out, as any of its people may be living.
 
 The two whose type a curator deprecated or outranked carry a religion
 beside it, which is no person evidence, so that their type is what marks
@@ -32,11 +34,11 @@ redirects to.
 The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes the
 public export from it, and reads public.nt.gz: it mentions the released
 person, the plain vessel and the migration by QID, and none of the other
-eight, the label-only item and the redirect included. The export first
-waits for the query service to hold the dump's revision of every item and
-property, a redirect's aside, so on a stack at rest, a merge included,
-the export must run, not refuse. The site lists the seven that have
-person evidence, and badges the six the export drops.
+nine, the label-only item, the family and the redirect included. The
+export first waits for the query service to hold the dump's revision of
+every item and property, a redirect's aside, so on a stack at rest, a
+merge included, the export must run, not refuse. The site lists the
+seven that have person evidence, and badges the six the export drops.
 
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
@@ -53,7 +55,7 @@ from pathlib import Path
 import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
-from yizkr.backup import NO_TYPE, dump_rdf, export_public
+from yizkr.backup import FAMILY, NO_TYPE, dump_rdf, export_public
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
 from .conftest import register_fictional, wait_for_query_service
@@ -88,6 +90,7 @@ ENTITIES = {
     "vessel": local("vessel", kind="vessel"),
     "vessel typed human": local("vessel typed human", kind="vessel"),
     "merge target": local("merge target"),
+    "family": local("family", kind="family"),
 }
 # the roles public.nt.gz mentions; every other one (the item with a label
 # only, and the redirect a merge leaves, too) it leaves out
@@ -292,6 +295,7 @@ def fixture_graph(client, config):
             participant("vessel", source.ref),
             participant("vessel typed human", source.ref),
             born("merge target", source.ref),
+            religion("family", source.ref),
         ],
     )
     qids = {
@@ -381,6 +385,7 @@ def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
         assert (qid in exclusions["excluded"]) == (role not in PRESENT)
         assert (qid in exclusions["included_persons"]) == (role == "released")
     assert exclusions["excluded"][fixture_graph["label only"]] == NO_TYPE
+    assert exclusions["excluded"][fixture_graph["family"]] == FAMILY
     target = fixture_graph["merge target"]
     assert exclusions["excluded"][fixture_graph["merged away"]] == (
         f"a redirect to {target}: {exclusions['excluded'][target]}"

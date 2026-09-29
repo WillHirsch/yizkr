@@ -40,7 +40,7 @@ from yizkr import disagreement
 from yizkr.backup import exclusion_report
 from yizkr.core import sparql
 from yizkr.core.config import Config
-from yizkr.core.privacy import BIRTHS_QUERY, people_selection
+from yizkr.core.privacy import BIRTHS_QUERY, family_type, people_selection
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import load_templates, prefix_block
 from yizkr.staticsite import SiteBuilder, format_time
@@ -564,6 +564,55 @@ class TestThePeopleAreTheExports:
             (query,) = [query for query in calls if marker in query]
             assert selection in query
             assert truthy not in query
+
+    def test_the_roster_says_which_people_are_families(
+        self, tmp_path, vocabulary
+    ):
+        calls = []
+
+        def run(query: str) -> list[dict]:
+            calls.append(query)
+            return []
+
+        SiteBuilder(
+            config(), tmp_path / "site", run=run, vocabulary=vocabulary
+        ).build()
+        properties, items = vocabulary
+        (roster,) = [q for q in calls if "GROUP_CONCAT(DISTINCT ?alias" in q]
+        assert f"BIND({family_type(properties, items)} AS ?family)" in roster
+        assert "?personDescription ?deceased ?family\n" in roster
+
+    def test_a_family_is_badged_whatever_the_check_says(
+        self, tmp_path, vocabulary
+    ):
+        # the export leaves every family out, released or not (#344): a
+        # death releases the one, not the other
+        builder = SiteBuilder(
+            config(),
+            tmp_path / "site",
+            run=lambda query: [],
+            vocabulary=vocabulary,
+        )
+        died = {"person": uri("Q9"), "deceased": literal("true")}
+        assert builder._possibly_living({**died, "family": literal("true")})
+        assert not builder._possibly_living(
+            {**died, "family": literal("false")}
+        )
+
+    def test_the_family_test_reads_the_type_at_normal_or_preferred_rank(
+        self, vocabulary
+    ):
+        properties, items = vocabulary
+        typing = properties["instance_of"]
+        assert " ".join(family_type(properties, items).split()) == (
+            "EXISTS { "
+            f"?person p:{typing} ?familyTyping . "
+            f"?familyTyping ps:{typing}/"
+            "<http://www.w3.org/2002/07/owl#sameAs>* "
+            f"wd:{items['family']} ; "
+            "wikibase:rank ?familyRank . "
+            "FILTER(?familyRank != wikibase:DeprecatedRank) }"
+        )
 
 
 class TestSections:

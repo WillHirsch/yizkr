@@ -13,9 +13,9 @@ Amended by #344 (2026-09-29): the public export fails closed. It keeps a
 person only once the check has released them: the check assesses every
 item with person evidence, read at every rank; the export reads the same
 evidence from its own dump and drops every such item the check did not
-release, and every item that states no type; and it refuses to run while
-the query service, where the check runs, does not hold the dump's
-revisions (§4, Ruling 6).
+release, every item that states no type, and every family; and it
+refuses to run while the query service, where the check runs, does not
+hold the dump's revisions (§4, Ruling 6).
 
 ## Context
 
@@ -138,7 +138,8 @@ is renamed **`critique_notes`** to reflect its now-single role (ADR-0013).
   and predicate — the private site therefore shows exactly what the
   public export would remove, derived, never stored. (Amended by #344:
   except a person with no type, whom the export leaves out even when
-  released; the site shows no badge. See below.)
+  released; the site shows no badge. A family is always badged. See
+  below.)
 
 Amended by #344 (2026-09-29): the export fails closed on who is a person,
 as it does on whether they may be living. The check selected people by
@@ -223,6 +224,21 @@ from the database while the check reads the query service. Now:
   reference that gives no kind, leaves an item untyped, and dropping it
   is right: it is missing from the public copy until it is typed. So are
   the retired vocabulary (§5) and the smoke test's item.
+- **A family is never public** (owner, 2026-09-29). A family is private
+  when the people it stands for may include a living person: whether it
+  refers to a specific set of people, whether that set is fully known,
+  and whether any member may be living. A family's members are the
+  people recorded as `member of` it, and the model cannot state that a
+  family's membership is complete (MODELING.md: there is no household
+  statement enumerating occupants), so today every family is private:
+  the export leaves out every item typed `family` at normal or preferred
+  rank, its type read through redirects like any other, whatever its
+  evidence, released or not (`public-exclusions.json`: "family: its
+  membership is not known to be complete, ..."; `FAMILY_CLASS`). A
+  redirect to a family goes with it. The full rule, with a way to mark a
+  family's membership complete, is #374. `family` stays out of the
+  non-person classes above: a family in a person event is still a
+  person there, and is left out either way.
 - **The query service must hold the dump.** The export reads the
   revision of every item and property from the dump and waits, up to
   `LAG_TIMEOUT`, for the query service to hold exactly those revisions (a
@@ -243,13 +259,14 @@ from the database while the check reads the query service. Now:
   replays recent changes only.
 - **The site lists the same people.** `yizkr publish-site` lists every
   item the selection finds, and badges each one the check does not
-  release, so for every person it lists its badge and the export's
-  exclusion agree, except a person with no type, whom the export leaves
-  out even when released (an untyped item with a date of death, say);
-  the site shows no badge. The badge speaks for the check, which releases
-  them; the missing type is the export's own rule, and a badge for it
-  would need a wording of its own. The export also drops what the site
-  lists as no person: an item that states no type and has no person
+  release, and every family, whatever the check says; so for every
+  person it lists its badge and the export's exclusion agree, except a
+  person with no type, whom the export leaves out even when released (an
+  untyped item with a date of death, say): the site shows no badge. The
+  badge speaks for the check, which releases them; the missing type is
+  the export's own rule, and a badge for it would need a wording of its
+  own. The export also drops what the site lists as no person: an item
+  that states no type and has no person evidence, a family with no person
   evidence, and a redirect.
 
 The rulings dated 2026-09-29 are the owner's, on the questions this
@@ -280,9 +297,9 @@ is strictly safer, since the determination is now absence-of-death only.
    its one query reads (amended by #334).
 6. **Only released people leave.** The public export drops every item
    with person evidence, read at every rank, that the check has not
-   released, and every item that states no type, and refuses to run
-   while the query service does not hold the dump's revisions (amended by
-   #344).
+   released, every item that states no type, and every family (#374
+   holds the full rule for families), and refuses to run while the query
+   service does not hold the dump's revisions (amended by #344).
 
 ## Consequences
 
