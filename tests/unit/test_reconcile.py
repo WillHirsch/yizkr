@@ -237,9 +237,7 @@ class TestAdjudication:
             ),
             *extra_lines,
         ]
-        lines.append(
-            json.dumps({"done": True, "proposals_emitted": len(lines) - 1})
-        )
+        lines.append(json.dumps({"done": True}))
         return "\n".join(lines)
 
     def test_valid_proposals_survive(self):
@@ -339,6 +337,72 @@ class TestAdjudication:
             ("e1", "Q77"),
             ("e2", "Q90"),
         ]
+
+
+class Stopping(ScriptedLlm):
+    """A scripted client whose engine reports why its model stopped
+    (`last_report`, as the engines' clients do)."""
+
+    def __init__(self, response: str, stop_reason: str) -> None:
+        super().__init__(response)
+        self.stop_reason = stop_reason
+
+    def last_report(self) -> dict:
+        return {"stop_reason": self.stop_reason}
+
+
+# two roster items whose names block them into a pair for adjudication
+NAMESAKES = [
+    RosterEntity(qid="Q170", label="Gus", kind="human"),
+    RosterEntity(qid="Q124", label="Gustave Lobig", kind="human"),
+]
+
+
+class TestTheSentinel:
+    """An adjudication answer ends with `{"done": true}`, whose presence
+    is the gate, and is cut off when its engine stopped it at max_tokens,
+    sentinel or no (#7)."""
+
+    def adjudicate(self, llm):
+        return adjudicate(
+            llm, entities(), block_candidates(entities(), roster()), batch()
+        )
+
+    def test_a_done_line_alone_is_the_sentinel(self):
+        """No count of the proposals comes before it: the prompts ask for
+        none."""
+        llm = ScriptedLlm(TestAdjudication().response())
+        assert len(self.adjudicate(llm)) == 2
+        assert 'final line:\n{"done": true}\n' in llm.prompts[0]
+        assert "emitted" not in llm.prompts[0]
+
+    def test_a_count_on_the_done_line_is_not_read(self):
+        answer = (
+            TestAdjudication()
+            .response()
+            .replace(
+                '{"done": true}', '{"done": true, "proposals_emitted": 9}'
+            )
+        )
+        assert len(self.adjudicate(ScriptedLlm(answer))) == 2
+
+    def test_an_answer_stopped_at_the_output_limit_raises(self):
+        llm = Stopping(TestAdjudication().response(), "max_tokens")
+        with pytest.raises(ValueError, match="cut off at max_tokens"):
+            self.adjudicate(llm)
+        llm = Stopping(TestAdjudication().response(), "end_turn")
+        assert len(self.adjudicate(llm)) == 2
+
+    def test_a_graph_answer_stopped_at_the_output_limit_raises(self):
+        from yizkr.pipeline.reconcile import propose_graph_pairs
+
+        llm = Stopping(json.dumps({"done": True}), "max_tokens")
+        with pytest.raises(ValueError, match="cut off at max_tokens"):
+            propose_graph_pairs(llm, NAMESAKES)
+        llm = ScriptedLlm(json.dumps({"done": True}))
+        assert propose_graph_pairs(llm, NAMESAKES) == []
+        assert 'final line:\n{"done": true}\n' in llm.prompts[0]
+        assert "emitted" not in llm.prompts[0]
 
 
 class TestEquivalencesCsv:

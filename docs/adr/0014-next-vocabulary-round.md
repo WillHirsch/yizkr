@@ -8,6 +8,11 @@ extractor guidance, GEDCOM `SEX`→`sex_or_gender`, and the
 `queries/kinship.rq` derivation starter. The full pairwise kinship
 calculus (degrees: great-, once-removed, half-) remains a frontend
 build over the same primitives (#165).
+Amended by [ADR-0036](0036-marriages-as-entities.md) (#311,
+2026-09-29): a marriage is an entity whose spouses are its participants,
+bounded by wedding, divorce and annulment events, so `spouse` leaves
+§1's stored primitives and is derived from the marriage by a query, as
+co-residence is, and §6's deferred divorce event is adopted.
 
 ## Context
 

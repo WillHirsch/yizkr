@@ -297,10 +297,12 @@ has something to say:
 
 A call event also says whether it is a replay of a conversation's
 opening turn (`replay`), and carries what the call's stream reported of
-it (`model`, `cli_version`, `usage`, `num_turns`, `subtype`;
-docs/LLM_CACHE.md), which the monitor does not show: `rundir.usage_counts`
-totals the usage per stage and role, and the anomaly checks compare the
-model with the run's (docs/ANOMALIES.md).
+it (`model`, `cli_version`, `usage`, `num_turns`, `subtype`,
+`stop_reason`, `api_error`; docs/LLM_CACHE.md), which the monitor does
+not show: `rundir.usage_counts` totals the usage per stage and role, and
+the anomaly checks compare the model with the run's and count the chunk
+calls the claude CLI gave up on at the output limit as truncations
+(docs/ANOMALIES.md).
 
 Engine calls are counted from the cache's events when the run has them,
 and from call events otherwise. A `duration_s` or `wait_s` that is not a

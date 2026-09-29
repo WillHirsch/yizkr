@@ -122,6 +122,24 @@ class FakeLlm:
         return self.response
 
 
+class Stopping(FakeLlm):
+    """A client that takes rejections, as the LLM cache's does, and
+    reports why its model stopped (`last_report`, as the engines' clients
+    do). No answer is one it kept from an earlier call."""
+
+    def __init__(self, response: str, stop_reason: str) -> None:
+        super().__init__(response)
+        self.stop_reason = stop_reason
+        self.rejected: list[tuple[str, str]] = []
+
+    def last_report(self) -> dict:
+        return {"stop_reason": self.stop_reason}
+
+    def reject(self, response, reason) -> bool:
+        self.rejected.append((response, reason))
+        return False
+
+
 class TestTranscribe:
     def test_text_file_engine(self, tmp_path):
         source = tmp_path / "scan.txt"
@@ -232,6 +250,43 @@ class TestExtract:
             "child: wikibase-item — the subject has the object as a child"
             in llm.prompts[0]
         )
+
+    def test_the_prompt_asks_for_a_done_line_and_no_count(self):
+        """The answer ends with `{"done": true}`: a count of the claims
+        gated nothing (#7)."""
+        llm = FakeLlm(json.dumps({"claims": CLAIMS}))
+        LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert 'final line:\n{"done": true}\n' in llm.prompts[0]
+        assert "emitted" not in llm.prompts[0]
+
+    @pytest.mark.parametrize(
+        ("stop_reason", "rejected"),
+        [
+            ("max_tokens", ["extraction: cut off at max_tokens"]),
+            ("end_turn", []),
+        ],
+    )
+    def test_an_answer_stopped_at_the_output_limit_is_rejected(
+        self, stop_reason, rejected
+    ):
+        """An answer whose engine reports it stopped at max_tokens is cut
+        off, even with its sentinel: its claims are kept, and it is
+        rejected, as one without its sentinel is (#7)."""
+        whole = "\n".join([*map(json.dumps, CLAIMS), '{"done": true}'])
+        llm = Stopping(whole, stop_reason)
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert len(batch.claims) == 2
+        assert llm.rejected == [(whole, reason) for reason in rejected]
+
+    def test_a_cut_answer_stopped_at_the_output_limit_says_so(self):
+        """Cut off twice over, at the output limit and before its
+        sentinel: its claims are kept, and the stop reason names the
+        rejection (#7)."""
+        cut = "\n".join(map(json.dumps, CLAIMS))
+        llm = Stopping(cut, "max_tokens")
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert len(batch.claims) == 2
+        assert llm.rejected == [(cut, "extraction: cut off at max_tokens")]
 
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")

@@ -56,6 +56,14 @@ recompute's calls with the baseline's, component by component; the run
 report, which reads the run directory, and never the LLM cache, gives
 each recompute's miss reasons and replays from the cache's events (§11).
 
+Amended by #7 (2026-09-29): an answer whose model stopped at the output
+limit (`max_tokens`) is cut off, and rejected as one without its
+terminal sentinel is; the stop reason is judged when the engine gives
+the answer, an entry does not keep it, and a hit is judged by its text
+alone; a call the claude CLI gave up on at that limit stores nothing,
+and its callers take it as a cut-off answer, so a fallback it led to
+repeats only if the engine gives up again (§3, §4, §5).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -218,8 +226,9 @@ an artifact a new QID changes no key.
   the client's config hash, the time, and its origin (the engine, or an
   adoption's reason). A claude-code answer's provenance adds what its
   call's stream reported of it: the session, the tokens it used, its
-  turns and how it ended, none of which is keyed (#98). An entry is
-  served only under the key it records.
+  turns and how it ended, none of which is keyed (#98), but not why its
+  model stopped, which its caller judges when the engine gives the
+  answer (§4). An entry is served only under the key it records.
 - The cache deletes nothing and overwrites nothing. An entry a caller
   rejects is moved aside with the reason; one a newer entry displaces (a
   refresh's, a racing call's, one displacing a damaged entry) is moved
@@ -277,15 +286,26 @@ extractor use the new answer. The rejectors are:
   the next run transcribes it again. No check version is keyed: a
   stricter check applies to every transcription, the stored views
   included;
-- the chunked extractor, for a chunk cut off before its terminal
-  sentinel;
-- the critic, for an answer without its terminal sentinel (a refusal, one
-  cut off, a usage-limit notice). The critique stays advisory: the
-  findings the answer holds are kept, and the critic never raises;
+- the chunked extractor, for a chunk cut off: one whose model stopped
+  at the output limit (`max_tokens`), whatever it holds, or one without
+  its terminal sentinel;
+- the critic, for an answer cut off at the output limit or without its
+  terminal sentinel (a refusal, one cut off, a usage-limit notice). The
+  critique stays advisory: the findings the answer holds are kept, and
+  the critic never raises;
 - the single-call extractor (`ingest extract --strategy single`), for an
   answer with no claim JSON or no valid claim, which fails the
-  extraction, and for one without its terminal sentinel, whose claims
-  are kept.
+  extraction, and for one cut off at the output limit or without its
+  terminal sentinel, whose claims are kept.
+
+The stop reason is judged when the engine gives the answer. An entry
+keeps none, so an answer the cache gives from an entry is judged by its
+text alone. The pinned claude CLI, run at a limit of 40 tokens, gave up
+on an answer its model stopped at the output limit rather than hand it
+back, and such a call raises `OutputLimitReached` (ADR-0006 §3). Like
+any error, it stores nothing, so there is nothing to reject, and the
+next call asks the engine again; the callers take it as a cut-off
+answer.
 
 The price: a parser fix recovers every response the old parser accepted,
 without a call, but not one it rejected, which is asked again. ADR-0006 §5
@@ -300,6 +320,10 @@ entity manifest and for the segmentation behind it: two attempts each,
 then the next tier (ADR-0006 §2, ADR-0007). A refused answer is kept, so a
 later run is answered attempt by attempt from the cache, takes the same
 fallback and gives the same batch, whatever the engine would answer now.
+An attempt the claude CLI gave up on at the output limit is the
+exception: it stores nothing, so a later run asks it again, and its
+fallback repeats only if the engine gives up again (#390 is to have it
+replay).
 A refused manifest falls back rather than failing the document, so the
 reason not to key chunk retries this way (a chunk that failed every
 attempt would fail again from the cache in every run) does not apply to
