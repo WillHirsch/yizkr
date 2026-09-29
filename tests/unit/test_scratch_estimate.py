@@ -1010,34 +1010,186 @@ OPENING = "b" * 64
 SESSION = {
     "fictional-project/0c4f6a52-3d1e-4b8a-9f00-5a1e2b3c4d5e.jsonl": b"{}"
 }
+# the same session as the two keeps before the last one left it
+EARLIER = {
+    "fictional-project/1b4c7d90-0000-4000-8000-00000000f001.jsonl": b"{}"
+}
+LATER = {"fictional-project/2c5d8e01-0000-4000-8000-00000000f002.jsonl": b"{}"}
+LISTED = dict.fromkeys(SESSION, b"")
+
+
+def between_renames(monkeypatch, folder, read):
+    """Have `read` called at the one moment a keep that replaces the
+    session folder `folder` leaves nothing at its path: after it has
+    renamed the folder it found aside, before it renames its own in.
+    Patches os.rename itself, so the interleaving is the writer's own,
+    at the exact point of it."""
+    rename = os.rename
+
+    def watched(src, dst, **kwargs):
+        rename(src, dst, **kwargs)
+        if Path(src) == folder:
+            read()
+
+    monkeypatch.setattr(os, "rename", watched)
 
 
 class TestCacheAsIs:
-    def test_a_kept_session_replaced_meanwhile_is_read_whole(self, tmp_path):
-        """A writer keeps the session again and again, each time moving
-        the folder there aside and renaming a new one in: a reader
-        without the lock sees the session's files every time, never an
-        empty listing or an error from a folder moved as it reads."""
+    """The lock-free reader against a run that keeps sessions as it reads
+    (#395)."""
+
+    def session_dir(self, cache: Path) -> Path:
+        from yizkr.pipeline.llmcache import EngineCache
+
+        return EngineCache(cache)._session_dir(KEY, OPENING)
+
+    def test_a_kept_session_replaced_meanwhile_is_read_whole(
+        self, tmp_path, monkeypatch
+    ):
+        """A keep that replaces the session's folder renames the folder it
+        finds aside and its own in, so for the moment between the two
+        renames the answer's path holds no folder. A reader without the
+        lock, listing it at exactly that moment, still sees the session's
+        files: it reads the folder the keep moved aside (#395)."""
+        from yizkr.pipeline.llmcache import EngineCache
+
+        cache = tmp_path / "cache"
+        writer = EngineCache(cache)
+        writer.keep_session(KEY, OPENING, SESSION)
+        as_is = llm.read_cache(cache)
+        folder = self.session_dir(cache)
+        seen = []
+        between_renames(
+            monkeypatch,
+            folder,
+            lambda: seen.append(
+                (
+                    folder.exists(),
+                    as_is.kept_session(KEY, OPENING),
+                )
+            ),
+        )
+        writer.keep_session(KEY, OPENING, SESSION)
+        # the reader ran where nothing was there to list, and read whole
+        assert seen == [(False, LISTED)]
+        assert as_is.kept_session(KEY, OPENING) == LISTED
+
+    def test_the_first_session_kept_is_read_once_it_is_whole(
+        self, tmp_path, monkeypatch
+    ):
+        """The first keep for an answer renames its folder in over
+        nothing, so a reader that lists the path before that rename finds
+        no session, and there is none: nothing kept is not an answer's
+        session read empty (#395)."""
+        from yizkr.pipeline.llmcache import EngineCache
+
+        cache = tmp_path / "cache"
+        as_is = llm.read_cache(cache)
+        folder = self.session_dir(cache)
+        seen = []
+        rename = os.rename
+
+        def watched(src, dst, **kwargs):
+            if Path(dst) == folder:
+                seen.append(as_is.kept_session(KEY, OPENING))
+            rename(src, dst, **kwargs)
+
+        monkeypatch.setattr(os, "rename", watched)
+        EngineCache(cache).keep_session(KEY, OPENING, SESSION)
+        assert seen == [{}]
+        assert as_is.kept_session(KEY, OPENING) == LISTED
+
+    def test_the_folder_fallen_back_on_is_the_one_last_moved_aside(
+        self, tmp_path, monkeypatch
+    ):
+        """A cache holds every folder a keep has moved aside, so an answer
+        kept again and again has several. The reader falls back to the
+        newest of them, the session as the keep before this one left it,
+        never an older one (#395)."""
+        from yizkr.pipeline import llmcache
+        from yizkr.pipeline.llmcache import EngineCache
+
+        stamps = iter(
+            ["20260929T090000Z-1a2b3c4d", "20260929T090100Z-5e6f7a8b"]
+        )
+        monkeypatch.setattr(llmcache, "_stamp", lambda: next(stamps))
+        cache = tmp_path / "cache"
+        writer = EngineCache(cache)
+        writer.keep_session(KEY, OPENING, EARLIER)
+        writer.keep_session(KEY, OPENING, LATER)
+        as_is = llm.read_cache(cache)
+        seen = []
+        between_renames(
+            monkeypatch,
+            self.session_dir(cache),
+            lambda: seen.append(as_is.kept_session(KEY, OPENING)),
+        )
+        writer.keep_session(KEY, OPENING, SESSION)
+        assert seen == [dict.fromkeys(LATER, b"")]
+        assert as_is.kept_session(KEY, OPENING) == LISTED
+
+    def test_a_stamp_taken_already_moves_the_folder_aside_again(
+        self, tmp_path, monkeypatch
+    ):
+        """A folder is moved aside under a name of its own: given a stamp
+        that the folder moved aside by an earlier keep has taken, the keep
+        is stamped again rather than failing, so no folder moved aside is
+        replaced by another, and the reader that falls back on one finds it
+        whole (#395)."""
+        from yizkr.pipeline import llmcache
+        from yizkr.pipeline.llmcache import EngineCache
+
+        taken = "20260929T090000Z-1a2b3c4d"
+        stamps = iter([taken, taken, "20260929T090000Z-5e6f7a8b"])
+        monkeypatch.setattr(llmcache, "_stamp", lambda: next(stamps))
+        writer = EngineCache(tmp_path / "cache")
+        for _ in range(3):
+            writer.keep_session(KEY, OPENING, SESSION)
+        folder = self.session_dir(tmp_path / "cache")
+        aside = sorted(folder.parent.glob(f"{folder.name}.replaced-*"))
+        assert [path.name.rsplit("-", 1)[-1] for path in aside] == [
+            "1a2b3c4d",
+            "5e6f7a8b",
+        ]
+        assert writer.kept_session(KEY, OPENING) == SESSION
+        for kept in [folder, *aside]:
+            assert {
+                path.relative_to(kept).as_posix()
+                for path in kept.rglob("*")
+                if path.is_file()
+            } == set(SESSION)
+
+    def test_a_reader_beside_a_run_that_keeps_sessions(self, tmp_path):
+        """The same guarantee under a writer that keeps the session again
+        and again in its own thread: every read is the whole session,
+        never empty and never an error. Where the reads above hold it
+        cannot fail, whatever the interleaving, and it costs a moment
+        because no read waits for a folder (#395)."""
         from yizkr.pipeline.llmcache import EngineCache
 
         cache = tmp_path / "cache"
         EngineCache(cache).keep_session(KEY, OPENING, SESSION)
         as_is = llm.read_cache(cache)
         stop = threading.Event()
+        failed = []
 
         def keep_again() -> None:
             writer = EngineCache(cache)
-            while not stop.is_set():
-                writer.keep_session(KEY, OPENING, SESSION)
+            try:
+                while not stop.is_set():
+                    writer.keep_session(KEY, OPENING, SESSION)
+            except Exception as exc:  # a keep of its own that failed
+                failed.append(exc)
 
         writer = threading.Thread(target=keep_again)
         writer.start()
         try:
-            seen = [as_is.kept_session(KEY, OPENING) for _ in range(2000)]
+            seen = [as_is.kept_session(KEY, OPENING) for _ in range(500)]
         finally:
             stop.set()
             writer.join()
-        assert all(listing == dict.fromkeys(SESSION, b"") for listing in seen)
+        assert failed == []
+        assert seen == [LISTED] * 500
 
     def test_a_session_kept_for_no_answer_under_the_key(self, tmp_path):
         as_is = llm.read_cache(tmp_path / "cache")

@@ -242,6 +242,8 @@ var/llm-cache/                     (--cache; private, below)
     <key>.replaced-<stamp>.json    an entry a newer one displaced
     <key>.session/<opening>/       an opening turn's session files, under
                                    the SHA-256 of the answer they hold
+    <key>.session/
+      <opening>.replaced-<stamp>/  a session folder a newer keep displaced
 ```
 
 An entry holds `format`, `key`, `components` (the key's components, whose
@@ -355,10 +357,25 @@ folder and writes nothing, and what calls made through it change (an
 answer rejected, one stored) stays in memory (ADR-0032 §3). A folder the
 cache would refuse to open it refuses too (`CacheRefused`; The cache
 folder, above). A kept session comes back as the names of its files
-only, with no bytes, read through its folder opened once, so one
-replaced meanwhile by renames is never read torn, and looked for again a
-moment later while it is missing. The call estimate reads the cache so,
-beside a run that holds it (docs/runbooks/scratch-run.md, Before a run).
+only, with no bytes, and comes back whole however the holder keeps that
+session meanwhile: a session kept for an answer is never read empty, and
+a read never fails and never waits.
+
+Two things hold it, against a keep that publishes a session by moving the
+folder it finds at the answer's path aside and renaming its own in. The
+folder is opened once and listed through that one handle, so a folder
+renamed as the listing runs is still listed whole. And where a keep is
+between its two renames, the answer's path holding no folder at all, the
+reader takes the folder that keep moved aside
+(`<opening>.replaced-<stamp>/`, the newest that lists any file), which
+holds the session kept for the same answer and which no keep touches
+again: a keep is stamped again where a folder moved aside has taken its
+stamp, so nothing moved aside is ever displaced. A path with no folder
+and nothing moved aside beside it is a session not kept yet, which is no
+session: the first keep for an answer renames its folder in over nothing.
+
+The call estimate reads the cache so, beside a run that holds it
+(docs/runbooks/scratch-run.md, Before a run).
 `llm.cache_holder` names the process that holds a cache, from its lock
 file's record, without taking the lock.
 
@@ -453,8 +470,10 @@ conversation exactly as the fork's context assumes:
 1. **Resumed exactly.** When a conversation is opened, the cache keeps
    what the engine needs to resume it, beside the opening turn's entry and
    under the SHA-256 of the opening answer it holds
-   (`<key>.session/<opening>/`, published whole): for claude-code, the
-   session's transcript files. A fork resumes only the session kept for
+   (`<key>.session/<opening>/`, published whole by renaming its folder
+   into place, over the folder kept for that answer before, which is
+   moved aside and kept): for claude-code, the session's transcript
+   files. A fork resumes only the session kept for
    the opening answer the cache serves, and replays when none is kept for
    it: a session made on another answer (by two callers that opened the
    conversation at once, or a replay whose session could not be kept) is
