@@ -200,7 +200,11 @@ class LlmVisionTranscriber(_CheckedTranscriber):
 
     def transcribe_unchecked(self, media_path: Path) -> Transcription:
         """The engine's reading of the media at `media_path`, named by the
-        SHA-1 of its bytes, which are hashed before the engine is asked."""
+        SHA-1 of its bytes, which are hashed before the engine is asked.
+        Its `engine` names the client that made the reading: the one
+        asked, or, for a reading the client's cache adopted rather than
+        an engine gave (an archived transcription), the one the adoption
+        names (`made_by`)."""
         self._response = None
         artifact = ArtifactRef.from_path(media_path)
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
@@ -208,11 +212,12 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         self.last_resolution = resolve_language(
             text, self.language, fallback=self.fallback_language
         )
+        made_by = getattr(text, "made_by", None)
         return Transcription(
             artifact=artifact,
             text=text,
             language=self.last_resolution.code,
-            engine=f"llm-vision:{self.client.model_identifier}",
+            engine=f"llm-vision:{made_by or self.client.model_identifier}",
         )
 
     def _reject(self, failed: TranscriptionCheckFailed) -> bool:

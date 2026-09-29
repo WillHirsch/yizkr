@@ -184,8 +184,8 @@ with its own date, place and circa, so that the alternatives coexist
   for line, its citation included, gives the same claim, which the batch
   holds once; the same value under another citation is a claim of its
   own in the batch, with that citation's excerpt and locator (CLAUDE.md
-  rule 1). The writer's keeping of that reference beside the first is
-  #335;
+  rule 1). The writer writes the two as one statement, with a reference
+  block for each citation (#335);
 - where one claim holds both an event's date and its place (BURI, RESI,
   OCCU, MARR), each of the event's dates is paired with each of its
   places, and each DATE of an OBJE dates an image claim of its own;
