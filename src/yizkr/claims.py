@@ -21,12 +21,12 @@ The schema makes the archive's core conventions structural:
   precision (day/month/year/decade/century) and a calendar; ranges and
   approximation are expressed with `earliest_date`/`latest_date`/
   `sourcing_circumstances` qualifiers, and a range for the start or end
-  time qualifier of a period (a marriage, a residence) with that end's own
-  bounds, `latest_start_date` and `earliest_end_date` among them. Nothing
-  invites the extractor to round or guess.
+  time qualifier of a period (a residence, an occupation) with that end's
+  own bounds, `latest_start_date` and `earliest_end_date` among them.
+  Nothing invites the extractor to round or guess.
 
 Vocabulary: `property` fields and vocabulary references hold *manifest
-keys* (e.g. ``spouse``, ``circa``) from model/manifest.yaml — stable,
+keys* (e.g. ``residence``, ``circa``) from model/manifest.yaml — stable,
 instance-independent names. `validate_against_manifest()` checks that
 keys exist, that each value's type matches the property's datatype, and
 that an item value is of a kind its property accepts (ADR-0035 §3.5).
@@ -48,6 +48,14 @@ Entity references (subjects and item values) come in three kinds:
 * ``local`` — a batch-scoped placeholder (``person-1``) for an entity
   the extractor proposes; entity resolution replaces it with a ``qid``
   reference or leaves it for item creation during the write step.
+
+A claim's subject may also be the document the claim comes from, named
+as its source is, by an ``artifact`` reference (ADR-0035 §3.4): the
+document itself is what a register office issued. Only a property the
+manifest marks `document_subject` takes such a subject, it must be the
+claim's own source, and such a property takes no other subject; the
+writer checks the same rule and resolves the subject to the artifact item
+as it resolves the source.
 
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
@@ -214,7 +222,7 @@ class TimeValue(StrictModel):
     meaning 1800-1899, are no such century: give them as a range.
     Ranges ("between 1938 and 1939") are NOT a precision problem: use
     earliest_date/latest_date qualifiers on the claim. A start_time or
-    end_time qualifier dating a period (a marriage, a residence) takes
+    end_time qualifier dating a period (a residence, an occupation) takes
     that end's own bounds instead: earliest_date/latest_start_date for a
     start, earliest_end_date/latest_date for an end. An entity's own
     start_time or end_time claim (a firm's founding) is a date value that
@@ -420,6 +428,13 @@ class SourceReference(StrictModel):
     transcription_excerpt: MonolingualText | None = None
 
 
+# A claim's subject: an entity reference, or the claim's own source
+# document named by its content key (ADR-0035 §3.4).
+SubjectRef = Annotated[
+    QidRef | VocabRef | LocalRef | ArtifactRef, Field(discriminator="kind")
+]
+
+
 # ---------------------------------------------------------------------------
 # Claims
 # ---------------------------------------------------------------------------
@@ -428,6 +443,19 @@ class SourceReference(StrictModel):
 class Qualifier(StrictModel):
     property: ManifestKey
     value: Value
+
+
+class JudgementNote(StrictModel):
+    """The extractor's note on a judgement call a careful reader could
+    make differently (ADR-0035 §4): its category and one sentence in
+    English naming what was read, such as "the postmark '19.8.38' read as
+    1938". Optional, and only for such a call: a fact without a note is
+    not thereby certain. It is the extraction's own remark, never the
+    source's, and never ranks or filters a value."""
+
+    # each the key of its manifest item less the `judgement_` prefix
+    category: Literal["kind", "relation", "date_reading", "identity", "other"]
+    text: str = Field(min_length=1)
 
 
 class Claim(StrictModel):
@@ -444,12 +472,14 @@ class Claim(StrictModel):
     machine writes (ADR-0003), and this statement's process was a human.
     """
 
-    subject: EntityRef
+    subject: SubjectRef
     property: ManifestKey
     value: Value
     qualifiers: list[Qualifier] = []
     source: SourceReference
     confidence: float | None = Field(default=None, ge=0, le=1)
+    # the judgement note on this claim, where one was a call (ADR-0035 §4)
+    note: JudgementNote | None = None
     curated: bool = False
     # That a curator approved the claim on its own row of a review sheet.
     # `apply_review` sets it on a `depicts` claim, to a digest of the
@@ -470,9 +500,14 @@ class Claim(StrictModel):
     def _omit_absent_row_approval(
         self, handler: SerializerFunctionWrapHandler
     ):
+        # a claim without a note or a row approval serialises as if the
+        # field did not exist, so its content hashes are unchanged
         data = handler(self)
-        if self.row_approval is None and isinstance(data, dict):
-            data.pop("row_approval", None)
+        if isinstance(data, dict):
+            if self.row_approval is None:
+                data.pop("row_approval", None)
+            if self.note is None:
+                data.pop("note", None)
         return data
 
 
@@ -632,12 +667,14 @@ class EntityRecord(StrictModel):
     # the document asserts historical/genealogical facts about get
     # extract=true. On official certificates and registers the
     # administrative apparatus is boilerplate: the registrar, officiant, or
-    # witness who certifies the record; the issuing authority (e.g. a civil
-    # registry office such as a Standesamt); and the register or
-    # certificate the document cites as its own source are all
-    # extract=false. They attest the record — they are not its
-    # genealogical subject. (A witness or officiant who is ALSO a relative
-    # of the subject is the exception: extract=true for the relationship.)
+    # witness who only certifies the record, and the register or certificate
+    # the document cites as its own source, are extract=false. They attest
+    # the record — they are not its genealogical subject. Whom the source
+    # shows acting is the exception, extract=true: the officiant or a
+    # witness of the event the document records (a wedding's registrar), the
+    # authority that issued the document (a civil registry office such as a
+    # Standesamt), and a witness or officiant who is ALSO a relative of the
+    # subject.
     # The entity-manifest prompt (ENTITY_MANIFEST_PROMPT in
     # pipeline/chunking.py) gives the model this rule in the same words;
     # SegmentationUnit.extract is the line-range fallback's flag for a
@@ -652,17 +689,24 @@ class EntityRecord(StrictModel):
     # The mention record (ADR-0035 §2): what the entity's names are made
     # of, for identity only and never written. Its variant matches the
     # entity's kind; `structure_problems` checks it against the label and
-    # aliases. The extraction prompts do not ask for it, so the JSON
-    # Schema they carry leaves it out, and an entity without one
-    # serialises as if the field did not exist, so its content hashes are
-    # unchanged.
+    # aliases. The entity-manifest prompt asks for it in its own words;
+    # the JSON Schema the chunk prompts carry leaves it out, and an entity
+    # without one serialises as if the field did not exist, so its content
+    # hashes are unchanged.
     structure: SkipJsonSchema[MentionStructure | None] = None
+    # the judgement note on the entity, a kind or an identity call
+    # (ADR-0035 §4); an entity without one serialises as if the field did
+    # not exist
+    note: JudgementNote | None = None
 
     @model_serializer(mode="wrap")
     def _omit_absent_structure(self, handler: SerializerFunctionWrapHandler):
         data = handler(self)
-        if self.structure is None and isinstance(data, dict):
-            data.pop("structure", None)
+        if isinstance(data, dict):
+            if self.structure is None:
+                data.pop("structure", None)
+            if self.note is None:
+                data.pop("note", None)
         return data
 
 
@@ -724,7 +768,11 @@ def validate_against_manifest(
       as a claim's or a qualifier's property;
     * a vocabulary ref to an entity kind (`human`, `place`) is a class,
       so a property that accepts entities of that kind refuses it;
-    * a death's principal is never also its informant (ADR-0035 §3.2).
+    * a death's principal is never also its informant (ADR-0035 §3.2);
+    * a claim whose subject is a document (an artifact reference) names
+      its own source, by a property the manifest marks
+      `document_subject`, and a claim of such a property has that
+      subject and no other (ADR-0035 §3.4).
     """
     properties, items = (
         vocabulary
@@ -823,6 +871,8 @@ def validate_against_manifest(
             return f"local:{ref.local_id}"
         if isinstance(ref, QidRef):
             return f"qid:{ref.qid}"
+        if isinstance(ref, ArtifactRef):
+            return str(ref)
         return f"vocab:{ref.key}"
 
     # roles each person holds in each death, across the batch's claims
@@ -831,6 +881,25 @@ def validate_against_manifest(
         where = f"claims[{index}]"
         subject_kind = kind_of(claim.subject)
         check_ref(claim.subject, f"{where}.subject")
+        if isinstance(claim.subject, ArtifactRef):
+            if claim.subject.sha1 != claim.source.artifact.sha1:
+                errors.append(
+                    f"{where}.subject: a document subject names the claim's "
+                    f"own source, {claim.source.artifact}, not "
+                    f"{claim.subject} (ADR-0035 §3.4)"
+                )
+            if claim.property not in acceptance.document_subjects:
+                errors.append(
+                    f"{where}.subject: property {claim.property!r} does not "
+                    f"take the source document as its subject (ADR-0035 "
+                    f"§3.4)"
+                )
+        elif claim.property in acceptance.document_subjects:
+            errors.append(
+                f"{where}.subject: property {claim.property!r} takes only "
+                f"the claim's own source document, {claim.source.artifact}, "
+                f"as its subject (ADR-0035 §3.4)"
+            )
         check_property_value(claim.property, claim.value, where, subject_kind)
         for q_index, qualifier in enumerate(claim.qualifiers):
             check_property_value(

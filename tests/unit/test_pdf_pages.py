@@ -48,6 +48,7 @@ from yizkr.pipeline.orchestrate import (
     FAILED,
     TRANSCRIPTION_VOLATILE,
     DocumentRun,
+    ExcerptRun,
     Orchestrator,
 )
 from yizkr.pipeline.presentation import (
@@ -224,6 +225,11 @@ def document(orchestrator: CachedRun, name: str) -> DocumentRun:
 
 def transcription_of(doc: DocumentRun) -> Transcription:
     return Transcription.model_validate_json(doc.transcription.read_text())
+
+
+def excerpt_of(orchestrator: Orchestrator, sha1: str) -> ExcerptRun:
+    """The excerpt the orchestrator's run found for an image."""
+    return orchestrator._excerpts[sha1]
 
 
 def page_methods(transcription: Transcription) -> list[tuple[int, str]]:
@@ -558,9 +564,12 @@ class TestImages:
         assert {claim.source.artifact.sha1 for claim in batch.claims} == {
             doc.sha1
         }
-        # no prompt of its extraction holds what was read from the image
+        # no prompt of its extraction holds what was read from the image:
+        # the prompts that hold the translation are the booklet's
         extraction = [
-            prompt for kind, prompt in reader.calls if kind != "vision"
+            prompt
+            for kind, prompt in reader.calls
+            if kind != "vision" and "Angerring 71" in prompt
         ]
         assert extraction
         assert not any("Angerring 11" in prompt for prompt in extraction)
@@ -685,6 +694,8 @@ class TestAScratchRun:
         assert driver.run() == EXIT_OK
         assert ("vision", f"{LETTER_SHA1}.png") in fakes.calls
         assert ("vision", "booklet.pdf") not in fakes.calls
+        # the folder's documents are the booklet alone; its image is an
+        # excerpt the booklet's transcription found
         (doc,) = driver.documents()
         transcription = transcription_of(doc)
         assert transcription.engine == TEXT_LAYER
@@ -797,8 +808,15 @@ def stricter_check(monkeypatch, phrase: str) -> None:
     )
 
 
-def set_asides(orchestrator: CachedRun) -> list[dict]:
-    return this_run(orchestrator, "set-aside")
+def set_asides(orchestrator: CachedRun, kind: str = "media") -> list[dict]:
+    """The set-aside events of this run for documents of a kind: the
+    PDFs' by default, since an excerpt's transcription is its image's
+    reading, set aside with it."""
+    return [
+        event
+        for event in this_run(orchestrator, "set-aside")
+        if event.get("kind") == kind
+    ]
 
 
 class TestReuse:
@@ -861,6 +879,11 @@ class TestReuse:
             f"{LETTER_SHA1}.transcription.superseded-1.json"
         )
         assert json.loads(superseded.read_text())["text"] == page_text(EXCERPT)
+        # the excerpt's transcription, the image's reading, is made again
+        # from the new one
+        (aside,) = set_asides(again, "excerpt")
+        excerpt = excerpt_of(again, LETTER_SHA1)
+        assert transcription_of(excerpt).text == page_text("Liebes Pünktchen!")
 
     def test_every_image_on_a_page_is_checked_again(
         self, tmp_path, monkeypatch
@@ -916,11 +939,11 @@ class TestReuse:
         reader = RefusingReader({})
         again = run(tmp_path, corpus, reader)
         reused = [
-            event
+            event["kind"]
             for event in this_run(again, "reused")
             if event["stage"] == "transcription"
         ]
-        assert len(reused) == 1
+        assert reused == ["media", "excerpt"]
 
 
 class TestTheView:

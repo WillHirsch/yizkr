@@ -1677,6 +1677,49 @@ class TestContent:
             "Pages of PDFs read page by page, by method: text-layer 3"
         ) in text
 
+    def test_a_pdf_s_images_count_per_pdf(self, run):
+        """The images a PDF read page by page places and reads on its own
+        (#397) count per PDF, each once however many pages place it; a
+        name that is no SHA-1 counts nothing, and no image's SHA-1 reaches
+        report.md."""
+        postcard = run / slugify(Path(FILES[POSTCARD][0]).stem)
+        view = json.loads((postcard / "transcription.json").read_text())
+        text = view["text"]
+        letter, inscription = "a" * 40, "b" * 40
+
+        def page(number, images):
+            provenance = {"method": "text-layer", "engine": "pdf-text-layer/1"}
+            return {
+                "page": number,
+                "start": 0,
+                "end": len(text),
+                "images": images,
+                "provenance": provenance,
+            }
+
+        view |= {
+            "engine": "pdf-pages:pdf-text-layer/1",
+            "pages": [
+                page(1, [letter, HOSTILE, 5]),
+                page(2, [letter, inscription]),
+            ],
+        }
+        (postcard / "transcription.json").write_text(json.dumps(view))
+        aggregate = build(run, now=NOW)["aggregate"]
+        assert aggregate["documents"]["pdf_images"] == {
+            "pdfs": 1,
+            "placed": 2,
+            "distinct": 2,
+            "per_pdf": {"2": 1},
+            "excerpts": 0,
+        }
+        text = render_markdown(aggregate)
+        assert (
+            "read on their own: 2 in 1 PDFs (2 distinct; images per PDF: "
+            "2 in 1); documents of their own (excerpts): 0"
+        ) in text
+        assert letter not in text
+
     def test_failed_documents_each_once(self, made):
         documents = made["aggregate"]["documents"]
         assert documents["failed"] == 2

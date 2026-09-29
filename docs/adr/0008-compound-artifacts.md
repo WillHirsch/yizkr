@@ -9,6 +9,9 @@ Amended by #103 (2026-09-29): the write registers the deck, its slides
 and its derived media, each by its SHA-1: see Amendments.
 Amended by #176 (2026-09-29): a PDF is read page by page, and each image
 placed within its text-layer pages is read on its own: see Amendments.
+Amended by #397 (2026-09-29): each image placed within a PDF's text-layer
+pages that has a reading of its own is extracted as a document of its
+own, an excerpt, and the write registers the images: see Amendments.
 Amended by #389 (2026-09-29): every page of a transcription carries the
 transcription record's fields (ADR-0037): a page read by vision takes
 them from its reading's record, merged into one page where the image
@@ -529,9 +532,104 @@ did so on 2026-09-29, in the review of its PR.
   run; pyproject.toml pins the PDFium build, since another could decode or
   render to other bytes. The owner accepts what reading each image on its
   own costs in calls.
-- **Still to do** (follow-up A): extracting each image's transcription
-  into a batch of its own; registering the images at write time; and
-  content dedup across documents, since another document or excerpt that
-  brings the same bytes keeps a view of its own, though the LLM cache
-  answers its call. Until then no claim is read from an image, and every
-  claim read from a PDF cites the PDF and comes from its own text.
+- **Still to do** (follow-up A; done by #397, see its amendment below):
+  extracting each image's transcription into a batch of its own;
+  registering the images at write time; and content dedup across
+  documents, since another document or excerpt that brings the same
+  bytes keeps a view of its own, though the LLM cache answers its call.
+  Until then no claim is read from an image, and every claim read from a
+  PDF cites the PDF and comes from its own text.
+
+Amended by #397 (2026-09-29): **each image a PDF places within a
+text-layer page is extracted as a document of its own, an excerpt, and
+the write registers it, `part of` the PDF.** This does the rest of
+follow-up A, and settles the first half of the #289 amendment's seventh
+question: where an excerpt's views live, and how its status relates to
+the compilation's.
+
+- **An excerpt is a document.** Each image that a PDF's transcription
+  reads on its own and keeps a reading of, which passes the transcription
+  check, is a document of the kind `excerpt` (`ExcerptRun` in
+  `yizkr.pipeline.orchestrate`), found from what the PDF's directory
+  keeps: the record of its images (`derived-media.json`) and each image's
+  reading beside its bytes. Its identity is the SHA-1 of its bytes, and
+  its directory is `excerpts/<sha1>/` in the state directory, apart from
+  the documents' directories, which no document's can take. It takes the
+  stages any extracted document takes, transcription, extraction and the
+  critique, each with its own view and its own status, and in `ingest
+  run` its own gates. Its transcription is the reading the PDF's
+  transcription made of it, taken without a model call, so the image is
+  read once. Its extraction cites the image (`cite_artifact`), and reads
+  the image's text alone: nothing the compilation says reaches it, as the
+  #289 amendment's second question leaves it.
+- **Its status is its own.** An excerpt joins the run once its PDF's
+  transcription has read it, and goes on whatever becomes of the PDF's
+  extraction, critique or review; the PDF goes on whatever becomes of
+  its excerpts. An image whose reading failed is no excerpt until a later
+  run reads it (below).
+- **One witness per SHA-1.** The same image in two PDFs is one excerpt,
+  with both among the PDFs that place it, and one extraction. An image
+  whose bytes a document of the corpus has is that document, and no
+  excerpt: its bytes are not extracted again (ADR-0010). A written
+  excerpt seeds content dedup across runs as a written document does, so
+  a file added later with its bytes is its duplicate. An image the
+  never-ingest list names is asked about again as excerpts are found, and
+  is never one.
+- **The scratch driver** takes an excerpt's stages as the PDF's
+  transcription ends: the first excerpt of an invocation is the
+  excerpts' canary, which goes through its stages next and joins the
+  run's `canaries`; the others take their stages rank by rank with the
+  rest of the documents. Each is added to the run plan (`documents`, with
+  the kind `excerpt`) as it is found, and a later invocation plans those
+  its directories hold from the start. The barrier takes the excerpts
+  whose stages all completed to the corpus stages with the documents.
+  `ingest run` takes an excerpt after the folder's documents, and in
+  serial mode (ADR-0019) extracts the excerpts before it orders them.
+- **Registration at write time.** The write of a PDF registers the images
+  its record names, after the PDF, as a deck's derived media are
+  registered (the #50 and #103 amendments): an item per image, found or
+  made by its SHA-1, labelled `"<title> — page <n>, image <k>"` for its
+  first place, `part of` the PDF once per page it is on with the page's
+  number, a `photograph` (the Decision's class for a raster image, which
+  the #289 amendment's fourth question leaves open), its description
+  naming the pages. Its file is uploaded under `"<title> page <n>, image
+  <k>.<suffix>"`. The write of an excerpt registers each PDF that places
+  it, with its images, and cites the image's item. The public export
+  needs no change: an image states its kind, stated in the PDF, as any
+  artifact does.
+- **Reuse.** A PDF's transcription that passes the check is still set
+  aside and made again when what it marks is not kept whole beside it: an
+  image the never-ingest list names now; a record that is missing,
+  damaged, made for other bytes, or names other images, or an image's
+  bytes that are missing or changed; or an image with no reading of its
+  own, whose reading failed or was lost, which is so read again. Its
+  pages and images are read again through the LLM cache, which answers
+  the calls it answered before. The record then names none of the images
+  the list names, so nothing registers or extracts what an earlier
+  reading kept of them.
+- **The run report** counts, as aggregates, the images the PDFs read page
+  by page place: the PDFs that place any, the images placed (each once
+  per PDF), the distinct images, how many PDFs place how many, and how
+  many images are documents of their own.
+- A curator's correction of a PDF's transcription
+  (`transcription.corrected.txt`) replaces the PDF's own text only: its
+  excerpts come from the record its reading kept.
+- **The transcription record (#389).** Excerpts take their language and
+  class from the kept reading's record once #389's record lands; until
+  then, py3langid and the wording check apply.
+- **Decided by default** (the owner may override): an excerpt's status
+  is independent of its PDF's; an excerpt's write may register its PDF's
+  item (its identity, no claims) before the PDF's own review is
+  accepted; an image whose reading always fails is read again on each
+  run, through the LLM cache, with no cap; and what earlier runs kept of
+  an image the never-ingest list names since stays on disk, as an
+  excluded document's directory does, runtime state that is never
+  extracted or written again.
+- **Left for later:** the call estimate (`yizkr scratch estimate`) does
+  not yet count an excerpt's extraction and critique; an excerpt's
+  transcription view does not name the PDF's kept reading among its
+  inputs, so a reading made again with other text that still passes the
+  check leaves the excerpt's view as it was; an excerpt's write fails
+  when one of the PDFs that place it no longer has the bytes it was read
+  with, even when another places the image; and the anomaly checks'
+  recheck does not read the excerpts' directories.

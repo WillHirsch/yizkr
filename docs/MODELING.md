@@ -117,9 +117,17 @@ and the judgement note's `judgement` and `judgement_note`) are marked
 `reference: true`: they are written only in a statement's references, so
 validation refuses one as a claim's or a qualifier's property, and no
 prompt offers it. A property may also be held back from the prompts with
-`offered: false` while it stays in the manifest and the bootstrap:
-`issued_by` is, since a claim has no way to name the document it comes
-from as its subject (ADR-0035 §3.4).
+`offered: false` while it stays in the manifest and the bootstrap. A
+property marked `document_subject: true` (`issued_by`) takes the
+claim's own source document as its subject, named by an `artifact`
+reference to the source's media, and no other subject; validation
+refuses such a subject on any other property, or naming another
+document, and a claim of such a property with any other subject
+(ADR-0035 §3.4). The writer checks the same rule itself, since `yizkr
+write` takes a batch without validating it against the manifest: it
+refuses such a claim before the first write, names it in its `refused`
+list and warns why, as it refuses a claim whose text the instance cannot
+hold.
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
@@ -303,12 +311,25 @@ artifact a new QID, changes neither.
 
 - An `organization` is an agent — a company, bank, committee, government
   body, school, or congregation. It is **distinct from `place`**: an
-  organization has a `location`, it is not one. Typed by primary role —
-  a source that treats an entity as an agent (employs, is deregistered,
-  helps, hires) makes it an organization; one that treats it as a
-  location (born at, died at, lives in) makes it a place. Dual-nature
-  entities (a hospital that is also a birthplace) pick their dominant
-  use in the document; genuine dual `instance of` is deferred.
+  organization has a `location`, it is not one. **The relation decides
+  the kind** (ADR-0031): a relation of place (born, died or buried at,
+  lives at, located at, deported to, held at) takes a place, and a
+  relation of agency (`issued_by`, `carried_out_by`, `employer`,
+  `educated_at`, `member_of`) an organization. So a camp, a prison, a
+  hospital or a school named only as where something happened is a
+  place, and one the source shows acting is an organization: the
+  registration card's Peiltal court prison, where Leopold was held, is a
+  place; the Landgericht Rekau, which divorces Leopold and Agnes, is an
+  organization. Where one source uses one institution both ways, it
+  gives two entities, a site and a body, linked by the organization's
+  `location`. The extraction prompts carry the rule, and validation
+  refuses a relation whose value is of a kind it does not accept.
+- `issued_by` (P2378) links a document to the organization that issued
+  it, such as the register office of a certificate. Its subject is the
+  document itself: a claim names it by the SHA-1 of its media, as its
+  source is named, and the writer writes the statement on the artifact
+  item (ADR-0035 §3.4). `carried_out_by` links an event to the
+  organization that carried it out, such as the court of a divorce.
 - `employer` (P108) links a person to an organization, orthogonal to
   `occupation`: what someone does (occupation, an occupation item) and
   whom they work for (employer, an organization item) are independent,
@@ -466,19 +487,23 @@ and reference the artifact itself or the producing run.
 - Unpacking is deterministic (documented ZIP+XML), never generative;
   only claim extraction from the slide text uses an LLM.
 - **A compilation's original excerpts are artifacts of their own**
-  (planned: ADR-0008 as amended by #289 lists what is still to do,
-  starting with #176). A compilation sets text of its own (a typed
-  translation, commentary) beside images of excerpts from the originals
-  it draws on: two witnesses of one text, which may disagree. An image
-  that a PDF places within one of its pages is a derived item like a
-  deck's: keyed by its SHA-1, `part_of` the PDF once per page it is on
-  (page-number qualified), and labelled "<title> — page <n>, image <k>".
-  An image that is a whole page, as a scanned page is, is that page.
-  A PDF with a text layer is read page by page, and each image placed
+  (ADR-0008 as amended by #289, #176 and #397). A compilation sets text
+  of its own (a typed translation, commentary) beside images of excerpts
+  from the originals it draws on: two witnesses of one text, which may
+  disagree. An image that a PDF places within one of its pages is a
+  derived item like a deck's: keyed by its SHA-1, `part_of` the PDF once
+  per page it is on (page-number qualified), labelled "<title> — page
+  <n>, image <k>" for its first place, and an `instance of` photograph.
+  An image that is a whole page, as a scanned page is, is that page. A
+  PDF with a text layer is read page by page, and each image placed
   within one of its text-layer pages has a transcription of its own
-  (ADR-0008 as amended by #176); until those transcriptions are
-  extracted, every claim read from a PDF cites the PDF, and is read from
-  its own text.
+  (ADR-0008 as amended by #176), which is extracted as a document of its
+  own, an excerpt, whose claims cite the image; the write registers the
+  image's item, after the PDF, before any claim that cites it (ADR-0008
+  as amended by #397). The same image in several PDFs is one item and
+  one excerpt; an image whose bytes a document of the corpus has is that
+  document. An image placed within a page read by vision is read with
+  that page, as the compilation's.
 - A claim cites the witness that asserts it. A claim read from the
   compilation's own text cites the compilation, with its page as the
   locator; a claim read from an excerpt cites the excerpt, with no page
@@ -604,6 +629,19 @@ label, aliases and kind. What a marker in a name asserts (a widow's
 marker, "the late", a patronymic's father, a married-name marker) is a
 claim: a `civil_status`, a death, a `father`, a `married_name`.
 
+The entity-manifest prompt asks for each record, and for each label's
+status, by the structure of what it reads (a surname-first register,
+capitals, a maiden-name or married-name marker, a courtesy title, a
+place's generic head, an institution's kind), with examples from the
+universe's sources in German, English, Russian and Frisian, and lists no
+marker words. A person the document does not name is labelled with the
+document's own words for them (the postcard's *Dein Vater*, status
+`kinship`). Any manifest entity or claim may carry a **judgement note**
+(ADR-0035 §4): a category (`kind`, `relation`, `date_reading`, `identity`
+or `other`) and one sentence in English, only where the extractor made a
+call a careful reader could make differently. `coverage.json` counts the
+records given, recordless and set aside, and the notes by category.
+
 **Relational and perspectival appellations are NOT names** (ADR-0018).
 "our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
 a relationship or viewpoint, so they never enter the alias bag. A literal
@@ -661,7 +699,9 @@ primitive network and the *same* term set describes any pair:
   states, never a guess: `side` (`paternal` or `maternal`), `degree` (how
   many "great-"s, or a cousin's number) and `removes` (a cousin's
   removes). The 1958 letter's *дядя по отцу*, "uncle on the father's
-  side", is `kin_aunt_or_uncle` on the `paternal` side; its *двоюродная
+  side", is `kin_aunt_or_uncle` of degree 0 (a term other than a
+  cousin's with no "great-" has degree 0) on the `paternal` side; its
+  *двоюродная
   сестра*, "first cousin", is `kin_cousin` of degree 1; the 1952 letter's
   *oerbeppe*, "great-grandmother", is `kin_grandparent` of degree 1. A
   literal term that reduces to a primitive stays one: *Dein Vater* is
@@ -701,11 +741,16 @@ subject; there is no household statement enumerating occupants.
 
 ADR-0036 makes a marriage an entity bounded by events, and retires the
 `spouse` statement below; its vocabulary is in the manifest ("Core
-classes"). Until the rest of the pipeline moves to marriages, the GEDCOM
-adapter still writes the spouse statements described here, the readers
-of spouse statements (the disagreement report, the timeline, the kinship
-query) still read them, and the chunk prompt's own text still names
-`spouse`, whose claims extraction now refuses and counts.
+classes"). The extraction prompts ask for marriages so: the couple take
+part in the marriage (or partnership) with the role `spouse` (or
+`partner`), the union is `started_by` its wedding and `ended_by` a
+divorce, an annulment, a partner's death, or an event of unstated kind
+where the source does not say how it ended, and each of those events
+carries its own date and place. Until the rest of the pipeline moves to
+marriages, the GEDCOM adapter still writes the spouse statements
+described here, and the readers of spouse statements (the disagreement
+report, the timeline, the kinship query) still read them; extraction
+refuses and counts any spouse claim.
 
 A statement that holds for a period, such as a marriage (`spouse`), a
 residence, an occupation or a membership, is dated as Wikidata dates
@@ -775,7 +820,9 @@ person timeline (`queries/person-timeline.rq`) lists each start, end and
 point in time with the range stated for it, which the static site's
 timeline page and feed show beside the date, each bound under its
 qualifier's label ("1946 (earliest date: 1946; latest start date:
-1947)"); and the extraction prompt gives the extractor this convention.
+1947)"); and the extraction prompts give the extractor this convention
+for residences and other periods, and date a marriage by its wedding and
+end events instead.
 
 ## Persecution and displacement as events (see ADR-0014)
 

@@ -17,8 +17,8 @@ registration writes:
 * for a compound artifact (ADR-0008), the media it embeds, from the
   record the stages before the write keep of them
   (yizkr.pipeline.presentation): each an artifact item of its own, with
-  its media file and SHA-1, ``part of`` the container once per slide it is
-  on.
+  its media file and SHA-1, ``part of`` the container once per slide of a
+  deck, or page of a PDF, it is on.
 
 **Identity is the SHA-1 alone.** An artifact is the item whose `media
 SHA-1` is the SHA-1 of its file's bytes, and with none a new item is made.
@@ -685,26 +685,32 @@ class Registrar:
     ) -> dict[str, str]:
         """Ensure each medium a container embeds has its artifact item and
         its file on the wiki, from the record of them kept in `directory`
-        (presentation.record_derived_media); returns {media SHA-1 -> QID}.
+        (presentation.record_derived_media, or the record a PDF read page
+        by page keeps of the images placed within its pages); returns
+        {media SHA-1 -> QID}.
 
         The container is the item whose `media SHA-1` is the record's
         source SHA-1, registered before its media. Each medium is found by
-        its own SHA-1 (ADR-0010), so an image that several decks embed, or
-        that is also ingested on its own, is one item, `part of` each
-        container. It is labelled ``"<container title> — <name>"`` by its
-        first name in the archive (ADR-0008), and its other names become
-        aliases, unless another item has one as its label. Its bytes are
-        uploaded from the file the record keeps, under the name
-        ``"<title> <name>"``, only when no file of the item holds them.
+        its own SHA-1 (ADR-0010), so an image that several decks or PDFs
+        embed, or that is also ingested on its own, is one item, `part of`
+        each container. It is labelled ``"<container title> — <name>"`` by
+        its first name: in the deck's archive (``image1.png``), or its
+        first place in the PDF (``page 6, image 1``; ADR-0008), and its
+        other names become aliases, unless another item has one as its
+        label. Its bytes are uploaded from the file the record keeps, under
+        the name ``"<title> <name>"``, with the file's suffix when the name
+        has none, only when no file of the item holds them. It is a
+        `photograph` when that file is an image's, and an `artifact`
+        otherwise.
 
         Each container asserts its media additively: one ``part of ->
-        container`` per slide the medium is on, slide-qualified, plus
-        `instance of`, `media file` and `media SHA-1`, each referenced
-        ``stated in -> the container``. A statement another container (or
-        the artifact itself) made already gains this container's reference
-        instead of a duplicate. A medium the never-ingest list names, by
-        a name or by its SHA-1, is left out: neither registered nor
-        uploaded.
+        container`` per slide or page the medium is on, qualified with its
+        number, plus `instance of`, `media file` and `media SHA-1`, each
+        referenced ``stated in -> the container``. A statement another
+        container (or the artifact itself) made already gains this
+        container's reference instead of a duplicate. A medium the
+        never-ingest list names, by a name or by its SHA-1, is left out:
+        neither registered nor uploaded.
         """
         if not record.media:
             return {}
@@ -723,7 +729,7 @@ class Registrar:
         # MediaWiki refuses some characters in a file name
         prefix = (
             re.sub(r"[^A-Za-z0-9 _.-]+", "", record.title).strip()
-            or "presentation"
+            or record.container
         )
         title = _stored_term(record.title)
         derived: dict[str, str] = {}
@@ -731,6 +737,9 @@ class Registrar:
             if self._excluded(medium.names, key):
                 continue
             path = directory / medium.file
+            # the record names the file for the medium's SHA-1 and the
+            # suffix of its first name
+            suffix = PurePosixPath(medium.file).suffix.lower()
             if path.is_symlink() or file_sha1(path) != key:
                 raise RuntimeError(
                     f"{medium.file} does not hold the bytes its record "
@@ -759,10 +768,11 @@ class Registrar:
             # uploaded only when no file of the item holds the bytes, so a
             # medium another container embeds adds no second blob
             if not held:
+                name = medium.names[0]
+                if not PurePosixPath(name).suffix:
+                    name += suffix
                 held = [
-                    self.client.upload_file(
-                        path, filename=f"{prefix} {medium.names[0]}"
-                    )
+                    self.client.upload_file(path, filename=f"{prefix} {name}")
                 ]
             if item is None:
                 item = self.client.wbi.item.new()
@@ -773,7 +783,11 @@ class Registrar:
                     _fitted(
                         slides,
                         ")",
-                        prefix="media embedded in the presentation (slide ",
+                        prefix=(
+                            "image placed within the PDF (page "
+                            if record.container == "pdf"
+                            else "media embedded in the presentation (slide "
+                        ),
                         at=", ",
                     ),
                 )
@@ -781,10 +795,11 @@ class Registrar:
                 if self._takes_alias(item, name, key):
                     item.aliases.set("en", name)
                     changed = True
-            image = (
-                PurePosixPath(medium.names[0]).suffix.lower() in IMAGE_SUFFIXES
+            kind = (
+                items["photograph"]
+                if suffix in IMAGE_SUFFIXES
+                else items["artifact"]
             )
-            kind = items["photograph"] if image else items["artifact"]
             statements = [
                 _item_claim(instance_of, kind, stated_in, container),
                 *(

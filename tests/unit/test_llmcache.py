@@ -3243,7 +3243,7 @@ class TestTheExtractor:
                 return json.dumps(manifest)
 
             def missing(parsed):
-                return [e.id for e in parsed if not e.summary]
+                return [e.id for e in parsed.entities if not e.summary]
 
         else:
             answers = functools.partial(segmenting, False)

@@ -23,14 +23,15 @@ yizkr.pipeline.orchestrate), each named for its places, "page 6, image
 beside each image's bytes, its own transcription
 (`derived_transcription`), which names the image by its SHA-1.
 
-The write registers a deck's derived media from that record
+The write registers a container's derived media from that record
 (`Registrar.register_derived_media` in yizkr.pipeline.registrar), after
-the deck itself: every statement a deck contributes to a derived item is
-referenced ``stated in -> that presentation`` (MODELING.md; ADR-0003).
-Derived items are keyed on content (ADR-0010), so an image shared by
-several decks is one item that is ``part of`` each of them. A PDF's images
-are recorded, and not registered: no claim cites them, since their
-transcriptions are not extracted (ADR-0008).
+the container itself: every statement a container contributes to a
+derived item is referenced ``stated in -> that container`` (MODELING.md;
+ADR-0003). Derived items are keyed on content (ADR-0010), so an image
+shared by several decks or PDFs is one item that is ``part of`` each of
+them. A PDF's image with a transcription of its own is also a document of
+its own, whose claims cite the image (yizkr.pipeline.orchestrate,
+ExcerptRun; ADR-0008).
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -251,6 +252,9 @@ class DerivedMediaRecord(BaseModel):
 
     # the container, the artifact the media are part of
     source_sha1: Sha1
+    # what kind of container it is: a deck, whose media are on slides, or
+    # a PDF, whose images are placed within its pages
+    container: Literal["presentation", "pdf"] = "presentation"
     # the container's title, which each medium's label begins with:
     # "<title> — <media name>" (ADR-0008)
     title: str

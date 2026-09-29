@@ -516,6 +516,36 @@ def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     ]
 
 
+def test_a_pdf_s_excerpt_leaves_the_wiki_alone(
+    tmp_path, refusals, monkeypatch
+):
+    """A PDF read page by page (#176) and the image it places, extracted as
+    a document of its own (#397): neither asks anything of the wiki before
+    the write."""
+    from tests.unit.test_pdf_pages import LETTER_SHA1, booklet
+    from yizkr.pipeline import transcribe
+    from yizkr.pipeline.orchestrate import EXCERPT
+
+    # a scripted engine reads the image; no poppler tool runs
+    monkeypatch.setattr(transcribe, "require_pdf_renderer", lambda *a: None)
+    folder = tmp_path / "pdfs"
+    folder.mkdir()
+    (folder / "booklet.pdf").write_bytes(booklet())
+
+    class Booklet(BeforeTheWrite):
+        def _llm(self, role, doc):
+            return ScriptedEngine(doc.sha1, *PEOPLE["postcard-1938.txt"])
+
+    orchestrator = Booklet(folder, tmp_path / "state", refusals)
+    assert orchestrator.run() == 2
+    assert refusals.asked == []
+    excerpt = orchestrator._excerpts[LETTER_SHA1]
+    assert excerpt.kind == EXCERPT
+    assert excerpt.state.status == AWAITING_CLAIMS, excerpt.state.error
+    states = run_state(orchestrator.rundir)
+    assert {states[stage].status for stage in stages(excerpt)} == {DONE}
+
+
 def test_adjudication_given_a_roster_asks_nothing_of_the_wiki(refusals):
     """The per-document blocking and adjudication (reconcile.adjudicate)
     take the roster as an input: given one, they read nothing from the

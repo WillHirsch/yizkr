@@ -1,10 +1,11 @@
-"""Offline tests for how a period is dated (#231): a marriage's date is its
-spouse statement's start time and its end the end time, a point in time on
-a spouse or residence statement dates an observation, and each end has a
-range of its own (docs/MODELING.md, "Marriages, residences and other
-periods"). test_gedcom.py pins the GEDCOM adapter and test_disagreement.py
-the disagreement report; this file pins the extraction prompts, the
-manifest's bounds and the person timeline.
+"""Offline tests for how a period is dated (#231): a residence's start
+and end are its statement's start and end time, a point in time on it
+dates an observation, and each end has a range of its own
+(docs/MODELING.md, "Marriages, residences and other periods"). Since
+ADR-0036 (#407) the extraction prompts date a marriage by its wedding and
+end events, not by a spouse statement. test_gedcom.py pins the GEDCOM
+adapter and test_disagreement.py the disagreement report; this file pins
+the extraction prompts, the manifest's bounds and the person timeline.
 """
 
 from __future__ import annotations
@@ -32,9 +33,7 @@ def flat(text: str) -> str:
 
 def dating_rule(prompt: str) -> str:
     """The prompt's bullet on dating a period."""
-    (rule,) = re.findall(
-        r"^- Dating a marriage.*?(?=^- )", prompt, re.M | re.S
-    )
+    (rule,) = re.findall(r"^- Dating a period.*?(?=^- )", prompt, re.M | re.S)
     return flat(rule)
 
 
@@ -42,25 +41,31 @@ class TestTheExtractionPrompts:
     """The extractor is told the convention, in both prompts alike."""
 
     @PROMPTS
-    def test_a_marriage_is_dated_by_its_start_and_end(self, prompt):
+    def test_a_period_is_dated_by_its_start_and_end(self, prompt):
         rule = dating_rule(prompt)
         assert (
-            "a marriage's date is `start_time` on the `spouse` claim" in rule
-        )
-        assert "(a divorce, an annulment, widowhood) is its `end_time`" in rule
-        assert (
-            "a move in and a move out date a `residence` the same way" in rule
+            "a residence, an occupation or a membership is dated by its "
+            "`start_time` and `end_time` qualifiers, a move in and a move "
+            "out as its start and end" in rule
         )
 
     @PROMPTS
-    def test_a_point_in_time_is_an_observation_never_a_wedding(self, prompt):
+    def test_a_marriage_is_dated_by_its_events(self, prompt):
+        # ADR-0036: no spouse statement carries a wedding's date
         rule = dating_rule(prompt)
         assert (
-            "`point_in_time` on a spouse or residence claim only records a "
-            "date at which the source presents the marriage or the "
-            "residence as holding (a census, a directory entry), never a "
-            "wedding date; a document that merely names a spouse gives no "
-            "such date."
+            "A marriage has no dates of its own: its wedding and its end "
+            "are events, each with its own `point_in_time`." in rule
+        )
+        assert "spouse" not in rule
+
+    @PROMPTS
+    def test_a_point_in_time_is_an_observation(self, prompt):
+        rule = dating_rule(prompt)
+        assert (
+            "`point_in_time` on such a claim only records a date at which "
+            "the source presents it as holding (a census, a directory "
+            "entry)."
         ) in rule
 
     @PROMPTS
@@ -71,10 +76,10 @@ class TestTheExtractionPrompts:
             "takes `earliest_end_date` and `latest_date`"
         ) in rule
         assert (
-            'Married "between X and Y" is start_time X with earliest_date X '
-            "and latest_start_date Y"
+            'Moved in "between X and Y" is start_time X with earliest_date '
+            "X and latest_start_date Y"
         ) in rule
-        assert 'divorced "before Z" is end_time Z with latest_date Z' in rule
+        assert 'moved out "before Z" is end_time Z with latest_date Z' in rule
 
     @PROMPTS
     def test_an_entitys_own_start_or_end_is_a_date_value(self, prompt):
@@ -127,7 +132,7 @@ class TestTheExtractionPrompts:
         description = flat(schema["$defs"]["TimeValue"]["description"])
         assert (
             "A start_time or end_time qualifier dating a period (a "
-            "marriage, a residence) takes that end's own bounds instead: "
+            "residence, an occupation) takes that end's own bounds instead: "
             "earliest_date/latest_start_date for a start, "
             "earliest_end_date/latest_date for an end."
         ) in description

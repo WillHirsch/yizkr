@@ -4,18 +4,35 @@ Status: **accepted** (owner decision 2026-09-29, #385). Like ADR-0031
 and ADR-0036, the owner's merge of the PR that adds it records its
 acceptance; #385's implementation carries it out.
 
-Amended by #389 (2026-09-29): the transcription check, the stream
-assembly and language detection no longer read wording (§10): the check
-reads the transcription record (ADR-0037) and its English signatures
-only flag, the answer is the text after the last tool result, and
-detection reads a text outside its editorial marks.
-
 Amended by #386 (2026-09-29): the critic's findings are validated records
 that name their entity and claim by id and give their axis and a
 category (ADR-0023 §3), so the sweep's item on the critic's target
 grammar is resolved; and the review sheet's `critique_notes` puts each
 finding on exactly one row (its claim's, else the first row naming its
 entity), not on every row of its subject.
+
+Amended by #389 (2026-09-29): the transcription check, the stream
+assembly and language detection no longer read wording (§10): the check
+reads the transcription record (ADR-0037) and its English signatures
+only flag, the answer is the text after the last tool result, and
+detection reads a text outside its editorial marks.
+
+Amended by #407 (2026-09-29): the extraction prompts ask for records,
+roles, kinship classes, markers as claims, civil status, unions and
+judgement notes (§5). A claim names its own document as subject by an
+`artifact` reference, the source's own content key; validation takes one
+only on a property the manifest marks `document_subject` (`issued_by`,
+§3.4), and only naming the claim's own source, and refuses a claim of
+such a property about anything else, as a counted reject. The writer
+checks the same rule itself, since `yizkr write` takes a batch without
+validating it, refusing and counting a claim that breaks it, and
+resolves a document subject to the artifact item as it resolves the
+source. A kinship term other than a cousin's with no "great-" has degree
+0 (§3.3). A note's categories are written `kind`, `relation`,
+`date_reading`, `identity` and `other`, each its manifest item's key
+less `judgement_`. An entity's record or note that fails validation is
+set aside and counted in `coverage.json` (`records`, `notes`), and a
+claim whose note fails is a counted reject.
 
 **Decided by the owner (2026-09-29):**
 
