@@ -960,13 +960,14 @@ class TestReuse:
         reader = Reader(
             {"family-history.pdf": [reading, record_answer(FIRST, SECOND)]}
         )
-        monkeypatch.setattr(
-            transcription_check, "media_page_count", lambda path: None
-        )
+        # transcribe holds its own name for the count: both are set, so
+        # the count is unknown when the reading is made even where
+        # pdfinfo is installed
+        for module in (transcription_check, transcribe):
+            monkeypatch.setattr(module, "media_page_count", lambda path: None)
         run(tmp_path, corpus, reader)
-        monkeypatch.setattr(
-            transcription_check, "media_page_count", lambda path: 2
-        )
+        for module in (transcription_check, transcribe):
+            monkeypatch.setattr(module, "media_page_count", lambda path: 2)
         again = run(tmp_path, corpus, reader)
         (aside,) = set_asides(again)
         assert "(pages-extra)" in aside["reason"]
