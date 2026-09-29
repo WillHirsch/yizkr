@@ -1,6 +1,11 @@
 # ADR-0012: Organizations as agents
 
 Status: accepted
+Amended by [ADR-0031](0031-the-relation-decides-the-kind.md) (#202,
+2026-09-29): the relation a source states decides an entity's kind
+(Fork C), and a source that uses one institution both ways gives two
+items, a place and an organisation located at it, never one entity of
+its dominant use (Forks C and F).
 
 ## Context
 
