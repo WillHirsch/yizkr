@@ -58,12 +58,26 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
+
+# the most characters Wikibase takes in a label or an alias (its default
+# limit on a term's length)
+TERM_LIMIT = 250
+
+
+def _stored_term(term: str) -> str:
+    """`term` in the form Wikibase stores a label or alias in: Unicode NFC,
+    with the whitespace around it trimmed. The reading of the instance
+    holds labels in that form, so a title is compared with it, and set,
+    in that form too: in any other, a label another item holds would look
+    free, and an alias the item has would look missing."""
+    return unicodedata.normalize("NFC", term).strip()
 
 
 class ExcludedMedia(RuntimeError):
@@ -352,18 +366,28 @@ class Registrar:
         )
 
     def _free_label(self, wanted: str, content_sha1: str) -> str:
-        """`wanted`, or, when another item has it as its label, `wanted`
-        with the media's content tag: labels stay unique per kind."""
+        """`wanted`, which is in the form Wikibase stores a label in
+        (_stored_term), or, when another item has it as its label,
+        `wanted` with the media's content tag: labels stay unique per
+        kind. A label Wikibase would refuse for its length is refused
+        here, before anything is written, so that a write it would refuse
+        leaves no half-made item behind."""
         labels = self._read().labels
-        if wanted not in labels:
-            return wanted
-        tagged = f"{wanted} [{content_sha1[:8]}]"
-        if tagged not in labels:
-            return tagged
-        raise RuntimeError(
-            f"the labels {wanted!r} and {tagged!r} both name other items, "
-            f"and labels stay unique: no item was made under either"
-        )
+        label = wanted
+        if wanted in labels:
+            label = f"{wanted} [{content_sha1[:8]}]"
+            if label in labels:
+                raise RuntimeError(
+                    f"the labels {wanted!r} and {label!r} both name other "
+                    f"items, and labels stay unique: no item was made "
+                    f"under either"
+                )
+        if len(label) > TERM_LIMIT:
+            raise ValueError(
+                f"the label {label!r} is longer than the {TERM_LIMIT} "
+                f"characters Wikibase takes: no item was made"
+            )
+        return label
 
     def _takes_alias(self, item, name: str, content_sha1: str) -> bool:
         """Should `name`, another name for an item's bytes, become its alias?
@@ -371,13 +395,16 @@ class Registrar:
         Name variants live in aliases (MODELING.md), but not a name that
         belongs to other content: another item's label, or the plain form
         of this item's content-tagged label (tagged because that name was
-        taken). Aliasing it would cross-link two artifacts.
+        taken). Aliasing it would cross-link two artifacts. Nor does a
+        name longer than Wikibase takes. `name` is in the stored form
+        (_stored_term), as the item's terms are.
         """
         current = str(item.labels.get("en") or "")
         aliases = {str(alias) for alias in item.aliases.get("en") or []}
         return (
             name != current
             and name not in aliases
+            and len(name) <= TERM_LIMIT
             and current != f"{name} [{content_sha1[:8]}]"
             and self._read().labels.get(name, set()) <= {item.id}
         )
@@ -403,7 +430,8 @@ class Registrar:
         a file that no longer has it, as it refuses media on the
         never-ingest list, before it asks anything of the wiki. Without
         media there is nothing to find an artifact by, so `media_path` is
-        required.
+        required. The title is taken in the form Wikibase stores a label
+        in (_stored_term), and one blank in that form is refused.
         """
         if media_path is None:
             raise ValueError(
@@ -421,6 +449,12 @@ class Registrar:
             raise ExcludedMedia(
                 f"{media_path.name} is on the never-ingest list; nothing "
                 f"was registered or uploaded"
+            )
+        title = _stored_term(title)
+        if not title:
+            raise ValueError(
+                f"{media_path.name} has a blank title: no label to register "
+                f"it under"
             )
         properties, items = self.client.vocabulary()
         if artifact_type not in items:
@@ -605,7 +639,10 @@ class Registrar:
                     f"{medium.file} does not hold the bytes its record "
                     f"names; nothing of it was registered or uploaded"
                 )
-            labels = [f"{record.title} — {name}" for name in medium.names]
+            labels = [
+                _stored_term(f"{record.title} — {name}")
+                for name in medium.names
+            ]
             found = instance.by_sha1.get(key)
             item = self.client.wbi.item.get(found) if found else None
             changed = item is None

@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import unicodedata
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -424,6 +425,42 @@ class Untouchable:
         raise AssertionError(f"the wiki was asked for {name}")
 
 
+def stored(term: str) -> str:
+    """A term as Wikibase stores it: trimmed and in Unicode NFC."""
+    return unicodedata.normalize("NFC", term).strip()
+
+
+class StoringWiki(FakeWiki):
+    """The in-memory wiki keeping terms as Wikibase does: every label,
+    description and alias trimmed and in NFC. Like Wikibase, it refuses an
+    item whose English label and description are another item's."""
+
+    def store(self, entity):
+        data = entity.get_json()
+        label = stored(data.get("labels", {}).get("en", {}).get("value", ""))
+        description = stored(
+            data.get("descriptions", {}).get("en", {}).get("value", "")
+        )
+        if label and description:
+            for qid, other in self.entities.items():
+                if qid != entity.id and (
+                    other.get("labels", {}).get("en", {}).get("value"),
+                    other.get("descriptions", {}).get("en", {}).get("value"),
+                ) == (label, description):
+                    raise WriteRefused(
+                        f"{qid} already has this label and description"
+                    )
+        written = super().store(entity)
+        record = self.entities[written.id]
+        for kind in ("labels", "descriptions"):
+            for term in record.get(kind, {}).values():
+                term["value"] = stored(term["value"])
+        for terms in record.get("aliases", {}).values():
+            for term in terms:
+                term["value"] = stored(term["value"])
+        return self.wbi.item.get(written.id)
+
+
 # -- fictional media (docs/EXAMPLES.md) ---------------------------------------
 
 # two different scans of the Löbig family's studio portrait of the 1890s
@@ -718,6 +755,73 @@ class TestRegisterArtifact:
         assert not result.created
         assert len(wiki.entities) == 2
 
+    def test_a_label_longer_than_wikibase_takes_is_refused(self, tmp_path):
+        """A title Wikibase would refuse as a label, whether too long as it
+        is or once tagged, is refused before anything is uploaded or
+        written: no half-made item is left, retry after retry."""
+        wiki = FakeWiki()
+        long = "Studio portrait " * 16  # 255 characters, trimmed
+        with pytest.raises(ValueError, match="250 characters"):
+            register(wiki, scan(tmp_path, PORTRAIT), long)
+        # 245 characters, which another item holds: tagged, 256
+        taken = ("Studio portrait " * 16)[:245]
+        wiki.item(taken)
+        writes = wiki.writes
+        for _ in range(2):
+            with pytest.raises(ValueError, match="250 characters"):
+                register(wiki, scan(tmp_path, PORTRAIT), taken)
+        assert wiki.writes == writes
+        assert wiki.media.requests == []
+
+    def test_a_name_longer_than_an_alias_takes_is_not_one(self, tmp_path):
+        wiki = FakeWiki()
+        first = register(wiki, scan(tmp_path, PORTRAIT))
+        writes = wiki.writes
+        again = register(
+            wiki,
+            scan(tmp_path, PORTRAIT, name="x.png", folder="x"),
+            "Studio portrait " * 17,
+        )
+        assert again.artifact_qid == first.artifact_qid
+        assert wiki.writes == writes
+        assert not wiki.entities[first.artifact_qid].get("aliases")
+
+    def test_a_blank_title_is_refused(self, tmp_path):
+        wiki = Untouchable()
+        with pytest.raises(ValueError, match="blank title"):
+            register(wiki, scan(tmp_path, PORTRAIT), " \t ")
+        assert wiki.asked == []
+
+    def test_a_property_label_leaves_the_title_free(self, tmp_path):
+        """Labels are unique per kind: a property with the title as its
+        label leaves the title free for an item."""
+        wiki = FakeWiki()
+        wiki.entities["P900"] = {
+            "id": "P900",
+            "type": "property",
+            "labels": {"en": {"language": "en", "value": TITLE}},
+            "claims": {},
+        }
+        result = register(wiki, scan(tmp_path, PORTRAIT))
+        assert label_of(wiki, result.artifact_qid) == TITLE
+
+    def test_its_own_tag_keeps_the_plain_title_from_its_aliases(
+        self, tmp_path
+    ):
+        """An item tagged because its title named another item never takes
+        that title as an alias, even once the other item is renamed: the
+        title belongs to the other artifact."""
+        wiki = FakeWiki()
+        first = register(wiki, scan(tmp_path, PORTRAIT))
+        changed = register(wiki, scan(tmp_path, RESCAN, folder="rescans"))
+        # a curator renames the first artifact
+        label = wiki.entities[first.artifact_qid]["labels"]["en"]
+        label["value"] = "Studio portrait, 1890s"
+        writes = wiki.writes
+        register(wiki, scan(tmp_path, RESCAN, folder="rescans"))
+        assert wiki.writes == writes
+        assert not wiki.entities[changed.artifact_qid].get("aliases")
+
     def test_registration_needs_media(self):
         wiki = Untouchable()
         with pytest.raises(ValueError, match="SHA-1 of its media"):
@@ -772,6 +876,89 @@ class TestRegisterArtifact:
         assert again.fragment_qids == first.fragment_qids
         assert changed.artifact_qid != first.artifact_qid
         assert_labels_unique(wiki)
+
+
+# -- terms in the form Wikibase stores them (#367 review) ---------------------
+
+# the portrait's title as a file name made on some systems keeps it:
+# decomposed (NFD), which the instance stores composed (NFC)
+NFD_TITLE = unicodedata.normalize("NFD", TITLE)
+FROM_FILE = "ingested by `yizkr ingest run` from portrait-1890s.png"
+
+
+class TestTermsInTheStoredForm:
+    """Wikibase keeps every label trimmed and in NFC, and the reading of
+    the instance holds them so: a title is compared, and set, in that form
+    (StoringWiki keeps terms as the instance does)."""
+
+    @pytest.mark.parametrize(
+        "title",
+        [NFD_TITLE, f"{TITLE} ", f"\t{TITLE}"],
+        ids=["decomposed", "trailing space", "leading tab"],
+    )
+    def test_a_title_another_item_holds_is_tagged(self, tmp_path, title):
+        wiki = StoringWiki()
+        held = wiki.item(TITLE)  # a person or place the writer minted, say
+        result = register(wiki, scan(tmp_path, PORTRAIT), title)
+        assert result.artifact_qid != held
+        assert label_of(wiki, result.artifact_qid) == (
+            f"{TITLE} [{sha1(PORTRAIT)[:8]}]"
+        )
+        assert_labels_unique(wiki)
+
+    def test_changed_bytes_under_such_a_title_are_an_artifact(self, tmp_path):
+        """The file's bytes change under its name: the same title and the
+        same description. The new artifact's tagged label keeps the pair
+        unique, so the instance takes its second write, and no item is
+        left without a label."""
+        wiki = StoringWiki()
+        first = register_artifact(
+            wiki, scan(tmp_path, PORTRAIT), "photograph", NFD_TITLE, FROM_FILE
+        )
+        changed = register_artifact(
+            wiki,
+            scan(tmp_path, RESCAN, folder="rescans"),
+            "photograph",
+            NFD_TITLE,
+            FROM_FILE,
+        )
+        assert changed.artifact_qid != first.artifact_qid
+        assert label_of(wiki, first.artifact_qid) == TITLE
+        assert label_of(wiki, changed.artifact_qid) == (
+            f"{TITLE} [{sha1(RESCAN)[:8]}]"
+        )
+        assert all(label_of(wiki, qid) for qid in wiki.entities)
+
+    def test_a_rerun_under_such_a_title_writes_nothing(self, tmp_path):
+        wiki = StoringWiki()
+        path = scan(tmp_path, PORTRAIT)
+        first = register(wiki, path, NFD_TITLE)
+        writes = wiki.writes
+        assert (
+            register(wiki, path, NFD_TITLE).artifact_qid == first.artifact_qid
+        )
+        assert wiki.writes == writes
+        assert not wiki.entities[first.artifact_qid].get("aliases")
+
+    def test_a_medium_label_is_compared_as_stored(self, tmp_path):
+        """A deck titled in NFD: its image's label is its title's stored
+        form, tagged when another item holds that, and a second write of
+        the deck writes nothing."""
+        wiki = StoringWiki()
+        title = f"{SHOP}, Flörburg"
+        decomposed = unicodedata.normalize("NFD", title)
+        held = wiki.item(f"{title} — image1.png")
+        media = [("image1.png", IMAGE, [1])]
+        _, derived = register_deck(wiki, tmp_path, "a", decomposed, media)
+        qid = derived[sha1(IMAGE)]
+        assert qid != held
+        assert label_of(wiki, qid) == (
+            f"{title} — image1.png [{sha1(IMAGE)[:8]}]"
+        )
+        assert_labels_unique(wiki)
+        writes = wiki.writes
+        register_deck(wiki, tmp_path, "a", decomposed, media)
+        assert wiki.writes == writes
 
 
 # -- the never-ingest list (#29) ----------------------------------------------
@@ -992,6 +1179,45 @@ class TestFragments:
 
         assert result.fragment_qids[2] == curated
         assert result.fragment_qids[1] != curated
+
+    def test_of_two_fragments_for_a_page_the_earliest_is_taken(self, tmp_path):
+        """Two fragments for one page of an artifact are a duplicate the
+        key exists to prevent: the numerically earliest is taken, and no
+        third is made."""
+        wiki = FakeWiki()
+        path = scan(tmp_path, EXTRACT, name="birth-extract-1938.pdf")
+        qid = register(wiki, path, EXTRACT_TITLE, "certificate").artifact_qid
+        first, second = (
+            wiki.item(
+                f"first page, copy {n}",
+                ("instance_of", ITEMS["artifact_fragment"], None),
+                ("part_of", qid, "1"),
+            )
+            for n in (1, 2)
+        )
+        result = register(wiki, path, EXTRACT_TITLE, "certificate", pages=1)
+        assert result.fragment_qids == {1: first} and first != second
+
+    def test_a_fragment_label_a_registrar_gave_is_taken(self, tmp_path):
+        """A registrar keeps the labels it gives fragments in its reading:
+        an artifact it registers later under one of them is tagged."""
+        wiki = FakeWiki()
+        registrar = Registrar(wiki)
+        registrar.register_artifact(
+            scan(tmp_path, EXTRACT, name="e.pdf"),
+            "certificate",
+            EXTRACT_TITLE,
+            pages=1,
+        )
+        later = registrar.register_artifact(
+            scan(tmp_path, SECOND_COPY, name="p.pdf"),
+            "certificate",
+            f"{EXTRACT_TITLE}, page 1",
+        )
+        assert label_of(wiki, later.artifact_qid) == (
+            f"{EXTRACT_TITLE}, page 1 [{sha1(SECOND_COPY)[:8]}]"
+        )
+        assert_labels_unique(wiki)
 
 
 # -- derived media, from their record (ADR-0008; #50, #128) -------------------
@@ -1322,6 +1548,99 @@ class TestRegisterDerivedMedia:
             for qid in wiki.entities
         )
 
+    def test_one_registrar_makes_one_item_for_an_image_two_decks_embed(
+        self, tmp_path
+    ):
+        """A registrar keeps the media it registers in its reading: a
+        second deck embedding the image finds its item (as one registrar
+        for a whole corpus does)."""
+        wiki = FakeWiki()
+        registrar = Registrar(wiki)
+        found = []
+        for name, title in (("a", "Deck A"), ("b", "Deck B")):
+            deck = deck_file(tmp_path, name)
+            registrar.register_artifact(deck, "presentation", title)
+            record, directory = recorded(
+                tmp_path, deck, title, [("image1.png", IMAGE, [1])]
+            )
+            found.append(registrar.register_derived_media(record, directory))
+        assert found[0] == found[1]
+        assert [
+            qid
+            for qid in wiki.entities
+            if sha1(IMAGE) in strings(wiki, qid, "media_sha1")
+        ] == list(found[0].values())
+
+    def test_a_medium_label_a_registrar_gave_is_taken(self, tmp_path):
+        """A registrar keeps the labels it gives media in its reading: an
+        artifact it registers later under one of them is tagged."""
+        wiki = FakeWiki()
+        registrar = Registrar(wiki)
+        deck = deck_file(tmp_path, "a")
+        registrar.register_artifact(deck, "presentation", "Deck A")
+        record, directory = recorded(
+            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        )
+        registrar.register_derived_media(record, directory)
+        later = registrar.register_artifact(
+            scan(tmp_path, PORTRAIT), "photograph", "Deck A — image1.png"
+        )
+        assert label_of(wiki, later.artifact_qid) == (
+            f"Deck A — image1.png [{sha1(PORTRAIT)[:8]}]"
+        )
+        assert_labels_unique(wiki)
+
+    def test_a_medium_listed_by_another_of_its_names_is_left_out(
+        self, tmp_path
+    ):
+        """Bytes the archive holds under two names are one medium, and the
+        list naming either name leaves it out: never registered or
+        uploaded."""
+        wiki = FakeWiki()
+        registrar = Registrar(
+            wiki, exclusions=ExclusionList.parse("image4.png\n")
+        )
+        deck = deck_file(tmp_path, "a")
+        registrar.register_artifact(deck, "presentation", SHOP)
+        record, directory = recorded(
+            tmp_path,
+            deck,
+            SHOP,
+            [
+                ("image2.png", IMAGE, [2]),
+                ("image4.png", IMAGE, [3]),
+                ("image5.png", OTHER_IMAGE, [4]),
+            ],
+        )
+        derived = registrar.register_derived_media(record, directory)
+        assert list(derived) == [sha1(OTHER_IMAGE)]
+        assert sha1(IMAGE) not in wiki.files.values()
+        assert not any(
+            sha1(IMAGE) in strings(wiki, qid, "media_sha1")
+            for qid in wiki.entities
+        )
+
+    def test_a_kept_medium_reached_through_a_link_is_refused(self, tmp_path):
+        """The file a record keeps must be a regular file: one replaced by a
+        link is never uploaded through, even to the medium's own bytes."""
+        wiki = FakeWiki()
+        registrar = Registrar(wiki)
+        deck = deck_file(tmp_path, "a")
+        registrar.register_artifact(deck, "presentation", "Deck A")
+        record, directory = recorded(
+            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        )
+        (medium,) = record.media.values()
+        elsewhere = tmp_path / "elsewhere.png"
+        elsewhere.write_bytes(IMAGE)
+        kept = directory / medium.file
+        kept.unlink()
+        kept.symlink_to(elsewhere)
+        requests, writes = len(wiki.media.requests), wiki.writes
+        with pytest.raises(RuntimeError, match="does not hold the bytes"):
+            registrar.register_derived_media(record, directory)
+        assert (len(wiki.media.requests), wiki.writes) == (requests, writes)
+
     def test_no_media_asks_nothing(self, tmp_path):
         wiki = Untouchable()
         record = record_derived_media(
@@ -1487,3 +1806,81 @@ class TestStepRegister:
         with pytest.raises(RuntimeError, match="no longer has the bytes"):
             orchestrator._step_register(doc)
         assert wiki.asked == []
+
+    def test_each_write_reads_the_instance_afresh(self, tmp_path):
+        """Each write's registrar reads the instance anew, so a label an
+        earlier write gave an item (a person the writer minted, say) is
+        taken: no duplicate label."""
+        wiki = FakeWiki()
+        orchestrator, _ = self.orchestrator(
+            tmp_path,
+            wiki,
+            [("a-portrait.png", PORTRAIT), ("studio.png", RESCAN)],
+        )
+        first, second = orchestrator.documents()
+        orchestrator._step_register(first)
+        wiki.item("studio")  # what the first write minted, between the two
+        qid = orchestrator._step_register(second)
+        assert label_of(wiki, qid) == f"studio [{sha1(RESCAN)[:8]}]"
+        assert_labels_unique(wiki)
+
+    def test_a_decks_write_reads_the_instance_once(self, tmp_path):
+        """One registrar per write: the deck, its slides and its media in
+        one reading of the instance."""
+        wiki = FakeWiki()
+        orchestrator, _ = self.orchestrator(tmp_path, wiki)
+        build_deck(orchestrator.folder / DECK)
+        (doc,) = orchestrator.documents()
+        orchestrator._step_register(doc)
+        assert wiki.reads == 1
+
+    def test_a_record_made_for_other_bytes_is_made_again(self, tmp_path):
+        """A derived-media record in the deck's directory made for other
+        deck bytes (as in a directory two sources shared) is made again at
+        the write: the deck's own images are registered, as part of it,
+        and nothing is made part of the other deck."""
+        wiki = FakeWiki()
+        orchestrator, _ = self.orchestrator(tmp_path, wiki)
+        build_deck(orchestrator.folder / DECK)
+        (doc,) = orchestrator.documents()
+        other = deck_file(tmp_path, "other")
+        other_qid = (
+            Registrar(wiki)
+            .register_artifact(other, "presentation", "Deck other")
+            .artifact_qid
+        )
+        record_derived_media(
+            PresentationContent(
+                slides=[Slide(number=1, text="")],
+                media=[
+                    EmbeddedMedium(name="image1.png", data=IMAGE, slides=[1])
+                ],
+            ),
+            source_sha1=sha1(other.read_bytes()),
+            title="Deck other",
+            directory=doc.dir,
+        )
+        deck = orchestrator._step_register(doc)
+        assert deck != other_qid
+        assert parts_of(wiki, other_qid)["medium"] == {}
+        assert sorted(parts_of(wiki, deck)["medium"]) == ["1", "2", "3"]
+
+
+class TestRegisterCommand:
+    def test_it_needs_the_media_file(self, capsys):
+        """`yizkr ingest register` finds or makes the artifact by its media's
+        SHA-1, so it refuses to run without the media file."""
+        from yizkr.cli import build_parser
+
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(
+                [
+                    "ingest",
+                    "register",
+                    "--type",
+                    "photograph",
+                    "--title",
+                    TITLE,
+                ]
+            )
+        assert "--file" in capsys.readouterr().err

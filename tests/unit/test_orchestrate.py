@@ -35,6 +35,7 @@ from yizkr.pipeline.orchestrate import (
     DUPLICATE,
     FAILED,
     PAUSED,
+    PENDING,
     TRANSCRIPTION_VOLATILE,
     WRITTEN,
     DocumentRun,
@@ -482,6 +483,29 @@ class TestResume:
         assert orchestrator.run() == 2
         (doc,) = orchestrator.documents()
         assert doc.state.status == AWAITING_EQUIVALENCES
+
+    @pytest.mark.parametrize(
+        "fresh", [True, False], ids=["view reused", "batch of the run"]
+    )
+    def test_a_pending_state_beside_a_batch_reads_batched(
+        self, tmp_path, fresh
+    ):
+        """A new directory's state is saved as `pending` before any view,
+        so a run stopped before it saved the state again leaves `pending`
+        beside a batch that stands. The extract-only pass says `batched`,
+        whether it reuses the batch view (a new orchestrator) or takes the
+        batch its run derived already."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        if fresh:
+            orchestrator = ScriptedOrchestrator(
+                orchestrator.folder, orchestrator.state_dir, log=quiet
+            )
+        (doc,) = orchestrator.documents()
+        doc.state.status = PENDING
+        doc.save()
+        (doc,) = orchestrator.documents()
+        assert orchestrator.advance(doc, stop_after_extract=True) == BATCHED
 
 
 class TestIsolationAndDiscovery:
@@ -2943,8 +2967,8 @@ class TestWriteTimeRegistration:
 
     def test_every_write_registers_again(self, tmp_path):
         """A write registers what it writes about each time: the registrar
-        finds by SHA-1 what an earlier write registered, so a write after
-        a reset registers on the reset instance."""
+        finds by SHA-1 what an earlier write registered, and a write that
+        runs on a reset instance registers there."""
         orchestrator = completed_run(tmp_path)
         self.rewrite(orchestrator)
         calls = len(orchestrator.calls)
@@ -3015,3 +3039,36 @@ class TestWriteTimeRegistration:
         assert [e["stage"] for e in this_run(orchestrator, "reused")] == [
             "transcription"
         ]
+
+    def test_a_new_deck_directory_records_its_bytes_before_its_media(
+        self, tmp_path, monkeypatch
+    ):
+        """A deck's derived media are recorded in its directory before any
+        view: its state comes first, so a run killed as it records them
+        leaves a directory the next run takes up, not one it sets aside."""
+        from tests.unit.test_presentation import build_deck
+
+        class Recorded(Exception):
+            """The kill, just after the media were recorded."""
+
+        class KilledAfterTheMedia(ScriptedOrchestrator):
+            def _step_derive_media(self, doc):
+                super()._step_derive_media(doc)
+                raise Recorded
+
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        build_deck(folder / "Family Deck.pptx")
+        with monkeypatch.context() as patch:
+            # nothing saves the state after the kill
+            patch.setattr(Orchestrator, "_save", lambda self, doc: None)
+            killed = KilledAfterTheMedia(folder, tmp_path / "state", log=quiet)
+            killed.run()
+        (doc,) = killed.documents()
+        assert (doc.dir / "derived-media.json").exists()
+        assert json.loads(doc.state_path.read_text())["content_sha1"] == (
+            doc.sha1
+        )
+        again = ScriptedOrchestrator(folder, tmp_path / "state", log=quiet)
+        again.run()
+        assert this_run(again, "set-aside") == []
