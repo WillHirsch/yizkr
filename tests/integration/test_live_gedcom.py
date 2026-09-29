@@ -1,6 +1,6 @@
 """Live write path for the GEDCOM adapter's SOUR/OBJE handling (ADR-0021),
-a residence's date period (#308), a repeated event's alternatives (#322)
-and an undated death (#323).
+a residence's date period (#308), a repeated event's alternatives (#322),
+an undated death (#323) and a marriage's citation (#324).
 
 A source citation (SOUR) must fold into the birth statement's reference
 as a page-number locator, and a multimedia object (OBJE) must become an
@@ -10,7 +10,9 @@ date period (FROM x TO y) must become the residence statement's start and
 end time, each with the range its own phrase states (docs/MODELING.md,
 "Marriages, residences and other periods"). A repeated BIRT or MARR, as
 GEDCOM states an alternative, must become statements of its own, each
-with its own date, circa and citation, beside the first. A DEAT that gives
+with its own date, circa and citation, beside the first, and a citation
+beneath a MARR must reach the reference of the spouse statements it
+dates. A DEAT that gives
 no date, place or cause must become a death event: an item that is an
 instance of `death`, with the person as its participant, which is what
 the possibly-living check reads as death evidence (ADR-0020 §2). All flow
@@ -41,6 +43,8 @@ TEMPLATE = """\
 1 TITL Integration birth register
 0 @S2@ SOUR
 1 TITL Integration burial register
+0 @S3@ SOUR
+1 TITL Integration marriage register
 0 @O1@ OBJE
 1 FILE https://example.test/portrait.jpg
 2 FORM jpg
@@ -72,6 +76,8 @@ TEMPLATE = """\
 1 WIFE @I2@
 1 MARR
 2 DATE 1975
+2 SOUR @S3@
+3 PAGE Volume 4, Page 2
 1 MARR
 2 DATE ABT 1974
 1 DIV
@@ -245,7 +251,8 @@ def test_gedcom_alternatives_are_statements_of_their_own(
     """A repeated BIRT and a repeated MARR land as statements of their own,
     each with its own date, circa and citation: a birth in 1950 per page 1
     and one about 1951 per page 7; a marriage from 1975 until the divorce
-    of 1980, and one from about 1974 (#322)."""
+    of 1980, per the marriage register at its page, and one from about
+    1974 (#322, #324)."""
     _, export = gedcom_artifact
     write = BatchWriter(client).write_batch(
         adapt_gedcom(GEDCOM, artifact=export).batch
@@ -302,16 +309,19 @@ def test_gedcom_alternatives_are_statements_of_their_own(
         ("+1951-00-00T00:00:00Z", [circa], ["Volume 2, Page 7"]),
     ]
     spouses = sorted(
-        qualifiers(statement)
+        (qualifiers(statement), pages(statement))
         for statement in statements("spouse")
         if statement["mainsnak"]["datavalue"]["value"]["id"] == spouse_qid
     )
     assert spouses == [
-        [
-            ("end_time", "+1980-00-00T00:00:00Z"),
-            ("start_time", "+1975-00-00T00:00:00Z"),
-        ],
-        [circa, ("start_time", "+1974-00-00T00:00:00Z")],
+        (
+            [
+                ("end_time", "+1980-00-00T00:00:00Z"),
+                ("start_time", "+1975-00-00T00:00:00Z"),
+            ],
+            ["Volume 4, Page 2"],
+        ),
+        ([circa, ("start_time", "+1974-00-00T00:00:00Z")], []),
     ]
 
 
