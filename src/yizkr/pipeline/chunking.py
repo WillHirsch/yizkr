@@ -42,6 +42,7 @@ from yizkr.pipeline.llm import (
     ConversationalLlmClient,
     ConversationChanged,
     LlmClient,
+    OutputLimitReached,
     at_output_limit,
     for_attempt,
     reject_response,
@@ -818,8 +819,11 @@ class ChunkedClaimExtractor:
         LLM cache a refused answer is kept under its own attempt and a
         later run replays the same attempts to the same outcome. An
         attempt fails when the engine raises or its answer is refused, and
-        each gives its own reason. No handle survives a refused answer:
-        forking would plant known-bad output in every chunk's context."""
+        each gives its own reason. An answer the engine gave up on at its
+        output limit (OutputLimitReached) is an answer refused, not a call
+        unanswered: the engine answered, past its limit. No handle
+        survives a refused answer: forking would plant known-bad output in
+        every chunk's context."""
         handle = None
         answered = False
         reasons: list[str] = []
@@ -830,6 +834,11 @@ class ChunkedClaimExtractor:
                     response, handle = client.open_conversation(prompt)
                 else:
                     response = client.complete(prompt)
+            except OutputLimitReached:
+                answered = True
+                reasons.append(CUT_OFF_AT_LIMIT)
+                handle = None
+                continue
             except Exception as exc:
                 reasons.append(f"{type(exc).__name__}: {exc}")
                 handle = None
@@ -981,10 +990,11 @@ class ChunkedClaimExtractor:
         manifest, or the line-range fallback when the manifest was
         unusable.
 
-        A fallback tier is taken only when the engine answered. When every
-        call of a tier raised (an engine outage), extraction fails
-        instead, so the document is retried rather than extracted by a
-        degraded path the engine never chose.
+        A fallback tier is taken only when the engine answered, an answer
+        it gave up on at its output limit included (_first_turn). When
+        every call of a tier raised otherwise (an engine outage),
+        extraction fails instead, so the document is retried rather than
+        extracted by a degraded path the engine never chose.
         """
         self._log("  scanning document for entities...")
         entities, handle, reasons, answered = self._entity_manifest(
@@ -1118,9 +1128,11 @@ class ChunkedClaimExtractor:
         limit or before its sentinel (parse_chunk_response), is rejected,
         so the retry asks again; one the client kept from an earlier call
         is asked for once more without spending a retry
-        (llm.reject_response). A conversation that changed
-        (ConversationChanged) is no failure of the chunk: it ends the
-        extraction's pass, which starts over."""
+        (llm.reject_response). A call the engine gave up on at its output
+        limit (OutputLimitReached) gave no response to reject: it spends
+        its try as a cut-off one does, and its reason is the same. A
+        conversation that changed (ConversationChanged) is no failure of
+        the chunk: it ends the extraction's pass, which starts over."""
         last_error: Exception = ChunkIncomplete("not attempted")
         tries = 1 + self.retries
         kept_rejected = False
@@ -1130,7 +1142,7 @@ class ChunkedClaimExtractor:
                 if handle is not None:
                     try:
                         response = self.client.fork(handle, prompt)
-                    except ConversationChanged:
+                    except (ConversationChanged, OutputLimitReached):
                         raise
                     except Exception:
                         # fork machinery failed (session gone, old CLI):
@@ -1141,6 +1153,9 @@ class ChunkedClaimExtractor:
                     response = self.client.complete(fallback_prompt)
             except ConversationChanged:
                 raise
+            except OutputLimitReached:
+                last_error = ChunkIncomplete(CUT_OFF_AT_LIMIT)
+                continue
             except Exception as exc:
                 last_error = exc
                 continue

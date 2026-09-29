@@ -21,6 +21,7 @@ from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     LlmClient,
+    OutputLimitReached,
     at_output_limit,
     reject_response,
 )
@@ -143,7 +144,10 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
     (llm.reject_response), so that a client that keeps answers asks the
     critic again next time rather than serving it. One the client kept
     from an earlier call is asked for once more, and the engine's answer
-    is used in its place, as it would be without the cache.
+    is used in its place, as it would be without the cache. A call the
+    engine gave up on at its output limit (llm.OutputLimitReached) gave no
+    answer: there are no findings, and nothing to reject, since the cache
+    keeps nothing for it.
     """
     if not batch.entities and not batch.claims:
         return []
@@ -151,13 +155,17 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
         entities_block=_entities_block(batch) or "(none)",
         claims_block=_claims_block(batch) or "(none)",
     )
-    response = client.complete(prompt)
-    findings, unfinished = _read(client, response)
-    if unfinished and _reject(client, response, unfinished):
+    try:
         response = client.complete(prompt)
         findings, unfinished = _read(client, response)
-        if unfinished:
-            _reject(client, response, unfinished)
+        if unfinished and _reject(client, response, unfinished):
+            response = client.complete(prompt)
+            findings, unfinished = _read(client, response)
+            if unfinished:
+                _reject(client, response, unfinished)
+    except OutputLimitReached:
+        logger.warning("critique %s: no findings", CUT_OFF_AT_LIMIT)
+        return []
     return findings
 
 

@@ -59,7 +59,9 @@ each recompute's miss reasons and replays from the cache's events (§11).
 Amended by #7 (2026-09-29): an answer whose model stopped at the output
 limit (`max_tokens`) is cut off, and rejected as one without its
 terminal sentinel is; the stop reason is judged when the engine gives
-the answer, and an entry does not keep it (§3, §4).
+the answer, an entry does not keep it, and a hit is judged by its text
+alone; a call the claude CLI gave up on at that limit stores nothing,
+and its callers take it as a cut-off answer (§3, §4).
 
 ## Context
 
@@ -294,6 +296,14 @@ extractor use the new answer. The rejectors are:
   answer with no claim JSON or no valid claim, which fails the
   extraction, and for one cut off at the output limit or without its
   terminal sentinel, whose claims are kept.
+
+The stop reason is judged when the engine gives the answer. An entry
+keeps none, so an answer the cache gives from an entry is judged by its
+text alone. The pinned claude CLI hands back no answer its model stopped
+at the output limit: it gives up on it, and the call raises
+`OutputLimitReached` (ADR-0006 §3). Like any error that stores nothing,
+so there is nothing to reject, and the next call asks the engine again;
+the callers take it as a cut-off answer.
 
 The price: a parser fix recovers every response the old parser accepted,
 without a call, but not one it rejected, which is asked again. ADR-0006 §5

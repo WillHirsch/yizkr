@@ -149,7 +149,9 @@ checks:
     fail-fast: true
 
   # More than `max-share` of a stage's last `window` engine calls failing,
-  # once it has made at least `min-count`. Its slice is the stage.
+  # once it has made at least `min-count`; a call the claude CLI gave up on
+  # at the output limit is no failure, and never counted. Its slice is the
+  # stage.
   call-failures:
     enabled: true
     window: 10

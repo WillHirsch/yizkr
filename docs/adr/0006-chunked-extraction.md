@@ -16,9 +16,11 @@ of its media, the key its claims cite, and never by QID; §3 no longer
 lists the language among what a chunk prompt carries, since it carries
 none (§3).
 Amended by #7 (2026-09-29): the terminal sentinel is `{"done": true}`,
-with no self-reported count, and an answer whose model stopped at the
-output limit (`max_tokens`) is cut off, sentinel or no, and rejected in
-the cache as one without its sentinel is (§3, §5).
+with no self-reported count; an answer whose model stopped at the output
+limit (`max_tokens`) is cut off, sentinel or no, and so is a call the
+claude CLI gave up on at that limit, which a fallback tier takes as
+answered; a cut-off answer is rejected in the cache as one without its
+sentinel is (§3, §5).
 
 ## Context
 
@@ -165,11 +167,16 @@ Two contract changes relative to the current prompt:
   *presence* is the gate: a **missing** sentinel is silent truncation,
   so the chunk is marked incomplete and retried. The line carries no
   self-reported count: models routinely miscount a dense chunk by one or
-  more, and a count gated nothing. The engine's own stop reason decides
-  too: an answer whose model stopped at the output limit (`max_tokens`,
-  as the claude-code CLI's result event and the Anthropic API report
-  it) is cut off whatever it holds, its sentinel included, and is
-  marked incomplete and retried as one without its sentinel is.
+  more, and a count gated nothing. The engine's own word on the output
+  limit decides too, where it gives one: an answer whose model stopped
+  at the output limit (`max_tokens`, as the Anthropic API says on its
+  response) is cut off whatever it holds, its sentinel included. The
+  pinned claude CLI hands back no such answer. It gives up on it, with
+  an API-error notice as its last assistant event, whose `error` is
+  `max_output_tokens`, and a result that reports `is_error`, and that
+  structure, never the notice's text, makes the call raise
+  `OutputLimitReached`. Either way the chunk is marked incomplete and
+  retried as one without its sentinel is.
 
 Entities defined outside the chunk's assigned units (e.g. a parent
 named elsewhere in the document) are referenced as local refs with
@@ -212,7 +219,8 @@ old code accepted. A chunk cut off, at the output limit or before its
 sentinel (§3), is rejected in the cache: it is kept aside for inspection
 and never served again, so the retry, or the next run, asks the engine
 anew, and a parser fix does not recover a response the old parser
-rejected. The entity manifest and the segmentation are asked in two
+rejected. A chunk the claude CLI gave up on stored nothing, and is asked
+anew as well. The entity manifest and the segmentation are asked in two
 attempts each, keyed apart in the cache, and a refused answer is kept,
 so a later run replays the same attempts and takes the same fallback
 (ADR-0032 §5). When a fork misses behind a cached
@@ -221,7 +229,8 @@ kept for the manifest it serves; a replay that answers differently starts
 the extraction over from the new answer (ADR-0032 §6). A cut-off chunk
 answer the cache kept from an earlier call spends no retry: the engine is
 asked once more (ADR-0032 §4). A fallback tier is taken only when the
-engine answered: an outage fails the extraction, to be retried. Per-chunk
+engine answered, a turn the claude CLI gave up on at the output limit
+included: an outage fails the extraction, to be retried. Per-chunk
 progress is the log, and the chunks that failed, with the first reason,
 are the extraction's error. An extraction that ends with no claims fails
 (amended by #45, 2026-09-28) when the model's answers could not be used:

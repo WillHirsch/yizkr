@@ -277,6 +277,16 @@ class TestExtract:
         assert len(batch.claims) == 2
         assert llm.rejected == [(whole, reason) for reason in rejected]
 
+    def test_a_cut_answer_stopped_at_the_output_limit_says_so(self):
+        """Cut off twice over, at the output limit and before its
+        sentinel: its claims are kept, and the stop reason names the
+        rejection (#7)."""
+        cut = "\n".join(map(json.dumps, CLAIMS))
+        llm = Stopping(cut, "max_tokens")
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert len(batch.claims) == 2
+        assert llm.rejected == [(cut, "extraction: cut off at max_tokens")]
+
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")
         with pytest.raises(ValueError, match="no claim JSON"):

@@ -419,8 +419,26 @@ says so on its response), and a `max_tokens` stop is the output limit's
 judged when the engine gives the answer: an entry keeps no stop reason,
 so an answer the cache gives from one, which no call made now, is judged
 by its text alone. Since the caller rejects a cut-off answer as soon as
-it is given, an entry holds one only when that rejection never came (the
-process ended first, or the rejection failed).
+it is given, an entry holds a cut-off chunk, critique or single-call
+answer only when that rejection never came (the process ended first, or
+the rejection failed).
+
+The pinned claude CLI never hands back an answer its model stopped at the
+output limit. It gives up on it: its stream ends with an API-error notice,
+an assistant event whose `error` is `max_output_tokens`, and a result
+that reports `is_error`, with no answer. That structure, never the
+notice's text, makes the call raise `llm.OutputLimitReached` (What a
+call's stream reported, below). Like any error it stores nothing, so
+there is no entry to reject, and the next call under the key misses as
+`absent` and asks the engine again. Its callers take it as an answer cut
+off at the output limit:
+
+- a chunk spends a try on it, as on a cut-off answer, and a chunk that
+  gets nothing else fails with `ChunkIncomplete: cut off at max_tokens`;
+- the entity manifest and the segmentation take it as an answer refused,
+  so their fallback tiers stand in, as for a cut-off answer;
+- the critic has no findings from it and still never raises;
+- a single-call extraction fails with it: there is no claim to keep.
 
 So a parser fix recovers every response the old parser accepted, without
 a call, but not one it rejected.
@@ -789,7 +807,7 @@ in, and the kind of call:
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
 | `cache-reject` | a caller's rejection moved an answer aside | `reason` |
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
-| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns`, `subtype` and `stop_reason` |
+| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns`, `subtype`, `stop_reason` and `api_error` |
 | `alert` | an anomaly alert was appended | `check`, `status` |
 | `anomaly-recheck` | a recheck of the stored outputs began (docs/ANOMALIES.md) | `config` (the thresholds' digest), `documents` |
 | `anomaly-error` | an anomaly check raised; nothing failed with it | `error` (the exception's name, never its message), `hook` |
@@ -809,14 +827,23 @@ event, its `num_turns`, its `subtype` (`success`, `error_max_turns`,
 whose call fails) and its `stop_reason`, why its model stopped on its
 final turn (`end_turn`; `max_tokens` when that turn hit the output limit,
 an answer the pipeline takes as cut off, Rejection, above; `refusal`;
-...). The stop reason is the result event's alone: an assistant event is
-printed as its content block completes, before the model's stop reason is
-known. The `usage` (the four token counts its cache entry keeps, Layout,
-above) is summed over all its attempts, those a subscription limit
-refused included. A final attempt cut off before its result event (a
-timeout, say) gives no turns, subtype or stop reason, whatever an earlier
-attempt reported, and no usage of its own; one cut off before its init
-event names no model. A replay is a call, and carries what the replay
+...); and from its last assistant event, the class of API error it
+stands for, its `error` (`api_error`: `max_output_tokens`, `rate_limit`,
+`overloaded`, ...). The stop reason is the result event's alone: an
+assistant event is printed as its content block completes, before the
+model's stop reason is known. The `usage` (the four token counts its
+cache entry keeps, Layout, above) is summed over all its attempts, those
+a subscription limit refused included. A final attempt cut off before its
+result event (a timeout, say) gives no turns, subtype or stop reason,
+whatever an earlier attempt reported, and no usage of its own; one cut
+off before its init event names no model.
+
+A call the CLI gave up on at the output limit (Rejection, above) has the
+outcome `error`, its `error` is `OutputLimitReached`, its `api_error` is
+`max_output_tokens`, and its `stop_reason` is the notice's
+(`stop_sequence`), as CLI 2.1.237 prints them. The anomaly checks count
+such a chunk call as a truncation, never as a failed call
+(docs/ANOMALIES.md). A replay is a call, and carries what the replay
 used; when it answers as the cache did, the opening turn's entry keeps
 what the original call's stream reported. A call the cache answers, by
 key match or adoption, makes no call, so it has no `call` event and uses

@@ -444,7 +444,10 @@ class LlmClaimExtractor:
     (llm.at_output_limit) or which has no terminal sentinel (the claims it
     holds are still returned). An answer the client kept from an earlier
     call is asked for once more when it is rejected, and the engine's
-    answer is used in its place, as it would be without the cache."""
+    answer is used in its place, as it would be without the cache. A call
+    the engine gave up on at its output limit (llm.OutputLimitReached)
+    gave no answer and so no claim: the extraction fails with it, and the
+    cache keeps nothing for it, so the next run asks again."""
 
     def __init__(
         self,

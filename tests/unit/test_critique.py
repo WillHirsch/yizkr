@@ -4,6 +4,7 @@ import json
 
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.critique import Finding, axis_of, run_critique
+from yizkr.pipeline.llm import OutputLimitReached
 
 # the bytes of a fictional scan, which the claims below cite by
 # their SHA-1 (#102)
@@ -237,6 +238,29 @@ class TestUnfinishedAnswers:
         llm = Stopping(whole, stops=["max_tokens"])
         assert [f.target for f in run_critique(llm, batch())] == ["e04"]
         assert llm.rejected == [(whole, "critique: cut off at max_tokens")]
+
+    def test_a_cut_answer_stopped_at_the_output_limit_says_so(self):
+        """Cut off twice over, at the output limit and before its
+        sentinel: the stop reason names the rejection (#7)."""
+        cut = json.dumps(FINDING) + '\n{"target": "e01 al'
+        llm = Stopping(cut, stops=["max_tokens"])
+        assert [f.target for f in run_critique(llm, batch())] == ["e04"]
+        assert llm.rejected == [(cut, "critique: cut off at max_tokens")]
+
+    def test_an_answer_the_engine_gave_up_on_gives_no_findings(self, caplog):
+        """A call the engine gave up on at its output limit gave no
+        answer: no findings, nothing to reject, and the critic still never
+        raises (#7)."""
+
+        class GivingUp(Rejecting):
+            def complete(self, prompt, image_paths=()):
+                super().complete(prompt, image_paths)
+                raise OutputLimitReached()
+
+        llm = GivingUp("unused")
+        assert run_critique(llm, batch()) == []
+        assert llm.rejected == []
+        assert "critique cut off at max_tokens" in caplog.text
 
     def test_an_answer_that_ended_its_turn_is_whole(self):
         llm = Stopping(response([FINDING]), stops=["end_turn"])

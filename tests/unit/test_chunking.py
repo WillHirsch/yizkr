@@ -31,7 +31,7 @@ from yizkr.pipeline.chunking import (
     unit_text,
 )
 from yizkr.pipeline.extract import LlmClaimExtractor
-from yizkr.pipeline.llm import ConversationChanged
+from yizkr.pipeline.llm import ConversationChanged, OutputLimitReached
 from yizkr.pipeline.orchestrate import FAILED
 from yizkr.pipeline.rundir import NEEDS_ATTENTION, StageState, run_state
 from yizkr.pipeline.transcribe import Transcription
@@ -1188,6 +1188,48 @@ class TestEntityFirstExtractor:
         assert extractor.failed_chunks == []
         assert llm.rejected == [(whole, "chunk: cut off at max_tokens")]
 
+    def test_a_chunk_the_engine_gave_up_on_is_forked_again(self, tmp_path):
+        """A call the engine gave up on at its output limit gave no answer:
+        the chunk spends a try on it, as on an answer cut off, and forks
+        again: the fork worked, and inline context would only lengthen the
+        call (#7)."""
+        llm = Rejecting(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    OutputLimitReached(),  # c001 try 1: no answer
+                    placeholder_claims("e1", "e2"),  # c001 try 2
+                ]
+            )
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000, retries=1)
+        batch = extractor.extract(transcription(), DOC_REF)
+        assert len(batch.claims) == 2
+        assert extractor.failed_chunks == []
+        assert [method for method, _ in llm.client.calls] == [
+            "open",
+            "fork",
+            "fork",
+        ]
+        assert llm.rejected == []  # nothing came to reject
+
+    def test_a_chunk_the_engine_gave_up_on_every_time_fails_as_cut_off(
+        self, tmp_path
+    ):
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                OutputLimitReached(),
+                OutputLimitReached(),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000, retries=1)
+        with pytest.raises(ExtractionFailed, match="1 of 1 chunk failed"):
+            extractor.extract(transcription(), DOC_REF)
+        assert extractor.failure_reasons == {
+            "c001": "ChunkIncomplete: cut off at max_tokens"
+        }
+
     def test_a_chunk_stopped_at_the_output_limit_on_every_try_fails(
         self, tmp_path
     ):
@@ -1515,6 +1557,30 @@ class TestFallbackLadder:
         # with the extraction's health, as on the entity-first tier (#45)
         assert (coverage["chunks"], coverage["claims"]) == (1, 2)
         assert coverage["rejected_claims"] == 0
+
+    def test_a_manifest_the_engine_gave_up_on_falls_back(self, tmp_path):
+        """A manifest the engine gave up on at its output limit was
+        answered, past the limit: it is refused, and the line-range tier
+        stands in for it, as for a manifest cut off, rather than the
+        extraction failing as if the engine were down (#7)."""
+        llm = ScriptedLlm(
+            [
+                OutputLimitReached(),  # manifest attempt 1
+                OutputLimitReached(),  # attempt 2
+                segmentation_json(),  # line-range segmentation
+                ndjson(
+                    [
+                        claim("p1", "Hildegard Löbig", 1876),
+                        claim("p2", "Sebastian Löbig", 1862),
+                    ]
+                ),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000)
+        batch = extractor.extract(transcription(), DOC_REF)
+        assert extractor.used_fallback_manifest
+        assert extractor.fallback["manifest"] == "cut off at max_tokens"
+        assert len(batch.claims) == 2
 
     def test_refused_tiers_are_attempted_apart_and_kept(self, tmp_path):
         """The manifest and the segmentation are each asked in two
