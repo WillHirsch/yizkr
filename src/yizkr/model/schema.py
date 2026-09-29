@@ -8,8 +8,10 @@ against an edited copy.
 from __future__ import annotations
 
 import functools
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
 import yaml
@@ -38,6 +40,17 @@ def read_manifest_data(source=DEFAULT_MANIFEST) -> str:
     return source.read_text()
 
 
+# The forms `accepts` takes besides a list of item keys (ADR-0035 §3.5):
+# any kind at all (`depicts`, ADR-0005), the claim subject's own kind
+# (`said_to_be_the_same_as`), or a class of the manifest named by its key
+# (`instance_of`, `subclass_of`).
+AcceptsAnyKind = Literal["any", "subject", "class"]
+
+# The holding class (ADR-0013) that every list naming an entity kind
+# accepts too, so an entity no modelled kind fits can still take part.
+UNCLASSIFIED = "unclassified_entity"
+
+
 class ManifestProperty(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -48,6 +61,29 @@ class ManifestProperty(BaseModel):
     datatype: Datatype
     aliases: list[str] = []
     wikidata: str | None = Field(default=None, pattern=r"^P\d+$")
+    # The kinds an item value of this property may be (ADR-0031,
+    # ADR-0035 §3.5): item keys, each accepted exactly, so a subclass is
+    # accepted only where it is listed; or one of AcceptsAnyKind. Every
+    # item-valued property declares it, and only those do.
+    accepts: list[str] | AcceptsAnyKind | None = None
+    # A retired property stays in the instance but takes no new claim:
+    # validation refuses every claim of it, and no prompt offers it
+    # (ADR-0036's `spouse`). It accepts nothing.
+    retired: bool = False
+    # A reference property is written only in a statement's references
+    # (ADR-0003; ADR-0035 §4's judgement notes): validation refuses it as
+    # a claim's or a qualifier's property, and no prompt offers it.
+    reference: bool = False
+    # Whether the prompts rendered from the manifest offer the property.
+    # A retired or reference property is never offered, whatever this
+    # says; `issued_by` is held back, since a claim has no way to name
+    # the document it comes from as its subject (ADR-0035 §3.4).
+    offered: bool = True
+
+    @property
+    def in_prompts(self) -> bool:
+        """Whether a prompt rendered from the manifest lists it."""
+        return self.offered and not self.retired and not self.reference
 
 
 class ManifestItem(BaseModel):
@@ -113,7 +149,156 @@ class Manifest(BaseModel):
                         f"idempotency key and must be unique)"
                     )
                 seen[entry.label] = key
+        self._check_accepts()
         return self
+
+    def _check_accepts(self) -> None:
+        """Fail closed on the kinds each property accepts (ADR-0035
+        §3.5): an item-valued property that declares none would escape
+        the check, so the manifest does not load."""
+        kinds = {key for key, item in self.items.items() if item.entity_kind}
+        for key, spec in self.properties.items():
+            where = f"properties.{key}"
+            if spec.datatype != "wikibase-item":
+                if spec.accepts is not None:
+                    raise ValueError(
+                        f"{where} declares accepts, but only an item-valued "
+                        f"property takes item values"
+                    )
+                if spec.retired:
+                    raise ValueError(
+                        f"{where} is retired, but only an item-valued "
+                        f"property is retired"
+                    )
+                continue
+            if spec.retired:
+                if spec.accepts:
+                    raise ValueError(
+                        f"{where} is retired and accepts nothing, but "
+                        f"declares accepts {spec.accepts!r}"
+                    )
+                continue
+            if spec.accepts is None:
+                raise ValueError(
+                    f"{where} is item-valued and declares no accepts: every "
+                    f"item-valued property names the kinds it accepts "
+                    f"(ADR-0035 §3.5)"
+                )
+            if isinstance(spec.accepts, str):
+                continue
+            if not spec.accepts:
+                raise ValueError(
+                    f"{where} accepts nothing, which only a retired "
+                    f"property does"
+                )
+            for kind in spec.accepts:
+                if kind not in self.items:
+                    raise ValueError(
+                        f"{where}.accepts names {kind!r}, which is not an "
+                        f"item key"
+                    )
+            if len(set(spec.accepts)) != len(spec.accepts):
+                raise ValueError(f"{where}.accepts repeats a kind")
+            if set(spec.accepts) & (kinds - {UNCLASSIFIED}) and (
+                UNCLASSIFIED not in spec.accepts
+            ):
+                raise ValueError(
+                    f"{where} accepts an entity kind but not "
+                    f"{UNCLASSIFIED!r}, which is accepted wherever a real "
+                    f"kind is (ADR-0013)"
+                )
+
+
+@dataclass(frozen=True)
+class Acceptance:
+    """What validation reads of the manifest to check a value's kind
+    (ADR-0035 §3.5): each item-valued property's accepted kinds, the
+    retired and reference properties, and the entity kinds."""
+
+    # property key -> a frozenset of item keys, or an AcceptsAnyKind form
+    accepts: MappingProxyType
+    retired: frozenset[str]
+    # the items an entity may be typed as: named by its key, such an item
+    # is a class, never an entity of that kind
+    entity_kinds: frozenset[str] = frozenset()
+    # the properties written only in references
+    references: frozenset[str] = frozenset()
+
+    def refusal(
+        self,
+        prop: str,
+        kind: str | None,
+        subject_kind: str | None = None,
+        vocabulary: bool = False,
+    ) -> str | None:
+        """Why `prop` refuses a value of `kind`, or None when it takes it.
+
+        `kind` is the value's entity kind, or, for a manifest item named
+        by its key (`vocabulary`), that key. A value whose kind is unknown
+        (an existing item named by its QID) is refused only by a retired
+        property, since nothing else can be checked of it."""
+        if prop in self.retired:
+            return (
+                f"property {prop!r} is retired and accepts no claim (ADR-0036)"
+            )
+        accepts = self.accepts.get(prop)
+        if accepts is None or kind is None or accepts == "any":
+            return None
+        if accepts == "subject":
+            if subject_kind is None or kind == subject_kind:
+                return None
+            return (
+                f"property {prop!r} accepts only the subject's own kind "
+                f"{subject_kind!r}, not a {kind!r}"
+            )
+        if accepts == "class":
+            if vocabulary:
+                return None
+            return f"property {prop!r} accepts a class, not a {kind!r} entity"
+        if vocabulary and kind in self.entity_kinds:
+            return (
+                f"property {prop!r} accepts an entity of kind {kind!r}, "
+                f"not the class itself"
+            )
+        if kind in accepts:
+            return None
+        return (
+            f"property {prop!r} does not accept a {kind!r}: it accepts "
+            f"{', '.join(sorted(accepts))} (ADR-0031)"
+        )
+
+
+def load_acceptance(source=DEFAULT_MANIFEST) -> Acceptance:
+    """The manifest's accepted kinds, read as `load_manifest` reads it.
+    Shared and immutable, so it is cached with the parse."""
+    return _acceptance(read_manifest_data(source))
+
+
+@functools.lru_cache(maxsize=8)
+def _acceptance(text: str) -> Acceptance:
+    manifest = _parse_manifest(text)
+    return Acceptance(
+        accepts=MappingProxyType(
+            {
+                key: (
+                    spec.accepts
+                    if isinstance(spec.accepts, str)
+                    else frozenset(spec.accepts)
+                )
+                for key, spec in manifest.properties.items()
+                if spec.accepts is not None
+            }
+        ),
+        retired=frozenset(
+            key for key, spec in manifest.properties.items() if spec.retired
+        ),
+        entity_kinds=frozenset(
+            key for key, item in manifest.items.items() if item.entity_kind
+        ),
+        references=frozenset(
+            key for key, spec in manifest.properties.items() if spec.reference
+        ),
+    )
 
 
 def load_manifest(source=DEFAULT_MANIFEST) -> Manifest:

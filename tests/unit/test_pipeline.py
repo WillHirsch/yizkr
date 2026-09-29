@@ -60,7 +60,8 @@ ARTIFACT = {"kind": "artifact", "sha1": MEDIA_SHA1}
 MEDIA_REF = ArtifactRef(sha1=MEDIA_SHA1)
 
 # Person One's dates are Leopold Löbig's in the example universe: born in
-# May 1914 (29 May per the divorce judgment) and married in 1947.
+# May 1914 (29 May per the divorce judgment), and a claim dated 1947, the
+# year of his wedding.
 CLAIMS = [
     {
         "subject": {
@@ -69,7 +70,7 @@ CLAIMS = [
             "label": "Person One",
             "instance_of": "human",
         },
-        "property": "spouse",
+        "property": "sibling",
         "value": {
             "type": "item",
             "value": {
@@ -88,7 +89,7 @@ CLAIMS = [
         "source": {
             "artifact": ARTIFACT,
             "page_number": "1",
-            "transcription_excerpt": {"text": "married", "language": "en"},
+            "transcription_excerpt": {"text": "brother", "language": "en"},
         },
         "confidence": 0.9,
     },
@@ -1244,8 +1245,8 @@ class TestCorrections:
         assert (value.year, value.month, value.day) == expected
         assert birth.value.precision == "day"
         assert birth.curated is True
-        (spouse,) = [c for c in approved.claims if c.property == "spouse"]
-        assert spouse.curated is False
+        (sibling,) = [c for c in approved.claims if c.property == "sibling"]
+        assert sibling.curated is False
 
     def test_ambiguous_date_correction_is_refused(self, tmp_path):
         source = batch()
@@ -1263,7 +1264,7 @@ class TestCorrections:
 
         TestReviewRoundTrip.edit_csv(csv_path, correct_badly)
         approved, warnings = apply_review(source, csv_path)
-        assert [c.property for c in approved.claims] == ["spouse"]
+        assert [c.property for c in approved.claims] == ["sibling"]
         assert any("not an unambiguous date" in w for w in warnings)
 
     def test_item_values_cannot_be_text_corrected(self, tmp_path):
@@ -1271,14 +1272,14 @@ class TestCorrections:
         csv_path = tmp_path / "review.csv"
         export_review_csv(source, csv_path)
 
-        def correct_spouse(rows):
+        def correct_sibling(rows):
             for row in rows:
                 row["decision"] = "approve"
-                if row["property"] == "spouse":
+                if row["property"] == "sibling":
                     row["correction"] = "Someone Else"
             return rows
 
-        TestReviewRoundTrip.edit_csv(csv_path, correct_spouse)
+        TestReviewRoundTrip.edit_csv(csv_path, correct_sibling)
         approved, warnings = apply_review(source, csv_path)
         assert [c.property for c in approved.claims] == ["date_of_birth"]
         assert any("cannot be corrected as text" in w for w in warnings)
@@ -1326,6 +1327,7 @@ PROPERTIES = {
     "kinship_type": "P22",
     "whg_place_id": "P23",
     "cause_of_death": "P24",
+    "sibling": "P25",
 }
 ITEMS = {
     "human": "Q1",
@@ -1703,7 +1705,7 @@ class TestWriterArtifactResolution:
         result = BatchWriter(wiki).write_batch(batch())
         assert result.written == 2
         person = wiki.wbi.item.get(result.created_items["person-1"])
-        for pid in (PROPERTIES["spouse"], PROPERTIES["date_of_birth"]):
+        for pid in (PROPERTIES["sibling"], PROPERTIES["date_of_birth"]):
             (statement,) = person.claims.get(pid)
             assert _cited(statement, "stated_in") == ["Q23"]
             assert _cited(statement, "inferred_from_extraction_run") == [

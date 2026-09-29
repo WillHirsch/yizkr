@@ -54,6 +54,7 @@ from tests.unit.test_scratch import (
 )
 from yizkr.claims import ClaimBatch, EntityRecord, ItemValue, TimeValue
 from yizkr.cli import build_parser
+from yizkr.model.schema import load_manifest
 from yizkr.pipeline import chunking, clustering, llm, scratch
 from yizkr.pipeline.critique import entries, sheet_notes
 from yizkr.pipeline.extract import run_metadata, salvage_valid_claims
@@ -263,6 +264,25 @@ def in_universe(value, known: dict[str, str]):
     return value.value
 
 
+# The properties the manifest retires: extraction refuses their claims
+# (ADR-0036), and the recorded answers still make some.
+RETIRED = {
+    key for key, spec in load_manifest().properties.items() if spec.retired
+}
+
+
+def retired_claims(name: str) -> int:
+    """How many claims of a retired property the recorded engine answers
+    for the document `name`."""
+    recorded = answers.RECORDED.get(name)
+    if recorded is None:
+        return 0
+    return sum(
+        claim["property"] in RETIRED
+        for claim in answers.claims(recorded, sha1(name))
+    )
+
+
 def said_in(name: str, batch: ClaimBatch) -> set[tuple]:
     """Every claim of a document's batch as (subject, property, value), in
     the universe's terms."""
@@ -379,7 +399,8 @@ class TestTheCorpus:
         universe records for the document's source, but for its recorded
         mistakes, which a sharper prompt mends; none of the source's
         assertions about an entity is left out; and each is a valid
-        claim."""
+        claim, but for a claim of a retired property, which is refused
+        (ADR-0036's `spouse`, which the chunk prompt still offers)."""
         run = run_metadata("recorded").model_dump(mode="json")
         for name, recorded in answers.RECORDED.items():
             ids = recorded.ids()
@@ -397,11 +418,19 @@ class TestTheCorpus:
                 batch, rejects = salvage_valid_claims(
                     claimed, run, entities=entities
                 )
-                assert rejects == [], name
+                assert [r["claim"] for r in rejects] == [
+                    c for c in claimed if c["property"] in RETIRED
+                ], name
+                assert all(
+                    "is retired" in problem
+                    for reject in rejects
+                    for problem in reject["problems"]
+                ), name
                 answered[sharper] = said_in(name, batch)
             stated = {
                 (a.subject, a.property, a.value)
                 for a in answers.said(recorded)
+                if a.property not in RETIRED
             }
             mistakes = answers.mistakes_in(recorded)
             says = {(m.subject, m.property, m.says) for m in mistakes}
@@ -542,7 +571,9 @@ class TestTheRun:
                 coverage = json.loads(
                     (doc.extraction / "coverage.json").read_text()
                 )
-                assert coverage["rejected_claims"] == 0, name
+                # only the claims of a retired property are refused, and
+                # counted
+                assert coverage["rejected_claims"] == retired_claims(name)
                 assert coverage["fallback"] == {}, name
         # the deck's photograph is recorded, not registered
         deck = runs.views(run)[fc.DECK]

@@ -42,7 +42,7 @@ from yizkr.claims import (
     load_vocabulary,
     validate_against_manifest,
 )
-from yizkr.model.schema import load_manifest
+from yizkr.model.schema import load_acceptance, load_manifest
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     LlmClient,
@@ -311,13 +311,16 @@ def salvage_valid_claims(
     Machine output is expensive and reviewed by a human either way, so a
     claim that fails schema or manifest validation must not sink the
     claims that pass: the valid subset proceeds to review, the rejects
-    are reported (each with its reasons) for diagnosis.
+    are reported (each with its reasons) for diagnosis. A claim whose
+    value is of a kind its property does not accept, or of a retired
+    property, is a reject like any other (ADR-0035 §3.5).
 
     With `entities` (an entity manifest, ADR-0007), local refs naming
     ids outside the manifest are rejected, and the manifest travels in
     the returned batch.
     """
     vocabulary = load_vocabulary()
+    acceptance = load_acceptance()
     entities = entities or []
     if entities:
         # manifest-level defects poison every claim; check them once,
@@ -326,7 +329,7 @@ def salvage_valid_claims(
             {"extraction_run": extraction_run, "entities": entities}
         )
         manifest_problems = validate_against_manifest(
-            manifest_only, vocabulary=vocabulary
+            manifest_only, vocabulary=vocabulary, acceptance=acceptance
         )
         if manifest_problems:
             raise ValueError(
@@ -349,7 +352,9 @@ def salvage_valid_claims(
         except Exception as exc:  # pydantic ValidationError, in short form
             rejects.append({"claim": claim, "problems": [str(exc)]})
             continue
-        problems = validate_against_manifest(batch, vocabulary=vocabulary)
+        problems = validate_against_manifest(
+            batch, vocabulary=vocabulary, acceptance=acceptance
+        )
         if problems:
             rejects.append({"claim": claim, "problems": problems})
         else:
@@ -389,12 +394,15 @@ def vocabulary_prompt_lines() -> tuple[str, str]:
     the organization, not the employee) and what kind of entity a value
     must be (`location` takes a place). Keys and datatypes alone would
     leave the model to guess both, and the manifest already holds the
-    words.
+    words. A property no claim may use, a retired or a reference
+    property, is left out, as is one the manifest holds back from prompts
+    (`ManifestProperty.in_prompts`).
     """
     manifest = load_manifest()
     property_lines = "\n".join(
         f"  {key}: {spec.datatype} — {_one_line(spec.description)}"
         for key, spec in sorted(manifest.properties.items())
+        if spec.in_prompts
     )
     item_lines = "  " + ", ".join(sorted(manifest.items))
     return property_lines, item_lines

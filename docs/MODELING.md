@@ -40,7 +40,15 @@
 - human
 - place
 - time period (linked to PeriodO definitions where applicable)
-- event (birth, marriage, migration, military service, ...)
+- event (birth, death, migration, military service, ...; a wedding, with
+  its subclasses civil wedding and religious wedding; a divorce; an
+  annulment — ADR-0036)
+- partnership (a couple's relationship of any kind, for two people a
+  source presents as a couple without saying they married), and its
+  subclass marriage (Q8445): each an entity, not an event, whose couple
+  are its participants with the role `partner` or `spouse`, started by
+  its wedding and ended by a divorce, an annulment or a partner's death
+  (`started_by`, `ended_by`; ADR-0036)
 - artifact (subclasses: photograph, certificate, letter, census page,
   newspaper clipping, presentation, genealogical report, address
   book, ...)
@@ -72,6 +80,53 @@ Artifact types, controlled-vocabulary values (`circa`, `male`), and
 infrastructure classes (`artifact_fragment`, `extraction_run`) are real
 classes but not entity kinds. A new item is not offered to the
 extractor until it says so.
+
+**Controlled vocabulary values** (items, never entity kinds): `circa`;
+`male` and `female`; the participant roles `principal`, `parent`,
+`partner`, `spouse`, `informant`, `witness` and `officiant`
+(`object_has_role`, ADR-0035 §3.2); the kinship classes `kin_parent` …
+`kin_relative` and the sides `paternal` and `maternal` ("Kinship"
+below); the civil statuses `unmarried` (never married), `married`,
+`widowed` and `divorced` (`civil_status`, ADR-0035 §3.1); and the five
+judgement note categories `judgement_kind`, `judgement_relation`,
+`judgement_date_reading`, `judgement_identity` and `judgement_other`
+(ADR-0035 §4). The kinship classes whose word is also a role's or a
+property's (parent, child, sibling, relative) carry "(kinship class)" in
+their labels, so that no two items share a label (the bootstrap's key)
+and none reads as the property of the same name.
+
+**The relation decides the kind (ADR-0031, ADR-0035 §3.5).** Every
+item-valued property declares `accepts` in the manifest: the kinds its
+value may be (`location` a place, `carried_out_by` an organisation,
+`participant` a human or a family), each named exactly, so a subclass is
+accepted only where it is listed; or `any` (`depicts`), `subject` (the
+subject's own kind, for `said_to_be_the_same_as`) or `class`
+(`instance_of`, `subclass_of`). A list that names an entity kind also
+names `unclassified_entity` (ADR-0013). The manifest does not load when
+an item-valued property declares none. Validation refuses a claim whose
+value is of a kind its property does not accept, and extraction counts it
+among its rejects. An existing item named by its QID has no kind in a
+batch and is not checked. A vocabulary ref to an entity kind (`human`,
+`place`) names the class, not an entity of it, so only `instance_of` and
+`subclass_of` take one. `part_of`'s list is flat for now: it takes a place
+or an artifact whatever its subject, so a place `part_of` an artifact
+passes the check, which reads the value alone.
+
+**Reference properties** (`stated_in`, `inferred_from_extraction_run`,
+and the judgement note's `judgement` and `judgement_note`) are marked
+`reference: true`: they are written only in a statement's references, so
+validation refuses one as a claim's or a qualifier's property, and no
+prompt offers it. A property may also be held back from the prompts with
+`offered: false` while it stays in the manifest and the bootstrap:
+`issued_by` is, since a claim has no way to name the document it comes
+from as its subject (ADR-0035 §3.4).
+
+**A retired property** stays in the instance and takes no new claim: it
+accepts nothing, validation refuses every claim of it, and no prompt that
+the manifest renders offers it. `spouse` is retired (ADR-0036): the spouse
+link is derived from a marriage's participants. The GEDCOM adapter still
+states a couple as a pair of spouse claims, which its own check lets
+through, until it makes marriages (ADR-0036 §5).
 
 ## Reference pattern (see ADR-0003)
 
@@ -496,6 +551,43 @@ label already carries) and keeps compound/particle surnames whole (never
 shattering `de la Cruz` / `van der Berg`), asserting no kind. Composition
 and short-form display are the frontend's to *derive*, never stored.
 
+**Mention records (ADR-0035 §2).** Extraction's entity manifest may give
+each person, place, organisation and family a `structure`, what its names
+are made of, read from its label and aliases as the document writes
+them, by the document's own conventions and never by a rule about a
+language:
+
+- **a person:** a status (`name`, `role`, `kinship`, `courtesy`,
+  `placeholder` or `description`; only a `name` keys); given names as
+  written, each with the standard form a diminutive or abbreviation
+  stands for where the document supports one, and marked when it is an
+  initial; surnames typed `birth`, `married` or `other`, with their
+  particles; patronymics, a name part of their own (the 1941
+  certificate's *Лёбиг Рудольф Феликсович* gives the given name Рудольф,
+  the surname Лёбиг and the patronymic Феликсович); nicknames; titles and
+  suffixes, which never key; and `unsplit` forms whose given name and
+  surname the source does not tell apart;
+- **a place:** a status (`toponym`, `deictic` or `generic`); its names,
+  each with its toponym and generic head where they can be told apart; an
+  address, with its street and number; and the containers the source puts
+  it in, in the source's order (`within`: *Snylsjum, gemeente
+  Drakeradiel, Fryslân, Nederlân* is Snylsjum within the other three);
+- **an organisation:** its proper names, the words naming its kind, and
+  its places (*Калдовское районное бюро ЗАГС* has a kind and a place, and
+  no proper name);
+- **a family:** its surnames.
+
+**A record is never written to the wiki**: it is the pipeline's reading of
+a name, not something a source asserts, so ADR-0022's Ruling 1 holds for
+the graph. Records live in the batch view and the LLM cache, as local-only
+data. A record may divide and label a name, never add to it: every part
+must occur in the label or an alias, folded, as whole words (a standard
+form and an organisation's places aside). A record that fails that, or
+that does not parse, is set aside and counted, and the entity keeps its
+label, aliases and kind. What a marker in a name asserts (a widow's
+marker, "the late", a patronymic's father, a married-name marker) is a
+claim: a `civil_status`, a death, a `father`, a `married_name`.
+
 **Relational and perspectival appellations are NOT names** (ADR-0018).
 "our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
 a relationship or viewpoint, so they never enter the alias bag. A literal
@@ -520,9 +612,13 @@ Kinship is modelled in **three layers**, so the graph stays a thin
 primitive network and the *same* term set describes any pair:
 
 - **Primitive edges (stored, source-attributed):** `father` (P22),
-  `mother` (P25), `spouse` (P26), `sibling` (P3373), `child` (P40).
-  `sex_or_gender` (P21; `male`/`female`) is stored alongside — the
-  calculus needs it to gender terms. `sibling` stays asserted-not-
+  `mother` (P25), `sibling` (P3373), `child` (P40). `sex_or_gender`
+  (P21; `male`/`female`) is stored alongside — the calculus needs it to
+  gender terms. A spouse is no stored edge (ADR-0036): a marriage is an
+  entity whose couple take part in it with the role `spouse`, and the
+  spouse link is derived from it by a query; the `spouse` property (P26)
+  is retired. A spousal term ("my husband") gives a marriage, not a
+  kinship class. `sibling` stays asserted-not-
   derived (a source may assert siblinghood directly) yet is *also*
   derivable from shared parents; both coexist.
 - **A derivation calculus (query/frontend layer — NOT vocabulary):**
@@ -539,6 +635,32 @@ primitive network and the *same* term set describes any pair:
   this qualifier share the same term set, so asserted and derived
   relationships describe uniformly and coexist (a match corroborates, a
   mismatch is an ordinary inconsistency).
+- **A kinship class beside the term (ADR-0035 §3.3).** A `relative`
+  claim keeps its verbatim `kinship_type` and gains a controlled
+  `kinship_class`: `kin_parent`, `kin_child`, `kin_sibling`,
+  `kin_grandparent`, `kin_grandchild`, `kin_aunt_or_uncle`,
+  `kin_niece_or_nephew`, `kin_cousin`, `kin_parent_in_law`,
+  `kin_child_in_law`, `kin_sibling_in_law`, or `kin_relative` where the
+  term's class is unclear. Three more qualifiers hold only what the term
+  states, never a guess: `side` (`paternal` or `maternal`), `degree` (how
+  many "great-"s, or a cousin's number) and `removes` (a cousin's
+  removes). The 1958 letter's *дядя по отцу*, "uncle on the father's
+  side", is `kin_aunt_or_uncle` on the `paternal` side; its *двоюродная
+  сестра*, "first cousin", is `kin_cousin` of degree 1; the 1952 letter's
+  *oerbeppe*, "great-grandmother", is `kin_grandparent` of degree 1. A
+  literal term that reduces to a primitive stays one: *Dein Vater* is
+  `father`.
+- **Civil status is a person's own state, not a relation.** A source's
+  stated civil status (`unmarried`, `married`, `widowed`, `divorced`) is
+  a `civil_status` claim, dated as the source dates it. It names no
+  partner and makes no marriage; a marriage comes only where a source
+  names the partner (ADR-0036).
+- **Participant roles.** A `participant` qualified by `object_has_role`
+  (P3831) says how someone took part in an event: the `principal` (the
+  one born, who died, or to whom it happened), a `parent`, the
+  `informant` who reported it, a `witness` or the `officiant`; in a
+  partnership or marriage, a `partner` or a `spouse`. One claim may carry
+  several roles, but a death's principal is never also its informant.
 
 ## Residence and co-residence (see ADR-0014)
 
@@ -560,6 +682,14 @@ subject; there is no household statement enumerating occupants.
   refuge to" — is the separate, non-derivable case ADR-0014 tracks.)
 
 ## Marriages, residences and other periods
+
+ADR-0036 makes a marriage an entity bounded by events, and retires the
+`spouse` statement below; its vocabulary is in the manifest ("Core
+classes"). Until the rest of the pipeline moves to marriages, the GEDCOM
+adapter still writes the spouse statements described here, the readers
+of spouse statements (the disagreement report, the timeline, the kinship
+query) still read them, and the chunk prompt's own text still names
+`spouse`, whose claims extraction now refuses and counts.
 
 A statement that holds for a period, such as a marriage (`spouse`), a
 residence, an occupation or a membership, is dated as Wikidata dates

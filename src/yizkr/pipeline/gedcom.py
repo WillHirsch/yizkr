@@ -1611,7 +1611,12 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             "entities": entities,
         }
     )
-    problems = validate_against_manifest(batch)
+    # The adapter states a couple as a pair of spouse claims, a property
+    # ADR-0036 retires; it makes no marriage entity (ADR-0036 §5), so its
+    # own check lets those claims through.
+    problems = validate_against_manifest(
+        batch, allow_retired=frozenset({"spouse"})
+    )
     if problems:
         # deterministic code emitting invalid claims is a bug, not input noise
         raise ValueError(

@@ -43,7 +43,7 @@ def source(**overrides) -> dict:
     return base
 
 
-def spouse_claim(**overrides) -> dict:
+def sibling_claim(**overrides) -> dict:
     base = {
         "subject": {
             "kind": "local",
@@ -51,7 +51,7 @@ def spouse_claim(**overrides) -> dict:
             "label": "Person One",
             "instance_of": "human",
         },
-        "property": "spouse",
+        "property": "sibling",
         "value": {
             "type": "item",
             "value": {
@@ -88,7 +88,7 @@ def batch(*claims) -> ClaimBatch:
 
 class TestBatchBasics:
     def test_full_batch_round_trips_through_json(self):
-        parsed = batch(spouse_claim())
+        parsed = batch(sibling_claim())
         again = ClaimBatch.model_validate_json(parsed.model_dump_json())
         assert again == parsed
         assert again.claims[0].qualifiers[0].value.precision == "year"
@@ -98,7 +98,7 @@ class TestBatchBasics:
 
     def test_unknown_fields_rejected_everywhere(self):
         with pytest.raises(ValidationError):
-            batch(spouse_claim(rnak="preferred"))  # typo must fail loudly
+            batch(sibling_claim(rnak="preferred"))  # typo must fail loudly
 
     def test_run_metadata_requires_timezone(self):
         with pytest.raises(ValidationError, match="timezone-aware"):
@@ -115,39 +115,39 @@ class TestBatchBasics:
 
 class TestConventionEnforcement:
     def test_source_is_required(self):
-        claim = spouse_claim()
+        claim = sibling_claim()
         del claim["source"]
         with pytest.raises(ValidationError, match="source"):
             batch(claim)
 
     def test_source_artifact_is_required(self):
         with pytest.raises(ValidationError, match="artifact"):
-            batch(spouse_claim(source={"page_number": "1"}))
+            batch(sibling_claim(source={"page_number": "1"}))
 
     def test_no_rank_field_exists(self):
         assert "rank" not in Claim.model_fields
         with pytest.raises(ValidationError):
-            batch(spouse_claim(rank="preferred"))
+            batch(sibling_claim(rank="preferred"))
 
     def test_confidence_bounds(self):
         with pytest.raises(ValidationError):
-            batch(spouse_claim(confidence=1.5))
+            batch(sibling_claim(confidence=1.5))
 
 
 class TestEntityRefs:
     def test_qid_format_enforced(self):
         with pytest.raises(ValidationError):
-            batch(spouse_claim(subject={"kind": "qid", "qid": "P31"}))
+            batch(sibling_claim(subject={"kind": "qid", "qid": "P31"}))
         with pytest.raises(ValidationError):
-            batch(spouse_claim(subject={"kind": "qid", "qid": "Q01"}))
+            batch(sibling_claim(subject={"kind": "qid", "qid": "Q01"}))
 
     def test_unknown_kind_rejected(self):
         with pytest.raises(ValidationError):
-            batch(spouse_claim(subject={"kind": "label", "label": "someone"}))
+            batch(sibling_claim(subject={"kind": "label", "label": "someone"}))
 
     def test_local_ref_requires_local_id(self):
         with pytest.raises(ValidationError):
-            batch(spouse_claim(subject={"kind": "local", "label": "x"}))
+            batch(sibling_claim(subject={"kind": "local", "label": "x"}))
 
 
 class TestArtifactRef:
@@ -156,7 +156,7 @@ class TestArtifactRef:
     (#102, ADR-0010)."""
 
     def test_source_artifact_is_content_addressed(self):
-        cited = batch(spouse_claim()).claims[0].source.artifact
+        cited = batch(sibling_claim()).claims[0].source.artifact
         assert cited == ArtifactRef(sha1=MEDIA_SHA1)
 
     def test_from_bytes_and_from_path_hash_the_media(self, tmp_path):
@@ -190,7 +190,7 @@ class TestArtifactRef:
     def test_malformed_digest_rejected(self, sha1):
         with pytest.raises(ValidationError):
             batch(
-                spouse_claim(
+                sibling_claim(
                     source=source(artifact={"kind": "artifact", "sha1": sha1})
                 )
             )
@@ -206,7 +206,7 @@ class TestArtifactRef:
         # an artifact is never proposed by extraction or named by a
         # vocabulary key: only its content is
         with pytest.raises(ValidationError):
-            batch(spouse_claim(source=source(artifact=ref)))
+            batch(sibling_claim(source=source(artifact=ref)))
 
     def test_an_item_qid_cannot_name_the_source(self):
         """No dual format (#102): a claim that cites its artifact item by
@@ -214,7 +214,7 @@ class TestArtifactRef:
         whatever instance the item is on."""
         with pytest.raises(ValidationError):
             batch(
-                spouse_claim(
+                sibling_claim(
                     source=source(artifact={"kind": "qid", "qid": "Q23"})
                 )
             )
@@ -224,7 +224,7 @@ class TestArtifactRef:
         assert str(ArtifactRef(sha1=MEDIA_SHA1)) == f"sha1:{MEDIA_SHA1}"
 
     def test_json_round_trip_keeps_the_digest(self):
-        parsed = batch(spouse_claim())
+        parsed = batch(sibling_claim())
         payload = json.loads(parsed.model_dump_json())
         assert payload["claims"][0]["source"]["artifact"] == {
             "kind": "artifact",
@@ -394,7 +394,7 @@ class TestOtherValues:
     def test_monolingual_language_tag(self):
         with pytest.raises(ValidationError):
             batch(
-                spouse_claim(
+                sibling_claim(
                     source=source(
                         transcription_excerpt={
                             "text": "x",
@@ -407,7 +407,7 @@ class TestOtherValues:
     def test_coordinate_bounds(self):
         with pytest.raises(ValidationError):
             batch(
-                spouse_claim(
+                sibling_claim(
                     property="coordinate_location",
                     value={
                         "type": "coordinate",
@@ -419,13 +419,13 @@ class TestOtherValues:
 
     def test_unknown_value_type_rejected(self):
         with pytest.raises(ValidationError):
-            batch(spouse_claim(value={"type": "boolean", "value": True}))
+            batch(sibling_claim(value={"type": "boolean", "value": True}))
 
     def test_quantity_round_trip_and_serialization(self):
         from yizkr.claims import QuantityValue
 
         parsed = batch(
-            spouse_claim(
+            sibling_claim(
                 property="number_of_children",
                 value={"type": "quantity", "amount": 3},
             )
@@ -440,7 +440,7 @@ class TestManifestValidation:
     """The real manifest is the vocabulary; these bind contract to model."""
 
     def test_realistic_batch_passes_against_real_manifest(self):
-        assert validate_against_manifest(batch(spouse_claim())) == []
+        assert validate_against_manifest(batch(sibling_claim())) == []
 
     def test_referred_to_as_appellation_with_perspective_is_valid(self):
         # ADR-0018: a perspectival appellation is a monolingual statement on
@@ -474,14 +474,14 @@ class TestManifestValidation:
 
     def test_unknown_property_reported(self):
         problems = validate_against_manifest(
-            batch(spouse_claim(property="shoe_size"))
+            batch(sibling_claim(property="shoe_size"))
         )
         assert problems == ["claims[0]: unknown property key 'shoe_size'"]
 
     def test_datatype_mismatch_reported(self):
         problems = validate_against_manifest(
             batch(
-                spouse_claim(
+                sibling_claim(
                     property="date_of_birth",
                     value={"type": "string", "value": "1876"},
                 )
@@ -490,7 +490,7 @@ class TestManifestValidation:
         assert any("requires a 'time' value" in p for p in problems)
 
     def test_qualifier_property_checked(self):
-        claim = spouse_claim()
+        claim = sibling_claim()
         claim["qualifiers"][0]["property"] = "no_such_qualifier"
         problems = validate_against_manifest(batch(claim))
         assert any(
@@ -498,7 +498,7 @@ class TestManifestValidation:
         )
 
     def test_unknown_vocab_key_reported(self):
-        claim = spouse_claim()
+        claim = sibling_claim()
         claim["qualifiers"][1]["value"]["value"]["key"] = "roughly"
         problems = validate_against_manifest(batch(claim))
         assert any(
@@ -506,7 +506,7 @@ class TestManifestValidation:
         )
 
     def test_unknown_instance_of_reported(self):
-        claim = spouse_claim()
+        claim = sibling_claim()
         claim["subject"]["instance_of"] = "wizard"
         problems = validate_against_manifest(batch(claim))
         assert any("wizard" in p for p in problems)
@@ -514,7 +514,7 @@ class TestManifestValidation:
     def test_kinship_fallback_and_sex_validate(self):
         # ADR-0014: `relative` + a verbatim `kinship_type` string qualifier,
         # and sex_or_gender pointing at the male/female vocab items
-        claim = spouse_claim(
+        claim = sibling_claim(
             property="relative",
             qualifiers=[
                 {
@@ -523,7 +523,7 @@ class TestManifestValidation:
                 }  # fmt: skip
             ],
         )
-        sex = spouse_claim(
+        sex = sibling_claim(
             property="sex_or_gender",
             value={
                 "type": "item",
@@ -554,8 +554,8 @@ class TestManifestValidation:
     def test_all_problems_reported_at_once(self):
         problems = validate_against_manifest(
             batch(
-                spouse_claim(property="shoe_size"),
-                spouse_claim(
+                sibling_claim(property="shoe_size"),
+                sibling_claim(
                     property="residence",
                     value={"type": "string", "value": "Stupfield"},
                 ),
@@ -566,8 +566,8 @@ class TestManifestValidation:
         assert problems[1].startswith("claims[1]")
 
     def test_injected_vocabulary_supported(self):
-        vocabulary = ({"spouse": "wikibase-item"}, set())
-        claim = spouse_claim(qualifiers=[])
+        vocabulary = ({"sibling": "wikibase-item"}, set())
+        claim = sibling_claim(qualifiers=[])
         claim["subject"].pop("instance_of")
         problems = validate_against_manifest(
             batch(claim), vocabulary=vocabulary
@@ -575,16 +575,16 @@ class TestManifestValidation:
         assert problems == []
 
     def test_unsupported_datatype_reported_not_crash(self):
-        vocabulary = ({"spouse": "url"}, set())
+        vocabulary = ({"sibling": "url"}, set())
         problems = validate_against_manifest(
-            batch(spouse_claim()), vocabulary=vocabulary
+            batch(sibling_claim()), vocabulary=vocabulary
         )
         assert any("does not support yet" in p for p in problems)
 
     def test_quantity_property_accepts_only_quantity_values(self):
         problems = validate_against_manifest(
             batch(
-                spouse_claim(
+                sibling_claim(
                     property="number_of_children",
                     value={"type": "string", "value": "3"},
                 )

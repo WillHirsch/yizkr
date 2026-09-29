@@ -605,8 +605,13 @@ class TestThePeopleSelection:
         assert set(NON_PERSON_CLASSES) <= set(MANIFEST["items"])
         for key in (*PERSON_SUBJECT_PROPERTIES, *PERSON_VALUE_PROPERTIES):
             assert MANIFEST["properties"][key]["datatype"]
+        # a marriage is a partnership, not an event (ADR-0036); its
+        # participants are people all the same
         for key in PERSON_EVENTS:
-            assert MANIFEST["items"][key]["subclass_of"] == "event"
+            assert MANIFEST["items"][key]["subclass_of"] in (
+                "event",
+                "partnership",
+            )
         for key in PERSON_VALUE_PROPERTIES:
             assert MANIFEST["properties"][key]["datatype"] == "wikibase-item"
 

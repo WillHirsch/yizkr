@@ -13,6 +13,12 @@ Amended by [ADR-0036](0036-marriages-as-entities.md) (#311,
 bounded by wedding, divorce and annulment events, so `spouse` leaves
 §1's stored primitives and is derived from the marriage by a query, as
 co-residence is, and §6's deferred divorce event is adopted.
+Amended by [ADR-0035](0035-mention-records.md) (owner decision
+2026-09-29, #385): §1's compound fallback, `relative` with its verbatim
+`kinship_type`, gains a controlled `kinship_class` beside the term, with
+the `side`, `degree` and `removes` the term states, never guessed
+(ADR-0035 §3.3). The calculus still derives every relation it can from
+the primitives.
 
 ## Context
 
