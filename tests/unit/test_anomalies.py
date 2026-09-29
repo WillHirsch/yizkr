@@ -373,6 +373,7 @@ class TestThresholds:
             "checks:\n  zero-claim:\n    min-chars: 10\n",  # no such check
             "checks:\n  call-failures:\n    min-count: 20\n",  # > window
             "checks:\n  kind-failures:\n    max-share: 1.5\n",
+            "checks:\n  kind-failures:\n    min-documents: 0\n",
             "pause-timeout-s: -1\n",
             "pause-timeout-s: .inf\n",  # would stop the timer's thread
             "pause-timeout-s: 1.0e+10\n",  # beyond threading.TIMEOUT_MAX
@@ -1138,6 +1139,67 @@ class TestRates:
         checks.poll()
         assert "kind-failures" not in checks_raised(run)
 
+    def test_a_kind_the_run_plans_one_document_of_is_never_paused(
+        self, tmp_path
+    ):
+        """A single deck that fails leaves no other deck for a pause to
+        protect (#376): the kind check leaves it alone, and the failure
+        still shows in stage-failures."""
+        run, checks = make_checks(
+            tmp_path,
+            {"checks": {"stage-failures": {"window": 1, "min-count": 1}}},
+        )
+        run.start(
+            documents=[
+                {"sha1": sha1_of("presentation-0"), "kind": "presentation"},
+                *(
+                    {"sha1": sha1_of(f"text-{n}"), "kind": "text"}
+                    for n in range(3)
+                ),
+            ]
+        )
+        outcomes(run, "transcription", "presentation", "x")
+        checks.poll()
+        assert "kind-failures" not in checks_raised(run)
+        assert requests(run) == []
+        assert only(run, "stage-failures")["kind"] == "presentation"
+
+    def test_a_kind_the_run_plans_two_documents_of_is_still_paused(
+        self, tmp_path
+    ):
+        run, checks = make_checks(tmp_path)
+        run.start(
+            documents=[
+                {"sha1": sha1_of(f"presentation-{n}"), "kind": "presentation"}
+                for n in range(2)
+            ]
+        )
+        outcomes(run, "transcription", "presentation", "xx")
+        checks.poll()
+        alert = only(run, "kind-failures")
+        assert (alert["value"], alert["limit"], alert["pause"]) == (
+            2,
+            1.0,
+            "kind:presentation",
+        )
+        (pause,) = requests(run)
+        assert pause["scope"] == "kind:presentation"
+
+    def test_the_fewest_documents_judged_is_a_threshold(self, tmp_path):
+        """With min-documents 1, a kind of one document that fails is
+        paused."""
+        run, checks = make_checks(
+            tmp_path, {"checks": {"kind-failures": {"min-documents": 1}}}
+        )
+        run.start(
+            documents=[
+                {"sha1": sha1_of("presentation-0"), "kind": "presentation"}
+            ]
+        )
+        outcomes(run, "transcription", "presentation", "x")
+        checks.poll()
+        assert only(run, "kind-failures")["pause"] == "kind:presentation"
+
     def test_most_recent_engine_calls_failing(self, tmp_path):
         run, checks = make_checks(tmp_path)
         doc = Doc(tmp_path, "letter.png", "media")
@@ -1165,6 +1227,217 @@ class TestRates:
             run.emit("call", stage="transcription", outcome=outcome, **about)
         checks.poll()
         assert "call-failures" not in checks_raised(run)
+
+
+# -- the engine's model -------------------------------------------------------
+
+
+def a_call(run: RunDir, doc: Doc, model: str | None, **fields) -> None:
+    """An engine call of the extraction, with the model its stream
+    reported (None: its stream named none)."""
+    about = {
+        "subject": doc.sha1,
+        "kind": doc.kind,
+        "role": "extract",
+        "stage": "extraction",
+        "call": "fork",
+        "outcome": "ok",
+        "model": model,
+    }
+    run.emit("call", **(about | fields))
+
+
+def models_manifest(run: RunDir, model=None, client=None) -> None:
+    """The run manifest's extract role: the model the run configures, and
+    the one its engine client asks for once it has started."""
+    run.update_manifest(
+        roles={
+            "extract": {
+                "model": model,
+                "client": None if client is None else {"model": client},
+            }
+        }
+    )
+
+
+class TestModel:
+    def test_a_call_on_the_role_s_model_is_quiet(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-sonnet-5", "claude-sonnet-5")
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-sonnet-5")
+        checks.poll()
+        assert run.alerts() == []
+
+    def test_a_call_on_another_model_than_the_manifest_s(self, tmp_path):
+        """An undated name the engine ran on a dated snapshot, say."""
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-sonnet-5", "claude-sonnet-5")
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-sonnet-5-20260901")
+        checks.poll()
+        alert = only(run, "model-mismatch")
+        assert (alert["value"], alert["limit"]) == (
+            "claude-sonnet-5-20260901",
+            "claude-sonnet-5",
+        )
+        assert (alert["role"], alert["against"]) == ("extract", "manifest")
+        assert (alert["stage"], alert["kind"], alert["status"]) == (
+            "extraction",
+            "text",
+            "new",
+        )
+        assert alert["subject"] == doc.sha1[:12]
+
+    def test_the_model_the_client_asks_for_comes_first(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-sonnet-5", client="claude-opus-5-5")
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-opus-5-5")
+        a_call(run, doc, "claude-sonnet-5")
+        checks.poll()
+        alert = only(run, "model-mismatch")
+        assert (alert["value"], alert["limit"]) == (
+            "claude-sonnet-5",
+            "claude-opus-5-5",
+        )
+
+    def test_the_configured_model_stands_until_a_client_starts(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-sonnet-5")
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-opus-5-5")
+        checks.poll()
+        assert only(run, "model-mismatch")["limit"] == "claude-sonnet-5"
+
+    def test_a_context_window_selector_is_no_other_model(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-opus-5-5[1m]", "claude-opus-5-5[1m]")
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-opus-5-5")
+        a_call(run, doc, "claude-opus-5-5[1m]")
+        checks.poll()
+        assert run.alerts() == []
+
+    @pytest.mark.parametrize("configured", [None, "sonnet", "opus-latest"])
+    def test_a_role_with_no_model_id_keeps_its_first_resolution(
+        self, tmp_path, configured
+    ):
+        """The engine's default, or an alias, names no model to compare
+        with: the role's first call reports the one it resolved to, and a
+        later call on another model is off it."""
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, configured, configured)
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-sonnet-5-20260901")
+        a_call(run, doc, "claude-sonnet-5-20260901")
+        checks.poll()
+        assert run.alerts() == []
+        a_call(run, doc, "claude-sonnet-5-20261101")
+        checks.poll()
+        alert = only(run, "model-mismatch")
+        assert (alert["value"], alert["limit"], alert["against"]) == (
+            "claude-sonnet-5-20261101",
+            "claude-sonnet-5-20260901",
+            "first call",
+        )
+
+    def test_a_role_the_manifest_does_not_know(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-sonnet-5")
+        a_call(run, doc, "claude-opus-5-5")
+        checks.poll()
+        assert only(run, "model-mismatch")["against"] == "first call"
+
+    def test_once_per_role_and_model(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-sonnet-5", "claude-sonnet-5")
+        for name in ("brief.txt", "karte.txt"):
+            doc = a_doc(tmp_path, name)
+            a_call(run, doc, "claude-opus-5-5")
+            a_call(run, doc, "claude-haiku-5")
+        checks.poll()
+        alerts = [a["value"] for a in run.alerts()]
+        assert alerts == ["claude-opus-5-5", "claude-haiku-5"]
+
+    def test_a_model_with_a_selector_is_the_same_model_once(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-sonnet-5", "claude-sonnet-5")
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-haiku-5")
+        a_call(run, doc, "claude-haiku-5[1m]")
+        checks.poll()
+        assert [a["value"] for a in run.alerts()] == ["claude-haiku-5"]
+
+    def test_each_role_has_its_own_model_and_its_own_alert(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        run.update_manifest(
+            roles={
+                "extract": {
+                    "model": "claude-sonnet-5",
+                    "client": {"model": "claude-sonnet-5"},
+                },
+                "critique": {
+                    "model": "claude-opus-5-5",
+                    "client": {"model": "claude-opus-5-5"},
+                },
+            }
+        )
+        doc = a_doc(tmp_path, "brief.txt")
+        critique = {"role": "critique", "stage": "critique"}
+        a_call(run, doc, "claude-sonnet-5")
+        a_call(run, doc, "claude-opus-5-5", **critique)
+        checks.poll()
+        assert run.alerts() == []
+        a_call(run, doc, "claude-haiku-5")
+        a_call(run, doc, "claude-haiku-5", **critique)
+        checks.poll()
+        assert sorted(
+            (a["role"], a["value"], a["limit"]) for a in run.alerts()
+        ) == [
+            ("critique", "claude-haiku-5", "claude-opus-5-5"),
+            ("extract", "claude-haiku-5", "claude-sonnet-5"),
+        ]
+
+    def test_each_role_keeps_its_own_first_resolution(self, tmp_path):
+        """Roles the manifest names no model for each take their own
+        first call's model."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        critique = {"role": "critique", "stage": "critique"}
+        a_call(run, doc, "claude-sonnet-5")
+        a_call(run, doc, "claude-opus-5-5", **critique)
+        a_call(run, doc, "claude-opus-5-5", **critique)
+        checks.poll()
+        assert run.alerts() == []
+
+    def test_a_call_whose_stream_named_no_model(self, tmp_path):
+        """It neither raises an alert nor becomes the role's model."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, None, outcome="error")
+        a_call(run, doc, "claude-sonnet-5")
+        a_call(run, doc, "claude-sonnet-5")
+        checks.poll()
+        assert run.alerts() == []
+
+    def test_a_failed_or_paused_call_s_model_counts(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-sonnet-5", "claude-sonnet-5")
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-opus-5-5", outcome="paused")
+        checks.poll()
+        assert only(run, "model-mismatch")["value"] == "claude-opus-5-5"
+
+    def test_it_can_be_switched_off(self, tmp_path):
+        run, checks = make_checks(
+            tmp_path, {"checks": {"model-mismatch": {"enabled": False}}}
+        )
+        models_manifest(run, "claude-sonnet-5", "claude-sonnet-5")
+        a_call(run, a_doc(tmp_path, "brief.txt"), "claude-opus-5-5")
+        checks.poll()
+        assert run.alerts() == []
 
 
 # -- fail-fast pauses ---------------------------------------------------------

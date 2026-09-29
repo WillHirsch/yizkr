@@ -37,7 +37,9 @@ The checks, which docs/ANOMALIES.md describes one by one:
   item reviewed, far from the median of the run's documents of the kind;
 * rates: a stage's failures over a rolling window of its dispatches, its
   failures among the first documents of a kind, and the failures among
-  its recent engine calls.
+  its recent engine calls;
+* the engine's model: a call whose stream reports running on another
+  model than its role's.
 
 They reuse the pipeline's own signals rather than judge again: the
 transcription check (yizkr.pipeline.transcription_check) and the reasons
@@ -108,6 +110,7 @@ from pydantic import (
 from yizkr.pipeline.rundir import (
     ABORT,
     ALERTS,
+    CALL,
     CONTROL,
     EVENTS,
     MANIFEST,
@@ -116,6 +119,8 @@ from yizkr.pipeline.rundir import (
     SET_ASIDE,
     RunDir,
     fold_control,
+    model_alias,
+    model_base,
 )
 from yizkr.pipeline.stages import canonical_json, read_jsonl, sha256_text
 from yizkr.pipeline.transcription_check import (
@@ -236,6 +241,7 @@ class Rolling(Check):
 class FirstOfKind(Check):
     first: int = Field(ge=1)
     max_share: float = Field(ge=0, lt=1)
+    min_documents: int = Field(ge=1)
     fail_fast: bool
 
 
@@ -259,6 +265,7 @@ class Checks(_Settings):
     stage_failures: Rolling
     kind_failures: FirstOfKind
     call_failures: Rolling
+    model_mismatch: Check
 
     def outlier(self, name: str) -> Outlier:
         """The settings of a distribution check, by its name."""
@@ -1168,6 +1175,9 @@ class AnomalyChecks:
         self._samples: dict[tuple[str, str | None], list[float]] = {}
         self._stage_windows: dict[str, _Rolling] = {}
         self._call_windows: dict[str, _Rolling] = {}
+        # each role's model, and what it is taken from (the run manifest,
+        # or the role's first call)
+        self._models: dict[str, tuple[str, str]] = {}
         self._first: dict[tuple[str, str], _FirstOf] = {}
         self._planned: Counter | None = None
         self._raised: set[tuple] = set()
@@ -1351,10 +1361,12 @@ class AnomalyChecks:
         subject: str | None,
         kind: Any,
         carried: bool,
+        once: tuple | None = None,
     ) -> None:
         """Append the alert, once per document, stage, check and status in
-        the invocation."""
-        key = (subject, stage, finding.check, carried)
+        the invocation, or once per `once` where the check says what it is
+        raised once for."""
+        key = once or (subject, stage, finding.check, carried)
         if key in self._raised:
             return
         self._raised.add(key)
@@ -1401,7 +1413,8 @@ class AnomalyChecks:
         elif name == SET_ASIDE:
             if event.get("stage") == TRANSCRIPTION:
                 self._check_failed(event, subject, carried=True)
-        elif name == "call":
+        elif name == CALL:
+            self._model(event, subject)
             self._call(event, subject)
         else:
             self._cache(event, name, subject)
@@ -1459,6 +1472,66 @@ class AnomalyChecks:
             kind=event.get("kind"),
             what="engine calls",
         )
+
+    def _model(self, event: dict, subject: str) -> None:
+        """A call's model, as its stream reports it, against its role's:
+        the model the run manifest names for the role (what its client
+        asks for, else what the run configures), or, for a role it names
+        no model for or names one by an alias, the model the role's first
+        call in the invocation reported, which the init event resolved.
+        Models are compared without a context-window selector. An alert
+        is raised once per role and model in the invocation, a model with
+        a selector and one without it being one, and is new, since the
+        call was made in it."""
+        settings = self.config.checks.model_mismatch
+        model, role = event.get("model"), event.get("role")
+        if not (
+            settings.enabled
+            and isinstance(model, str)
+            and model
+            and isinstance(role, str)
+            and role
+        ):
+            return
+        expected, against = self._models.get(role) or (None, None)
+        if expected is None:
+            named = self._manifest_model(role)
+            expected, against = (
+                (named, "manifest") if named else (model, "first call")
+            )
+            self._models[role] = (expected, against)
+        if model_base(model) == model_base(expected):
+            return
+        stage = event.get("stage")
+        self._raise(
+            Finding(
+                "model-mismatch",
+                model,
+                expected,
+                {"role": role, "against": against},
+            ),
+            stage=stage if isinstance(stage, str) and stage else "run",
+            subject=subject,
+            kind=event.get("kind"),
+            carried=False,
+            once=("model-mismatch", role, model_base(model)),
+        )
+
+    def _manifest_model(self, role: str) -> str | None:
+        """The full model id the run manifest names for `role`: what the
+        role's engine client asks for, once it has started, else what the
+        run configures; None for none, or for an alias (rundir.
+        model_alias), which names no model of its own."""
+        roles = self.run.manifest().get("roles")
+        settings = roles.get(role) if isinstance(roles, dict) else None
+        if not isinstance(settings, dict):
+            return None
+        client = settings.get("client")
+        model = client.get("model") if isinstance(client, dict) else None
+        model = model or settings.get("model")
+        if not isinstance(model, str) or model_alias(model):
+            return None
+        return model.strip() or None
 
     def _end(self, event: dict, subject: str, *, failed: bool) -> None:
         stage = event.get("stage")
@@ -1589,13 +1662,16 @@ class AnomalyChecks:
             carried=all(failures),
         )
 
-    def _planned_of(self, kind: str) -> int:
-        """How many documents of `kind` the run plans (run.json)."""
+    def _planned_of(self, kind: str) -> int | None:
+        """How many documents of `kind` the run plans (run.json), or None
+        while run.json records no plan."""
         if not self._planned:
             documents = self.run.manifest().get("documents")
+            if not isinstance(documents, list):
+                return None
             self._planned = Counter(
                 document.get("kind")
-                for document in documents or []
+                for document in documents
                 if isinstance(document, dict)
             )
         return self._planned.get(kind, 0)
@@ -1610,6 +1686,12 @@ class AnomalyChecks:
     ) -> None:
         settings = self.config.checks.kind_failures
         if not settings.enabled:
+            return
+        planned = self._planned_of(kind)
+        # a kind the run plans too few documents of is never judged: no
+        # other document of it is left for a pause to protect, and its
+        # failure shows as a failed document and in stage-failures
+        if planned is not None and planned < settings.min_documents:
             return
         first = self._first.get((stage, kind))
         if first is None:
@@ -1627,7 +1709,6 @@ class AnomalyChecks:
             for did_fail, from_cache in first.outcomes.values()
             if did_fail
         ]
-        planned = self._planned_of(kind)
         limit = settings.max_share * (
             min(settings.first, planned) if planned else settings.first
         )
