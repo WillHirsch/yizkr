@@ -151,10 +151,13 @@ EXTRACTION = "extraction"
 CRITIQUE = "critique"
 GEDCOM = "gedcom"
 
-# the `api_error` of a call event whose answer the claude CLI gave up on at
-# the output token limit (yizkr.pipeline.llm.OUTPUT_LIMIT_ERROR): the call
-# raised OutputLimitReached, and its outcome is `error`
-OUTPUT_LIMIT_ERROR = "max_output_tokens"
+# the `error` of a call event whose answer the claude CLI gave up on at the
+# output token limit: the engine read the give-up from the call's stream
+# (yizkr.pipeline.llm.output_limit_reached) and raised OutputLimitReached.
+# The event's `api_error` (max_output_tokens) does not tell it alone: a
+# call that crashed or timed out after the CLI printed its notice names
+# that class too, and failed.
+OUTPUT_LIMIT_REACHED = "OutputLimitReached"
 
 # the routes whose transcriptions the transcription check judges, by the
 # first part of a transcription's `engine`: an engine's reading and a text
@@ -1449,17 +1452,18 @@ class AnomalyChecks:
 
     def _call(self, event: dict, subject: str) -> None:
         """One engine call's event. A call whose answer the engine gave up
-        on at its output limit (the outcome `error`, and the `api_error`
-        OUTPUT_LIMIT_ERROR) is an answer cut off, not a failed call: a
+        on at its output limit (the outcome `error`, and the `error`
+        OUTPUT_LIMIT_REACHED) is an answer cut off, not a failed call: a
         chunk call's counts among the extraction's chunk answers and its
         truncations, never among its chunk failures, and no such call
         enters call-failures' window, whose step rule would pause the stage
-        as if the engine were down."""
+        as if the engine were down. Any other call that ended in an error
+        failed, whatever class of API error its event names."""
         outcome = event.get("outcome")
         if outcome not in ("ok", "error"):
             return
         failed = outcome == "error"
-        cut_off = failed and event.get("api_error") == OUTPUT_LIMIT_ERROR
+        cut_off = failed and event.get("error") == OUTPUT_LIMIT_REACHED
         attempt = self._attempt_of(subject)
         chunk = event.get("role") == "extract" and event.get("call") != "open"
         if attempt is not None and chunk:

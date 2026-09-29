@@ -61,7 +61,8 @@ limit (`max_tokens`) is cut off, and rejected as one without its
 terminal sentinel is; the stop reason is judged when the engine gives
 the answer, an entry does not keep it, and a hit is judged by its text
 alone; a call the claude CLI gave up on at that limit stores nothing,
-and its callers take it as a cut-off answer (§3, §4).
+and its callers take it as a cut-off answer, so a fallback it led to
+repeats only if the engine gives up again (§3, §4, §5).
 
 ## Context
 
@@ -299,9 +300,9 @@ extractor use the new answer. The rejectors are:
 
 The stop reason is judged when the engine gives the answer. An entry
 keeps none, so an answer the cache gives from an entry is judged by its
-text alone. The pinned claude CLI hands back no answer its model stopped
-at the output limit: it gives up on it, and the call raises
-`OutputLimitReached` (ADR-0006 §3). Like any error that stores nothing,
+text alone. The pinned claude CLI, run at a limit of 40 tokens, gave up
+on an answer its model stopped at the output limit rather than hand it
+back, and such a call raises `OutputLimitReached` (ADR-0006 §3). Like any error, it stores nothing,
 so there is nothing to reject, and the next call asks the engine again;
 the callers take it as a cut-off answer.
 
@@ -318,6 +319,10 @@ entity manifest and for the segmentation behind it: two attempts each,
 then the next tier (ADR-0006 §2, ADR-0007). A refused answer is kept, so a
 later run is answered attempt by attempt from the cache, takes the same
 fallback and gives the same batch, whatever the engine would answer now.
+An attempt the claude CLI gave up on at the output limit is the
+exception: it stores nothing, so a later run asks it again, and its
+fallback repeats only if the engine gives up again (#390 is to have it
+replay).
 A refused manifest falls back rather than failing the document, so the
 reason not to key chunk retries this way (a chunk that failed every
 attempt would fail again from the cache in every run) does not apply to

@@ -165,8 +165,9 @@ calls failing, over at least `min-count` of them: the engine's `call`
 events of the extraction with the outcome `error`, among its calls other
 than a conversation's opening turn (the entity manifest and the
 segmentation). A call whose answer the claude CLI gave up on at the
-output limit is a truncation, below, not a failure. It is judged when the
-extraction ends, done or failed. Value: the share; `count`, `of`.
+output limit, whose `error` is `OutputLimitReached`, is a truncation,
+below, not a failure. It is judged when the extraction ends, done or
+failed. Value: the share; `count`, `of`.
 
 **`truncations`**: more than `max-share` of an extraction's chunk answers
 cut off, over at least `min-count` answers, among the answers the engine
@@ -176,7 +177,11 @@ or the cache gave its chunk calls. A chunk answer is cut off when:
   event of the extract role gives a reason that starts `chunk:`;
 - the claude CLI gave up on it at the output limit and handed back
   none: the chunk call's `call` event has the outcome `error`, and its
-  `api_error` is `max_output_tokens` (docs/LLM_CACHE.md).
+  `error` is `OutputLimitReached`, which the engine raises when it reads
+  that give-up in the call's stream (docs/LLM_CACHE.md). The event's
+  `api_error`, `max_output_tokens`, does not tell it alone: a call that
+  crashed or timed out after the CLI printed its notice names that class
+  too, under another `error`, and is a failed call.
 
 Value: the share; `count`, `of`.
 
@@ -240,10 +245,11 @@ judged. Value: the failures; `of` (the documents counted), `first`,
 engine calls failing (`call` events with the outcome `error`), once it has
 made at least `min-count`. Calls paused or interrupted are not counted.
 Nor is a call whose answer the claude CLI gave up on at the output limit
-(`api_error` `max_output_tokens`): the engine answered it, so it says
-nothing of an engine down, and it is left out of the window. It fires as
-`stage-failures` does. Its slice is the stage; fail-fast by default.
-Value: the share; `count`, `of`, `pause`.
+(`error` `OutputLimitReached`): the engine answered it, so it says
+nothing of an engine down, and it is left out of the window. A call that
+crashed or timed out after the CLI printed its notice is counted, as a
+failed call. It fires as `stage-failures` does. Its slice is the stage;
+fail-fast by default. Value: the share; `count`, `of`, `pause`.
 
 ### The engine's model
 

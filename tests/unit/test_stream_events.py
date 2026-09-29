@@ -1337,6 +1337,25 @@ class TestTheCliGivingUp:
             ClaudeCodeClient(model=MODEL).complete("Extract the claims.")
         assert not isinstance(raised.value, OutputLimitReached)
 
+    @pytest.mark.parametrize("status", [1, 0], ids=["exit-1", "exit-0"])
+    def test_a_stream_that_ends_after_the_notice_is_no_give_up(
+        self, cli, status
+    ):
+        """The notice with no result after it (a crash): nothing says the
+        CLI gave up, so the call is what its exit makes it, a failure, or
+        at a zero exit an answer holding the notice, for its caller to
+        judge. Its report still names the class of API error (#7)."""
+        cli.edit = reshaped(lambda events: events.pop())
+        cli.exits = [status]
+        client = ClaudeCodeClient(model=MODEL)
+        if status:
+            with pytest.raises(RuntimeError) as raised:
+                client.complete("Extract the claims.")
+            assert not isinstance(raised.value, OutputLimitReached)
+        else:
+            assert client.complete("Extract the claims.") == LIMIT_NOTICE
+        assert client.last_stream()["api_error"] == "max_output_tokens"
+
     def test_a_result_that_reports_no_error_answers(self, cli):
         """The notice beside a result that reports no error: the call
         answers with what its stream holds, for its caller to judge."""

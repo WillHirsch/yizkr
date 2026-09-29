@@ -831,14 +831,15 @@ def _as_text(output: str | bytes | None) -> str:
 # its content block completes, before the API's message_delta says why the
 # model stopped, so its message's stop_reason tells nothing of it.
 #
-# When its model's answer passes the output token limit, the pinned CLI
-# hands back no answer. Its stream ends with an assistant event whose error
-# is max_output_tokens (OUTPUT_LIMIT_ERROR), holding an API-error notice as
-# its one text block, and a result that reports is_error, with the notice
-# as its result and stop_sequence as its stop reason. That stream is read
-# by its structure, never by the notice's text (output_limit_reached), and
-# the call raises OutputLimitReached. A stop reason of max_tokens on a
-# result that answers is read too (at_output_limit).
+# When its model's answer passed the output token limit (at a limit of 40
+# tokens), the pinned CLI handed back no answer. Its stream ended with an
+# assistant event whose error is max_output_tokens (OUTPUT_LIMIT_ERROR),
+# holding an API-error notice as its one text block, and a result that
+# reports is_error, with the notice as its result and stop_sequence as its
+# stop reason. Such a stream is read by its structure, never by the
+# notice's text (output_limit_reached), and the call raises
+# OutputLimitReached. A stop reason of max_tokens on a result that answers
+# is read too (at_output_limit): either way the answer is cut off.
 #
 # A stream cut off before its result event (a timeout, a crash) reports no
 # usage, turns, subtype or stop reason, and one cut off before its init

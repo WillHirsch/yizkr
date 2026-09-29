@@ -132,7 +132,17 @@ def _claims_block(batch: ClaimBatch) -> str:
     return "\n".join(lines)
 
 
-def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
+# what the critique stage says of a critique the engine gave up on at its
+# output limit (run_critique's `attention`)
+GAVE_UP = f"critique {CUT_OFF_AT_LIMIT}: no findings"
+
+
+def run_critique(
+    client: LlmClient,
+    batch: ClaimBatch,
+    *,
+    attention: list[str] | None = None,
+) -> list[Finding]:
     """Review the batch; return flagged concerns (possibly empty).
 
     Advisory only — an unfinished answer never raises (unlike chunk
@@ -147,7 +157,9 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
     is used in its place, as it would be without the cache. A call the
     engine gave up on at its output limit (llm.OutputLimitReached) gave no
     answer: there are no findings, and nothing to reject, since the cache
-    keeps nothing for it.
+    keeps nothing for it. So that an empty critique of that kind never
+    passes for a sound extraction's, GAVE_UP is added to `attention`, when
+    given, for the stage to show.
     """
     if not batch.entities and not batch.claims:
         return []
@@ -164,7 +176,9 @@ def run_critique(client: LlmClient, batch: ClaimBatch) -> list[Finding]:
             if unfinished:
                 _reject(client, response, unfinished)
     except OutputLimitReached:
-        logger.warning("critique %s: no findings", CUT_OFF_AT_LIMIT)
+        logger.warning(GAVE_UP)
+        if attention is not None:
+            attention.append(GAVE_UP)
         return []
     return findings
 

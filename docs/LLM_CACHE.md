@@ -423,12 +423,14 @@ it is given, an entry holds a cut-off chunk, critique or single-call
 answer only when that rejection never came (the process ended first, or
 the rejection failed).
 
-The pinned claude CLI never hands back an answer its model stopped at the
-output limit. It gives up on it: its stream ends with an API-error notice,
-an assistant event whose `error` is `max_output_tokens`, and a result
-that reports `is_error`, with no answer. That structure, never the
-notice's text, makes the call raise `llm.OutputLimitReached` (What a
-call's stream reported, below). Like any error it stores nothing, so
+The pinned claude CLI gave up on an answer its model stopped at the output
+limit, when run at a limit of 40 tokens, rather than hand it back: its
+stream ended with an API-error notice, an assistant event whose `error`
+is `max_output_tokens`, and a result that reports `is_error`, with no
+answer. That structure, never the notice's text, makes the call raise
+`llm.OutputLimitReached` (What a call's stream reported, below), and an
+engine that does hand back such an answer, with the stop reason
+`max_tokens`, is read as above. Like any error, it stores nothing, so
 there is no entry to reject, and the next call under the key misses as
 `absent` and asks the engine again. Its callers take it as an answer cut
 off at the output limit:
@@ -437,7 +439,10 @@ off at the output limit:
   gets nothing else fails with `ChunkIncomplete: cut off at max_tokens`;
 - the entity manifest and the segmentation take it as an answer refused,
   so their fallback tiers stand in, as for a cut-off answer;
-- the critic has no findings from it and still never raises;
+- the critic has no findings from it and still never raises, and the
+  critique stage is done but needs attention, with the reason
+  `critique cut off at max_tokens: no findings`, which a run that reuses
+  the empty critique carries on;
 - a single-call extraction fails with it: there is no claim to keep.
 
 So a parser fix recovers every response the old parser accepted, without
@@ -449,7 +454,10 @@ The entity manifest and the segmentation behind it are asked in two
 attempts each, and each attempt is keyed apart (`llm.for_attempt`). A
 refused answer is kept, not rejected: a later run is answered attempt by
 attempt from the cache, takes the same fallback, and gives the same
-batch, whatever the engine would answer now. `--refresh extract` or a new
+batch, whatever the engine would answer now. An attempt the claude CLI
+gave up on at the output limit is the exception: it stores nothing, so a
+later run asks it again, and its fallback repeats only if the engine
+gives up again (#390 is to have it replay). `--refresh extract` or a new
 epoch asks again.
 
 **A stricter parser replays a kept answer, rather than rejecting it.** An
@@ -843,7 +851,9 @@ outcome `error`, its `error` is `OutputLimitReached`, its `api_error` is
 `max_output_tokens`, and its `stop_reason` is the notice's
 (`stop_sequence`), as CLI 2.1.237 prints them. The anomaly checks count
 such a chunk call as a truncation, never as a failed call
-(docs/ANOMALIES.md). A replay is a call, and carries what the replay
+(docs/ANOMALIES.md). A call that crashed or timed out after the CLI
+printed the notice carries the same `api_error` under another `error`:
+it failed. A replay is a call, and carries what the replay
 used; when it answers as the cache did, the opening turn's entry keeps
 what the original call's stream reported. A call the cache answers, by
 key match or adoption, makes no call, so it has no `call` event and uses

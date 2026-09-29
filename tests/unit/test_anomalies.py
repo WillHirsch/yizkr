@@ -901,6 +901,40 @@ class TestExtraction:
         assert (alert["value"], alert["count"], alert["of"]) == (0.667, 4, 6)
         assert "chunk-failures" not in checks_raised(run)
 
+    @pytest.mark.parametrize(
+        ("outcome", "error", "raised"),
+        [
+            ("error", "RuntimeError", "chunk-failures"),
+            ("ok", None, None),
+        ],
+        ids=["failed-after-the-notice", "answered"],
+    )
+    def test_the_class_of_api_error_alone_is_no_give_up(
+        self, tmp_path, outcome, error, raised
+    ):
+        """Only a call the engine raised OutputLimitReached for is a
+        give-up. One that crashed or timed out after the CLI printed its
+        notice names max_output_tokens too, and failed; an answered one
+        that names it is an answer (#7)."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        about = dict(subject=doc.sha1, kind="text", role="extract")
+        run.emit("started", subject=doc.sha1, kind="text", stage="extraction")
+        for _ in range(4):
+            run.emit(
+                "call",
+                call="fork",
+                stage="extraction",
+                outcome=outcome,
+                api_error="max_output_tokens",
+                **({"error": error} if error else {}),
+                **about,
+            )
+        run.emit("done", subject=doc.sha1, kind="text", stage="extraction")
+        checks.poll()
+        assert "truncations" not in checks_raised(run)
+        assert checks_raised(run) == ([raised] if raised else [])
+
     def test_rejections_of_other_answers_are_no_truncations(self, tmp_path):
         run, checks = make_checks(tmp_path)
         doc = a_doc(tmp_path, "brief.txt")
@@ -1273,6 +1307,28 @@ class TestRates:
         assert "call-failures" not in checks_raised(run)
         for _ in range(10):
             run.emit("call", stage="extraction", outcome="error", **about)
+        checks.poll()
+        alert = only(run, "call-failures")
+        assert (alert["value"], alert["count"], alert["of"]) == (1.0, 10, 10)
+
+    def test_a_call_that_failed_after_the_notice_is_a_failed_call(
+        self, tmp_path
+    ):
+        """A call that crashed or timed out after the CLI printed its
+        output-limit notice names max_output_tokens, but the engine raised
+        no OutputLimitReached for it: it failed, and counts (#7)."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        about = dict(subject=doc.sha1, kind="text", role="extract")
+        for _ in range(10):
+            run.emit(
+                "call",
+                stage="extraction",
+                outcome="error",
+                error="RuntimeError",
+                api_error="max_output_tokens",
+                **about,
+            )
         checks.poll()
         alert = only(run, "call-failures")
         assert (alert["value"], alert["count"], alert["of"]) == (1.0, 10, 10)

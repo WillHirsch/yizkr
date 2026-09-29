@@ -171,12 +171,12 @@ Two contract changes relative to the current prompt:
   limit decides too, where it gives one: an answer whose model stopped
   at the output limit (`max_tokens`, as the Anthropic API says on its
   response) is cut off whatever it holds, its sentinel included. The
-  pinned claude CLI hands back no such answer. It gives up on it, with
-  an API-error notice as its last assistant event, whose `error` is
-  `max_output_tokens`, and a result that reports `is_error`, and that
-  structure, never the notice's text, makes the call raise
-  `OutputLimitReached`. Either way the chunk is marked incomplete and
-  retried as one without its sentinel is.
+  pinned claude CLI, run at a limit of 40 tokens, handed back no such
+  answer. It gave up on it, with an API-error notice as its last
+  assistant event, whose `error` is `max_output_tokens`, and a result
+  that reports `is_error`, and that structure, never the notice's text,
+  makes the call raise `OutputLimitReached`. Either way the chunk is
+  marked incomplete and retried as one without its sentinel is.
 
 Entities defined outside the chunk's assigned units (e.g. a parent
 named elsewhere in the document) are referenced as local refs with
@@ -223,8 +223,11 @@ rejected. A chunk the claude CLI gave up on stored nothing, and is asked
 anew as well. The entity manifest and the segmentation are asked in two
 attempts each, keyed apart in the cache, and a refused answer is kept,
 so a later run replays the same attempts and takes the same fallback
-(ADR-0032 §5). When a fork misses behind a cached
-manifest, the conversation is resumed exactly from the session the cache
+(ADR-0032 §5). An attempt the claude CLI gave up on at the output limit
+is the exception: it stores nothing, so a later run asks it again, and
+its fallback repeats only if the engine gives up again (#390 is to have
+it replay). When a fork misses behind a cached manifest, the
+conversation is resumed exactly from the session the cache
 kept for the manifest it serves; a replay that answers differently starts
 the extraction over from the new answer (ADR-0032 §6). A cut-off chunk
 answer the cache kept from an earlier call spends no retry: the engine is

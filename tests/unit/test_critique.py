@@ -261,6 +261,16 @@ class TestUnfinishedAnswers:
         assert run_critique(llm, batch()) == []
         assert llm.rejected == []
         assert "critique cut off at max_tokens" in caplog.text
+        # the stage is told, so that the empty critique needs attention
+        attention: list[str] = []
+        assert run_critique(llm, batch(), attention=attention) == []
+        assert attention == ["critique cut off at max_tokens: no findings"]
+        # a whole critique tells it nothing
+        attention = []
+        run_critique(
+            Rejecting(response([FINDING])), batch(), attention=attention
+        )
+        assert attention == []
 
     def test_an_answer_that_ended_its_turn_is_whole(self):
         llm = Stopping(response([FINDING]), stops=["end_turn"])
