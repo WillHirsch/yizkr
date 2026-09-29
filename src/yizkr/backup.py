@@ -832,15 +832,19 @@ def filter_public_export(
         match = _PROVENANCE_NODE.fullmatch(line.split(" ", 1)[0])
         return match.group(1) if match else None
 
+    def dump_lines():
+        # each pass reads the same lines, ended at a newline alone
+        return gzip.open(full_dump, "rt", encoding="utf-8", newline="\n")
+
     # pass 1: which provenance nodes do the surviving statements need?
     needed: set[str] = set()
-    with gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source:
+    with dump_lines() as source:
         for line in source:
             if suppressed(line) or subject_hash(line) is not None:
                 continue
             needed.update(_PROVENANCE_NODE.findall(line))
     # ...and which value nodes do the surviving reference nodes need?
-    with gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source:
+    with dump_lines() as source:
         for line in source:
             if suppressed(line):
                 continue
@@ -851,7 +855,7 @@ def filter_public_export(
     # pass 2: write everything that survives
     kept = dropped = 0
     with (
-        gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source,
+        dump_lines() as source,
         gzip.open(
             public_dump, "wt", encoding="utf-8", newline="\n", compresslevel=6
         ) as sink,
