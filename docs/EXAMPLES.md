@@ -168,9 +168,9 @@ offline end-to-end tests, one of each kind the scratch driver plans, in
 `build.py` makes them (`uv run python -m tests.fixtures.corpus.build`),
 and a test fails when the committed files differ from what it makes. The
 two images are small stand-ins that show no text; the export is
-`example-family.ged`'s Lobig line, record for record, with the traps
-below. `engine.RecordedEngine` answers every call the stages before write
-make of them, as a faithful model would, from the universe's own
+`example-family.ged`'s Lobig line, record for record, with two traps of
+its own. `engine.RecordedEngine` answers every call the stages before
+write make of them, as a faithful model would, from the universe's own
 assertions for each source (`answers.py`), with one deliberate mistake: it
 reads the family history's *'50* as 1850, and reads it right once the
 chunk prompt carries a rule about two-digit years.
@@ -178,30 +178,15 @@ chunk prompt carries a rule about two-digit years.
 runs under a refusing wiki, and asserts what must come of each stage and
 each trap, with no gold set.
 
-The traps (`TRAPS`):
-
-- **Two homonyms with identical source descriptions**: the export gives
-  both Ursula Löbigs a record alike (one name, one sex, no date), so only
-  their links tell them apart; the family history names both.
-- **A cross-source contradiction**: Gustav born 7 January 1919 (the
-  export) and 1 July 1919 (the certificate).
-- **Mirrored kinship**: the parents' `child` claims (the family history,
-  the talk) and the children's `father` and `mother` (the export, the
-  postcard).
-- **A death-date trap**: the export gives Nicholas a DEAT that states no
-  death (no DATE, PLAC or Y), from which no death evidence may come.
-- **A hallucination-style early birth and a later conflicting birth**:
-  Nicholas born 1850 per the recorded model's reading of the family
-  history, 1950 per the export and the talk.
-- **A cross-source merge carrying death evidence**: the certificate's
-  Gustave Lobig carries no death evidence; the family history's and the
-  export's carry his death and burial.
-
-`PRIVACY_TRAPS` gives the evidence of the four that bear on privacy, in
-the universe's terms, for the possibly-living predicate's tests (#120):
-`from tests.fixtures.corpus import PRIVACY_TRAPS`. To add a document,
-give it a source here first, then its bytes in `build.py`, its entity
-manifest in `answers.py` and an entry in `DOCUMENTS`, and build again.
+`TRAPS`, in `tests/fixtures/corpus/__init__.py`, names the six traps the
+corpus sets, in #76's words: the documents and people each involves, how
+the corpus sets it, and what must come of it, clustering's outcomes
+included. `PRIVACY_TRAPS` gives the evidence of the four that bear on
+privacy, in the universe's terms, for the possibly-living predicate's
+tests (#120): `from tests.fixtures.corpus import PRIVACY_TRAPS`. To add a
+document, give it a source in `tests/fixtures/example_universe.py` first,
+then its bytes in `build.py`, its entity manifest in `answers.py` and an
+entry in `DOCUMENTS`, and build again.
 
 ## Extending
 

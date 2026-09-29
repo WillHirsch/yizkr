@@ -45,6 +45,15 @@ itself in its own `--help`.
     loses them for the rest of its run. A test that needs a patch for
     part of its run scopes it with `with monkeypatch.context() as patch:`
     instead.
+- **The offline end-to-end scratch run**
+  (`tests/unit/test_fixture_corpus.py`, a unit test like the rest) takes
+  the fixture corpus (`tests/fixtures/corpus/`, docs/EXAMPLES.md) through
+  whole scratch runs, as far as the scratch driver goes: every
+  per-document stage, the barrier and the corpus stages. A recorded
+  engine answers behind the real LLM cache, and the wiki refuses every
+  read and write. It asserts what must come of each stage and of each of
+  the corpus's traps, and how a second run, a run invoked again and a
+  changed extraction prompt reuse the work, with no gold set.
 - **Live tests** (`tests/integration`, every module marked `live`) run
   against the deployed stack (`make up` or `make up-local`) through
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.

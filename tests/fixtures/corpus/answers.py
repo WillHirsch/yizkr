@@ -102,7 +102,7 @@ MISTAKES = (
         u.Date(1950),
         u.Date(1850),
         SHARPER_RULE,
-        "born in 1850, ninety years before his father married in 1942",
+        "born in 1850, 92 years before his father married in 1942",
     ),
 )
 

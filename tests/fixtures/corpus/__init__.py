@@ -150,7 +150,10 @@ TRAPS = (
         "history and the talk give the parents their children (`child`).",
         "Each document's claims state the kinship the way it does, from the "
         "child's end or the parents'; clustering reads the two ends as one "
-        "(#105).",
+        "(#105). Under the whole-cluster merge rule (#361), Klara's mentions "
+        "stay unmerged, in a conflicting cluster: the postcard's 'Klara's "
+        "father' blocks with her and is her kin. That is expected under the "
+        "rule, not a split to mend here (#380).",
     ),
     Trap(
         "death-date",
@@ -188,7 +191,12 @@ TRAPS = (
         "'96 and his burial in Stupfield, and so does the export's Gustav.",
         "The certificate's batch holds no death evidence for him: it reaches "
         "his mention there only through a merge of mentions (#105), which "
-        "is no confirmed evidence (#120).",
+        "is no confirmed evidence (#120). Under the whole-cluster merge "
+        "rule (#361) no such merge happens: the postcard's one-token "
+        "'Gustl', which nothing corroborates, holds Gustav's candidate "
+        "cluster ambiguous. That is expected under the rule; the link rule "
+        "would merge the certificate's mention with those that carry his "
+        "death (#380).",
     ),
 )
 
