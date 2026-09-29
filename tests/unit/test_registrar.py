@@ -7,7 +7,10 @@ and the registrar itself over an in-memory wiki whose uploads run the
 real `WikiClient.upload_file` against a fake MediaWiki (#186): artifacts
 found or made by SHA-1 alone, never by title; page fragments keyed by
 their artifact (#187); a container's derived media registered from their
-record (#128); and the never-ingest list (#29). The orchestrator's
+record (#128); the never-ingest list (#29); and `ensure_self_typed`, which
+gives an item found without its kind that kind, stated in the item itself
+(#368; its use for the place-hierarchy pass's run item is tested in
+tests/unit/test_places.py). The orchestrator's
 write-time registration of a document runs here too, through its real
 `_step_register`. The flow is also verified live
 (tests/integration/test_live_write_time_registration.py,
@@ -49,6 +52,7 @@ from yizkr.pipeline.registrar import (
     _ensure_referenced,
     _item_claim,
     _string_claim,
+    ensure_self_typed,
     register_artifact,
     register_derived_media,
 )
@@ -261,6 +265,7 @@ class FakeWiki:
         "presentation": "Q5",
         "certificate": "Q6",
         "genealogical_report": "Q7",
+        "extraction_run": "Q8",
     }
 
     def __init__(self) -> None:
@@ -1353,6 +1358,35 @@ class TestFragments:
         result = register(wiki, path, EXTRACT_TITLE, "certificate", pages=1)
         assert result.fragment_qids == {1: first} and first != second
 
+    def test_a_leftover_with_a_fragments_label_is_not_taken(self, tmp_path):
+        """An item with a fragment's label and no statements, as a
+        registration cut short between the two writes that made a fragment
+        before #103 could leave, is not taken for the fragment (#368): the
+        fragment is made beside it, its label tagged, and the leftover is
+        left as it is."""
+        wiki = FakeWiki()
+        leftover = wiki.item(f"{EXTRACT_TITLE}, page 1")
+        before = copy.deepcopy(wiki.entities[leftover])
+
+        result = register(
+            wiki,
+            scan(tmp_path, EXTRACT, name="birth-extract-1938.pdf"),
+            EXTRACT_TITLE,
+            "certificate",
+            pages=1,
+        )
+
+        fragment = result.fragment_qids[1]
+        assert fragment != leftover
+        assert wiki.entities[leftover] == before
+        kinds, parts = fragment_statements(wiki, fragment)
+        assert kinds == [ITEMS["artifact_fragment"]]
+        assert parts == {(result.artifact_qid, "1"): [result.artifact_qid]}
+        assert label_of(wiki, fragment) == (
+            f"{EXTRACT_TITLE}, page 1 [{sha1(EXTRACT)[:8]}]"
+        )
+        assert_labels_unique(wiki)
+
     def test_a_fragment_label_a_registrar_gave_is_taken(self, tmp_path):
         """A registrar keeps the labels it gives fragments in its reading:
         an artifact it registers later under one of them is tagged."""
@@ -2039,3 +2073,121 @@ class TestRegisterCommand:
                 ]
             )
         assert "--file" in capsys.readouterr().err
+
+
+# -- an item's kind, stated in the item itself (#368) -------------------------
+
+# a run item, labelled as the writer labels one: a date, a model and the
+# batch's fingerprint
+RUN_LABEL = "extraction run 2026-07-12 fake-model 0a9afd5746"
+
+
+def kinds_of(wiki, qid: str) -> list[tuple[str, str, list[str]]]:
+    """(kind, rank, the items it is stated in) of each `instance of`
+    statement of an item."""
+    return [
+        (value(statement), statement["rank"], cited(statement))
+        for statement in wiki.entities[qid]["claims"].get(P["instance_of"], [])
+    ]
+
+
+def typed(wiki, qid: str, **options) -> bool:
+    return ensure_self_typed(
+        wiki, qid, "extraction_run", summary="run item statements", **options
+    )
+
+
+class TestEnsureSelfTyped:
+    """A run item's kind cites the item itself, so it is written after the
+    write that makes the item. Whatever finds an item that a write cut short
+    left without it gives it that kind; an item that states it already, in
+    any way, is left as it is."""
+
+    def test_an_item_without_its_kind_gets_it_stated_in_itself(self):
+        wiki = FakeWiki()
+        qid = wiki.item(RUN_LABEL)
+        writes = wiki.writes
+
+        assert typed(wiki, qid) is True
+
+        assert wiki.writes == writes + 1
+        assert kinds_of(wiki, qid) == [
+            (ITEMS["extraction_run"], "normal", [qid])
+        ]
+        assert label_of(wiki, qid) == RUN_LABEL
+
+    def test_an_item_that_states_its_kind_gets_no_write(self):
+        wiki = FakeWiki()
+        qid = wiki.item(
+            RUN_LABEL, ("instance_of", ITEMS["extraction_run"], None)
+        )
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+
+        assert typed(wiki, qid) is False
+
+        assert wiki.writes == writes
+        assert wiki.entities == before
+
+    def test_its_kind_under_another_reference_is_left_as_it_is(self):
+        """A curator's statement of the kind, cited to another item, types
+        the item: it gains no statement and no reference."""
+        wiki = FakeWiki()
+        elsewhere = wiki.item("model manifest")
+        qid = wiki.item(
+            RUN_LABEL,
+            ("instance_of", ITEMS["extraction_run"], None),
+            stated_in=elsewhere,
+        )
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+
+        assert typed(wiki, qid) is False
+
+        assert wiki.writes == writes
+        assert wiki.entities == before
+        assert kinds_of(wiki, qid) == [
+            (ITEMS["extraction_run"], "normal", [elsewhere])
+        ]
+
+    def test_a_kind_a_curator_deprecated_is_left_alone(self):
+        """The kind at deprecated rank is still stated: the curator's rank
+        stands (CLAUDE.md rules 3 and 4), and no second statement is put
+        beside it."""
+        wiki = FakeWiki()
+        qid = wiki.item(
+            RUN_LABEL, ("instance_of", ITEMS["extraction_run"], None)
+        )
+        (statement,) = wiki.entities[qid]["claims"][P["instance_of"]]
+        statement["rank"] = "deprecated"
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+
+        assert typed(wiki, qid) is False
+
+        assert wiki.writes == writes
+        assert wiki.entities == before
+        assert kinds_of(wiki, qid) == [
+            (ITEMS["extraction_run"], "deprecated", [qid])
+        ]
+
+    def test_another_kind_is_kept_beside_it(self):
+        """An item that states another kind only gains this one beside it:
+        nothing it states is replaced or removed."""
+        wiki = FakeWiki()
+        qid = wiki.item(RUN_LABEL, ("instance_of", ITEMS["artifact"], None))
+
+        assert typed(wiki, qid) is True
+
+        assert kinds_of(wiki, qid) == [
+            (ITEMS["artifact"], "normal", [qid]),
+            (ITEMS["extraction_run"], "normal", [qid]),
+        ]
+
+    def test_a_dry_run_writes_nothing(self):
+        wiki = FakeWiki()
+        qid = wiki.item(RUN_LABEL)
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+
+        # the item lacks its kind, and the dry run says so
+        assert typed(wiki, qid, dry_run=True) is True
+
+        assert wiki.writes == writes
+        assert wiki.entities == before
