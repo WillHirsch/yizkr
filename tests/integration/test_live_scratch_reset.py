@@ -102,7 +102,6 @@ def test_a_live_session_clears_the_contents_key(config):
 
 def test_the_reset_runs_twice_and_empties_the_instance(resets, client):
     first = reset(resets, client)
-    assert [step.name for step in first.steps] == STEPS
     writer = WikiClient(resets)
     item = writer.wbi.item.new()
     item.labels.set("en", BETWEEN)
@@ -110,9 +109,11 @@ def test_the_reset_runs_twice_and_empties_the_instance(resets, client):
     item.write(summary="live test: written between two resets")
     assert WikiClient(resets).find_item_by_label(BETWEEN) is not None
     second = reset(resets, client)
-    assert [step.name for step in second.steps] == STEPS
     fresh = WikiClient(resets)
+    # the volumes really went
     assert fresh.find_item_by_label(BETWEEN) is None
+    for done in (first, second):
+        assert [step.name for step in done.steps] == STEPS
     # the fresh instance holds the manifest's vocabulary again
     properties, items = fresh.vocabulary()
     assert "stated_in" in properties
