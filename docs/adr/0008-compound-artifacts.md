@@ -419,13 +419,17 @@ time"):
   amendment's registration item asks for;
 - then each image of the record kept in the deck's state directory,
   found or made by its own SHA-1 under the rules of the #50 amendment
-  and ADR-0010's "Media files". Its bytes are uploaded from the file the
-  record keeps, under the name `"<deck title> <name in the archive>"`.
-  Bytes the archive holds under several names are one medium: the first
-  name labels it (`"<deck title> — <name>"`), and the others are its
-  aliases;
-- an image the never-ingest list names, by a name or by its SHA-1, is
-  left out: neither registered nor uploaded.
+  and ADR-0010's "Media files", except one: the #50 amendment's adoption
+  of an item without a hash by its label no longer applies. An image is
+  found by its SHA-1 alone, and a new image whose label another item
+  already has takes a content-tagged label. Its bytes are uploaded from
+  the file the record keeps, under the name `"<deck title> <name in the
+  archive>"`. Bytes the archive holds under several names are one
+  medium: the first name labels it (`"<deck title> — <name>"`), and the
+  others are its aliases. Labels are compared and set in the form
+  Wikibase stores them in (trimmed, NFC);
+- an image the never-ingest list names, by any of its names or by its
+  SHA-1, is left out: neither registered nor uploaded.
 
 A compilation's excerpts are registered the same way once follow-up A
 records them.

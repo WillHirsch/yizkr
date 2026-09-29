@@ -107,14 +107,15 @@ one that lost its record, so nothing says what its files were derived
 from), or when files sit beside the record with no `state.json` to name
 the artifact they were made for, `ingest run` moves the directory aside
 whole, as `.<name>.superseded-<n>` in the state directory (`<name>` is
-the directory's), and ingests the document afresh in a new one:
-registration, views and gates. No document directory's name starts with
-a dot, so none can take that name. Nothing in the old directory is
+the directory's), and ingests the document afresh in a new one: views,
+gates, then the write, which registers it. No document directory's name
+starts with a dot, so none can take that name. Nothing in the old directory is
 deleted, the log and a `set-aside` event name it and the document, and
 the bytes it recorded seed no content dedup. Every directory `ingest
 run` makes has its `derivations.json` from its first run, written before
-any other file, and its `state.json` from its registration, before any
-view; no state is saved into a directory without its record.
+any other file, and its `state.json`, which names the bytes its views are
+made for, before any view; no state is saved into a directory without its
+record.
 
 **A directory per source file.** Each source file has a directory of its
 own in the state directory, named after its stem (`letter`) when no
@@ -159,8 +160,8 @@ directory with its record, and its `state.json` names its file, its
 `state.json` records the failure and the reason; a state that names
 another file, a departed source's, is left as it is. A `state.json` the
 run cannot read is left as it is too, never saved over, since it may hold
-the registration: repair it, or remove it and the next run starts the
-document afresh. A source removed after discovery fails its document
+state a person can recover: repair it, or remove it and the next run
+starts the document afresh. A source removed after discovery fails its document
 when a later step reads it; a document whose views all stand may not
 read it again in the run.
 
@@ -990,6 +991,6 @@ through it, and the transcription check counts its pages with it
 cache, or is a view the run reuses and checks again.
 
 The per-document path goes when the scratch driver has run the corpus
-end to end (#119). Until #103 lands, it still registers the
-artifact in the wiki before the stages run; the stages themselves read
-and write no wiki. A scratch run registers no artifact.
+end to end (#119). It registers each artifact as its write begins
+(#103); the stages before the write read and write no wiki. A scratch
+run registers no artifact.

@@ -86,7 +86,12 @@ never by name (amended by #103, 2026-09-29):
   When the title is already another item's label, the new item's label
   takes a short content tag (`"<title> [<sha1[:8]>]"`), so labels stay
   unique (the wiki client's label index; #94 would scope that rule away
-  from artifacts) and homonymous files stay separate artifacts;
+  from artifacts) and homonymous files stay separate artifacts. The tag
+  is a stopgap until #94, and which of two homonyms bears it depends on
+  the order they are registered in, so nothing may key on an artifact's
+  label: its key is its `media SHA-1`. Titles and labels are compared
+  and set in the form Wikibase stores terms in (trimmed, NFC), so a
+  title in another form never passes for a free label;
 - **no media to hash →** refused: there is nothing to find an artifact
   by.
 
@@ -101,9 +106,11 @@ stages before the write read nothing from the wiki (ADR-0025 §2), and
 claims cite their artifact by its SHA-1 (#102), so nothing before the
 write needs an artifact item. `ingest run` registers a document as its
 write begins, just before the claims that cite it are written, and a
-write that runs again registers again, finding by SHA-1 what the earlier
-one registered. After a reset, then, the write registers everything on
-the new instance.
+write that runs again (a changed review, say) registers again, finding by
+SHA-1 what the earlier one registered. A reset by itself makes no write
+run again, since a written document's `write.json` stays current: it is
+a scratch run, which starts from fresh state directories, whose writes
+register every document on the instance its reset emptied (#200).
 
 - **One reading per registrar.** A `Registrar` reads the instance once:
   every item's label, its `media SHA-1` values and, for an `artifact
