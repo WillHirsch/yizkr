@@ -690,6 +690,34 @@ class TestRegisterArtifact:
         (stored,) = claims[P["media_file"]]
         assert cited(kind) == cited(hashed) == cited(stored) == [deck, media]
 
+    def test_a_title_whose_tagged_form_is_taken_too_is_refused(self, tmp_path):
+        """Labels stay unique: when the title and its content-tagged form
+        both name other items, nothing is made, written or uploaded."""
+        wiki = FakeWiki()
+        wiki.item(TITLE)
+        wiki.item(f"{TITLE} [{sha1(PORTRAIT)[:8]}]")
+        writes = wiki.writes
+        with pytest.raises(RuntimeError, match="labels stay unique"):
+            register(wiki, scan(tmp_path, PORTRAIT))
+        assert wiki.writes == writes
+        assert wiki.media.requests == []
+        assert_labels_unique(wiki)
+
+    def test_of_two_items_with_the_bytes_the_earliest_is_the_artifact(
+        self, tmp_path
+    ):
+        """Two items that carry one media SHA-1 are the duplicate the key
+        exists to prevent: registration takes the numerically earliest,
+        as the writer's index does, and makes no third."""
+        wiki = FakeWiki()
+        hashed = ("media_sha1", sha1(PORTRAIT), None)
+        first = wiki.item("Studio portrait, first copy", hashed)
+        second = wiki.item("Studio portrait, second copy", hashed)
+        result = register(wiki, scan(tmp_path, PORTRAIT))
+        assert result.artifact_qid == first != second
+        assert not result.created
+        assert len(wiki.entities) == 2
+
     def test_registration_needs_media(self):
         wiki = Untouchable()
         with pytest.raises(ValueError, match="SHA-1 of its media"):
