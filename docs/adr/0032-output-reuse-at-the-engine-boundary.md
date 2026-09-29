@@ -64,6 +64,12 @@ alone; a call the claude CLI gave up on at that limit stores nothing,
 and its callers take it as a cut-off answer, so a fallback it led to
 repeats only if the engine gives up again (§3, §4, §5).
 
+Amended by #395 (2026-09-29): a keep publishes a session by moving the
+folder it finds at the answer's path aside and renaming its own in, so
+that path holds no folder between the two renames. Both readers, the
+run's and the lock-free one, read the folder moved aside while it does,
+instead of waiting for the path to hold one again (§3).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -259,7 +265,10 @@ an artifact a new QID changes no key.
   process needs. What its own calls would change it keeps in memory; the
   entries it reads are whole, as every reader's are, and a kept session's
   folder, which its keeper replaces by renames, is listed through the
-  folder opened once, and looked for again a moment later while missing.
+  folder opened once. While the answer's own path holds no folder, between
+  the keeper's two renames, both readers read the folder the keeper moved
+  aside, which holds the session kept for the same answer, rather than
+  waiting for a folder to be there again.
 
 ### 4. Rejection
 
