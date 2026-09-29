@@ -79,53 +79,75 @@ are written with the batch they describe.
 **A PDF read page by page.** The vision route reads a PDF page by page
 when any of its pages has a usable text layer, and otherwise reads it
 whole, as it reads an image (`yizkr.pipeline.textlayer` defines each
-term; ADR-0008 as amended by #176):
+term; ADR-0008 as amended by #176). A page is read:
 
-- a page whose text layer is usable is read from it, deterministically,
-  with no model call (the method `pdf-text-layer`, version 1, read with
-  pypdfium2, which pyproject.toml records);
-- a scanned page (images cover most of it, and it draws little text
-  visibly: an OCR layer is invisible), and a page whose text layer is
-  empty or garbage, is read by one vision call of its own: the page's one
-  image as the PDF holds it, where the page is nothing else, or a
-  rendering of it;
-- a blank page is read by nothing;
-- each image placed within a text-layer page, and not smaller than the
-  module's floor for decoration, is read by one vision call of its own,
-  once however many times it is placed, unless the never-ingest list names
-  its SHA-1. It is a witness of its own (#178): its text is never part of
-  the PDF's transcription.
+- by nothing (the method `none`), when it draws nothing and shows no
+  annotation but a link;
+- by one vision call of its own, when it shows text in an annotation (a
+  free-text annotation, or a form field whose value is text); when it
+  hides text it draws visibly, under an image or a filled path painted
+  after it (a redaction box, a scan laid over an OCR layer, a cropped or
+  see-through picture), since such text is never read; when images cover
+  at least 60% of it and more of its visible letters and digits lie over
+  them than beside them (a scan with a stamp, or text laid over a picture
+  that fills the page); and when its text layer is empty, garbage, or
+  garbled, a replacement character standing within a word. The engine is
+  given the page's one image as the PDF holds it, where the page draws
+  nothing else and shows no annotation, or else a rendering of it;
+- from its text layer otherwise, deterministically, with no model call
+  (the method `pdf-text-layer`, version 1, read with pypdfium2, which
+  pyproject.toml pins). The text layer is what the page draws visibly: an
+  OCR layer drawn invisibly, and text outside the page, are no part of
+  it; a hyphen at a line's end stays, with its line break.
+
+Each image placed within a text-layer page, and not smaller than the
+module's floor for decoration, is read by one vision call of its own,
+once however many times it is placed, unless the never-ingest list names
+its SHA-1. It is a witness of its own (#178): its text is never part of
+the PDF's transcription. An image the list names on a page read by vision,
+or in a PDF read whole, reaches the engine with the page: the owner
+accepts that as a case that does not arise (2026-09-29).
+
+Each PDF is read by PDFium started afresh, drawing a font the PDF does
+not embed with a built-in one, never the host's: how PDFium draws such a
+font can depend on what it has drawn before. So a rendering, and where a
+page's characters lie, are the same on every host and in every run.
 
 The transcription holds the PDF's own text, page by page in order, each
 page opened by a `[Page N]` marker and by a marker for each image placed
 within it, which names the image by its SHA-1 (`[Page 6, image 1:
-sha1:…]`), so that claims read from it carry their page. Its `pages`
-record each page's method (`text-layer`, `vision` or `blank`), what made
-it (the text-layer method with the library's version, or the vision
-client) and where its text lies in `text`; its `engine` is
-`pdf-pages:pdf-text-layer/1`. Beside it, the document's directory keeps
-each image's bytes, recorded in `derived-media.json` as a deck's derived
-media are (each named "page 6, image 1" for its places, with the pages it
-is on), and each image's own transcription,
-`derived-media/<sha1>.transcription.json`, which names the image by its
-SHA-1. An image whose reading fails the transcription check has none,
-and the transcription stage's attention says so; the PDF's own text goes
-on to its batch. Nothing extracts the images' transcriptions yet, so no
-claim cites an image, and the write registers none (ADR-0008). The
-readings are made in a scratch folder of their own, and nothing is
-written to the document's directory until the stage keeps them, so the
-call estimate, which takes the stage through the same code, writes
-nothing.
+sha1:…]`), so that claims read from it carry their page. Its `pages` hold
+each page's content, where its text lies in `text` and the images it
+names, which the content hash covers, and apart from it the page's
+`provenance`: its method (`text-layer`, `vision` or `none`), what made it
+(the text-layer method with the library's version, or the vision client)
+and how many annotations it shows that its text layer leaves unread,
+which the run report counts. Its `engine` is `pdf-pages:pdf-text-layer/1`.
+Beside it, the document's directory keeps each image's bytes, recorded in
+`derived-media.json` as a deck's derived media are (each named "page 6,
+image 1" for its places, with the pages it is on), and each image's own
+transcription, `derived-media/<sha1>.transcription.json`, which names the
+image by its SHA-1. An image whose reading fails the transcription check
+has none, and the transcription stage's attention says so; the PDF's own
+text goes on to its batch. Nothing extracts the images' transcriptions
+yet, so no claim cites an image, and the write registers none (ADR-0008).
+The readings are made in a scratch folder of their own, and nothing is
+written to the document's directory until the stage keeps them. The call
+estimate takes the stage through the same code: it counts a call for each
+page and image, standing in for a reading the cache cannot give, keeps
+nothing of the reading, and leaves the extraction after such a
+transcription to the engine.
 
 **What recomputes.** A page's or an image's call sends the transcription
 prompt and that page's or image's bytes, which depend only on the PDF and
-the PDFium build uv.lock pins, so it keeps its key from run to run. A PDF
-none of whose pages has a usable text layer, a scan, is read by the one
-call it has always been read with, under the same key, and its
-transcription is what it was; so are the extraction and the critique
-after it, whose calls the cache answers. Only a PDF read page by page
-makes its transcription, and everything after it, again: its text is its
-text layer now, so its extraction's prompts, and their keys, are new.
+the PDFium build pyproject.toml pins, so it keeps its key from run to
+run. A PDF none of whose pages has a usable text layer, a scan, is read
+by one call that gives the engine the PDF itself, under the key its
+answer is cached and seeded under, and its transcription is the one that
+answer gives; so are the extraction and the critique after it, whose
+calls the cache answers. Only a PDF read page by page makes its
+transcription, and everything after it, afresh: its text is its text
+layer, so its extraction's prompts, and their keys, are new.
 
 The later files are recorded the same way:
 
@@ -803,9 +825,9 @@ the one whose key it is stored under.
   read from their text layer, or by calls of their own, which nothing
   adopts. The import still adopts such a transcription, as it cannot tell
   how the run will read the PDF without reading it; the adoption is
-  inert. A scan, none of whose pages has a usable text layer, is still
-  read whole, by the call its adoption answers, so its adoption is served
-  as before, and so is everything after it.
+  inert. A scan, none of whose pages has a usable text layer, is read
+  whole, by the call its adoption answers, so its adoption is served, and
+  so is everything after it.
 
 **Running it.** Run it before the scratch run it is for, with that run's
 settings: the same `--cache` (default `var/llm-cache`) and
@@ -1157,11 +1179,13 @@ made without a call counts 0), else the baseline's mean for documents of
 its kind, else typical: a vision call per scan and none for a text file
 or slide text, the entity manifest and a chunk per 2000 characters for
 extraction, and a critique each. These are the pipeline's calls,
-counted without their keys. `yizkr scratch estimate`
-(docs/runbooks/scratch-run.md, Before a run) counts a planned scratch
-run's calls by their keys: it takes each stale stage through the
-pipeline's own code with the cache as it is (`llm.read_cache`), so each
-call the cache answers, and each it cannot, is known. It estimates only
+counted without their keys; a PDF read page by page makes a call for
+each page and image vision reads, which only the count by keys below
+sees. `yizkr scratch estimate` (docs/runbooks/scratch-run.md, Before a
+run) counts a planned scratch run's calls by their keys: it takes each
+stale stage through the pipeline's own code with the cache as it is
+(`llm.read_cache`), so each call the cache answers, and each it cannot,
+is known. It estimates only
 the calls whose keys wait on an answer the engine has yet to give: by
 `llm.estimate_calls`, or, for the forks after a conversation it replays,
 by the chunks the cache kept.

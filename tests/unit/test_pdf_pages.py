@@ -37,6 +37,7 @@ from tests.unit.test_scratch_estimate import (  # noqa: F401
     per_stage,
     runs_dir,
 )
+from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import llm, transcribe, transcription_check
@@ -57,6 +58,7 @@ from yizkr.pipeline.stages import content_hash, sha1_file
 from yizkr.pipeline.textlayer import png
 from yizkr.pipeline.transcribe import (
     TRANSCRIPTION_PROMPT,
+    PageProvenance,
     PdfPageTranscriber,
     TranscribedPage,
     Transcription,
@@ -118,7 +120,7 @@ def history(second: pdfs.Page | None = None) -> bytes:
 
 
 def booklet(image: pdfs.Image = LETTER_IMAGE) -> bytes:
-    """Our Family from Germany: two typed pages, three blank ones, and
+    """Our Family from Germany: two typed pages, three empty ones, and
     page 6, with the image of the letter's top above its caption, the
     translation and the commentary."""
     six = pdfs.Page().image(image, 72, 520, 300, 200)
@@ -209,7 +211,9 @@ def transcription_of(doc: DocumentRun) -> Transcription:
 
 
 def page_methods(transcription: Transcription) -> list[tuple[int, str]]:
-    return [(page.page, page.method) for page in transcription.pages]
+    return [
+        (page.page, page.provenance.method) for page in transcription.pages
+    ]
 
 
 class TestTheRoute:
@@ -237,7 +241,9 @@ class TestTheRoute:
             transcription.page_text(page) for page in transcription.pages
         ] == [first, second]
         for page in transcription.pages:
-            assert page.engine.startswith("pdf-text-layer/1 (pypdfium2 ")
+            assert page.provenance.engine.startswith(
+                "pdf-text-layer/1 (pypdfium2 "
+            )
         # its claims cite it, by the SHA-1 of its bytes
         batch = ClaimBatch.model_validate_json(doc.batch.read_text())
         assert batch.claims
@@ -274,7 +280,9 @@ class TestTheRoute:
             (1, "text-layer"),
             (2, "vision"),
         ]
-        assert transcription.pages[1].engine == "llm-vision:scripted/model-a"
+        assert transcription.pages[1].provenance.engine == (
+            "llm-vision:scripted/model-a"
+        )
         assert transcription.page_text(transcription.pages[1]) == SECOND
         first = "\n".join(pdfs.lines(FIRST))
         assert transcription.text == f"[Page 1]\n{first}\n\n[Page 2]\n{SECOND}"
@@ -296,15 +304,17 @@ class TestTheRoute:
         ]
         assert not any("\ue000" <= ch <= "\uf8ff" for ch in transcription.text)
 
-    def test_blank_pages_are_marked_and_not_read(self, tmp_path):
+    def test_pages_with_nothing_to_read_are_marked_and_not_read(
+        self, tmp_path
+    ):
         corpus = folder(tmp_path, booklet=booklet())
         reader = Reader({LETTER_SHA1: EXCERPT})
         doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
         transcription = transcription_of(doc)
         assert page_methods(transcription)[2:5] == [
-            (3, "blank"),
-            (4, "blank"),
-            (5, "blank"),
+            (3, "none"),
+            (4, "none"),
+            (5, "none"),
         ]
         assert "[Page 4]\n\n[Page 5]" in transcription.text
         assert reader.names() == [f"{LETTER_SHA1}.png"]
@@ -353,6 +363,26 @@ class TestTheRoute:
         orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
         assert not list(scratch.glob("yizkr-pdf-*"))
         assert transcription_of(document(orchestrator, "booklet.pdf"))
+
+    def test_a_page_that_hides_text_is_read_by_vision(self, tmp_path):
+        """A line a black box covers is never read from the text layer, as
+        the owner decided: the page goes to vision, which reads what the
+        page shows, and the line reaches no transcription."""
+        hidden = "Rahel wohnt jetzt Angerring 11."
+        page = pdfs.Page().text([hidden, "Gustl hat endlich sein Visum."])
+        page.rectangle(60, 766, 480, 14, gray=0)
+        corpus = folder(tmp_path, letter=pdfs.pdf([typed(TITLE), page]))
+        reader = Reader(
+            {"page-2": "[redacted]\nGustl hat endlich sein Visum."}
+        )
+        doc = document(run(tmp_path, corpus, reader), "letter.pdf")
+        transcription = transcription_of(doc)
+        assert page_methods(transcription) == [
+            (1, "text-layer"),
+            (2, "vision"),
+        ]
+        assert reader.names() == ["page-2.png"]
+        assert "Angerring" not in transcription.text
 
     def test_a_pdf_pdfium_cannot_read_is_read_whole(self, tmp_path):
         corpus = folder(tmp_path, scan=b"%PDF-1.4 fictional")
@@ -559,6 +589,63 @@ class TestAScratchRun:
         assert not runs_dir(tmp_path).exists()
         assert engine.calls == []
 
+    def test_the_call_estimate_counts_every_page_and_image(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """A PDF read page by page makes a call for each image and each
+        page vision reads: the estimate counts every one, the cache unable
+        to answer any, and leaves the extraction after them to the
+        engine."""
+        three = pdfs.Page()
+        for shade, x in ((1, 72), (2, 300)):
+            three.image(pdfs.gray(300, 120, shade=shade), x, 600, 200, 80)
+        three.image(pdfs.gray(300, 120, shade=3), 72, 480, 200, 80)
+        three.text(pdfs.lines(CAPTION, TRANSLATION), y=400)
+        scans = [
+            pdfs.Page().image(
+                pdfs.gray(60, 80, shade=shade), 0, 0, pdfs.WIDTH, pdfs.HEIGHT
+            )
+            for shade in (4, 5, 6)
+        ]
+        corpus = Corpus(tmp_path / "corpus")
+        (corpus.folder / "booklet.pdf").write_bytes(
+            pdfs.pdf([typed(TITLE), three])
+        )
+        (corpus.folder / "history.pdf").write_bytes(
+            pdfs.pdf([typed(FIRST), *scans])
+        )
+        corpus.texts["booklet.pdf"] = TRANSLATION
+        corpus.texts["history.pdf"] = FIRST
+        counted = estimate_of(tmp_path, corpus, engine)
+        assert per_stage(counted, "known")["transcription"] == 6
+        assert per_stage(counted, "known").get("extraction", 0) == 0
+        assert per_stage(counted, "estimated")["extraction"] > 0
+        assert engine.calls == []
+
+    def test_the_call_estimate_keeps_nothing_of_a_reading(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+        monkeypatch,
+    ):
+        """A reading the cache answers whole is closed as the estimate
+        counts it, and its scratch folder goes."""
+        corpus = Corpus(tmp_path / "corpus")
+        (corpus.folder / "booklet.pdf").write_bytes(booklet())
+        corpus.texts["booklet.pdf"] = "\n".join(
+            pdfs.lines(CAPTION, TRANSLATION, COMMENT)
+        )
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
+        run_scratch(tmp_path, corpus, engine)
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+        counted = estimate_of(tmp_path, corpus, engine)
+        assert per_stage(counted, "hits")["transcription"] == 1
+        assert not list(scratch.glob("yizkr-pdf-*"))
+
 
 def stricter_check(monkeypatch, phrase: str) -> None:
     """Make the transcription check stricter, as a change to it would:
@@ -636,6 +723,24 @@ class TestReuse:
         )
         assert json.loads(superseded.read_text())["text"] == EXCERPT
 
+    def test_every_image_on_a_page_is_checked_again(
+        self, tmp_path, monkeypatch
+    ):
+        """The second image a page places is checked again as its first
+        is."""
+        other = pdfs.gray(300, 120, shade=9)
+        other_sha1 = hashlib.sha1(png(300, 120, 1, other.data)).hexdigest()
+        page = pdfs.Page().image(LETTER_IMAGE, 72, 600, 200, 80)
+        page.image(other, 300, 600, 200, 80)
+        page.text(pdfs.lines(CAPTION, TRANSLATION), y=500)
+        corpus = folder(tmp_path, booklet=pdfs.pdf([typed(TITLE), page]))
+        reader = Reader({LETTER_SHA1: EXCERPT, other_sha1: ["Wastl", "Klara"]})
+        run(tmp_path, corpus, reader)
+        stricter_check(monkeypatch, "Wastl")
+        again = run(tmp_path, corpus, reader)
+        (aside,) = set_asides(again)
+        assert aside["reason"].endswith(f"(image {other_sha1[:12]})")
+
     @pytest.mark.parametrize(
         "damage, reason",
         [
@@ -700,10 +805,9 @@ class TestTheView:
         def page(number, start, end):
             return TranscribedPage(
                 page=number,
-                method="text-layer",
-                engine="m",
                 start=start,
                 end=end,
+                provenance=PageProvenance(method="text-layer", engine="m"),
             )
 
         text = "[Page 1]\nRahel\n\n[Page 2]\nKlara"
@@ -725,36 +829,45 @@ class TestTheView:
                 )
 
     def test_provenance_is_no_part_of_the_content(self):
-        """The batch is made from the text, its language and the artifact:
-        how the pages were read is provenance, as the engine is."""
-        assert "pages" in TRANSCRIPTION_VOLATILE
+        """How a page was read is provenance, as the engine is, and is left
+        out of the content hash; where a page's text lies, and the images it
+        names, are content, as the text is (#389 hashes what extraction
+        reads of a page)."""
         from yizkr.claims import ArtifactRef
 
         ref = ArtifactRef(sha1="a" * 40)
         text = "[Page 1]\nRahel"
-        made = [
-            Transcription(
+
+        def made(method, made_by, *, end=14, annotations=0):
+            return Transcription(
                 artifact=ref,
                 text=text,
                 engine=made_by,
                 pages=[
                     TranscribedPage(
-                        page=1, method=method, engine=made_by, start=9, end=14
+                        page=1,
+                        start=9,
+                        end=end,
+                        provenance=PageProvenance(
+                            method=method,
+                            engine=made_by,
+                            annotations=annotations,
+                        ),
                     )
                 ],
             )
-            for method, made_by in (
-                ("text-layer", TEXT_LAYER),
-                ("vision", "llm-vision:scripted/model-a"),
+
+        def hashed(transcription):
+            return content_hash(
+                transcription.model_dump(mode="json"),
+                volatile=TRANSCRIPTION_VOLATILE,
             )
-        ]
-        hashes = {
-            content_hash(
-                t.model_dump(mode="json"), volatile=TRANSCRIPTION_VOLATILE
-            )
-            for t in made
-        }
-        assert len(hashes) == 1
+
+        read = made("text-layer", TEXT_LAYER)
+        assert hashed(read) == hashed(
+            made("vision", "llm-vision:scripted/model-a", annotations=2)
+        )
+        assert hashed(read) != hashed(made("text-layer", TEXT_LAYER, end=13))
 
 
 # -- the keys -----------------------------------------------------------------

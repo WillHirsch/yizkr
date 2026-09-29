@@ -221,9 +221,10 @@ BATCH_VOLATILE = (
     "extraction_run.pipeline_version",
 )
 # the fields of a transcription that say what made it (the route and the
-# engine build, and a PDF's method page by page), left out of its content
-# hash: extraction reads only the text, its language and the artifact
-TRANSCRIPTION_VOLATILE = ("engine", "pages")
+# engine build, and each page's provenance in a PDF read page by page),
+# left out of its content hash: a page's place in the text and the images
+# it names are content, as its text is
+TRANSCRIPTION_VOLATILE = ("engine", "pages.provenance")
 # the event that says a stage's view was current and stands
 REUSED = "reused"
 
@@ -1336,7 +1337,7 @@ class Orchestrator:
                 None if check.passed else str(TranscriptionCheckFailed(check))
             )
         for page in transcription.pages:
-            if page.method == VISION:
+            if page.provenance.method == VISION:
                 check = check_transcription(
                     transcription.page_text(page), pages=1
                 )
@@ -2474,7 +2475,7 @@ def _supersede(path: Path) -> Path | None:
 def _read_by_page(transcription) -> str:
     """How a PDF read page by page was read, as counts: its pages by
     method, and the images read on their own."""
-    methods = Counter(page.method for page in transcription.pages)
+    methods = Counter(page.provenance.method for page in transcription.pages)
     images = len(
         {sha1 for page in transcription.pages for sha1 in page.images}
     )

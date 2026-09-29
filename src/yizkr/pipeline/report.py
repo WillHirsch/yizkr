@@ -212,7 +212,11 @@ INVOCATION_ENDS = frozenset(OUTCOMES) | {"running", KILLED}
 STATUSES = frozenset(
     {PENDING, HELD, RUNNING, INTERRUPTED, DONE, NEEDS_ATTENTION, FAILED}
 ) | {NOT_RUN}
-ROUTES = frozenset({"llm-vision", "text-file", "pptx-adapter", "correction"})
+ROUTES = frozenset(
+    {"llm-vision", "pdf-pages", "text-file", "pptx-adapter", "correction"}
+)
+# how a page of a PDF read page by page is read (yizkr.pipeline.textlayer)
+PAGE_METHODS = frozenset({"text-layer", "vision", "none"})
 RESOLUTIONS = frozenset({"detected", "fallback", "override"})
 HIT_REASONS = frozenset({KEY_MATCH, "adopted"})
 MISS_REASONS = frozenset({"absent", "rejected", "refresh"})
@@ -875,6 +879,30 @@ def _view(document: Document, stage: str, path: Path, kind: type) -> Any:
     return None
 
 
+def _pages(pages: Any) -> dict[str, Any]:
+    """A PDF read page by page, as its transcription's `pages` give it:
+    its pages by the method that read them, and how many of its
+    text-layer pages show annotations the text layer leaves unread. Pages
+    whose provenance cannot be read are not counted."""
+    methods: Counter = Counter()
+    annotated = 0
+    for page in _list(pages):
+        provenance = page.get("provenance") if isinstance(page, dict) else None
+        if not isinstance(provenance, dict):
+            continue
+        method = _known(provenance.get("method"), PAGE_METHODS)
+        methods[method] += 1
+        unread = provenance.get("annotations")
+        if (
+            method == "text-layer"
+            and isinstance(unread, int)
+            and not isinstance(unread, bool)
+            and unread > 0
+        ):
+            annotated += 1
+    return {"page_methods": dict(methods), "annotated_pages": annotated}
+
+
 def _read_views(document: Document, directory: Path, state: dict) -> None:
     """What the document's views hold, for each stage that completed: the
     transcription's language, route and how its language was resolved;
@@ -898,6 +926,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 "resolved": _text(language.get("source"))
                 if isinstance(language, dict)
                 else None,
+                **_pages(found.get("pages")),
             }
     stage = next(
         (s for s in ("extraction", "gedcom") if document.completed(s)), None
@@ -1659,6 +1688,8 @@ def _aggregate_documents(
     language_kinds: dict[str, Counter] = {}
     routes: Counter = Counter()
     resolved: Counter = Counter()
+    page_methods: Counter = Counter()
+    annotated_pages = 0
     untranscribed = 0
     for document in planned:
         if "transcription" not in document.stages:
@@ -1675,6 +1706,8 @@ def _aggregate_documents(
         routes[_known(transcription["route"], ROUTES)] += 1
         if transcription["resolved"]:
             resolved[_known(transcription["resolved"], RESOLUTIONS)] += 1
+        page_methods.update(transcription.get("page_methods") or {})
+        annotated_pages += transcription.get("annotated_pages") or 0
     return {
         "planned": len(planned),
         "files": entries,
@@ -1692,6 +1725,11 @@ def _aggregate_documents(
         "untranscribed": untranscribed,
         "routes": _by_count(routes),
         "language_resolved": _by_count(resolved),
+        # the pages of the PDFs read page by page, by the method that read
+        # each, and those of their text-layer pages that show annotations
+        # the text layer leaves unread
+        "pdf_pages": _by_count(page_methods),
+        "pdf_pages_annotated": annotated_pages,
         "failed": len(failed),
         # the planned documents that failed, by the kind the plan gives
         # each; the others (a source that could not be read has no SHA-1
@@ -2347,6 +2385,9 @@ def _documents_section(documents: Mapping[str, Any]) -> _Section:
             "Not transcribed, or its transcription not read: "
             f"{_n(documents['untranscribed'])}",
             f"Transcription routes: {_listed(documents['routes'])}",
+            "Pages of PDFs read page by page, by method: "
+            f"{_listed(documents['pdf_pages'])}; with annotations the text "
+            f"layer leaves unread: {_n(documents['pdf_pages_annotated'])}",
             f"Language resolved: {_listed(documents['language_resolved'])}",
         ]
     )

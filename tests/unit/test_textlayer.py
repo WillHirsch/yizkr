@@ -13,19 +13,21 @@ import struct
 import zlib
 from pathlib import Path
 
+import pypdfium2 as pdfium
 import pytest
 
 from tests.fixtures import example_universe as u
 from tests.fixtures import pdfs
 from yizkr.pipeline import textlayer
 from yizkr.pipeline.textlayer import (
-    BLANK,
     JPEG_SUFFIX,
-    MIN_TEXT_OVER_IMAGES,
+    NONE,
     PNG_SUFFIX,
+    REDACTED,
     TEXT_LAYER,
     VISION,
     clean,
+    garbled,
     png,
     read_pages,
     union_area,
@@ -35,6 +37,7 @@ from yizkr.pipeline.textlayer import (
 SOURCES = {source.key: source for source in u.SOURCES}
 EXTRACT = SOURCES["birth-extract-1938"].text
 EXCERPT = SOURCES["letter-excerpt-1939"].text
+HISTORY = SOURCES["family-history-2008"].text
 TITLE = "Our Family from Germany. Compiled by Nicholas Lobig. Stupfield, 2011."
 # an image in a filter PDFium does not know, so it cannot decode it
 BROKEN = pdfs.Image(
@@ -48,14 +51,18 @@ TRANSLATION = (
     "Gustl finally has his visa. Hilde is sewing him shirts for the "
     "journey. Rahel now lives at Angerring 71."
 )
+STAMP = "Stadtarchiv Flörburg, Standesamt 1938"
+# a page of 600 by 800 points, whose shares of its area are whole numbers
+SIDE, TALL = 600, 800
 
 
 def read(tmp_path: Path, *pages: pdfs.Page, **options):
     """`read_pages` of a PDF of `pages`, with the files it writes in a
-    folder of their own."""
+    folder of their own; `font` names the PDF's plain font."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     source = tmp_path / "document.pdf"
-    source.write_bytes(pdfs.pdf(list(pages)))
+    font = options.pop("font", "Helvetica")
+    source.write_bytes(pdfs.pdf(list(pages), font=font))
     out = tmp_path / "out"
     out.mkdir(exist_ok=True)
     return read_pages(source, out, **options)
@@ -82,6 +89,22 @@ def scan(*, ocr: str | None = None) -> pdfs.Page:
     return page
 
 
+def contents(data: bytes) -> textlayer._Contents:
+    """What the first page of the PDF `data` draws, as `read_pages` reads
+    it (under the lock PDFium is read under)."""
+    with textlayer._LOCK:
+        textlayer.fresh_start()
+        document = pdfium.PdfDocument(data)
+        try:
+            page = document[0]
+            try:
+                return textlayer._contents(page)
+            finally:
+                page.close()
+        finally:
+            document.close()
+
+
 class TestUsable:
     def test_text_is_usable(self):
         assert usable(TITLE)
@@ -102,6 +125,12 @@ class TestUsable:
         assert not usable("Gustl \ue000\U000e0080")
         assert not usable("Rahel\x01\x02")
         assert usable("Rahel    \n\n\t  Angerring")
+
+    def test_the_replacement_character_within_a_word_is_garbled(self):
+        assert garbled("Fl\ufffdrburg")
+        assert garbled("Brunnenring 35\ufffd")
+        assert not garbled("Flörburg \ufffd Brunnenring 35")
+        assert not garbled(TITLE)
 
     def test_code_units_become_characters(self):
         """A surrogate pair is one character; a lone surrogate, or a code
@@ -125,11 +154,11 @@ class TestPng:
     def test_the_encoding_is_held_byte_for_byte(self):
         data = png(12, 2, 1, self.GREY)
         assert hashlib.sha1(data).hexdigest() == (
-            "74b016d9ba49ee74899ce28f2f03b363883cfb4d"
+            "81fc97f44f1fad62c90731202bcf5aa0c618a6c2"
         )
         rgb = png(2, 2, 3, bytes(range(12)))
         assert hashlib.sha1(rgb).hexdigest() == (
-            "6de4d6e82dc6cd947fef062da6ae210d5a4cc1c6"
+            "d286b97893304f986b27d4b30266d3794cc9b001"
         )
 
     def test_a_png_holds_its_pixels(self):
@@ -168,67 +197,108 @@ class TestPages:
         assert not result.by_text_layer
         assert written(tmp_path) == []
 
-    def test_text_painted_over_by_a_scan_is_not_its_text_layer(self, tmp_path):
-        """An OCR layer drawn in a visible mode, but under the scan that
-        covers it, cannot be seen either."""
-        page = typed(EXTRACT)
-        page.image(pdfs.jpeg(), 0, 0, pdfs.WIDTH, pdfs.HEIGHT)
-        result = read(tmp_path, page)
-        assert methods(result) == [VISION]
-
-    def test_text_outside_the_page_is_not_its_text_layer(self, tmp_path):
-        page = pdfs.Page()
-        page.text(pdfs.lines(EXTRACT), x=pdfs.WIDTH + 50)
-        page.image(pdfs.jpeg(), 0, 0, pdfs.WIDTH, pdfs.HEIGHT)
-        assert methods(read(tmp_path, page)) == [VISION]
-
-    def test_a_stamp_over_a_scan_leaves_it_a_scan(self, tmp_path):
-        """A covered page is read from its text layer only when it draws
-        at least MIN_TEXT_OVER_IMAGES letters and digits visibly."""
-        stamp = "Stadtarchiv Flörburg, Standesamt 1938"
-        page = scan().text([stamp], y=20)
-        assert methods(read(tmp_path, page)) == [VISION]
-
-    def test_a_typed_page_over_a_background_reads_its_text_layer(
+    def test_text_in_render_mode_7_is_no_part_of_the_text_layer(
         self, tmp_path
     ):
-        """A born-digital page over a picture that fills it: enough
-        visible text makes it a text-layer page, and the picture is its
-        background, not an image read on its own."""
-        page = pdfs.Page().image(pdfs.gray(300, 400), 0, 0, 595, 842)
-        page.text(pdfs.lines(TRANSLATION, SOURCES["family-history-2008"].text))
+        page = typed(TITLE).text([STAMP], y=500, mode=pdfs.CLIPPING)
         result = read(tmp_path, page)
         assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text == TITLE
+
+    def test_text_outside_the_page_is_no_part_of_the_text_layer(
+        self, tmp_path
+    ):
+        page = typed(TITLE).text([STAMP], x=pdfs.WIDTH + 50, y=500)
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text == TITLE
+
+    def test_a_hyphen_at_a_line_end_stays(self, tmp_path):
+        """PDFium marks a hyphen that ends a line and drops the line break
+        after it: the text layer gives both back, as the page prints them,
+        and joins no word."""
+        page = pdfs.Page().text(
+            ["Flörburg, Brunnen-", "ring 35, den 28. Juli 1939."]
+        )
+        result = read(tmp_path, page)
+        assert result.pages[0].text == (
+            "Flörburg, Brunnen-\nring 35, den 28. Juli 1939."
+        )
+
+    def test_a_stamp_over_a_scan_leaves_it_a_scan(self, tmp_path):
+        """Images cover the page, and more of its visible letters lie over
+        them than beside them: a scan (as the owner decided)."""
+        page = scan().text([STAMP], y=20)
+        assert methods(read(tmp_path, page)) == [VISION]
+
+    def test_typed_text_over_a_picture_that_fills_the_page_is_a_scan(
+        self, tmp_path
+    ):
+        """However much of it there is, text laid over a picture that fills
+        the page is read by vision, as the owner decided, and no image is
+        read on its own."""
+        page = pdfs.Page().image(pdfs.gray(300, 400), 0, 0, 595, 842)
+        page.text(pdfs.lines(TRANSLATION, HISTORY))
+        result = read(tmp_path, page)
+        assert methods(result) == [VISION]
         assert result.images == {}
 
-    def test_the_boundary_of_text_over_images(self, tmp_path):
-        """MIN_TEXT_OVER_IMAGES letters and digits over a covered page read
-        from its text layer; one fewer does not."""
-        words = "Hutmacher " * (MIN_TEXT_OVER_IMAGES // 9 + 1)
+    def test_text_beside_a_large_image_reads_its_text_layer(self, tmp_path):
+        """An excerpt that fills most of the page, with its caption beside
+        it: a typed page, and the image a witness of its own, as the owner
+        decided."""
+        page = pdfs.Page(width=SIDE, height=TALL)
+        page.image(pdfs.gray(300, 200), 0, 200, SIDE, 600)
+        page.text([CAPTION], y=100)
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text == CAPTION
+        assert len(result.images) == 1
 
-        def over_scan(letters: int) -> pdfs.Page:
-            kept, count = [], 0
-            for word in words.split():
-                if count + len(word) > letters:
-                    word = word[: letters - count]
-                if word:
-                    kept.append(word)
-                    count += len(word)
-            return scan().text(pdfs.lines(" ".join(kept)))
+    @pytest.mark.parametrize(
+        "height, method", [(480, VISION), (479, TEXT_LAYER)]
+    )
+    def test_the_boundary_of_a_scan(self, tmp_path, height, method):
+        """Images covering exactly SCAN_COVER of the page, with its text
+        over them, make a scan; a point less does not."""
+        page = pdfs.Page(width=SIDE, height=TALL)
+        page.image(pdfs.gray(300, 200), 0, TALL - height, SIDE, height)
+        page.text([STAMP], y=TALL - 40)
+        assert methods(read(tmp_path, page)) == [method]
 
-        at = read(tmp_path / "at", over_scan(MIN_TEXT_OVER_IMAGES))
-        below = read(tmp_path / "below", over_scan(MIN_TEXT_OVER_IMAGES - 1))
-        assert methods(at) == [TEXT_LAYER]
-        assert methods(below) == [VISION]
+    def test_punctuation_does_not_count_beside_a_scan(self, tmp_path):
+        """Only letters and digits are weighed, over the images and beside
+        them: a row of dots beside a scan does not outweigh its stamp."""
+        page = pdfs.Page(width=SIDE, height=TALL)
+        page.image(pdfs.gray(300, 200), 0, 200, SIDE, 600)
+        page.text(["Standesamt 1938"], y=700)
+        page.text(["." * 70], y=100)
+        assert methods(read(tmp_path, page)) == [VISION]
 
-    def test_a_garbled_text_layer_is_read_by_vision(self, tmp_path):
+    def test_a_garbage_text_layer_is_read_by_vision(self, tmp_path):
         """A font whose codes extract as private-use characters: the text
         layer is garbage, and the page is read from a rendering."""
-        page = typed(SOURCES["family-history-2008"].text, font=pdfs.GARBLED)
+        page = typed(HISTORY, font=pdfs.GARBLED)
         result = read(tmp_path, typed(TITLE), page)
         assert methods(result) == [TEXT_LAYER, VISION]
         assert result.pages[1].text == ""
         assert result.pages[1].vision.name == "page-2.png"
+
+    def test_a_replacement_character_within_a_word_is_read_by_vision(
+        self, tmp_path
+    ):
+        """One letter its font cannot map, in a text layer otherwise usable:
+        the page is read by vision (as the owner decided)."""
+        page = typed(TITLE).text(["Flörburg, Brunnenring 35"], y=500)
+        garbling = page.text(["Flörburg"], y=480, font=pdfs.REPLACED)
+        result = read(tmp_path, typed(TITLE), garbling)
+        assert methods(result) == [TEXT_LAYER, VISION]
+
+    def test_a_replacement_character_alone_leaves_a_text_layer(self, tmp_path):
+        page = typed(TITLE, HISTORY).text(["\xf6"], y=100, font=pdfs.REPLACED)
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text.endswith("\ufffd")
 
     def test_a_page_with_no_text_layer_is_read_by_vision(self, tmp_path):
         """A page that draws a picture and no text at all, with room
@@ -242,20 +312,173 @@ class TestPages:
 
     def test_a_page_that_draws_only_paths_is_read_by_vision(self, tmp_path):
         """Text drawn as outlines is paths, and no text layer: the page is
-        not blank, and only vision can read it."""
+        not empty, and only vision can read it."""
         drawing = pdfs.Page().rectangle(72, 400, 300, 200)
         result = read(tmp_path, typed(TITLE), drawing)
         assert methods(result) == [TEXT_LAYER, VISION]
 
-    def test_a_blank_page_is_not_read(self, tmp_path):
+    def test_a_page_that_draws_nothing_is_not_read(self, tmp_path):
         result = read(tmp_path, typed(TITLE), pdfs.Page())
-        assert methods(result) == [TEXT_LAYER, BLANK]
+        assert methods(result) == [TEXT_LAYER, NONE]
         assert result.pages[1].vision is None
+
+    def test_a_page_whose_only_annotation_is_a_link_is_not_read(
+        self, tmp_path
+    ):
+        linked = pdfs.Page().annotate("/Subtype /Link /Rect [72 400 300 440]")
+        result = read(tmp_path, typed(TITLE), linked)
+        assert methods(result) == [TEXT_LAYER, NONE]
+
+    def test_a_page_that_shows_only_an_annotation_is_read(self, tmp_path):
+        noted = pdfs.Page().annotate("/Subtype /Square /Rect [72 400 300 440]")
+        result = read(tmp_path, typed(TITLE), noted)
+        assert methods(result) == [TEXT_LAYER, VISION]
 
     def test_a_pdf_pdfium_cannot_read_is_read_whole(self, tmp_path):
         source = tmp_path / "damaged.pdf"
         source.write_bytes(b"%PDF-1.4 not a PDF after all")
         assert read_pages(source, tmp_path) is None
+
+
+class TestAnnotations:
+    """Text a page shows in an annotation is no part of its text layer: a
+    page that shows some is read by vision, as the owner decided. Other
+    annotations are left unread, and the page counts them."""
+
+    def test_a_free_text_annotation_sends_its_page_to_vision(self, tmp_path):
+        page = typed(TITLE).annotate(
+            "/Subtype /FreeText /Rect [72 500 300 540] "
+            "/Contents (Rahel wohnt jetzt Angerring 11) /DA (/Helv 12 Tf 0 g)"
+        )
+        assert methods(read(tmp_path, typed(TITLE), page)) == [
+            TEXT_LAYER,
+            VISION,
+        ]
+
+    def test_a_form_field_holding_text_sends_its_page_to_vision(
+        self, tmp_path
+    ):
+        page = typed(TITLE).field("name", "Gustav Löbig", (72, 500, 300, 540))
+        assert methods(read(tmp_path, typed(TITLE), page)) == [
+            TEXT_LAYER,
+            VISION,
+        ]
+
+    @pytest.mark.parametrize(
+        "annotate",
+        [
+            lambda page: page.field("name", "", (72, 500, 300, 540)),
+            lambda page: page.field(
+                "box", "/Yes", (72, 500, 90, 518), kind="/Btn"
+            ),
+            lambda page: page.annotate(
+                "/Subtype /Stamp /Rect [72 500 300 540]"
+            ),
+        ],
+        ids=["empty field", "check box", "stamp"],
+    )
+    def test_other_annotations_are_counted_and_left_unread(
+        self, tmp_path, annotate
+    ):
+        page = annotate(typed(TITLE))
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].annotations == 1
+
+    def test_a_link_is_not_counted(self, tmp_path):
+        page = typed(TITLE).annotate("/Subtype /Link /Rect [72 500 300 540]")
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].annotations == 0
+
+
+class TestHiddenText:
+    """Text a page hides is never read, as the owner decided: a character
+    drawn in a visible mode that an image or a filled path painted after
+    it covers sends its page to vision, which reads what the page
+    shows."""
+
+    PARAGRAPH = pdfs.lines(HISTORY)[:6]
+
+    def hiding(self, cover) -> pdfs.Page:
+        """A typed paragraph, then `cover` painted after it."""
+        page = pdfs.Page().text(self.PARAGRAPH)
+        cover(page)
+        return page
+
+    @pytest.mark.parametrize(
+        "cover",
+        [
+            # a photograph cropped to below the paragraph, whose uncropped
+            # extent reaches over it
+            lambda page: page.image(
+                pdfs.gray(300, 200),
+                72,
+                500,
+                400,
+                300,
+                clip=(72, 500, 400, 100),
+            ),
+            # a stamp its soft mask shows nothing of
+            lambda page: page.image(
+                pdfs.transparent(pdfs.gray(200, 100)), 60, 690, 480, 100
+            ),
+            # a stencil mask
+            lambda page: page.image(pdfs.stencil(200, 100), 60, 690, 480, 100),
+            # a picture laid over the paragraph at 30% opacity
+            lambda page: page.image(
+                pdfs.gray(200, 100), 60, 690, 480, 100, alpha=0.3
+            ),
+            # a black box drawn over one line, to redact it
+            lambda page: page.rectangle(60, 755, 480, 20, gray=0),
+        ],
+        ids=[
+            "cropped photo",
+            "transparent stamp",
+            "stencil mask",
+            "alpha overlay",
+            "path redaction",
+        ],
+    )
+    def test_its_page_is_read_by_vision(self, tmp_path, cover):
+        result = read(tmp_path, typed(TITLE), self.hiding(cover))
+        assert methods(result) == [TEXT_LAYER, VISION]
+        assert result.pages[1].text == ""
+        # and its text layer, which no transcription is given, marks what
+        # the page hides rather than leaving it out
+        read_back = contents(pdfs.pdf([self.hiding(cover)]))
+        assert read_back.text.hidden > 0
+        assert REDACTED in read_back.text.text
+
+    def test_a_filled_path_painted_before_the_text_hides_nothing(
+        self, tmp_path
+    ):
+        """A shaded box behind a paragraph, as a table cell's is."""
+        page = pdfs.Page().rectangle(60, 740, 480, 40, gray=0.9)
+        page.text(self.PARAGRAPH)
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text == "\n".join(self.PARAGRAPH)
+
+    def test_a_box_over_a_space_alone_hides_nothing(self, tmp_path):
+        """A box painted over the space between two words, and over no
+        letter: no text is hidden, and the space stays."""
+        page = pdfs.Page().text(["Klara Wastl", "Angerring 11"])
+        page.rectangle(95.5, 768, 2.5, 4, gray=0)
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        assert result.pages[0].text == "Klara Wastl\nAngerring 11"
+
+    def test_a_text_layer_marks_what_it_hides(self):
+        """Were a text layer ever given for a page that hides text, each
+        run of hidden characters would stand as REDACTED, never silently
+        left out: the redacted line is one mark, the lines around it are
+        the page's."""
+        page = pdfs.Page().text(["Flörburg, Brunnenring 35", "Angerring 11"])
+        page.rectangle(60, 766, 480, 14, gray=0)
+        read_back = contents(pdfs.pdf([page]))
+        assert read_back.text.hidden == len("Flörburg,Brunnenring35")
+        assert read_back.text.text.split() == [REDACTED, "Angerring", "11"]
 
 
 class TestWhatVisionReads:
@@ -266,7 +489,7 @@ class TestWhatVisionReads:
         assert vision.read_bytes() == pdfs.JPEG
 
     def test_a_page_that_draws_more_is_rendered(self, tmp_path):
-        page = scan().text(["Stadtarchiv Flörburg"], y=20)
+        page = scan().text([STAMP], y=20)
         result = read(tmp_path, typed(TITLE), page)
         vision = result.pages[1].vision
         assert vision.name == "page-2.png"
@@ -274,9 +497,54 @@ class TestWhatVisionReads:
         width, height = struct.unpack(">II", data[16:24])
         assert max(width, height) == textlayer.RENDER_LONG_EDGE
 
-    def test_a_rotated_scan_is_rendered(self, tmp_path):
+    def test_the_long_edge_of_a_rendering_is_held(self):
+        """A change to it changes every rendered page's bytes, and so the
+        key of every call that reads one: it is made on purpose."""
+        assert textlayer.RENDER_LONG_EDGE == 1600
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            lambda page: setattr(page, "rotate", 90),
+            lambda page: page.annotate(
+                "/Subtype /Square /Rect [72 400 300 440]"
+            ),
+        ],
+        ids=["rotated", "annotated"],
+    )
+    def test_a_rotated_or_annotated_scan_is_rendered(self, tmp_path, change):
         page = scan()
-        page.rotate = 90
+        change(page)
+        result = read(tmp_path, typed(TITLE), page)
+        assert result.pages[1].vision.suffix == PNG_SUFFIX
+
+    def test_a_mirrored_scan_is_rendered(self, tmp_path):
+        page = pdfs.Page().image(
+            pdfs.jpeg(), 0, 0, pdfs.WIDTH, pdfs.HEIGHT, mirrored=True
+        )
+        result = read(tmp_path, typed(TITLE), page)
+        assert result.pages[1].vision.suffix == PNG_SUFFIX
+
+    @pytest.mark.parametrize(
+        "height, suffix", [(720, JPEG_SUFFIX), (719, PNG_SUFFIX)]
+    )
+    def test_the_boundary_of_a_page_s_one_image(
+        self, tmp_path, height, suffix
+    ):
+        """A page's one image covering exactly BACKGROUND_COVER of it is
+        given as held; a point less, and the page is rendered."""
+        page = pdfs.Page(width=SIDE, height=TALL)
+        page.image(pdfs.jpeg(), 0, 0, SIDE, height)
+        result = read(tmp_path, typed(TITLE), page)
+        assert result.pages[1].vision.suffix == suffix
+
+    def test_an_image_partly_off_the_page_counts_for_its_part_on_it(
+        self, tmp_path
+    ):
+        """The page's one image, placed mostly beyond its edge: what falls
+        on the page covers too little of it to stand for the page, which
+        is rendered."""
+        page = pdfs.Page().image(pdfs.jpeg(), 400, 0, 1000, pdfs.HEIGHT)
         result = read(tmp_path, typed(TITLE), page)
         assert result.pages[1].vision.suffix == PNG_SUFFIX
 
@@ -289,12 +557,30 @@ class TestWhatVisionReads:
         assert result.pages[1].vision.name == "page-2.png"
 
     def test_a_rendering_is_the_same_every_time(self, tmp_path):
-        page = scan().text(["Stadtarchiv Flörburg"], y=20)
+        page = scan().text([STAMP], y=20)
         first = read(tmp_path / "first", typed(TITLE), page)
         second = read(tmp_path / "second", typed(TITLE), page)
         assert (
             first.pages[1].vision.read_bytes()
             == second.pages[1].vision.read_bytes()
+        )
+
+    def redacted(self, tmp_path: Path, font: str) -> bytes:
+        """The rendering of a page of text in the non-embedded `font`, with
+        a line redacted, so that vision reads it."""
+        page = typed(TRANSLATION).rectangle(60, 755, 480, 20, gray=0)
+        result = read(tmp_path / font, typed(TITLE), page, font=font)
+        return result.pages[1].vision.read_bytes()
+
+    def test_a_font_no_pdf_embeds_renders_alike_on_every_host(self, tmp_path):
+        """PDFium draws a font the PDF does not embed with a built-in one,
+        never with a font the host has installed: a family many hosts have
+        renders as one none has, and the bytes are held."""
+        installed = self.redacted(tmp_path, "Ubuntu")
+        nowhere = self.redacted(tmp_path, "Fictional")
+        assert installed == nowhere
+        assert hashlib.sha1(installed).hexdigest() == (
+            "91597b0d27e26af7aec5094ee5b310060438d2c8"
         )
 
 
@@ -327,8 +613,11 @@ class TestImages:
         (placed,) = result.images.values()
         assert placed.path.read_bytes() == png(300, 120, 1, image.data)
 
-    def test_a_jpeg_is_kept_as_the_pdf_holds_it(self, tmp_path):
-        page = pdfs.Page().image(pdfs.jpeg(), 72, 480, 256, 192)
+    @pytest.mark.parametrize("flated", [False, True], ids=["as is", "flated"])
+    def test_a_jpeg_is_kept_as_the_jpeg(self, tmp_path, flated):
+        """A JPEG the PDF holds, even compressed again by a lossless
+        filter, is kept as the JPEG file."""
+        page = pdfs.Page().image(pdfs.jpeg(flated=flated), 72, 480, 256, 192)
         page.text(pdfs.lines(CAPTION), y=460)
         result = read(tmp_path, page)
         (placed,) = result.images.values()
@@ -358,22 +647,33 @@ class TestImages:
         """An image under MIN_IMAGE_SIDE pixels on a side, or under
         MIN_IMAGE_PIXELS in all, could hold no more than a word."""
         page = self.booklet_page(pdfs.gray(300, 120))
-        page.image(pdfs.gray(20, 600, shade=1), 400, 100, 20, 600)
-        page.image(pdfs.gray(99, 100, shade=2), 400, 50, 99, 100)
+        page.image(pdfs.gray(20, 600, shade=1), 500, 100, 20, 300)
+        page.image(pdfs.gray(99, 100, shade=2), 420, 50, 99, 100)
         kept = pdfs.gray(100, 100, shade=3)
         page.image(kept, 72, 50, 100, 100)
         result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
         assert len(result.images) == 2
         assert [place for place, _sha1 in result.pages[0].images] == [1, 2]
         assert hashlib.sha1(png(100, 100, 1, kept.data)).hexdigest() in (
             result.images
         )
 
+    @pytest.mark.parametrize("width, read_on_its_own", [(24, 1), (23, 0)])
+    def test_the_boundary_of_decoration(
+        self, tmp_path, width, read_on_its_own
+    ):
+        """An image MIN_IMAGE_SIDE pixels wide (and over MIN_IMAGE_PIXELS in
+        all) is read; a pixel narrower, it is decoration."""
+        page = typed(TITLE).image(pdfs.gray(width, 500), 400, 100, 20, 400)
+        assert len(read(tmp_path, page).images) == read_on_its_own
+
     def test_an_image_in_a_form_is_placed_where_the_form_puts_it(
         self, tmp_path
     ):
         """A form XObject scaled over the whole page puts its image over
-        the whole page: the page's background, not an image within it."""
+        the whole page, over the text painted before it: that page is read
+        by vision, and its image is not read on its own."""
         within = typed(TITLE).form_image(
             pdfs.rgb(150, 100), 100, 300, 240, 160
         )
@@ -419,7 +719,8 @@ class TestUnionArea:
         assert union_area([]) == 0
 
     def test_strips_cover_a_page_together(self, tmp_path):
-        """A scan stored as strips covers the page as one image does."""
+        """A scan stored as strips covers the page as one image does: a
+        stamp over them leaves the page a scan."""
         page = pdfs.Page()
         for strip in range(4):
             page.image(
@@ -429,6 +730,7 @@ class TestUnionArea:
                 pdfs.WIDTH,
                 pdfs.HEIGHT / 4,
             )
+        page.text([STAMP], y=20)
         result = read(tmp_path, typed(TITLE), page)
         assert methods(result) == [TEXT_LAYER, VISION]
         assert result.pages[1].vision.suffix == PNG_SUFFIX

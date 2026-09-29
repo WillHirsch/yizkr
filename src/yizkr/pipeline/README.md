@@ -258,20 +258,26 @@ re-running one step in isolation — but for a normal ingest you only ever run
   `ingest run` and `scratch run`, a PDF with a page whose text layer is
   usable is read **page by page** (#176, `yizkr.pipeline.textlayer`):
   such a page from its text layer, deterministically, without a model
-  call (the method `pdf-text-layer`, version 1); a scanned page (images
-  cover most of it and it draws little text visibly, since an OCR layer
-  is drawn invisibly), or one whose text layer is empty or garbage, by a
-  vision call of its own; a blank page by nothing; and each image placed
-  within a text-layer page by a vision call of its own, as a witness of
-  its own (#178, ADR-0008), unless it is too small to hold text or the
-  never-ingest list names its SHA-1. The PDF's transcription holds its
-  own text, page by page behind `[Page N]` markers, with each image
-  marked where it sits by its SHA-1, never what was read from it; its
-  `pages` record each page's method, and each image's transcription is
-  kept beside the image in `derived-media/`. A PDF with no such page,
-  a scan, is read whole, by the one call it has always been read with,
-  so the LLM cache and the transcription seed answer it as before. The
-  standalone `ingest transcribe --engine llm` reads a PDF whole.
+  call (the method `pdf-text-layer`, version 1); a page that shows text
+  in an annotation, hides text under something painted after it (a
+  redaction box, say, since hidden text is never read), is a scan (images
+  cover most of it and its visible text lies over them, an OCR layer
+  being drawn invisibly), or whose text layer is empty, garbage or
+  garbled, by a vision call of its own; a page with nothing to read by
+  nothing; and each image placed within a text-layer page by a vision
+  call of its own, as a witness of its own (#178, ADR-0008), unless it is
+  too small to hold text or the never-ingest list names its SHA-1. The
+  PDF's transcription holds its own text, page by page behind `[Page N]`
+  markers, with each image marked where it sits by its SHA-1, never what
+  was read from it; its `pages` record each page's method apart from its
+  content, and each image's transcription is kept beside the image in
+  `derived-media/`. A PDF with no such page, a scan, is read whole, by
+  one call that gives the engine the PDF itself, so the LLM cache and the
+  transcription seed answer it under the key they hold its answer under.
+  PDFium is started afresh for each PDF and draws fonts a PDF does not
+  embed with its own, never the host's, so a page reads and renders alike
+  on every host and in every run. The standalone `ingest transcribe
+  --engine llm` reads a PDF whole.
 - **transcription check** — runs on the output of the `llm` and
   `textfile` engines (in `ingest run`, the vision and text-file methods)
   before anything uses it, in `ingest run` and `ingest transcribe`

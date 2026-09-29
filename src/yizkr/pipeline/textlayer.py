@@ -8,45 +8,65 @@ text, and the vision engine reads it. `read_pages` tells the two apart
 page by page, and the transcription reads a PDF page by page whenever one
 of its pages reads from its text layer
 (yizkr.pipeline.transcribe.PdfPageTranscriber). A PDF none of whose pages
-does is read whole by the vision engine, with the call it has always been
-read with, so its transcription, and every answer the LLM cache or the
-transcription seed holds for it, stays as it was (ADR-0032).
+does is read whole by the vision engine, in one call that gives the
+engine the PDF itself: the call the LLM cache, and the transcription
+seed, keep its answer under (ADR-0032).
 
 **The text layer** of a page is the text its content draws visibly, in
-the order PDFium extracts it. Text drawn in an invisible render mode, as
-an OCR layer over a scan is, text that falls outside the page, and text
-that an image painted after it covers, is not part of it: none of it can
-be seen on the page, and an OCR layer is a machine's reading, not the
-page's text. A text layer is **usable** when it holds a letter or a digit
-and at most `MAX_UNREADABLE_SHARE` of its characters, whitespace aside,
-are ones no text is written in: the replacement character, private-use
-and unassigned code points, lone surrogates and control characters, which
-is what a font without a usable Unicode map extracts as.
+the order PDFium extracts it. Text drawn in an invisible render mode (3,
+as an OCR layer over a scan is, or 7), and text that falls outside the
+page, is no part of it: neither can be seen, and an OCR layer is a
+machine's reading, not the page's text. A hyphen that PDFium finds at
+the end of a line stays, with the line break after it. A text layer is
+**usable** when it holds a letter or a digit and at most
+`MAX_UNREADABLE_SHARE` of its characters, whitespace aside, are ones no
+text is written in: the replacement character, private-use and
+unassigned code points, lone surrogates and control characters, which is
+what a font without a usable Unicode map extracts as. It is **garbled**
+when the replacement character stands within a word, next to a letter or
+a digit, where a letter the font could not map should be.
+
+**Text a page hides** is never read. A character drawn in a visible mode
+that an image or a filled path painted after it covers (its centre within
+the other's bounds) cannot be seen as the text layer holds it, whether a
+box is drawn over a line to redact it, a scan is laid over an OCR layer
+drawn visibly, or the other only seems to cover it (an image clipped to
+less than its bounds, or see-through): so its page is read by vision, which
+reads what the page shows. Were a text layer ever given with such
+characters left out, each run of them would stand as ``[redacted]``
+(`REDACTED`), never silently dropped.
 
 **How each page is read** (its method, which the transcription records):
 
-- ``blank``: the page draws nothing and has no annotation, so there is
-  nothing to read and no call is made;
+- ``none``: the page draws nothing and shows no annotation (a link shows
+  nothing), so there is nothing to read and no call is made;
+- ``vision``, for a page that shows text in an annotation: a free-text
+  annotation, or a form field whose value is text;
+- ``vision``, for a page that hides text it draws visibly (above);
 - ``vision``, for a scanned page: images cover at least `SCAN_COVER` of
-  it together, and it draws fewer than `MIN_TEXT_OVER_IMAGES` letters and
-  digits visibly (a stamp, a page number or a header over a scan);
-- ``text-layer``: its text layer is usable;
-- ``vision`` otherwise: its text layer is empty or garbage, so what it
-  draws can only be read from a picture of it.
+  it together, and more of the letters and digits it draws visibly lie
+  over an image than beside one (a stamp, a page number or a header over
+  a scan, or text laid over a picture that fills the page);
+- ``text-layer``: its text layer is usable, and not garbled;
+- ``vision`` otherwise: its text layer is empty, garbage or garbled, so
+  what it draws can only be read from a picture of it.
 
 **Images placed within a page** that reads from its text layer are read
 on their own, each as a witness of its own (ADR-0008): an original that a
 compilation embeds beside its translation is its writer's assertion, not
-the compiler's. An image is placed within a page when it covers less than
-`BACKGROUND_COVER` of the page on its own; one that covers more is the
-page's background, or the page itself. An image under `MIN_IMAGE_SIDE`
-pixels on a side, or under `MIN_IMAGE_PIXELS` pixels in all, is taken for
-decoration: it could hold no more than a word of legible text, and it is
-not read. Each image is known by the SHA-1 of its bytes (ADR-0010), so one
-placed on several pages, or twice on one, is one image, read once. A page
-read by vision is read whole, whatever images it holds, as the
-compilation's own page (ADR-0008, the third question its compilation
-amendment leaves open): nothing is derived from it.
+the compiler's. An image under `MIN_IMAGE_SIDE` pixels on a side, or
+under `MIN_IMAGE_PIXELS` pixels in all, is taken for decoration: it could
+hold no more than a word of legible text, and it is not read. Each image
+is known by the SHA-1 of its bytes (ADR-0010), so one placed on several
+pages, or twice on one, is one image, read once. An image the
+never-ingest list names by its SHA-1 is neither read nor kept; one that a
+page read by vision draws, or a PDF read whole, reaches the engine with
+the page, a case ADR-0008 leaves unhandled since it does not arise. A
+page read by vision is read whole, whatever images it
+holds, as the compilation's own page (ADR-0008, the third question its
+compilation amendment leaves open): nothing is derived from it.
+Annotations a text-layer page shows (a stamp, a note, a check box) are
+not read, and the page counts them.
 
 **The bytes of an image** are the image as the PDF holds it where that is
 a whole JPEG file (a DCTDecode stream, after any lossless filters). Any
@@ -54,28 +74,34 @@ other image is decoded by PDFium and written out as PNG by `png`, whose
 output depends only on the pixels and on zlib's deflate at a fixed level,
 so every run finds the same SHA-1 for the same image; a test holds the
 encoding byte for byte. **What the vision engine reads of a page** is the
-page's one image, as held, where the page draws nothing but one unrotated
-image that covers it, as a scanned page does; otherwise a rendering of the
-whole page, `RENDER_LONG_EDGE` pixels on its long edge, written as PNG.
-Both depend only on the PDF and on the PDFium build that uv.lock pins, so
-the calls that read them keep their keys in the LLM cache from run to run.
+page's one image, as held, where the page draws nothing but one upright
+image that covers at least `BACKGROUND_COVER` of it and shows no
+annotation, as a scanned page does; otherwise a rendering of the whole
+page, `RENDER_LONG_EDGE` pixels on its long edge, written as PNG, with
+its annotations and form fields drawn.
 
-**Text a page holds only in annotations**, such as a filled form field,
-is not part of its text layer; a page that draws nothing else is read by
-vision, whose rendering shows its annotations.
+**Fonts, and a fresh start.** PDFium draws a font a PDF does not embed
+with one of its own built-in fonts, never with one the host has
+installed, and each PDF is read by PDFium started afresh for it, since
+how PDFium draws such a font can depend on what it has drawn before. So a
+page renders to the same bytes, and its characters take the same places,
+on every host and in every run, and the calls that read its pages keep
+their keys in the LLM cache: they depend only on the PDF and on the
+PDFium build that pyproject.toml pins.
 
 **The library** is pypdfium2 (Apache-2.0 or BSD-3-Clause), the Python
 binding of PDFium (BSD-3-Clause), Chromium's PDF engine, which its wheels
 bundle: it reads the file offline, in this process, and nothing leaves
 the machine. PDFium is not thread-safe, so every call into it is made
-under one lock, and every page and bitmap it hands out is closed before
-the lock is released.
+under one lock, and every page, form environment and bitmap it hands out
+is closed before the lock is released.
 """
 
 from __future__ import annotations
 
 import ctypes
 import hashlib
+import re
 import struct
 import threading
 import unicodedata
@@ -86,12 +112,13 @@ from pathlib import Path
 from typing import Any
 
 import pypdfium2 as pdfium
+import pypdfium2._library_scope as pdfium_library
 import pypdfium2.raw as pdfium_c
 
 # how a page is read
 TEXT_LAYER = "text-layer"
 VISION = "vision"
-BLANK = "blank"
+NONE = "none"
 # the text-layer method, as a transcription's provenance names it: VERSION
 # goes up whenever what the method reads off a page changes
 METHOD = "pdf-text-layer"
@@ -99,14 +126,11 @@ VERSION = 1
 LIBRARY = f"pypdfium2 {pdfium.PYPDFIUM_INFO}, pdfium {pdfium.PDFIUM_INFO}"
 
 # the share of a page that images must cover, together, for the page to be
-# read as a scan
+# read as a scan when its text lies over them
 SCAN_COVER = 0.6
-# the share of a page one image must cover to be its background (or the
-# page itself) rather than an image placed within it
+# the share of a page its one image must cover to be given to the vision
+# engine as held, rather than the page rendered
 BACKGROUND_COVER = 0.9
-# the fewest letters and digits a page covered by images must draw visibly
-# to be read from its text layer
-MIN_TEXT_OVER_IMAGES = 200
 # the largest share of a usable text layer's characters, whitespace aside,
 # that may be unreadable
 MAX_UNREADABLE_SHARE = 0.1
@@ -116,7 +140,10 @@ MIN_IMAGE_PIXELS = 10_000
 # the long edge, in pixels, of a page rendered for the vision engine
 RENDER_LONG_EDGE = 1600
 # zlib's level for PNG: fixed, since an image's bytes are its identity
-PNG_LEVEL = 9
+PNG_LEVEL = 6
+# what stands for a run of characters a page hides, were a text layer
+# ever given without them
+REDACTED = "[redacted]"
 
 JPEG_SUFFIX = ".jpg"
 PNG_SUFFIX = ".png"
@@ -135,6 +162,23 @@ _BITMAP_BYTES = {
     pdfium_c.FPDFBitmap_BGRx: 4,
     pdfium_c.FPDFBitmap_BGRA: 4,
 }
+# the annotations that show nothing of their own on the page
+_UNSHOWN = frozenset({pdfium_c.FPDF_ANNOT_LINK, pdfium_c.FPDF_ANNOT_POPUP})
+# the form fields whose value is text
+_TEXT_FIELDS = frozenset(
+    {
+        pdfium_c.FPDF_FORMFIELD_TEXTFIELD,
+        pdfium_c.FPDF_FORMFIELD_COMBOBOX,
+        pdfium_c.FPDF_FORMFIELD_LISTBOX,
+    }
+)
+# the replacement character next to a letter or a digit
+_GARBLED = re.compile(r"[^\W_]\ufffd|\ufffd[^\W_]")
+# what marks a character a page hides while its text is put together (a
+# code PDFium never gives, which `_decode` makes NUL): a run of them, with
+# any whitespace between, is one REDACTED
+_HIDDEN_CODE = -1
+_HIDDEN_RUN = re.compile(r"\x00(?:[\s\x00]*\x00)?")
 
 Rect = tuple[float, float, float, float]  # left, bottom, right, top
 
@@ -156,6 +200,12 @@ def usable(text: str) -> bool:
     if not any(ch.isalnum() for ch in chars):
         return False
     return sum(map(unreadable, chars)) <= MAX_UNREADABLE_SHARE * len(chars)
+
+
+def garbled(text: str) -> bool:
+    """Whether the replacement character stands within a word of `text`,
+    next to a letter or a digit: a letter its font could not map."""
+    return _GARBLED.search(text) is not None
 
 
 def clean(text: str) -> str:
@@ -250,15 +300,17 @@ class PlacedImage:
 @dataclass
 class PdfPage:
     """How one page is read: its method, its text layer (a text-layer
-    page's), the file the vision engine reads (a vision page's), and the
+    page's), the file the vision engine reads (a vision page's), the
     images placed within it that are read on their own, as (place, SHA-1)
-    in their order on the page."""
+    in their order on the page, and how many annotations it shows that its
+    text layer leaves unread (a text-layer page's)."""
 
     number: int
     method: str
     text: str = ""
     vision: Path | None = None
     images: list[tuple[int, str]] = field(default_factory=list)
+    annotations: int = 0
 
 
 @dataclass
@@ -289,37 +341,52 @@ def read_pages(
     how): each page's method and text layer and, when any page reads from
     its text layer, the files the vision engine is to read, written into
     `directory`: each vision page's (``page-<n><suffix>``) and each image
-    read on its own (``<sha1><suffix>``). An image whose SHA-1 the
-    never-ingest list names (`excluded`) is neither written nor listed.
-    When no page reads from its text layer, nothing is written, and the
-    caller reads the PDF whole. None when PDFium cannot open or read the
-    file (one that is no PDF, or one locked by a password): the caller
-    reads it whole."""
+    read on its own (``<sha1><suffix>``). An image read on its own whose
+    SHA-1 the never-ingest list names (`excluded`) is neither written nor
+    listed. When no page reads from its text layer, nothing is written,
+    and the caller reads the PDF whole. None when PDFium cannot open or
+    read the file (one that is no PDF, or one locked by a password): the
+    caller reads it whole."""
     with _LOCK:
+        fresh_start()
         try:
             document = pdfium.PdfDocument(path)
         except pdfium.PdfiumError:
             return None
         try:
+            document.init_forms()
             return _read(document, directory, excluded)
         except pdfium.PdfiumError:
             return None
         finally:
+            # its form environment with it
             document.close()
+
+
+def fresh_start() -> None:
+    """Start PDFium afresh, drawing a font a PDF does not embed with a
+    built-in one, whatever fonts the host has (the module docstring says
+    why). Called under the lock, with nothing PDFium handed out still
+    open."""
+    pdfium_library.destroy_lib()
+    pdfium_library.init_lib()
+    pdfium_c.FPDF_SetSystemFontInfo(None)
 
 
 @dataclass
 class _Layout:
     """What one page holds, as `_layout` reads it: its method and text
     layer, the images read on their own (their indexes among the page's
-    objects, in paint order), and the index of the page's one image when
-    it draws nothing else and covers the page."""
+    objects, in paint order), the index of the page's one image when it
+    draws nothing else and covers the page, and the annotations it shows
+    that its text layer leaves unread."""
 
     number: int
     method: str
     text: str
     images: list[int]
     lone_image: int | None
+    annotations: int
 
 
 def _read(
@@ -331,12 +398,17 @@ def _read(
     for index in range(len(document)):
         page = document[index]
         try:
-            layouts.append(_layout(page, index + 1))
+            layouts.append(_layout(page, index + 1, document.formenv))
         finally:
             page.close()
     read = PdfPages(
         [
-            PdfPage(layout.number, layout.method, layout.text)
+            PdfPage(
+                layout.number,
+                layout.method,
+                layout.text,
+                annotations=layout.annotations,
+            )
             for layout in layouts
         ]
     )
@@ -408,13 +480,18 @@ def _address(handle: Any) -> int:
 
 
 def _decode(codes: list[int]) -> str:
-    """Characters from PDFium's code units: a surrogate pair joined, and
-    a lone surrogate or a code beyond Unicode as the replacement
-    character."""
+    """Characters from PDFium's code units: a surrogate pair joined, a
+    lone surrogate or a code beyond Unicode as the replacement character,
+    a NUL as another control character, and _HIDDEN_CODE, which marks a
+    character the page hides, as NUL."""
     chars: list[str] = []
     index = 0
     while index < len(codes):
         code = codes[index]
+        if code in (_HIDDEN_CODE, 0):
+            chars.append("\x00" if code == _HIDDEN_CODE else "\x01")
+            index += 1
+            continue
         if 0xD800 <= code <= 0xDBFF and index + 1 < len(codes):
             low = codes[index + 1]
             if 0xDC00 <= low <= 0xDFFF:
@@ -435,57 +512,101 @@ def _inside(x: float, y: float, rect: Rect) -> bool:
     return rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]
 
 
-def _visible_text(
+@dataclass
+class _Text:
+    """What a page draws of its text layer: its text, the text objects
+    that draw a character that can be seen, how many characters drawn in
+    a visible mode something painted after them hides, and how many of the
+    letters and digits that can be seen lie over an image painted before
+    them, and how many beside."""
+
+    text: str
+    drawing: set[int]
+    hidden: int
+    over: int
+    beside: int
+
+
+def _characters(
     textpage: Any,
     page_box: Rect,
     orders: dict[int, int],
+    hiders: dict[int, Rect],
     images: dict[int, Rect],
-) -> tuple[str, set[int]]:
-    """The text the page draws visibly, and the text objects that draw
-    it. A character is visible when its object draws in a visible render
-    mode, its centre falls on the page, and no image painted after that
-    object covers its centre. Characters PDFium adds between words and
-    lines are kept."""
+) -> _Text:
+    """The page's text layer (the module docstring says what it holds): a
+    character drawn in a visible mode, whose centre falls on the page, is
+    part of it, unless an image or a filled path painted after its object
+    (`hiders`) covers its centre, when it is hidden and stands in the text
+    as REDACTED. Characters PDFium adds between words and lines are kept,
+    and a hyphen it finds at a line's end is given back with its line
+    break."""
     raw = textpage.raw
     box = [ctypes.c_double() for _ in range(4)]
     # for each text object: None when its render mode draws nothing, else
-    # the images painted after it
-    over: dict[int, list[Rect] | None] = {}
+    # the hiders painted after it and the images painted before it
+    seen: dict[int, tuple[list[Rect], list[Rect]] | None] = {}
     drawing: set[int] = set()
+    hidden = over = beside = 0
     codes: list[int] = []
     for index in range(pdfium_c.FPDFText_CountChars(raw)):
+        code = pdfium_c.FPDFText_GetUnicode(raw, index)
         handle = pdfium_c.FPDFText_GetTextObject(raw, index)
         if handle:
             key = _address(handle)
-            if key not in over:
+            if key not in seen:
                 mode = pdfium_c.FPDFTextObj_GetTextRenderMode(handle)
                 painted = orders.get(key, -1)
-                over[key] = (
+                seen[key] = (
                     None
                     if mode in _INVISIBLE_MODES
-                    else [rect for at, rect in images.items() if at > painted]
+                    else (
+                        [rect for at, rect in hiders.items() if at > painted],
+                        [rect for at, rect in images.items() if at < painted],
+                    )
                 )
-            later = over[key]
-            if later is None:
+            entry = seen[key]
+            if entry is None:
                 continue
+            later, under = entry
             pdfium_c.FPDFText_GetCharBox(raw, index, *box)
             left, right, bottom, top = (value.value for value in box)
             x, y = (left + right) / 2, (bottom + top) / 2
-            if not _inside(x, y, page_box) or any(
-                _inside(x, y, rect) for rect in later
-            ):
+            if not _inside(x, y, page_box):
+                continue
+            if any(_inside(x, y, rect) for rect in later):
+                # a space hides nothing, and stays as it is
+                if code > 0x10FFFF or not chr(code).isspace():
+                    hidden += 1
+                    code = _HIDDEN_CODE
+                codes.append(code)
                 continue
             drawing.add(key)
-        codes.append(pdfium_c.FPDFText_GetUnicode(raw, index))
-    return _decode(codes), drawing
+            if code <= 0x10FFFF and chr(code).isalnum():
+                if any(_inside(x, y, rect) for rect in under):
+                    over += 1
+                else:
+                    beside += 1
+        codes.append(code)
+    text = _decode(codes).replace("\x02", "-\n")
+    text = _HIDDEN_RUN.sub(REDACTED, text)
+    return _Text(text, drawing, hidden, over, beside)
+
+
+def _filled(obj: Any) -> bool:
+    """Does a path object fill the area it bounds?"""
+    fill, stroke = ctypes.c_int(), ctypes.c_int()
+    if not pdfium_c.FPDFPath_GetDrawMode(obj.raw, fill, stroke):
+        return False
+    return fill.value != pdfium_c.FPDF_FILLMODE_NONE
 
 
 def _draws(obj: Any, on_page: bool, drawing: set[int]) -> bool:
     """Does the object draw something on the page? An image does where it
-    falls on the page, a text object where it draws a visible character,
-    and a path or a shading always: PDFium keeps a path as an object only
-    when it fills or strokes. A form draws through the objects it
-    holds."""
+    falls on the page, a text object where it draws a character that can
+    be seen, and a path or a shading always: PDFium keeps a path as an
+    object only when it fills or strokes. A form draws through the
+    objects it holds."""
     kind = obj.type
     if kind == pdfium_c.FPDF_PAGEOBJ_IMAGE:
         return on_page
@@ -510,11 +631,65 @@ def _upright(obj: Any) -> bool:
     return b == 0 and c == 0 and a > 0 and d > 0
 
 
-def _layout(page: Any, number: int) -> _Layout:
-    """Read one page and decide how it is read (the module docstring says
-    how)."""
+def _field_text(formenv: Any, annot: Any) -> str:
+    """The value of the form field an annotation is a widget of, when the
+    field's value is text; "" otherwise."""
+    if not formenv:
+        return ""
+    kind = pdfium_c.FPDFAnnot_GetFormFieldType(formenv, annot)
+    if kind not in _TEXT_FIELDS:
+        return ""
+    size = pdfium_c.FPDFAnnot_GetFormFieldValue(formenv, annot, None, 0)
+    if size <= 2:
+        return ""
+    buffer = (ctypes.c_ushort * (size // 2))()
+    pdfium_c.FPDFAnnot_GetFormFieldValue(formenv, annot, buffer, size)
+    return bytes(buffer).decode("utf-16-le", errors="replace").rstrip("\x00")
+
+
+def _annotations(page: Any, formenv: Any) -> tuple[bool, int]:
+    """(whether an annotation on the page shows text: a free-text
+    annotation, or a form field whose value is text; how many annotations
+    it shows besides, which its text layer leaves unread). A link and a
+    pop-up show nothing of their own, and are neither."""
+    shows_text, others = False, 0
+    for index in range(pdfium_c.FPDFPage_GetAnnotCount(page.raw)):
+        annot = pdfium_c.FPDFPage_GetAnnot(page.raw, index)
+        if not annot:
+            continue
+        try:
+            kind = pdfium_c.FPDFAnnot_GetSubtype(annot)
+            if kind in _UNSHOWN:
+                continue
+            if kind == pdfium_c.FPDF_ANNOT_FREETEXT or (
+                kind == pdfium_c.FPDF_ANNOT_WIDGET
+                and _field_text(formenv, annot).strip()
+            ):
+                shows_text = True
+            else:
+                others += 1
+        finally:
+            pdfium_c.FPDFPage_CloseAnnot(annot)
+    return shows_text, others
+
+
+@dataclass
+class _Contents:
+    """What one page draws: its box and area, its objects in paint order
+    with their bounds, its images on the page by index (their bounds
+    clipped to it), and its text layer (`_characters`)."""
+
+    box: Rect
+    area: float
+    objects: list[tuple[Any, Rect]]
+    images: dict[int, Rect]
+    text: _Text
+
+
+def _contents(page: Any) -> _Contents:
+    """What `page` draws (`_Contents`), read under the lock. An image or a
+    filled path hides the text an earlier object draws."""
     box = page.get_cropbox()
-    area = _area(box)
     objects = _objects(page)
     orders = {_address(obj.raw): at for at, (obj, _rect) in enumerate(objects)}
     images = {
@@ -523,38 +698,53 @@ def _layout(page: Any, number: int) -> _Layout:
         if obj.type == pdfium_c.FPDF_PAGEOBJ_IMAGE
         and (clipped := _clip(rect, box)) is not None
     }
+    hiders = dict(images)
+    for at, (obj, rect) in enumerate(objects):
+        if obj.type == pdfium_c.FPDF_PAGEOBJ_PATH and _filled(obj):
+            clipped = _clip(rect, box)
+            if clipped is not None:
+                hiders[at] = clipped
     textpage = page.get_textpage()
     try:
-        visible, drawing = _visible_text(textpage, box, orders, images)
+        text = _characters(textpage, box, orders, hiders, images)
     finally:
         textpage.close()
-    text = clean(visible)
-    letters = sum(ch.isalnum() for ch in text)
+    return _Contents(box, _area(box), objects, images, text)
+
+
+def _layout(page: Any, number: int, formenv: Any) -> _Layout:
+    """Read one page and decide how it is read (the module docstring says
+    how)."""
+    contents = _contents(page)
+    area, objects, images = contents.area, contents.objects, contents.images
+    drawn_text = contents.text
+    visible = drawn_text.text
     cover = union_area(list(images.values())) / area if area > 0 else 0.0
     drawn = [
         at
         for at, (obj, _rect) in enumerate(objects)
-        if _draws(obj, at in images, drawing)
+        if _draws(obj, at in images, drawn_text.drawing)
     ]
-    annotated = pdfium_c.FPDFPage_GetAnnotCount(page.raw) > 0
-    if not drawn and not annotated:
-        method = BLANK
-    elif cover >= SCAN_COVER and letters < MIN_TEXT_OVER_IMAGES:
+    shows_text, others = _annotations(page, formenv)
+    shows = shows_text or others > 0
+    if not drawn and not shows:
+        method = NONE
+    elif (
+        # text an annotation shows, text the page hides, or a scan
+        shows_text
+        or drawn_text.hidden
+        or (cover >= SCAN_COVER and drawn_text.over > drawn_text.beside)
+    ):
         method = VISION
-    elif usable(visible):
+    elif usable(visible) and not garbled(visible):
         method = TEXT_LAYER
     else:
         method = VISION
     placed = []
     if method == TEXT_LAYER:
-        placed = [
-            at
-            for at, rect in images.items()
-            if _area(rect) < BACKGROUND_COVER * area
-            and not _decoration(objects[at][0])
-        ]
+        placed = [at for at in images if not _decoration(objects[at][0])]
     lone = None
-    if method == VISION and not annotated and len(drawn) == 1:
+    if method == VISION and not shows and len(drawn) == 1:
         at = drawn[0]
         obj = objects[at][0]
         if (
@@ -565,8 +755,14 @@ def _layout(page: Any, number: int) -> _Layout:
             and page.get_rotation() == 0
         ):
             lone = at
+    reads_text = method == TEXT_LAYER
     return _Layout(
-        number, method, text if method == TEXT_LAYER else "", placed, lone
+        number,
+        method,
+        clean(visible) if reads_text else "",
+        placed,
+        lone,
+        others if reads_text else 0,
     )
 
 

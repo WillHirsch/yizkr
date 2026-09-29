@@ -59,12 +59,15 @@ one of its text-layer pages is marked where it sits, by the SHA-1 of its
 bytes (``[Page 6, image 1: sha1:…]``), but what is read from the image is
 never part of it: the image's own transcription names the image, so that
 the claims read from each cite the witness that makes them (ADR-0008).
-The transcription's `pages` record, page by page, the method that read it
-(text layer, vision, or blank), what made it, and where the page's text
-lies in `text`. The check runs on the reading of each page and each image
-the vision engine read, as on any vision transcription, and never on text
-read from a text layer: that is the document's own text, read without an
-engine, which no engine failure can have shaped.
+The transcription's `pages` hold, page by page, where the page's text
+lies in `text` and the images placed within it, which are content, and
+apart from them the page's provenance: the method that read it
+(text-layer, vision, or none, for a page with nothing to read), what made
+it, and how many annotations its text layer leaves unread. The check runs
+on the reading of each page and each image the vision engine read, as on
+any vision transcription, and never on text read from a text layer: that
+is the document's own text, read without an engine, which no engine
+failure can have shaped.
 
 Vision transcription of a PDF read whole needs poppler-utils on the
 ingestion host: the claude-code engine's Read tool renders the pages with
@@ -154,38 +157,49 @@ def preflight_vision_transcription(
         require_pdf_renderer(which)
 
 
-# the SHA-1 of an image's bytes, as a page's provenance names it
+# the SHA-1 of an image's bytes, as a page names it
 Sha1 = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 # the methods a page of a PDF read page by page is read by
-# (yizkr.pipeline.textlayer)
-PageMethod = Literal["text-layer", "vision", "blank"]
+# (yizkr.pipeline.textlayer); "none" reads a page with nothing to read
+PageMethod = Literal["text-layer", "vision", "none"]
+
+
+class PageProvenance(BaseModel):
+    """What read one page of a PDF read page by page: its method, what
+    made its text (the text-layer method with its version and the
+    library's, or the vision client), and how many annotations the page
+    shows that its text layer leaves unread (a text-layer page's)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method: PageMethod
+    engine: str = Field(min_length=1)
+    annotations: int = Field(default=0, ge=0)
 
 
 class TranscribedPage(BaseModel):
-    """How one page of a PDF read page by page was transcribed: the
-    method that read it, what made its text (the text-layer method and
-    its version, or the vision client), where its text lies in the
-    transcription's `text` (`start` to `end`, after its markers), and the
-    images placed within it that have transcriptions of their own, by the
-    SHA-1 of their bytes, in their order on the page."""
+    """One page of a PDF read page by page: its place in the PDF (`page`,
+    from 1), where its text lies in the transcription's `text` (`start` to
+    `end`, after its markers), the images placed within it that have
+    transcriptions of their own, by the SHA-1 of their bytes in their
+    order on the page, and, apart from that content, its provenance."""
 
     model_config = ConfigDict(extra="forbid")
 
     page: int = Field(ge=1)
-    method: PageMethod
-    engine: str = Field(min_length=1)
     start: int = Field(ge=0)
     end: int = Field(ge=0)
     images: list[Sha1] = Field(default_factory=list)
+    provenance: PageProvenance
 
 
 class Transcription(BaseModel):
     """A transcription of one artifact's media. `artifact` names the
     artifact by the SHA-1 of the media's bytes: the key its claims cite,
     and part of the transcription's content, which depends on no
-    instance. `pages` is the provenance of a PDF read page by page, page
-    by page (`TranscribedPage`); a transcription made whole has none, and
-    none is written."""
+    instance. `pages` are a PDF read page by page, page by page
+    (`TranscribedPage`); a transcription made whole has none, and holds
+    no `pages` key."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -217,8 +231,7 @@ class Transcription(BaseModel):
     @model_serializer(mode="wrap")
     def _without_absent_pages(self, handler: Any) -> dict[str, Any]:
         """The transcription as written: a transcription made whole
-        carries no `pages` at all, so its view is what it has always
-        been."""
+        holds no `pages` key at all."""
         data = handler(self)
         if self.pages is None:
             data.pop("pages", None)
@@ -427,16 +440,17 @@ class PdfReading:
 class PdfPageTranscriber:
     """A PDF read page by page (yizkr.pipeline.textlayer): each page from
     its text layer where it has a usable one, by the vision engine where
-    it does not, and not at all where it is blank; and each image placed
-    within a text-layer page read by the vision engine on its own, as a
-    witness of its own (ADR-0008).
+    it does not, and not at all where it holds nothing to read; and each
+    image placed within a text-layer page read by the vision engine on its
+    own, as a witness of its own (ADR-0008).
 
     `transcribe` gives the PDF's transcription, with the page markers and
     the provenance the module docstring describes, and the images'
     readings as its `reading`, for the caller to keep and then close. It
     gives None for a PDF none of whose pages reads from its text layer, or
-    that PDFium cannot read: the caller reads that PDF whole, with the
-    vision call it has always been read with. `client` gives the vision
+    that PDFium cannot read: the caller reads that PDF whole, in one
+    vision call that gives the engine the PDF itself. `client` gives the
+    vision
     engine's client, and is called only once a page or an image is to be
     read by vision, so a PDF read wholly from its text layer starts no
     engine. `excluded` says whether the never-ingest list names an image
@@ -517,9 +531,9 @@ class PdfPageTranscriber:
     ) -> Transcription:
         """The PDF's own text (`read`, textlayer.PdfPages), page by page
         in order: each page opened by its marker and the markers of the
-        images placed within it, then its text, read by its method. A
-        blank page is its markers alone, and its method is the text-layer
-        method's, which judged it blank."""
+        images placed within it, then its text, read by its method. A page
+        with nothing to read is its markers alone, read by no method: what
+        made it is the text-layer method, which found nothing on it."""
         from yizkr.pipeline import textlayer
 
         method = f"{textlayer.METHOD}/{textlayer.VERSION}"
@@ -543,11 +557,14 @@ class PdfPageTranscriber:
             pages.append(
                 TranscribedPage(
                     page=page.number,
-                    method=page.method,
-                    engine=engine,
                     start=start,
                     end=len(text),
                     images=[sha1 for _place, sha1 in page.images],
+                    provenance=PageProvenance(
+                        method=page.method,
+                        engine=engine,
+                        annotations=page.annotations,
+                    ),
                 )
             )
         self.last_resolution = resolve_language(
