@@ -74,6 +74,8 @@ STAGE_OF = {
 SHA1 = re.compile(r"sha1\W*([0-9a-f]{40})")
 # a live cache entry's file name
 ENTRY = re.compile(r"^[0-9a-f]{64}\.json$")
+# a stamp, as the cache names what it moves aside
+REPLACED = "20260929T090000Z-1a2b3c4d"
 
 
 class Engine:
@@ -468,6 +470,32 @@ class TestCounts:
         assert (extraction.estimated, extraction.more) == (0, 0)
         # the batch holds a chunk the engine answers: its critique waits
         assert counted.stages["critique"].estimated == 1
+        made = run(tmp_path, corpus, engine)
+        assert made == {"extraction": 1, "critique": 1}
+        assert per_stage(counted, "engine_calls") == made
+
+    def test_a_keep_cut_off_between_its_renames_is_resumed(
+        self, tmp_path, engine
+    ):
+        """A keep publishes a session by moving the folder it finds at the
+        answer's path aside and renaming its own in. One cut off between
+        the two, as a killed process leaves it, leaves that path with no
+        folder and the session in the folder it moved aside: both readers
+        find it there, so the second chunk forks the conversation with no
+        call and the estimate counts what the run then makes, rather than
+        one counting a resume and the other replaying (#395)."""
+        engine.people = 12
+        corpus = one_letter(tmp_path)
+        cut = cut_short(tmp_path, corpus, engine)
+        cache = tmp_path / "cache"
+        for folder in sorted(cache.glob("*/*.session/*")):
+            folder.rename(
+                folder.with_name(f"{folder.name}.replaced-{REPLACED}")
+            )
+        counted = estimate_of(tmp_path, corpus, engine)
+        assert counted.resumed
+        assert counted.run == cut
+        assert not per_stage(counted, "replays")
         made = run(tmp_path, corpus, engine)
         assert made == {"extraction": 1, "critique": 1}
         assert per_stage(counted, "engine_calls") == made
@@ -1007,15 +1035,19 @@ def cut_short(tmp_path, corpus, fake) -> Path:
 
 KEY = "a" * 64
 OPENING = "b" * 64
+# another opening answer's session, kept under the same key
+OTHER = "c" * 64
 SESSION = {
     "fictional-project/0c4f6a52-3d1e-4b8a-9f00-5a1e2b3c4d5e.jsonl": b"{}"
 }
-# the same session as the two keeps before the last one left it
-EARLIER = {
-    "fictional-project/1b4c7d90-0000-4000-8000-00000000f001.jsonl": b"{}"
-}
-LATER = {"fictional-project/2c5d8e01-0000-4000-8000-00000000f002.jsonl": b"{}"}
 LISTED = dict.fromkeys(SESSION, b"")
+
+
+def a_session(marker: str) -> dict[str, bytes]:
+    """A session of one transcript, told from another by `marker`: what a
+    keep of the same answer left before or after this one."""
+    transcript = f"0c4f6a52-3d1e-4b8a-9f00-5a1e2b3c4d{marker}.jsonl"
+    return {f"fictional-project/{transcript}": b"{}"}
 
 
 def between_renames(monkeypatch, folder, read):
@@ -1056,6 +1088,10 @@ class TestCacheAsIs:
         cache = tmp_path / "cache"
         writer = EngineCache(cache)
         writer.keep_session(KEY, OPENING, SESSION)
+        # another answer of the same key, kept twice so that it has a
+        # folder moved aside of its own: no read of this answer takes it
+        for _ in range(2):
+            writer.keep_session(KEY, OTHER, a_session("09"))
         as_is = llm.read_cache(cache)
         folder = self.session_dir(cache)
         seen = []
@@ -1073,6 +1109,9 @@ class TestCacheAsIs:
         # the reader ran where nothing was there to list, and read whole
         assert seen == [(False, LISTED)]
         assert as_is.kept_session(KEY, OPENING) == LISTED
+        assert as_is.kept_session(KEY, OTHER) == dict.fromkeys(
+            a_session("09"), b""
+        )
 
     def test_the_first_session_kept_is_read_once_it_is_whole(
         self, tmp_path, monkeypatch
@@ -1099,24 +1138,29 @@ class TestCacheAsIs:
         assert seen == [{}]
         assert as_is.kept_session(KEY, OPENING) == LISTED
 
-    def test_the_folder_fallen_back_on_is_the_one_last_moved_aside(
+    def test_the_folder_fallen_back_on_is_the_newest_by_its_stamp(
         self, tmp_path, monkeypatch
     ):
         """A cache holds every folder a keep has moved aside, so an answer
-        kept again and again has several. The reader falls back to the
-        newest of them, the session as the keep before this one left it,
-        never an older one (#395)."""
+        kept again and again has several, and their stamps need not follow
+        the order they were moved in: two of one second, or a clock set
+        back between them. The reader falls back to the newest by stamp,
+        whichever that is of them (#395)."""
         from yizkr.pipeline import llmcache
         from yizkr.pipeline.llmcache import EngineCache
 
         stamps = iter(
-            ["20260929T090000Z-1a2b3c4d", "20260929T090100Z-5e6f7a8b"]
+            [
+                "20260929T090100Z-1a2b3c4d",  # the session kept first
+                "20260929T090300Z-5e6f7a8b",  # the second: the newest stamp
+                "20260929T090200Z-9c0d1e2f",  # the third, a second behind
+            ]
         )
         monkeypatch.setattr(llmcache, "_stamp", lambda: next(stamps))
         cache = tmp_path / "cache"
         writer = EngineCache(cache)
-        writer.keep_session(KEY, OPENING, EARLIER)
-        writer.keep_session(KEY, OPENING, LATER)
+        for marker in ("01", "02", "03"):
+            writer.keep_session(KEY, OPENING, a_session(marker))
         as_is = llm.read_cache(cache)
         seen = []
         between_renames(
@@ -1125,8 +1169,37 @@ class TestCacheAsIs:
             lambda: seen.append(as_is.kept_session(KEY, OPENING)),
         )
         writer.keep_session(KEY, OPENING, SESSION)
-        assert seen == [dict.fromkeys(LATER, b"")]
+        # the folders moved aside hold 01, 02 and 03, in that order, and
+        # 02's stamp is the newest: the order they were moved in decides
+        # nothing
+        assert seen == [dict.fromkeys(a_session("02"), b"")]
         assert as_is.kept_session(KEY, OPENING) == LISTED
+
+    def test_no_name_left_to_move_the_folder_aside_under(
+        self, tmp_path, monkeypatch
+    ):
+        """Every stamp a keep is given names a folder moved aside already:
+        it gives up with an OSError, which the caller that keeps a session
+        warns about and goes on from, and the session kept stays where it
+        was for both readers (#395)."""
+        from yizkr.pipeline import llmcache
+        from yizkr.pipeline.llmcache import EngineCache
+
+        monkeypatch.setattr(llmcache, "_stamp", lambda: REPLACED)
+        cache = tmp_path / "cache"
+        writer = EngineCache(cache)
+        writer.keep_session(KEY, OPENING, a_session("01"))
+        writer.keep_session(KEY, OPENING, SESSION)
+        with pytest.raises(OSError):
+            writer.keep_session(KEY, OPENING, a_session("03"))
+        folder = self.session_dir(cache)
+        assert writer.kept_session(KEY, OPENING) == SESSION
+        assert llm.read_cache(cache).kept_session(KEY, OPENING) == LISTED
+        # the folder moved aside stands, and the keep left nothing behind
+        assert sorted(path.name for path in folder.parent.iterdir()) == [
+            OPENING,
+            f"{OPENING}.replaced-{REPLACED}",
+        ]
 
     def test_a_stamp_taken_already_moves_the_folder_aside_again(
         self, tmp_path, monkeypatch

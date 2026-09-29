@@ -56,6 +56,12 @@ recompute's calls with the baseline's, component by component; the run
 report, which reads the run directory, and never the LLM cache, gives
 each recompute's miss reasons and replays from the cache's events (§11).
 
+Amended by #395 (2026-09-29): a keep publishes a session by moving the
+folder it finds at the answer's path aside and renaming its own in, so
+that path holds no folder between the two renames. Both readers, the
+run's and the lock-free one, read the folder moved aside while it does,
+instead of waiting for the path to hold one again (§3).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -250,7 +256,10 @@ an artifact a new QID changes no key.
   process needs. What its own calls would change it keeps in memory; the
   entries it reads are whole, as every reader's are, and a kept session's
   folder, which its keeper replaces by renames, is listed through the
-  folder opened once, and looked for again a moment later while missing.
+  folder opened once. While the answer's own path holds no folder, between
+  the keeper's two renames, both readers read the folder the keeper moved
+  aside, which holds the session kept for the same answer, rather than
+  waiting for a folder to be there again.
 
 ### 4. Rejection
 

@@ -202,6 +202,10 @@ def _now() -> str:
 
 
 def _stamp() -> str:
+    """A name for something moved aside: the second it was moved at, in a
+    fixed-width UTC form, and a suffix that tells two of one second apart.
+    The width and the UTC are what make names of different seconds sort by
+    time (_replaced_sessions)."""
     return (
         datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         + "-"
@@ -821,8 +825,10 @@ class EngineCache:
         published whole, by renaming their folder into place, so the
         answer they are kept under names the session they hold. A folder
         kept there before is first moved aside, so between the two renames
-        the answer's own path holds no folder: a reader then finds the
-        session in the folder moved aside (CacheAsIs.kept_session)."""
+        the answer's own path holds no folder: a reader finds the session
+        in the folder moved aside for as long as that lasts, whether it
+        reads under the lock (kept_session) or without it
+        (CacheAsIs.kept_session)."""
         if not files:
             return
         target = self._session_dir(key, opening)
@@ -846,29 +852,33 @@ class EngineCache:
 
     def _move_session_aside(self, target: Path) -> None:
         """Move the session folder at `target` aside as replaced, under a
-        name of its own: a stamp that a folder moved aside in the same
-        second has taken is stamped again, so no folder moved aside is
-        ever replaced by another, and none is left half read. A folder
-        another keep has moved aside meanwhile is left where that one put
-        it."""
+        name of its own. A folder a stamp of the same second already names
+        is stamped again, since renaming a folder onto one that holds
+        files fails rather than replacing it, and the keep with it: a
+        folder moved aside is never displaced, whatever the stamp. A
+        folder another keep has moved aside meanwhile is left where that
+        one put it."""
         for _ in range(_PUBLISH_TRIES):
-            aside = self._aside_name(target, "replaced")
             try:
-                os.rename(target, aside)
+                os.rename(target, self._aside_name(target, "replaced"))
+                return
             except FileNotFoundError:
                 return
             except OSError as exc:
                 if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
                     raise
-                continue
-            return
-        raise RuntimeError(f"could not move the kept session {target} aside")
+        raise FileExistsError(
+            errno.EEXIST,
+            "no name left to move the kept session aside under",
+            str(target),
+        )
 
     def _replaced_sessions(self, folder: Path) -> list[Path]:
         """The session folders kept aside as replaced where `folder` keeps
-        the session of an opening answer, newest first as their stamps
-        name them; those of one second in an order of their own, each a
-        whole session of the same answer."""
+        the session of an opening answer, newest first as far as their
+        stamps order them: those of one second, or from across a change of
+        the clock, come in an order of their own. Each holds a whole
+        session of the same opening answer."""
         try:
             return sorted(
                 folder.parent.glob(f"{folder.name}.replaced-*"), reverse=True
@@ -879,10 +889,25 @@ class EngineCache:
     def kept_session(self, key: str, opening: str) -> dict[str, bytes]:
         """The session files kept for the conversation opened under `key`
         with the opening answer whose SHA-256 is `opening`, by their
-        relative paths; empty when none are kept for that answer."""
+        relative paths; empty when none are kept for that answer.
+
+        A keep moves the folder it finds at the answer's path aside before
+        it renames its own in, so one that ended between the two (killed,
+        or its rename in refused) leaves that path with no folder and the
+        session in the folder it moved aside. The newest of those holding
+        a file is read instead, so this reader and the lock-free one
+        (CacheAsIs.kept_session) answer alike, and a run resumes what the
+        estimate counted on."""
         folder = self._session_dir(key, opening)
         if not folder.is_dir():
-            return {}
+            kept = (
+                aside
+                for aside in self._replaced_sessions(folder)
+                if any(path.is_file() for path in aside.rglob("*"))
+            )
+            folder = next(kept, None)
+            if folder is None:
+                return {}
         return {
             path.relative_to(folder).as_posix(): path.read_bytes()
             for path in sorted(folder.rglob("*"))
@@ -1020,10 +1045,10 @@ class CacheAsIs(EngineCache):
         replaces it meanwhile never tears the listing. A keep renames the
         folder it finds aside before it renames its own in, so the
         answer's path holds no folder for a moment: the session is then
-        read from the folder kept aside, the newest whose listing is not
-        empty, which no keep touches again. So a read never waits, never
-        fails and never comes back empty while a session is kept, however
-        it falls against a keep."""
+        read from a folder kept aside, the first whose listing is not empty
+        of those _replaced_sessions orders, which no keep touches again. So
+        a read never waits, never fails and never comes back empty while a
+        session is kept, however it falls against a keep."""
         folder = self._session_dir(key, opening)
         names = _listed(folder)
         if names:

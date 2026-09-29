@@ -246,6 +246,12 @@ var/llm-cache/                     (--cache; private, below)
       <opening>.replaced-<stamp>/  a session folder a newer keep displaced
 ```
 
+`<stamp>` is the second the thing was moved aside at, in a fixed-width
+UTC form (`20260929T090000Z`), and a random suffix that tells two of one
+second apart. So names of different seconds sort by time, and names of
+one second, or from across a change of the clock, sort in an order of
+their own.
+
 An entry holds `format`, `key`, `components` (the key's components, whose
 canonical JSON hashes to the key), `response`, `origin` (`engine`, or an
 adoption's reason) and `provenance`: the `role`, the `call`, the
@@ -366,13 +372,19 @@ folder it finds at the answer's path aside and renaming its own in. The
 folder is opened once and listed through that one handle, so a folder
 renamed as the listing runs is still listed whole. And where a keep is
 between its two renames, the answer's path holding no folder at all, the
-reader takes the folder that keep moved aside
-(`<opening>.replaced-<stamp>/`, the newest that lists any file), which
-holds the session kept for the same answer and which no keep touches
-again: a keep is stamped again where a folder moved aside has taken its
-stamp, so nothing moved aside is ever displaced. A path with no folder
-and nothing moved aside beside it is a session not kept yet, which is no
-session: the first keep for an answer renames its folder in over nothing.
+reader takes a folder that keep moved aside
+(`<opening>.replaced-<stamp>/`, the first that lists any file, newest
+first as far as the stamps order them): it holds the session kept for the
+same answer, and no keep touches a folder moved aside again. A path with
+no folder and nothing moved aside beside it is a session not kept yet,
+which is no session: the first keep for an answer renames its folder in
+over nothing.
+
+The reader under the lock (`EngineCache.kept_session`, which a run
+resumes from) reads a folder moved aside the same way, so the two answer
+alike: a keep that ended between its renames, killed or with its rename
+in refused, leaves the session kept for that answer where a run finds it
+and where the estimate counted it.
 
 The call estimate reads the cache so, beside a run that holds it
 (docs/runbooks/scratch-run.md, Before a run).
@@ -477,7 +489,11 @@ conversation exactly as the fork's context assumes:
    the opening answer the cache serves, and replays when none is kept for
    it: a session made on another answer (by two callers that opened the
    conversation at once, or a replay whose session could not be kept) is
-   never resumed for it. The files are put back into the CLI's projects
+   never resumed for it. A keep that ended between its two renames leaves
+   the answer's own path with no folder and the session in the folder it
+   moved aside (`<opening>.replaced-<stamp>/`), where a fork resumes it
+   as it would from the path itself, so nothing replays for the want of a
+   session that is kept (Reading a cache as it is, above). The files are put back into the CLI's projects
    folder for `--resume … --fork-session`, and released after the forks,
    as every transcript is. The API engine rebuilds the conversation from
    the opening turn's prompt and cached answer. No call is made; the event
