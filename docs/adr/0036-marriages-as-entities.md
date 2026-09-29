@@ -22,43 +22,44 @@ a source narrated one; the universe's divorce judgment is such a source.
 ## Decision
 
 A marriage is its own entity, bounded by events, and the spouse link is
-derived from it. Below, a *union* is a marriage or a partnership.
+derived from it. It is a kind of partnership, the generic term for a
+couple's relationship; below, a *union* is any partnership.
 
 ### 1. Vocabulary
 
 | Key | What it is | Wikidata |
 |---|---|---|
-| `marriage` | class, kept and re-described: a couple's marriage, no longer an `event`; the couple take part with role `spouse` (ADR-0035) | Q8445 |
-| `partnership` | class, new: a couple as a source gives it without saying they married; the couple take part with a new role, `partner` | none (the link: unmarried partner, P451) |
+| `partnership` | class, new: a couple's relationship, of any kind. A source that presents two people as a couple without saying they married gives a partnership, which may be a marriage no source identifies; the couple take part with a new role, `partner` | none |
+| `marriage` | class, kept and re-described: a subclass of `partnership`, no longer an `event`; the couple take part with role `spouse` (ADR-0035) | Q8445 |
 | `wedding` | event class, new: a ceremony that starts a marriage | an item |
 | `civil_wedding`, `religious_wedding` | subclasses of `wedding`: its kind, where a source states it | an item each |
 | `divorce`, `annulment` | event classes, new: an end that a court or another authority pronounces | an item each |
 | `started_by` | union → the event that began it: its wedding, or each of two ceremonies | none (P26 takes a start time, P580) |
-| `ended_by` | union → the event that ended it: a divorce, an annulment, a spouse's own `death` event, or an `event` of unstated kind | none (nearest: end cause, P1534, which names a cause's class) |
+| `ended_by` | union → the event that ended it: a divorce, an annulment, a partner's own `death` event, or an `event` of unstated kind | none (nearest: end cause, P1534, which names a cause's class) |
 | `spouse` | property, retired: nothing writes it, and the spouse link is a query | P26 |
 
-- **`marriage` keeps its key, label and Wikidata id**, which name the
-  union already, and drops `subclass of event`; each scratch run's reset
+- **`marriage` keeps its key, label and Wikidata id**, and becomes a
+  subclass of `partnership` instead of `event`; each scratch run's reset
   bootstraps an empty graph (ADR-0025), so no stale statement survives.
 - **The union points to its events**, so its item holds its couple and
   its bounds, as a P26 statement holds its dates, and no event needs a
-  link back. A death that ends a union is the spouse's own `death` event
+  link back. A death that ends a union is the partner's own `death` event
   (ADR-0020 §2, ADR-0035 §3.2): `ended_by` points to it, never to a copy.
 - **Each event has its own date** (`point_in_time` at its precision,
   with `earliest_date`, `latest_date` and a circa of its own), **place**
   (`location`) **and participants** (roles `witness`, `officiant`); a
   divorce names the court that acts by `carried_out_by` (ADR-0031). The
   couple take part in the union, and its events reach them through it.
-- **The spouse link is a query**: two participants of one union with
-  role `spouse` (the partner link: `partner`). A spouse term gives a
-  union, as "Dein Vater" gives `father` (ADR-0035 §3.3).
+- **The spouse link is a query**: two participants of one marriage with
+  role `spouse`. The partner link reads every partnership, marriages
+  included, and either role: a married couple are partners too. A spouse
+  term gives a marriage, as "Dein Vater" gives `father` (ADR-0035 §3.3).
 
 **Where this departs from Wikidata**, which has no item per marriage and
-qualifies each spouse's P26 statement with a start time, an end time, an
-end cause and a place of marriage (P2842): here each bound has its own
-date, range, circa, place and people, which one statement's qualifiers
-cannot keep apart. P26 so qualified can still be generated for an
-export. #394 adds the new items' ids, checked against wikidata.org.
+qualifies each spouse's P26 with a start time, an end time, an end cause
+and a place of marriage (P2842): each bound here has its own date, range,
+circa, place and people, which qualifiers cannot keep apart. An export
+can still generate P26 so qualified. #394 adds the new classes' ids.
 
 ### 2. What sources give
 
@@ -70,14 +71,14 @@ export. #394 adds the new items' ids, checked against wikidata.org.
 | "Husband: Felix LÖBIG, died 1931" (Ida's 1945 card) | an undated marriage: a source that merely names a spouse dates nothing, and the card's own date observes nothing, since Felix died in 1931 |
 | a directory or a census listing a couple as married, with no start or end | an observation: a `point_in_time` on the union, never a wedding date. A union has no date of its own, so clustering never keys on it and the disagreement report never compares it |
 | "Löbig, Ursula, Wwe." (the 1912 directory) | no union, since no spouse is named: ADR-0035's `civil_status` |
-| a couple presented as a couple, with no word of a marriage | a partnership. Two people named only as a child's parents are not thereby a couple |
+| a couple presented as a couple, with no word of a marriage | a partnership, which may be a marriage no source identifies. Two people named only as a child's parents are not thereby a couple |
 
 ### 3. Identity across documents
 
-- **A union is keyed by its couple** once people are clustered. Unions
-  of one couple link without a date, as two births of one person do
-  (#361); one that names only one of its couple is ambiguous where that
-  person has two unions.
+- **A union is keyed by its couple**, whatever its class, once people
+  are clustered. Unions of one couple link without a date, as two births
+  of one person do (#361); one that names only one of its couple is
+  ambiguous where that person has two unions.
 - **Wedding dates tell two unions of one couple apart**: where they
   cannot overlap, the pair is ambiguous and a scratch run keeps it apart
   (ADR-0025), since no rule tells a remarriage from a wedding dated two
@@ -95,17 +96,17 @@ export. #394 adds the new items' ids, checked against wikidata.org.
   any event's own date (ADR-0033): the judgment's 8 February 1947 and the
   1984 tree's "= (1947)" differ only in resolution, and are not listed;
   a circa 1946, which clustering widens to meet them, would be.
-- **One source may call a couple married and another not.** The GEDCOM
-  export's family of Felix and Ida has no MARR, so it makes their union a
-  `partnership`, while Ida's card and the tree make it a marriage: one
-  union with both `instance of` statements, each referenced (ADR-0007,
-  as amended by #233). Different ends from two sources stand alike.
+- **A partnership and a marriage of one couple agree.** The GEDCOM
+  export's family of Felix and Ida has no MARR, so it gives a partnership;
+  Ida's card and the tree make it, more specifically, a marriage. Both
+  `instance of` statements stand, each referenced (ADR-0007, as amended
+  by #233), as do different ends that two sources give a union.
 
 ### 5. The GEDCOM adapter
 
 | The export gives | The adapter makes |
 |---|---|
-| a family with two partners | a union: a `marriage` when the family has a MARR, otherwise a `partnership` |
+| a family with two partners | a union: a `marriage` when the family has a MARR, otherwise a `partnership`, which may be a marriage the export does not identify |
 | each MARR | a wedding. A TYPE that names a civil or a religious ceremony gives that kind; any other TYPE stays in the excerpt and is counted. A family's MARRs of one TYPE, or of none, are one wedding, each alternative date or place a statement of its own (ADR-0021) |
 | each DIV, each ANUL | a divorce, an annulment (a family's DIVs are one divorce), with its PLAC as the event's `location` |
 | a DATE's range or circa | the range or circa of that event's own date |
@@ -120,7 +121,7 @@ export. #394 adds the new items' ids, checked against wikidata.org.
   withheld whenever any of its couple may be living, as a family is
   (#374): the export keeps them only when the union names both and the
   possibly-living check releases each; the site badges them otherwise.
-  A spouse's death, a witness and an officiant follow the person rule,
+  A partner's death, a witness and an officiant follow the person rule,
   and taking part in a union or its events is person evidence (ADR-0020).
 - **Display.** A person's timeline (`person-timeline.rq`) lists the
   events that start and end the person's unions, so weddings and
@@ -146,13 +147,12 @@ meant. `latest_start_date` and `earliest_end_date` stay, for them alone.
   clustering; the disagreement report; the timeline and kinship queries;
   the site, privacy check and export; the universe, fixture corpus and
   docs/EXAMPLES.md; and, by dated lines, ADR-0020, ADR-0021, ADR-0033.
-- **Cost.** A marriage takes a union and an item per event, not a
-  statement per spouse and source, and lands within #385's revision.
+- **Cost.** A union and an item per event replace a statement per spouse.
 - **Risks.** Genealogy programs often leave out a MARR they cannot date,
-  so an export may make a married couple's union a partnership, as the
-  universe's does for Felix and Ida, beside the other sources' marriage.
-  A wedding dated two ways that cannot overlap stays split in a scratch
-  run, so the report compares those dates only once a review joins them.
+  as the universe's export does for Felix and Ida, so a couple known from
+  an export alone shows as partners until a source identifies their
+  marriage. A wedding dated two ways that cannot overlap stays split in a
+  scratch run, so the report compares those dates once a review joins them.
 
 ## Alternatives considered
 
