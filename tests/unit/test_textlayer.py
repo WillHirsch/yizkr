@@ -346,9 +346,12 @@ class TestPages:
         assert methods(result) == [TEXT_LAYER, NONE]
 
     def test_a_page_that_shows_only_an_annotation_is_read(self, tmp_path):
+        """By vision, whose rendering draws the annotation: none is left
+        unread."""
         noted = pdfs.Page().annotate("/Subtype /Square /Rect [72 400 300 440]")
         result = read(tmp_path, typed(TITLE), noted)
         assert methods(result) == [TEXT_LAYER, VISION]
+        assert result.pages[1].annotations == 0
 
     def test_a_pdf_pdfium_cannot_read_is_read_whole(self, tmp_path):
         source = tmp_path / "damaged.pdf"

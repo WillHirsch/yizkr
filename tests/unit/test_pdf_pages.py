@@ -643,7 +643,8 @@ class TestAScratchRun:
         monkeypatch,
     ):
         """A reading the cache answers whole is closed as the estimate
-        counts it, and its scratch folder goes."""
+        counts it, and its scratch folder goes, however long the reading
+        itself is kept."""
         corpus = Corpus(tmp_path / "corpus")
         (corpus.folder / "booklet.pdf").write_bytes(booklet())
         corpus.texts["booklet.pdf"] = "\n".join(
@@ -654,8 +655,19 @@ class TestAScratchRun:
         scratch = tmp_path / "tmp"
         scratch.mkdir()
         monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+        # every reading made is kept here, so that its folder goes only if
+        # it is closed, never as the reading is let go
+        made = []
+
+        class Kept(transcribe.PdfReading):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                made.append(self)
+
+        monkeypatch.setattr(transcribe, "PdfReading", Kept)
         counted = estimate_of(tmp_path, corpus, engine)
         assert per_stage(counted, "hits")["transcription"] == 1
+        assert len(made) == 1
         assert not list(scratch.glob("yizkr-pdf-*"))
 
 
