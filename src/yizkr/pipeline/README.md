@@ -461,9 +461,11 @@ refuses). The module docstring is the full account; in short:
   run diff on the same module).
 - **Records, not wording** (ADR-0035 §7). Every key comes from a
   mention's record (`EntityRecord.structure`): a person's given names by
-  their standard forms (never by prefix: "Gustl" meets "Gustav" only
-  where its document gives that standard form) and nicknames, each with
-  the person's own surnames and patronymics and its kin's surnames; a
+  their standard forms and as written (never by prefix: "Gustl" meets
+  "Gustav" only where its document gives that standard form) and
+  nicknames, each with the person's own surnames and patronymics and its
+  kin's surnames (a given name that folds like any of those surnames
+  pairs with no kin's surname); a
   place's names and address as written, save a short form that is
   another name's toponym ("Klurnau" beside "Lager Klurnau"); an
   organisation's proper names, or else each kind with each of its places;
@@ -475,7 +477,9 @@ refuses). The module docstring is the full account; in short:
   time written out (DIN 5007-2: "Floerburg" meets "Flörburg"). A mention
   of those kinds without a record is *recordless*: it keys on its exact
   normalised name, meets only mentions without a record, never links
-  confidently, and is counted. No word list and no token length remains.
+  confidently, and is counted; so is a document's mention whose record
+  fails ADR-0035 §5's checks, which clustering sets aside. No word list
+  and no token length remains.
 - **Blocking** proposes pairs by those keys, never by one shared token.
   Events and unions meet through their people: a birth or a death its
   principal's own through that principal, a union through its couple,
@@ -505,15 +509,20 @@ refuses). The module docstring is the full account; in short:
   civil status `unmarried` stated after a marriage another source
   states, keep it ambiguous; for places a shared name whose containers
   are one set or nest, compared as one set; for organisations a shared
-  proper name of two words or more, one of one word with a shared kind or
-  place, or, with no proper name, a shared kind with places that agree,
-  and never with places that differ; for families never, since a surname
+  proper name of two words or more, one of one word only with places
+  that agree, or, with no proper name, a shared kind with places that
+  agree, and never with places that differ (places a location claim names
+  agree when they would link as places, or one lies in the other by the
+  manifests' containment; a recordless one is compared by its exact
+  names; places a record names agree on a shared name); for families
+  never, since a surname
   names many; for unions a couple of two whose members merged, and
   weddings whose dates do not conflict (ADR-0036 §3); for a union's
   wedding or end, unions that merged, kinds that can be one and dates
   that agree; for two births or two deaths, each its principal's own
   (its date, if any, not conflicting with the date the person's own
-  claims give), principals that merged; for other events every
+  claims give), principals that merged, and never for one that is
+  nobody's own (no principal, or several); for other events every
   participant of the one with fewer merged into one cluster with a
   participant of the other, and dates that agree; otherwise an exact
   name. A recordless mention never links confidently, nor does one of no

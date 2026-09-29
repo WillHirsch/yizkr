@@ -17,14 +17,52 @@ record gives (never on a recordless kin's name), and the couple of a
 union count as each other's spouses. A lone given name, and a key only a
 GEDCOM `unsplit` form gives, pair but never make a link confident; a
 document's own `unsplit` form keys like its typed parts. Two places that
-share a name with containers neither equal nor nested stay ambiguous. An
-organisation's places agree when a place of one is among the other's
-places or the places those lie in (by `part_of` and `location` claims,
-and by `within`); one without a proper name keys and links on kind and
-place only against another without one. The alias cleanup (§8) leaves an
-entity without a standing record its aliases, blanks and duplicates
-aside. The run report counts recordless mentions; the judgement notes of
-§4 are counted once the manifest carries them.
+share a name with containers neither equal nor nested stay ambiguous.
+Rule 6's places stand as written: a place an organisation's `location`
+claims name agrees with the other's when the two would link under rule 5
+(`exact` or `nested`), or when one is a place the other lies in by the
+`part_of` and `location` claims of its manifest, or would link with one;
+a place without a record, which rule 5 cannot link, is compared by its
+exact names, which leave the places unknown when shared and differ
+otherwise. Places a record names carry no containers, and agree on a
+name shared with the other's places or the places those lie in. Places
+differ when both sides state places and none of this holds. An
+organisation without a proper name keys and links on kind and place only
+against another without one. Clustering sets aside a document's record
+that fails §5's checks, as extraction does, so its mention is
+recordless; an export's records are its tags' (§6), which no model
+wrote. A birth or death with no principal, or several, is nobody's own
+and meets nothing through its other participants (§3.2; rule 9). The
+alias cleanup (§8) leaves an entity without a standing record its
+aliases, blanks and duplicates aside, and §5's verdict on a record is
+taken before that cleanup. The run report counts recordless mentions;
+#420 counts the records and the judgement notes of §4 in it.
+
+Amended by #409 (2026-09-29), decided by the orchestrator (the owner may
+override; conservative, since a missed merge is safe and a false
+confident link is not):
+
+- Rule 6 on places stays as written above; a place name the two share is
+  not enough for their places to agree.
+- Two organisations named only by a kind, or by a kind and a proper name
+  of one word (such as "Firma Löbig"), never link confidently where
+  either states no place: a proper name of one word links only on places
+  that agree, a shared kind notwithstanding, since no rule can tell a
+  surname from another one-word name. Containment of stated places still
+  agrees: a nameless Landgericht at Rekau, which its manifest puts in
+  Hesse, links with a nameless Landgericht at Hesse.
+- Rule 1: a given part that folds like any of the person's own surnames
+  or a kin's pairs with no kin's surname. Two registers that misread the
+  sisters "Löbig Ursula" and "Löbig Klara", daughters of Hildegard
+  Laudler, with "Löbig" as a given name, never key (Löbig, Laudler).
+- Rule 3: a given name also keys by its written form, not only its
+  standard form, so a "Gustl" whose record gives the standard form
+  Gustav meets a "Gustl" whose record gives none. Meeting is not
+  merging: the pair is still judged.
+- A known limit, to revisit after scratch run 1 (#145): a record that
+  gives both "Bad Flörburg" (with the head "Bad") and "Flörburg" drops
+  "Flörburg" as a short form, so it never meets a plain Flörburg. That
+  keeps two mentions apart, which is safe.
 
 **Decided by the owner (2026-09-29):**
 

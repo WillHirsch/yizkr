@@ -13,6 +13,10 @@ person's unions before it has clustered them. A union's couple are its
 participants as spouses or partners, or every participant where none
 has such a role.
 
+Amended by #409 (2026-09-29), decided by the orchestrator (the owner may
+override): a union that names only one of its couple stays ambiguous,
+as the line above says; that can only keep two unions apart.
+
 ## Context
 
 MODELING.md dates a marriage as Wikidata dates spouse (P26): a statement

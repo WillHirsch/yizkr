@@ -23,6 +23,11 @@ add something, in their order and verbatim spelling:
 * an entity without a record keeps every other alias: nothing says which
   of its words are parts.
 
+Whether a record stands is judged on the alias bag as it comes, before
+this cleanup (ADR-0035 §5 before §8), and never again after it: a
+dropped alias may have been the only form holding a part the record
+gives, such as a suffix.
+
 Nothing is composed and nothing is split, so a compound or a particle
 surname stays whole. Idempotent: cleaning a cleaned bag changes nothing.
 """

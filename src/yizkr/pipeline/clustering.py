@@ -28,7 +28,9 @@ extraction are clustered; the others are each a cluster of their own
 extraction says its names are made of (`EntityRecord.structure`,
 ADR-0035 §2), never on the wording, word order or punctuation of its
 label. A person, a place, an organisation or a family without a record
-(a structure set aside, a batch without a manifest) is *recordless*
+(none given, a batch without a manifest, or a document's record that
+fails the checks of ADR-0035 §5, `structure_problems`, which clustering
+sets aside too; an export's records are its tags') is *recordless*
 (ADR-0035 §7, rule 1): it keys on its exact normalised name, from its
 label and each alias, meets only mentions without a record, and never
 links confidently. The summary counts recordless mentions by kind.
@@ -58,9 +60,11 @@ spelling is never turned back into an umlaut.
 **Keys** (ADR-0035 §7, rule 1), from typed parts only:
 
 - *A person* whose record's status is `name`: each given name, by its
-  standard form (its written form where it has none), and each nickname,
-  with each of its own surnames and patronymics and each surname of the
-  kin its document names. No key pairs two parts that share a key. An
+  standard form and as written, and each nickname, with each of its own
+  surnames and patronymics and each surname of the kin its document
+  names. No key pairs two parts that share a key, and a given part that
+  shares a key with any of those surnames (a surname misread as a given
+  name) pairs with no kin's surname. An
   `unsplit` form keys each ordered pair of its distinct words, never
   with a kin's surname, and a one-word one counts as a given name. With
   no surname of either kind, its given names alone (`lone`), which pair
@@ -72,7 +76,7 @@ spelling is never turned back into an umlaut.
 - *An organisation*: each proper name; without one, each kind with each
   of its places. Its places are those its record names, or else the
   places its `location` claims point to, with every place its manifest
-  puts them in.
+  puts them in; a place without a record is named by its exact names.
 - *A family*: each surname.
 - *Events*: the same kind (a wedding of any kind together; a divorce, an
   annulment and an end of unstated kind together), through people: a
@@ -121,12 +125,18 @@ by deterministic evidence alone:
   (`exact`) or one's are all among the other's (`nested`); a shared name
   with containers that differ (`key`) stays ambiguous;
 - an organisation pair on a shared proper name of two words or more
-  (`exact`); on a shared proper name of one word (`key`) only with a
-  shared kind or places that agree; and, when neither has a proper name,
-  on a shared kind with places that agree (`kind`). Places agree when a
-  place of one is among the other's places or the places they lie in,
-  and differ when both state places and neither holds: places that
-  differ keep a pair ambiguous whatever its name;
+  (`exact`); on a shared proper name of one word (`key`) only with places
+  that agree, a shared kind notwithstanding; and, when neither has a
+  proper name, on a shared kind with places that agree (`kind`). Places
+  its `location` claims name agree when a place of one would link with a
+  place of the other, or with a place that one lies in, as places do
+  (`exact` or `nested`), or is one of those (ADR-0035 §7, rule 6); a
+  place without a record, which cannot link, leaves them unknown where it
+  shares an exact name with the other's. Places its record names carry
+  no containers, and agree when a place of one is among the other's
+  places or the places they lie in. Places differ when both state places
+  and none of that holds, and places that differ keep a pair ambiguous
+  whatever its name;
 - a family pair never: every pair goes to adjudication;
 - a union pair when both name a couple of two and each of one's couple
   merged with one of the other's, and their weddings' dates do not
@@ -136,6 +146,8 @@ by deterministic evidence alone:
   of unstated kind meets any end) and their dates agree;
 - two births or two deaths, each its principal's own, when the
   principals merged, with no date needed, since a person has one of each;
+  a birth or death that is nobody's own (no principal, several, or one
+  whose own date conflicts with it) never, whoever else took part;
 - any other event pair when every participant of the one with fewer is
   merged into one cluster with a participant of the other, and their
   dates agree;
@@ -229,6 +241,7 @@ from yizkr.claims import (
     PlaceStructure,
     TimeValue,
     VocabRef,
+    structure_problems,
 )
 from yizkr.pipeline.fingerprints import (
     Mention,
@@ -538,10 +551,11 @@ def _distinct_words(form: str) -> list[Part]:
 
 def _person_names(record: PersonStructure) -> tuple[list[Part], list[Part]]:
     """(given names and nicknames, surnames and patronymics) of a person's
-    record, as parts: a given name by its standard form, else as
+    record, as parts: a given name keys by its standard form and as
     written."""
     givens = [
-        part_keys(name.standard or name.written) for name in record.given
+        part_keys(name.written) | part_keys(name.standard or "")
+        for name in record.given
     ] + [part_keys(name) for name in record.nicknames]
     surnames = [part_keys(name.written) for name in record.surnames] + [
         part_keys(name) for name in record.patronymics
@@ -717,11 +731,15 @@ class _Node:
     place_names: tuple[Part, ...] = ()
     within: tuple[Part, ...] = ()
     # an organisation's proper names (with their word counts), kinds, the
-    # places it is in, and those with every place they lie in
+    # keys of the places it is in, and of those with every place they lie
+    # in; and, for places its location claims name, the places by
+    # fingerprint, and those with every place they lie in
     org_names: tuple[tuple[Part, int], ...] = ()
     org_kinds: frozenset[str] = frozenset()
     org_primary: frozenset[str] = frozenset()
     org_all: frozenset[str] = frozenset()
+    org_places: tuple[str, ...] = ()
+    org_closure: frozenset[str] = frozenset()
     # a family's surnames
     family: frozenset[str] = frozenset()
     # a recordless mention's (or one of a kind without records) every
@@ -786,11 +804,15 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
     mention space."""
     batch = manifest.batch
     mentions = mentions_of(manifest.sha1, batch)
+    # a document's record that cannot stand (ADR-0035 §5) is set aside,
+    # and its mention is recordless; an export's records are its tags'
+    # (§6), which no model wrote
     records = {
         entity.id: entity.structure
         for entity in batch.entities
         if entity.structure is not None
         and entity.structure.kind == entity.kind
+        and (manifest.source == GEDCOM or not structure_problems(entity))
     }
     if batch.entities:
         aliases = {
@@ -970,7 +992,12 @@ def _derive_person(
         if isinstance(kin := by_id[kin_id].record, PersonStructure)
         for part in _person_names(kin)[1]
     ]
-    typed = _pairs(givens, surnames + kin_surnames)
+    # a given part that folds like any surname, its own or a kin's (a
+    # surname misread as a given name), pairs with no kin's surname
+    surname_keys = _all(surnames + kin_surnames)
+    typed = _pairs(givens, surnames) | _pairs(
+        [part for part in givens if not part & surname_keys], kin_surnames
+    )
     unsplit: set[Pair] = set()
     alone: list[Part] = []
     for form in record.unsplit:
@@ -1022,10 +1049,15 @@ def _derive_place(node: _Node, record: PlaceStructure) -> None:
     node.raw = frozenset(("place", key) for key in _all(names))
 
 
+def _place_names(node: _Node) -> frozenset[str]:
+    """The keys a place is named by: a recordless one's exact names."""
+    return _all(node.place_names) or node.exact
+
+
 def _place_keys(node: _Node) -> frozenset[str]:
     """The keys a place is named by, and those of the places its record
-    puts it in."""
-    return _all(node.place_names) | _all(node.within)
+    puts it in; a recordless one's exact names."""
+    return (_all(node.place_names) | _all(node.within)) or node.exact
 
 
 def _derive_organization(
@@ -1044,7 +1076,6 @@ def _derive_organization(
     else:
         # the places its location claims name, and every place its
         # manifest puts one of them inside
-        every: set[str] = set()
         seen: set[str] = set()
         stack = sorted(node.places)
         while stack:
@@ -1052,14 +1083,17 @@ def _derive_organization(
             if place_id in seen:
                 continue
             seen.add(place_id)
-            every |= _place_keys(by_id[place_id])
             stack.extend(sorted(by_id[place_id].containers))
+        node.org_places = tuple(sorted(node.places))
+        node.org_closure = frozenset(seen)
         node.org_primary = frozenset(
             key
             for place_id in node.places
-            for key in _all(by_id[place_id].place_names)
+            for key in _place_names(by_id[place_id])
         )
-        node.org_all = frozenset(every)
+        node.org_all = frozenset(
+            key for place_id in seen for key in _place_keys(by_id[place_id])
+        )
     keys: set[BlockingKey] = {
         ("org", key) for name, _count in node.org_names for key in name
     }
@@ -1386,17 +1420,42 @@ class _Judge:
             return "exact"
         return "nested" if any(among) else "key"
 
-    @staticmethod
-    def _organizations(a: _Node, b: _Node) -> tuple[str, str]:
+    def _located(self, a: _Node, b: _Node) -> str:
+        """Whether the places two organisations' location claims name
+        agree (ADR-0035 §7, rule 6): a place of one would link with a place
+        of the other, or with a place it lies in, under rule 5 (`exact` or
+        `nested`), or is one of those. They are `unknown` when neither
+        holds but a recordless place shares a name with the other's, and
+        differ otherwise."""
+        unknown = False
+        for ours, theirs in ((a, b), (b, a)):
+            for place_id in ours.org_places:
+                if place_id in theirs.org_closure:
+                    return "agree"
+                one = self._nodes[place_id]
+                for other_id in sorted(theirs.org_closure):
+                    other = self._nodes[other_id]
+                    if one.record is None or other.record is None:
+                        unknown = unknown or bool(
+                            _place_names(one) & _place_names(other)
+                        )
+                    elif self._places(one, other) in ("exact", "nested"):
+                        return "agree"
+        return "unknown" if unknown else "differ"
+
+    def _organizations(self, a: _Node, b: _Node) -> tuple[str, str]:
         """(name, places) of two organisations. The name is `exact` for a
         shared proper name of two words or more, `key` for one of one
         word, `kind` for a shared kind where neither has a proper name
-        and their places agree, else `none`. The places agree when a place
-        of one is among the other's places or those they lie in, differ
-        when both state places and neither is, and are `unknown`
-        otherwise."""
+        and their places agree, else `none`. The places are `unknown`
+        when either states none. Places its location claims name agree
+        as `_located` says; places its record names, which carry no
+        containers, agree when one's are among the other's places or the
+        places those lie in. Otherwise they differ."""
         if not a.org_primary or not b.org_primary:
             places = "unknown"
+        elif a.org_places and b.org_places:
+            places = self._located(a, b)
         elif a.org_primary & b.org_all or b.org_primary & a.org_all:
             places = "agree"
         else:
@@ -1528,12 +1587,11 @@ class _Judge:
         elif a.kind == PLACE_KIND:
             confident = name in ("exact", "nested")
         elif a.kind == ORGANIZATION:
+            # a one-word name (a kind with a surname, as in "Firma
+            # Löbig", may be any Löbig's), like a kind alone, links only
+            # on places that agree
             confident = kin != "differ" and (
-                name in ("exact", "kind")
-                or (
-                    name == "key"
-                    and (bool(a.org_kinds & b.org_kinds) or kin == "agree")
-                )
+                name == "exact" or (name in ("key", "kind") and kin == "agree")
             )
         elif a.kind == FAMILY:
             # a surname names many families: every pair is adjudicated
@@ -1567,8 +1625,14 @@ class _Judge:
                 and merged(a.union, b.union)
                 and dates == "agree"
             )
-        elif a.principal is not None and b.principal is not None:
-            confident = merged(a.principal, b.principal)
+        elif a.kind in ONE_PER_PERSON or b.kind in ONE_PER_PERSON:
+            # a birth or death with no principal, or several, is nobody's
+            # own, and meets nothing through its other participants
+            confident = (
+                a.principal is not None
+                and b.principal is not None
+                and merged(a.principal, b.principal)
+            )
         elif dates != "agree":
             confident = False
         else:
@@ -1634,6 +1698,8 @@ class _Judge:
             node.org_kinds,
             node.org_primary,
             node.org_all,
+            node.org_places,
+            node.org_closure,
             node.family,
             frozenset(node.sexes),
             tuple(sorted((s, i.start, i.end) for s, i in node.civil)),

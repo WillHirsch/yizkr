@@ -1256,6 +1256,11 @@ class TestTheTrapsInTheIdentityMap:
         "certificate's mention with them.",
     )
     def test_the_certificates_gustav_merges_with_his_death(self, identity):
+        _premise(_people_recordless(identity), "every person is recordless")
+        _premise(
+            not identity.methods_of("gustav-loebig") & {clustering.CONFIDENT},
+            "no mention of Gustav links confidently",
+        )
         gustav = identity.of("gustav-loebig")
         assert identity.cluster(gustav[fc.CERTIFICATE]) == identity.cluster(
             gustav[fc.NARRATIVE]
@@ -1276,10 +1281,27 @@ class TestTheTrapsInTheIdentityMap:
         export's mentions, whose kin agree, not a cluster of all four:
         the postcard's mention links to the export on nothing but the
         name, so no rule under discussion merges it."""
+        _premise(_people_recordless(identity), "every person is recordless")
         klara = identity.of("klara-loebig")
         assert identity.cluster(klara[fc.DECK]) == identity.cluster(
             klara[fc.EXPORT]
         )
+
+
+def _premise(holds: bool, what: str) -> None:
+    """A strict xfail's premise, as its reason states it: when it no
+    longer holds, the test errors, rather than xfailing for a reason
+    other than its own."""
+    if not holds:
+        raise RuntimeError(f"the xfail's premise no longer holds: {what}")
+
+
+def _people_recordless(identity: Identity) -> bool:
+    """Whether every person of the map is recordless."""
+    mentions = identity.map["mentions"].values()
+    people = sum(mention["kind"] == "human" for mention in mentions)
+    summary = identity.map["summary"]
+    return summary["recordless_by_kind"].get("human") == people
 
 
 # -- the run report -----------------------------------------------------------
