@@ -17,7 +17,7 @@ sends none over the limit:
   limit is cut at a space and ends with "…";
 * a claim whose own text, its value or a qualifier's, is over the limit
   is refused, never cut (CLAUDE.md rule 5): nothing of it is written,
-  the result names it by its review-sheet id, and a warning says why,
+  the result names it by its claim id, and a warning says why,
   quoting none of its text. Every other claim is written, with its
   references (rules 1 and 2), and a kind only a refused claim gives is
   neither recorded nor warned of;
@@ -277,6 +277,32 @@ for apostrophe in ("'", "\u2019"):
         CLARA,
         CLARA[: ROOM - 6] + _mark(CLARA),
     )
+# (here) an index that numbers its leaves as German writes an ordinal,
+# "36. Blatt": the room ends between 36 and its point, which a space
+# follows, so the point ends the word, and the cut keeps 36 whole
+ORDINALS = " ; ".join(f"{leaf}. Blatt" for leaf in range(4, 64))
+assert ORDINALS[ROOM - 5 : ROOM + 2] == " ; 36. "
+PAGES["the room ends before a point that ends a word"] = (
+    ORDINALS,
+    ORDINALS[:ROOM] + _mark(ORDINALS),
+)
+# (here) an index that lists the register's pages with no spaces,
+# "2,3,4": one word fills the room, so the cut falls at the last comma
+# before it, keeping page 122 and leaving 123 out whole
+SPACELESS = ",".join(str(page) for page in range(2, 202))
+assert SPACELESS[ROOM - 3 : ROOM + 1] == ",123"
+PAGES["one word of pages and commas fills the room"] = (
+    SPACELESS,
+    SPACELESS[: SPACELESS.rindex(",", 0, ROOM) + 1] + _mark(SPACELESS),
+)
+# (here) and one that lists its leaves as "Bl.2,Bl.3": the cut falls at
+# the point of leaf 66, leaving its number out whole
+ABBREVIATED = ",".join(f"Bl.{leaf}" for leaf in range(2, 202))
+assert ABBREVIATED[ROOM - 5 : ROOM + 2] == ",Bl.66,"
+PAGES["one word of leaves and points fills the room"] = (
+    ABBREVIATED,
+    ABBREVIATED[: ABBREVIATED.rindex(".", 0, ROOM) + 1] + _mark(ABBREVIATED),
+)
 # the room ends between the register's n and its bar: the cut leaves the
 # street's name out whole, the letter with its mark
 MARK = _leaves(90, 40, f", {STREET}")
@@ -506,7 +532,7 @@ def _with_properties(wiki: FakeWiki, key: str) -> list[str]:
 class TestClaimsOverTheLimit:
     """A claim whose own text is over the limit is refused, and nothing of
     it is written, not even an item only it mentions; it is never cut
-    (rule 5). The result names it by its review-sheet id, a warning says
+    (rule 5). The result names it by its claim id, a warning says
     why without quoting it, and every other claim of the batch is written,
     with its references (rules 1 and 2)."""
 

@@ -115,17 +115,19 @@ string, external-id or monolingual text value, whether the value is a
 statement's, a qualifier's or a reference's, and refuses the whole edit
 that sends a longer one. The writer counts each text in the form the
 instance keeps it in (`_stored_string`) and sends none over the limit,
-so that no text's length stops the batch:
+so that no text value's length stops the batch:
 
 * a claim whose own text, its value or a qualifier's, is over the limit
   is refused before the first write, and nothing of it is written: no
   statement, and no item that only it mentions. The result's `refused`
-  names it by its review-sheet id, and a warning gives each of its texts
-  over the limit with its length. The text is never cut, as a cut would
-  narrow what the source says (CLAUDE.md rule 5). Every other claim of
-  the batch is written as the steps above say, with its references
-  (rules 1 and 2). An entity's type hint over the limit is left out in
-  the same way, with a warning, wherever the writer would record it;
+  names it by its claim id (`claim_id` in yizkr.pipeline.review), its
+  review-sheet id unless the review corrected it, and a warning gives
+  each of its texts over the limit with its length. The text is never
+  cut, as a cut would narrow what the source says (CLAUDE.md rule 5).
+  Every other claim of the batch is written as the steps above say,
+  with its references (rules 1 and 2). An entity's type hint over the
+  limit is left out in the same way, with a warning, wherever the writer
+  would record it;
 * a reference's page number and region only place the claim in its
   source, as its excerpt only helps a reader check it there, so each is
   cut to the limit rather than refused: a page number or region at a
@@ -246,9 +248,10 @@ class WriteResult:
     # what the writer left out and why, such as a kind the vocabulary
     # lacks (step 2 of the module docstring) or a claim it refused
     warnings: list[str] = field(default_factory=list)
-    # the review-sheet id (yizkr.pipeline.review.claim_id) of each claim
-    # refused whole because its own text is over TEXT_LIMIT, in batch
-    # order; a warning says why for each (the module docstring)
+    # the claim id (yizkr.pipeline.review.claim_id; its review-sheet id
+    # unless the review corrected it) of each claim refused whole because
+    # its own text is over TEXT_LIMIT, in batch order; a warning says why
+    # for each (the module docstring)
     refused: list[str] = field(default_factory=list)
 
 
@@ -330,26 +333,28 @@ def _is_mark(char: str) -> bool:
     return unicodedata.category(char).startswith("M")
 
 
-def _in_word(text: str, index: int) -> bool:
+def _in_word(text: str, index: int, inner: str = INNER_PUNCTUATION) -> bool:
     """Whether text[index] belongs to a word: a letter, a digit or a
-    combining mark, or INNER_PUNCTUATION with a letter, digit or mark
+    combining mark, or `inner` punctuation with a letter, digit or mark
     before it and a letter or digit after it."""
     char = text[index]
     if char.isalnum() or _is_mark(char):
         return True
     return (
-        char in INNER_PUNCTUATION
+        char in inner
         and 0 < index < len(text) - 1
         and (text[index - 1].isalnum() or _is_mark(text[index - 1]))
         and text[index + 1].isalnum()
     )
 
 
-def _joined(text: str, end: int) -> bool:
+def _joined(text: str, end: int, inner: str = INNER_PUNCTUATION) -> bool:
     """Whether a cut of `text` before text[end] would split what reads as
-    one: a combining mark from the character before it, or a word."""
+    one: a combining mark from the character before it, or a word, whose
+    parts `inner` punctuation joins. With no `inner` punctuation, a word
+    is a run of letters, digits and marks."""
     return _is_mark(text[end]) or (
-        _in_word(text, end - 1) and _in_word(text, end)
+        _in_word(text, end - 1, inner) and _in_word(text, end, inner)
     )
 
 
@@ -361,14 +366,17 @@ def _locator_text(text: str) -> str:
     A cut keeps the longest start of the text that ends at a break
     between words and leaves room for the mark, and the mark follows it:
     CUT_MARK, then "sha1" and the first 12 hex digits of the SHA-1 of the
-    whole text in NFC. No word is kept in part, so a page "112" is never
+    whole text in NFC. So no word is kept in part: a page "112" is never
     kept as "11", nor "1.234" as "1" (INNER_PUNCTUATION), and no letter
-    loses a combining mark. Only when no such start holds anything but
-    spaces, as when one word fills the room, is the text cut inside a
-    word, each letter kept with its marks. The digest keeps two texts
-    that agree up to the cut apart, and apart from a text that reads as
-    the cut's start: the places a source asserts a value in stay a
-    reference block each (step 4).
+    loses a combining mark. When one word fills the room, as a list of
+    pages with no spaces ("2,3,4") can, the cut falls at its last point,
+    comma or apostrophe, so no number in it is kept in part either; and
+    only when no such start holds anything but spaces, as when one run of
+    letters and digits fills the room, is the text cut inside the run,
+    each letter kept with its marks. The digest keeps two texts that
+    agree up to the cut apart, and apart from a text that reads as the
+    cut's start: the places a source asserts a value in stay a reference
+    block each (step 4).
 
     The cut depends on the text alone, and keeps it in NFC: a start of a
     text in NFC is in NFC, and so is it with the mark after it. So a claim
@@ -385,6 +393,13 @@ def _locator_text(text: str) -> str:
         end -= 1
     kept = text[:end].rstrip()
     if not kept:
+        # one word fills the room: its last point, comma or apostrophe
+        end = room
+        while end and _joined(text, end, inner=""):
+            end -= 1
+        kept = text[:end].rstrip()
+    if not kept:
+        # one run of letters and digits fills the room
         end = room
         while end and _is_mark(text[end]):
             end -= 1
@@ -1121,7 +1136,7 @@ class BatchWriter:
     def _refusals(batch: ClaimBatch) -> dict[int, str]:
         """The claims of `batch` whose own text the instance cannot hold,
         by their place in the batch, each with the warning that names it
-        by its review-sheet id and property and gives each of its texts,
+        by its claim id and property and gives each of its texts,
         its value or a qualifier's, that is over TEXT_LIMIT, with its
         length in the form the writer sends it in (the module
         docstring)."""

@@ -184,7 +184,7 @@ class TestWriteStepSummary:
         # (here) the directory's extraction took the firm's entry, over and
         # over, as a name the directory refers to it by: longer than a text
         # value holds, so the writer refuses the claim, and the summary
-        # names it by its review-sheet id beside the claim it writes
+        # names it by its claim id beside the claim it writes
         entry = (f"{FIRM_ENTRY}. " * 11)[:400] + "."
         name = {
             "property": "referred_to_as",

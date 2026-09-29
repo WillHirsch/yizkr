@@ -100,8 +100,9 @@ and the digest keeps two places whose locators agree up to the cut two
 references. A claim whose own text, its value or a qualifier's, is over
 the limit is refused, never cut, since a cut would narrow what the
 source says: nothing of it is written, and the write's result names it
-by its review-sheet id, with a warning that says why (the writer's
-module docstring). Every other claim of the batch is written.
+by its claim id (its review-sheet id, unless the review corrected it),
+with a warning that says why (the writer's module docstring). Every
+other claim of the batch is written.
 
 Curator-attributed statements (a value correction from the review CSV)
 carry the `stated in → artifact` reference only:
