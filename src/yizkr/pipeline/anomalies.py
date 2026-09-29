@@ -1479,8 +1479,9 @@ class AnomalyChecks:
         no model for or names one by an alias, the model the role's first
         call in the invocation reported, which the init event resolved.
         Models are compared without a context-window selector. An alert
-        is raised once per role and model in the invocation, and is new,
-        since the call was made in it."""
+        is raised once per role and model in the invocation, a model with
+        a selector and one without it being one, and is new, since the
+        call was made in it."""
         settings = self.config.checks.model_mismatch
         model, role = event.get("model"), event.get("role")
         if not (
@@ -1512,7 +1513,7 @@ class AnomalyChecks:
             subject=subject,
             kind=event.get("kind"),
             carried=False,
-            once=("model-mismatch", role, model),
+            once=("model-mismatch", role, model_base(model)),
         )
 
     def _manifest_model(self, role: str) -> str | None:

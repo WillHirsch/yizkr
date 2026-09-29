@@ -905,12 +905,16 @@ def stream_report(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def _add_report(call: dict[str, Any], attempt: Mapping[str, Any]) -> None:
-    """Take one attempt's stream report (stream_report) into its call's:
-    each field as the latest attempt that reported it gives it, and the
-    usage summed over the attempts, since each used what it reports."""
+    """Take one attempt's stream report (stream_report) into its call's,
+    attempt by attempt: the call's fields are those of its latest attempt,
+    which say what that attempt ran on and how it ended, and a field that
+    attempt did not report is unknown, whatever an earlier one reported;
+    the usage is summed over all of them, since each used what it
+    reports."""
     usage = dict(call.get("usage") or {})
     for name, count in (attempt.get("usage") or {}).items():
         usage[name] = usage.get(name, 0) + count
+    call.clear()
     call.update(
         {name: attempt[name] for name in STREAM_FIELDS if name in attempt}
     )
@@ -2195,10 +2199,10 @@ class ClaudeCodeClient:
 
     def last_stream(self) -> dict[str, Any]:
         """What the streams reported about the calling thread's last call,
-        answered or not (stream_report): each field as the latest of its
-        attempts that reported it gives it, and the usage summed over them.
-        Empty for a call that never ran the CLI, or whose streams reported
-        nothing."""
+        answered or not (stream_report): what the stream of its final
+        attempt reported, with the usage summed over all its attempts,
+        those a subscription limit refused included. Empty for a call that
+        never ran the CLI, or whose streams reported nothing."""
         return copy.deepcopy(getattr(self._streams, "value", {}))
 
     def last_pacing(self) -> dict[str, Any]:

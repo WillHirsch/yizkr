@@ -1299,6 +1299,57 @@ class TestModel:
         alerts = [a["value"] for a in run.alerts()]
         assert alerts == ["claude-opus-5-5", "claude-haiku-5"]
 
+    def test_a_model_with_a_selector_is_the_same_model_once(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        models_manifest(run, "claude-sonnet-5", "claude-sonnet-5")
+        doc = a_doc(tmp_path, "brief.txt")
+        a_call(run, doc, "claude-haiku-5")
+        a_call(run, doc, "claude-haiku-5[1m]")
+        checks.poll()
+        assert [a["value"] for a in run.alerts()] == ["claude-haiku-5"]
+
+    def test_each_role_has_its_own_model_and_its_own_alert(self, tmp_path):
+        run, checks = make_checks(tmp_path)
+        run.update_manifest(
+            roles={
+                "extract": {
+                    "model": "claude-sonnet-5",
+                    "client": {"model": "claude-sonnet-5"},
+                },
+                "critique": {
+                    "model": "claude-opus-5-5",
+                    "client": {"model": "claude-opus-5-5"},
+                },
+            }
+        )
+        doc = a_doc(tmp_path, "brief.txt")
+        critique = {"role": "critique", "stage": "critique"}
+        a_call(run, doc, "claude-sonnet-5")
+        a_call(run, doc, "claude-opus-5-5", **critique)
+        checks.poll()
+        assert run.alerts() == []
+        a_call(run, doc, "claude-haiku-5")
+        a_call(run, doc, "claude-haiku-5", **critique)
+        checks.poll()
+        assert sorted(
+            (a["role"], a["value"], a["limit"]) for a in run.alerts()
+        ) == [
+            ("critique", "claude-haiku-5", "claude-opus-5-5"),
+            ("extract", "claude-haiku-5", "claude-sonnet-5"),
+        ]
+
+    def test_each_role_keeps_its_own_first_resolution(self, tmp_path):
+        """Roles the manifest names no model for each take their own
+        first call's model."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        critique = {"role": "critique", "stage": "critique"}
+        a_call(run, doc, "claude-sonnet-5")
+        a_call(run, doc, "claude-opus-5-5", **critique)
+        a_call(run, doc, "claude-opus-5-5", **critique)
+        checks.poll()
+        assert run.alerts() == []
+
     def test_a_call_whose_stream_named_no_model(self, tmp_path):
         """It neither raises an alert nor becomes the role's model."""
         run, checks = make_checks(tmp_path)

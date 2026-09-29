@@ -276,8 +276,9 @@ class StreamCli(LimitedCli):
     `model` and whose result events report what CLI 2.1.237 reports of a
     call: `result` goes into an answered call's result event, `refused`
     into a refused one's. `edit`, when set, rewrites every call's events
-    last, and `cut_after` ends a call in a timeout after that many of its
-    events, as the process killed mid-stream prints them."""
+    last, and `cuts` holds, for each next call in order, how many of its
+    events it prints before its timeout kills it, as a process killed
+    mid-stream prints them (None: it is not cut off)."""
 
     def __init__(self, projects: Path, other) -> None:
         super().__init__(projects, other)
@@ -290,7 +291,7 @@ class StreamCli(LimitedCli):
         }
         self.refused: dict = {"usage": usage(5)}
         self.edit = None
-        self.cut_after: int | None = None
+        self.cuts: list[int | None] = []
 
     def __call__(self, command, **kwargs):
         completed = super().__call__(command, **kwargs)
@@ -307,10 +308,9 @@ class StreamCli(LimitedCli):
         if self.edit is not None:
             events = self.edit(events)
         text = "\n".join(json.dumps(event) for event in events)
-        if self.cut_after is not None:
-            partial = "\n".join(
-                json.dumps(event) for event in events[: self.cut_after]
-            )
+        cut = self.cuts.pop(0) if self.cuts else None
+        if cut is not None:
+            partial = "\n".join(json.dumps(event) for event in events[:cut])
             raise subprocess.TimeoutExpired(
                 command, kwargs["timeout"], output=partial.encode()
             )
@@ -377,6 +377,9 @@ class TestTheClient:
         assert client.last_report() == answered
 
     def test_a_stream_with_no_init_or_no_result(self, cli):
+        """An answer whose stream had no result event is kept with
+        nothing of the usage, turns or subtype the answer before it
+        reported."""
         client = ClaudeCodeClient(model=MODEL)
         cli.edit = without("system")
         client.complete("Read the letter.")
@@ -391,11 +394,16 @@ class TestTheClient:
             "cli_version",
             "session_id",
         }
+        assert set(client.last_report()) == {
+            "model",
+            "cli_version",
+            "session_id",
+        }
 
     def test_a_call_cut_off_by_its_timeout(self, cli):
         """The init event came, the result never did."""
         client = ClaudeCodeClient(model=MODEL)
-        cli.cut_after = 1
+        cli.cuts = [1]
         with pytest.raises(subprocess.TimeoutExpired):
             client.complete("Read the letter.")
         assert set(client.last_stream()) == {
@@ -415,12 +423,35 @@ class TestTheClient:
         assert stream["usage"] == tokens(3 + 5, 24, 2048, 11264)
         assert (stream["subtype"], stream["num_turns"]) == ("success", 2)
 
+    def test_a_calls_fields_are_its_final_attempts(self, cli, clock):
+        """An attempt the subscription refused, then one its timeout cut
+        off after its init event: how the call ended is unknown, whatever
+        the refused attempt's result said, and its session is the final
+        attempt's; the usage is still both attempts'."""
+        cli.script = [RATE_LIMITED]
+        cli.cuts = [None, 1]
+        client = ClaudeCodeClient(model=MODEL)
+        with pytest.raises(subprocess.TimeoutExpired):
+            client.complete("List the entities.")
+        stream = client.last_stream()
+        assert not {"subtype", "num_turns"} & set(stream)
+        assert stream["usage"] == tokens(5)
+        refused, final = (
+            command[command.index("--session-id") + 1]
+            for command, _ in cli.calls
+        )
+        assert stream["session_id"] == final != refused
+
     def test_a_call_that_never_ran_reports_nothing_of_an_earlier_one(
-        self, cli
+        self, cli, clock
     ):
+        """The earlier call was refused once, so it has a report and a
+        wait to leak."""
+        cli.script = [RATE_LIMITED]
         client = ClaudeCodeClient(model=MODEL)
         client.complete("Read the letter.")
         assert client.last_stream()
+        assert client.last_pacing()
         with pytest.raises(TypeError):
             client.complete("Read the scan.", [object()])
         assert client.last_stream() == {}
@@ -808,6 +839,15 @@ class TestUsageCounts:
 
     def test_a_run_with_no_calls(self, tmp_path):
         assert usage_counts(RunDir(tmp_path / "run")) == {}
+
+    def test_a_usage_of_zeros_is_reported(self, tmp_path):
+        """A call whose stream reported using no tokens reported its
+        usage: it is no call with nothing reported."""
+        run = RunDir(tmp_path / "run")
+        call(run, "critique", "critique", tokens())
+        assert usage_counts(run)["critique"]["critique"] == zero(
+            calls=1, reported=1
+        )
 
     def test_a_runs_calls_through_the_engine(self, cli, tmp_path):
         run = RunDir(tmp_path / "run")

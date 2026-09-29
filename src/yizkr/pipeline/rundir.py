@@ -24,9 +24,8 @@ give (yizkr.pipeline.llmcache) and every call that reaches the engine,
 with what its stream reported of it (yizkr.pipeline.llm); the driver,
 the live monitor, the anomaly checks and pacing all read and write these
 files, and docs/LLM_CACHE.md and docs/RUN_MANIFEST.md are their
-contract. The run report reads them too: `cache_counts` and
-`usage_counts` total what the cache did and what the engine's calls
-used.
+contract. `cache_counts` and `usage_counts` total, from the events,
+what the cache did and what the engine's calls used.
 
 The manifest records settings and hashes, never a prompt or any document
 content. It describes the run as its latest invocation ran it. A run
@@ -940,11 +939,14 @@ def usage_counts(
     from its `call` events. A call the LLM cache answered, by key match or
     by adoption, reached no engine, used nothing and has no call event.
 
-    Each total counts the `calls`, those whose stream reported their
-    usage (`reported`: a call cut off before its result event reports
-    none, so the sums are of what was reported), and sums the tokens they
-    reported, by the CLI's names for them (llm.USAGE_TOKENS), each 0 when
-    none was reported. `replays` narrows the calls to the replays of a
+    Each total counts the `calls`, those whose event carries a usage
+    (`reported`), and sums the tokens those carry, by the CLI's names for
+    them (llm.USAGE_TOKENS), each 0 when none was reported. A call's usage
+    is summed over its attempts, so a call whose final attempt was cut off
+    before its result event is reported with what its earlier attempts,
+    refused for a limit, used, and one none of whose attempts reported
+    any is not reported: the sums are of what was reported. A usage of
+    zeros is reported. `replays` narrows the calls to the replays of a
     conversation's opening turn (True), which the cache asked for a
     fork's session although it held the answer, or to every other call
     (False). A call names its stage and role, else counts under "?"."""

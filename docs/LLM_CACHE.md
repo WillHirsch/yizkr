@@ -246,13 +246,14 @@ adoption's reason) and `provenance`: the `role`, the `call`, the
 `engine`, the `model` the engine reported, the `cli_version`, the
 `config_hash`, the client's `model_identifier` and the time (`at`). An
 answer of the claude-code engine adds what else the call's stream
-reported of it (`llm.stream_report`, from its init and result events):
-the `session_id` it ran in, its `usage` (`input_tokens`,
-`output_tokens`, `cache_creation_input_tokens` and
-`cache_read_input_tokens`, summed over any attempts a subscription
-limit refused before it), its `num_turns` and its result's `subtype`. A
-field its stream did not report is left out: a stream cut off before its
-result event reports no usage. None of it is a key component, so two
+reported of it (`llm.stream_report`, from its init and result events,
+as the attempt that answered reported them): the `session_id` it ran
+in, its `usage` (`input_tokens`, `output_tokens`,
+`cache_creation_input_tokens` and `cache_read_input_tokens`, summed
+over it and any attempts a subscription limit refused before it), its
+`num_turns` and its result's `subtype`. A field its stream did not
+report is left out: a stream cut off before its result event reports no
+usage of its own. None of it is a key component, so two
 calls that send the same are keyed the same whatever their streams
 report, and an answer served again adds nothing to its entry. A fork's
 entry adds how its session was obtained (`session`: `live`, `resumed`,
@@ -776,24 +777,27 @@ in, and the kind of call:
 **What a call's stream reported.** A claude-code call's `call` event
 carries what its stream-json output reported of it (`llm.stream_report`,
 as CLI 2.1.237 prints it), each field only when the stream gave it in
-the form expected of it, whether the call was answered or not: from its
-init event, the `model` it ran on (the model id the configured name
-resolved to, which the `model-mismatch` anomaly check compares with the
-run manifest's, docs/ANOMALIES.md) and the `cli_version`; from its result
-event, its `usage` (the four token counts its cache entry keeps, Layout,
-above, summed over its attempts, a refused one's included), its
-`num_turns` and its `subtype` (`success`, `error_max_turns`,
+the form expected of it, whether the call was answered or not. The
+fields are those its final attempt's stream reported: from its init
+event, the `model` it ran on (the model id the configured name resolved
+to, which the `model-mismatch` anomaly check compares with the run
+manifest's, docs/ANOMALIES.md) and the `cli_version`; from its result
+event, its `num_turns` and its `subtype` (`success`, `error_max_turns`,
 `error_during_execution`; the CLI reports an API error as a `success`
-whose call fails). A stream cut off before its result event (a timeout,
-say) gives no usage, turns or subtype, and one cut off before its init
-event names no model. A replay is a call, and carries what the replay
+whose call fails). The `usage` (the four token counts its cache entry
+keeps, Layout, above) is summed over all its attempts, those a
+subscription limit refused included. A final attempt cut off before its
+result event (a timeout, say) gives no turns or subtype, whatever an
+earlier attempt reported, and no usage of its own; one cut off before
+its init event names no model. A replay is a call, and carries what the replay
 used; when it answers as the cache did, the opening turn's entry keeps
 what the original call's stream reported. A call the cache answers, by
 key match or adoption, makes no call, so it has no `call` event and uses
 nothing.
 
-The session a call ran in is kept in its cache entry, never in its
-event. It names a session of the account the engine is logged in with,
+The session an answered call ran in is kept in its cache entry (a call
+the cache stores nothing for keeps it nowhere), never in its event. It
+names a session of the account the engine is logged in with,
 and the CLI files the call's transcript under it. The event log is what
 the live monitor and the run report read, the report's summary meant for
 sharing included, and a session has no meaning in aggregate, so no
@@ -886,13 +890,16 @@ rejections and adoptions. The counts are totals over every invocation the
 run directory has seen.
 
 What the engine's calls used is totalled per stage and role from the
-`call` events (`rundir.usage_counts`), for the run report: the calls,
-those whose stream reported their usage (`reported`), and the four token
-counts those reported, over every invocation the run directory has seen.
-A call cut off before its result event counts as a call with nothing
-reported, so the sums are of what was reported. `replays=True` narrows
-them to the replays of opening turns, which the cache asked only for a
-fork's session, and `replays=False` to every other call.
+`call` events (`rundir.usage_counts`): the calls, those whose event
+carries a usage (`reported`, a usage of zeros included), and the four
+token counts those carry, over every invocation the run directory has
+seen. A call's usage is summed over its attempts, so a call whose final
+attempt was cut off before its result event is reported with what its
+earlier attempts, refused for a limit, used; a call none of whose
+attempts reported any counts as a call with nothing reported. The sums
+are of what was reported. `replays=True` narrows them to the replays of
+opening turns, which the cache asked only for a fork's session, and
+`replays=False` to every other call.
 
 ## Subscription limits
 

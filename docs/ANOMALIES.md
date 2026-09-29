@@ -245,8 +245,9 @@ with: there, the model the role's first call in the invocation reported
 is the resolution the rest are compared with, so a default or an alias
 that moves to another model while the run unfolds is seen. Models are
 compared without a context-window selector (`[1m]`). The alert is raised
-once per role and model in the invocation, on the document whose call
-first ran on it, and is always new: the call was made in the run. Its
+once per role and model in the invocation (a model with a selector and
+one without it being one), on the document whose call first ran on it,
+and is always new: the call was made in the run. Its
 stage is the call's. Value: the model the call ran on; `limit`, the
 role's model; `role`, and `against` (`manifest`, or `first call`). Alert
 only: it pauses nothing.
