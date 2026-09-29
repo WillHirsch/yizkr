@@ -55,6 +55,7 @@ from yizkr.reset import (
     InstanceReset,
     ResetFailed,
     ResetRefused,
+    assigned_in,
     describe,
     elapsed,
     stack,
@@ -96,7 +97,9 @@ STEPS = [
     "run the smoke test",
 ]
 # the docker commands a reset reads with before it changes anything
-READS = ["context show", "config", "ps", "volume ls"]
+READS = ["context show", "info", "config", "ps", "volume ls"]
+# the id of the Docker engine that runs the stack
+ENGINE = "a1b2c3d4-0000-4000-8000-000000001863"
 FIRST_SETTINGS = "<?php // the install of the Löbig family archive\n"
 # the settings the environment could give: the connection's, and those
 # that point docker at another project or engine
@@ -234,6 +237,7 @@ class FakeDocker:
         self.wiki = wiki
         self.events = events
         self.context = "default"
+        self.engine = ENGINE
         self.project = PROJECT
         self.config_dir = deploy / "config"
         self.declared = {key: {"name": f"{PROJECT}_{key}"} for key in DECLARED}
@@ -256,6 +260,7 @@ class FakeDocker:
         self.installs = 0
         # the verb of a command that fails, as with no engine to answer it
         self.failing: str | None = None
+        self.down_fails = False
 
     def __call__(self, argv, *, capture=True, timeout=None) -> str:
         argv = list(argv)
@@ -269,6 +274,8 @@ class FakeDocker:
             )
         if verb == "context show":
             return f"{self.context}\n"
+        if verb == "info":
+            return f"{self.engine}\n"
         if verb == "config":
             return json.dumps(self._config())
         if verb == "ps":
@@ -284,6 +291,8 @@ class FakeDocker:
                 for name, (made_for, made_as) in self.volumes.items()
             )
         if verb == "down":
+            if self.down_fails:
+                raise DockerFailed("`docker compose down` exited with 1")
             self.containers.clear()
             self.wiki.answering = False
             return ""
@@ -476,6 +485,25 @@ def moved(stack: Stack, name: str, **changes) -> None:
     stack.docker.containers[name] = dataclasses.replace(
         stack.docker.containers[name], where="/srv/elsewhere/deploy", **changes
     )
+
+
+def write_origin(stack: Stack, **changes) -> Path:
+    """The last reset's record of where the stack runs from: this stack's,
+    but for `changes`. An `engine` of None leaves the engine out, as a
+    record made before engines were recorded does."""
+    compose = Compose(stack.deploy, stack.deploy / ".env")
+    record = {
+        **compose.origin(),
+        "project": PROJECT,
+        "engine": ENGINE,
+        **changes,
+    }
+    path = stack.records / HOST / ORIGIN_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({k: v for k, v in record.items() if v is not None})
+    )
+    return path
 
 
 def write_host_marker(stack: Stack, text: str | None = None) -> Path:
@@ -887,6 +915,7 @@ class TestAReset:
             str((stack_.deploy / "docker-compose.yml").resolve())
         ]
         assert record["project"] == PROJECT
+        assert record["engine"] == ENGINE
 
 
 class TestTheKeptGuard:
@@ -1051,7 +1080,7 @@ class TestTheOtherGuards:
         moved(stack_, f"{PROJECT}-wikibase-1")
         with pytest.raises(ResetRefused, match="made in /srv/elsewhere"):
             stack_.reset().run()
-        assert stack_.events == ["context show", "config", "ps"]
+        assert stack_.events == ["context show", "info", "config", "ps"]
 
     def test_a_stack_started_from_other_compose_files_is_refused(self, stack_):
         name = f"{PROJECT}-traefik-1"
@@ -1079,7 +1108,7 @@ class TestTheOtherGuards:
             stack_.docker.declared["mysql-data"]["external"] = True
         with pytest.raises(ResetRefused, match=refusal):
             stack_.reset().run()
-        assert stack_.events == ["context show", "config"]
+        assert stack_.events == ["context show", "info", "config"]
 
     def test_a_wiki_with_no_config_directory_is_refused(self, stack_):
         config = stack_.docker._config()
@@ -1087,21 +1116,32 @@ class TestTheOtherGuards:
         stack_.docker._config = lambda: config
         with pytest.raises(ResetRefused, match="mounts no directory"):
             stack_.reset().run()
-        assert stack_.events == ["context show", "config"]
+        assert stack_.events == ["context show", "info", "config"]
 
-    @pytest.mark.parametrize("where", ["the environment", "the env file"])
+    @pytest.mark.parametrize(
+        ("where", "line"),
+        [
+            ("the environment", None),
+            ("the env file", "COMPOSE_PROJECT_NAME=archive"),
+            ("the env file", "export COMPOSE_PROJECT_NAME=archive"),
+            ("the env file", "COMPOSE_PROJECT_NAME: archive"),
+            ("the env file", "  export\tCOMPOSE_PROJECT_NAME = archive"),
+        ],
+        ids=["environment", "assigned", "exported", "colon", "spaced"],
+    )
     def test_a_project_name_setting_is_refused(
-        self, stack_, monkeypatch, where
+        self, stack_, monkeypatch, where, line
     ):
         """The setting would make docker compose take the stack for another
         project: here an archive restored as the project `archive`, whose
         volumes are there under the same keys and whose containers are
-        down. The reset would remove them."""
-        if where == "the environment":
+        down. The reset would remove them. Docker compose reads each of
+        these forms in an env file."""
+        if line is None:
             monkeypatch.setenv("COMPOSE_PROJECT_NAME", "archive")
         else:
             with (stack_.deploy / ".env").open("a") as env:
-                env.write("COMPOSE_PROJECT_NAME=archive\n")
+                env.write(f"{line}\n")
         stack_.docker.project = "archive"
         stack_.docker.declared = {
             key: {"name": f"archive_{key}"} for key in DECLARED
@@ -1120,6 +1160,45 @@ class TestTheOtherGuards:
         assert stack_.events == []
 
     @pytest.mark.parametrize(
+        ("text", "assigned"),
+        [
+            ("COMPOSE_PROJECT_NAME=archive\n", True),
+            ("export COMPOSE_PROJECT_NAME=archive\n", True),
+            ("COMPOSE_PROJECT_NAME: archive\n", True),
+            ("COMPOSE_PROJECT_NAME=\n", True),
+            ("WIKIBASE_PUBLIC_HOST=x\nCOMPOSE_PROJECT_NAME=archive\n", True),
+            ("# COMPOSE_PROJECT_NAME=archive\n", False),
+            ("COMPOSE_PROJECT_NAME_BEFORE=archive\n", False),
+            ("NOTE=COMPOSE_PROJECT_NAME=archive\n", False),
+            ("", False),
+        ],
+    )
+    def test_an_env_file_assigns_as_docker_compose_reads_it(
+        self, text, assigned
+    ):
+        """Any value, an empty one too, since docker compose's own reading
+        of it decides; a comment, a longer name or another setting's value
+        assigns nothing."""
+        name = "COMPOSE_PROJECT_NAME"
+        assert assigned_in(text, name) is assigned
+
+    def test_a_commented_out_setting_is_no_setting(self, stack_):
+        with (stack_.deploy / ".env").open("a") as env:
+            env.write("# COMPOSE_PROJECT_NAME=archive\n")
+        report = stack_.reset().run()
+        assert [step.name for step in report.steps] == STEPS
+
+    def test_an_engine_setting_in_the_env_file_is_refused(self, stack_):
+        with (stack_.deploy / ".env").open("a") as env:
+            env.write("export DOCKER_HOST=ssh://kredfeld.example\n")
+        env_file = re.escape(str(stack_.deploy / ".env"))
+        with pytest.raises(
+            ResetRefused, match=f"DOCKER_HOST is set in {env_file}"
+        ):
+            stack_.reset().run()
+        assert stack_.events == []
+
+    @pytest.mark.parametrize(
         ("name", "value"),
         [
             ("DOCKER_HOST", "ssh://kredfeld.example"),
@@ -1132,7 +1211,9 @@ class TestTheOtherGuards:
         """The reset moves a file beside the compose files, so it works on
         the local engine only."""
         monkeypatch.setenv(name, value)
-        with pytest.raises(ResetRefused, match=f"{name} set"):
+        with pytest.raises(
+            ResetRefused, match=f"{name} is set in the environment"
+        ):
             stack_.reset().run()
         assert stack_.events == []
 
@@ -1163,7 +1244,9 @@ class TestTheOtherGuards:
             stack_.reset().run()
         assert stack_.writes() == []
 
-    @pytest.mark.parametrize("changed", ["volumes", "config directory"])
+    @pytest.mark.parametrize(
+        "changed", ["volumes", "config directory", "engine"]
+    )
     def test_a_stack_that_changed_while_the_reset_waited_is_refused(
         self, stack_, changed
     ):
@@ -1173,8 +1256,10 @@ class TestTheOtherGuards:
         def lock():
             if changed == "volumes":
                 stack_.docker.declared["wdqs-data"] = {"name": "archive_wdqs"}
-            else:
+            elif changed == "config directory":
                 stack_.docker.config_dir = stack_.deploy / "config-2"
+            else:
+                stack_.docker.engine = "e5f6a7b8-0000-4000-8000-000000001954"
             yield
 
         with pytest.raises(ResetRefused, match="changed while the reset"):
@@ -1196,29 +1281,83 @@ class TestTheOtherGuards:
     ):
         """With no container to say where the stack runs from, the last
         reset's record says it."""
-        record = stack_.records / HOST / ORIGIN_FILE
-        record.parent.mkdir(parents=True)
         elsewhere = "/srv/elsewhere/deploy"
-        record.write_text(
-            json.dumps(
-                {
-                    "deploy_dir": elsewhere,
-                    "compose_files": [f"{elsewhere}/docker-compose.yml"],
-                }
-            )
+        write_origin(
+            stack_,
+            deploy_dir=elsewhere,
+            compose_files=[f"{elsewhere}/docker-compose.yml"],
         )
         stack_.docker.containers.clear()
         with pytest.raises(ResetRefused, match="has no containers to say"):
             stack_.reset().run()
         assert stack_.events == READS
 
+    def test_with_no_containers_another_project_is_refused(self, stack_):
+        write_origin(stack_, project="archive")
+        stack_.docker.containers.clear()
+        with pytest.raises(ResetRefused, match="as another project"):
+            stack_.reset().run()
+        assert stack_.writes() == []
+
+    def test_another_engine_behind_the_socket_is_refused(self, stack_):
+        """After a restart, another engine can answer behind the local
+        socket, with none of the stack's containers or volumes, while the
+        stack's own engine, and so its wiki, is down. Nothing here tells a
+        kept instance from another, but the last reset's record names the
+        engine that runs the stack."""
+        write_origin(stack_)
+        stack_.docker.engine = "e5f6a7b8-0000-4000-8000-000000001954"
+        for name in GRAPH:
+            del stack_.docker.volumes[name]
+        stack_.docker.containers.clear()
+        stack_.wiki.answering = False
+        with pytest.raises(ResetRefused, match="another Docker engine"):
+            stack_.reset().run()
+        assert stack_.writes() == []
+        assert stack_.settings.read_text() == FIRST_SETTINGS
+
+    def test_a_record_that_names_no_engine_leaves_it_unknown(self, stack_):
+        """As a record made before engines were recorded: only another
+        engine than one it names is refused."""
+        write_origin(stack_, engine=None)
+        stack_.docker.containers.clear()
+        stack_.wiki.answering = False
+        stack_.reset().run()
+        record = json.loads((stack_.records / HOST / ORIGIN_FILE).read_text())
+        assert record["engine"] == ENGINE
+
+    def test_an_origin_changed_while_the_reset_waited_is_refused(self, stack_):
+        """With no container, the record is read again under the lock."""
+        write_origin(stack_)
+        stack_.docker.containers.clear()
+        stack_.wiki.answering = False
+
+        @contextlib.contextmanager
+        def lock():
+            write_origin(stack_, deploy_dir="/srv/elsewhere/deploy")
+            yield
+
+        with pytest.raises(ResetRefused, match="has no containers to say"):
+            stack_.reset(lock=lock).run()
+        assert stack_.events == READS * 2
+
+    def test_the_origin_is_recorded_before_the_stack_stops(self, stack_):
+        """A stop that fails part way can leave no container to say where
+        the stack runs from."""
+        stack_.docker.down_fails = True
+        with pytest.raises(ResetFailed, match="stop the stack failed"):
+            stack_.reset().run()
+        record = json.loads((stack_.records / HOST / ORIGIN_FILE).read_text())
+        assert record["deploy_dir"] == str(stack_.deploy.resolve())
+
     def test_an_origin_record_that_cannot_be_read_is_refused(self, stack_):
         record = stack_.records / HOST / ORIGIN_FILE
         record.parent.mkdir(parents=True)
         record.write_text("{not json")
         stack_.docker.containers.clear()
-        with pytest.raises(ResetRefused, match="cannot be read"):
+        with pytest.raises(ResetRefused, match="cannot be read") as refused:
             stack_.reset().run()
+        assert "Remove it by hand" in str(refused.value)
         assert stack_.writes() == []
 
 
@@ -1319,7 +1458,13 @@ class TestTheLiveStackLock:
 
         with pytest.raises(ResetRefused, match="made in /srv/elsewhere"):
             stack_.reset(lock=lock).run()
-        assert stack_.events == [*READS, "context show", "config", "ps"]
+        assert stack_.events == [
+            *READS,
+            "context show",
+            "info",
+            "config",
+            "ps",
+        ]
         assert stack_.writes() == []
 
 

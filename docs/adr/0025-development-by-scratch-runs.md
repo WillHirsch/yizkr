@@ -66,11 +66,12 @@ LocalSettings.php aside so that the wiki installs afresh; it holds the
 live-stack lock while it runs, and a reset without a terminal needs
 `--yes`. The kept-state marker is kept twice, as a page on the instance
 and as a record on the host, and the reset refuses if either says kept,
-if it cannot read the page, or if a wiki answers that the local engine's
-stack does not serve. The instance-contents record names the instance's
-newest revision and log entry, so any write the scratch write stage did
-not make voids it, a manual edit included; §1, §6 and §8 are amended in
-place.
+if it cannot read the page, if a wiki answers that the local engine's
+stack does not serve, or if, with no container of the stack, the engine
+is not the one the last reset recorded. The instance-contents record
+names the instance's newest revision and log entry, so any write the
+scratch write stage did not make voids it, a manual edit included; §1,
+§6 and §8 are amended in place.
 
 ## Context
 

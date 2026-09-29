@@ -27,18 +27,22 @@ the corpus, which all outlive the instance.
 refuses:
 
 - a setting that points docker compose at another project than the one
-  the compose files name (COMPOSE_PROJECT_NAME, in the environment or
-  the env file), whose volumes it would remove, or docker at another
-  engine than the local one (DOCKER_HOST, DOCKER_CONTEXT, or a context
-  other than LOCAL_CONTEXT): the reset moves a file beside the compose
-  files, so it works on the local engine only;
+  the compose files name (COMPOSE_PROJECT_NAME), whose volumes it would
+  remove, or docker at another engine than the local one (DOCKER_HOST,
+  DOCKER_CONTEXT, or a context other than LOCAL_CONTEXT): the reset moves
+  a file beside the compose files, so it works on the local engine only.
+  It reads them in the environment, and in the env file in each form
+  docker compose reads there (`NAME=value`, `export NAME=value`,
+  `NAME: value`);
 - compose files that do not declare the four volumes under the keys
   Wikibase Suite Deploy gives them, or that declare one external;
 - a stack whose containers were made from another directory or other
   compose files, stopped ones included: starting the stack from these
   would swap its config directory, and so its LocalSettings.php, for
   another's. With no container to say so, the reset checks the
-  directory and compose files the last reset recorded (ORIGIN_FILE);
+  directory, compose files, project and Docker engine the last reset
+  recorded (ORIGIN_FILE): after a restart, another engine can answer
+  behind the local socket, with none of the stack's volumes;
 - a volume of one of those names that Docker Compose did not make for
   this project as that volume: the reset removes the stack's own volumes
   and nothing else;
@@ -49,18 +53,18 @@ refuses:
 It then takes the live-stack lock and holds it to the end, so no live
 test session uses the instance while it is reset. It reads the stack
 again under the guards, since the stack may have changed while it waited
-for the lock, and refuses one that names another project, other volumes
-or another config directory than the one confirmed. Then it reads the
-kept-state marker, on the host and on the instance, and refuses a kept
-instance. It asks the wiki first. A wiki that answers must be served by
-this engine's stack, with the project's database volume and a running
-wiki container; otherwise it is served from elsewhere (another engine
-behind the local socket, say), and the reset cannot tell which instance
-it would reset. A wiki that answers as another wiki than the one these
-compose files serve is refused too. With the database volume there but
-no answer, the reset starts the stack to read the marker, and refuses
-if it still cannot. Only no answer and no database volume mean there is
-no graph to guard.
+for the lock, and refuses one that names another project, other
+volumes, another config directory or another engine than the one
+confirmed. Then it reads the kept-state marker, on the host and on the
+instance, and refuses a kept instance. It asks the wiki first. A wiki
+that answers must be served by this engine's stack, with the project's
+database volume and a running wiki container; otherwise it is served
+from elsewhere (another engine behind the local socket, say), and the
+reset cannot tell which instance it would reset. A wiki that answers as
+another wiki than the one these compose files serve is refused too.
+With the database volume there but no answer, the reset starts the
+stack to read the marker, and refuses if it still cannot. Only no
+answer and no database volume mean there is no graph to guard.
 
 **What it deletes.** The four volumes, and nothing else. The rest of what
 it clears it sets aside in the instance's record (yizkr.core.instance),
@@ -85,6 +89,7 @@ import importlib.util
 import itertools
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -97,7 +102,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from yizkr.core.config import Config, read_env_file, resolve_env_file
+from yizkr.core.config import Config, resolve_env_file
 from yizkr.core.instance import (
     KEPT_STATE_PAGE,
     carries_kept_marker,
@@ -276,14 +281,15 @@ class Container:
 class Plan:
     """What the reset read of the stack before changing anything: the
     compose project, the volumes it removes, those of them that exist,
-    the directory the wiki keeps LocalSettings.php in, and the project's
-    containers."""
+    the directory the wiki keeps LocalSettings.php in, the project's
+    containers, and the id of the Docker engine that holds them."""
 
     project: str
     volumes: tuple[Volume, ...]
     present: frozenset[str]
     config_dir: Path
     containers: tuple[Container, ...] = ()
+    engine: str = ""
 
     @property
     def database(self) -> Volume:
@@ -297,12 +303,13 @@ class Plan:
         )
 
     def names(self) -> dict:
-        """What a confirmation names: the project, the volumes and the
-        config directory."""
+        """What a confirmation names: the project, the volumes, the config
+        directory, and the engine that holds them."""
         return {
             "project": self.project,
             "volumes": [volume.name for volume in self.volumes],
             "config directory": str(self.config_dir),
+            "engine": self.engine,
         }
 
 
@@ -310,31 +317,59 @@ def _label(name: str) -> str:
     return f'{{{{.Label "{name}"}}}}'
 
 
+def assigned_in(env_text: str, name: str) -> bool:
+    """Whether an env file's text assigns `name`, in any form docker
+    compose reads one: `NAME=value`, `export NAME=value` or `NAME: value`,
+    whatever the value."""
+    return (
+        re.search(
+            rf"^\s*(?:export\s+)?{re.escape(name)}\s*[=:]",
+            env_text,
+            re.MULTILINE,
+        )
+        is not None
+    )
+
+
 def refuse_other_targets(compose: Compose) -> None:
     """ResetRefused for a setting that points docker compose at another
     project than the one the compose files name, or docker at another
-    engine than the local one (the module docstring's guards)."""
-    places = [
-        where
-        for where, settings in (
-            ("the environment", os.environ),
-            (str(compose.env_file), read_env_file(compose.env_file)),
-        )
-        if settings.get(PROJECT_SETTING)
-    ]
-    if places:
+    engine than the local one (the module docstring's guards): set in the
+    environment, or assigned in the env file, which docker compose reads
+    too."""
+    try:
+        env_text = compose.env_file.read_text()
+    except OSError:  # docker compose cannot read it either, and refuses
+        env_text = ""
+
+    def places(name: str) -> list[str]:
+        return [
+            where
+            for where, there in (
+                ("the environment", bool(os.environ.get(name))),
+                (str(compose.env_file), assigned_in(env_text, name)),
+            )
+            if there
+        ]
+
+    project = places(PROJECT_SETTING)
+    if project:
         raise ResetRefused(
-            f"{PROJECT_SETTING} is set in {' and in '.join(places)}: docker "
+            f"{PROJECT_SETTING} is set in {' and in '.join(project)}: docker "
             "compose would take the stack for another project than the one "
             "its compose files name, with other volumes, which the reset "
             "would remove. Unset it to reset the stack"
         )
-    engines = [name for name in ENGINE_SETTINGS if os.environ.get(name)]
+    engines = [
+        f"{name} is set in {' and in '.join(where)}"
+        for name in ENGINE_SETTINGS
+        if (where := places(name))
+    ]
     if engines:
         raise ResetRefused(
-            f"{' and '.join(engines)} set in the environment: the reset "
-            "works on the local Docker engine only, since it moves a file "
-            "beside the compose files. Unset it to reset the stack"
+            f"{'; '.join(engines)}: the reset works on the local Docker "
+            "engine only, since it moves a file beside the compose files. "
+            "Unset it to reset the stack"
         )
 
 
@@ -361,6 +396,11 @@ def _read_plan(compose: Compose, runner: Callable[..., str]) -> Plan:
             f"local Docker engine only (the context {LOCAL_CONTEXT!r}), since "
             "it moves a file beside the compose files"
         )
+    engine = runner(
+        ["docker", "info", "--format", "{{.ID}}"],
+        capture=True,
+        timeout=QUERY_TIMEOUT,
+    ).strip()
     raw = runner(
         compose.command("config", "--format", "json"),
         capture=True,
@@ -419,6 +459,7 @@ def _read_plan(compose: Compose, runner: Callable[..., str]) -> Plan:
         present=present_volumes(project, volumes, runner),
         config_dir=config_dirs[0],
         containers=containers,
+        engine=engine,
     )
 
 
@@ -802,34 +843,40 @@ class InstanceReset:
 
     def check_origin(self, plan: Plan) -> None:
         """With no container to say where the stack runs from, refuse to
-        run it from another deploy directory or other compose files than
-        the last reset recorded."""
+        run it from another deploy directory, other compose files, as
+        another project or on another Docker engine than the last reset
+        recorded. A record that names no engine, as one made before
+        engines were recorded, leaves the engine unknown, and only another
+        engine than the one it names is refused."""
         if plan.containers:
             return
         path = self._origin_path()
         try:
             recorded = json.loads(path.read_text())
+            if not isinstance(recorded, dict):
+                raise ValueError("it holds no record")
         except FileNotFoundError:
             return
         except (OSError, ValueError) as exc:
             raise ResetRefused(
                 f"{path}, where the last reset recorded where the stack runs "
-                f"from, cannot be read ({exc}); nothing was changed"
+                f"from, cannot be read ({exc}). Remove it by hand once you "
+                "know the stack runs from here; nothing was changed"
             ) from None
-        ours = self.compose.origin()
-        theirs = {
-            key: recorded.get(key) if isinstance(recorded, dict) else None
-            for key in ours
-        }
+        ours = {**self.compose.origin(), "project": plan.project}
+        theirs = {key: recorded.get(key) for key in ours}
+        if recorded.get("engine") and recorded["engine"] != plan.engine:
+            ours["engine"], theirs["engine"] = plan.engine, recorded["engine"]
         if theirs != ours:
             raise ResetRefused(
                 "the stack has no containers to say where it runs from, and "
-                f"the last reset ran it from {theirs['deploy_dir']} with "
-                f"{theirs['compose_files']}, not from {ours['deploy_dir']} "
-                f"with {ours['compose_files']}. Run the reset with those "
+                f"the last reset ran it as {theirs}, not as {ours}: from "
+                "another deploy directory, other compose files, as another "
+                "project, or on another Docker engine (one behind the local "
+                "socket, say). Run the reset with the ones it names "
                 "(--deploy-dir, --compose-file, or the env file beside "
-                "them); if the stack has moved for good, remove "
-                f"{path} by hand. Nothing was changed"
+                "them), on that engine; if the stack has moved for good, "
+                f"remove {path} by hand. Nothing was changed"
             )
 
     def _record_origin(self, plan: Plan) -> Path:
@@ -838,6 +885,7 @@ class InstanceReset:
         record = {
             **self.compose.origin(),
             "project": plan.project,
+            "engine": plan.engine,
             "recorded_at": _now(),
         }
         atomic_write_text(path, json.dumps(record, indent=2) + "\n")

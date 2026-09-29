@@ -360,19 +360,26 @@ is about to reset.
   deploy directory and compose files that the last reset recorded in
   `stack.json`.
 - **Guards.** Before it changes anything, the reset refuses:
-  - `COMPOSE_PROJECT_NAME`, set in the environment or in the env file:
-    docker compose would take the stack for another project than its
-    compose files name, with other volumes, which the reset would remove;
+  - `COMPOSE_PROJECT_NAME`: docker compose would take the stack for
+    another project than its compose files name, with other volumes,
+    which the reset would remove;
   - `DOCKER_HOST` or `DOCKER_CONTEXT`, or a docker context other than
     `default`: the reset moves a file beside the compose files, so it
-    works on the local Docker engine only;
+    works on the local Docker engine only. It reads these settings in the
+    environment, and in the env file in each form docker compose reads
+    there (`NAME=value`, `export NAME=value`, `NAME: value`), whatever
+    the value;
   - compose files that do not declare the four volumes under the keys
     Wikibase Suite Deploy gives them, or declare one external;
   - a stack whose containers, stopped ones included, were made from
     another directory or other compose files, or, with no container,
-    that the last reset ran from elsewhere (`stack.json`): starting it
-    from here would swap its config directory, and its
-    `LocalSettings.php`, for another checkout's;
+    that the last reset ran from elsewhere, as another project or on
+    another Docker engine (`stack.json`): starting it from here would
+    swap its config directory, and its `LocalSettings.php`, for another
+    checkout's, and after a restart another engine can answer behind the
+    local socket, with none of the stack's volumes. A record from before
+    engines were recorded names none, and only a record that names
+    another engine is refused on that count;
   - a volume of one of those names that Docker Compose did not make for
     this project as that volume: it removes the stack's own volumes and
     nothing else;
@@ -417,7 +424,8 @@ is about to reset.
 - **When the stack cannot start.** A reset cut short while the stack
   installed MediaWiki can leave a half-installed database, whose wiki
   never answers; the reset then refuses, since it cannot tell whether
-  the instance is kept. If you are sure it is not, finish by hand in the
+  the instance is kept. If you are sure it is not kept, and there is no
+  `kept.json` in the record of the instance, finish by hand in the
   deploy directory, with the compose files the stack was started with (a
   `-f` for each, as the reset's refusal names them), then run
   `yizkr scratch reset` again:
@@ -427,7 +435,8 @@ is about to reset.
   docker volume rm yizkr-wikibase_mysql-data \
       yizkr-wikibase_elasticsearch-data yizkr-wikibase_wdqs-data \
       yizkr-wikibase_wikibase-image-data
-  mv config/LocalSettings.php ~/.local/state/yizkr/instances/<host>/reset/
+  mv config/LocalSettings.php \
+      ~/.local/state/yizkr/instances/<host>/reset/LocalSettings.php.$(date -u +%Y%m%dT%H%M%SZ)
   ```
 
   The volume names are the project's (`yizkr-wikibase`, from the
@@ -453,8 +462,10 @@ set), in a private folder named after the instance's host.
   outright, and the cleared record names who cleared it, when, and from
   which process.
 - `kept.json`: the host-side kept-state marker (above).
-- `stack.json`: the deploy directory, compose files and project that
-  the last reset stopped the stack from.
+- `stack.json`: the deploy directory, compose files, project and Docker
+  engine (its id, from `docker info`) that the last reset stopped the
+  stack from. When it cannot be read, the reset refuses, and says to
+  remove it by hand once you know where the stack runs from.
 - `write/`: the write stage's state between its invocations (#200),
   which the reset sets aside.
 - `reset/`: what each reset set aside.
