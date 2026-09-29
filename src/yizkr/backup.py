@@ -1,19 +1,21 @@
 """Backup and export.
 
 One `yizkr backup` run produces a timestamped directory containing
-everything needed to rebuild the instance, plus a public export:
+everything needed to rebuild the instance, plus a non-privileged export:
 
 * ``database.sql.gz`` — mariadb dump of the MediaWiki/Wikibase database
   (THE authoritative backup: items, statements, history, users).
 * ``media.tar.gz`` — the wiki's uploaded files (scanned artifacts).
 * ``full.nt.gz`` — complete RDF dump (portable export; also the input
-  for the public variant). WDQS state is derived and never backed up:
-  it reloads from this dump.
-* ``public.nt.gz`` — the possibly-living-excluded export (R7,
-  docs/MODELING.md "Living persons and privacy"). Nothing about a
-  possibly-living person leaves the instance: every triple that
-  mentions an excluded person — as subject, statement node, or object
-  of someone else's claim — is dropped.
+  for the non-privileged variant). WDQS state is derived and never
+  backed up: it reloads from this dump.
+* ``public.nt.gz`` — the non-privileged export, which leaves out every
+  possibly-living person (R7, docs/MODELING.md "Living persons and
+  privacy"). Nothing about a possibly-living person leaves the instance
+  in it: every triple that mentions an excluded person — as subject,
+  statement node, or object of someone else's claim — is dropped. All
+  else leaves as it is, text included: whatever is recorded about a
+  person the check releases, and about the other items it keeps.
 
 Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
 no stored "living" flag (ADR-0020). A person is excluded unless the graph
@@ -40,6 +42,15 @@ closed:
   vocabulary and the classes its items are typed with are kept.
 * It drops every family too, released or not: a family stands for its
   people, any of whom may be living (``privacy.FAMILY_CLASS``).
+* It drops every event that an item it drops took part in, at any rank:
+  what the event records, its date and place, is that participant's too.
+  So it drops every event of a person kind that names no participant,
+  as whom it happened to is unknown, and the events that start and end
+  a union it drops (ADR-0036), a partner's own death aside.
+* It drops the extractor's judgement notes, its remarks on its own
+  reading, and any line it cannot read (``filter_public_export``), and
+  refuses a dump that holds what it is not made to filter: a sitelink,
+  or a property of a type the model does not use (``UnfilterableDump``).
 * The check runs on the query service, the dump comes from the database:
   the export waits for the query service to hold exactly the dump's
   revision of every item and property, and refuses to run when it does
@@ -298,6 +309,18 @@ _DATA_NODE = re.compile(r"<[^<>]*[/:]([QP][1-9]\d*)>")
 _VERSION = "<http://schema.org/version>"
 _RANK = "<http://wikiba.se/ontology#rank>"
 _DEPRECATED = "<http://wikiba.se/ontology#DeprecatedRank>"
+# A property's type (``wikibase:propertyType``), and what a page is about
+# (``schema:about``): an entity's data node, or a sitelink's page.
+_PROPERTY_TYPE = "<http://wikiba.se/ontology#propertyType>"
+_PROPERTY = re.compile(r"<[^<>]*/entity/(P[1-9]\d*)>")
+_ABOUT = "<http://schema.org/about>"
+_ENTITY_DATA = re.compile(r"<[^<>]*/Special:EntityData/[QP][1-9]\d*>")
+
+# The properties by which a union, a marriage or a partnership, points to
+# the events that start and end it (ADR-0036 §6): they are the couple's, and
+# go with the union. Keys of the model manifest; one the instance's
+# vocabulary does not hold reads nothing.
+UNION_BOUNDS = ("started_by", "ended_by")
 
 
 @dataclass
@@ -306,14 +329,24 @@ class DumpReading:
     item with person evidence (the privacy module's, at every rank);
     `untyped`, every item that states no type, the vocabulary and classes
     aside, and `families`, every item typed as a family (``read_dump``);
-    `redirects`, each redirect's target; and `revisions`, the revision of
-    every item and property that is not a redirect."""
+    `participants`, the items that take part in each event, at every
+    rank; `unattended`, every event of a person kind that names no item
+    taking part; `bounds`, the events that start and end each union, a
+    partner's own death aside; `redirects`, each redirect's target;
+    `revisions`, the revision of every item and property that is not a
+    redirect; `property_types`, each property's type as the dump names it;
+    and `sitelinks`, every entity that a sitelink is about."""
 
     people: set[str] = field(default_factory=set)
     untyped: set[str] = field(default_factory=set)
     families: set[str] = field(default_factory=set)
+    participants: dict[str, set[str]] = field(default_factory=dict)
+    unattended: set[str] = field(default_factory=set)
+    bounds: dict[str, set[str]] = field(default_factory=dict)
     redirects: dict[str, str] = field(default_factory=dict)
     revisions: dict[str, int] = field(default_factory=dict)
+    property_types: dict[str, str] = field(default_factory=dict)
+    sitelinks: set[str] = field(default_factory=set)
 
 
 def _item(term: str) -> str | None:
@@ -357,10 +390,24 @@ def read_dump(
     item the redirect leads to.
 
     An item is a family when an `instance of` statement of it at normal or
-    preferred rank names the family class."""
+    preferred rank names the family class.
+
+    The items that take part in each event are read at every rank,
+    whatever the event's type: every item a `participant` statement's
+    value names. An event of a person kind that names none (no
+    `participant` statement, or only one whose value is unknown) is
+    unattended. So are read, at every rank, the events that start and end
+    each union (``UNION_BOUNDS``), but a `death` event, which is a
+    partner's own; and each property's type, and every sitelink, whose
+    page is anything but an entity's data node.
+
+    Lines are read as they end, at a newline alone."""
     instance_of = properties["instance_of"]
     subclass_of = properties["subclass_of"]
     participant = properties["participant"]
+    bound_links = {
+        properties[key] for key in UNION_BOUNDS if key in properties
+    }
     subject_links = {properties[key] for key in PERSON_SUBJECT_PROPERTIES}
     value_links = {properties[key] for key in PERSON_VALUE_PROPERTIES}
     human = items[PERSON_CLASS]
@@ -374,10 +421,12 @@ def read_dump(
     kinds: dict[str, str] = {}  # statement -> the type it gives
     events: dict[str, str] = {}  # statement -> the event it is part of
     participants: dict[str, str] = {}  # statement -> the participant
+    unions: dict[str, str] = {}  # statement -> the union it bounds
+    bounds: dict[str, str] = {}  # statement -> the event it points to
     deprecated: set[str] = set()  # statements a curator deprecated
     classes = set(items.values())  # the vocabulary, and every type named
     links: dict[str, tuple[str, str] | None] = {}
-    with gzip.open(full_dump, "rt", encoding="utf-8") as source:
+    with gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source:
         for line in source:
             parts = line.split(" ", 2)
             if len(parts) < 3:
@@ -398,6 +447,14 @@ def read_dump(
             if predicate == _RANK:
                 if term == _DEPRECATED:
                     deprecated.add(subject)
+                continue
+            if predicate == _PROPERTY_TYPE:
+                if prop := _PROPERTY.fullmatch(subject):
+                    reading.property_types[prop.group(1)] = term
+                continue
+            if predicate == _ABOUT:
+                if not _ENTITY_DATA.fullmatch(subject):
+                    reading.sitelinks.add(_item(term) or term)
                 continue
             if predicate not in links:
                 links[predicate] = next(
@@ -424,6 +481,8 @@ def read_dump(
                     typed[term] = item
                 if pid == participant:
                     events[term] = item
+                if pid in bound_links:
+                    unions[term] = item
                 if pid in subject_links:
                     reading.people.add(item)
                 continue
@@ -441,6 +500,8 @@ def read_dump(
                 classes.add(item)
             if pid == participant:
                 participants[subject] = item
+            if pid in bound_links:
+                bounds[subject] = item
 
     # a type is read through the redirects it names: an item typed with a
     # class a curator merged into `human` is typed human, and the class it
@@ -471,6 +532,14 @@ def read_dump(
         for statement, person in participants.items()
         if events.get(statement) in person_events and person not in set_aside
     )
+    for statement, part in participants.items():
+        if statement in events:
+            reading.participants.setdefault(events[statement], set()).add(part)
+    reading.unattended = person_events - set(reading.participants)
+    deaths = typed_as({items["death"]})
+    for statement, event in bounds.items():
+        if statement in unions and event not in deaths:
+            reading.bounds.setdefault(unions[statement], set()).add(event)
     for redirect in reading.redirects:
         reading.revisions.pop(redirect, None)
     reading.untyped = (
@@ -483,7 +552,9 @@ def read_dump(
 
 
 # Why the export drops an item with person evidence that the check did
-# not assess, one that states no type, and a family.
+# not assess, one that states no type, a family, an event of a person kind
+# that names no participant, an event that items it drops took part in,
+# and one that starts or ends a union it drops (the braces take QIDs).
 NOT_ASSESSED = (
     "person evidence in the dump, but the check did not assess this item: "
     "unknown means excluded"
@@ -495,6 +566,17 @@ FAMILY = (
 NO_TYPE = (
     "no type (no instance of, at normal or preferred rank, that names an "
     "item): unknown means excluded"
+)
+UNATTENDED = (
+    "an event of a person kind that names no participant: unknown means "
+    "excluded"
+)
+PARTICIPANT_LEFT_OUT = (
+    "a participant the export leaves out ({}): what this event records "
+    "is theirs too"
+)
+BOUND_LEFT_OUT = (
+    "it starts or ends a union the export leaves out ({}): it is the couple's"
 )
 
 
@@ -508,7 +590,14 @@ def public_exclusions(
       dropped, not kept (``NOT_ASSESSED``);
     * each item that states no type (``NO_TYPE``), even one the check
       released;
-    * each family (``FAMILY``), whatever it holds, released or not.
+    * each family (``FAMILY``), whatever it holds, released or not;
+    * each event of a person kind that names no participant
+      (``UNATTENDED``): whom it happened to is unknown;
+    * each event that an item it drops takes part in, at any rank
+      (``PARTICIPANT_LEFT_OUT``, naming them), and each event that starts
+      or ends a union it drops (``BOUND_LEFT_OUT``, naming the union),
+      read through redirects; and so on until no more go, as an event
+      dropped so may itself be a participant, or a union.
 
     A redirect stands for the item it redirects to: it is dropped when
     that item is, and when it has person evidence of its own and that item
@@ -528,10 +617,14 @@ def public_exclusions(
             return NOT_ASSESSED
         if qid in reading.untyped:
             return NO_TYPE
+        if qid in reading.unattended:
+            return UNATTENDED
         return None
 
     excluded = {}
-    candidates = people | reading.untyped | reading.families
+    candidates = (
+        people | reading.untyped | reading.families | reading.unattended
+    )
     for qid in candidates | set(reading.redirects):
         found = target(qid)
         reason = why(found)
@@ -541,7 +634,32 @@ def public_exclusions(
             excluded[qid] = (
                 reason if found == qid else f"a redirect to {found}: {reason}"
             )
-    return excluded
+    # an event goes with the items it drops that take part in it, a
+    # participant named through a redirect included, and with a union it
+    # drops that it starts or ends; a redirect goes with the event
+    while True:
+        left_out = set(excluded)
+        gone = {
+            event: PARTICIPANT_LEFT_OUT.format(
+                ", ".join(sorted(parts & left_out, key=_order))
+            )
+            for event, parts in reading.participants.items()
+            if event not in left_out and parts & left_out
+        }
+        for union, bounds in reading.bounds.items():
+            if union in left_out:
+                for event in {target(bound) for bound in bounds}:
+                    if event not in left_out and event not in gone:
+                        gone[event] = BOUND_LEFT_OUT.format(union)
+        if not gone:
+            return excluded
+        excluded.update(gone)
+        for redirect in reading.redirects:
+            found = target(redirect)
+            if found in gone and redirect not in excluded:
+                excluded[redirect] = (
+                    f"a redirect to {found}: {excluded[found]}"
+                )
 
 
 # The revision of every entity the query service holds, redirects left
@@ -568,13 +686,59 @@ LAG_TIMEOUT = 180.0
 LAG_POLL = 5.0
 
 
-class QueryServiceLag(RuntimeError):
-    """The query service does not hold the dump's revisions. The check
-    assesses people there, so its release of anyone would not be about
-    what the dump holds: the public export refuses to run. `manifest` is
-    the backup's, once ``run_backup`` has recorded the refusal in it."""
+class PublicExportRefused(RuntimeError):
+    """The non-privileged export refuses to run, and writes nothing.
+    `manifest` is the backup's, once ``run_backup`` has recorded the
+    refusal in it."""
 
     manifest: dict | None = None
+
+
+class QueryServiceLag(PublicExportRefused):
+    """The query service does not hold the dump's revisions. The check
+    assesses people there, so its release of anyone would not be about
+    what the dump holds: the export refuses to run."""
+
+
+class UnfilterableDump(PublicExportRefused):
+    """The dump holds what the export is not made to filter. A sitelink:
+    its page's own triples (its name, its language, its site) never name
+    the entity it is about, so leaving that entity out would leave its
+    page's name behind. Or a property of a type the model does not use (a
+    URL, a media file, a shape), whose values the filter has not been
+    reviewed for. The export refuses to run."""
+
+
+# The types of property the export is made to filter, as the dump names
+# them: those the model manifest uses, an item, a string, a text in a
+# language, an external identifier, a time, a quantity and a globe
+# coordinate. The unit, calendar or globe of a value is an IRI, which
+# Wikibase takes only as an entity's.
+_MODEL_TYPES = frozenset(
+    f"<http://wikiba.se/ontology#{name}>"
+    for name in (
+        "WikibaseItem",
+        "String",
+        "Monolingualtext",
+        "ExternalId",
+        "Time",
+        "Quantity",
+        "GlobeCoordinate",
+    )
+)
+
+
+def unfilterable(reading: DumpReading) -> list[str]:
+    """What in the dump the export is not made to filter: each property of
+    a type outside ``_MODEL_TYPES``, and each entity a sitelink is
+    about."""
+    return [
+        f"{pid} ({kind.rsplit('#', 1)[-1].rstrip('>')})"
+        for pid, kind in sorted(
+            reading.property_types.items(), key=lambda pair: _order(pair[0])
+        )
+        if kind not in _MODEL_TYPES
+    ] + [f"{entity} (a sitelink)" for entity in sorted(reading.sitelinks)]
 
 
 def _order(entity: str) -> tuple[str, int]:
@@ -651,62 +815,89 @@ def await_query_service(
 
 _PROVENANCE_NODE = re.compile(r"<[^>]*/(?:reference|value)/([0-9a-f]{16,})>")
 
+# A triple as dumpRdf.php writes one, on a line of its own: a subject, a
+# predicate and an object, one space apart, and a closing dot. The object
+# is an IRI, a blank node, or a literal with its escapes, and a language or
+# a type.
+_IRI = r'<[^\x00-\x20<>"{}|^`\\]*>'
+_TRIPLE = re.compile(
+    rf"({_IRI}|_:\S+) ({_IRI}) "
+    rf'({_IRI}|_:\S+|"(?:[^"\\\n\r]|\\.)*"'
+    rf"(?:@[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|\^\^{_IRI})?) \."
+)
+
+# The properties whose snaks the export drops, wherever one is written:
+# the extractor's judgement notes (ADR-0035), its remarks on its own
+# reading, which are no information on anyone. Keys of the model manifest;
+# one the instance's vocabulary does not hold drops nothing.
+DROPPED_PROPERTIES = ("judgement", "judgement_note")
+
 
 def filter_public_export(
     full_dump: Path,
     public_dump: Path,
     excluded: set[str],
-    excerpt_pids: frozenset[str] | set[str] = frozenset(),
+    dropped_pids: frozenset[str] | set[str] = frozenset(),
 ) -> tuple[int, int]:
-    """Produce the public dump: three privacy filters over N-triples.
-    `excluded` holds every item to drop: for the public export, every
-    item with person evidence that the check did not release
-    (``public_exclusions``).
+    """Produce the export's dump: four filters over N-triples. `excluded`
+    holds every item to drop: for the export, every item with person
+    evidence that the check did not release, and the rest
+    ``public_exclusions`` names. `dropped_pids` holds the properties whose
+    snaks are dropped: for the export, those of ``DROPPED_PROPERTIES``.
 
-    1. Drop every triple that mentions an excluded entity: entity URIs,
+    1. Drop every line that is not a triple as dumpRdf.php writes one
+       (``_TRIPLE``): what the filter cannot read, it does not pass on.
+       Lines end at a newline alone.
+    2. Drop every triple that mentions an excluded entity: entity URIs,
        statement node URIs (entity/statement/Q76-...), and object
        references all carry the QID as a delimited token, so token
        matching catches a person wherever they appear — including in
        other people's claims.
-    2. Drop every transcription-excerpt triple. Excerpts quote raw
-       source text for curator verification and can name ANYONE the
-       source mentions, living people included; they are not public
-       data.
-    3. Sweep orphaned provenance nodes. Reference/value nodes are
+    3. Drop every triple of a property of `dropped_pids`, in any form: a
+       statement's value, a qualifier's, a reference's, or a truthy one.
+    4. Sweep orphaned provenance nodes. Reference/value nodes are
        shared, content-addressed resources; once the statements using
        them are dropped, their triples would still leak what those
        statements recorded about an excluded person. Only nodes still
        reachable from a kept statement survive.
 
+    Everything else leaves as it is, its text included: the labels,
+    descriptions and aliases of the items kept, their statements' values,
+    and the excerpts of the references their statements keep.
+
     Returns (kept, dropped) line counts. Streams the gzipped dump three
     times, holding only node-hash sets in memory.
     """
-    excerpt_predicates = tuple(
-        f"/prop/reference/{pid}>" for pid in excerpt_pids
-    )
+    dropped_predicates = tuple(f"/{pid}>" for pid in dropped_pids)
 
     def suppressed(line: str) -> bool:
+        triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
+        if triple is None:
+            return True
         if excluded and any(
             token in excluded for token in _QID_TOKEN.findall(line)
         ):
             return True
-        parts = line.split(" ", 2)
-        predicate = parts[1] if len(parts) >= 3 else ""
-        return any(predicate.endswith(marker) for marker in excerpt_predicates)
+        predicate = triple.group(2)
+        return "/prop/" in predicate and predicate.endswith(dropped_predicates)
 
     def subject_hash(line: str) -> str | None:
         match = _PROVENANCE_NODE.fullmatch(line.split(" ", 1)[0])
         return match.group(1) if match else None
 
+    def dump_lines():
+        # each pass reads the same lines, ended at a newline alone
+        return gzip.open(full_dump, "rt", encoding="utf-8", newline="\n")
+
     # pass 1: which provenance nodes do the surviving statements need?
     needed: set[str] = set()
-    with gzip.open(full_dump, "rt", encoding="utf-8") as source:
+    with dump_lines() as source:
         for line in source:
             if suppressed(line) or subject_hash(line) is not None:
                 continue
             needed.update(_PROVENANCE_NODE.findall(line))
     # ...and which value nodes do the surviving reference nodes need?
-    with gzip.open(full_dump, "rt", encoding="utf-8") as source:
+    with dump_lines() as source:
         for line in source:
             if suppressed(line):
                 continue
@@ -717,9 +908,9 @@ def filter_public_export(
     # pass 2: write everything that survives
     kept = dropped = 0
     with (
-        gzip.open(full_dump, "rt", encoding="utf-8") as source,
+        dump_lines() as source,
         gzip.open(
-            public_dump, "wt", encoding="utf-8", compresslevel=6
+            public_dump, "wt", encoding="utf-8", newline="\n", compresslevel=6
         ) as sink,
     ):
         for line in source:
@@ -762,21 +953,24 @@ def export_public(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict:
-    """Write the public export of the dump ``out_dir/full.nt.gz``:
+    """Write the non-privileged export of the dump ``out_dir/full.nt.gz``:
     ``public.nt.gz``, and ``public-exclusions.json``, which lists every
-    item dropped for privacy with why (``public_exclusions``: people and
-    untyped items, redirects to them included), and the people released
-    and kept. Returns the counts the backup's manifest records: its
+    item dropped for privacy with why (``public_exclusions``: people,
+    untyped items, families and the events such items took part in,
+    redirects to them included), and the people released and kept.
+    Returns the counts the backup's manifest records: its
     `excluded_persons` counts every item dropped.
 
-    It reads the dump first, then waits for the query service to hold
-    exactly the dump's revisions (``await_query_service``), runs the check
-    there, and asks again once it has run: a graph that changed meanwhile
-    raises QueryServiceLag, and nothing is written. Every item with person
-    evidence that the check did not release is then dropped
-    (``public_exclusions``). The queries go to the instance's query
-    service, with its vocabulary, unless `run` and `vocabulary` are
-    given."""
+    It reads the dump first, and refuses a dump that holds what the
+    export is not made to filter (``unfilterable``: UnfilterableDump). It
+    then waits for the query service to hold exactly the dump's revisions
+    (``await_query_service``), runs the check there, and asks again once
+    it has run: a graph that changed meanwhile raises QueryServiceLag.
+    Either refusal writes nothing. Every item with person evidence that
+    the check did not release is then dropped (``public_exclusions``),
+    and so are the judgement notes (``filter_public_export``). The
+    queries go to the instance's query service, with its vocabulary,
+    unless `run` and `vocabulary` are given."""
     if vocabulary is None:
         from yizkr.core.wiki import WikiClient
 
@@ -785,6 +979,15 @@ def export_public(
     run = run or sparql.runner(config)
     full_dump = out_dir / "full.nt.gz"
     reading = read_dump(full_dump, properties, items)
+    unreadable = unfilterable(reading)
+    if unreadable:
+        raise UnfilterableDump(
+            "the dump holds what the export is not made to filter: "
+            f"{', '.join(unreadable)}. A sitelink's page is named apart "
+            "from its entity, and a property of another type than the "
+            "model's has not been reviewed, so the export refuses to run "
+            "until it is removed."
+        )
     await_query_service(
         run, reading.revisions, timeout=lag_timeout, sleep=sleep, clock=clock
     )
@@ -805,7 +1008,9 @@ def export_public(
         full_dump,
         out_dir / "public.nt.gz",
         set(excluded),
-        excerpt_pids={properties["transcription_excerpt"]},
+        dropped_pids={
+            properties[key] for key in DROPPED_PROPERTIES if key in properties
+        },
     )
     (out_dir / "public-exclusions.json").write_text(
         json.dumps(
@@ -837,9 +1042,10 @@ def run_backup(
 ) -> dict:
     """Full backup run; returns the manifest that is also written to disk.
 
-    A public export that refuses to run (QueryServiceLag) leaves the other
-    dumps in place: the manifest records them and the refusal, old runs
-    are pruned, and the refusal is raised."""
+    A non-privileged export that refuses to run (PublicExportRefused: the
+    query service lags, or the dump holds what the export is not made to
+    filter) leaves the other dumps in place: the manifest records them and
+    the refusal, old runs are pruned, and the refusal is raised."""
     stamp = datetime.datetime.now(datetime.UTC).strftime(TIMESTAMP_FORMAT)
     out_dir = backup_root / stamp
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -875,7 +1081,7 @@ def run_backup(
                 out_dir / "public.nt.gz",
                 **export_public(config, out_dir, cutoff_years=cutoff_years),
             )
-        except QueryServiceLag as refusal:
+        except PublicExportRefused as refusal:
             manifest["public_export_refused"] = str(refusal)
             refused = refusal
 

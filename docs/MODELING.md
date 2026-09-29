@@ -773,14 +773,14 @@ not a signal to grow the schema on.
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records
   that as an ordinary death assertion, not a flag.
-- The public export (`yizkr backup`) is **conservative**: a person
-  enters it only on positive evidence they are not living — any death
-  evidence above, or births beyond the cutoff (`--cutoff-years`, by
-  default `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown
-  means excluded.** Exclusion removes every
-  mention (other people's claims about them, orphaned provenance nodes),
-  and transcription excerpts — raw source quotations, which can name
-  anyone — never enter the public tier.
+- The export (`yizkr backup`'s `public.nt.gz`, a non-privileged view,
+  not a public copy) is **conservative**: a person enters it only on
+  positive evidence they are not living — any death evidence above, or
+  births beyond the cutoff (`--cutoff-years`, by default
+  `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown means
+  excluded.** Exclusion removes every mention (other people's claims
+  about them, orphaned provenance nodes), and a transcription excerpt —
+  a raw source quotation — leaves only with a statement it attests.
 - **Who is a person fails closed too** (ADR-0020, as amended by #344).
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
@@ -823,6 +823,33 @@ not a signal to grow the schema on.
   typed `family` at normal or preferred rank, whatever it holds, released
   or not, and the site badges it. #374 holds the full rule, with a way
   to mark a family's membership complete.
+- **An event goes with its participants** (ADR-0020, as amended by
+  #363). An event's date and place are its participants' too, and its
+  label is written after them, so the export leaves out every event,
+  whatever its kind, that has a `participant` statement at any rank
+  whose value it leaves out, a redirect to one included. An event so
+  left out may itself be a participant, and the rule applies again. An
+  event of a person kind that names no participant (none, or only one of
+  unknown value) is left out too: whom it happened to is unknown. And
+  the events that start and end a union it leaves out go with the union
+  (`started_by`, `ended_by`; ADR-0036 §6), a partner's own death aside.
+- **Everything about a released person stays, text included** (ADR-0020,
+  as amended by #363). The owner decided (2026-09-29): "I don't intend
+  to make a completely public copy, so any non-privileged view can
+  include all information on confirmed-deceased people." So the export
+  keeps a released person's labels, descriptions, aliases, names and
+  titles, their statements' values and the excerpts of the references
+  those statements keep, and everything about the other items it keeps
+  (a place, an organization, an artifact, the vocabulary, an event whose
+  participants it all keeps); families and untyped items stay out. Such
+  a text can name a possibly living relative, and it is visible in the
+  non-privileged view: a consequence presented to the owner with the
+  rule on 2026-09-29, which drew no objection. The extractor's
+  judgement notes never leave (ADR-0035), in any form. A line the export
+  cannot read as a triple is dropped, and a dump that holds a sitelink,
+  whose page's own triples never name its entity, or a property of a
+  type the model does not use (a URL, a media file, a shape) makes the
+  export refuse to run.
 - The check runs on the query service, so the export waits for the query
   service to hold the dump's revision of every item and property, and
   **refuses to run** while it does not, or when the graph changes during
@@ -856,4 +883,5 @@ not a signal to grow the schema on.
   badge. A family it lists is always badged. Its people are the items
   with person evidence, selected as the check selects them; the export
   also drops what the site lists as no person, an untyped item without
-  person evidence, a family without person evidence and a redirect.
+  person evidence, a family without person evidence, a redirect and an
+  event that one it drops took part in.
