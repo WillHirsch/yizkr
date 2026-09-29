@@ -134,11 +134,14 @@ class TestUsable:
 
     def test_code_units_become_characters(self):
         """A surrogate pair is one character; a lone surrogate, or a code
-        beyond Unicode, is the replacement character."""
+        beyond Unicode, is the replacement character; a NUL is a control
+        character, never the mark of a character the page hides."""
         decode = textlayer._decode
         assert decode([0x47, 0xD83D, 0xDCDC, 0x6C]) == "G\U0001f4dcl"
         assert decode([0x47, 0xD83D, 0x6C]) == "G\ufffdl"
         assert decode([0xDCDC, 0x110000]) == "\ufffd\ufffd"
+        assert decode([0x47, 0, 0x6C]) == "G\x01l"
+        assert decode([0x47, textlayer._HIDDEN_CODE, 0x6C]) == "G\x00l"
 
     def test_clean_keeps_the_text_and_its_lines(self):
         raw = "\r\nFlörburg,  \r\n\r\n\r\n\x00Brunnenring 35\t\r\n\r\n"
