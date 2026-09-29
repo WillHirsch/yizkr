@@ -157,8 +157,16 @@ rechecks.
 cache answered, in all and per role; hits and misses by reason; resumes,
 replays (and those that answered otherwise), rejections and adoptions;
 and what the engine's call events say: outcomes, errors by name, engine
-time, waits for the subscription, attempts a limit refused and why calls
-were held.
+time, waits for the subscription, attempts a limit refused, why calls
+were held, and the model the engine reported for each call.
+
+**Usage.** The tokens each call's stream reported it used (input,
+output, cache creation and cache read), per stage and role as the call
+events name them, and in all, with how many calls reported any. The sums
+are of what was reported: a call cut off before its result reports
+nothing, so where some did, the sums fall short of what was used. A run
+whose call events carry no usage says so: `not recorded`. The report
+totals them from the call events as it reads the log.
 
 **Control requests.** How many, by action and by who asked, and the
 slices paused and aborted.

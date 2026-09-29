@@ -161,9 +161,19 @@ HELD = "held"
 KILLED = "killed"
 # the stage an alert on the run as a whole names
 RUN = "run"
+# whether the run's call events carry what the calls used
+RECORDED = "recorded"
 
 # the engine's call event (yizkr.pipeline.llm.ENGINE_CALL)
 CALL = "call"
+# the tokens a call's stream reports it used, by the claude CLI's names
+# for them, as the engine's call event carries them (its `usage`)
+USAGE_TOKENS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
 # the clustering stage and its output (in CORPUS_DIR/<stage>/)
 CLUSTERING = "clustering"
 IDENTITY_MAP = "identity-map.json"
@@ -431,6 +441,11 @@ class _Calls:
     refused: int = 0
     holds: Counter = field(default_factory=Counter)
     errors: Counter = field(default_factory=Counter)
+    # the model each call's stream reported; and per (stage, role), as
+    # the call event names them, its calls, those whose stream reported
+    # what they used, and the tokens they reported
+    models: Counter = field(default_factory=Counter)
+    usage: dict[tuple[str, str], Counter] = field(default_factory=dict)
 
     def role(self, name: str) -> Counter:
         counts = self.roles.get(name)
@@ -660,6 +675,27 @@ class _Fold:
         error = _text(event.get("error"))
         if error is not None:
             calls.errors[failure_label(error)] += 1
+        model = _text(event.get("model"))
+        if model is not None:
+            calls.models[model] += 1
+        where = (
+            _text(event.get("stage")) or "?",
+            _text(event.get("role")) or "?",
+        )
+        used = calls.usage.setdefault(where, Counter())
+        used["calls"] += 1
+        usage = event.get("usage")
+        tokens = {
+            name: usage[name]
+            for name in USAGE_TOKENS
+            if isinstance(usage, dict)
+            and isinstance(usage.get(name), int)
+            and not isinstance(usage[name], bool)
+            and usage[name] >= 0
+        }
+        if tokens:
+            used["reported"] += 1
+            used.update(tokens)
         attempt, stage = self._in_flight(event)
         if stage is not None:
             self._totals(stage).calls += 1
@@ -1436,7 +1472,7 @@ def _aggregate(
         "corpus_stages": _aggregate_corpus(fold, run, vocabulary),
         "anomalies": _aggregate_alerts(alerts, fold, vocabulary),
         "content": _aggregate_content(documents, clusters, flags, vocabulary),
-        "calls": _aggregate_calls(fold),
+        "calls": _aggregate_calls(fold, vocabulary),
         "control": _aggregate_control(control, vocabulary),
     }
 
@@ -1892,7 +1928,7 @@ def _aggregate_clusters(
     return shown
 
 
-def _aggregate_calls(fold: _Fold) -> dict[str, Any]:
+def _aggregate_calls(fold: _Fold, vocabulary: _Vocabulary) -> dict[str, Any]:
     calls = fold.calls
     roles: dict[str, Counter] = {}
     for role, counts in calls.roles.items():
@@ -1940,7 +1976,40 @@ def _aggregate_calls(fold: _Fold) -> dict[str, Any]:
                     else OTHER
                 ),
             ),
+            "models": _folded(
+                calls.models,
+                lambda value: value if _MODEL.fullmatch(value) else OTHER,
+            ),
         },
+        "usage": _aggregate_usage(calls, vocabulary),
+    }
+
+
+def _aggregate_usage(calls: _Calls, vocabulary: _Vocabulary) -> dict[str, Any]:
+    """What the calls that reached the engine reported they used, per
+    stage and role as their call events name them, and in all: their
+    calls, those whose stream reported their usage, and the tokens
+    reported. The sums are of what was reported, so they fall short of
+    what was used by the calls that reported nothing. RECORDED false when
+    no call event of the run carries its usage."""
+    rows: dict[tuple[str, str], Counter] = {}
+    for (stage, role), used in calls.usage.items():
+        key = (vocabulary.stage(stage), _known(role, ROLES))
+        rows.setdefault(key, Counter()).update(used)
+    total: Counter = Counter()
+    for used in rows.values():
+        total.update(used)
+    if not total["reported"]:
+        return {RECORDED: False}
+    fields = ("calls", "reported", *USAGE_TOKENS)
+    return {
+        RECORDED: True,
+        "by_stage": [
+            {"stage": stage, "role": role}
+            | {name: rows[(stage, role)][name] for name in fields}
+            for stage, role in sorted(rows)
+        ],
+        "total": {name: total[name] for name in fields},
     }
 
 
@@ -2045,7 +2114,7 @@ def _sections(aggregate: Mapping[str, Any]) -> list[_Section]:
         *_stage_sections(aggregate["stages"], aggregate["corpus_stages"]),
         _anomalies_section(aggregate["anomalies"]),
         *_content_sections(aggregate["content"]),
-        _calls_section(aggregate["calls"]),
+        *_calls_sections(aggregate["calls"]),
         _control_section(aggregate["control"]),
     ]
 
@@ -2489,7 +2558,7 @@ def _cluster_blocks(clusters: Mapping[str, Any]) -> list[Any]:
     return blocks
 
 
-def _calls_section(calls: Mapping[str, Any]) -> _Section:
+def _calls_sections(calls: Mapping[str, Any]) -> list[_Section]:
     events = calls["engine_calls"]
     blocks: list[Any] = [
         f"{_n(calls['engine'])} calls reached the engine and the LLM cache "
@@ -2539,9 +2608,58 @@ def _calls_section(calls: Mapping[str, Any]) -> _Section:
             f"{_n(events['refused'])}",
             f"Held: {_listed(events['holds'])}; errors: "
             f"{_listed(events['errors'])}",
+            "Calls by the model the engine reported: "
+            + _listed(events["models"], "not recorded"),
         ]
     )
-    return _Section("Calls and the cache", blocks)
+    return [
+        _Section("Calls and the cache", blocks),
+        _Section("Usage", _usage_blocks(calls["usage"]), 3),
+    ]
+
+
+def _usage_blocks(usage: Mapping[str, Any]) -> list[Any]:
+    if not usage[RECORDED]:
+        return ["Usage: not recorded. The run's call events carry no usage."]
+    head = (
+        "Stage",
+        "Role",
+        "Calls",
+        "Reported",
+        "Input",
+        "Output",
+        "Cache creation",
+        "Cache read",
+    )
+    total = usage["total"]
+    return [
+        "The tokens the calls that reached the engine reported they used, "
+        "by the stage and role their call events name. The sums are of "
+        "what was reported: a call that reported nothing (one cut off "
+        "before its result) adds nothing to them.",
+        _table(
+            head,
+            [
+                (
+                    row["stage"],
+                    row["role"],
+                    *(row[name] for name in ("calls", "reported")),
+                    *(row[name] for name in USAGE_TOKENS),
+                )
+                for row in usage["by_stage"]
+            ]
+            + [
+                (
+                    "all",
+                    "",
+                    total["calls"],
+                    total["reported"],
+                    *(total[name] for name in USAGE_TOKENS),
+                )
+            ],
+            numbers=range(2, len(head)),
+        ),
+    ]
 
 
 def _control_section(control: Mapping[str, Any]) -> _Section:

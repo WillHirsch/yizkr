@@ -169,6 +169,8 @@ CHECK_FAILED = (
     "Flörburg' (signature read-error: Eugen Löbig)"
 )
 ABORT = "the Brunnenring 35 deck looks wrong"
+OPUS, SONNET = "claude-opus-5-5", "claude-sonnet-5"
+USED = {"input_tokens": 500, "output_tokens": 100}
 CLUSTERED = [
     "ambiguous clusters not merged: 1 cluster of 2 mentions",
     "conflicting clusters not merged: Klurnau and Rekau",
@@ -288,7 +290,9 @@ STREAM = [
     stage("started", 10, CERT, "transcription", FIRST),
     cache("cache-miss", 11, CERT, "transcribe", FIRST, call="complete",
           reason="absent"),
-    call(31, CERT, "transcribe", FIRST, 20.0),
+    call(31, CERT, "transcribe", FIRST, 20.0, model=OPUS,
+         usage={"input_tokens": 1200, "output_tokens": 300,
+                "cache_read_input_tokens": 800}),
     stage("done", 31, CERT, "transcription", FIRST),
     *alert(31, FIRST, "transcription", "language-unexpected", CERT[:12],
            "yi", "new", confidence=0.51, detail="Hildegard Laudler"),
@@ -303,22 +307,24 @@ STREAM = [
     stage("started", 41, CERT, "critique", FIRST),
     cache("cache-miss", 42, CERT, "critique", FIRST, call="complete",
           reason="rejected"),
-    call(47, CERT, "critique", FIRST, 5.0),
+    call(47, CERT, "critique", FIRST, 5.0, model=OPUS,
+         usage={"input_tokens": 700, "output_tokens": 50,
+                "cache_creation_input_tokens": 90}),
     stage("done", 47, CERT, "critique", FIRST),
     stage("started", 50, DIRECTORY, "transcription", FIRST),
     stage("done", 51, DIRECTORY, "transcription", FIRST),
     stage("started", 52, DIRECTORY, "extraction", FIRST),
     cache("cache-miss", 53, DIRECTORY, "extract", FIRST, call="open",
           reason="absent"),
-    call(55, DIRECTORY, "extract", FIRST, 2.0),
+    call(55, DIRECTORY, "extract", FIRST, 2.0, model=SONNET, usage=USED),
     cache("cache-miss", 56, DIRECTORY, "extract", FIRST, call="fork",
           reason="absent"),
-    call(60, DIRECTORY, "extract", FIRST, 4.0),
+    call(60, DIRECTORY, "extract", FIRST, 4.0, model=SONNET, usage=USED),
     cache("cache-reject", 61, DIRECTORY, "extract", FIRST,
           reason="chunk: no terminal sentinel after 'Löbig, Ursula, Wwe.'"),
     cache("cache-miss", 62, DIRECTORY, "extract", FIRST, call="fork",
           reason="rejected"),
-    call(66, DIRECTORY, "extract", FIRST, 4.0),
+    call(66, DIRECTORY, "extract", FIRST, 4.0, model=SONNET, usage=USED),
     stage("done", 70, DIRECTORY, "extraction", FIRST, attention=[FALLBACK]),
     *alert(70, FIRST, "extraction", "fallback-manifest", DIRECTORY[:12],
            True, "new"),
@@ -391,7 +397,9 @@ STREAM = [
     stage("started", 3610, POSTCARD, "extraction", SECOND),
     cache("cache-miss", 3611, POSTCARD, "extract", SECOND, call="open",
           reason="absent"),
-    call(3614, POSTCARD, "extract", SECOND, 3.0),
+    # a model the stream names by no model id, and a usage of no counts
+    call(3614, POSTCARD, "extract", SECOND, 3.0, model="Hildegard Laudler",
+         usage={"input_tokens": True, "output_tokens": -5}),
     cache("cache-hit", 3615, POSTCARD, "extract", SECOND, call="fork",
           reason="key match"),
     stage("done", 3620, POSTCARD, "extraction", SECOND),
@@ -1261,6 +1269,29 @@ class TestCallsAndTime:
         assert calls["rejections"] == 1
         assert calls["by_role"]["extract"]["engine"] == 12
 
+    def test_what_the_calls_reported_they_used(self, made):
+        usage = made["aggregate"]["calls"]["usage"]
+        zero = {"cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        assert usage["by_stage"] == [
+            {"stage": "critique", "role": "critique", "calls": 3,
+             "reported": 1, "input_tokens": 700, "output_tokens": 50,
+             "cache_creation_input_tokens": 90,
+             "cache_read_input_tokens": 0},
+            {"stage": "extraction", "role": "extract", "calls": 12,
+             "reported": 3, "input_tokens": 1500, "output_tokens": 300}
+            | zero,
+            {"stage": "transcription", "role": "transcribe", "calls": 1,
+             "reported": 1, "input_tokens": 1200, "output_tokens": 300,
+             "cache_creation_input_tokens": 0,
+             "cache_read_input_tokens": 800},
+        ]  # fmt: skip
+        assert usage["total"]["reported"] == 5
+        assert usage["total"]["input_tokens"] == 3400
+        models = made["aggregate"]["calls"]["engine_calls"]["models"]
+        assert models == {SONNET: 3, OPUS: 2, OTHER: 1}
+        text = render_markdown(made["aggregate"])
+        assert "| all |  | 16 | 5 | 3,400 | 650 | 90 | 800 |" in text
+
     def test_the_engine_s_call_events(self, made):
         events = made["aggregate"]["calls"]["engine_calls"]
         assert events["count"] == 16
@@ -1434,9 +1465,12 @@ class TestRunStates:
         aggregate = made["aggregate"]
         assert aggregate["documents"]["planned"] == 0
         assert aggregate["stages"] == []
+        assert aggregate["calls"]["usage"] == {"recorded": False}
         text = render_markdown(aggregate)
         assert "No stage planned or seen." in text
         assert "0 documents planned" in text
+        assert "Usage: not recorded." in text
+        assert "Calls by the model the engine reported: not recorded" in text
 
     def test_a_run_that_never_started(self, tmp_path):
         path = tmp_path / "run"
