@@ -683,7 +683,7 @@ class TestGapChannel:
         assert "`deportation`" in chunk_prompt
         assert "`imprisonment`" in chunk_prompt
         assert "`release`" in chunk_prompt
-        assert "`participant` (the person)" in chunk_prompt
+        assert "`participant` (the person, role `principal`)" in chunk_prompt
         # no longer offered as things to gap
         assert "employed by" not in chunk_prompt
         assert "deported to" not in chunk_prompt
@@ -1681,10 +1681,11 @@ class TestFallbackLadder:
         names nothing, refused so that the line-range tier looks again;
         any other value where the entity list belongs is unusable (#45)."""
         manifest = json.dumps({"entities": listed})
-        assert ChunkedClaimExtractor._parse_entity_manifest(manifest, 1) == (
-            records,
-            [problem],
+        parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
+            manifest, 1
         )
+        entities = None if parsed is None else parsed.entities
+        assert (entities, problems) == (records, [problem])
 
 
 class TestExtractionsWithoutClaims:

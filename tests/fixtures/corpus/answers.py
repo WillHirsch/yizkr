@@ -3,9 +3,13 @@
 A faithful model's answers, recorded from the example universe itself: a
 document's claims are the assertions the universe records for its source
 (tests/fixtures/example_universe.py), each citing its excerpt and the page
-or slide it is on, and the only thing written here by hand is each
-document's entity manifest: the entities as the document names them, each
-with the universe entity it is (`truth`). One answer is deliberately wrong,
+or slide it is on, in the form the extraction prompts ask for (#407): an
+event's participant with its role, and a spouse assertion as a marriage
+bounded by its wedding (`answered_as`, ADR-0036). The only thing written
+here by hand is each document's entity manifest: the entities as the
+document names them, each with the universe entity it is (`truth`) and
+its mention record (ADR-0035 §2); a marriage and its wedding have keys of
+their own. One answer is deliberately wrong,
 as models are: the family history's "I was born in '50" is read as 1850
 (MISTAKES). Under an extraction prompt that carries SHARPER_RULE the
 recorded model reads it right, and the critic flags the mistake wherever a
@@ -51,6 +55,11 @@ class Entity:
     aliases: tuple[str, ...] = ()
     summary: str = ""
     mentions: tuple[str, ...] = ()
+    # the mention record the recorded model gives (ADR-0035 §2), for a
+    # person, a place, an organisation or a family
+    structure: dict | None = None
+    # for a marriage or its wedding, the universe keys of the couple
+    couple: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +116,48 @@ MISTAKES = (
 )
 
 
+def given(written: str, standard: str | None = None) -> dict:
+    """A given name as written, with the standard form the document
+    supports; a full name is its own."""
+    name = {"written": written}
+    return name | {"standard": standard} if standard else name
+
+
+def person(*names: dict, surnames=(), nicknames=(), status="name") -> dict:
+    """A person's mention record: given names (`given`), surnames, each
+    untyped unless the document marks it, and nicknames."""
+    record: dict = {"kind": "human", "status": status}
+    if names:
+        record["given"] = list(names)
+    if surnames:
+        record["surnames"] = [{"written": name} for name in surnames]
+    if nicknames:
+        record["nicknames"] = list(nicknames)
+    return record
+
+
+def place(*names: str) -> dict:
+    """A place's mention record: its names, each its own toponym."""
+    return {
+        "kind": "place",
+        "status": "toponym",
+        "names": [{"written": n, "toponym": n} for n in names],
+    }
+
+
+def address(written: str, street: str, number: str, *within: str) -> dict:
+    """An address's mention record: the address as written, its street
+    and its number, and the places the label puts it in, in its order."""
+    record: dict = {
+        "kind": "place",
+        "status": "toponym",
+        "address": {"written": written, "street": street, "number": number},
+    }
+    if within:
+        record["within"] = list(within)
+    return record
+
+
 RECORDED = {
     CERTIFICATE: Recorded(
         CERTIFICATE,
@@ -124,15 +175,39 @@ RECORDED = {
                     "at Floerburg, Germany; arrived 1939; naturalised 1952"
                 ),
                 mentions=("LOBIG",),
+                structure=person(
+                    given("Gustave", "Gustave"),
+                    given("Gustav", "Gustav"),
+                    surnames=("Lobig", "Löbig"),
+                ),
             ),
             Entity(
                 "e2",
                 "8 Hawthorn Road, Stupfield, Victoria",
                 "place",
                 "hawthorn-road-8",
+                structure=address(
+                    "8 Hawthorn Road",
+                    "Hawthorn Road",
+                    "8",
+                    "Stupfield",
+                    "Victoria",
+                ),
             ),
-            Entity("e3", "Floerburg", "place", "floerburg"),
-            Entity("e4", "Australia", "place", "australia"),
+            Entity(
+                "e3",
+                "Floerburg",
+                "place",
+                "floerburg",
+                structure=place("Floerburg"),
+            ),
+            Entity(
+                "e4",
+                "Australia",
+                "place",
+                "australia",
+                structure=place("Australia"),
+            ),
             Entity("e5", "RMS Flund", "vessel", "rms-flund"),
             Entity("e6", "hatter", "occupation_class", "hatter"),
         ),
@@ -150,29 +225,53 @@ RECORDED = {
                 "klara-loebig",
                 aliases=("Pünktchen",),
                 summary="the addressee, in Stupfield; left on 22 June",
+                structure=person(
+                    given("Klara", "Klara"),
+                    surnames=("Löbig",),
+                    nicknames=("Pünktchen",),
+                ),
             ),
+            # the writer, whom the postcard names only by its own words
+            # for him: his label is those words, with the status kinship
+            # (ADR-0035 §2.1)
             Entity(
                 "e2",
-                "Klara's father",
+                "Dein Vater",
                 "human",
                 "sebastian-loebig",
-                summary="the sender, who signs 'Dein Vater'",
-                mentions=("Dein Vater",),
+                summary="the sender, Klara's father",
+                structure=person(status="kinship"),
             ),
+            # the postcard never spells the full form, so it gives none
             Entity(
                 "e3",
                 "Gustl",
                 "human",
                 "gustav-loebig",
                 summary="waiting for his visa",
+                structure=person(given("Gustl")),
             ),
             Entity(
                 "e4",
                 "31 Juniper Street, Stupfield, Victoria, Australien",
                 "place",
                 "juniper-street-31",
+                structure=address(
+                    "31 Juniper Street",
+                    "Juniper Street",
+                    "31",
+                    "Stupfield",
+                    "Victoria",
+                    "Australien",
+                ),
             ),
-            Entity("e5", "Flörburg", "place", "floerburg"),
+            Entity(
+                "e5",
+                "Flörburg",
+                "place",
+                "floerburg",
+                structure=place("Flörburg"),
+            ),
             Entity(
                 "e6",
                 "Emigration of Klara Löbig",
@@ -194,6 +293,7 @@ RECORDED = {
                 "human",
                 "eugen-loebig",
                 summary="master hatter in Flörburg; Sebastian's father",
+                structure=person(given("Eugen", "Eugen"), surnames=("Löbig",)),
             ),
             Entity(
                 "e2",
@@ -203,6 +303,11 @@ RECORDED = {
                 aliases=("Wastl",),
                 summary="Eugen's son; born 1862; hatter; married 1905",
                 mentions=("Sebastian", "Wastl"),
+                structure=person(
+                    given("Sebastian", "Sebastian"),
+                    surnames=("Löbig",),
+                    nicknames=("Wastl",),
+                ),
             ),
             Entity(
                 "e3",
@@ -211,6 +316,11 @@ RECORDED = {
                 "hildegard-loebig",
                 aliases=("Hilde",),
                 summary="married Wastl in 1905",
+                structure=person(
+                    given("Hildegard", "Hildegard"),
+                    surnames=("Laudler",),
+                    nicknames=("Hilde",),
+                ),
             ),
             Entity(
                 "e4",
@@ -219,6 +329,9 @@ RECORDED = {
                 "ursula-loebig",
                 summary="Wastl and Hilde's eldest; born 1911, died 1941",
                 mentions=("Ursula,", "the eldest"),
+                structure=person(
+                    given("Ursula", "Ursula"), surnames=("Löbig",)
+                ),
             ),
             Entity(
                 "e5",
@@ -228,7 +341,15 @@ RECORDED = {
                 aliases=("Pünktchen",),
                 summary="Wastl and Hilde's daughter; born 1917; went first",
                 mentions=("Klara",),
+                structure=person(
+                    given("Klara", "Klara"),
+                    surnames=("Löbig",),
+                    nicknames=("Pünktchen",),
+                ),
             ),
+            # "Gustav, the youngest, was Gustl at home" and "became
+            # Gustave Lobig here, Gus to everyone": the document supports
+            # each diminutive's full form
             Entity(
                 "e6",
                 "Gustave Lobig",
@@ -240,6 +361,12 @@ RECORDED = {
                     "1939; married Florence Faxridge 1942; died '96"
                 ),
                 mentions=("Gustav", "Gustl", "Dad"),
+                structure=person(
+                    given("Gustave", "Gustave"),
+                    given("Gustl", "Gustav"),
+                    given("Gus", "Gustave"),
+                    surnames=("Lobig",),
+                ),
             ),
             Entity(
                 "e7",
@@ -248,6 +375,9 @@ RECORDED = {
                 "ursula-loebig-angerring",
                 summary="a widow at Angerring 57 in 1912; no known relation",
                 mentions=("a widow",),
+                structure=person(
+                    given("Ursula", "Ursula"), surnames=("Löbig",)
+                ),
             ),
             Entity(
                 "e8",
@@ -255,6 +385,9 @@ RECORDED = {
                 "human",
                 "florence-lobig",
                 summary="married Gus in 1942",
+                structure=person(
+                    given("Florence", "Florence"), surnames=("Faxridge",)
+                ),
             ),
             Entity(
                 "e9",
@@ -263,6 +396,9 @@ RECORDED = {
                 "nicholas-lobig",
                 summary="the writer; Gus's son; born in '50",
                 mentions=("Nicholas", "my father", "I was born"),
+                structure=person(
+                    given("Nicholas", "Nicholas"), surnames=("Lobig",)
+                ),
             ),
             Entity(
                 "e10",
@@ -270,10 +406,23 @@ RECORDED = {
                 "place",
                 "floerburg",
                 mentions=("Flörburg",),
+                structure=place("Flörburg"),
             ),
-            Entity("e11", "Hesse", "place", "hesse"),
-            Entity("e12", "Angerring 57", "place", "angerring-57"),
-            Entity("e13", "Stupfield", "place", "stupfield"),
+            Entity("e11", "Hesse", "place", "hesse", structure=place("Hesse")),
+            Entity(
+                "e12",
+                "Angerring 57",
+                "place",
+                "angerring-57",
+                structure=address("Angerring 57", "Angerring", "57"),
+            ),
+            Entity(
+                "e13",
+                "Stupfield",
+                "place",
+                "stupfield",
+                structure=place("Stupfield"),
+            ),
             Entity(
                 "e14",
                 "master hatter",
@@ -301,6 +450,38 @@ RECORDED = {
                 "emigration-1939",
                 mentions=("followed her in 1939",),
             ),
+            Entity(
+                "e18",
+                "Marriage of Sebastian Löbig and Hildegard Laudler",
+                "marriage",
+                "marriage-sebastian-hildegard",
+                mentions=("Wastl married",),
+                couple=("sebastian-loebig", "hildegard-loebig"),
+            ),
+            Entity(
+                "e19",
+                "Wedding of Sebastian Löbig and Hildegard Laudler",
+                "wedding",
+                "wedding-sebastian-hildegard",
+                mentions=("Wastl married",),
+                couple=("sebastian-loebig", "hildegard-loebig"),
+            ),
+            Entity(
+                "e20",
+                "Marriage of Gustave Lobig and Florence Faxridge",
+                "marriage",
+                "marriage-gustav-florence",
+                mentions=("Dad married",),
+                couple=("gustav-loebig", "florence-lobig"),
+            ),
+            Entity(
+                "e21",
+                "Wedding of Gustave Lobig and Florence Faxridge",
+                "wedding",
+                "wedding-gustav-florence",
+                mentions=("Dad married",),
+                couple=("gustav-loebig", "florence-lobig"),
+            ),
         ),
     ),
     DECK: Recorded(
@@ -316,6 +497,11 @@ RECORDED = {
                 aliases=("Wastl",),
                 summary="Wastl, 1862–1945; married Hilde",
                 mentions=("Wastl",),
+                structure=person(
+                    given("Sebastian", "Sebastian"),
+                    surnames=("Löbig",),
+                    nicknames=("Wastl",),
+                ),
             ),
             Entity(
                 "e2",
@@ -324,6 +510,11 @@ RECORDED = {
                 "hildegard-loebig",
                 aliases=("Hilde",),
                 summary="Hilde, 1876–1968; married Wastl",
+                structure=person(
+                    given("Hildegard", "Hildegard"),
+                    surnames=("Laudler",),
+                    nicknames=("Hilde",),
+                ),
             ),
             Entity(
                 "e3",
@@ -332,6 +523,9 @@ RECORDED = {
                 "ursula-loebig",
                 summary="a child of Wastl and Hilde",
                 mentions=("Ursula",),
+                structure=person(
+                    given("Ursula", "Ursula"), surnames=("Löbig",)
+                ),
             ),
             Entity(
                 "e4",
@@ -341,7 +535,14 @@ RECORDED = {
                 aliases=("Pünktchen",),
                 summary="a child of Wastl and Hilde; came first",
                 mentions=("Klara",),
+                structure=person(
+                    given("Klara", "Klara"),
+                    surnames=("Löbig",),
+                    nicknames=("Pünktchen",),
+                ),
             ),
+            # "Gustav 'Gustl'" and "Gustave 'Gus' Lobig": the deck gives
+            # each diminutive's full form
             Entity(
                 "e5",
                 "Gustave Lobig",
@@ -350,6 +551,12 @@ RECORDED = {
                 aliases=("Gustl", "Gus"),
                 summary="a child of Wastl and Hilde; came in 1939",
                 mentions=("Gustl", "Gustave"),
+                structure=person(
+                    given("Gustave", "Gustave"),
+                    given("Gustl", "Gustav"),
+                    given("Gus", "Gustave"),
+                    surnames=("Lobig",),
+                ),
             ),
             Entity(
                 "e6",
@@ -357,6 +564,9 @@ RECORDED = {
                 "human",
                 "florence-lobig",
                 summary="married Gus in 1942",
+                structure=person(
+                    given("Florence", "Florence"), surnames=("Faxridge",)
+                ),
             ),
             Entity(
                 "e7",
@@ -365,8 +575,17 @@ RECORDED = {
                 "nicholas-lobig",
                 summary="the speaker; Gus and Florence's son, born 1950",
                 mentions=("Nicholas",),
+                structure=person(
+                    given("Nicholas", "Nicholas"), surnames=("Lobig",)
+                ),
             ),
-            Entity("e8", "Stupfield", "place", "stupfield"),
+            Entity(
+                "e8",
+                "Stupfield",
+                "place",
+                "stupfield",
+                structure=place("Stupfield"),
+            ),
             Entity(
                 "e9",
                 "Emigration of Klara Löbig",
@@ -380,6 +599,32 @@ RECORDED = {
                 "migration",
                 "emigration-1939",
                 mentions=("Gustl in 1939",),
+            ),
+            # "=" marks the couple married, and dates nothing: a marriage
+            # with no wedding
+            Entity(
+                "e11",
+                "Marriage of Sebastian Löbig and Hildegard Laudler",
+                "marriage",
+                "marriage-sebastian-hildegard",
+                mentions=("= Hildegard",),
+                couple=("sebastian-loebig", "hildegard-loebig"),
+            ),
+            Entity(
+                "e12",
+                "Marriage of Gustave Lobig and Florence Faxridge",
+                "marriage",
+                "marriage-gustav-florence",
+                mentions=("= Florence",),
+                couple=("gustav-loebig", "florence-lobig"),
+            ),
+            Entity(
+                "e13",
+                "Wedding of Gustave Lobig and Florence Faxridge",
+                "wedding",
+                "wedding-gustav-florence",
+                mentions=("= Florence",),
+                couple=("gustav-loebig", "florence-lobig"),
             ),
         ),
     ),
@@ -431,6 +676,7 @@ def manifest(recorded: Recorded) -> dict:
                 "mention_lines": lines,
                 "extract": True,
             }
+            | ({"structure": entity.structure} if entity.structure else {})
         )
     return {"entities": entities}
 
@@ -461,7 +707,11 @@ def _value(recorded: Recorded, prop: str, value, language: str) -> dict:
     if datatype == "time":
         return _time(value)
     if datatype == "wikibase-item":
-        entity = {entity.truth: entity for entity in recorded.entities}[value]
+        entities = {entity.truth: entity for entity in recorded.entities}
+        if value not in entities:
+            # a vocabulary item, such as a participant's role
+            return {"type": "item", "value": {"kind": "vocab", "key": value}}
+        entity = entities[value]
         return {
             "type": "item",
             "value": {
@@ -491,57 +741,112 @@ def said(recorded: Recorded) -> list[u.Assertion]:
     ]
 
 
+# the universe's property for a couple, which the prompts no longer
+# offer: the recorded model states a marriage as a union bounded by events
+# instead (ADR-0036)
+SPOUSE = "spouse"
+# the kinds whose participants take part in them as the couple
+UNION_KINDS = ("marriage", "partnership")
+
+
+def union_of(recorded: Recorded, couple: set[str], kind: str) -> Entity:
+    """The document's entity of `kind` (a marriage or its wedding) that
+    joins the couple."""
+    (found,) = [
+        entity
+        for entity in recorded.entities
+        if entity.kind == kind and set(entity.couple or ()) == couple
+    ]
+    return found
+
+
+def as_unions(recorded: Recorded, assertion: u.Assertion) -> list[tuple]:
+    """A spouse assertion of the universe as the recorded model answers
+    it, (subject key, property, value, qualifiers): each of the couple a
+    participant of their marriage with the role spouse, and, where the
+    source dates the marriage's start, the marriage started by its
+    wedding, which the date dates (ADR-0036)."""
+    couple = {assertion.subject, assertion.value}
+    marriage = union_of(recorded, couple, "marriage")
+    stated = [
+        (marriage.truth, "participant", who, (("object_has_role", SPOUSE),))
+        for who in (assertion.subject, assertion.value)
+    ]
+    for prop, when in assertion.qualifiers:
+        if prop == "start_time":
+            wedding = union_of(recorded, couple, "wedding")
+            stated += [
+                (marriage.truth, "started_by", wedding.truth, ()),
+                (wedding.truth, "point_in_time", when, ()),
+            ]
+    return stated
+
+
+def answered_as(recorded: Recorded, assertion: u.Assertion) -> list[tuple]:
+    """What the recorded model answers for one assertion, as (subject key,
+    property, value, qualifiers): a spouse assertion as its union
+    (as_unions), and an event's participant with the role principal, the
+    person the event happens to (ADR-0035 §3.2); any other as it is."""
+    if assertion.property == SPOUSE:
+        return as_unions(recorded, assertion)
+    qualifiers = assertion.qualifiers
+    if assertion.property == "participant":
+        qualifiers = (*qualifiers, ("object_has_role", "principal"))
+    return [
+        (assertion.subject, assertion.property, assertion.value, qualifiers)
+    ]
+
+
 def claims(
     recorded: Recorded, sha1: str, *, sharper: bool = False
 ) -> list[dict]:
     """Every claim the recorded model answers for the document, whose
-    SHA-1 is `sha1`: one per assertion, with its mistakes unless `sharper`
-    (the chunk prompt carries each mistake's rule)."""
+    SHA-1 is `sha1`: those of each assertion (answered_as), with its
+    mistakes unless `sharper` (the chunk prompt carries each mistake's
+    rule)."""
     ids = recorded.ids()
     by_id = {entity.id: entity for entity in recorded.entities}
     answered = []
     for assertion in said(recorded):
-        value = assertion.value
-        for mistake in MISTAKES:
-            if (
-                not sharper
-                and (mistake.document, mistake.subject, mistake.property)
-                == (recorded.document, assertion.subject, assertion.property)
-                and value == mistake.says
-            ):
-                value = mistake.read_as
-        subject = by_id[ids[assertion.subject]]
-        answered.append(
-            {
-                "subject": {
-                    "kind": "local",
-                    "local_id": subject.id,
-                    "label": subject.label,
-                },
-                "property": assertion.property,
-                "value": _value(
-                    recorded, assertion.property, value, recorded.language
-                ),
-                "qualifiers": [
-                    {
-                        "property": prop,
-                        "value": _value(
-                            recorded, prop, qualifier, recorded.language
-                        ),
-                    }
-                    for prop, qualifier in assertion.qualifiers
-                ],
-                "source": {
-                    "artifact": {"kind": "artifact", "sha1": sha1},
-                    "page_number": page_of(recorded, assertion.excerpt),
-                    "transcription_excerpt": {
-                        "text": assertion.excerpt,
-                        "language": recorded.language,
+        for key, prop, value, qualifiers in answered_as(recorded, assertion):
+            for mistake in MISTAKES:
+                if (
+                    not sharper
+                    and (mistake.document, mistake.subject, mistake.property)
+                    == (recorded.document, key, prop)
+                    and value == mistake.says
+                ):
+                    value = mistake.read_as
+            subject = by_id[ids[key]]
+            answered.append(
+                {
+                    "subject": {
+                        "kind": "local",
+                        "local_id": subject.id,
+                        "label": subject.label,
                     },
-                },
-                "confidence": CONFIDENCE,
-            }
-        )
+                    "property": prop,
+                    "value": _value(recorded, prop, value, recorded.language),
+                    "qualifiers": [
+                        {
+                            "property": qualifier,
+                            "value": _value(
+                                recorded, qualifier, held, recorded.language
+                            ),
+                        }
+                        for qualifier, held in qualifiers
+                    ],
+                    "source": {
+                        "artifact": {"kind": "artifact", "sha1": sha1},
+                        "page_number": page_of(recorded, assertion.excerpt),
+                        "transcription_excerpt": {
+                            "text": assertion.excerpt,
+                            "language": recorded.language,
+                        },
+                    },
+                    "confidence": CONFIDENCE,
+                }
+            )
     return answered
 
 

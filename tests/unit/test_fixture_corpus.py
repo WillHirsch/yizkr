@@ -266,22 +266,11 @@ def in_universe(value, known: dict[str, str]):
 
 
 # The properties the manifest retires: extraction refuses their claims
-# (ADR-0036), and the recorded answers still make some.
+# (ADR-0036), and the recorded answers, under prompts that no longer offer
+# them, make none (#407).
 RETIRED = {
     key for key, spec in load_manifest().properties.items() if spec.retired
 }
-
-
-def retired_claims(name: str) -> int:
-    """How many claims of a retired property the recorded engine answers
-    for the document `name`."""
-    recorded = answers.RECORDED.get(name)
-    if recorded is None:
-        return 0
-    return sum(
-        claim["property"] in RETIRED
-        for claim in answers.claims(recorded, sha1(name))
-    )
 
 
 def said_in(name: str, batch: ClaimBatch) -> set[tuple]:
@@ -399,11 +388,15 @@ class TestTheCorpus:
 
     def test_the_recorded_answers_are_the_sources_assertions(self):
         """Every claim the recorded engine answers is an assertion the
-        universe records for the document's source, but for its recorded
-        mistakes, which a sharper prompt mends; none of the source's
-        assertions about an entity is left out; and each is a valid
-        claim, but for a claim of a retired property, which is refused
-        (ADR-0036's `spouse`, which the chunk prompt still offers)."""
+        universe records for the document's source, in the form the
+        extraction prompts ask for (#407), but for its recorded mistakes,
+        which a sharper prompt mends; none of the source's assertions
+        about an entity is left out; and each is a valid claim. The
+        universe states a couple by a spouse assertion, a property now
+        retired: the recorded model answers each as a marriage whose
+        couple take part in it as spouses, started by a wedding where the
+        source dates the start (ADR-0036). Every participant has a role:
+        spouse in a marriage, and the principal in any other event."""
         run = run_metadata("recorded").model_dump(mode="json")
         for name, recorded in answers.RECORDED.items():
             ids = recorded.ids()
@@ -415,26 +408,47 @@ class TestTheCorpus:
             for entity in recorded.entities:
                 assert answers.mention_lines(recorded, entity), entity
             entities = answers.manifest(recorded)["entities"]
+            kinds = {e["id"]: e["kind"] for e in entities}
             answered = {}
             for sharper in (False, True):
                 claimed = answers.claims(recorded, sha1(name), sharper=sharper)
                 batch, rejects = salvage_valid_claims(
                     claimed, run, entities=entities
                 )
-                assert [r["claim"] for r in rejects] == [
-                    c for c in claimed if c["property"] in RETIRED
-                ], name
-                assert all(
-                    "is retired" in problem
-                    for reject in rejects
-                    for problem in reject["problems"]
-                ), name
+                assert rejects == [], name
+                assert not {c.property for c in batch.claims} & RETIRED
+                for claim in batch.claims:
+                    roles = [
+                        q.value.value.key
+                        for q in claim.qualifiers
+                        if q.property == "object_has_role"
+                    ]
+                    if claim.property != "participant":
+                        assert roles == [], claim
+                    elif kinds[claim.subject.local_id] == "marriage":
+                        assert roles == ["spouse"], claim
+                    else:
+                        assert roles == ["principal"], claim
                 answered[sharper] = said_in(name, batch)
-            stated = {
-                (a.subject, a.property, a.value)
-                for a in answers.said(recorded)
-                if a.property not in RETIRED
-            }
+            stated = set()
+            for a in answers.said(recorded):
+                if a.property not in RETIRED:
+                    stated.add((a.subject, a.property, a.value))
+                    continue
+                assert a.property == "spouse", a
+                couple = {a.subject, a.value}
+                marriage = answers.union_of(recorded, couple, "marriage")
+                stated |= {
+                    (marriage.truth, "participant", a.subject),
+                    (marriage.truth, "participant", a.value),
+                }
+                for prop, when in a.qualifiers:
+                    assert prop == "start_time", a
+                    wedding = answers.union_of(recorded, couple, "wedding")
+                    stated |= {
+                        (marriage.truth, "started_by", wedding.truth),
+                        (wedding.truth, "point_in_time", when),
+                    }
             mistakes = answers.mistakes_in(recorded)
             says = {(m.subject, m.property, m.says) for m in mistakes}
             read_as = {(m.subject, m.property, m.read_as) for m in mistakes}
@@ -574,10 +588,12 @@ class TestTheRun:
                 coverage = json.loads(
                     (doc.extraction / "coverage.json").read_text()
                 )
-                # only the claims of a retired property are refused, and
-                # counted
-                assert coverage["rejected_claims"] == retired_claims(name)
+                # no claim is refused, and every person, place,
+                # organisation and family has its mention record
+                assert coverage["rejected_claims"] == 0, name
                 assert coverage["fallback"] == {}, name
+                assert coverage["records"]["recordless"] == 0, name
+                assert coverage["records"]["set_aside"] == {}, name
         # the deck's photograph is recorded, not registered
         deck = runs.views(run)[fc.DECK]
         assert (deck.dir / "derived-media.json").is_file()
@@ -1124,9 +1140,11 @@ class TestTheTrapsInTheIdentityMap:
         a father and a mother, and no date. Clustering lifts kin from
         both ends, so the two agree and the pair is a confident link on
         kinship alone (the evidence reads name/dates/kin). The postcard
-        states it from Klara's end too (her father, its writer); the
-        impossibility filter reads that kin edge, so its two mentions
-        cannot be one person."""
+        states it from Klara's end too (her father, its writer). The
+        postcard names its writer only by its own words for him, "Dein
+        Vater", which is his label, with the status kinship (ADR-0035
+        §2.1): no name, so his mention keys on nothing and never meets his
+        daughter's as a name would."""
         klara = identity.of("klara-loebig")
         deck, export = batches.said(fc.DECK), batches.said(fc.EXPORT)
         assert values(deck, "sebastian-loebig", "child") >= {"klara-loebig"}
@@ -1138,17 +1156,19 @@ class TestTheTrapsInTheIdentityMap:
             clustering.CONFIDENT,
             "exact/unknown/agree",
         )
-        # the postcard names her father, its writer, from her end, and
-        # his mention there cannot be hers: the kin edge rules it out
+        # the postcard names her father, its writer, from her end, by a
+        # kinship term: his mention is no name, pairs with no one, and so
+        # takes no part in her candidate cluster
         assert values(batches.said(fc.LETTER), "klara-loebig", "father") == {
             "sebastian-loebig"
         }
+        (writer,) = batches.entities(fc.LETTER, "Dein Vater")
+        assert writer.structure.status == "kinship"
         father = identity.of("sebastian-loebig")[fc.LETTER]
-        assert entry["conflict"]["how"] == clustering.HARD
-        assert set(entry["conflict"]["mentions"]) == {
-            father,
-            klara[fc.LETTER],
-        }
+        assert identity.method(father) == clustering.SINGLETON
+        assert father not in entry["members"]
+        assert entry["status"] == clustering.AMBIGUOUS
+        assert entry["conflict"] is None
         # its own mention of her links to the export on the name alone,
         # so no merge rule under discussion takes it in
         assert identity.pair(entry, klara[fc.LETTER], klara[fc.EXPORT]) == (
@@ -1258,14 +1278,14 @@ class TestTheTrapsInTheIdentityMap:
         strict=True,
         raises=AssertionError,
         reason=HELD_APART["mirrored-kinship"]
-        + ": the postcard's writer blocks with his daughter and is her "
-        "kin, so the candidate cluster of her mentions conflicts (hard), "
-        "and the whole-cluster merge rule (#361) leaves every member of "
-        "a conflicting cluster apart, the two confident links among them "
-        "included. A rule that merged over the confident links alone "
-        "(#66) would merge these two, and the family history's mention "
-        "with them; the postcard's own mention of her would stay apart "
-        "either way, since its one link is ambiguous.",
+        + ": the postcard's own mention of her links to the export on the "
+        "name alone, so the candidate cluster of her mentions is "
+        "ambiguous, and the whole-cluster merge rule (#361) leaves every "
+        "member of an ambiguous cluster apart, the two confident links "
+        "among them included. A rule that merged over the confident links "
+        "alone (#66) would merge these two, and the family history's "
+        "mention with them; the postcard's own mention of her would stay "
+        "apart either way, since its one link is ambiguous.",
     )
     def test_klaras_mentions_merge(self, identity):
         """What the rule withholds is the merge of the two mentions its
@@ -1567,6 +1587,8 @@ class TestTheRunReport:
             "migration",
             "occupation_class",
             "vessel",
+            "marriage",
+            "wedding",
         }
         # the counts report.md shows are those, rendered
         for label, count in counts.items():
