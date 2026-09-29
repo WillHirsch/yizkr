@@ -247,15 +247,26 @@ An entry holds `format`, `key`, `components` (the key's components, whose
 canonical JSON hashes to the key), `response`, `origin` (`engine`, or an
 adoption's reason) and `provenance`: the `role`, the `call`, the
 `engine`, the `model` the engine reported, the `cli_version`, the
-`config_hash`, the client's `model_identifier` and the time (`at`). A
-fork's entry adds how its session was obtained (`session`: `live`,
-`resumed`, `replayed` or `recomputed`) and the `opening_sha256` it was
-made on. An adoption's entry holds the components when its seeder gives
-them, and the provenance its seeder gives, with `adopted_at` (Seeding,
-below). An entry moved aside gains `rejected` (`at`, `reason`, `role`)
-or `replaced` (`at`); an answer recorded as rejected
-(`record_rejected`) has `rejected` from the start. An entry is served
-only under the key it records.
+`config_hash`, the client's `model_identifier` and the time (`at`). An
+answer of the claude-code engine adds what else the call's stream
+reported of it (`llm.stream_report`, from its init and result events,
+as the attempt that answered reported them): the `session_id` it ran
+in, its `usage` (`input_tokens`, `output_tokens`,
+`cache_creation_input_tokens` and `cache_read_input_tokens`, summed
+over it and any attempts a subscription limit refused before it), its
+`num_turns` and its result's `subtype`. A field its stream did not
+report is left out: a stream cut off before its result event reports no
+usage of its own. None of it is a key component, so two
+calls that send the same are keyed the same whatever their streams
+report, and an answer served again adds nothing to its entry. A fork's
+entry adds how its session was obtained (`session`: `live`, `resumed`,
+`replayed` or `recomputed`) and the `opening_sha256` it was made on. An
+adoption's entry holds the components when its seeder gives them, and
+the provenance its seeder gives, with `adopted_at` (Seeding, below). An
+entry moved aside gains `rejected` (`at`, `reason`, `role`) or
+`replaced` (`at`); an answer recorded as rejected (`record_rejected`)
+has `rejected` from the start. An entry is served only under the key it
+records.
 
 **Writes are atomic, and nothing is overwritten.** An entry is written to
 a staging file beside it, flushed, and published by a link that fails
@@ -760,12 +771,42 @@ in, and the kind of call:
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
 | `cache-reject` | a caller's rejection moved an answer aside | `reason` |
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
-| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears) |
+| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns` and `subtype` |
 | `alert` | an anomaly alert was appended | `check`, `status` |
 | `anomaly-recheck` | a recheck of the stored outputs began (docs/ANOMALIES.md) | `config` (the thresholds' digest), `documents` |
 | `anomaly-error` | an anomaly check raised; nothing failed with it | `error` (the exception's name, never its message), `hook` |
 | `run-end` | the invocation ended, other than by Ctrl-C | `outcome` and `reason` as `run.json` records them for the invocation (docs/RUN_MANIFEST.md: `finished`, `stopped`, `paused`, `refused` or `failed`), `statuses` (documents per status) |
 | `run-interrupted` | the invocation was interrupted (Ctrl-C) | `outcome` (`interrupted`), `statuses` |
+
+**What a call's stream reported.** A claude-code call's `call` event
+carries what its stream-json output reported of it (`llm.stream_report`,
+as CLI 2.1.237 prints it), each field only when the stream gave it in
+the form expected of it, whether the call was answered or not. The
+fields are those its final attempt's stream reported: from its init
+event, the `model` it ran on (the model id the configured name resolved
+to, which the `model-mismatch` anomaly check compares with the run
+manifest's, docs/ANOMALIES.md) and the `cli_version`; from its result
+event, its `num_turns` and its `subtype` (`success`, `error_max_turns`,
+`error_during_execution`; the CLI reports an API error as a `success`
+whose call fails). The `usage` (the four token counts its cache entry
+keeps, Layout, above) is summed over all its attempts, those a
+subscription limit refused included. A final attempt cut off before its
+result event (a timeout, say) gives no turns or subtype, whatever an
+earlier attempt reported, and no usage of its own; one cut off before
+its init event names no model. A replay is a call, and carries what the replay
+used; when it answers as the cache did, the opening turn's entry keeps
+what the original call's stream reported. A call the cache answers, by
+key match or adoption, makes no call, so it has no `call` event and uses
+nothing.
+
+The session an answered call ran in is kept in its cache entry (a call
+the cache stores nothing for keeps it nowhere), never in its event. It
+names a session of the account the engine is logged in with,
+and the CLI files the call's transcript under it. The event log is what
+the live monitor and the run report read, the report's summary meant for
+sharing included, and a session has no meaning in aggregate, so no
+reader of the events has it to pass on. Where it is needed, to trace an
+answer to its transcript, the entry has it.
 
 Every invocation's events end with `run-end` or `run-interrupted`,
 however it ended: a paused pass, a refusal and an escaped error
@@ -851,6 +892,18 @@ file (`rundir.run_state`, `yizkr stages state <run dir>`):
 (`rundir.cache_counts`): hits and misses by reason, resumes, replays,
 rejections and adoptions. The counts are totals over every invocation the
 run directory has seen.
+
+What the engine's calls used is totalled per stage and role from the
+`call` events (`rundir.usage_counts`): the calls, those whose event
+carries a usage (`reported`, a usage of zeros included), and the four
+token counts those carry, over every invocation the run directory has
+seen. A call's usage is summed over its attempts, so a call whose final
+attempt was cut off before its result event is reported with what its
+earlier attempts, refused for a limit, used; a call none of whose
+attempts reported any counts as a call with nothing reported. The sums
+are of what was reported. `replays=True` narrows them to the replays of
+opening turns, which the cache asked only for a fork's session, and
+`replays=False` to every other call.
 
 ## Subscription limits
 

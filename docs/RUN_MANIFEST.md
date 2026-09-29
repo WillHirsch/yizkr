@@ -167,9 +167,15 @@ Two cases pass the check and stay visible elsewhere:
   run, whose answers later runs reuse, refuses this too: its preflight
   asks every role for a model.
 - **An undated name of a model that also has dated snapshots.** Its form
-  cannot tell it from a full id. Every cache entry records the model the
-  engine reported, and #98 will compare the model each call's stream
-  resolves with the manifest's.
+  cannot tell it from a full id.
+
+In either case, the model each call ran on is in its `call` event and
+its cache entry, as the call's stream reported it (docs/LLM_CACHE.md),
+and the `model-mismatch` anomaly check compares it with the one the
+manifest names for the role (docs/ANOMALIES.md): an undated name that a
+call's stream reports running on a dated snapshot raises it. A role the
+manifest names no model for has none to compare with: the model its
+first call ran on, the one the engine resolved, stands for it.
 
 ## Format 1
 
@@ -287,9 +293,6 @@ otherwise.
   its order afresh in each invocation. Persisting it, with an explicit
   re-sequence as the only way to change it, belongs to keeper mode
   (#118).
-- **The resolved model per call.** The manifest says what a run
-  configures and what its clients apply; which model answered each call
-  is in the LLM cache's entries, and #98 parses it from the stream.
 - **The engine's pacing in `ingest run`.** The share of each usage
   window left to development sessions and the longest a call waits for
   the subscription (`$YIZKR_CLAUDE_RESERVE`, `$YIZKR_CLAUDE_MAX_WAIT`;

@@ -91,6 +91,11 @@ a replay, serves a conversation only for the answer it was made on,
 whichever answer a racing call or a replay has since stored under the
 key.
 
+An entry of an answer the engine gave also keeps, in its provenance,
+what the call's stream reported of it, where the engine reports it: the
+session it ran in, the tokens it used, its turns and how it ended. None
+of it is keyed.
+
 docs/LLM_CACHE.md describes the cache, its events and the run directory.
 """
 
@@ -167,6 +172,10 @@ LIVE = "live"
 RESUMED = "resumed"
 REPLAYED = "replayed"
 RECOMPUTED = "recomputed"
+
+# what an entry keeps of its call's stream report (llm.stream_report),
+# besides the model and the CLI version every entry records
+STREAM_REPORT = ("session_id", "usage", "num_turns", "subtype")
 
 # a key, or the SHA-256 of the opening answer a kept session holds
 _KEY = re.compile(r"^[0-9a-f]{64}$")
@@ -1296,7 +1305,11 @@ class CachingClient:
         response: str,
         provenance: dict[str, Any],
     ) -> dict[str, Any]:
-        """A new entry for a response the engine has just returned."""
+        """A new entry for a response the engine has just returned, with
+        what the call's stream reported of it (llm.stream_report: the
+        session, the usage, the turns and the subtype, beside the model and
+        the CLI version) where the engine reports it. None of it is in the
+        key's components, which are the call's alone."""
         last_report = getattr(self._engine, "last_report", None)
         report = last_report() if callable(last_report) else {}
         return {
@@ -1315,6 +1328,11 @@ class CachingClient:
                 "config_hash": components["config"],
                 "model_identifier": self._engine.model_identifier,
                 "at": _now(),
+                **{
+                    name: report[name]
+                    for name in STREAM_REPORT
+                    if report.get(name) is not None
+                },
                 **provenance,
             },
         }
@@ -1468,7 +1486,14 @@ class ConversationalCachingClient(CachingClient):
         answer, or replayed and found the same; a replay that differs
         raises ConversationChanged. A replay that fails raises, and the
         failure is remembered: the conversation's later forks raise it
-        again at once, rather than asking the engine once per fork."""
+        again at once, rather than asking the engine once per fork.
+
+        A replay is asked through the client's replay_conversation where
+        it has one (a client that reports its calls: the replay's call
+        event says it is one), else as an opening turn. One that matches
+        leaves the entry as it was, with what the original call's stream
+        reported; one that differs stores its own answer, with what its
+        own stream reported."""
         with conversation.lock:
             key = conversation.chain[-1]
             if conversation.changed:
@@ -1497,10 +1522,11 @@ class ConversationalCachingClient(CachingClient):
                     conversation.origin = RESUMED
                     self._emit(RESUME, call=OPEN, key=key)
                     return session
+            replay = getattr(self.client, "replay_conversation", None)
+            if not callable(replay):
+                replay = self.client.open_conversation
             try:
-                response, session = self.client.open_conversation(
-                    conversation.prompt
-                )
+                response, session = replay(conversation.prompt)
             except Exception as exc:
                 conversation.failed = f"{type(exc).__name__}: {exc}"
                 raise

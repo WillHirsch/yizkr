@@ -29,10 +29,10 @@ comment on each. The run directory's files are described in
   checks, from where the last call left off: every stage's end (`done`,
   `failed`), a transcription view the transcription check sets aside on
   reuse (`set-aside`), the LLM cache's events, and the engine's `call`
-  events. The orchestrator calls the checks when a stage fails too, so a
-  run in which every document fails is watched as closely as one in
-  which none does. (A pause's timer, below, reads the control file, not
-  the events.)
+  events, with what each call's stream reported of it. The orchestrator
+  calls the checks when a stage fails too, so a run in which every
+  document fails is watched as closely as one in which none does. (A
+  pause's timer, below, reads the control file, not the events.)
 
 An output made from answers the LLM cache adopted (an archived
 transcription, say) is an output the run stored whose calls the cache
@@ -72,16 +72,17 @@ Each alert is a line of `alerts.jsonl` in the run directory
 | `stage` | `transcription`, `extraction`, `critique` or `gedcom`; `run` for `anomaly-config` |
 | `check` | the check's name (below) |
 | `subject` | the document: the first 12 hex digits of its SHA-1 (empty for `anomaly-config`) |
-| `value` | the measured value: a number, a language code (`language-unexpected`), or `true` for a check that measures a presence |
+| `value` | the measured value: a number, a language code (`language-unexpected`), a model id (`model-mismatch`), or `true` for a check that measures a presence |
 | `status` | `new` or `carried` |
 | `kind` | the document's kind: `text`, `media`, `presentation` or `gedcom` |
 | `limit` | the threshold the value crossed |
 | `config` | the first 12 hex digits of the SHA-256 of the thresholds in force, so alerts raised under other thresholds tell apart |
 
 A check adds fields of its own, listed with it. An alert is raised once
-per document, stage, check and status in an invocation. No field holds a
-document's words: a value is a number, a count, a share, a language code
-or `true`, and the other fields are names from the pipeline's vocabulary.
+per document, stage, check and status in an invocation (`model-mismatch`
+once per role and model). No field holds a document's words: a value is
+a number, a count, a share, a language code, a model id or `true`, and
+the other fields are names from the pipeline's vocabulary.
 The monitor shows a value when it is a number or a yes or no.
 
 ## The checks
@@ -221,7 +222,12 @@ slice is the stage; not fail-fast by default. Value: the share; `count`,
 kind's documents the run plans, for a kind with fewer. It fires as soon
 as the failures pass that share, even before the first documents are all
 in, and once per stage and kind. Its slice is the kind; fail-fast by
-default. Value: the failures; `of` (the documents counted), `first`,
+default. A kind the run plans fewer than `min-documents` documents of (2
+by default: a single deck, say, or a single GEDCOM file) is never judged,
+so this check never pauses it: no other document of the kind is left for
+a pause to protect. Its failure still shows as a failed document, and in
+`stage-failures`. A run whose `run.json` records no plan has every kind
+judged. Value: the failures; `of` (the documents counted), `first`,
 `pause`.
 
 **`call-failures`**: more than `max-share` of a stage's last `window`
@@ -229,6 +235,28 @@ engine calls failing (`call` events with the outcome `error`; calls
 paused or interrupted are not counted), once it has made at least
 `min-count`. It fires as `stage-failures` does. Its slice is the stage;
 fail-fast by default. Value: the share; `count`, `of`, `pause`.
+
+### The engine's model
+
+**`model-mismatch`**: an engine call whose stream reports running on
+another model than its role's. Each `call` event carries the model the
+call's stream reported (its init event's, as the engine resolved the
+configured name: docs/LLM_CACHE.md, `events.jsonl`), and the check
+compares it with the model the run manifest names for the role: what the
+role's engine client asks for (`roles.<role>.client.model`), else what the
+run configures (`roles.<role>.model`; docs/RUN_MANIFEST.md). A role the
+manifest names no model for, whose engine runs a default of its own, or
+names one by an alias (rundir's alias rule), has no model id to compare
+with: there, the model the role's first call in the invocation reported
+is the resolution the rest are compared with, so a default or an alias
+that moves to another model while the run unfolds is seen. Models are
+compared without a context-window selector (`[1m]`). The alert is raised
+once per role and model in the invocation (a model with a selector and
+one without it being one), on the document whose call first ran on it,
+and is always new: the call was made in the run. Its
+stage is the call's. Value: the model the call ran on; `limit`, the
+role's model; `role`, and `against` (`manifest`, or `first call`). Alert
+only: it pauses nothing.
 
 ### The configuration itself
 
@@ -402,7 +430,10 @@ check.
 - **Calls are measured where the run made them.** Chunk failures and
   truncations are judged on extractions made in the invocation; a reused
   batch keeps no record of its calls, so it is judged on its stored
-  outputs alone.
+  outputs alone. So is `model-mismatch`: an answer the LLM cache gives
+  makes no call and has no call event, and the model that made it is
+  recorded in its cache entry alone (docs/LLM_CACHE.md, Layout). A
+  recheck does not look at calls, and so checks no model again.
 - **The first documents of a kind are compared with few**: while the run
   unfolds, a document is compared with those before it, and the first
   `min-samples` of a kind with none. A recheck compares every document

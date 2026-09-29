@@ -44,6 +44,13 @@ transcription view a run makes from it names the archive's client, not
 the one the run asked. An adoption stands for its call's key alone: a
 change to what the call sends, or a stricter check, recomputes it (§9).
 
+Amended by #98 (2026-09-29): an answer's entry keeps, beside it and never
+in its key, what its call's stream reported of it: the session it ran in,
+the tokens it used, its turns and how it ended. The call's event carries
+the same but the session, which names a session of the account and so
+stays out of the event log the run report reads; a replay's event says
+it is one (§3, §8).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -204,7 +211,10 @@ an artifact a new QID changes no key.
 - Each entry records its key, the key's components, and its provenance:
   the role, the engine, the model the engine reported, the CLI version,
   the client's config hash, the time, and its origin (the engine, or an
-  adoption's reason). An entry is served only under the key it records.
+  adoption's reason). A claude-code answer's provenance adds what its
+  call's stream reported of it: the session, the tokens it used, its
+  turns and how it ended, none of which is keyed (#98). An entry is
+  served only under the key it records.
 - The cache deletes nothing and overwrites nothing. An entry a caller
   rejects is moved aside with the reason; one a newer entry displaces (a
   refresh's, a racing call's, one displacing a damaged entry) is moved
@@ -402,7 +412,9 @@ is kept under (§1). The monitor (#195) and the run report
 counts per role, as totals over every invocation of the run directory.
 Every call that reaches the engine is a `call` event too, with or
 without the cache (#101): a wrapper beneath the cache reports it, so a
-hit is none, and a miss or a replay is one.
+hit is none, and a miss or a replay is one. It carries what the call's
+stream reported of it but the session, and a replay's says it is one
+(#98).
 
 ### 9. Seeding: visible equivalences
 
