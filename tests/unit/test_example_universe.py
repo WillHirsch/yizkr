@@ -92,6 +92,9 @@ class TestIntegrity:
 
     def test_assertions_follow_the_manifest(self):
         manifest = load_manifest()
+        # a sourcing circumstance is a vocabulary item: the manifest's, or
+        # one it is planned to gain
+        circumstances = set(manifest.items) | set(u.PLANNED_VOCABULARY)
         for assertion in u.ASSERTIONS:
             assert assertion.subject in KEYS, assertion
             assert assertion.source in SOURCES, assertion
@@ -100,7 +103,9 @@ class TestIntegrity:
                 *assertion.qualifiers,
             ):
                 datatype = manifest.properties[prop].datatype
-                if datatype == "wikibase-item":
+                if prop == "sourcing_circumstances":
+                    assert value in circumstances, (prop, value)
+                elif datatype == "wikibase-item":
                     assert value in KEYS, (prop, value)
                 elif datatype == "time":
                     assert isinstance(value, u.Date), (prop, value)
@@ -108,6 +113,18 @@ class TestIntegrity:
                     assert isinstance(value, int), (prop, value)
                 else:
                     assert isinstance(value, str) and value, (prop, value)
+
+    def test_planned_vocabulary_is_not_in_the_manifest_yet(self):
+        # an item leaves u.PLANNED_VOCABULARY when the manifest gains it
+        gained = set(u.PLANNED_VOCABULARY) & set(load_manifest().items)
+        assert not gained, (
+            f"the manifest now holds {sorted(gained)}: drop them from "
+            "PLANNED_VOCABULARY, and update the sentences that call them "
+            "planned: the comment above PLANNED_VOCABULARY in "
+            "tests/fixtures/example_universe.py, and docs/EXAMPLES.md, "
+            '"Using it": "One value is planned rather than in the manifest '
+            'yet"'
+        )
 
     def test_kinds_are_manifest_items(self):
         items = load_manifest().items
@@ -545,6 +562,123 @@ class TestEventsAndDates:
             when.year >= 1940 and when.precision == "year"
             for when in values("nicholas-lobig", "date_of_birth")
         )
+
+
+class TestCompilation:
+    """ADR-0008, as amended by #289: an original excerpt that a compilation
+    embeds is an artifact of its own, part of the compilation, so the
+    original and the compilation's translation of it are two witnesses."""
+
+    MARKED = ("sourcing_circumstances", "machine_assisted")
+    # a page of a compilation that says its translations were made with
+    # machine assistance
+    STATEMENT = re.compile(
+        r"^\[page \d+\] [^\n]*\btranslations\b[^\n]*"
+        r"\b(?:software|machine|computer|online translator)\b",
+        re.MULTILINE | re.IGNORECASE,
+    )
+    # a compilation's translation of the excerpt beside it, one line each
+    TRANSLATION = re.compile(r"^Translation: .*$", re.MULTILINE)
+
+    @staticmethod
+    def embedded() -> list[u.Assertion]:
+        """Each part-of link from a source to a source that embeds it;
+        the universe has at least one."""
+        links = [
+            a
+            for a in u.ASSERTIONS
+            if a.property == "part_of"
+            and a.subject in SOURCES
+            and a.value in SOURCES
+        ]
+        assert links
+        return links
+
+    @staticmethod
+    def said_by(key: str) -> list[u.Assertion]:
+        return [a for a in u.ASSERTIONS if a.source == key]
+
+    @classmethod
+    def claim(cls, a: u.Assertion) -> tuple:
+        """What a claim says, the marker aside: its subject, property and
+        other qualifiers."""
+        return (
+            a.subject,
+            a.property,
+            frozenset(set(a.qualifiers) - {cls.MARKED}),
+        )
+
+    def test_an_excerpt_is_part_of_its_compilation(self):
+        for link in self.embedded():
+            excerpt, compilation = SOURCES[link.subject], SOURCES[link.value]
+            # a raster image placed within a page is classed a photograph
+            assert excerpt.artifact_class == "photograph"
+            # the compilation asserts its own composition, with the page
+            assert link.source == compilation.key
+            page = dict(link.qualifiers)["page_number"]
+            # labelled "<compilation title> — page <n>, image <k>", and the
+            # compilation's text marks the image on that page
+            label = f"{compilation.title} — page {page}, image "
+            placed = re.fullmatch(
+                re.escape(label) + r"([1-9]\d*)", excerpt.title
+            )
+            assert placed, excerpt.title
+            assert f"[page {page}] [image {placed[1]}]" in compilation.text
+            # the compilation's text is its own: nothing read from the
+            # excerpt is in it
+            for a in self.said_by(excerpt.key):
+                assert a.excerpt and a.excerpt not in compilation.text, a
+
+    def test_the_marker_is_on_the_translation_alone(self):
+        for link in self.embedded():
+            text = SOURCES[link.value].text
+            stated = bool(self.STATEMENT.search(text))
+            translation = self.TRANSLATION.findall(text)
+            assert translation
+            # a claim of the compilation carries the marker exactly when
+            # it is read from a translation that the compilation says was
+            # made with machine assistance
+            for a in self.said_by(link.value):
+                translated = bool(a.excerpt) and any(
+                    a.excerpt in line for line in translation
+                )
+                assert (self.MARKED in a.qualifiers) == (
+                    stated and translated
+                ), a
+            # and no claim of the original carries it
+            for a in self.said_by(link.subject):
+                assert self.MARKED not in a.qualifiers, a
+
+    def test_a_translation_and_its_original_are_two_witnesses(self):
+        for link in self.embedded():
+            original = self.said_by(link.subject)
+            compilation = self.said_by(link.value)
+            translated = [
+                a for a in compilation if self.MARKED in a.qualifiers
+            ]
+            assert translated
+            # each claim read from the translation renders one that the
+            # original makes, with the same qualifiers, and at least one
+            # gives it another value
+            read: dict[tuple, set] = {}
+            for a in original:
+                read.setdefault(self.claim(a), set()).add(a.value)
+            assert {self.claim(a) for a in translated} <= set(read)
+            misread = {
+                self.claim(a)[:2]
+                for a in translated
+                if a.value not in read[self.claim(a)]
+            }
+            assert misread
+            assert misread <= set(u.CONTRADICTIONS)
+            # the compilation's own text says something the original does
+            # not, with no marker
+            own = {
+                (a.subject, a.property)
+                for a in compilation
+                if self.MARKED not in a.qualifiers and a.subject in PEOPLE
+            }
+            assert own - {claim[:2] for claim in read}
 
 
 @pytest.fixture(scope="module")
