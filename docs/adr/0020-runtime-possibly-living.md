@@ -22,11 +22,15 @@ civil status (`civil_status`) is person evidence for the check (ADR-0035
 §3.1).
 Amended by #363 (2026-09-29): the export is a non-privileged view, not
 a public copy (the owner, 2026-09-29). It keeps everything recorded about
-a person the check releases, and about every item that is no person,
-text included, and leaves out every possibly-living person with the
-events they took part in. It drops the extractor's judgement notes and
-any line it cannot read, and refuses a dump that holds a sitelink or a
-property of a type the model does not use (§4, Ruling 6).
+a person the check releases, and about the other items it keeps (places,
+organizations, artifacts, the vocabulary, and events all of whose
+participants it keeps), text included. It leaves out every
+possibly-living person, family and untyped item, as before, and with
+them the events they took part in, every person event that names no
+participant, and the events that start and end a union it leaves out.
+It drops the extractor's judgement notes and any line it cannot read,
+and refuses a dump that holds a sitelink or a property of a type the
+model does not use (§4, Ruling 6).
 
 ## Context
 
@@ -279,7 +283,9 @@ from the database while the check reads the query service. Now:
   the export's own rule, and a badge for it would need a wording of its
   own. The export also drops what the site lists as no person: an item
   that states no type and has no person evidence, a family with no person
-  evidence, a redirect, and an event that an item it drops took part in.
+  evidence, a redirect, an event that an item it drops took part in, a
+  person event that names no participant, and an event that starts or
+  ends a union it drops.
 
 The rulings dated 2026-09-29 are the owner's, on the questions this
 amendment raised.
@@ -288,20 +294,24 @@ Amended by #363 (2026-09-29): the export is a non-privileged view. The
 owner decided (2026-09-29): "I don't intend to make a completely public
 copy, so any non-privileged view can include all information on
 confirmed-deceased people." The export, still written as
-`public.nt.gz`, is that view, and what it keeps of the items it keeps
-follows:
+`public.nt.gz`, is that view. The rule below was presented to the owner
+on 2026-09-29 with its consequence: items that are not people are
+included, and a document's title, or a text about a deceased person, can
+name a living relative. The owner raised no objection. What the export
+keeps of the items it keeps follows:
 
 - **Everything about a released person stays, text included**: their
   labels, descriptions, aliases, names and titles, their statements'
   values, and the excerpts of the references those statements keep. So
-  does everything about an item that is no person: a place, an
+  does everything about the other items it keeps: a place, an
   organization, an artifact, the vocabulary, an event whose
-  participants are all released. A transcription excerpt leaves with the
-  statement it attests, and goes with a statement dropped: a reference
-  that no statement kept derives from is swept. Accepted consequence:
-  free text about a released person, or a document's title, can name a
-  possibly living relative, and it is visible in the non-privileged
-  view. A public copy would need rules of its own (#163).
+  participants it all keeps. Families and untyped items stay out, as
+  above. A transcription excerpt leaves with the statement it attests,
+  and goes with a statement dropped: a reference that no statement kept
+  derives from is swept. The consequence: free text about a released
+  person, or a document's title, can name a possibly living relative,
+  and it is visible in the non-privileged view. A public copy would need
+  rules of its own (#163).
 - **An event goes with its participants** (#363). An event stands for
   those who took part in it, as a family stands for its people: its
   date and place are theirs, and its label is written after them ("Death
@@ -314,6 +324,28 @@ follows:
   participant, so the rule applies again until no more go, and a
   redirect to such an event goes with it. An event whose participants
   are all kept stays.
+- **A person event that names no participant goes** (#363; unknown means
+  excluded, Ruling 2). An event of a person kind (`PERSON_EVENTS`) with
+  no `participant` statement, or only one of unknown value, as a claim
+  refused, left unconfirmed or cut short after the type leaves it,
+  records a birth, a death or a marriage of someone unknown, who may be
+  living (`public-exclusions.json`: "an event of a person kind that
+  names no participant: unknown means excluded"; `UNATTENDED`). Once
+  #385's participant roles land, the stronger form is that a person
+  event whose principal the export does not keep goes; that belongs to
+  #410.
+- **A union's bounds go with it** (#363; ADR-0036 §6). An event that a
+  union the export leaves out points to by `started_by` or `ended_by`,
+  read through redirects and at any rank, goes too: its wedding, divorce
+  or annulment, with its label and date, is the couple's
+  (`public-exclusions.json`: "it starts or ends a union the export
+  leaves out (the union's QID): it is the couple's"; `BOUND_LEFT_OUT`).
+  A partner's own `death` event follows the person rule instead
+  (ADR-0036 §6). The keys land with #394 (`backup.UNION_BOUNDS`); until
+  then nothing is read. The rest of §6 is #410's: a union that names only
+  one partner is withheld too, and with it its events; until then, a
+  union is left out by the event rule, when one of the partners it names
+  is left out, or as a person event that names no participant.
 - **The judgement notes never leave** (ADR-0035): the export drops every
   snak of the `judgement` and `judgement_note` properties, in any form,
   a reference's included (`backup.DROPPED_PROPERTIES`). They are the
@@ -363,11 +395,12 @@ is strictly safer, since the determination is now absence-of-death only.
    released, every item that states no type, and every family (#374
    holds the full rule for families), and refuses to run while the query
    service does not hold the dump's revisions (amended by #344). It is a
-   non-privileged view: it keeps everything about released people and
-   items that are no person, text included, drops every event that an
-   item it drops took part in and the judgement notes, and refuses a dump
-   that holds a sitelink or a property of another type than the model's
-   (amended by #363).
+   non-privileged view: it keeps everything about released people and the
+   other items it keeps, text included; it drops every event that an item
+   it drops took part in, every person event that names no participant,
+   the events that start and end a union it drops, and the judgement
+   notes; and it refuses a dump that holds a sitelink or a property of
+   another type than the model's (amended by #363).
 
 ## Consequences
 
@@ -394,8 +427,9 @@ is strictly safer, since the determination is now absence-of-death only.
   statement keeps it out at any rank: fail closed, accepted.
 - The export is a non-privileged view, not a public copy (amended by
   #363; the owner, 2026-09-29): every text recorded about a released
-  person or an item that is no person leaves with it, a source's excerpt
-  included, so a text can name a possibly living relative. An event with
+  person or another item it keeps leaves with it, a source's excerpt
+  included, so a text can name a possibly living relative. A person
+  event that names no participant is left out, whatever else it records. An event with
   a participant left out goes whole: a marriage of a released person and
   a possibly living one, and, while every family is left out, every
   event a family took part in. An item that is no event but carries a

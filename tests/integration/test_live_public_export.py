@@ -25,7 +25,9 @@ fixture's content (test_live_privacy.py's write_fixture):
   released person's description; and a letter's title, its page's label
   and description, and its file's name, which is made from the title.
   The letter is the source of their birth, and the excerpt of the
-  released person's death names them too.
+  released person's death names them too;
+* a birth, labelled for "Named In Text" and dated 1990, that names no
+  participant, as a claim refused or cut short leaves one.
 
 The two whose type a curator deprecated or outranked carry a religion
 beside it, which is no person evidence, so that their type is what marks
@@ -39,23 +41,24 @@ public export in full. A vessel's part in a migration does not make it a
 person, but a `human` type at any rank does. An item that states no type
 is left out, whatever else it holds, and a redirect goes with the item it
 redirects to. An event that one of those left out takes part in is left
-out too: the migration, for its vessel typed human, and the birth. Every
+out too: the migration, for its vessel typed human, and the birth; so is
+a person event that names no participant, the unrecorded birth. Every
 text about what the export keeps stays, one naming a possibly living
 person included (owner, 2026-09-29).
 
 The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes the
 export from it, and reads public.nt.gz: it mentions the released person,
 the plain vessel, the letter and its page by QID, and none of the others,
-the label-only item, the family, the redirect, the migration and the
-birth included. The released person's description and death excerpt,
+the label-only item, the family, the redirect, the migration and both
+births included. The released person's description and death excerpt,
 the letter's title and its page's label and description leave as
-written, "Named In Text" and all; the labels of the person named, of
-their birth, and the family's description do not; and the vocabulary
-keeps its terms. The export first waits for
-the query service to hold the dump's revision of every item and
-property, a redirect's aside, so on a stack at rest, a merge included,
-the export must run, not refuse. The site lists the eight that have
-person evidence, and badges the seven the export drops.
+written, "Named In Text" and all; the labels of the person named and of
+both births, and the family's description, do not; and the vocabulary
+keeps its terms. The export first waits for the query service to hold
+the dump's revision of every item and property, a redirect's aside, so
+on a stack at rest, a merge included, the export must run, not refuse.
+The site lists the eight that have person evidence, and badges the
+seven the export drops.
 
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
@@ -76,6 +79,7 @@ from yizkr.backup import (
     FAMILY,
     NO_TYPE,
     PARTICIPANT_LEFT_OUT,
+    UNATTENDED,
     dump_rdf,
     export_public,
 )
@@ -141,6 +145,13 @@ ENTITIES = {
     # and the person's label, verbatim
     "birth of named in text": local(
         "birth of named in text", kind="birth", label=f"Birth of {NAMED}"
+    ),
+    # a birth that names no participant, as a claim refused or cut short
+    # leaves one: whom it happened to is unknown
+    "unrecorded birth": local(
+        "unrecorded birth",
+        kind="birth",
+        label=f"Birth of {NAMED}, participant unrecorded",
     ),
 }
 # the roles public.nt.gz mentions; every other one (the item with a label
@@ -366,6 +377,12 @@ def fixture_graph(client, config):
                 {"type": "time", "year": 1990},
                 source.ref,
             ),
+            claim(
+                "unrecorded birth",
+                "point_in_time",
+                {"type": "time", "year": 1990},
+                source.ref,
+            ),
         ],
     )
     qids = {
@@ -437,6 +454,9 @@ def test_the_fixture_takes_the_shapes_the_truthy_type_missed(
     assert fixture_graph["merged away"] in redirects_to(
         client, fixture_graph["merge target"]
     )
+    # the unrecorded birth names no participant
+    unrecorded = client.wbi.item.get(fixture_graph["unrecorded birth"])
+    assert unrecorded.claims.get(properties["participant"]) == []
     # the texts name the person the export leaves out: an event's label, a
     # family's and a released person's description, a letter's title and
     # its page's label and description
@@ -489,6 +509,11 @@ def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
         assert exclusions["excluded"][fixture_graph[event]] == (
             PARTICIPANT_LEFT_OUT.format(fixture_graph[part])
         )
+    # and a person event that names no participant goes: unknown means
+    # excluded
+    assert exclusions["excluded"][fixture_graph["unrecorded birth"]] == (
+        UNATTENDED
+    )
 
 
 def test_what_is_kept_leaves_with_its_text(
@@ -519,6 +544,7 @@ def test_what_is_kept_leaves_with_its_text(
     for role, terms in (
         ("named in text", "labels"),
         ("birth of named in text", "labels"),
+        ("unrecorded birth", "labels"),
         ("family", "descriptions"),
     ):
         assert term(role, terms) not in text

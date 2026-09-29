@@ -802,17 +802,23 @@ not a signal to grow the schema on.
   label is written after them, so the export leaves out every event,
   whatever its kind, that has a `participant` statement at any rank
   whose value it leaves out, a redirect to one included. An event so
-  left out may itself be a participant, and the rule applies again.
+  left out may itself be a participant, and the rule applies again. An
+  event of a person kind that names no participant (none, or only one of
+  unknown value) is left out too: whom it happened to is unknown. And
+  the events that start and end a union it leaves out go with the union
+  (`started_by`, `ended_by`; ADR-0036 §6), a partner's own death aside.
 - **Everything about a released person stays, text included** (ADR-0020,
   as amended by #363). The owner decided (2026-09-29): "I don't intend
   to make a completely public copy, so any non-privileged view can
   include all information on confirmed-deceased people." So the export
   keeps a released person's labels, descriptions, aliases, names and
   titles, their statements' values and the excerpts of the references
-  those statements keep, and everything about an item that is no person
+  those statements keep, and everything about the other items it keeps
   (a place, an organization, an artifact, the vocabulary, an event whose
-  participants are all released). Such a text can name a possibly living
-  relative, and it is visible in the non-privileged view. The extractor's
+  participants it all keeps); families and untyped items stay out. Such
+  a text can name a possibly living relative, and it is visible in the
+  non-privileged view: a consequence presented to the owner with the
+  rule on 2026-09-29, which drew no objection. The extractor's
   judgement notes never leave (ADR-0035), in any form. A line the export
   cannot read as a triple is dropped, and a dump that holds a sitelink,
   whose page's own triples never name its entity, or a property of a

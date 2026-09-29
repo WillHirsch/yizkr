@@ -20,6 +20,7 @@ from yizkr.backup import run_backup
 pytestmark = pytest.mark.live
 
 QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
+REFERENCE_NODE = re.compile(r"<[^<>]*/reference/[0-9a-f]{40}>")
 
 
 def test_backup_and_public_export_privacy(config, tmp_path):
@@ -50,9 +51,11 @@ def test_backup_and_public_export_privacy(config, tmp_path):
     }
     assert not (mentioned & excluded)
     # an excerpt (a raw source quotation) leaves only with a statement it
-    # attests (#363; owner, 2026-09-29): every reference left is one that
-    # a statement left derives from, so no dropped statement's excerpt
-    # stays behind
+    # attests (#363; owner, 2026-09-29): every reference node left is one
+    # that a statement left derives from, so no dropped statement's excerpt
+    # stays behind. A reference node's IRI ends in its SHA-1; the
+    # reference properties' own IRIs (…/prop/reference/Pn, which the dump
+    # declares for every property) are no nodes
     triples = [
         parts
         for line in public.splitlines()
@@ -64,7 +67,9 @@ def test_backup_and_public_export_privacy(config, tmp_path):
         if predicate == "<http://www.w3.org/ns/prov#wasDerivedFrom>"
     }
     references = {
-        subject for subject, _, _ in triples if "/reference/" in subject
+        subject
+        for subject, _, _ in triples
+        if REFERENCE_NODE.fullmatch(subject)
     }
     assert references and references <= derived
     # people with recorded deaths are present

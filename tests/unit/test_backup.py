@@ -943,6 +943,71 @@ class TestReadDump:
         found = self.reading(tmp_path, vocabulary)
         assert found.participants == PARTICIPANTS
 
+    def test_an_event_of_a_person_kind_that_names_no_participant(
+        self, tmp_path, vocabulary
+    ):
+        # none, or only one of unknown value, as a claim refused, left
+        # unconfirmed or cut short after the type leaves it; an event of
+        # no person kind, or one that names an item, is attended (#363)
+        _, items = vocabulary
+
+        def build(dump):
+            for qid in ("Q452", "Q453", "Q454", "Q455"):
+                dump.entity(qid, qid)
+            dump.says("Q452", "instance_of", entity(items["birth"]))
+            dump.says("Q452", "point_in_time", dated(1950))
+            dump.says("Q453", "instance_of", entity(items["death"]))
+            dump.says("Q453", "participant", "_:genid9")
+            dump.says("Q454", "instance_of", entity(items["birth"]))
+            dump.says("Q454", "participant", entity("Q450"))
+            dump.says("Q455", "instance_of", entity(items["event"]))
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert found.unattended == {"Q452", "Q453"}
+        # every person event of the fixture names someone
+        assert self.reading(tmp_path, vocabulary).unattended == set()
+
+    def test_the_events_that_start_and_end_a_union(self, tmp_path, vocabulary):
+        # by started_by and ended_by (ADR-0036), at every rank, once the
+        # vocabulary holds them; a partner's own death is no bound of the
+        # union's, as it follows the person rule (#363)
+        properties, items = vocabulary
+        bounded = (
+            {**properties, "started_by": "P996", "ended_by": "P997"},
+            items,
+        )
+
+        def build(dump):
+            for qid in ("Q460", "Q461", "Q462", "Q463"):
+                dump.entity(qid, qid)
+            dump.says("Q460", "instance_of", entity(items["marriage"]))
+            dump.says("Q460", "started_by", entity("Q461"), rank="Deprecated")
+            dump.says("Q460", "ended_by", entity("Q462"))
+            dump.says("Q460", "ended_by", entity("Q463"))
+            dump.says("Q461", "instance_of", entity(items["event"]))
+            dump.says("Q462", "instance_of", entity(items["event"]))
+            dump.says("Q463", "instance_of", entity(items["death"]))
+
+        found = self.one(tmp_path, bounded, build)
+        assert found.bounds == {"Q460": {"Q461", "Q462"}}
+
+    def test_a_line_ends_at_a_newline_alone(self, tmp_path, vocabulary):
+        # a raw carriage return inside a text (dumpRdf.php escapes every
+        # one) starts no line: nothing is read from within the text, a
+        # forged redirect included (#363)
+        forged = (
+            f"{entity('Q451')} <http://www.w3.org/2002/07/owl#sameAs> "
+            f"{entity('Q450')} ."
+        )
+
+        def build(dump):
+            dump.lines.append(
+                f'{entity("Q450")} {RDFS_LABEL} "x\r{forged}"@en .'
+            )
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert found.redirects == {}
+
     def test_property_types_and_sitelinks(self, tmp_path, vocabulary):
         # a property's type, as the dump names it, and what a sitelink's
         # page is about; an entity's data node is about it too, and is no
@@ -1127,6 +1192,48 @@ class TestPublicExclusions:
         assert "Q412" not in dropped
         # an event dropped for another reason keeps it
         assert dropped["Q416"] == backup.NO_TYPE
+
+    def test_a_person_event_that_names_no_participant_goes(self):
+        # whom it happened to is unknown, and unknown means excluded
+        # (#363); a redirect goes with it, and an event it takes part in
+        reading = DumpReading(
+            unattended={"Q493"},
+            redirects={"Q494": "Q493"},
+            participants={"Q495": {"Q493"}},
+        )
+        assert public_exclusions(reading, report_of()) == {
+            "Q493": backup.UNATTENDED,
+            "Q494": f"a redirect to Q493: {backup.UNATTENDED}",
+            "Q495": backup.PARTICIPANT_LEFT_OUT.format("Q493"),
+        }
+
+    def test_a_union_left_out_takes_the_events_that_bound_it(self):
+        # Q490's couple is Q401, released, and Q402, not: the union goes,
+        # and with it its start Q491 and its end, named through the
+        # redirect Q496 to Q492, and what takes part in Q491 (#363;
+        # ADR-0036 §6); the union Q497 of released partners keeps Q498
+        reading = DumpReading(
+            people={"Q401", "Q402", "Q403"},
+            participants={
+                "Q490": {"Q401", "Q402"},
+                "Q495": {"Q491"},
+                "Q497": {"Q401", "Q403"},
+            },
+            bounds={"Q490": {"Q491", "Q496"}, "Q497": {"Q498"}},
+            redirects={"Q496": "Q492"},
+        )
+        dropped = public_exclusions(
+            reading, report_of({"Q401", "Q403"}, {"Q402"})
+        )
+        bound = backup.BOUND_LEFT_OUT.format("Q490")
+        assert dropped == {
+            "Q402": "possibly living (Q402)",
+            "Q490": backup.PARTICIPANT_LEFT_OUT.format("Q402"),
+            "Q491": bound,
+            "Q492": bound,
+            "Q496": f"a redirect to Q492: {bound}",
+            "Q495": backup.PARTICIPANT_LEFT_OUT.format("Q491"),
+        }
 
     def test_a_family_or_an_untyped_item_takes_its_event_with_it(self):
         # each the one participant left out of its event
@@ -1411,6 +1518,41 @@ class TestExportPublic:
         for qid in DROPPED:
             assert f"{entity(qid)} {RDFS_LABEL} " not in text
 
+    @staticmethod
+    def export_of(tmp_path, dump, vocabulary) -> None:
+        """export_public over `dump`, with the check selecting the
+        fixture's people, on a clock that only its naps move on."""
+        dump.write(tmp_path / "full.nt.gz")
+        clock = Clock()
+        export_public(
+            config(),
+            tmp_path,
+            run=ExportRun(dump.revisions, tuple(PEOPLE)),
+            vocabulary=vocabulary,
+            lag_timeout=60,
+            sleep=clock.sleep,
+            clock=clock,
+        )
+
+    def test_a_person_event_that_names_no_participant_goes(
+        self, tmp_path, vocabulary
+    ):
+        # a birth whose participant's claim was refused or cut short: its
+        # label and date are of someone unknown, who may be living (#363)
+        _, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q470", "Birth of Nicholas Lobig", revision=470)
+        dump.says("Q470", "instance_of", entity(items["birth"]))
+        dump.says("Q470", "point_in_time", dated(1950))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q470" not in mentioned
+        assert "Birth of Nicholas Lobig" not in text
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert exclusions["excluded"]["Q470"] == backup.UNATTENDED
+
     def test_the_judgement_notes_never_leave(self, tmp_path, vocabulary):
         # the extractor's remark on its own reading, in a run's reference
         # (ADR-0035), goes; the reference keeps what it cites (#363)
@@ -1428,17 +1570,7 @@ class TestExportPublic:
                 ("judgement_note", '"the postmark read as 1938"@en'),
             ],
         )
-        dump.write(tmp_path / "full.nt.gz")
-        clock = Clock()
-        export_public(
-            config(),
-            tmp_path,
-            run=ExportRun(dump.revisions, tuple(PEOPLE)),
-            vocabulary=(noted, items),
-            lag_timeout=60,
-            sleep=clock.sleep,
-            clock=clock,
-        )
+        self.export_of(tmp_path, dump, (noted, items))
         text, _ = self.public(tmp_path)
         assert "the postmark read as 1938" not in text
         assert f"/prop/reference/P998> {entity(items['circa'])} ." not in text

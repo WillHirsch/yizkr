@@ -15,7 +15,7 @@ everything needed to rebuild the instance, plus a non-privileged export:
   in it: every triple that mentions an excluded person — as subject,
   statement node, or object of someone else's claim — is dropped. All
   else leaves as it is, text included: whatever is recorded about a
-  person the check releases, and about every item that is no person.
+  person the check releases, and about the other items it keeps.
 
 Exclusion is CONSERVATIVE by design and computed at RUNTIME — there is
 no stored "living" flag (ADR-0020). A person is excluded unless the graph
@@ -44,6 +44,9 @@ closed:
   people, any of whom may be living (``privacy.FAMILY_CLASS``).
 * It drops every event that an item it drops took part in, at any rank:
   what the event records, its date and place, is that participant's too.
+  So it drops every event of a person kind that names no participant,
+  as whom it happened to is unknown, and the events that start and end
+  a union it drops (ADR-0036), a partner's own death aside.
 * It drops the extractor's judgement notes, its remarks on its own
   reading, and any line it cannot read (``filter_public_export``), and
   refuses a dump that holds what it is not made to filter: a sitelink,
@@ -313,6 +316,12 @@ _PROPERTY = re.compile(r"<[^<>]*/entity/(P[1-9]\d*)>")
 _ABOUT = "<http://schema.org/about>"
 _ENTITY_DATA = re.compile(r"<[^<>]*/Special:EntityData/[QP][1-9]\d*>")
 
+# The properties by which a union, a marriage or a partnership, points to
+# the events that start and end it (ADR-0036 §6): they are the couple's, and
+# go with the union. Keys of the model manifest; one the instance's
+# vocabulary does not hold reads nothing.
+UNION_BOUNDS = ("started_by", "ended_by")
+
 
 @dataclass
 class DumpReading:
@@ -321,15 +330,19 @@ class DumpReading:
     `untyped`, every item that states no type, the vocabulary and classes
     aside, and `families`, every item typed as a family (``read_dump``);
     `participants`, the items that take part in each event, at every
-    rank; `redirects`, each redirect's target; `revisions`, the revision
-    of every item and property that is not a redirect; `property_types`,
-    each property's type as the dump names it; and `sitelinks`, every
-    entity that a sitelink is about."""
+    rank; `unattended`, every event of a person kind that names no item
+    taking part; `bounds`, the events that start and end each union, a
+    partner's own death aside; `redirects`, each redirect's target;
+    `revisions`, the revision of every item and property that is not a
+    redirect; `property_types`, each property's type as the dump names it;
+    and `sitelinks`, every entity that a sitelink is about."""
 
     people: set[str] = field(default_factory=set)
     untyped: set[str] = field(default_factory=set)
     families: set[str] = field(default_factory=set)
     participants: dict[str, set[str]] = field(default_factory=dict)
+    unattended: set[str] = field(default_factory=set)
+    bounds: dict[str, set[str]] = field(default_factory=dict)
     redirects: dict[str, str] = field(default_factory=dict)
     revisions: dict[str, int] = field(default_factory=dict)
     property_types: dict[str, str] = field(default_factory=dict)
@@ -381,13 +394,20 @@ def read_dump(
 
     The items that take part in each event are read at every rank,
     whatever the event's type: every item a `participant` statement's
-    value names. So are each property's type and every sitelink, whose
+    value names. An event of a person kind that names none (no
+    `participant` statement, or only one whose value is unknown) is
+    unattended. So are read, at every rank, the events that start and end
+    each union (``UNION_BOUNDS``), but a `death` event, which is a
+    partner's own; and each property's type, and every sitelink, whose
     page is anything but an entity's data node.
 
     Lines are read as they end, at a newline alone."""
     instance_of = properties["instance_of"]
     subclass_of = properties["subclass_of"]
     participant = properties["participant"]
+    bound_links = {
+        properties[key] for key in UNION_BOUNDS if key in properties
+    }
     subject_links = {properties[key] for key in PERSON_SUBJECT_PROPERTIES}
     value_links = {properties[key] for key in PERSON_VALUE_PROPERTIES}
     human = items[PERSON_CLASS]
@@ -401,6 +421,8 @@ def read_dump(
     kinds: dict[str, str] = {}  # statement -> the type it gives
     events: dict[str, str] = {}  # statement -> the event it is part of
     participants: dict[str, str] = {}  # statement -> the participant
+    unions: dict[str, str] = {}  # statement -> the union it bounds
+    bounds: dict[str, str] = {}  # statement -> the event it points to
     deprecated: set[str] = set()  # statements a curator deprecated
     classes = set(items.values())  # the vocabulary, and every type named
     links: dict[str, tuple[str, str] | None] = {}
@@ -459,6 +481,8 @@ def read_dump(
                     typed[term] = item
                 if pid == participant:
                     events[term] = item
+                if pid in bound_links:
+                    unions[term] = item
                 if pid in subject_links:
                     reading.people.add(item)
                 continue
@@ -476,6 +500,8 @@ def read_dump(
                 classes.add(item)
             if pid == participant:
                 participants[subject] = item
+            if pid in bound_links:
+                bounds[subject] = item
 
     # a type is read through the redirects it names: an item typed with a
     # class a curator merged into `human` is typed human, and the class it
@@ -509,6 +535,11 @@ def read_dump(
     for statement, part in participants.items():
         if statement in events:
             reading.participants.setdefault(events[statement], set()).add(part)
+    reading.unattended = person_events - set(reading.participants)
+    deaths = typed_as({items["death"]})
+    for statement, event in bounds.items():
+        if statement in unions and event not in deaths:
+            reading.bounds.setdefault(unions[statement], set()).add(event)
     for redirect in reading.redirects:
         reading.revisions.pop(redirect, None)
     reading.untyped = (
@@ -521,8 +552,9 @@ def read_dump(
 
 
 # Why the export drops an item with person evidence that the check did
-# not assess, one that states no type, a family, and an event that items
-# it drops took part in (the braces take their QIDs).
+# not assess, one that states no type, a family, an event of a person kind
+# that names no participant, an event that items it drops took part in,
+# and one that starts or ends a union it drops (the braces take QIDs).
 NOT_ASSESSED = (
     "person evidence in the dump, but the check did not assess this item: "
     "unknown means excluded"
@@ -535,9 +567,16 @@ NO_TYPE = (
     "no type (no instance of, at normal or preferred rank, that names an "
     "item): unknown means excluded"
 )
+UNATTENDED = (
+    "an event of a person kind that names no participant: unknown means "
+    "excluded"
+)
 PARTICIPANT_LEFT_OUT = (
     "a participant the export leaves out ({}): what this event records "
     "is theirs too"
+)
+BOUND_LEFT_OUT = (
+    "it starts or ends a union the export leaves out ({}): it is the couple's"
 )
 
 
@@ -552,9 +591,13 @@ def public_exclusions(
     * each item that states no type (``NO_TYPE``), even one the check
       released;
     * each family (``FAMILY``), whatever it holds, released or not;
+    * each event of a person kind that names no participant
+      (``UNATTENDED``): whom it happened to is unknown;
     * each event that an item it drops takes part in, at any rank
-      (``PARTICIPANT_LEFT_OUT``, naming them), and so on until no more
-      go, as an event dropped so may itself be a participant.
+      (``PARTICIPANT_LEFT_OUT``, naming them), and each event that starts
+      or ends a union it drops (``BOUND_LEFT_OUT``, naming the union),
+      read through redirects; and so on until no more go, as an event
+      dropped so may itself be a participant, or a union.
 
     A redirect stands for the item it redirects to: it is dropped when
     that item is, and when it has person evidence of its own and that item
@@ -574,10 +617,14 @@ def public_exclusions(
             return NOT_ASSESSED
         if qid in reading.untyped:
             return NO_TYPE
+        if qid in reading.unattended:
+            return UNATTENDED
         return None
 
     excluded = {}
-    candidates = people | reading.untyped | reading.families
+    candidates = (
+        people | reading.untyped | reading.families | reading.unattended
+    )
     for qid in candidates | set(reading.redirects):
         found = target(qid)
         reason = why(found)
@@ -588,19 +635,25 @@ def public_exclusions(
                 reason if found == qid else f"a redirect to {found}: {reason}"
             )
     # an event goes with the items it drops that take part in it, a
-    # participant named through a redirect included, and a redirect goes
-    # with the event
+    # participant named through a redirect included, and with a union it
+    # drops that it starts or ends; a redirect goes with the event
     while True:
         left_out = set(excluded)
         gone = {
-            event: sorted(parts & left_out, key=_order)
+            event: PARTICIPANT_LEFT_OUT.format(
+                ", ".join(sorted(parts & left_out, key=_order))
+            )
             for event, parts in reading.participants.items()
             if event not in left_out and parts & left_out
         }
+        for union, bounds in reading.bounds.items():
+            if union in left_out:
+                for event in {target(bound) for bound in bounds}:
+                    if event not in left_out and event not in gone:
+                        gone[event] = BOUND_LEFT_OUT.format(union)
         if not gone:
             return excluded
-        for event, parts in gone.items():
-            excluded[event] = PARTICIPANT_LEFT_OUT.format(", ".join(parts))
+        excluded.update(gone)
         for redirect in reading.redirects:
             found = target(redirect)
             if found in gone and redirect not in excluded:

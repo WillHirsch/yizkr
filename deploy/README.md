@@ -239,22 +239,26 @@ directory under `var/backups/` containing:
   it, and so is every item that states no type, no `instance of` at
   normal or preferred rank that names an item (the vocabulary and the
   classes items are typed with aside), every family, whose people may
-  include a living person, and every event that any of these took part
-  in. Everything else leaves as it is, text included: whatever is
-  recorded about a released person (their labels, descriptions, names,
-  and the source excerpts of their statements) and about every item that
-  is no person. Only the extractor's judgement notes are dropped. So a
-  text about a released person, or a document's title, can name a
-  possibly living relative: the export is a non-privileged view, not a
-  public copy (the owner, 2026-09-29). A dump that holds a sitelink or a
-  property of a type the model does not use (a URL, a media file) makes
-  the export refuse: `yizkr backup` keeps the other dumps, records the
-  refusal in `manifest.json` and exits non-zero.
+  include a living person, every event that any of these took part in,
+  every person event that names no participant, and the events that
+  start and end a union it leaves out. Everything else leaves as it is,
+  text included: whatever is recorded about a released person (their
+  labels, descriptions, names, and the source excerpts of their
+  statements) and about the other items it keeps (places, organizations,
+  artifacts, the vocabulary, and events whose participants it all
+  keeps). Only the extractor's judgement notes are dropped. So a text
+  about a released person, or a document's title, can name a possibly
+  living relative: the export is a non-privileged view, not a public copy
+  (the owner, 2026-09-29). A dump that holds a sitelink or a property of
+  a type the model does not use (a URL, a media file) makes the export
+  refuse: `yizkr backup` keeps the other dumps, records the refusal in
+  `manifest.json` and exits non-zero.
   Nothing here publishes anything. `public.nt.gz` is the only file of a
   backup that may be shared, and only with those a non-privileged view
-  is for. `public-exclusions.json` is for curator review and stays on
-  the machine with the backup: it gives every item left out by QID, with
-  why, a birth year and the events it took part in among the reasons.
+  is for. `public-exclusions.json` is for curator review: it stays with
+  the backup and is never shared, as it gives every item left out by
+  QID, with why, a birth year and the events it took part in among the
+  reasons.
 
   The check runs on the query service, so the export first waits (up to
   three minutes) for the query service to hold the dump's revision of
