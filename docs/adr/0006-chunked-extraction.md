@@ -15,6 +15,10 @@ Amended by #127 (2026-09-28): the prompts name the artifact by the SHA-1
 of its media, the key its claims cite, and never by QID; §3 no longer
 lists the language among what a chunk prompt carries, since it carries
 none (§3).
+Amended by #7 (2026-09-29): the terminal sentinel is `{"done": true}`,
+with no self-reported count, and an answer whose model stopped at the
+output limit (`max_tokens`) is cut off, sentinel or no, and rejected in
+the cache as one without its sentinel is (§3, §5).
 
 ## Context
 
@@ -157,14 +161,15 @@ Two contract changes relative to the current prompt:
   wrapper object, no prose. Seams between turns then fall *between*
   units of meaning, and the parser is trivial. (The single-shot
   strategy adopts NDJSON too.)
-- **Terminal sentinel**: the final line must be
-  `{"done": true, "claims_emitted": N}`. Its *presence* proves the
-  response was not cut off: a **missing** sentinel is silent truncation,
-  so the chunk is marked incomplete and retried. The self-reported `N`
-  is advisory only — models routinely miscount a dense chunk by one or
-  more, so a count mismatch keeps every parsed claim and merely warns.
-  Rejecting a complete, valid response over an off-by-one self-count
-  would discard the whole chunk's extraction.
+- **Terminal sentinel**: the final line must be `{"done": true}`. Its
+  *presence* is the gate: a **missing** sentinel is silent truncation,
+  so the chunk is marked incomplete and retried. The line carries no
+  self-reported count: models routinely miscount a dense chunk by one or
+  more, and a count gated nothing. The engine's own stop reason decides
+  too: an answer whose model stopped at the output limit (`max_tokens`,
+  as the claude-code CLI's result event and the Anthropic API report
+  it) is cut off whatever it holds, its sentinel included, and is
+  marked incomplete and retried as one without its sentinel is.
 
 Entities defined outside the chunk's assigned units (e.g. a parent
 named elsewhere in the document) are referenced as local refs with
@@ -203,13 +208,14 @@ rest: a failed chunk costs one chunk. Parsing, the merge and validation
 run whenever the batch is made again (in a fresh state directory, or on
 `--refresh extract`; `ingest run` otherwise reuses the batch view,
 ADR-0032 §1), so a fix to them costs no model call for any response the
-old code accepted. A chunk cut off before its sentinel is rejected in the
-cache: it is kept aside for inspection and never served again, so the
-retry, or the next run, asks the engine anew, and a parser fix does not
-recover a response the old parser rejected. The entity manifest and the
-segmentation are asked in two attempts each, keyed apart in the cache, and
-a refused answer is kept, so a later run replays the same attempts and
-takes the same fallback (ADR-0032 §5). When a fork misses behind a cached
+old code accepted. A chunk cut off, at the output limit or before its
+sentinel (§3), is rejected in the cache: it is kept aside for inspection
+and never served again, so the retry, or the next run, asks the engine
+anew, and a parser fix does not recover a response the old parser
+rejected. The entity manifest and the segmentation are asked in two
+attempts each, keyed apart in the cache, and a refused answer is kept,
+so a later run replays the same attempts and takes the same fallback
+(ADR-0032 §5). When a fork misses behind a cached
 manifest, the conversation is resumed exactly from the session the cache
 kept for the manifest it serves; a replay that answers differently starts
 the extraction over from the new answer (ADR-0032 §6). A cut-off chunk
