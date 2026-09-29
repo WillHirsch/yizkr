@@ -4,7 +4,7 @@ Status: **accepted** (owner decision 2026-09-29, #311). Like ADR-0031,
 the owner's merge of the PR that adds it is its acceptance. It settles
 #311's questions for marriages and amends ADR-0014 in place (§1's stored
 `spouse` edge, §6's deferred divorce event). #394 implements it with
-#385's extraction revision (ADR-0035, proposed), before scratch run 1.
+#385's extraction revision (ADR-0035, accepted), before scratch run 1.
 
 ## Context
 
