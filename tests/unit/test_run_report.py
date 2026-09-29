@@ -1543,6 +1543,28 @@ class TestFiles:
         finally:
             (run / "events.jsonl").chmod(0o600)
 
+    def test_alerts_or_requests_it_cannot_read_are_not_available(self, run):
+        logs = [run / "alerts.jsonl", run / "control.jsonl"]
+        for log in logs:
+            log.chmod(0)
+        try:
+            if os.access(logs[0], os.R_OK):
+                pytest.skip("this process reads a file whatever its mode")
+            aggregate = build(run, now=NOW)["aggregate"]
+        finally:
+            for log in logs:
+                log.chmod(0o600)
+        assert aggregate["anomalies"] == {
+            "status": NOT_AVAILABLE,
+            "why": "alerts.jsonl cannot be read",
+        }
+        assert aggregate["control"]["status"] == NOT_AVAILABLE
+        text = render_markdown(aggregate)
+        assert "not available: alerts.jsonl cannot be read." in text
+        assert "not available: control.jsonl cannot be read." in text
+        # the stages, from the events, are there all the same
+        assert stage_row({"aggregate": aggregate}, "gedcom")[COMPUTED] == 1
+
     def test_a_torn_last_line_and_a_foreign_one_are_skipped(self, run):
         with open(run / "events.jsonl", "a") as handle:
             handle.write("[1, 2]\n\n" + '{"event": "started", "subj')
