@@ -164,8 +164,10 @@ def runs(tmp_path, calls, refusals, monkeypatch) -> Scratch:  # noqa: F811
 
 def export_truth(batch: ClaimBatch) -> dict[str, str]:
     """The universe key of each entity the export's batch holds: a person
-    by the xref its id is made from, a place by the head of its name, an
-    occupation by its label."""
+    by the xref its id is made from, a place by the head of its name and
+    an occupation by its label. Any other entity, such as a death the
+    export states without a date, stands for itself by its kind and label,
+    which is no universe key."""
     people = {
         person.gedcom_xref.strip("@").lower(): person.key
         for person in u.PEOPLE
@@ -173,10 +175,15 @@ def export_truth(batch: ClaimBatch) -> dict[str, str]:
     }
     named = {place.label: place.key for place in u.PLACES}
     named |= {entity.label: entity.key for entity in u.ENTITIES}
-    return {
-        record.id: people.get(record.id) or named[record.label.split(", ")[0]]
-        for record in batch.entities
-    }
+    known = {}
+    for record in batch.entities:
+        if record.id in people:
+            known[record.id] = people[record.id]
+        elif record.kind in ("place", "occupation_class"):
+            known[record.id] = named[record.label.split(", ")[0]]
+        else:
+            known[record.id] = f"{record.kind}: {record.label}"
+    return known
 
 
 def truth(name: str, batch: ClaimBatch) -> dict[str, str]:
