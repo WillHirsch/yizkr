@@ -15,17 +15,17 @@ Source-first conventions carry over unchanged:
   excerpt — the human reviewer sees exactly the lines that assert the
   claim. Of a family record, a pair of spouse claims holds the lines
   that give it: the family's own line, its HUSB and WIFE, its own
-  citations, and the MARR and DIV that date the pair. A person's image
+  citations, and the MARRs and DIVs that give the pair. A person's image
   claim holds the object's lines, after those of the person's OBJE link
   when the link holds any beneath it. An excerpt is given in NFC, the
   form the instance stores text in, and holds at most 400 characters,
-  as a Wikibase text value does: a longer one keeps every
-  line of the citations folded into its claim (below) and the titles
-  they resolve to, and as many of its other lines, from the first, as
-  fit, marking each run it leaves out with `…`, and it ends with
-  `clipped, sha1` and the first 12 hex digits of the whole excerpt's
-  SHA-1, so that clipping never makes one claim of two that the whole
-  excerpts keep apart, such as two citations of one fact;
+  as a Wikibase text value does: a longer one keeps every line of the
+  citations folded into its claim (below) and the titles they resolve
+  to, and as many of its other lines, from the first, as fit, marking
+  each run it leaves out with `…`, and it ends with `clipped, sha1` and
+  the first 12 hex digits of the whole excerpt's SHA-1, so that clipping
+  never makes one claim of two that the whole excerpts keep apart, such
+  as two citations of one fact;
 * GEDCOM's own uncertainty vocabulary maps to the archive's structural
   uncertainty (docs/MODELING.md): ABT/EST/CAL -> `circa` sourcing
   circumstances; BEF -> `latest date`; AFT -> `earliest date`;
@@ -118,14 +118,14 @@ so such a tag is named with its parent's tag where it goes unread
 reference is counted so too: one directly beneath a person (INDI.SOUR),
 beneath a DATE, PLAC, HUSB, WIFE, CHIL, FAMC or FAMS (DATE.SOUR,
 CHIL.SOUR), or beneath an event or a NAME that gives no claim
-(BIRT.SOUR, NAME.SOUR). So is an
-OBJE that it maps to no media item, beneath a family or an event
-(FAM.OBJE, DEAT.OBJE), save a person's link to an object the export
-lacks, which is counted as OBJE, as a level-0 OBJE record that no image
-claim cites is. A level-0 SOUR record that no folded citation cites is
-counted as SOUR, and each FILE of an object after its first as
-OBJE.FILE. A DIV without a DATE is counted as DIV: it says a
-marriage ended at an unknown time, and a claim has no unknown value to
+(BIRT.SOUR, NAME.SOUR). So is an OBJE that it maps to no media item,
+beneath a family or an event (FAM.OBJE, DEAT.OBJE), save a person's
+link to an object the export lacks, which is counted as OBJE, as a
+level-0 OBJE record that no image claim cites is. A level-0 SOUR record
+that no folded citation cites is counted as SOUR, and each FILE of an
+object after its first as OBJE.FILE. A DIV without a DATE is counted as
+DIV: it says a marriage ended at an unknown time, and a claim has no
+unknown value to
 state that with. A family has one husband and one wife, so the adapter
 reads a family's first HUSB and first WIFE alone, and a further one is
 counted with its parent's tag too (FAM.HUSB, FAM.WIFE). A family's MARR
