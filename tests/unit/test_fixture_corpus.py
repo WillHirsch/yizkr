@@ -22,8 +22,9 @@ and the clusters, and report.md must say none of it by a universe name, a
 file name or a document's SHA-1. The clustering stage's identity map
 (TestTheTrapsInTheIdentityMap) must meet each trap TRAPS sets for it,
 read in the universe's terms; the two the whole-cluster merge rule cannot
-meet (#361) are recorded as expected, each with its reason, by an xfail
-that turns when the rule does.
+meet (#361) are recorded as expected, each with its reason, by a strict
+xfail that asserts the merge the rule withholds, so it turns when the
+rule does.
 """
 
 from __future__ import annotations
