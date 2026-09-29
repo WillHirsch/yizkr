@@ -221,7 +221,12 @@ slice is the stage; not fail-fast by default. Value: the share; `count`,
 kind's documents the run plans, for a kind with fewer. It fires as soon
 as the failures pass that share, even before the first documents are all
 in, and once per stage and kind. Its slice is the kind; fail-fast by
-default. Value: the failures; `of` (the documents counted), `first`,
+default. A kind the run plans fewer than `min-documents` documents of (2
+by default: a single deck, say, or a single GEDCOM file) is never judged,
+so this check never pauses it: no other document of the kind is left for
+a pause to protect. Its failure still shows as a failed document, and in
+`stage-failures`. A run whose `run.json` records no plan has every kind
+judged. Value: the failures; `of` (the documents counted), `first`,
 `pause`.
 
 **`call-failures`**: more than `max-share` of a stage's last `window`

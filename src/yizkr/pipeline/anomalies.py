@@ -241,6 +241,7 @@ class Rolling(Check):
 class FirstOfKind(Check):
     first: int = Field(ge=1)
     max_share: float = Field(ge=0, lt=1)
+    min_documents: int = Field(ge=1)
     fail_fast: bool
 
 
@@ -1661,13 +1662,16 @@ class AnomalyChecks:
             carried=all(failures),
         )
 
-    def _planned_of(self, kind: str) -> int:
-        """How many documents of `kind` the run plans (run.json)."""
+    def _planned_of(self, kind: str) -> int | None:
+        """How many documents of `kind` the run plans (run.json), or None
+        while run.json records no plan."""
         if not self._planned:
             documents = self.run.manifest().get("documents")
+            if not isinstance(documents, list):
+                return None
             self._planned = Counter(
                 document.get("kind")
-                for document in documents or []
+                for document in documents
                 if isinstance(document, dict)
             )
         return self._planned.get(kind, 0)
@@ -1682,6 +1686,12 @@ class AnomalyChecks:
     ) -> None:
         settings = self.config.checks.kind_failures
         if not settings.enabled:
+            return
+        planned = self._planned_of(kind)
+        # a kind the run plans too few documents of is never judged: no
+        # other document of it is left for a pause to protect, and its
+        # failure shows as a failed document and in stage-failures
+        if planned is not None and planned < settings.min_documents:
             return
         first = self._first.get((stage, kind))
         if first is None:
@@ -1699,7 +1709,6 @@ class AnomalyChecks:
             for did_fail, from_cache in first.outcomes.values()
             if did_fail
         ]
-        planned = self._planned_of(kind)
         limit = settings.max_share * (
             min(settings.first, planned) if planned else settings.first
         )

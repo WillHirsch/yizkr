@@ -373,6 +373,7 @@ class TestThresholds:
             "checks:\n  zero-claim:\n    min-chars: 10\n",  # no such check
             "checks:\n  call-failures:\n    min-count: 20\n",  # > window
             "checks:\n  kind-failures:\n    max-share: 1.5\n",
+            "checks:\n  kind-failures:\n    min-documents: 0\n",
             "pause-timeout-s: -1\n",
             "pause-timeout-s: .inf\n",  # would stop the timer's thread
             "pause-timeout-s: 1.0e+10\n",  # beyond threading.TIMEOUT_MAX
@@ -1137,6 +1138,67 @@ class TestRates:
         outcomes(run, "transcription", "media", "xxxxx.....xxxxxx")
         checks.poll()
         assert "kind-failures" not in checks_raised(run)
+
+    def test_a_kind_the_run_plans_one_document_of_is_never_paused(
+        self, tmp_path
+    ):
+        """A single deck that fails leaves no other deck for a pause to
+        protect (#376): the kind check leaves it alone, and the failure
+        still shows in stage-failures."""
+        run, checks = make_checks(
+            tmp_path,
+            {"checks": {"stage-failures": {"window": 1, "min-count": 1}}},
+        )
+        run.start(
+            documents=[
+                {"sha1": sha1_of("presentation-0"), "kind": "presentation"},
+                *(
+                    {"sha1": sha1_of(f"text-{n}"), "kind": "text"}
+                    for n in range(3)
+                ),
+            ]
+        )
+        outcomes(run, "transcription", "presentation", "x")
+        checks.poll()
+        assert "kind-failures" not in checks_raised(run)
+        assert requests(run) == []
+        assert only(run, "stage-failures")["kind"] == "presentation"
+
+    def test_a_kind_the_run_plans_two_documents_of_is_still_paused(
+        self, tmp_path
+    ):
+        run, checks = make_checks(tmp_path)
+        run.start(
+            documents=[
+                {"sha1": sha1_of(f"presentation-{n}"), "kind": "presentation"}
+                for n in range(2)
+            ]
+        )
+        outcomes(run, "transcription", "presentation", "xx")
+        checks.poll()
+        alert = only(run, "kind-failures")
+        assert (alert["value"], alert["limit"], alert["pause"]) == (
+            2,
+            1.0,
+            "kind:presentation",
+        )
+        (pause,) = requests(run)
+        assert pause["scope"] == "kind:presentation"
+
+    def test_the_fewest_documents_judged_is_a_threshold(self, tmp_path):
+        """With min-documents 1, a kind of one document that fails is
+        paused."""
+        run, checks = make_checks(
+            tmp_path, {"checks": {"kind-failures": {"min-documents": 1}}}
+        )
+        run.start(
+            documents=[
+                {"sha1": sha1_of("presentation-0"), "kind": "presentation"}
+            ]
+        )
+        outcomes(run, "transcription", "presentation", "x")
+        checks.poll()
+        assert only(run, "kind-failures")["pause"] == "kind:presentation"
 
     def test_most_recent_engine_calls_failing(self, tmp_path):
         run, checks = make_checks(tmp_path)
