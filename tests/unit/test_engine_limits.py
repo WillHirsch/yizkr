@@ -83,7 +83,7 @@ from yizkr.pipeline.llm import (
 )
 from yizkr.pipeline.orchestrate import AWAITING_CLAIMS, BATCHED, Orchestrator
 from yizkr.pipeline.review import export_review_csv
-from yizkr.pipeline.rundir import DOCUMENT_FAILED, RUNNING, run_state
+from yizkr.pipeline.rundir import DOCUMENT_FAILED, INTERRUPTED, run_state
 
 PINNED = "2.1.237"
 ROOT = Path(__file__).resolve().parents[2]
@@ -1480,9 +1480,11 @@ class TestNoDocumentFails:
         ]
         assert made[-1]["kind"] == "text"
         assert made[-1]["resumes_at"] == stamp(resets)
-        # the stage was cut short, not failed: the next run makes it
+        # the stage was cut short, not failed: the paused invocation has
+        # ended, so the stage reads as interrupted (#300), and the next run
+        # makes it
         state = run_state(run.rundir)[(last.sha1, "critique")]
-        assert state.status == RUNNING
+        assert state.status == INTERRUPTED
 
         clock.now = resets + HOUR
         again = Run(a_folder(tmp_path), tmp_path / "state", **options)
