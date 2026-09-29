@@ -153,7 +153,7 @@ RECORDED = {
             ),
             Entity(
                 "e2",
-                "father of Klara Löbig",
+                "Klara's father",
                 "human",
                 "sebastian-loebig",
                 summary="the sender, who signs 'Dein Vater'",
