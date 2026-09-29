@@ -1459,10 +1459,10 @@ class TestEvents:
         assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
             (AMBIGUOUS, "exact/conflict/unknown")
         ]
-        # one participant each: the tree dates her birth event 1917 and
-        # gives her born 1919 too, the postcard's event says 1919. The
-        # Klaras' births overlap and they merge; the events' own dates
-        # conflict, and so does their link
+        # one participant each, and each birth hers: the tree gives her
+        # born 1917 and 1919, and dates her birth event 1917; the
+        # postcard's event says 1919. The Klaras' births overlap and they
+        # merge; the events' own dates conflict, and so does their link
         tree = document(
             "family-tree-1984",
             [
@@ -1470,6 +1470,7 @@ class TestEvents:
                 entity("e2", "Birth of Klara Löbig", "birth"),
             ],
             [
+                ("e1", "date_of_birth", day(1917)),
                 ("e1", "date_of_birth", day(1919)),
                 ("e2", "participant", item("e1")),
                 ("e2", "point_in_time", day(1917)),
