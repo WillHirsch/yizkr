@@ -16,6 +16,9 @@ evidence from its own dump and drops every such item the check did not
 release, every item that states no type, and every family; and it
 refuses to run while the query service, where the check runs, does not
 hold the dump's revisions (§4, Ruling 6).
+Amendment proposed by [ADR-0035](0035-mention-records.md) (#385): a stated
+civil status (`civil_status`) is person evidence for the check (ADR-0035
+§3.1).
 
 ## Context
 

@@ -16,8 +16,9 @@ owner accepts it; #385's implementation does.
 - The relation a source states decides the kind of what it points to
   (ADR-0031, accepted; #202). This ADR carries its structural half (§3.4,
   §3.5).
-- Marriages and partnerships are entities (ADR-0036, accepted; #311).
-  Their participants take the roles `spouse` and `partner` defined here.
+- Marriages and partnerships are entities (ADR-0036, the owner's
+  decision on #311; accepted when PR #398 merges). Their participants
+  take the roles `spouse` and `partner` defined here.
 
 **Amends:** ADR-0003 (an extraction-run reference may carry a note),
 ADR-0007 (the manifest record gains a structure and a note), ADR-0011
@@ -46,23 +47,34 @@ Line numbers are those of main at 52e2a08, for paths under `src/yizkr/`.
 - **What a source does say becomes a claim.** The burial register's
   "Witwer der Cäcilie Löbig" gives Eugen's civil status (widowed),
   Cäcilie's death, and their marriage.
-- **Everyone in an event gets a role.** In Gustav's birth register extract
-  he is the principal, and his father Sebastian is a parent and the
-  informant. A birth's date belongs to its principal alone.
+- **Everyone in an event gets a role.** In Gustav's birth register
+  extract, Gustav is the one born (the event's *principal*), and his
+  father Sebastian is both a parent and the informant who reported the
+  birth. A birth's date belongs to the person born alone, so a death that
+  names only the person who reported it no longer dates that person's
+  death.
 - **A kinship term keeps its words and gains a class.** "Dad's cousin
   Leopold" gets the class cousin beside the word "cousin".
 - **The relation decides the kind.** The Landgericht Rekau, which divorces
   Leopold and Agnes, is an organisation; the Peiltal court prison, where
-  Leopold was held, is a place.
+  Leopold was held, is a place. A claim that points a relation at the
+  wrong kind is refused and counted.
 - **Given names match by their full form, never by their first letters.**
   "Gustl" meets "Gustav"; a man's name no longer meets the woman's name
   that adds a letter to it.
-- **An umlaut meets its spelling without one.** "Floerburg" meets
-  "Flörburg".
+- **Some pairs are no longer proposed.** Names that share only a part
+  ("Bad Flörburg" and "Flörburg") or are one name in two languages
+  ("Gustav" and "Gustave") no longer pair on their own; a source that
+  gives both still joins them. A bracket in a family-tree export no longer
+  marks a nickname; a quote still does.
+- **An umlaut also meets its two-letter spelling.** "Floerburg" meets
+  "Flörburg" (ö written as oe), as "Lobig" already meets "Löbig".
 - **The extractor may leave a note where it made a judgement call**, such
-  as "the postmark '19.8.38' read as 1938". The note is written inside
-  the run's reference, never ranks or hides anything, and stays out of
-  the public export.
+  as "the postmark '19.8.38' read as 1938". The note is written to the
+  wiki as the extraction's own remark, beside the record of the run that
+  made the claim, never as something the source says. It never ranks or
+  hides a value, a claim without one is not thereby certain, and it never
+  reaches the public export.
 - **What cannot be structured is counted, never guessed.** Its mentions
   stay apart, and the run report says how many.
 
@@ -192,12 +204,14 @@ to `toponym`, and a surname's type to `other`.
 - **Particles stay in their surname** (ADR-0022 §4), so a surname keys
   whole.
 - **A standard form** is the full form of a given name in its usual
-  spelling, which a diminutive or an abbreviation stands for, as the
-  document supports it: the postcard's "Gustl" is Gustav, and the
-  interview's "Gus" is Gustave. A full name is its own standard form. A
-  standard form is never a translation, and an initial has none. A pet
-  name that stands for no given name ("Peppi", "Muckel") is a nickname,
-  with no standard form.
+  spelling, which a diminutive or an abbreviation stands for, and it is
+  given only as the document supports it. The 2008 family history's
+  "became Gustave Lobig here, Gus to everyone" makes its "Gus" Gustave.
+  The postcard's lone "Gustl" never spells the full form, so it gets
+  none, and its written form stands in. A full name is its own standard
+  form. A standard form is never a translation, and an initial has none.
+  A pet name that stands for no given name ("Peppi", "Muckel") is a
+  nickname, with no standard form.
 - **A patronymic** is a name part of its own, never a surname. The
   relation it states is a `father` claim where the source names the
   father (§3.1). (An example follows when #400 adds a patronymic to the
@@ -271,7 +285,7 @@ to `toponym`, and a surname's type to `other`.
 |---|---|---|
 | `names` | its proper names, as written | yes |
 | `kinds` | the words naming what kind of institution it is, as written | only with a place |
-| `places` | the places its names carry, as written; or else those its `location` claims name | only with a kind |
+| `places` | the places its names carry, as written; or else those its `location` claims name, with every place its manifest puts them in (#361's `_places`, `pipeline/clustering.py:1609-1620`) | only with a kind |
 
 - "Hutmacherei zum Blauen Hut" gives the name "zum Blauen Hut" and the
   kind Hutmacherei. "Photograph Brüsrich" gives the name Brüsrich and the
@@ -384,8 +398,10 @@ A `participant` claim gains a role, as Wikidata qualifies one with
 
 - **Who is the principal.** In a birth or a death, the one born or who
   died. In any other event, the person it happens to: Ida in her
-  deportation, Leopold in his imprisonment. In a partnership the couple
-  are `partner`s, and in a marriage `spouse`s (ADR-0036).
+  deportation, Leopold in his imprisonment. A union's own events are the
+  exception: the couple take part in the partnership or marriage, as
+  `partner`s or `spouse`s, and its wedding, divorce or annulment carries
+  only witnesses and an officiant (ADR-0036).
 - **Gustav's birth register extract** gives the boy as principal and
   Sebastian and Hildegard as parents. Sebastian, who reported the birth,
   is the informant too: one participant claim with two role qualifiers.
@@ -405,9 +421,9 @@ A `participant` claim gains a role, as Wikidata qualifies one with
   only its informant dates no one's death.
 - **A death's principal is never also its informant**: validation refuses
   such a claim.
-- **A participant claim points from the event to the person.** The
-  accepted kinds (§3.5) refuse one from a person to an event, which #361
-  read either way (`pipeline/clustering.py:918-922`).
+- **A participant claim points from the event, or the union (ADR-0036),
+  to the person.** The accepted kinds (§3.5) refuse one from a person to
+  an event, which #361 read either way (`pipeline/clustering.py:918-922`).
 - **The GEDCOM adapter** makes each person's death event with that person
   as principal.
 - **Privacy.** #345 reads the role: a death event is death evidence for
@@ -454,10 +470,11 @@ ADR-0031 §1 leaves both to this revision.
   of its media as a claim's source is (ADR-0010), and resolved to the
   artifact item at write, as the writer resolves sources (writer step 0).
   Gustav's birth register extract was issued by the Standesamt Flörburg.
-- **`carried_out_by`**: an event → the organisation, or the person, that
-  carried it out. The Landgericht Rekau carries out Leopold and Agnes's
-  divorce (an event of ADR-0036). Wikidata has no exact equivalent; the
-  nearest are *court* (P4884) and *organizer* (P664).
+- **`carried_out_by`**: an event → the organisation that carried it out;
+  a person who performs an event takes part in it as its `officiant`
+  (§3.2). The Landgericht Rekau carries out Leopold and Agnes's divorce
+  (an event of ADR-0036). Wikidata has no exact equivalent; the nearest
+  are *court* (P4884) and *organizer* (P664).
 - The rule that a document's issuing authority is boilerplate gives way
   where the source shows the authority issuing: that authority is
   extracted, with `extract` true.
@@ -476,11 +493,11 @@ The critic no longer has to spot a mismatch by reading wording.
 | Property or qualifier | Accepts |
 |---|---|
 | `place_of_birth`, `place_of_death`, `burial_place`, `residence`, `location`, `country_of_citizenship`, `part_of` between places | place |
+| `part_of` from an artifact fragment or a deck's derived media (the registrar's own statements, ADR-0008) | artifact |
 | `father`, `mother`, `child`, `sibling`, `relative`, `gave_refuge_to` | human |
 | `participant`, `perspective` | human, family |
 | `member_of` | organization, family |
-| `employer`, `educated_at`, `issued_by` | organization |
-| `carried_out_by` | organization, human |
+| `employer`, `educated_at`, `issued_by`, `carried_out_by` | organization |
 | `occupation` | occupation_class |
 | `time_period` | time_period_class |
 | `image` | artifact |
@@ -494,7 +511,9 @@ The critic no longer has to spot a mismatch by reading wording.
 | `judgement` | the note categories of §4 |
 | ADR-0036's properties | as ADR-0036 declares them |
 
-The reference and schema properties (`stated_in`,
+A retired property (ADR-0036's `spouse`) accepts nothing: validation
+refuses any claim of it, and the loader's rule exempts it. The reference
+and schema properties (`stated_in`,
 `inferred_from_extraction_run`, `instance_of`, `subclass_of`) declare
 theirs too: an artifact, an extraction run, and a class.
 
@@ -509,7 +528,7 @@ theirs too: an artifact, an extraction run, and a class.
 | `degree`, `removes` | qualifiers on `relative` | quantity | — |
 | the kinship classes, `paternal`, `maternal` | their values | items | — |
 | `issued_by` | document → organisation | item | P2378 |
-| `carried_out_by` | event → organisation or person | item | — (nearest P4884, P664) |
+| `carried_out_by` | event → organisation | item | — (nearest P4884, P664) |
 | `civil_status` | a person's stated civil status | item | — |
 | `unmarried`, `married`, `widowed`, `divorced` | its values | items | — |
 | `judgement` | reference property: a note's category | item | — |
@@ -606,8 +625,8 @@ run's note, or none. Earlier notes stay, never updated or removed.
 - *Ruling 6 stands*: notes record the extraction's process, not an
   acceptance.
 
-**ADR-0023's dated line**, added with the implementation: "Superseded in
-part by ADR-0035 (#385, owner decision 2026-09-29): §2 and Ruling 1 no
+**ADR-0023's dated line**, added with this ADR: "Superseded in part by
+ADR-0035 (proposed; owner decision 2026-09-29, #385): §2 and Ruling 1 no
 longer keep every machine judgement out of the graph. An extraction's
 judgement note, a category and one sentence, is written inside the
 extraction-run reference of the statement it concerns, as process
@@ -615,9 +634,9 @@ provenance. It is never used to rank, order or filter a value; a
 statement without one is not thereby certain; the public export leaves
 notes out as free text. The graph still holds no confidence number,
 epistemic qualifier, or per-statement trust or acceptance marker. §1,
-§3–§6 and Rulings 2–6 stand." ADR-0023's consequence "zero graph /
-export / privacy delta" no longer holds. ADR-0003 gains a dated line: an
-extraction-run reference may carry a note.
+§3–§6 and Rulings 2–6 stand. The consequence "zero graph / export /
+privacy delta" no longer holds." ADR-0003's dated line says that an
+extraction-run reference may carry a judgement note.
 
 ### 5. How extraction fills it
 
@@ -718,12 +737,17 @@ and brackets in a NAME value, which §10 names.
      "Agnes Löbig geb. Nertler" keys as Agnes Löbig and Agnes Nertler.
      With no surname of either kind, its given names alone, which pair
      only with the GEDCOM export, as in #361.
-   - No key pairs a part with itself: a given name that is also one of
-     the person's surnames makes no key with it (as #361 guards,
+   - No key pairs two parts that fold alike: a given name or nickname
+     makes no key with a surname or patronymic that folds to the same
+     key, the person's own or a relative's (#361's guard,
      `pipeline/clustering.py:1070-1073`). An `unsplit` form keys each
      ordered pair of its distinct words, never with a relative's surname:
      "Löbig Ursula" keys (Löbig, Ursula) and (Ursula, Löbig), never
      (Löbig, Löbig).
+   - A key that only a GEDCOM `unsplit` form gives (a bracketed part, a
+     NAME without slashes) proposes a pair but never makes a link
+     confident: the export does not say which word is which, and some of
+     its words may be markers ("geb.").
    - A place: each of its names as written, its address among them,
      except a short form that is another name's toponym (§2.2).
    - An organisation: each proper name; without one, each kind with each
@@ -743,8 +767,10 @@ and brackets in a NAME value, which §10 names.
    another source states: the directory's widow Ursula Löbig (1912) never
    merges with an Ursula Löbig whom a later source calls never married.
 3. **Given names match on their standard forms, exactly, never by
-   prefix.** "Gustl" meets "Gustav" through its standard form; a man's
-   given name no longer meets a woman's that adds a letter to it.
+   prefix.** "Gustl" meets "Gustav" through its standard form where its
+   document supports one, as the 2008 family history does ("Gustav, the
+   youngest, was Gustl at home"); a man's given name no longer meets a
+   woman's that adds a letter to it.
 4. **Parts compare by #361's `normal`** (`pipeline/clustering.py:541-543`):
    case and accents folded after Unicode normalisation (`fold`, 522-527),
    each word's edge punctuation stripped, and single spaces, plus the
@@ -763,9 +789,11 @@ and brackets in a NAME value, which §10 names.
    a proper name of one word only with a shared kind or place, since a
    firm named after a surname, such as "Firma Löbig", may be any Löbig's;
    and without a proper name, only where kind and place both agree. Two
-   places agree when they would link under rule 5. Places that differ keep
-   a pair ambiguous even on a long shared name: two shops called "zum
-   Blauen Hut" in two towns stay apart.
+   places agree when they would link under rule 5, or when one lies
+   inside the other by the containers the manifests state; they differ
+   only when neither holds. Places that differ keep a pair ambiguous even
+   on a long shared name: two shops called "zum Blauen Hut" in two towns
+   stay apart.
 7. **Families** pair on a shared surname and never merge in clustering:
    every pair goes to #106, as two documents' "Familie Löbig" do.
 8. **Kin and contradictions in record terms.** Two kin agree when they
@@ -879,7 +907,8 @@ into "fix first, and measure in run 1": under the pre-baseline exception
 - The organisation rule's word count (§7, rule 6): a count, not a list,
   guarding firms named after a surname.
 - `normal`'s edge punctuation (§7, rule 4) and the no-addition test's
-  word boundaries (§5, §8).
+  word boundaries (§5, §8), save a family's surname, which may end inside
+  a word ("the Löbigs").
 - Containers compared as written: an abbreviation ("Kr. Peiltal" beside
   "Kreis Peiltal") misses, and the pair stays ambiguous.
 - GEDCOM's grammar and vocabulary: slashes, comma-separated pieces, NAME
@@ -967,8 +996,9 @@ whole names as now.
 - **Two spellings of one given name across languages**, such as Gustav
   and Gustave, which #361's prefix matching paired, no longer meet on
   their names alone. They meet where a source names both, as the
-  naturalisation does, and a diminutive meets its full name through its
-  standard form ("Gus" is Gustave).
+  naturalisation does, and a diminutive meets its full name through the
+  standard form its document supports (the 2008 family history's "Gus to
+  everyone" is Gustave).
 - **Patronymics key like surnames**, so a person known by a given name and
   a patronymic meets another known the same way, and not only the GEDCOM
   export.
@@ -989,9 +1019,11 @@ whole names as now.
     the prompt is fixed where the counts point.
   - *Over-structuring.* Every field is optional and its values closed, and
     the escape hatches (`unsplit`, the statuses, the `relative` class) say
-    "not settled" instead of forcing a reading. Every field has a reader:
-    the head and toponym split, for one, keeps a camp's short form from
-    meeting its town (§2.2).
+    "not settled" instead of forcing a reading. Every field but two has a
+    reader: the head and toponym split, for one, keeps a camp's short form
+    from meeting its town (§2.2). An address's street and number have none
+    yet, since an address keys as written; they are kept for the place
+    hierarchy's follow-up (§10).
   - *Output size.* A dense document's manifest turn grows. A manifest the
     turn cannot hold falls back as now (ADR-0007), and its mentions are
     recordless.
@@ -1003,13 +1035,16 @@ whole names as now.
     still give no false merge.
   - *Recordless mentions stay apart.* A document whose manifest falls back
     to line ranges merges nothing by name, and the report counts it.
+- **Dated lines.** This ADR adds them to ADR-0003, ADR-0007, ADR-0011,
+  ADR-0018, ADR-0022 and ADR-0023 (§4's text), and to ADR-0020 as a
+  proposal of its own. ADR-0013's (§A, type hints in English) waits for
+  #391, and ADR-0014's (the kinship class) for #398, since both edit
+  those headers.
 - **Docs that move with the implementation:** docs/MODELING.md ("Names",
   "Places", "Organizations", "Kinship", "Identity and reconciliation",
   "Reference pattern", "Living persons and privacy", and the "Machine
-  uncertainty is process" entry under "Contradictions"); dated lines in
-  ADR-0003, ADR-0007, ADR-0011, ADR-0013 (§A), ADR-0014, ADR-0018,
-  ADR-0020, ADR-0022 and ADR-0023 (§4's text); the pipeline README's
-  clustering section; docs/RUN_REPORT.md (the counts of records and
+  uncertainty is process" entry under "Contradictions"); the pipeline
+  README's clustering section; docs/RUN_REPORT.md (the counts of records and
   notes); docs/EXAMPLES.md; and the docstrings of the writer, the review
   sheet, `Claim` and `EntityRecord`.
 - **Tests** (#385): fictional fixtures in languages beyond English and

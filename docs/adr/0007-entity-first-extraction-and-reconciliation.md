@@ -18,6 +18,11 @@ entities against no graph entity and proposes nothing; matching against
 a kept graph's roster comes back as an explicit, keyed input (#130). The
 standalone `ingest reconcile` step and `reconcile-graph` still read the
 graph's roster.
+Amended by [ADR-0035](0035-mention-records.md) (proposed; owner decision
+2026-09-29, #385): a manifest record of a person, place, organisation or
+family gains a `structure`, what its names are made of, which is input to
+identity and never written, and any record may carry a judgement note
+(ADR-0035 §2, §4).
 
 Amends ADR-0006. The transport machinery specified there — forked
 conversations, NDJSON emission with sentinel, per-chunk state with
