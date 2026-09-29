@@ -15,6 +15,7 @@ tries a held lock more often than a real session does.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import http.server
 import json
 import os
@@ -137,6 +138,15 @@ class Child:
 
     def wait_for(self, text: str) -> None:
         until(lambda: text in self.output(), f"{text!r}", self)
+
+    def said(self, line: str) -> bool:
+        """Whether the process has printed `line` as a whole line. A cue
+        such as "released" is matched whole, as the announcement before
+        it quotes paths and a command line that may hold the word."""
+        return line in self.output().splitlines()
+
+    def wait_for_line(self, line: str) -> None:
+        until(lambda: self.said(line), f"the line {line!r}", self)
 
     def stop(self) -> None:
         if self.running():
@@ -314,7 +324,7 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Runs]:
     with stand_in_stack() as stack, spawner(root) as start:
         held_lock = root / "held" / "live-stack.lock"
         holder = start("holder", holder_args(root), child_env(held_lock))
-        holder.wait_for("acquired")
+        holder.wait_for_line("acquired")
 
         pair_lock = root / "pair" / "live-stack.lock"
         pair_a, pair_b = (
@@ -463,38 +473,67 @@ def test_a_second_holder_waits_until_the_first_releases_the_lock(
     lock, start_holder
 ):
     first = start_holder("first")
-    first.wait_for("acquired")
+    first.wait_for_line("acquired")
     assert record(lock)["pid"] == first.pid
 
     second = start_holder("second")
     second.wait_for(f"held by pid {first.pid} ")
     time.sleep(WATCH)
-    assert "acquired" not in second.output()
+    assert not second.said("acquired")
 
     first.cue()  # release the lock, and stay running
-    first.wait_for("released")
-    second.wait_for("acquired")
+    first.wait_for_line("released")
+    second.wait_for_line("acquired")
     assert first.running()
     assert record(lock)["pid"] == second.pid
     # the holder is announced once, however many times the second tried
     assert second.output().count("is held by") == 1
 
     second.cue()
-    second.wait_for("released")
-    assert lock.read_text() == ""  # the record goes with the lock
+    second.wait_for_line("released")
+    # The record goes with the lock. The holder empties it before it
+    # releases the lock and so before it prints "released", as the next
+    # test checks step by step, in this process. Here, across processes on
+    # a loaded machine, the file is read until it is empty, within
+    # PATIENCE, rather than once (#379).
+    until(lambda: lock.read_text() == "", "the record to go", second)
+
+
+def test_the_record_is_emptied_before_the_lock_is_released(lock, monkeypatch):
+    """A holder empties its record, then releases the lock, then returns
+    from hold(): so no holder that takes the lock next finds the record
+    of one that released it, and whatever a holder does after its hold,
+    such as announcing the release, comes after both."""
+    at_release: list[str] = []
+    flock = fcntl.flock
+
+    def watched(fd: int, operation: int) -> None:
+        if operation == fcntl.LOCK_UN:
+            at_release.append(lock.read_text())
+        flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, "flock", watched)
+    with hold(lock, timeout=0):
+        assert record(lock)["pid"] == os.getpid()
+        assert at_release == []
+    assert at_release == [""]  # released once, with the record emptied
+    assert lock.read_text() == ""
+    # and the lock is free: another open file description takes it at once
+    with hold(lock, timeout=0):
+        pass
 
 
 def test_a_holder_killed_with_sigkill_releases_the_lock(lock, start_holder):
     # The first holder's record is the longer, so a record written over it
     # without emptying the file first would not parse.
     first = start_holder("first", "x" * 200)
-    first.wait_for("acquired")
+    first.wait_for_line("acquired")
     second = start_holder("second")
     second.wait_for(f"held by pid {first.pid} ")
 
     first.process.send_signal(signal.SIGKILL)
     first.process.wait(timeout=PATIENCE)
-    second.wait_for("acquired")
+    second.wait_for_line("acquired")
     holder = record(lock)
     assert holder["pid"] == second.pid
     assert holder["cwd"] == str(second.cwd)
@@ -503,7 +542,7 @@ def test_a_holder_killed_with_sigkill_releases_the_lock(lock, start_holder):
 def test_giving_up_names_the_holder(lock, start_holder, monkeypatch):
     monkeypatch.setattr(live_lock, "POLL_INTERVAL", POLL)
     first = start_holder("first", "--an-argument")
-    first.wait_for("acquired")
+    first.wait_for_line("acquired")
 
     announced: list[str] = []
     started = time.monotonic()
