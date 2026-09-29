@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,7 @@ from tests.unit.test_llmcache import (
     Engine,
     pipeline_answers,
 )
-from tests.unit.test_orchestrate import quiet, this_run
+from tests.unit.test_orchestrate import ScriptedOrchestrator, quiet, this_run
 from tests.unit.test_scratch import Corpus, a_run, fakes  # noqa: F401
 from tests.unit.test_scratch_estimate import (  # noqa: F401
     engine,
@@ -38,12 +39,13 @@ from tests.unit.test_scratch_estimate import (  # noqa: F401
 )
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import transcription_check
+from yizkr.pipeline import llm, transcription_check
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     FAILED,
     TRANSCRIPTION_VOLATILE,
     DocumentRun,
+    Orchestrator,
 )
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA,
@@ -308,6 +310,37 @@ class TestTheRoute:
         assert "transcription check" in doc.state.error
         assert not doc.transcription.exists()
 
+    def test_a_pdf_read_from_its_text_layer_starts_no_engine(
+        self, tmp_path, monkeypatch
+    ):
+        """The transcribe role's engine starts only for a page or an image
+        to read by vision: the run manifest records no client for it."""
+
+        class Starting(ScriptedOrchestrator):
+            _llm = Orchestrator._llm
+
+        monkeypatch.setattr(llm, "make_client", lambda *a, **k: Reader({}))
+        corpus = folder(tmp_path, family_history_2008=history())
+        orchestrator = Starting(
+            corpus, tmp_path / "state", proposals=0, log=quiet
+        )
+        orchestrator.run()
+        roles = orchestrator.rundir.manifest()["roles"]
+        assert roles["transcribe"]["client"] is None
+        assert roles["extract"]["client"] is not None
+
+    def test_the_reading_s_scratch_folder_is_removed(
+        self, tmp_path, monkeypatch
+    ):
+        """The images wait in a scratch folder while the PDF is read, and
+        it is gone once the stage has kept them."""
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+        corpus = folder(tmp_path, booklet=booklet())
+        run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        assert not list(scratch.glob("yizkr-pdf-*"))
+
     def test_a_pdf_pdfium_cannot_read_is_read_whole(self, tmp_path):
         corpus = folder(tmp_path, scan=b"%PDF-1.4 fictional")
         reader = Reader({"scan.pdf": EXTRACT})
@@ -569,6 +602,36 @@ class TestReuse:
             f"{LETTER_SHA1}.transcription.superseded-1.json"
         )
         assert json.loads(superseded.read_text())["text"] == EXCERPT
+
+    @pytest.mark.parametrize(
+        "damage, reason",
+        [
+            ("another image", "names another image"),
+            ("not a transcription", "cannot be read"),
+        ],
+    )
+    def test_a_damaged_image_transcription_is_made_again(
+        self, tmp_path, damage, reason
+    ):
+        corpus = folder(tmp_path, booklet=booklet())
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
+        kept = derived_transcription(doc.dir, LETTER_SHA1)
+        if damage == "another image":
+            view = json.loads(kept.read_text())
+            view["artifact"]["sha1"] = "b" * 40
+            kept.write_text(json.dumps(view))
+        else:
+            kept.write_text("{")
+        again = run(tmp_path, corpus, reader)
+        (aside,) = set_asides(again)
+        assert reason in aside["reason"]
+        assert json.loads(kept.read_text())["artifact"]["sha1"] == (
+            LETTER_SHA1
+        )
+        assert kept.with_name(
+            f"{LETTER_SHA1}.transcription.superseded-1.json"
+        ).exists()
 
     def test_a_reused_view_stands_without_a_call(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet())

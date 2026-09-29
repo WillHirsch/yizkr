@@ -231,6 +231,10 @@ class Transcription(BaseModel):
         other transcription."""
         return self._reading
 
+    def forget_reading(self) -> None:
+        """Let go of the reading once its caller has kept it."""
+        self._reading = None
+
     def page_text(self, page: TranscribedPage) -> str:
         """The text of one page, as `pages` places it."""
         return self.text[page.start : page.end]

@@ -479,30 +479,18 @@ def _visible_text(
     return _decode(codes), drawing
 
 
-def _paints(obj: Any) -> bool:
-    """Does a path object fill or stroke? One that does neither draws
-    nothing."""
-    fill, stroke = ctypes.c_int(), ctypes.c_int()
-    if not pdfium_c.FPDFPath_GetDrawMode(obj.raw, fill, stroke):
-        return True
-    return bool(fill.value or stroke.value)
-
-
 def _draws(obj: Any, on_page: bool, drawing: set[int]) -> bool:
     """Does the object draw something on the page? An image does where it
-    falls on the page, a shading always, a path where it fills or strokes,
-    and a text object where it draws a visible character. A form draws
-    through the objects it holds."""
+    falls on the page, a text object where it draws a visible character,
+    and a path or a shading always: PDFium keeps a path as an object only
+    when it fills or strokes. A form draws through the objects it
+    holds."""
     kind = obj.type
     if kind == pdfium_c.FPDF_PAGEOBJ_IMAGE:
         return on_page
-    if kind == pdfium_c.FPDF_PAGEOBJ_SHADING:
-        return True
-    if kind == pdfium_c.FPDF_PAGEOBJ_PATH:
-        return _paints(obj)
     if kind == pdfium_c.FPDF_PAGEOBJ_TEXT:
         return _address(obj.raw) in drawing
-    return False
+    return kind in (pdfium_c.FPDF_PAGEOBJ_PATH, pdfium_c.FPDF_PAGEOBJ_SHADING)
 
 
 def _decoration(obj: Any) -> bool:

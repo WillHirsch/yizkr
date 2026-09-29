@@ -97,6 +97,14 @@ class TestUsable:
         assert not usable("Rahel\x01\x02")
         assert usable("Rahel    \n\n\t  Angerring")
 
+    def test_code_units_become_characters(self):
+        """A surrogate pair is one character; a lone surrogate, or a code
+        beyond Unicode, is the replacement character."""
+        decode = textlayer._decode
+        assert decode([0x47, 0xD83D, 0xDCDC, 0x6C]) == "G\U0001f4dcl"
+        assert decode([0x47, 0xD83D, 0x6C]) == "G\ufffdl"
+        assert decode([0xDCDC, 0x110000]) == "\ufffd\ufffd"
+
     def test_clean_keeps_the_text_and_its_lines(self):
         raw = "\r\nFlörburg,  \r\n\r\n\r\n\x00Brunnenring 35\t\r\n\r\n"
         assert clean(raw) == "Flörburg,\n\nBrunnenring 35"
@@ -225,6 +233,13 @@ class TestPages:
         assert methods(result) == [TEXT_LAYER, VISION]
         assert result.pages[1].images == []
         assert result.images == {}
+
+    def test_a_page_that_draws_only_paths_is_read_by_vision(self, tmp_path):
+        """Text drawn as outlines is paths, and no text layer: the page is
+        not blank, and only vision can read it."""
+        drawing = pdfs.Page().rectangle(72, 400, 300, 200)
+        result = read(tmp_path, typed(TITLE), drawing)
+        assert methods(result) == [TEXT_LAYER, VISION]
 
     def test_a_blank_page_is_not_read(self, tmp_path):
         result = read(tmp_path, typed(TITLE), pdfs.Page())

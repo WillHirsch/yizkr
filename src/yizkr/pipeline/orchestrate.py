@@ -1390,11 +1390,13 @@ class Orchestrator:
             lambda: self._transcribe(doc, method),
             attention=_reading_attention,
         )
-        if transcription.reading is not None:
+        reading = transcription.reading
+        if reading is not None:
             try:
                 self._keep_reading(doc, transcription)
             finally:
-                transcription.reading.close()
+                reading.close()
+                transcription.forget_reading()
         # detection is a per-document choice with real graph effect (the
         # excerpt language tag): record it, and surface it when it was
         # inferred rather than forced, so a wrong guess is reviewable.
