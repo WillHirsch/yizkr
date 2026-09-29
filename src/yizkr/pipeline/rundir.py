@@ -827,6 +827,34 @@ def interrupted(
     )
 
 
+# how many times run_state reads a run directory while invocations start
+# or end as it reads (_consistent_read)
+_READS = 5
+
+
+def _consistent_read(run: RunDir) -> tuple[list[dict], dict]:
+    """The run's events, and a reading of run.json that holds for them.
+
+    run.json is read before the events and again after them. While the two
+    readings differ in the invocations they record, or in their ends (an
+    invocation started or ended while the events were read), all three
+    are read again, _READS times at most. When they agree, the invocations
+    and ends run.json records held while the events were read. An
+    invocation records its start in run.json before its first event, and
+    its end before its closing event, so a stage an invocation started
+    after the one before it ended is not read against that one, and a
+    stage done just before its invocation ended is not read without its
+    done. When they never agree, the last events are read against the
+    run.json read after them."""
+    for _ in range(_READS):
+        before = run.manifest()
+        events = run.events()
+        manifest = run.manifest()
+        if invocation_records(before) == invocation_records(manifest):
+            break
+    return events, manifest
+
+
 def run_state(run: RunDir) -> dict[tuple[str, str], StageState]:
     """State per (document SHA-1, stage).
 
@@ -834,15 +862,9 @@ def run_state(run: RunDir) -> dict[tuple[str, str], StageState]:
     for it sets its state. A stage whose latest event is its start is
     running while the invocation that started it runs, and interrupted
     once that invocation is over (interrupted): the next invocation starts
-    it again.
-
-    The events are read before run.json, as the live monitor reads them.
-    An invocation records itself in run.json before its first event, so
-    run.json then knows every invocation the events name, and a stage an
-    invocation has just started is never read against an older run.json
-    whose latest invocation has ended."""
-    events = run.events()
-    manifest = run.manifest()
+    it again. The events are read with a reading of run.json that holds
+    for them (_consistent_read)."""
+    events, manifest = _consistent_read(run)
     states: dict[tuple[str, str], StageState] = {}
     for document in manifest.get("documents") or []:
         for stage in document.get("stages") or []:

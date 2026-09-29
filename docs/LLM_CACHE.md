@@ -827,15 +827,19 @@ file (`rundir.run_state`, `yizkr stages state <run dir>`):
   **pending** with the reason the control file held it. A stage that
   started with no later event is **running** while the invocation that
   started it runs, and **interrupted** once that invocation is over:
-  the latest invocation has ended (`run.json` records its end, or its
-  closing event, `run-end` or `run-interrupted`, follows), or a later
-  invocation has started. The next invocation starts an interrupted
-  stage again. A killed invocation records no end and has no closing
-  event, so while it is the latest, the stages it left started read as
-  running. The live monitor tells a stage cut short by the same rule
-  (`rundir.interrupted`, with `rundir.Invocations`; docs/MONITOR.md),
-  and so do `yizkr stages state` and the scratch driver's closing
-  report, which print `run_state`'s counts.
+  the latest invocation has ended (`run.json` records its end, or the
+  log holds its closing event, `run-end` or `run-interrupted`, wherever
+  in the log it is), or a later invocation has started. The next
+  invocation starts an interrupted stage again. A killed invocation
+  records no end and has no closing event, so while it is the latest,
+  the stages it left started read as running. The live monitor tells a
+  stage cut short by the same rule (`rundir.interrupted`, with
+  `rundir.Invocations`; docs/MONITOR.md), and so do `yizkr stages state`
+  and the scratch driver's closing report, which print `run_state`'s
+  counts. `run_state` reads `run.json` before the events and after them,
+  and reads all three again, a few times at most, while an invocation
+  starts or ends between those two readings: a stage is read against the
+  invocations as they stood while the events were read.
 
 `yizkr stages state` also counts what the cache did for each role
 (`rundir.cache_counts`): hits and misses by reason, resumes, replays,

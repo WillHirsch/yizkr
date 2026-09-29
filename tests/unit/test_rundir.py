@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.unit.stage_counts import disagreement
 from yizkr.pipeline import rundir
 from yizkr.pipeline.rundir import (
     DONE,
@@ -590,6 +591,9 @@ class TestStagesCutShort:
             run.emit(closing, outcome=outcome, statuses={"paused": 1})
 
     def status(self, tmp_path, stage, subject=DOC_A) -> str:
+        """The stage's state as run_state reads it, once the live
+        monitor's counts are shown to agree with run_state's."""
+        assert disagreement(tmp_path) is None
         return run_state(RunDir(tmp_path))[(subject, stage)].status
 
     @pytest.mark.parametrize("how", ENDS)
@@ -606,6 +610,7 @@ class TestStagesCutShort:
         self.emit(run, "started", "extraction")
         assert self.status(tmp_path, "extraction") == RUNNING
         self.end(run, outcome, how)
+        assert disagreement(tmp_path) is None
         states = run_state(RunDir(tmp_path))
         assert states[(DOC_A, "extraction")] == rundir.StageState(INTERRUPTED)
         assert summarise(states) == {
@@ -626,12 +631,25 @@ class TestStagesCutShort:
         assert self.status(tmp_path, "transcription") == INTERRUPTED
         assert self.status(tmp_path, "transcription", DOC_B) == RUNNING
 
+    def test_an_earlier_invocations_late_closing_event(self, tmp_path):
+        """The closing event of an earlier invocation that lands after a
+        later one's start closes the earlier one, not the latest: the
+        stage the latest has started runs."""
+        first = self.invocation(tmp_path, "critique")
+        self.emit(first, "started", "critique")
+        first.end("interrupted")
+        second = self.invocation(tmp_path, "critique")
+        self.emit(second, "started", "critique", subject=DOC_B)
+        first.emit(RUN_INTERRUPTED, outcome="interrupted", statuses={})
+        assert self.status(tmp_path, "critique") == INTERRUPTED
+        assert self.status(tmp_path, "critique", DOC_B) == RUNNING
+
     def test_a_killed_invocation_reads_as_running_until_another_starts(
         self, tmp_path
     ):
-        """A killed invocation records no end and closes no events: while
-        it is the latest, nothing tells it from one still running, as in
-        the monitor; a later invocation's start shows it is over."""
+        """A killed invocation records no end and has no closing event:
+        while it is the latest, nothing tells it from one still running,
+        as in the monitor; a later invocation's start shows it is over."""
         killed = self.invocation(tmp_path, "extraction")
         self.emit(killed, "started", "extraction")
         assert self.status(tmp_path, "extraction") == RUNNING
@@ -681,6 +699,7 @@ class TestStagesCutShort:
             second, "failed", "critique", subject=DOC_B, reason="OSError: y"
         )
         self.end(second, "stopped")
+        assert disagreement(tmp_path) is None
         states = run_state(RunDir(tmp_path))
         assert states[(DOC_A, "extraction")] == rundir.StageState(
             FAILED, "RuntimeError: x"
@@ -733,13 +752,10 @@ class TestStagesCutShort:
         self.end(run)
         assert self.status(tmp_path, "critique", DOC_B) == INTERRUPTED
 
-    def test_the_events_are_read_before_run_json(self, tmp_path):
-        """A new invocation starts, and starts a stage, between the two
-        reads. run.json, read second, knows the new invocation, so the
-        stage it has started is never read against the ended invocation
-        before it and taken for that one's leftover: the events read
-        before its start leave it pending, and a later reading finds it
-        running."""
+    def test_an_invocation_that_starts_between_the_reads(self, tmp_path):
+        """A new invocation starts, and starts a stage, while run_state
+        reads the run: the stage is never read against the ended
+        invocation before it and taken for that one's leftover."""
         first = self.invocation(tmp_path, "critique")
         self.emit(first, "started", "critique")
         self.end(first)
@@ -748,24 +764,64 @@ class TestStagesCutShort:
             second = self.invocation(tmp_path, "critique")
             self.emit(second, "started", "critique", subject=DOC_B)
 
-        states = run_state(Racing(tmp_path, start_another))
+        states = run_state(Racing(tmp_path, first=start_another))
         assert states[(DOC_A, "critique")].status == INTERRUPTED
-        assert states[(DOC_B, "critique")].status == PENDING
-        assert self.status(tmp_path, "critique", DOC_B) == RUNNING
+        assert states[(DOC_B, "critique")].status == RUNNING
+        assert disagreement(tmp_path) is None
+
+    def test_a_stage_done_as_its_invocation_ends_between_the_reads(
+        self, tmp_path
+    ):
+        """The latest invocation finishes a stage and ends just after
+        run_state has read the events: the stage is done, never read as
+        cut short by an end that came after its done."""
+        run = self.invocation(tmp_path, "critique")
+        self.emit(run, "started", "critique")
+
+        def finish(reads):
+            if reads == 1:
+                self.emit(run, "done", "critique")
+                self.end(run, "finished")
+
+        states = run_state(Racing(tmp_path, each=finish))
+        assert states[(DOC_A, "critique")].status == DONE
+        assert disagreement(tmp_path) is None
+
+    def test_the_reads_are_bounded_while_invocations_keep_starting(
+        self, tmp_path
+    ):
+        """Invocations that keep starting while run_state reads leave its
+        readings of run.json never agreeing: it stops after a bounded
+        number of reads, with the last events read against the run.json
+        read after them."""
+        run = self.invocation(tmp_path, "critique")
+        self.emit(run, "started", "critique")
+
+        def start_another(reads):
+            if reads <= 2 * rundir._READS:
+                self.invocation(tmp_path, "critique")
+
+        racing = Racing(tmp_path, each=start_another)
+        states = run_state(racing)
+        assert racing.event_reads == rundir._READS
+        assert states[(DOC_A, "critique")].status == INTERRUPTED
 
 
 class Racing(RunDir):
-    """A run directory that something else writes to just after the first
-    of the files run_state reads has been read."""
+    """A run directory that something else writes to while run_state
+    reads it: `first` runs once, just after the first of its reads,
+    whichever file that reads, and `each` just after each reading of the
+    events, given how many there have been."""
 
-    def __init__(self, path, meanwhile) -> None:
+    def __init__(self, path, *, first=None, each=None) -> None:
         super().__init__(path)
-        self.meanwhile = meanwhile
+        self.first, self.each = first, each
+        self.event_reads = 0
 
-    def _after_a_read(self):
-        meanwhile, self.meanwhile = self.meanwhile, None
-        if meanwhile is not None:
-            meanwhile()
+    def _after_a_read(self) -> None:
+        first, self.first = self.first, None
+        if first is not None:
+            first()
 
     def manifest(self) -> dict:
         manifest = super().manifest()
@@ -775,6 +831,9 @@ class Racing(RunDir):
     def events(self) -> list[dict]:
         events = super().events()
         self._after_a_read()
+        self.event_reads += 1
+        if self.each is not None:
+            self.each(self.event_reads)
         return events
 
 

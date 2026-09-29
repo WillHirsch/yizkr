@@ -1190,7 +1190,9 @@ class TestSubscription:
 
     def test_usage_credits_end_the_driver(self, tmp_path, fakes):
         """A call that ran on usage credits pauses the pass with no time to
-        go on: the driver ends, and never waits."""
+        go on: the driver ends, and never waits. Its closing report shows
+        the extraction the pause cut short as interrupted, as run_state
+        does once the invocation has ended (#300)."""
         corpus = small(tmp_path)
 
         def hook(what, name):
@@ -1201,7 +1203,9 @@ class TestSubscription:
             )
 
         fakes.hook = hook
-        driver = a_run(tmp_path, corpus, fakes)
+        said: list[str] = []
+        log = lambda *args, **kwargs: said.append(" ".join(map(str, args)))  # noqa: E731
+        driver = a_run(tmp_path, corpus, fakes, log=log)
         with pytest.raises(UsageLimitReached):
             driver.run()
         (only,) = RunDir(driver.state_dir).manifest()["invocations"]
@@ -1209,6 +1213,9 @@ class TestSubscription:
             "paused",
             "UsageLimitReached",
         )
+        report = closing_report(said)
+        assert report["extraction"] == {INTERRUPTED: 1, PENDING: 3}
+        assert report == summarise(run_state(RunDir(driver.state_dir)))
 
     def test_an_abort_while_waiting_ends_the_run(self, tmp_path, fakes):
         corpus = small(tmp_path)
