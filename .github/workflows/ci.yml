@@ -1,8 +1,19 @@
 name: CI
 
 on:
+  # every commit that lands on main
   push:
+    branches: [main]
+  # every push to a pull request, drafts included, tested merged with main
   pull_request:
+  # a run by hand on any branch
+  workflow_dispatch:
+
+# A newer push to a pull request cancels its run in progress; a run on
+# main always finishes.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
