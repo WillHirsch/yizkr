@@ -15,6 +15,16 @@
   in aliases. English labels are the bootstrap's idempotency key:
   unique per entity kind, and renames must happen on the wiki and in
   the manifest together.
+- Wikibase keeps a label, a description or an alias trimmed: each run
+  of control characters in it (a line break or a tab among them) made
+  one space, the separators at either end dropped, in NFC, and at most
+  250 characters long. The writer sends each term it makes in that form,
+  and finds an item by its label in it too, so a label given in another
+  form finds its item again. A term still over 250 characters is cut as
+  a long locator is (below), with the digest of the whole, so that two
+  labels that agree up to the cut stay two items' labels, and the run
+  item's label, which holds the model's identifier, keeps its batch's
+  fingerprint in the digest (#384).
 - Schema-level statements (e.g. the subclass hierarchy) carry
   references too (ADR-0003): a `stated in` reference to the *model
   manifest* item, which represents `model/manifest.yaml` — the document that
@@ -90,19 +100,26 @@ claims, from an entity manifest or a ref, follow ADR-0007 instead.
 
 Wikibase holds at most 400 characters in the text of a string,
 external-id or monolingual text value, a reference's page number and
-region among them, and refuses the whole edit that sends a longer one;
-the writer counts each text in NFC, the form the instance keeps it in
-(#366). A page number or region over the limit is cut at a break
-between words and ends with " … sha1 " and the first 12 hex digits of
-the SHA-1 of the whole text, as an excerpt over the limit is cut at a
-space and ends with "…": a locator only places the claim in its source,
-and the digest keeps two places whose locators agree up to the cut two
-references. A claim whose own text, its value or a qualifier's, is over
-the limit is refused, never cut, since a cut would narrow what the
-source says: nothing of it is written, and the write's result names it
-by its claim id (its review-sheet id, unless the review corrected it),
-with a warning that says why (the writer's module docstring). Every
-other claim of the batch is written.
+region among them, and no text value with a line break or a tab in it,
+or whitespace at either end; it refuses the whole edit that sends a
+text it does not hold. The writer checks each text in NFC, the form the
+instance keeps it in (#366, #384). A page number, region or excerpt
+goes on one line: whitespace at either end is dropped, a line break
+inside becomes " | " and a tab a space, and one of whitespace alone is
+left out. One still over the limit is cut at a break between words and
+ends with " … sha1 " and the first 12 hex digits of the SHA-1 of the
+whole text: a locator only places the claim in its source, as an
+excerpt only helps a reader check it there, and the digest keeps two
+places whose locators or excerpts agree up to the cut two references. A
+claim whose own text, its value or a qualifier's, is over the limit, or
+holds a line break or a tab, or has whitespace at either end, is
+refused, never cut or changed, since that would alter what the source
+says: nothing of it is written, and the write's result names it by its
+claim id (its review-sheet id, unless the review corrected it), with a
+warning that says why (the writer's module docstring). Every other
+claim of the batch is written. An entity's type hint is free text,
+compared ignoring its spacing, so it goes with each run of whitespace
+in it as one space.
 
 Curator-attributed statements (a value correction from the review CSV)
 carry the `stated in → artifact` reference only:
