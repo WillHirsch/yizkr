@@ -35,6 +35,15 @@ estimate's, takes no lock and writes nothing, so it reads beside the
 process that holds the cache, and it refuses the folders the cache
 refuses (§3).
 
+Amended by #104 (2026-09-28): the archived-transcription import (`yizkr
+scratch import-transcriptions`) adopts only what the transcription check
+passes and what was made with the prompt the run sends; a transcription
+the check fails is recorded as rejected under its call's key. An
+adoption keeps the key's components, and says what made it, so the
+transcription view a run makes from it names the archive's client, not
+the one the run asked. An adoption stands for its call's key alone: a
+change to what the call sends, or a stricter check, recomputes it (§9).
+
 ## Context
 
 ADR-0025 made whole-corpus scratch runs the way the pipeline is developed,
@@ -400,17 +409,51 @@ hit is none, and a miss or a replay is one.
 `seed(key, response, provenance, reason="adopted")` stores an answer the
 engine did not give, for the key of the call it stands for, which the
 caching client computes (`complete_key`). A hit on it reports its reason,
-not a key match, and it keeps the provenance it was given. It never
-replaces an entry the key already has, never adopts an answer a caller
-rejected under that key, and refuses the reason `engine`, which marks the
-engine's own answers. The archived-transcription import (#104) uses it
-after the transcription check passes, and takes its client from
-`Orchestrator.role_client(role)`, which builds the role's client exactly
-as `ingest run` does (engine, effort, model, pinned CLI, cache and epoch),
-so that its keys are the ones the run's calls are served under. A CLI
-update changes every key (§2): adoptions made before it are no longer
-found, and those calls miss as `absent` until they are adopted again. The
-import is #104's.
+not a key match, and it keeps the provenance it was given, and the key's
+components when the seeder gives them, as an answer's entry does (§3,
+§11). The answer a hit on it serves says what made it (`made_by`: the
+model identifier its provenance names), so that what is made from it
+does not name the client that asked. It never replaces an entry the key
+already has, never adopts an answer a caller rejected under that key,
+and refuses the reason `engine`, which marks the engine's own answers.
+An answer the engine did not give that a check fails is recorded as
+rejected under its key instead (`record_rejected`), never served: the
+call misses as `rejected`, and no seed adopts it later. A seeder takes
+its client from `Orchestrator.role_client(role)`, which builds the
+role's client exactly as `ingest run` does (engine, effort, model, pinned
+CLI, cache and epoch), so that its keys are the ones the run's calls are
+served under.
+
+The archived-transcription import (`yizkr scratch import-transcriptions`,
+#104) seeds the transcribe role's calls with the vision transcriptions of
+an earlier `ingest run`'s state directory, reading no file outside it
+and following no link inside it. It asks the never-ingest list first, of
+each document's state before its transcription is opened; leaves out the
+scans the operator names, withdrawing any adoption the cache serves for
+them; adopts only a transcription made with the prompt the run sends (the
+QID format was made with one prompt; the current format names none),
+keyed from the very bytes whose SHA-1 the archive names; and runs the
+transcription check on each: one it fails is recorded as rejected, so the
+run reads the scan afresh. Each adoption's provenance is backfilled from
+the archive, and claims only what it tells (the client its `engine` field
+names, the prompt's SHA-256 and the time it was made where the archive
+tells them, the check's verdict, `backfilled: true`), and it keeps no
+QID. The transcription view a run makes from it names the client the
+archive names. The details are in docs/LLM_CACHE.md, Seeding.
+
+An adoption is invalidated as any answer is, never by a registry:
+
+- **Its key changes.** It stands for one key. A change to what the call
+  sends (the prompt, the model, the effort, the engine's configuration,
+  a claude CLI update among them, the scan's bytes, the epoch) gives the
+  run's call a key under which nothing is adopted: the call misses as
+  `absent`, and the engine recomputes it. The import run again adopts
+  under the new key only what its prompt guard and the check still pass,
+  so after a prompt change nothing made with the old prompt is adopted.
+- **The check changes.** The transcriber checks every answer the cache
+  gives (§4): an adoption a stricter check fails is rejected, moved
+  aside, and asked for once more, so the engine recomputes it in the same
+  run, and no later import adopts it again.
 
 ### 10. The pipeline does not depend on the cache
 
