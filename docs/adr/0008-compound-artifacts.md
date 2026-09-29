@@ -562,7 +562,9 @@ the compilation's.
 - **One witness per SHA-1.** The same image in two PDFs is one excerpt,
   with both among the PDFs that place it, and one extraction. An image
   whose bytes a document of the corpus has is that document, and no
-  excerpt: its bytes are not extracted again (ADR-0010). An image the
+  excerpt: its bytes are not extracted again (ADR-0010). A written
+  excerpt seeds content dedup across runs as a written document does, so
+  a file added later with its bytes is its duplicate. An image the
   never-ingest list names is asked about again as excerpts are found, and
   is never one.
 - **The scratch driver** takes an excerpt's stages as the PDF's
@@ -587,8 +589,8 @@ the compilation's.
   it, with its images, and cites the image's item. The public export
   needs no change: an image states its kind, stated in the PDF, as any
   artifact does.
-- **Reuse.** A PDF's transcription that passes the check is still made
-  again, in place, when what it marks is not kept whole beside it: an
+- **Reuse.** A PDF's transcription that passes the check is still set
+  aside and made again when what it marks is not kept whole beside it: an
   image the never-ingest list names now; a record that is missing,
   damaged, made for other bytes, or names other images, or an image's
   bytes that are missing or changed; or an image with no reading of its
@@ -604,5 +606,22 @@ the compilation's.
 - A curator's correction of a PDF's transcription
   (`transcription.corrected.txt`) replaces the PDF's own text only: its
   excerpts come from the record its reading kept.
+- **The transcription record (#389).** Excerpts take their language and
+  class from the kept reading's record once #389's record lands; until
+  then, py3langid and the wording check apply.
+- **Decided by default** (the owner may override): an excerpt's status
+  is independent of its PDF's; an excerpt's write may register its PDF's
+  item (its identity, no claims) before the PDF's own review is
+  accepted; an image whose reading always fails is read again on each
+  run, through the LLM cache, with no cap; and what earlier runs kept of
+  an image the never-ingest list names since stays on disk, as an
+  excluded document's directory does, runtime state that is never
+  extracted or written again.
 - **Left for later:** the call estimate (`yizkr scratch estimate`) does
-  not yet count an excerpt's extraction and critique.
+  not yet count an excerpt's extraction and critique; an excerpt's
+  transcription view does not name the PDF's kept reading among its
+  inputs, so a reading made again with other text that still passes the
+  check leaves the excerpt's view as it was; an excerpt's write fails
+  when one of the PDFs that place it no longer has the bytes it was read
+  with, even when another places the image; and the anomaly checks'
+  recheck does not read the excerpts' directories.

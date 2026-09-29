@@ -68,8 +68,11 @@ from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import scratch
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
+    DUPLICATE,
     EXCERPTS_DIR,
+    WRITTEN,
     Orchestrator,
+    directory_names,
 )
 from yizkr.pipeline.orchestrate import (
     EXCERPT as KIND,
@@ -82,6 +85,7 @@ from yizkr.pipeline.presentation import (
 )
 from yizkr.pipeline.registrar import ExcludedMedia
 from yizkr.pipeline.report import build, render_markdown
+from yizkr.pipeline.review import accept_all
 from yizkr.pipeline.rundir import RunDir
 from yizkr.pipeline.scratch import EXIT_OK, CorpusStage
 from yizkr.pipeline.textlayer import png
@@ -152,8 +156,10 @@ class TestAnExcerpt:
         ]
         assert letter
         assert not any("Angerring 71" in prompt for prompt in letter)
-        # the run plans it once it is found
+        # the run plans it once it is found, and its end counts it
         assert planned(orchestrator) == {doc.sha1: "media", LETTER_SHA1: KIND}
+        (end,) = this_run(orchestrator, "run-end")
+        assert end["statuses"] == {AWAITING_CLAIMS: 2}
 
     def test_the_same_image_in_two_pdfs_is_one_witness(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet(), reprint=reprint())
@@ -172,6 +178,11 @@ class TestAnExcerpt:
             and event["stage"] == "extraction"
         ]
         assert len(extractions) == 1
+        # the report counts the image once per PDF, and once in all
+        images = build(tmp_path / "state")["aggregate"]["documents"][
+            "pdf_images"
+        ]
+        assert (images["placed"], images["distinct"]) == (2, 1)
 
     def test_an_image_a_document_of_the_corpus_is_is_not_extracted_again(
         self, tmp_path
@@ -247,6 +258,32 @@ class TestAnExcerpt:
         excerpt = excerpt_of(orchestrator, LETTER_SHA1)
         assert excerpt.batch.exists()
         assert planned(orchestrator)[LETTER_SHA1] == KIND
+        # found twice, before the sequence and in the loop, the PDF is one
+        # of the PDFs that place the image once
+        doc = document(orchestrator, "booklet.pdf")
+        assert [c.dir for c in excerpt.containers] == [doc.dir]
+
+    def test_a_written_excerpt_makes_a_later_copy_a_duplicate(self, tmp_path):
+        """Written in one run, the excerpt seeds the next run's content
+        dedup: a file of the folder with its bytes, added since, is its
+        duplicate, and is not extracted or written again (ADR-0010)."""
+        corpus = folder(tmp_path, booklet=booklet())
+        reader = Reader({LETTER_SHA1: EXCERPT, "letter-excerpt-1939": EXCERPT})
+        first = run(tmp_path, corpus, reader)
+        for doc in (
+            document(first, "booklet.pdf"),
+            excerpt_of(first, LETTER_SHA1),
+        ):
+            accept_all(doc.review, doc.review_reviewed)
+        second = run(tmp_path, corpus, reader)
+        assert excerpt_of(second, LETTER_SHA1).state.status == WRITTEN
+        (corpus / "letter-excerpt-1939.png").write_bytes(LETTER_PNG)
+        third = run(tmp_path, corpus, reader)
+        assert LETTER_SHA1 in third._prior_written_hashes()
+        letter = document(third, "letter-excerpt-1939.png")
+        assert letter.state.status == DUPLICATE
+        assert letter.state.detail["duplicate_of"] == f"{LETTER_SHA1}.png"
+        assert not letter.batch.exists()
 
 
 class TestReuse:
@@ -394,6 +431,15 @@ class TestRegistration:
             "2",
         }
 
+    def test_a_record_made_for_other_bytes_registers_nothing(self, tmp_path):
+        orchestrator, _wiki = self.made(tmp_path, booklet=booklet())
+        doc = document(orchestrator, "booklet.pdf")
+        assert orchestrator._placed_images(doc) is not None
+        record = json.loads((doc.dir / DERIVED_MEDIA).read_text())
+        record["source_sha1"] = "b" * 40
+        (doc.dir / DERIVED_MEDIA).write_text(json.dumps(record))
+        assert orchestrator._placed_images(doc) is None
+
     def test_an_excerpt_the_list_names_now_is_refused(self, tmp_path):
         orchestrator, wiki = self.made(tmp_path, booklet=booklet())
         excerpt = excerpt_of(orchestrator, LETTER_SHA1)
@@ -479,7 +525,11 @@ class TestAScratchRun:
         assert a_run(tmp_path, corpus, fakes).run() == EXIT_OK
         assert fakes.calls == calls
         manifest = RunDir(driver.state_dir).manifest()
-        assert LETTER_SHA1 in {d["sha1"] for d in manifest["documents"]}
+        planned = [d["sha1"] for d in manifest["documents"]]
+        assert sorted(planned) == sorted([pdf, LETTER_SHA1])
+        # the invocation's end counts both documents
+        end = events(driver.state_dir, "run-end", invocation=-1)[-1]
+        assert sum(end["statuses"].values()) == 2
 
     def test_past_the_barrier_alone_the_excerpt_goes_with_its_pdf(
         self,
@@ -514,6 +564,41 @@ class TestAScratchRun:
             LETTER_SHA1,
         }
         assert LETTER_SHA1 in {d["sha1"] for d in manifest["documents"]}
+
+    def test_an_image_a_document_of_the_corpus_is_is_no_excerpt(
+        self,
+        tmp_path,
+        fakes,  # noqa: F811
+    ):
+        """The booklet's image is also a file of the corpus, with the same
+        bytes: that document is the witness, and the driver takes no
+        excerpt for it."""
+        corpus = Corpus(tmp_path / "corpus")
+        (corpus.folder / "a-booklet.pdf").write_bytes(booklet())
+        (corpus.folder / "letter-excerpt-1939.png").write_bytes(LETTER_PNG)
+        corpus.texts["a-booklet.pdf"] = OWN
+        # the two readings of the same bytes differ by a line, so that the
+        # fake engine tells the prompts apart; the cache answers the second
+        # reading with the first either way
+        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT + "\nOne reading."
+        corpus.texts["letter-excerpt-1939.png"] = EXCERPT + "\nAnother."
+        driver = a_run(tmp_path, corpus, fakes)
+        assert driver.run() == EXIT_OK
+        assert driver._excerpts == {}
+        assert not (driver.state_dir / EXCERPTS_DIR).exists()
+        kinds = {
+            d["kind"] for d in RunDir(driver.state_dir).manifest()["documents"]
+        }
+        assert kinds == {"media"}
+
+    def test_excerpts_is_no_document_s_directory(self, tmp_path):
+        """A file of the folder named for the excerpts' directory gets a
+        directory of another name."""
+        (tmp_path / "corpus").mkdir()
+        source = tmp_path / "corpus" / f"{EXCERPTS_DIR}.txt"
+        source.write_text(SOURCES["postcard-1938"].text)
+        names = directory_names([source], tmp_path / "state")
+        assert names[source] != EXCERPTS_DIR
 
     def test_the_other_excerpts_take_their_stages_rank_by_rank(
         self,

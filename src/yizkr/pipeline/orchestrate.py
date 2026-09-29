@@ -135,6 +135,7 @@ that asks for other settings than the run recorded is refused.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import os
@@ -2403,7 +2404,9 @@ class Orchestrator:
         self, docs: Sequence[DocumentRun] = ()
     ) -> dict[str, str]:
         """content SHA-1 -> filename of a document already ingested to
-        completion in a prior run (ADR-0010).
+        completion in a prior run, an excerpt among them (ADR-0010): the
+        excerpts' directories, in EXCERPTS_DIR, are read too, so a file of
+        the folder with an excerpt's bytes is that excerpt's duplicate.
 
         Lets a renamed identical file be recognised and skipped BEFORE any
         expensive step, not merely deduped at the graph by the writer.
@@ -2422,10 +2425,13 @@ class Orchestrator:
         seen: dict[str, str] = {}
         if not self.state_dir.exists():
             return seen
-        current: dict[str, set[str]] = {}
+        current: dict[Path, set[str]] = {}
         for doc in docs:
-            current.setdefault(doc.dir.name, set()).add(doc.sha1)
-        for sub in sorted(self.state_dir.iterdir()):
+            current.setdefault(doc.dir, set()).add(doc.sha1)
+        subs = sorted(self.state_dir.iterdir())
+        with contextlib.suppress(OSError):
+            subs += sorted((self.state_dir / EXCERPTS_DIR).iterdir())
+        for sub in subs:
             if sub.name.startswith("."):  # set aside
                 continue
             state_file = sub / "state.json"
@@ -2441,8 +2447,7 @@ class Orchestrator:
             ):  # unreadable or foreign
                 continue
             if (
-                sub.name in current
-                and state.content_sha1 not in current[sub.name]
+                sub in current and state.content_sha1 not in current[sub]
             ):  # its source changed: it is set aside in this run
                 continue
             if state.status == WRITTEN and state.content_sha1:
