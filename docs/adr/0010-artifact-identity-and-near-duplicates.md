@@ -90,8 +90,12 @@ never by name (amended by #103, 2026-09-29):
   is a stopgap until #94, and which of two homonyms bears it depends on
   the order they are registered in, so nothing may key on an artifact's
   label: its key is its `media SHA-1`. Titles and labels are compared
-  and set in the form Wikibase stores terms in (trimmed, NFC), so a
-  title in another form never passes for a free label;
+  and set in the form Wikibase stores terms in (separators and control
+  characters trimmed at either end, each run of control characters
+  inside made one space, then NFC), so a title in another form never
+  passes for a free label. A label longer than the 250 characters
+  Wikibase takes, as it is or once tagged, is refused before anything is
+  uploaded or written;
 - **no media to hash →** refused: there is nothing to find an artifact
   by.
 
@@ -125,7 +129,9 @@ register every document on the instance its reset emptied (#200).
   <n>"`, so an artifact whose title another artifact shared took the
   other's fragments, which are `part of` the other only. A new fragment
   is labelled `"<artifact label>, page <n>"`, content-tagged if that
-  label is taken, and is made in one write with its statements. A
+  label is taken, and is made in one write with its statements. Its
+  label and description only display the artifact's label, so that is
+  cut, ending in "…", where the whole would pass 250 characters. A
   container's derived medium, `part of` it with a page qualifier too, is
   never taken for a fragment, since it is no `artifact fragment` (ADR-0008,
   as amended by #289).

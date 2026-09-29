@@ -139,10 +139,11 @@ artifact a new QID, changes neither.
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one
   is labelled `"<artifact label>, page <n>"` (content-tagged if that label
-  is taken) and made in one write with both statements, each stated in
-  the artifact. So same-titled artifacts never share a fragment, and a
-  derived medium, `part of` its container with a page qualifier too, is
-  never taken for one.
+  is taken, and the artifact's label cut to end in "…" if the whole would
+  pass 250 characters) and made in one write with both statements, each
+  stated in the artifact. So same-titled artifacts never share a
+  fragment, and a derived medium, `part of` its container with a page
+  qualifier too, is never taken for one.
 - Machine-proposed entities (people, places) get their `instance of`
   statement referenced to the artifact that mentions them. A later
   source that names the entity adds its own references (the artifact and
@@ -166,13 +167,17 @@ artifact a new QID, changes neither.
 - Labels stay unique per kind: when a title is already another item's
   label, the new artifact's label is disambiguated with a short content
   tag (`"<title> [<sha1[:8]>]"`) rather than colliding. Titles are
-  compared in the form Wikibase stores labels in (trimmed, NFC). The tag
+  compared in the form Wikibase stores labels in (separators and control
+  characters trimmed at either end, each run of control characters
+  inside made one space, then NFC), and one longer than the 250
+  characters Wikibase takes, as it is or once tagged, is refused. The tag
   is a stopgap until labels need not be unique for artifacts (#94), and
   which homonym bears it depends on registration order: nothing may key
   on an artifact's label, only on its `media SHA-1`.
 - A file on the never-ingest list is never registered or uploaded, and
   neither is a medium a container embeds that the list names, by name
-  or by SHA-1.
+  or by SHA-1. The container's own file is uploaded as it is, with
+  whatever it embeds.
 - **Every `media file` holds the bytes its item's `media SHA-1` names.**
   A wiki file is never overwritten: bytes whose file name already holds
   different bytes are uploaded under a content-tagged file name,
@@ -335,7 +340,8 @@ and reference the artifact itself or the producing run.
   the write registers them from that record, after the container
   (ADR-0008 as amended by #128 and #103). Bytes the archive holds under
   several names are one medium: the first name labels it, and the others
-  are aliases.
+  are aliases. A deck title that would push the label past 250 characters
+  is cut there, ending in "…": the label only displays it.
 - Every statement a container contributes to a derived item is
   referenced `stated in → that container` — a compound artifact asserts
   its own composition, the same convention as fragments and registrar

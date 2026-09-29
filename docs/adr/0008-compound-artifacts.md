@@ -427,9 +427,17 @@ time"):
   archive>"`. Bytes the archive holds under several names are one
   medium: the first name labels it (`"<deck title> — <name>"`), and the
   others are its aliases. Labels are compared and set in the form
-  Wikibase stores them in (trimmed, NFC);
+  Wikibase stores them in (separators and control characters trimmed at
+  either end, each run of control characters inside made one space, then
+  NFC). A deck title that would push its images' or its slides' labels,
+  or its slides' descriptions, past the 250 characters Wikibase takes is
+  cut there, ending in "…", since those only display it; so is the list
+  of slides in an image's description;
 - an image the never-ingest list names, by any of its names or by its
-  SHA-1, is left out: neither registered nor uploaded.
+  SHA-1, is left out: neither registered nor uploaded. The deck's own
+  file is uploaded as it is, with whatever it embeds (the owner's
+  decision, 2026-09-29: refusing the deck would add complexity for a case
+  with no meaningful reason to arise).
 
 A compilation's excerpts are registered the same way once follow-up A
 records them.
