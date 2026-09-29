@@ -30,15 +30,9 @@ most 400 characters; and a clipped excerpt keeps its citations and the
 lines they stand beneath, and ends with a key of its whole text: see
 Amendments.
 Amended by #408 (2026-09-29): a family's MARR, DIV and ANUL are events of
-its union (ADR-0036 §5), so a SOUR beneath one is folded into that
-event's claims and the union's claim that points to it, and the family
-record's own SOURs into its couple's claims; each such claim's excerpt
-holds the family's own line, its HUSB and WIFE, and the lines of the
-record that gives it. A divorce's PLAC is read as its location, and an
-ANUL is read; a MARR's TYPE is read where it names the ceremony's kind;
-a DIV Y is an undated divorce; a DIV or ANUL that states no event is
-counted, as a DEAT is. The HEAD's LANG gives the language of the
-excerpts and names (ADR-0035 §6).
+its union (ADR-0036 §5), whose citations fold into those events' claims;
+a divorce's PLAC and a MARR's TYPE naming a ceremony are read, and an
+ANUL is read; the HEAD's LANG gives the texts' language: see Amendments.
 
 ## Context
 
@@ -476,3 +470,29 @@ The live GEDCOM test's batch changes too, each of its two pairs of
 spouse claims holding the lines of its own MARR and DIV alone, and its
 first MARR now cites a marriage register at a page, which the spouse
 statements it dates carry; its marker changes with it.
+
+Amended by #408 (2026-09-29): **a family is a union, and its events are
+items.** ADR-0036 §5 makes a coupled family a `marriage` (a MARR that
+states a wedding) or a `partnership`, started by its wedding and ended
+by its divorce or annulment, and the adapter writes no spouse claim. So
+what #308, #323 and #324 say of the spouse claims is superseded:
+
+- a SOUR beneath a MARR, a DIV or an ANUL is folded into that event's
+  claims and the union's claim that points to it, and the family
+  record's own SOURs into its couple's participant claims; each such
+  claim's excerpt holds the family's own line, its HUSB and WIFE, and
+  the lines of the record that gives it;
+- a divorce's PLAC is the divorce's `location`, no longer counted as
+  `DIV.PLAC`; a MARR's TYPE that names a civil or a religious ceremony
+  gives the wedding's kind, and any other is still counted as
+  `MARR.TYPE`; an ANUL is read as an annulment;
+- a MARR, a DIV or an ANUL states its event as a DEAT does, by a Y, or a
+  DATE or PLAC with a value: a `DIV Y` is an undated divorce, and one
+  that states none (`MARR N`, a bare DIV) is counted as MARR, DIV or
+  ANUL;
+- a family with no WIFE and two HUSBs, or no HUSB and two WIFEs, has
+  those two as its couple, so its second HUSB or WIFE is read; a further
+  one is still counted;
+- the HEAD's LANG gives the language of every excerpt and name the
+  adapter writes (ADR-0035 §6), `und` where the export states none the
+  adapter knows.

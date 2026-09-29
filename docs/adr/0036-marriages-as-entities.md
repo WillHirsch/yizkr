@@ -16,9 +16,28 @@ as GEDCOM 5.5.1 has one asserted, by a DATE or a PLAC with a value or a
 Y, and one that states none is counted. An end of unstated kind is
 labelled as the end of its union. Two unions of one couple, or their
 events, get labels of their own, told apart by a number, since the
-writer finds an item by its label. Each union and each event is counted
+writer finds an item by its label, and an entity whose id another
+entity holds (a family whose xref is another union's event's, or a
+person's) takes a numbered one. Each union and each event is counted
 by kind in the adapter's outcomes, and so is an undated divorce or
-annulment.
+annulment, one whose DATEs give no date among them.
+
+Amended by #408 (2026-09-29; decided by the orchestrator, the owner may
+override):
+
+- **A MARR states its wedding as a DIV states its divorce.** `MARR N`,
+  and a MARR that states nothing (no Y, and no DATE or PLAC with a
+  value), makes no wedding and is counted as `MARR`, and a family with
+  no MARR that states one is a partnership.
+- **Weddings are grouped by kind, not by TYPE.** The table's "MARRs of
+  one TYPE" reads "of one kind": MARRs whose TYPEs name one kind of
+  ceremony (`civil` and `Standesamt` alike) are one wedding, and a MARR
+  whose TYPE names no known kind ("Elopement") joins the wedding of
+  unstated kind, its TYPE counted as `MARR.TYPE`.
+- **Two partners under one tag.** A family with two HUSBs and no WIFE,
+  or two WIFEs and no HUSB, naming two people, has those two as its
+  couple: a partnership, or a marriage where a MARR states a wedding,
+  counted as `FAM two HUSB/WIFE`.
 
 ## Context
 

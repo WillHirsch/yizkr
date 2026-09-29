@@ -272,7 +272,7 @@ GEDCOM = """\
 1 NAME Hildegard /Probewald-Namecheck/
 2 TYPE married
 1 NAME Hildegard /van der Probewald/
-1 _MARNM Hildegard Probewald
+1 _MARNM Hildegard /Probewald/
 1 BIRT
 2 DATE 1876
 0 TRLR

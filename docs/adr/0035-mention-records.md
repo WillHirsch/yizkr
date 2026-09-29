@@ -30,18 +30,38 @@ claim whose note fails is a counted reject.
 
 Amended by #408 (2026-09-29): the GEDCOM adapter fills §6 as follows.
 The label of a NAME leaves out its bracketed parts, each of which is an
-alias and an `unsplit` form; a NAME without slashes, whose parts no GIVN
-or SURN gives, gives no typed-name claim, whatever its TYPE. Given names
+alias and an `unsplit` form; a NAME whose value is brackets alone, with
+no part that gives a name, is labelled by the brackets as written
+("(Peppi)"), so that its person keeps an entity and its claims. A NAME
+without slashes, whose parts no GIVN or SURN gives, gives no typed-name
+claim, whatever its TYPE; one with more than one pair of slashes is
+read so too, counted apart (`NAME slashes not one pair`). Given names
 are the words of the part before the slashes and of each GIVN piece; a
-NICK and a `_MARNM` are aliases, so the record adds no name (§5); the
-alias hygiene keeps a form that alone carries a part of the record. A
-prefix or a suffix with no given name or surname beside it reaches its
-field only where the value restates it. HEAD.LANG maps GEDCOM 5.5.1's
-language names to BCP 47 where the instance is known to take the code,
-and an absent or unmapped one gives `und`, which the live GEDCOM test
-checks the instance accepts. What §6 counts is counted in the adapter's
+NICK, less one pair of quotes that encloses it, and a `_MARNM` are
+aliases, so the record adds no name (§5); the alias hygiene keeps a
+form that alone carries a part of the record. An NPFX or NSFX that the
+value does not restate reaches its field beside the value's name, as
+the table says, and the full form is an alias, counted as `NAME parts
+not restated`; only in a NAME with no value, whose parts give no given
+name or surname, is a prefix or a suffix counted instead (`NAME part
+without a name`). A particle that the value's surname holds is no
+particle without a surname. A `_MARNM` gives a `married` surname and a
+`married_name` claim only where its slashes hold a surname; otherwise it
+is `unsplit`, counted, with no typed-name claim, as a NAME without
+slashes gives none. HEAD.LANG maps GEDCOM 5.5.1's language names to BCP
+47 where the instance is known to take the code, and takes one of those
+codes as it is ("de"); an absent or unmapped one gives `und`. The live
+GEDCOM tests check that the instance takes `und` and every mapped code
+for a monolingual text. What §6 counts is counted in the adapter's
 outcomes, beside its census of unmapped tags, and reaches the run's
 document state and log.
+
+Amended by #408 (2026-09-29; decided by the orchestrator, the owner may
+override): a NAME without slashes that has only a GIVN or only a SURN
+keeps its whole value as an `unsplit` form beside that part, counted
+(`NAME without slashes, one part given`), so that no word the part does
+not place is dropped silently. The table's `unsplit` row is the NAME
+with neither.
 
 **Decided by the owner (2026-09-29):**
 
@@ -745,7 +765,7 @@ and brackets in a NAME value, which §10 names.
 | any other TYPE, or none | `other`, with no typed-name claim |
 | `_MARNM` | a `married` surname: the part between its slashes; a value without them is `unsplit` |
 | PLAC | its first non-empty component is the place's name and the rest are `within`, each as written, with no head or toponym split: GEDCOM lists jurisdictions from the lowest |
-| HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`pipeline/gedcom.py:982`, 1230-1234, 1413-1421); an absent or unknown one gives undetermined (`und`), counted |
+| HEAD.LANG | GEDCOM 5.5.1's language name, mapped to a BCP 47 code, sets the language of the adapter's texts instead of a fixed `en` (`GEDCOM_LANGUAGES`, `UNDETERMINED` in `pipeline/gedcom.py`); an absent or unknown one gives undetermined (`und`), counted |
 | a DEAT that states the death and gives no date, place or cause | a `death` event with the person as principal |
 
 - **No NAME part is dropped without a count** (#352). A part the NAME's
@@ -953,7 +973,7 @@ into "fix first, and measure in run 1": under the pre-baseline exception
 - Containers compared as written: an abbreviation ("Kr. Peiltal" beside
   "Kreis Peiltal") misses, and the pair stays ambiguous.
 - GEDCOM's grammar and vocabulary: slashes, comma-separated pieces, NAME
-  TYPE values (`pipeline/gedcom.py:631-644`), PLAC's order of
+  TYPE values (`_NAME_TYPE_PROPERTY` in `pipeline/gedcom.py`), PLAC's order of
   jurisdictions and HEAD.LANG's language names. With them, the tree
   keepers' inline convention: a quote marks a nickname, a bracket an
   untyped form (§6). An initial or a placeholder in an export keys as
@@ -961,7 +981,7 @@ into "fix first, and measure in run 1": under the pre-baseline exception
   NAME's given part with no NPFX ("Dr.") keys as a given name: an
   accepted limitation.
 - GEDCOM dates: month names beyond the standard's abbreviations come from
-  an English and German table (`pipeline/gedcom.py:168-179`); a date in
+  an English and German table (`MONTHS` in `pipeline/gedcom.py`); a date in
   any other language gives no claim and a warning, as now.
 - #361's date thresholds (`circa-years`, `max-corroborating-years`):
   numbers, not wording.

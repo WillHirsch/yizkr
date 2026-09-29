@@ -854,15 +854,14 @@ def validate_against_manifest(
             )
         if isinstance(value, ItemValue):
             check_ref(value.value, f"{where}.value")
-            if prop not in acceptance.retired:
-                refusal = acceptance.refusal(
-                    prop,
-                    kind_of(value.value),
-                    subject_kind,
-                    vocabulary=isinstance(value.value, VocabRef),
-                )
-                if refusal is not None:
-                    errors.append(f"{where}.value: {refusal}")
+            refusal = acceptance.refusal(
+                prop,
+                kind_of(value.value),
+                subject_kind,
+                vocabulary=isinstance(value.value, VocabRef),
+            )
+            if refusal is not None:
+                errors.append(f"{where}.value: {refusal}")
 
     def ref_key(ref) -> str:
         if isinstance(ref, LocalRef):

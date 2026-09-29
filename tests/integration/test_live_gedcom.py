@@ -22,7 +22,8 @@ no date, place or cause must become a death event: an item that is an
 instance of `death`, with the person as its principal participant, which
 is what the possibly-living check reads as death evidence (ADR-0020 §2).
 The export states no language, so its excerpts are undetermined (`und`),
-which the instance must take (ADR-0035 §6). All flow through the generic
+which the instance must take (ADR-0035 §6), as it must every code the
+adapter maps a GEDCOM language name to. All flow through the generic
 writer unchanged; this proves they land in the graph. Every claim cites
 the export by the SHA-1 of its bytes (#102)."""
 
@@ -34,7 +35,11 @@ import json
 import pytest
 
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline.gedcom import adapt_gedcom
+from yizkr.pipeline.gedcom import (
+    GEDCOM_LANGUAGES,
+    UNDETERMINED,
+    adapt_gedcom,
+)
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
 
@@ -439,6 +444,23 @@ def test_gedcom_excerpts_of_an_export_without_a_language_are_undetermined(
     ]
     assert excerpts
     assert {excerpt["language"] for excerpt in excerpts} == {"und"}
+
+
+def test_every_code_the_adapter_maps_to_is_one_the_instance_takes(client):
+    """Each code of GEDCOM_LANGUAGES, and `und`, is a language the
+    instance takes for a monolingual text: a code it refused would fail
+    the write of every statement cited to such an export rather than be
+    counted (ADR-0035 §6)."""
+    found = client.api_get(
+        {
+            "action": "query",
+            "meta": "wbcontentlanguages",
+            "wbclcontext": "monolingualtext",
+        }
+    )
+    accepted = set(found["query"]["wbcontentlanguages"])
+    wanted = {*GEDCOM_LANGUAGES.values(), UNDETERMINED}
+    assert sorted(wanted - accepted) == []
 
 
 def test_gedcom_undated_death_is_a_death_event(client, gedcom_artifact):

@@ -572,9 +572,13 @@ Names are modelled in **two layers**:
   ("Cäcilie 'Cilli' Tarle"). A bracketed part ("Ida (Peppi) Sörne") may
   hold a nickname, a maiden name or a note, so it is an alias and an
   unsplit form of the mention record, typed as nothing and counted, and
-  the label leaves it out; a NAME without slashes, whose parts no GIVN or
-  SURN gives, is an unsplit form too, and its TYPE gives no claim
-  (ADR-0035 §6). The adapter's texts are in the export's language
+  the label leaves it out, save where the value is brackets alone
+  ("(Peppi)"), whose person keeps the brackets as its label; a NAME
+  without slashes, whose parts no GIVN or SURN gives, is an unsplit form
+  too, and its TYPE gives no claim, and one with only a GIVN or only a
+  SURN keeps its whole value as an unsplit form beside that part. A
+  `_MARNM` gives a married-name claim only where its slashes hold a
+  surname; otherwise it is an unsplit form too (ADR-0035 §6). The adapter's texts are in the export's language
   (HEAD.LANG, mapped to BCP 47), or undetermined (`und`) where it states
   none. Typed names also feed reconciliation: a married
   name matching another's birth name (a marriage name change) is strong
@@ -632,8 +636,10 @@ that does not parse, is set aside and counted, and the entity keeps its
 label, aliases and kind. The GEDCOM adapter fills each person's record
 from the NAME's value and its GIVN, SURN, SPFX, NPFX, NSFX, NICK and
 `_MARNM` (ADR-0035 §6): a part the value does not restate reaches its
-field and the name the parts give becomes an alias, counted, and a part
-that gives no name of its own is counted, so none is dropped silently. A
+field, and the name it completes (the name the parts give, or an NPFX
+or NSFX beside the value's name: "Dr. Eugen Löbig") becomes an alias,
+counted; in a NAME with no value, a prefix or suffix with no given name
+or surname beside it is counted instead, so none is dropped silently. A
 NICK and a `_MARNM` are aliases too. A place's record takes its PLAC's
 first component as its name and the rest as the places it is within.
 What a marker in a name asserts (a widow's
@@ -765,15 +771,21 @@ the timeline, the kinship query) still read them; extraction refuses and
 counts any spouse claim.
 
 **The GEDCOM adapter makes unions (ADR-0036 §5).** A family with two
-partners is a `marriage` when it has a `MARR`, otherwise a `partnership`
-(the export gives Felix and Ida no `MARR`, so theirs is a partnership);
-its couple are its participants with the role `spouse` or `partner`. The
-family's `MARR`s of one kind are one wedding, which the union is
-`started_by`: a `civil_wedding` or a `religious_wedding` where the `MARR`'s
-`TYPE` names the ceremony (`civil`, `religious`, `church`, and their
-German forms), else a `wedding`, any other `TYPE` counted. Its `DIV`s are
-one divorce and its `ANUL`s one annulment, which the union is `ended_by`,
-each `PLAC` the event's `location`, and a `DIV Y` an undated divorce. Each
+partners (its `HUSB` and `WIFE`, or, with no `WIFE` or no `HUSB`, two
+`HUSB`s or two `WIFE`s, counted) is a `marriage` when a `MARR` of it
+states a wedding, otherwise a `partnership` (the export gives Felix and
+Ida no `MARR`, so theirs is a partnership); its couple are its
+participants with the role `spouse` or `partner`. A `MARR` states its
+wedding as a `DIV` its divorce, by a `Y` or a `DATE` or `PLAC` with a
+value: a `MARR N`, or one that states nothing, makes no wedding and is
+counted. The family's `MARR`s of one kind are one wedding, which the
+union is `started_by`: a `civil_wedding` or a `religious_wedding` where
+the `MARR`'s `TYPE` names the ceremony (`civil`, `religious`, `church`,
+and their German forms), else a `wedding`, which a `MARR` whose `TYPE`
+names no known kind joins, that `TYPE` counted. Its `DIV`s are one
+divorce and its `ANUL`s one annulment, which the union is `ended_by`,
+each `PLAC` the event's `location`, and a `DIV Y` an undated divorce,
+counted, as is one whose `DATE` gives no date. Each
 date and place of each record is a claim of its own on that event: its
 `point_in_time`, with the range and circa its `DATE` states. A `FROM … TO
 …` on a `MARR` dates the wedding by the `FROM` and an end of unstated kind
