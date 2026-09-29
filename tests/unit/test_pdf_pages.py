@@ -24,7 +24,7 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from tests.fixtures import pdfs
-from tests.fixtures.records import page_text, record_answer
+from tests.fixtures.records import page_text, record_answer, record_page
 from tests.unit.test_llmcache import (
     CachedRun,
     Engine,
@@ -369,6 +369,44 @@ class TestTheRoute:
         assert transcription.text == f"[Page 1]\n{first}\n\n[Page 2]\n{SECOND}"
         # the scan's OCR layer is no part of it
         assert "Standesamt" not in transcription.text
+
+    def test_each_page_carries_the_record_s_fields(self, tmp_path):
+        """A page read by vision takes the fields of its reading's record
+        (#389); a page read from its text layer is transcribed, with no
+        printed number, languages or notes, since no engine read it."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reading = json.dumps(
+            {
+                "document_class": "unclassified",
+                "pages": [
+                    record_page(
+                        1,
+                        SECOND,
+                        printed_page="2",
+                        notes="a coffee ring in the margin",
+                    )
+                ],
+            }
+        )
+        reader = Reader({"page-2": reading})
+        doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
+        transcription = transcription_of(doc)
+        typed_page, scanned_page = transcription.pages
+        assert (
+            typed_page.status,
+            typed_page.printed_page,
+            typed_page.languages,
+            typed_page.notes,
+        ) == ("transcribed", None, [], "")
+        assert (
+            scanned_page.status,
+            scanned_page.printed_page,
+            scanned_page.languages,
+            scanned_page.notes,
+        ) == ("transcribed", "2", ["en"], "a coffee ring in the margin")
+        assert transcription.printed_pages() == {2: "2"}
+        # no call saw the PDF whole, so it has no class
+        assert transcription.document_class is None
 
     def test_a_garbled_text_layer_is_read_by_vision(self, tmp_path):
         """The second page's font extracts as private-use characters: the

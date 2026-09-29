@@ -228,6 +228,28 @@ class TestTheRecord:
         assert (blank.status, blank.printed_page) == ("blank", "12")
 
 
+class TestTheViewsRecord:
+    def test_a_view_whose_fields_the_record_no_longer_accepts_has_none(
+        self,
+    ):
+        """A stored view with a class the manifest has since dropped holds
+        no record, and the check fails it as holding none, so it is made
+        again rather than crashing its reuse."""
+        view = Transcription.from_record(
+            parse_record(record_answer(CAPTION)),
+            artifact=ArtifactRef(sha1="a" * 40),
+            language="en",
+            engine="llm-vision:fake-model",
+        )
+        assert view.record() is not None
+        stale = view.model_copy(update={"document_class": "diary"})
+        assert stale.record() is None
+        check = check_transcription(
+            stale.text, pages=1, record=stale.record(), expect_record=True
+        )
+        assert check.failure == NOT_A_RECORD
+
+
 class TestTheCheckReadsTheRecord:
     def test_a_record_passes_and_is_judged_on_its_text(self):
         check, record = check_answer(

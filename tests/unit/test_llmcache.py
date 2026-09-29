@@ -2664,6 +2664,44 @@ class TestThePipeline:
             )
         )
 
+    def test_a_vision_view_made_before_the_record_is_made_again(
+        self, tmp_path
+    ):
+        """A stored vision transcription that holds no record (one made
+        before it, #389) fails the check when it is reused: it is moved
+        aside and made again, with its record."""
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "scan.png").write_bytes(b"not really a png")
+
+        def run():
+            orchestrator = CachedRun(
+                folder,
+                tmp_path / "state",
+                engine=Engine(pipeline_answers),
+                cache_dir=tmp_path / "cache",
+                log=quiet,
+            )
+            orchestrator.run()
+            (doc,) = orchestrator.documents()
+            return orchestrator, doc
+
+        _, doc = run()
+        view = json.loads(doc.transcription.read_text())
+        assert view["document_class"] == "letter"
+        # the view as a transcription made before the record left it
+        for name in ("pages", "document_class"):
+            view.pop(name)
+        view["text"] = LETTER
+        doc.transcription.write_text(json.dumps(view))
+        again, doc = run()
+        (aside,) = this_run(again, "set-aside")
+        assert aside["stage"] == "transcription"
+        assert "(not-a-record)" in aside["reason"]
+        made = json.loads(doc.transcription.read_text())
+        assert made["document_class"] == "letter"
+        assert made["text"] == page_text(LETTER)
+
     def test_a_text_file_that_now_fails_the_check_fails_its_document(
         self, tmp_path, monkeypatch
     ):
