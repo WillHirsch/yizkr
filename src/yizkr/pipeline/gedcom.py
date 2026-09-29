@@ -709,16 +709,18 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # OBJE mapped to a media item, is incorporated wholesale (`folded`,
     # `mapped`): it is not counted, and within it only a SOUR or an OBJE
     # that is itself neither folded nor mapped is (`within`), as is
-    # within a source record a folded citation cites. The rest of it
-    # stands in an excerpt. Whether one is depends on where it stands and
-    # on what the record it stands beneath gives, so the census runs once
-    # the claims are made: a SOUR directly beneath a person, beneath a
-    # DATE, PLAC, HUSB, WIFE, CHIL, FAMC or FAMS, or beneath an event that
-    # gives no claim, is folded into none, and an OBJE beneath a family or
-    # an event is mapped to no media item, and each is counted. So is a
-    # level-0 SOUR record that no folded citation cites, a level-0 OBJE
-    # record that no image claim cites, and each FILE of an object after
-    # its first, which its media item does not stand for.
+    # within a source record a folded citation cites. The rest of a
+    # citation or an object stands in an excerpt, and the rest of a source
+    # record is left to step B (ADR-0021). Whether one is depends on where
+    # it stands and on what the record it stands beneath gives, so the
+    # census runs once the claims are made: a SOUR directly beneath a
+    # person, beneath a DATE, PLAC, HUSB, WIFE, CHIL, FAMC or FAMS, or
+    # beneath an event that gives no claim, is folded into none, and an
+    # OBJE beneath a family or an event is mapped to no media item, and
+    # each is counted. So is a level-0 SOUR record that no folded citation
+    # cites, a level-0 OBJE record that no image claim cites, and each FILE
+    # of an object after its first, which its media item does not stand
+    # for.
     # The envelope is structure, not data. Everything else is counted once
     # and its subtree left untouched, so an already-dropped branch is not
     # itemised down to its PAGE/_APID leaves. What remains reported is the
@@ -918,9 +920,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         the lines of `passage` (by default `record` and every line beneath
         it) as the excerpt, and the SOUR citations directly beneath
         `record` or one of `events` folded in. Only a citation that the
-        passage holds is folded in, so that the excerpt, which a clip
-        keeps the lines of the folded citations of in preference to any
-        other (_excerpt), shows it."""
+        passage holds is folded in, so that the excerpt shows it: a clip
+        keeps the folded citations' lines in preference to any other
+        (_excerpt)."""
         passage = record.walk() if passage is None else passage
         folding = {
             id(citation)
@@ -1282,11 +1284,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         does: the family's claims state the marriage already, and its
         citations are folded into none. When no MARR or DIV gives one, each
         MARR gives the family's one pair, which none dates or places. A
-        start or an
-        end that restates another under the same citations, line for line,
-        gives no pair of its own, and its MARR or DIV joins the other's;
-        under other citations, it is a pair of its own, citing them, since
-        the same value under another citation is a claim of its own."""
+        start or an end that restates another under the same citations,
+        line for line, gives no pair of its own, and its MARR or DIV joins
+        the other's; under other citations, it is a pair of its own,
+        citing them, since the same value under another citation is a
+        claim of its own."""
 
         def cites(event: Record) -> str:
             """An event's SOUR citations, line for line."""
