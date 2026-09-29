@@ -36,11 +36,12 @@ per the civil register, 1 July per his naturalisation: day and month
 transposed), and the sources carry every uncertain date form: circa,
 before, after, between and decade.
 
-Nicholas's 2011 booklet, "Letters from Flörburg", is a compilation: it
-sets an image of the top of a 1939 letter from Sebastian to Klara, an
-artifact of its own, beside a translation made with translation
-software, which misreads the letter's Brunnenring 35 as 36.  The two
-are witnesses of one text that disagree (ADR-0008, as amended by #289).
+Nicholas's 2011 booklet, "Our Family from Germany", is a compilation:
+it sets an image of the top of a 1939 letter from Sebastian to Klara,
+an artifact of its own, beside a translation made with translation
+software, which misreads the address the letter gives for Rahel,
+Angerring 11, as Angerring 71.  The two are witnesses of one text that
+disagree (ADR-0008, as amended by #289).
 
 ``GEDCOM_FIXTURE`` renders the family as a genealogy program would
 export it from these sources; ``tests/unit/test_example_universe.py``
@@ -484,20 +485,27 @@ PLACES = (
         ("brunnenring",),
         note="The firm's premises and the family home.",
     ),
-    Place(
-        "brunnenring-36",
-        "Brunnenring 36",
-        "address",
-        ("brunnenring",),
-        note=(
-            "Named only by the 2011 booklet's translation, which misreads "
-            "the letter's Brunnenring 35."
-        ),
-    ),
     Place("wasserallee", "Wasserallee", "street", ("floerburg",)),
     Place("wasserallee-59", "Wasserallee 59", "address", ("wasserallee",)),
     Place("angerring", "Angerring", "street", ("floerburg",)),
+    Place(
+        "angerring-11",
+        "Angerring 11",
+        "address",
+        ("angerring",),
+        note="Rahel's address in July 1939, per Sebastian's letter.",
+    ),
     Place("angerring-57", "Angerring 57", "address", ("angerring",)),
+    Place(
+        "angerring-71",
+        "Angerring 71",
+        "address",
+        ("angerring",),
+        note=(
+            "Named only by the 2011 booklet's translation, which misreads "
+            "the letter's Angerring 11."
+        ),
+    ),
     Place(
         "floerburg-cemetery",
         "Friedhof Flörburg",
@@ -885,38 +893,38 @@ SOURCES = (
     ),
     Source(
         "family-booklet-2011",
-        "Letters from Flörburg",
+        "Our Family from Germany",
         "en",
         2011,
         "artifact",
         text=(
-            "[page 1] Letters from Flörburg. Compiled by Nicholas Lobig. "
+            "[page 1] Our Family from Germany. Compiled by Nicholas Lobig. "
             "Stupfield, 2011.\n"
             "[page 2] All translations in this booklet were done with "
             "translation software; any mistakes are mine.\n"
-            "[page 3] [image 1] Wastl to Klara, July 1939.\n"
-            "Translation: Flörburg, Brunnenring 36, 28 July 1939. Dear "
+            "[page 6] [image 1] Wastl to Klara, July 1939.\n"
+            "Translation: Flörburg, Brunnenring 35, 28 July 1939. Dear "
             "Pünktchen! Gustl finally has his visa. Hilde is sewing him "
-            "shirts for the journey.\n"
-            "Klara kept this letter all her life. Wastl died in Rekau in "
-            "1945."
+            "shirts for the journey. Rahel now lives at Angerring 71.\n"
+            "Gustl was Ursula's younger brother."
         ),
         note=(
             "A compilation, holding its own text only: the image beside "
             "the translation is letter-excerpt-1939, an artifact of its own "
-            "(ADR-0008). The translation misreads the letter's 35 as 36."
+            "(ADR-0008). The translation misreads Rahel's Angerring 11 as "
+            "71."
         ),
     ),
     Source(
         "letter-excerpt-1939",
-        "Letters from Flörburg — page 3, image 1",
+        "Our Family from Germany — page 6, image 1",
         "de",
         1939,
         "photograph",
         text=(
             "Flörburg, Brunnenring 35, den 28. Juli 1939.\n"
             "Liebes Pünktchen! Gustl hat endlich sein Visum. Hilde näht "
-            "ihm Hemden für die Reise."
+            "ihm Hemden für die Reise. Rahel wohnt jetzt Angerring 11."
         ),
         note=(
             "The top of the first page of Sebastian's letter to Klara, as "
@@ -2012,19 +2020,19 @@ ASSERTIONS = tuple(
             "letter-excerpt-1939",
             "part_of",
             "family-booklet-2011",
-            {"page_number": "3"},
+            {"page_number": "6"},
         ),
         # read from the translation, which page 2 says was done with
         # translation software: each claim carries the marker
         (
             "sebastian-loebig",
             "residence",
-            "brunnenring-36",
+            "brunnenring-35",
             {
                 "point_in_time": Date(1939, 7, 28),
                 "sourcing_circumstances": "machine_assisted",
             },
-            "Flörburg, Brunnenring 36",
+            "Flörburg, Brunnenring 35, 28 July 1939",
         ),
         (
             "klara-loebig",
@@ -2047,19 +2055,23 @@ ASSERTIONS = tuple(
             {"sourcing_circumstances": "machine_assisted"},
             "Hilde is sewing him shirts",
         ),
+        (
+            "rahel-loebig",
+            "residence",
+            "angerring-71",
+            {
+                "point_in_time": Date(1939, 7, 28),
+                "sourcing_circumstances": "machine_assisted",
+            },
+            "Rahel now lives at Angerring 71",
+        ),
         # the caption and the commentary are no translation: no marker
         ("sebastian-loebig", "nickname", "Wastl", "Wastl to Klara"),
         (
-            "sebastian-loebig",
-            "place_of_death",
-            "rekau",
-            "Wastl died in Rekau in 1945",
-        ),
-        (
-            "sebastian-loebig",
-            "date_of_death",
-            Date(1945),
-            "Wastl died in Rekau in 1945",
+            "gustav-loebig",
+            "sibling",
+            "ursula-loebig",
+            "Gustl was Ursula's younger brother",
         ),
     )
     + _said(
@@ -2075,7 +2087,7 @@ ASSERTIONS = tuple(
             "residence",
             "brunnenring-35",
             {"point_in_time": Date(1939, 7, 28)},
-            "Flörburg, Brunnenring 35",
+            "Flörburg, Brunnenring 35, den 28. Juli 1939",
         ),
         ("klara-loebig", "nickname", "Pünktchen", "Liebes Pünktchen!"),
         (
@@ -2085,6 +2097,13 @@ ASSERTIONS = tuple(
             "Gustl hat endlich sein Visum",
         ),
         ("hildegard-loebig", "nickname", "Hilde", "Hilde näht ihm Hemden"),
+        (
+            "rahel-loebig",
+            "residence",
+            "angerring-11",
+            {"point_in_time": Date(1939, 7, 28)},
+            "Rahel wohnt jetzt Angerring 11",
+        ),
     )
 )
 
@@ -2095,11 +2114,11 @@ CONTRADICTIONS = (
     ("gustav-loebig", "date_of_birth"),
     # Kreis Mockburg (1905 certificate) vs Kreis Peiltal (1984 tree).
     ("flaeckfeld", "part_of"),
-    # Brunnenring 35 (the letter's excerpt) vs Brunnenring 36 (the 2011
-    # booklet's machine-assisted translation of it) on 28 July 1939: two
-    # witnesses of one text (ADR-0008).  The disagreement report compares
-    # a residence only by its dates, so it does not list this one.
-    ("sebastian-loebig", "residence"),
+    # Rahel at Angerring 11 (the letter's excerpt) vs Angerring 71 (the
+    # 2011 booklet's machine-assisted translation of it) on 28 July 1939:
+    # two witnesses of one text (ADR-0008).  The disagreement report
+    # compares a residence only by its dates, so it does not list this one.
+    ("rahel-loebig", "residence"),
 )
 
 # (subject, property) pairs where one source is vaguer than another but

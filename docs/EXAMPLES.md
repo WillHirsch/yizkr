@@ -30,7 +30,8 @@ institution, ship and document is invented.
   court prison, *Gerichtsgefängnis Peiltal*, and the photo studio
   *Photograph Brüsrich*), the town of Kredfeld and the town of
   **Flörburg**: Brunnenring 35 (the firm and the family home),
-  Wasserallee 59, Angerring 57 and the cemetery, *Friedhof Flörburg*.
+  Wasserallee 59, Angerring 11 and 57, and the cemetery, *Friedhof
+  Flörburg*; Angerring 71 is named only by a misreading of Angerring 11.
   Flörburg became **Bad Flörburg** in 1954. Fläckfeld lies in Kreis
   Mockburg or Kreis Peiltal, depending on the source. Moshausen is
   placed only in Germany. **Rekau**, seat of the regional court
@@ -85,7 +86,7 @@ every assertion quotes the passage that makes it (`Assertion.excerpt`).
 | `school-report-1930` | Rudolf's school report | German |
 | `birth-extract-1938` | Gustav's birth register extract, issued for emigration | German |
 | `postcard-1938` | Sebastian to Klara in Australia, dated only by its postmark | German |
-| `letter-excerpt-1939` | the top of Sebastian's July 1939 letter to Klara, as an image on page 3 of the 2011 booklet: an artifact of its own, `part of` the booklet | German |
+| `letter-excerpt-1939` | the top of Sebastian's July 1939 letter to Klara, as an image on page 6 of the 2011 booklet: an artifact of its own, `part of` the booklet | German |
 | `registration-card-1945` | Ida's post-war card, with her son Leopold's arrest | English |
 | `naturalisation-1952` | Gustav's naturalisation as Gustave Lobig | English |
 | `compensation-file-1953` | Leopold's claim for his late mother Ida: her deportation | German |
@@ -93,7 +94,7 @@ every assertion quotes the passage that makes it (`Assertion.excerpt`).
 | `divorce-judgment-1957` | the Landgericht Rekau's judgment divorcing Leopold and Agnes | German |
 | `family-tree-1984` | the tree Klara drew in Australia | English |
 | `interview-2002` | oral history with Nicholas (possibly living), who says where Gustav is buried | English |
-| `family-booklet-2011` | *Letters from Flörburg*, Nicholas's compilation: the letter's excerpt beside his translation, made with translation software, and his commentary | English |
+| `family-booklet-2011` | *Our Family from Germany*, Nicholas's compilation: the letter's excerpt beside his translation, made with translation software, and his commentary | English |
 
 ## Pattern index
 
@@ -115,10 +116,10 @@ every assertion quotes the passage that makes it (`Assertion.excerpt`).
 | A place under two parents | Fläckfeld: Kreis Mockburg (1905) or Kreis Peiltal (1984) |
 | A place with no known location | Klurnau |
 | Persecution events (ADR-0014) | Leopold's arrest (3 Sep 1939), imprisonment in the Peiltal court prison and release (1 Oct 1939); Ida's deportation to Lager Klurnau (21 Aug 1942) and liberation at Klurnau (28 Jan 1945). Emigrations are `migration` events too |
-| Contradictory dates (ADR-0002) | Gustav born 7 Jan 1919 (civil register) and 1 July 1919 (naturalisation): day and month transposed. Also Fläckfeld's district, and Sebastian's address in July 1939 (the booklet, below) |
+| Contradictory dates (ADR-0002) | Gustav born 7 Jan 1919 (civil register) and 1 July 1919 (naturalisation): day and month transposed. Also Fläckfeld's district, and Rahel's address in July 1939 (the booklet, below) |
 | Refinement, not contradiction | Eugen died 1909 (gravestone) and 16 Mar 1909 (burial register); Klara left in '38 or '39 (interview) and on 22 June 1938 (postcard); Leopold born 1914 (tree) and 29 May 1914 (judgment), Agnes likewise; Leopold held "in Peiltal" and in its court prison; Ida deported to Klurnau (card) and to Lager Klurnau (compensation file) |
 | Uncertain dates | circa: Cäcilie *c. 1833* (`ABT 1833`); before: the firm gone *before 1926* (`BEF 1926`); after: Rahel died *after 1945* (`AFT 1945`); between: Klara left *between 1938 and 1939* (`BET 1938 AND 1939`); decade: the studio portrait, *1890s* (`BET 1890 AND 1899`) |
-| An embedded original and its translation, as two witnesses (ADR-0008, amended) | *Letters from Flörburg* (2011), Nicholas's compilation, sets an image of the top of Sebastian's 1939 letter to Klara (`letter-excerpt-1939`, an artifact of its own, `part of` the booklet on page 3) beside his translation, which reads the letter's *Brunnenring 35* as *36*: each witness gives Sebastian's address its own value. The booklet says its translations were done with translation software, so each claim read from the translation carries `sourcing_circumstances` → `machine_assisted` and no claim of the excerpt does. The caption and the commentary are not translations and carry no marker; the commentary says what the letter does not, that Sebastian died in Rekau in 1945 |
+| An embedded original and its translation, as two witnesses (ADR-0008, amended) | *Our Family from Germany* (2011), Nicholas's compilation, sets an image of the top of Sebastian's 1939 letter to Klara (`letter-excerpt-1939`, an artifact of its own, `part of` the booklet on page 6) beside his translation. Where the letter says Rahel now lives at *Angerring 11*, the translation reads *Angerring 71*: each witness gives Rahel's address its own value. The booklet says its translations were done with translation software, so each claim read from the translation carries `sourcing_circumstances` → `machine_assisted` and no claim of the excerpt does. The caption and the commentary are not translations and carry no marker; the commentary says what the letter does not, that Gustav was Ursula's younger brother (`sibling`) |
 | A person without name or sex | the infant of 1922, *N.N. Löbig* (`SEX U`) |
 | Privacy (ADR-0020) | Nicholas Lobig (b. 1950, no death asserted) is possibly living; he is dated to the year only |
 | GEDCOM rendering (ADR-0021) | `tests/fixtures/example-family.ged`: typed names, `NICK`, an inline `(Peppi)`, `_MARNM`, `TYPE immigrant`, a dated burial and an undated one, cause of death, child count, residences at street addresses, a `DIV`, an `EDUC` and a `NOTE` the adapter reports as unsupported, and the studio portrait as a shared `OBJE` |
@@ -139,10 +140,10 @@ events) and sources are ground truth, so tests can check identity and
 containment decisions against it. Everything said *about* them is a
 source-attributed `Assertion` in the archive's own vocabulary: manifest
 property ids, entity kinds and artifact classes. One value is planned
-rather than in the manifest yet: `machine_assisted`, which ADR-0008 adds
-and `PLANNED_VOCABULARY` names. `CONTRADICTIONS` and `REFINEMENTS` name
-the deliberate cases. Each person's `gedcom_xref` points into
-`tests/fixtures/example-family.ged`, and
+rather than in the manifest yet: `machine_assisted`, which ADR-0008's
+follow-up B adds and `PLANNED_VOCABULARY` names. `CONTRADICTIONS` and
+`REFINEMENTS` name the deliberate cases. Each person's `gedcom_xref`
+points into `tests/fixtures/example-family.ged`, and
 `tests/unit/test_example_universe.py` checks that the GEDCOM file says
 nothing the sources do not.
 
