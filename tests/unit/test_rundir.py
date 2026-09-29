@@ -7,6 +7,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -16,12 +17,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.unit.stage_counts import disagreement
 from yizkr.pipeline import rundir
 from yizkr.pipeline.rundir import (
     DONE,
     FAILED,
+    INTERRUPTED,
     NEEDS_ATTENTION,
     PENDING,
+    RUN_END,
+    RUN_INTERRUPTED,
     RUNNING,
     RunDir,
     cache_counts,
@@ -549,6 +554,297 @@ class TestRunState:
         }
 
 
+# how an invocation's end can be on record: as the driver records it, in
+# run.json and then in its closing event, and each alone (a driver killed
+# between the two, or a run.json that does not record it)
+ENDS = ["run.json and closing event", "run.json alone", "closing event alone"]
+
+
+class TestStagesCutShort:
+    """A stage whose latest event is its start is running while the
+    invocation that started it runs, and interrupted once that invocation
+    is over (#300), as the live monitor reads it: the monitor's tests
+    compare its counts with run_state's on the same streams."""
+
+    def invocation(self, tmp_path, *stages: str) -> RunDir:
+        """An invocation of the run in `tmp_path`, started, which plans
+        `stages` for both documents."""
+        run = RunDir(tmp_path)
+        run.start(
+            documents=[
+                {"sha1": DOC_A, "kind": "text", "stages": list(stages)},
+                {"sha1": DOC_B, "kind": "media", "stages": list(stages)},
+            ]
+        )
+        return run
+
+    def emit(self, run, event, stage, subject=DOC_A, **fields):
+        run.emit(event, subject=subject, kind="text", stage=stage, **fields)
+
+    def end(self, run, outcome="interrupted", how=ENDS[0]):
+        """End the invocation as the driver ends it: its end in run.json,
+        then the event that closes its events, or one of them alone."""
+        if how != "closing event alone":
+            run.end(outcome)
+        if how != "run.json alone":
+            closing = RUN_INTERRUPTED if outcome == "interrupted" else RUN_END
+            run.emit(closing, outcome=outcome, statuses={"paused": 1})
+
+    def status(self, tmp_path, stage, subject=DOC_A) -> str:
+        """The stage's state as run_state reads it, once the live
+        monitor's counts are shown to agree with run_state's."""
+        assert disagreement(tmp_path) is None
+        return run_state(RunDir(tmp_path))[(subject, stage)].status
+
+    @pytest.mark.parametrize("how", ENDS)
+    @pytest.mark.parametrize("outcome", ["interrupted", "paused", "failed"])
+    def test_a_stage_its_invocation_left_started_is_interrupted(
+        self, tmp_path, outcome, how
+    ):
+        """Ctrl-C, a paused pass or an error ends the invocation with a
+        stage started: nothing runs it, so it is interrupted, not running,
+        with no reason; the next invocation starts it again."""
+        run = self.invocation(tmp_path, "transcription", "extraction")
+        self.emit(run, "started", "transcription")
+        self.emit(run, "done", "transcription")
+        self.emit(run, "started", "extraction")
+        assert self.status(tmp_path, "extraction") == RUNNING
+        self.end(run, outcome, how)
+        assert disagreement(tmp_path) is None
+        states = run_state(RunDir(tmp_path))
+        assert states[(DOC_A, "extraction")] == rundir.StageState(INTERRUPTED)
+        assert summarise(states) == {
+            "transcription": {DONE: 1, PENDING: 1},
+            "extraction": {INTERRUPTED: 1, PENDING: 1},
+        }
+
+    def test_the_end_of_an_earlier_invocation_leaves_a_later_one_running(
+        self, tmp_path
+    ):
+        """Only the latest invocation's end counts: a stage it started
+        runs, while the stage the ended one left is interrupted."""
+        first = self.invocation(tmp_path, "transcription")
+        self.emit(first, "started", "transcription")
+        self.end(first)
+        second = self.invocation(tmp_path, "transcription")
+        self.emit(second, "started", "transcription", subject=DOC_B)
+        assert self.status(tmp_path, "transcription") == INTERRUPTED
+        assert self.status(tmp_path, "transcription", DOC_B) == RUNNING
+
+    def test_an_earlier_invocations_late_closing_event(self, tmp_path):
+        """The closing event of an earlier invocation that lands after a
+        later one's start closes the earlier one, not the latest: the
+        stage the latest has started runs."""
+        first = self.invocation(tmp_path, "critique")
+        self.emit(first, "started", "critique")
+        first.end("interrupted")
+        second = self.invocation(tmp_path, "critique")
+        self.emit(second, "started", "critique", subject=DOC_B)
+        first.emit(RUN_INTERRUPTED, outcome="interrupted", statuses={})
+        assert self.status(tmp_path, "critique") == INTERRUPTED
+        assert self.status(tmp_path, "critique", DOC_B) == RUNNING
+
+    def test_a_killed_invocation_reads_as_running_until_another_starts(
+        self, tmp_path
+    ):
+        """A killed invocation records no end and has no closing event:
+        while it is the latest, nothing tells it from one still running,
+        as in the monitor; a later invocation's start shows it is over."""
+        killed = self.invocation(tmp_path, "extraction")
+        self.emit(killed, "started", "extraction")
+        assert self.status(tmp_path, "extraction") == RUNNING
+        later = self.invocation(tmp_path, "extraction")
+        assert self.status(tmp_path, "extraction") == INTERRUPTED
+        self.emit(later, "started", "extraction", subject=DOC_B)
+        assert self.status(tmp_path, "extraction", DOC_B) == RUNNING
+
+    def test_an_interrupted_stage_is_started_and_done_again(self, tmp_path):
+        first = self.invocation(tmp_path, "critique")
+        self.emit(first, "started", "critique")
+        self.end(first)
+        second = self.invocation(tmp_path, "critique")
+        self.emit(second, "started", "critique")
+        assert self.status(tmp_path, "critique") == RUNNING
+        self.emit(second, "done", "critique")
+        self.end(second, "finished")
+        assert self.status(tmp_path, "critique") == DONE
+
+    def test_a_stage_interrupted_twice_is_interrupted(self, tmp_path):
+        first = self.invocation(tmp_path, "critique")
+        self.emit(first, "started", "critique")
+        self.end(first)
+        second = self.invocation(tmp_path, "critique")
+        self.emit(second, "started", "critique")
+        self.end(second, "paused")
+        assert self.status(tmp_path, "critique") == INTERRUPTED
+        # a third invocation that has not reached it yet
+        self.invocation(tmp_path, "critique")
+        assert self.status(tmp_path, "critique") == INTERRUPTED
+
+    def test_held_and_failed_stages_stay_so_when_the_invocation_ends(
+        self, tmp_path
+    ):
+        """Only a stage whose latest event is its start is cut short: a
+        held stage is pending with its reason, and a failed one failed,
+        whether the invocation that left them has ended or not."""
+        first = self.invocation(tmp_path, "extraction", "critique")
+        self.emit(first, "started", "extraction")
+        self.emit(first, "failed", "extraction", reason="RuntimeError: x")
+        self.emit(first, "started", "critique")
+        self.end(first)
+        second = self.invocation(tmp_path, "extraction", "critique")
+        self.emit(second, "held", "critique", reason="stage:critique paused")
+        self.emit(second, "started", "critique", subject=DOC_B)
+        self.emit(
+            second, "failed", "critique", subject=DOC_B, reason="OSError: y"
+        )
+        self.end(second, "stopped")
+        assert disagreement(tmp_path) is None
+        states = run_state(RunDir(tmp_path))
+        assert states[(DOC_A, "extraction")] == rundir.StageState(
+            FAILED, "RuntimeError: x"
+        )
+        assert states[(DOC_A, "critique")] == rundir.StageState(
+            PENDING, "stage:critique paused"
+        )
+        assert states[(DOC_B, "critique")] == rundir.StageState(
+            FAILED, "OSError: y"
+        )
+        assert states[(DOC_B, "extraction")] == rundir.StageState(PENDING)
+
+    def test_a_run_with_no_end_on_record_is_running(self, tmp_path):
+        """No run.json invocation and no event that opens or closes one,
+        as a run directory written by hand has: nothing says the stage is
+        over."""
+        run = RunDir(tmp_path)
+        run.update_manifest(
+            documents=[{"sha1": DOC_A, "kind": "text", "stages": ["critique"]}]
+        )
+        self.emit(run, "started", "critique")
+        assert self.status(tmp_path, "critique") == RUNNING
+
+    def test_without_invocations_in_run_json_the_events_tell(self, tmp_path):
+        """A run.json that records no invocation: the latest event that
+        opens or closes one says whether the latest invocation has
+        ended, as the monitor reads it."""
+        run = RunDir(tmp_path)
+        run.update_manifest(
+            documents=[{"sha1": DOC_A, "kind": "text", "stages": ["critique"]}]
+        )
+        run.emit("run-start")
+        self.emit(run, "started", "critique")
+        assert self.status(tmp_path, "critique") == RUNNING
+        run.emit(RUN_INTERRUPTED, outcome="interrupted")
+        assert self.status(tmp_path, "critique") == INTERRUPTED
+        # a later invocation starts: the one that started the stage is over
+        later = RunDir(tmp_path)
+        later.emit("run-start")
+        assert self.status(tmp_path, "critique") == INTERRUPTED
+
+    def test_a_start_that_names_no_invocation(self, tmp_path):
+        """A start event without an invocation is read by the latest
+        invocation's end alone: running until it ends."""
+        run = self.invocation(tmp_path, "critique")
+        start = {"event": "started", "subject": DOC_B, "stage": "critique"}
+        with open(tmp_path / rundir.EVENTS, "a") as log:
+            log.write(json.dumps(start) + "\n")
+        assert self.status(tmp_path, "critique", DOC_B) == RUNNING
+        self.end(run)
+        assert self.status(tmp_path, "critique", DOC_B) == INTERRUPTED
+
+    def test_an_invocation_that_starts_between_the_reads(self, tmp_path):
+        """A new invocation starts, and starts a stage, while run_state
+        reads the run: the stage is never read against the ended
+        invocation before it and taken for that one's leftover."""
+        first = self.invocation(tmp_path, "critique")
+        self.emit(first, "started", "critique")
+        self.end(first)
+
+        def start_another():
+            second = self.invocation(tmp_path, "critique")
+            self.emit(second, "started", "critique", subject=DOC_B)
+
+        states = run_state(Racing(tmp_path, first=start_another))
+        assert states[(DOC_A, "critique")].status == INTERRUPTED
+        assert states[(DOC_B, "critique")].status == RUNNING
+        assert disagreement(tmp_path) is None
+
+    def test_a_stage_done_as_its_invocation_ends_between_the_reads(
+        self, tmp_path
+    ):
+        """The latest invocation finishes a stage and ends just after
+        run_state has read the events: the stage is done, never read as
+        cut short by an end that came after its done."""
+        run = self.invocation(tmp_path, "critique")
+        self.emit(run, "started", "critique")
+
+        def finish(reads):
+            if reads == 1:
+                self.emit(run, "done", "critique")
+                self.end(run, "finished")
+
+        racing = Racing(tmp_path, each=finish)
+        states = run_state(racing)
+        assert states[(DOC_A, "critique")].status == DONE
+        # one reading disagreed, and the one after it agreed
+        assert racing.event_reads == 2
+        assert disagreement(tmp_path) is None
+
+    def test_the_reads_are_bounded_while_invocations_keep_starting(
+        self, tmp_path
+    ):
+        """Invocations that keep starting, each starting a stage, while
+        run_state reads leave its readings of run.json never agreeing: it
+        stops after a bounded number of reads, with the last events read
+        against the run.json read after them. So the stage started by the
+        latest invocation those events hold is interrupted: that run.json
+        holds a later invocation, whose start shows the earlier one is
+        over."""
+        run = self.invocation(tmp_path, "critique")
+        self.emit(run, "started", "critique")
+
+        def start_another(reads):
+            if reads <= 2 * rundir._READS:
+                later = self.invocation(tmp_path, "critique")
+                self.emit(later, "started", "critique", subject=DOC_B)
+
+        racing = Racing(tmp_path, each=start_another)
+        states = run_state(racing)
+        assert racing.event_reads == rundir._READS
+        assert states[(DOC_A, "critique")].status == INTERRUPTED
+        assert states[(DOC_B, "critique")].status == INTERRUPTED
+
+
+class Racing(RunDir):
+    """A run directory that something else writes to while run_state
+    reads it: `first` runs once, just after the first of its reads,
+    whichever file that reads, and `each` just after each reading of the
+    events, given how many there have been."""
+
+    def __init__(self, path, *, first=None, each=None) -> None:
+        super().__init__(path)
+        self.first, self.each = first, each
+        self.event_reads = 0
+
+    def _after_a_read(self) -> None:
+        first, self.first = self.first, None
+        if first is not None:
+            first()
+
+    def manifest(self) -> dict:
+        manifest = super().manifest()
+        self._after_a_read()
+        return manifest
+
+    def events(self) -> list[dict]:
+        events = super().events()
+        self._after_a_read()
+        self.event_reads += 1
+        if self.each is not None:
+            self.each(self.event_reads)
+        return events
+
+
 class TestCacheCounts:
     def test_cache_events_are_counted_per_role_and_reason(self, tmp_path):
         run = RunDir(tmp_path)
@@ -639,6 +935,36 @@ class TestStagesStateCommand:
                 }
             ],
             "cache": {},
+        }
+
+    def test_a_stage_cut_short_shows_as_interrupted(self, tmp_path, capsys):
+        """After Ctrl-C, the stage the invocation cut short is interrupted,
+        in the counts and in --json, as the monitor shows it (#300)."""
+        from yizkr.cli import build_parser
+
+        run = RunDir(tmp_path)
+        run.start(
+            documents=[
+                {"sha1": DOC_A, "stages": ["extraction"]},
+                {"sha1": DOC_B, "stages": ["extraction"]},
+            ]
+        )
+        run.emit("started", subject=DOC_A, stage="extraction")
+        run.end("interrupted")
+        run.emit(RUN_INTERRUPTED, outcome="interrupted", statuses={})
+        parser = build_parser()
+        args = parser.parse_args(["stages", "state", str(tmp_path)])
+        assert args.func(args) == 0
+        out = capsys.readouterr().out.splitlines()
+        assert out == ["extraction       1 interrupted, 1 pending"]
+        args = parser.parse_args(["stages", "state", str(tmp_path), "--json"])
+        assert args.func(args) == 0
+        rows = json.loads(capsys.readouterr().out)["stages"]
+        assert {
+            row["subject"]: (row["status"], row["reason"]) for row in rows
+        } == {
+            DOC_A: (INTERRUPTED, None),
+            DOC_B: (PENDING, None),
         }
 
     def test_a_directory_without_a_run_is_refused(self, tmp_path):

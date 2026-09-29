@@ -103,8 +103,14 @@ documents:
 | `failed` | the latest attempt failed |
 | `engine`, `cached` | the stage's calls the engine answered (a cache miss, or a replay of a conversation's opening turn) and the cache answered |
 
-The counts agree with `rundir.run_state`: `done` and `reused` together
-are its done, and `running` with the interrupted ones is its running. A
+The counts agree with `rundir.run_state`, which tells a stage cut short
+by the same rule (`rundir.interrupted`, given the latest invocation and
+whether it has ended as `rundir.Invocations` reads them from `run.json`
+and the events): `done` and `reused` together are its done, the
+interrupted stages among `pending` are its `interrupted`, and the rest of
+`pending` is its pending (#300). `yizkr stages state` and the scratch
+driver's closing report therefore show a stage an ended invocation left
+started as interrupted, as this view does, and not as running. A
 SHA-1 planned twice (two files with the same bytes) is one document, with
 the stages both entries plan. A planned document or stage counts even
 when its SHA-1 or name is empty (a stage without a name shows as `?`),
@@ -356,7 +362,8 @@ request.
 ## Limits
 
 - An invocation killed without a trace (no end in `run.json`, no closing
-  event, no later invocation) looks as if it were still running; the
+  event, no later invocation) looks as if it were still running, and so
+  do the stages it left started, here and in `rundir.run_state`; the
   header's last-event age shows how quiet it has gone.
 - The estimate assumes the documents still to go of a kind behave like
   the ended ones.
