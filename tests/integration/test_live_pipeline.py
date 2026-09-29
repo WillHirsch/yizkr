@@ -117,10 +117,15 @@ def test_register_creates_artifact_fragment_and_media(client, artifact):
     assert artifact.file_page.startswith("File:")
 
 
-def test_register_is_idempotent(client, artifact):
+def test_register_is_idempotent(client, artifact, tmp_path):
+    # found again by the SHA-1 of its media alone (#103): the same bytes,
+    # read from another file, are the one artifact, with the one page
+    # fragment
+    media = tmp_path / "integration-test-certificate-again.png"
+    media.write_bytes(png_bytes())
     again = register_artifact(
         client,
-        media_path=None,
+        media_path=media,
         artifact_type="certificate",
         title=ARTIFACT_TITLE,
         pages=1,
