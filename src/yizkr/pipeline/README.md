@@ -435,8 +435,8 @@ refuses). The module docstring is the full account; in short:
   other's distinctive tokens; events through their participants; the
   whole name otherwise. A mention that key-matches the GEDCOM export
   pairs with those anchors only. A key more than `max-key-mentions`
-  mentions share is a hub: none of them is blocked on it, and they are
-  counted. Lookups go through indexes, organizations included, so the
+  mentions share is a hub: none of them is blocked on it, and the hubs
+  and the mentions holding one are counted. Lookups go through indexes, organizations included, so the
   work grows with the mentions and the pairs proposed.
 - **Cannot-link.** Two ids of one manifest are kept apart (soft). The
   export's places and occupations are exempt, as the adapter mints one

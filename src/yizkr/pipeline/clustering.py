@@ -74,10 +74,10 @@ only, never with other mentions, so the export is the roster documents
 meet. A person named by one token only, with no kin to key a surname,
 pairs only with GEDCOM people whose given name is compatible. A key that
 more than `max-key-mentions` mentions of one kind share (a hub) is
-blocked on by none of them: the mentions it would join stay apart, and
-the summary counts them. Blocking looks keys up in indexes, so its work
-grows with the mentions and the pairs it proposes, never with every pair
-of mentions.
+blocked on by none of them: the mentions only it would join stay apart,
+and the summary counts the hubs and the mentions that hold one. Blocking
+looks keys up in indexes, so its work grows with the mentions and the
+pairs it proposes, never with every pair of mentions.
 
 **Cannot-link.** Two ids of one manifest are kept apart (soft): the
 manifest already unified what it could. The places and occupations of a
@@ -2171,7 +2171,7 @@ def attention(summary: Mapping[str, Any]) -> list[str]:
         reasons.append(
             "hub keys not blocked on: "
             f"{_counted(summary['hub_keys'], 'key')}, "
-            f"{_counted(summary['hub_mentions'], 'mention')} kept apart"
+            f"held by {_counted(summary['hub_mentions'], 'mention')}"
         )
     return reasons
 

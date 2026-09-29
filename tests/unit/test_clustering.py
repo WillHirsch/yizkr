@@ -802,7 +802,7 @@ class TestBlocking:
             SINGLETON
         }
         assert (
-            "hub keys not blocked on: 1 key, 5 mentions kept apart"
+            "hub keys not blocked on: 1 key, held by 5 mentions"
             in attention(summary)
         )
         assert len(blocked_pairs(manifests)) == 10

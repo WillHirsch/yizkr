@@ -24,7 +24,8 @@ blocking:
   # named by one token only is blocked against GEDCOM people alone.
   gedcom-anchored: true
   # A key more mentions of one kind share than this is blocked on by
-  # none of them: the mentions it would join stay apart, and are counted.
+  # none of them, and is counted: the mentions only it would join stay
+  # apart.
   max-key-mentions: 200
 
 evidence:
