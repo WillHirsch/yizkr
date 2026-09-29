@@ -364,6 +364,7 @@ OTHERS = {
     "Q408": "a place",
     "Q409": "a certificate",
     "Q411": "an organization taking part in an event of no person kind",
+    "Q436": "a place taking part in an event of no person kind",
     "Q412": "an event of no person kind",
     "Q413": "an occupation",
     "Q414": "a place with a nickname",
@@ -421,6 +422,8 @@ def export_dump(vocabulary) -> Dump:
     typed("Q411", "organization")
     typed("Q412", "event")
     dump.says("Q412", "participant", entity("Q411"))
+    typed("Q436", "place")
+    dump.says("Q412", "participant", entity("Q436"))
     typed("Q413", "occupation_class")
     typed("Q414", "place")
     dump.says("Q414", "nickname", '"Gus"@en')
