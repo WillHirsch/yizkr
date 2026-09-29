@@ -228,10 +228,12 @@ def attempt(
     misses: int = 0,
     rejects=(),
     call_kind: str = "fork",
+    gave_up: int = 0,
 ) -> None:
     """The events of one stage attempt, as the stage runner, the LLM cache
     and the engine's call reports write them: its start, the cache's hits
-    and misses, a call event per outcome in `calls`, the cache's
+    and misses, a call event per outcome in `calls`, `gave_up` calls whose
+    answer the claude CLI gave up on at the output limit, the cache's
     rejections, and its end, done or failed with `failed` as the
     reason."""
     where = {"subject": doc.sha1, "kind": doc.kind, "stage": stage}
@@ -247,6 +249,14 @@ def attempt(
         )
     for outcome in calls:
         run.emit("call", call=call_kind, stage=stage, outcome=outcome, **about)
+    for _ in range(gave_up):
+        run.emit(
+            "call",
+            call=call_kind,
+            stage=stage,
+            **GAVE_UP,
+            **about,
+        )
     for reason in rejects:
         run.emit("cache-reject", key="k", reason=reason, **about)
     if failed is None:
@@ -254,6 +264,17 @@ def attempt(
     else:
         run.emit("failed", reason=failed[:500], **where)
 
+
+# what a call event says of a call whose answer the claude CLI gave up on
+# at the output token limit (llm.OutputLimitReached): no answer, its
+# error, and the class of API error its stream's last assistant event
+# names, beside the stop reason the CLI reports (#7)
+GAVE_UP = {
+    "outcome": "error",
+    "error": "OutputLimitReached",
+    "api_error": "max_output_tokens",
+    "stop_reason": "stop_sequence",
+}
 
 # the scan every transcription the checks are shown is of
 SCAN = ArtifactRef.from_bytes(b"fictional scan: a Loebig letter")
@@ -840,9 +861,17 @@ class TestExtraction:
         checks.poll()
         assert "chunk-failures" not in checks_raised(run)
 
-    def test_chunk_answers_cut_off_above_the_share(self, tmp_path):
+    @pytest.mark.parametrize(
+        "stopped", [False, True], ids=["no-sentinel", "stop-reason"]
+    )
+    def test_chunk_answers_cut_off_above_the_share(self, tmp_path, stopped):
+        """Cut off before its sentinel, or, whole as it looks, stopped at
+        the output limit (#7): either rejection counts."""
+        answer = json.dumps(a_claim())
+        if stopped:
+            answer += '\n{"done": true}'
         with pytest.raises(ChunkIncomplete) as cut:
-            parse_chunk_response(json.dumps(a_claim()))
+            parse_chunk_response(answer, cut_off=stopped)
         run, checks = make_checks(tmp_path)
         doc = a_doc(tmp_path, "brief.txt")
         # two kept answers cut off, rejected and asked again of the engine
@@ -859,6 +888,52 @@ class TestExtraction:
         alert = only(run, "truncations")
         assert (alert["value"], alert["count"], alert["of"]) == (0.333, 2, 6)
         assert alert["status"] == "new"
+
+    def test_chunk_calls_the_engine_gave_up_on_are_truncations(self, tmp_path):
+        """A chunk call whose answer the claude CLI gave up on at the
+        output limit is an answer cut off, with nothing to reject: a
+        truncation, never a chunk failure (#7)."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        attempt(run, doc, "extraction", misses=6, calls=["ok"] * 2, gave_up=4)
+        checks.poll()
+        alert = only(run, "truncations")
+        assert (alert["value"], alert["count"], alert["of"]) == (0.667, 4, 6)
+        assert "chunk-failures" not in checks_raised(run)
+
+    @pytest.mark.parametrize(
+        ("outcome", "error", "raised"),
+        [
+            ("error", "RuntimeError", "chunk-failures"),
+            ("ok", None, None),
+        ],
+        ids=["failed-after-the-notice", "answered"],
+    )
+    def test_the_class_of_api_error_alone_is_no_give_up(
+        self, tmp_path, outcome, error, raised
+    ):
+        """Only a call the engine raised OutputLimitReached for is a
+        give-up. One that crashed or timed out after the CLI printed its
+        notice names max_output_tokens too, and failed; an answered one
+        that names it is an answer (#7)."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        about = dict(subject=doc.sha1, kind="text", role="extract")
+        run.emit("started", subject=doc.sha1, kind="text", stage="extraction")
+        for _ in range(4):
+            run.emit(
+                "call",
+                call="fork",
+                stage="extraction",
+                outcome=outcome,
+                api_error="max_output_tokens",
+                **({"error": error} if error else {}),
+                **about,
+            )
+        run.emit("done", subject=doc.sha1, kind="text", stage="extraction")
+        checks.poll()
+        assert "truncations" not in checks_raised(run)
+        assert checks_raised(run) == ([raised] if raised else [])
 
     def test_rejections_of_other_answers_are_no_truncations(self, tmp_path):
         run, checks = make_checks(tmp_path)
@@ -1218,6 +1293,45 @@ class TestRates:
         assert alert["pause"] == "stage:transcription"
         (pause,) = requests(run)
         assert pause["scope"] == "stage:transcription"
+
+    def test_calls_the_engine_gave_up_on_never_pause_a_stage(self, tmp_path):
+        """The engine answered those calls, past its output limit: they
+        are no engine failures, so they never enter the window whose step
+        rule pauses the stage (#7). Calls failing otherwise still do."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        about = dict(subject=doc.sha1, kind="text", role="extract")
+        for _ in range(12):
+            run.emit("call", stage="extraction", **GAVE_UP, **about)
+        checks.poll()
+        assert "call-failures" not in checks_raised(run)
+        for _ in range(10):
+            run.emit("call", stage="extraction", outcome="error", **about)
+        checks.poll()
+        alert = only(run, "call-failures")
+        assert (alert["value"], alert["count"], alert["of"]) == (1.0, 10, 10)
+
+    def test_a_call_that_failed_after_the_notice_is_a_failed_call(
+        self, tmp_path
+    ):
+        """A call that crashed or timed out after the CLI printed its
+        output-limit notice names max_output_tokens, but the engine raised
+        no OutputLimitReached for it: it failed, and counts (#7)."""
+        run, checks = make_checks(tmp_path)
+        doc = a_doc(tmp_path, "brief.txt")
+        about = dict(subject=doc.sha1, kind="text", role="extract")
+        for _ in range(10):
+            run.emit(
+                "call",
+                stage="extraction",
+                outcome="error",
+                error="RuntimeError",
+                api_error="max_output_tokens",
+                **about,
+            )
+        checks.poll()
+        alert = only(run, "call-failures")
+        assert (alert["value"], alert["count"], alert["of"]) == (1.0, 10, 10)
 
     def test_half_the_recent_calls_failing_is_not_most(self, tmp_path):
         run, checks = make_checks(tmp_path)

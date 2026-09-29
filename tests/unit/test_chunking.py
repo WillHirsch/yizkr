@@ -31,7 +31,7 @@ from yizkr.pipeline.chunking import (
     unit_text,
 )
 from yizkr.pipeline.extract import LlmClaimExtractor
-from yizkr.pipeline.llm import ConversationChanged
+from yizkr.pipeline.llm import ConversationChanged, OutputLimitReached
 from yizkr.pipeline.orchestrate import FAILED
 from yizkr.pipeline.rundir import NEEDS_ATTENTION, StageState, run_state
 from yizkr.pipeline.transcribe import Transcription
@@ -70,16 +70,11 @@ def claim(local_id: str, label: str, year: int) -> dict:
     }
 
 
-def ndjson(claims: list[dict], emitted: int | None = None) -> str:
+def ndjson(claims: list[dict]) -> str:
+    """A complete chunk answer: its claims, one per line, then the terminal
+    sentinel the prompt asks for."""
     lines = [json.dumps(c) for c in claims]
-    lines.append(
-        json.dumps(
-            {
-                "done": True,
-                "claims_emitted": len(claims) if emitted is None else emitted,
-            }
-        )
-    )
+    lines.append(json.dumps({"done": True}))
     return "\n".join(lines)
 
 
@@ -232,6 +227,34 @@ class Rejecting:
         self.closed.append(handle)
 
 
+class Reporting(Rejecting):
+    """A client that takes rejections and reports why its model stopped on
+    each call it answers (`last_report`, as the engines' clients do):
+    `stops` holds each next answer's stop reason, in order."""
+
+    def __init__(self, client, stops: list[str]) -> None:
+        super().__init__(client)
+        self.stops = list(stops)
+        self.report: dict = {}
+
+    def _stopped(self, response):
+        self.report = {"stop_reason": self.stops.pop(0)}
+        return response
+
+    def complete(self, prompt, image_paths=()):
+        return self._stopped(super().complete(prompt, image_paths))
+
+    def open_conversation(self, prompt):
+        response, handle = super().open_conversation(prompt)
+        return self._stopped(response), handle
+
+    def fork(self, handle, prompt):
+        return self._stopped(super().fork(handle, prompt))
+
+    def last_report(self):
+        return dict(self.report)
+
+
 class Attempting(Rejecting):
     """A client that takes rejections and tells attempts at a call apart
     (as the LLM cache's does): `attempt(n)` gives a sibling whose calls
@@ -308,24 +331,20 @@ def logistics_manifest_json() -> str:
 def wrapped(claims: list[dict]) -> str:
     """A complete chunk answer whose claims are wrapped in one object, which
     the NDJSON parser does not read as claims."""
-    return ndjson([{"claims": claims}], emitted=len(claims))
+    return ndjson([{"claims": claims}])
 
 
 def wrapped_in_sentinel(claims: list[dict]) -> str:
     """A complete chunk answer whose claims ride in its terminal sentinel,
     one object the parser reads as the sentinel alone."""
-    return json.dumps(
-        {"claims": claims, "done": True, "claims_emitted": len(claims)}
-    )
+    return json.dumps({"claims": claims, "done": True})
 
 
 def gap_in_sentinel(claims: list[dict]) -> str:
     """A complete chunk answer whose claims ride in its terminal sentinel
     under `gap`, the key of a gap line merged into it, which neither the
     claim parser nor the gap parser reads."""
-    return json.dumps(
-        {"done": True, "claims_emitted": len(claims), "gap": claims}
-    )
+    return json.dumps({"done": True, "gap": claims})
 
 
 def with_predicate(claims: list[dict]) -> str:
@@ -338,7 +357,7 @@ def with_predicate(claims: list[dict]) -> str:
         }
         for one in claims
     ]
-    return ndjson(renamed, emitted=len(claims))
+    return ndjson(renamed)
 
 
 def stamp_manifest_json() -> str:
@@ -453,16 +472,46 @@ class TestChunkResponseContract:
                 json.dumps(claim("e1", "Hildegard Löbig", 1876))
             )
 
-    def test_count_mismatch_keeps_claims_and_warns(self):
-        # a present sentinel proves completeness; a miscounted
-        # claims_emitted keeps every parsed claim and only warns
-        warnings: list[str] = []
-        claims = parse_chunk_response(
-            ndjson([claim("e1", "Hildegard Löbig", 1876)], emitted=5),
-            warn=warnings.append,
+    def test_a_done_line_is_the_sentinel(self):
+        """The prompt asks for `{"done": true}` alone, with no count of
+        what came before it (#7)."""
+        response = json.dumps(claim("e1", "Hildegard Löbig", 1876))
+        claims = parse_chunk_response(response + '\n{"done": true}')
+        assert [c["subject"]["local_id"] for c in claims] == ["e1"]
+
+    @pytest.mark.parametrize(
+        "counts",
+        [
+            {"claims_emitted": 5},
+            {"claims_emitted": 0, "gaps_emitted": 3},
+            {"claims_emitted": None},
+        ],
+        ids=["too-many", "too-few", "null"],
+    )
+    def test_a_count_on_the_done_line_is_not_read(self, counts):
+        """A count a model still writes, right or wrong, gates nothing:
+        every parsed claim is kept (#7)."""
+        response = "\n".join(
+            [
+                json.dumps(claim("e1", "Hildegard Löbig", 1876)),
+                json.dumps({"done": True, **counts}),
+            ]
         )
-        assert len(claims) == 1
-        assert warnings and "reported 5" in warnings[0]
+        assert len(parse_chunk_response(response)) == 1
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            ndjson([claim("e1", "Hildegard Löbig", 1876)]),
+            json.dumps(claim("e1", "Hildegard Löbig", 1876)),
+        ],
+        ids=["with-sentinel", "without"],
+    )
+    def test_an_answer_stopped_at_the_output_limit_is_cut_off(self, response):
+        """An answer its engine stopped at max_tokens is cut off, even with
+        its sentinel (#7)."""
+        with pytest.raises(ChunkIncomplete, match="^cut off at max_tokens$"):
+            parse_chunk_response(response, cut_off=True)
 
     def test_valid_ndjson_parses(self):
         claims = parse_chunk_response(
@@ -470,10 +519,9 @@ class TestChunkResponseContract:
         )
         assert len(claims) == 1
 
-    def test_gap_lines_and_extended_sentinel_do_not_break_claims(self):
-        # ADR-0013: gap lines + gaps_emitted in the sentinel are ignored
-        # by the claim parser (non-breaking), and the claim count still
-        # matches the sentinel's claims_emitted
+    def test_gap_lines_do_not_break_claims(self):
+        # ADR-0013: gap lines are ignored by the claim parser
+        # (non-breaking)
         response = "\n".join(
             [
                 json.dumps(claim("e1", "Hildegard Löbig", 1876)),
@@ -487,9 +535,7 @@ class TestChunkResponseContract:
                         }
                     }
                 ),  # fmt: skip
-                json.dumps(
-                    {"done": True, "claims_emitted": 1, "gaps_emitted": 1}
-                ),
+                json.dumps({"done": True}),
             ]
         )
         claims = parse_chunk_response(response)
@@ -847,6 +893,20 @@ class TestEntityFirstExtractor:
             llm, state_dir=tmp_path / "state", **kwargs
         )
 
+    def test_a_chunk_prompt_asks_for_a_done_line_and_no_count(self, tmp_path):
+        """A chunk answer ends with `{"done": true}`: a count of its claim
+        and gap lines gated nothing (#7)."""
+        llm = ScriptedLlm(
+            [entity_manifest_json(), placeholder_claims("e1", "e2")]
+        )
+        self.extractor(llm, tmp_path, budget=10_000).extract(
+            transcription(), DOC_REF
+        )
+        ((method, prompt),) = llm.calls[1:]
+        assert method == "fork"
+        assert 'final line:\n{"done": true}\n' in prompt
+        assert "emitted" not in prompt
+
     def test_fork_flow_end_to_end(self, tmp_path):
         """The manifest opens a conversation; each chunk is a fork
         assigned entities; ids stay manifest-scoped; labels normalize
@@ -995,8 +1055,7 @@ class TestEntityFirstExtractor:
         assert "entity manifest" in rejects[0]["problems"][0]
 
     def test_truncation_retries_then_succeeds(self, tmp_path):
-        # a missing sentinel is real truncation: retryable, unlike a
-        # count mismatch (which keeps its claims — next test)
+        # a missing sentinel is real truncation: retryable
         truncated = json.dumps(
             claim("e1", "Hildegard Löbig", 1876)
         )  # no sentinel
@@ -1074,15 +1133,20 @@ class TestEntityFirstExtractor:
             assert extractor.failed_chunks == ["c001"]
         assert [response for response, _ in llm.rejected] == [cut] * kept
 
-    def test_count_mismatch_chunk_accepted_without_retry(self, tmp_path):
-        # the c007/c019 case: a complete response whose sentinel
-        # undercounts is kept as-is and does NOT burn a retry
+    def test_a_miscounting_done_line_is_accepted_without_retry(self, tmp_path):
+        # a complete response whose done line still carries a wrong count
+        # is kept as it is and does NOT burn a retry: the count gates
+        # nothing (#7)
+        miscounted = "\n".join(
+            [
+                json.dumps(claim("e1", "Hildegard Löbig", 1876)),
+                json.dumps({"done": True, "claims_emitted": 99}),
+            ]
+        )
         llm = ScriptedLlm(
             [
                 entity_manifest_json(),
-                ndjson(
-                    [claim("e1", "Hildegard Löbig", 1876)], emitted=99
-                ),  # miscount
+                miscounted,
                 ndjson([claim("e2", "Sebastian Löbig", 1862)]),
             ]
         )
@@ -1097,6 +1161,89 @@ class TestEntityFirstExtractor:
         }
         # one fork per chunk — the miscount triggered no retry
         assert sum(1 for method, _ in llm.calls if method == "fork") == 2
+
+    def test_an_answer_stopped_at_the_output_limit_is_asked_again(
+        self, tmp_path
+    ):
+        """An answer whose engine reports it stopped at max_tokens is cut
+        off, however whole it looks: it is rejected, with a reason the
+        truncations anomaly check counts, and the retry asks again (#7)."""
+        whole = placeholder_claims("e1")
+        llm = Reporting(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    whole,  # c001 attempt 1: stopped at max_tokens
+                    whole,  # c001 attempt 2: ended its turn
+                    placeholder_claims("e2"),  # c002
+                ]
+            ),
+            stops=["end_turn", "max_tokens", "end_turn", "end_turn"],
+        )
+        extractor = self.extractor(
+            llm, tmp_path, budget=LINE_LENGTH, retries=1
+        )
+        batch = extractor.extract(transcription(), DOC_REF)
+        assert len(batch.claims) == 2
+        assert extractor.failed_chunks == []
+        assert llm.rejected == [(whole, "chunk: cut off at max_tokens")]
+
+    def test_a_chunk_the_engine_gave_up_on_is_forked_again(self, tmp_path):
+        """A call the engine gave up on at its output limit gave no answer:
+        the chunk spends a try on it, as on an answer cut off, and forks
+        again: the fork worked, and inline context would only lengthen the
+        call (#7)."""
+        llm = Rejecting(
+            ScriptedLlm(
+                [
+                    entity_manifest_json(),
+                    OutputLimitReached(),  # c001 try 1: no answer
+                    placeholder_claims("e1", "e2"),  # c001 try 2
+                ]
+            )
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000, retries=1)
+        batch = extractor.extract(transcription(), DOC_REF)
+        assert len(batch.claims) == 2
+        assert extractor.failed_chunks == []
+        assert [method for method, _ in llm.client.calls] == [
+            "open",
+            "fork",
+            "fork",
+        ]
+        assert llm.rejected == []  # nothing came to reject
+
+    def test_a_chunk_the_engine_gave_up_on_every_time_fails_as_cut_off(
+        self, tmp_path
+    ):
+        llm = ScriptedLlm(
+            [
+                entity_manifest_json(),
+                OutputLimitReached(),
+                OutputLimitReached(),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000, retries=1)
+        with pytest.raises(ExtractionFailed, match="1 of 1 chunk failed"):
+            extractor.extract(transcription(), DOC_REF)
+        assert extractor.failure_reasons == {
+            "c001": "ChunkIncomplete: cut off at max_tokens"
+        }
+
+    def test_a_chunk_stopped_at_the_output_limit_on_every_try_fails(
+        self, tmp_path
+    ):
+        whole = placeholder_claims("e1")
+        llm = Reporting(
+            ScriptedLlm([entity_manifest_json(), whole, whole]),
+            stops=["end_turn", "max_tokens", "max_tokens"],
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000, retries=1)
+        with pytest.raises(ExtractionFailed, match="1 of 1 chunk failed"):
+            extractor.extract(transcription(), DOC_REF)
+        assert extractor.failure_reasons == {
+            "c001": "ChunkIncomplete: cut off at max_tokens"
+        }
 
     def test_failed_chunk_yields_partial_batch(self, tmp_path):
         llm = ScriptedLlm(
@@ -1410,6 +1557,30 @@ class TestFallbackLadder:
         # with the extraction's health, as on the entity-first tier (#45)
         assert (coverage["chunks"], coverage["claims"]) == (1, 2)
         assert coverage["rejected_claims"] == 0
+
+    def test_a_manifest_the_engine_gave_up_on_falls_back(self, tmp_path):
+        """A manifest the engine gave up on at its output limit was
+        answered, past the limit: it is refused, and the line-range tier
+        stands in for it, as for a manifest cut off, rather than the
+        extraction failing as if the engine were down (#7)."""
+        llm = ScriptedLlm(
+            [
+                OutputLimitReached(),  # manifest attempt 1
+                OutputLimitReached(),  # attempt 2
+                segmentation_json(),  # line-range segmentation
+                ndjson(
+                    [
+                        claim("p1", "Hildegard Löbig", 1876),
+                        claim("p2", "Sebastian Löbig", 1862),
+                    ]
+                ),
+            ]
+        )
+        extractor = self.extractor(llm, tmp_path, budget=10_000)
+        batch = extractor.extract(transcription(), DOC_REF)
+        assert extractor.used_fallback_manifest
+        assert extractor.fallback["manifest"] == "cut off at max_tokens"
+        assert len(batch.claims) == 2
 
     def test_refused_tiers_are_attempted_apart_and_kept(self, tmp_path):
         """The manifest and the segmentation are each asked in two
@@ -1788,8 +1959,8 @@ class TestExtractionsWithoutClaims:
         keys = {
             wrapped: "claims",
             with_predicate: "subject, predicate, value, source, conf…",
-            wrapped_in_sentinel: "claims, done, claims_emitted",
-            gap_in_sentinel: "done, claims_emitted, gap",
+            wrapped_in_sentinel: "claims, done",
+            gap_in_sentinel: "done, gap",
         }[shape]
         plural = "" if count == 1 else "s"
         extractor = self.extractor(
@@ -1887,8 +2058,7 @@ class TestExtractionsWithoutClaims:
             pytest.param(
                 [
                     ndjson(
-                        [{f"an_unexpected_key_number_{n}": n for n in (1, 2)}],
-                        emitted=0,
+                        [{f"an_unexpected_key_number_{n}": n for n in (1, 2)}]
                     ),
                     ndjson(
                         [dict(claim("p1", "p1", 1917), property="shoe_size")]
@@ -2016,7 +2186,7 @@ class TestTheExtractionStage:
         ("shape", "keys"),
         [
             (wrapped, "claims"),
-            (wrapped_in_sentinel, "claims, done, claims_emitted"),
+            (wrapped_in_sentinel, "claims, done"),
         ],
         ids=["wrapped", "in-sentinel"],
     )
