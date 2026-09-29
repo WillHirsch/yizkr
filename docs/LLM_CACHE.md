@@ -22,7 +22,8 @@ Development runs the whole corpus through the pipeline again and again
 The run directory beside them records what each run did, for the scratch
 driver (docs/runbooks/scratch-run.md), the live monitor
 ([docs/MONITOR.md](MONITOR.md)), the anomaly checks (#196), the call
-estimate (#101) and the run report (#124). How the claude-code engine
+estimate (#101) and the run report
+([docs/RUN_REPORT.md](RUN_REPORT.md)). How the claude-code engine
 meets the subscription's limits, and paces its calls to leave headroom
 for development sessions, is under Subscription limits, below.
 
@@ -140,7 +141,9 @@ changed source's (above). No directory takes the name of a run file
 (`run.json`, `events.jsonl`, `alerts.jsonl`, `control.jsonl`), of the
 directory the live monitor writes its page into (`status`,
 docs/MONITOR.md), or of the one a scratch run's corpus stages keep their
-outputs in (`corpus`, docs/runbooks/scratch-run.md).
+outputs in (`corpus`, docs/runbooks/scratch-run.md). The run report's
+folder, `.report` (docs/RUN_REPORT.md), needs no such rule: a directory's
+name is a slug, which never starts with a dot.
 
 A state directory an earlier `ingest run` made may hold one directory
 that two same-stem sources shared: it stays with the source its
@@ -651,9 +654,10 @@ makes from it names, in its `engine`, the client the archive names
 **What the run sees.** A scratch run's transcription call for an adopted
 scan is a `cache-hit` whose reason is `adopted`, and no engine call. The
 live monitor counts the stage as reused, by reason (docs/MONITOR.md),
-`yizkr stages state` counts `hit: adopted` for the transcribe role, and
-the run report (#124) and the run-to-run diff (#198) are to count reuse
-by reason from the same events. The anomaly checks look at the view as
+`yizkr stages state` counts `hit: adopted` for the transcribe role, the
+run report counts the stage reused by `adopted` (docs/RUN_REPORT.md), and
+the run-to-run diff (#198) is to count reuse by reason from the same
+events. The anomaly checks look at the view as
 at any stored output, and their alerts on it are carried
 (docs/ANOMALIES.md).
 

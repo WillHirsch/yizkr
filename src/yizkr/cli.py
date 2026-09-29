@@ -14,6 +14,8 @@
                            counted without making one
     yizkr scratch watch    follow a scratch run; pause|resume|abort ask its
                            driver to stop or go on
+    yizkr scratch report   what a scratch run did, per stage and per
+                           document, from its run directory alone
 
 Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 --env-file); see deploy/README.md.
@@ -851,6 +853,23 @@ def cmd_scratch_watch(args) -> int:
         )
     except OSError as exc:
         sys.exit(str(exc))
+
+
+def cmd_scratch_report(args) -> int:
+    from yizkr.pipeline import report
+
+    run = _scratch_run_dir(args)
+    try:
+        written = report.write_report(run)
+    except report.ReportError as exc:
+        sys.exit(str(exc))
+    for name in (report.MARKDOWN_FILE, report.HTML_FILE, report.JSON_FILE):
+        print(f"{name:12} {written[name]}")
+    print(
+        f"{report.MARKDOWN_FILE} holds the aggregates alone, and may be "
+        f"posted; {report.HTML_FILE} and {report.JSON_FILE} stay local"
+    )
+    return 0
 
 
 def cmd_scratch_control(args) -> int:
@@ -1709,6 +1728,19 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "runs (off by default)",
     )
     p.set_defaults(func=cmd_scratch_watch)
+
+    p = ssub.add_parser(
+        "report",
+        help="what a scratch run (the latest by default) did, per stage and "
+        "per document, read from its run directory alone: report.html and "
+        "report.json, which stay local, and report.md, the aggregates "
+        "alone, which may be posted (docs/RUN_REPORT.md)",
+    )
+    p.add_argument("run", nargs="?", help="a run id or directory")
+    p.add_argument(
+        "--runs", type=Path, default=scratch.DEFAULT_RUNS, help=runs_help
+    )
+    p.set_defaults(func=cmd_scratch_report)
 
     for action in CONTROL_ACTIONS:
         p = ssub.add_parser(
