@@ -450,30 +450,31 @@ def plan_containment(
 def ensure_places_run_item(
     client: WikiClient, fingerprint: str, model: str
 ) -> str:
-    from yizkr.pipeline.registrar import _append, _item_claim
+    """The pass's run item, found by its label or made. Its ``instance of
+    -> extraction run`` cites the item itself, so it is written in a
+    second write, and a run item that a pass cut short between the two
+    writes left without it gets it when the next pass finds it
+    (registrar.ensure_self_typed)."""
+    from yizkr.pipeline.registrar import ensure_self_typed
 
-    properties, items = client.vocabulary()
     label = f"place-hierarchy run {model} {fingerprint}"
-    existing = client.find_item_by_label(label)
-    if existing:
-        return existing
-    item = client.wbi.item.new()
-    item.labels.set("en", label)
-    item.descriptions.set(
-        "en",
-        "reconcile-places pass (ADR-0009): human-approved containment "
-        "between place items",
+    qid = client.find_item_by_label(label)
+    if qid is None:
+        item = client.wbi.item.new()
+        item.labels.set("en", label)
+        item.descriptions.set(
+            "en",
+            "reconcile-places pass (ADR-0009): human-approved containment "
+            "between place items",
+        )
+        qid = item.write(summary="reconcile-places: run item").id
+    ensure_self_typed(
+        client,
+        qid,
+        "extraction_run",
+        summary="reconcile-places: run item statements",
     )
-    item = item.write(summary="reconcile-places: run item")
-    claim = _item_claim(
-        properties["instance_of"],
-        items["extraction_run"],
-        properties["stated_in"],
-        item.id,
-    )
-    _append(item, claim)
-    item.write(summary="reconcile-places: run item statements")
-    return item.id
+    return qid
 
 
 def apply_containment(

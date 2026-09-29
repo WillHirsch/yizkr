@@ -15,6 +15,9 @@ without media are removed, page fragments are keyed by their artifact,
 a container's derived media are registered from their record, and
 registration asks the never-ingest list first (§1, "Registration at
 write time").
+Amended by #368 (2026-09-29): an item left with a page fragment's label
+and no statements is never taken for the fragment (§1, "Registration at
+write time").
 
 ## Context
 
@@ -134,7 +137,12 @@ register every document on the instance its reset emptied (#200).
   cut, ending in "…", where the whole would pass 250 characters. A
   container's derived medium, `part of` it with a page qualifier too, is
   never taken for a fragment, since it is no `artifact fragment` (ADR-0008,
-  as amended by #289).
+  as amended by #289). Nor is an item with a fragment's label and no
+  statements, which a registration cut short between the two writes that
+  made a fragment before #103 could leave (amended by #368): the
+  fragment is made beside it, content-tagged when the leftover holds its
+  label. Nothing makes such an item now, and a scratch run's reset
+  removes any.
 - **Derived media from their record.** A deck's images are recorded
   before the write, each by its SHA-1 (ADR-0008, as amended by #128); the
   write registers the deck, then its images from the record, each by its

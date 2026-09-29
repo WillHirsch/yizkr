@@ -21,7 +21,14 @@ Per batch, the writer:
 1. mints an extraction-run item from the batch metadata (idempotent:
    matched by a deterministic label containing the batch content hash),
    with its run details in the label/description — items describe
-   themselves; statements stay reserved for source-attributed claims;
+   themselves; statements stay reserved for source-attributed claims.
+   Its one statement, `instance of -> extraction run`, cites the run
+   item itself, the document of its own execution, so it goes in a
+   write after the one that makes the item. A run item found by its
+   label without that statement, as a write cut short between the two
+   leaves it, gains it then; one that states it already, at any rank
+   and under any reference, is left as it is (`ensure_self_typed` in
+   yizkr.pipeline.registrar). A dry run writes neither;
 2. creates items for unresolved `local` subjects/values (reusing an
    existing item on exact label match, so re-runs never duplicate
    people: the label is matched and written in the form the instance
@@ -952,8 +959,20 @@ class BatchWriter:
             f"extraction run {run.started_at.date().isoformat()} "
             f"{run.model_identifier} {fingerprint}"
         )
+        from yizkr.pipeline.registrar import ensure_self_typed
+
         existing = self.client.find_item_by_label(label)
         if existing:
+            # a write cut short between the two below left the run item
+            # without its kind, which it gains now; one that states it
+            # already, in any way, is left as it is
+            ensure_self_typed(
+                self.client,
+                existing,
+                "extraction_run",
+                summary="ingest: run item statements",
+                dry_run=self.dry_run,
+            )
             return existing
         if self.dry_run:
             return "(new:run)"
@@ -972,14 +991,15 @@ class BatchWriter:
             ),
         )
         item = item.write(summary="ingest: extraction run")
-        claim = self._item_claim(
-            self.properties["instance_of"], self.items["extraction_run"]
-        )
         # The run item is the document of its own execution (same
-        # convention as the model manifest, docs/MODELING.md).
-        claim.references = self._references(artifact_qid=item.id)
-        self._append(item, claim)
-        item.write(summary="ingest: run item statements")
+        # convention as the model manifest, docs/MODELING.md): its kind
+        # cites the item itself, so it is written once the item has an id.
+        ensure_self_typed(
+            self.client,
+            item.id,
+            "extraction_run",
+            summary="ingest: run item statements",
+        )
         return item.id
 
     # -- statement existence check -------------------------------------------

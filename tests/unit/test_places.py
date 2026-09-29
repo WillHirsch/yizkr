@@ -3,17 +3,20 @@ no LLM; fixtures are fictional."""
 
 from __future__ import annotations
 
+import copy
 import csv
 import json
 
 import pytest
 
+from tests.unit.test_registrar import FakeWiki, WriteRefused
 from yizkr.pipeline.places import (
     PlaceRecord,
     Question,
     adjudicate_places,
     build_worklist,
     comma_parent_candidates,
+    ensure_places_run_item,
     export_places_csv,
     plan_containment,
 )
@@ -256,3 +259,107 @@ class TestCsv:
         assert line["label_a"] == "Brunnenring 35, Flörburg, Germany"
         assert line["question"] == "pob of X"
         assert line["decision"] == ""
+
+
+# -- the pass's run item (#368) -----------------------------------------------
+
+
+class RunItemWiki(FakeWiki):
+    """The registrar tests' in-memory wiki, with the lag-free label lookup
+    the pass finds its run item by. Like the wiki client's label index, it
+    fails on a label two items share."""
+
+    def find_item_by_label(self, label):
+        found = [
+            qid
+            for qid, entity in self.entities.items()
+            if entity["labels"].get("en", {}).get("value") == label
+        ]
+        assert len(found) <= 1, f"two items are labelled {label!r}"
+        return found[0] if found else None
+
+
+FINGERPRINT = "0a9afd5746"
+RUN_LABEL = f"place-hierarchy run fake-model {FINGERPRINT}"
+P, ITEMS = FakeWiki.PROPERTIES, FakeWiki.ITEMS
+
+
+def run_item(wiki) -> str:
+    return ensure_places_run_item(wiki, FINGERPRINT, "fake-model")
+
+
+def kinds(wiki, qid: str) -> list[tuple[str, str, list[str]]]:
+    """(kind, rank, the items it is stated in) of each `instance of`
+    statement of an item."""
+    return [
+        (
+            statement["mainsnak"]["datavalue"]["value"]["id"],
+            statement["rank"],
+            [
+                snak["datavalue"]["value"]["id"]
+                for reference in statement.get("references", [])
+                for snak in reference["snaks"].get(P["stated_in"], [])
+            ],
+        )
+        for statement in wiki.entities[qid]["claims"].get(P["instance_of"], [])
+    ]
+
+
+class TestPlacesRunItem:
+    """The pass's run item states its kind, `extraction run`, in itself, in
+    a write after the one that makes it (registrar.ensure_self_typed)."""
+
+    def test_a_new_run_item_states_its_kind_in_itself(self):
+        wiki = RunItemWiki()
+
+        qid = run_item(wiki)
+
+        assert wiki.entities[qid]["labels"]["en"]["value"] == RUN_LABEL
+        assert kinds(wiki, qid) == [(ITEMS["extraction_run"], "normal", [qid])]
+        assert wiki.writes == 2
+
+    def test_a_pass_cut_short_is_typed_by_the_next(self):
+        """A pass cut short between the run item's two writes leaves it
+        labelled, with no kind, so the public export would leave it out
+        and the containment it backs would lose its only reference there.
+        The next pass finds it by its label and types it: one run item,
+        typed."""
+        wiki = RunItemWiki()
+        wiki.refuse = lambda data: bool(data.get("claims"))
+        with pytest.raises(WriteRefused):
+            run_item(wiki)
+        (left,) = wiki.entities
+        assert wiki.entities[left]["labels"]["en"]["value"] == RUN_LABEL
+        assert kinds(wiki, left) == []
+
+        wiki.refuse = lambda data: False
+        qid = run_item(wiki)
+
+        assert qid == left
+        assert list(wiki.entities) == [qid]
+        assert kinds(wiki, qid) == [(ITEMS["extraction_run"], "normal", [qid])]
+
+    def test_a_run_item_with_its_kind_gets_no_write(self):
+        wiki = RunItemWiki()
+        first = run_item(wiki)
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+
+        assert run_item(wiki) == first
+
+        assert wiki.writes == writes
+        assert wiki.entities == before
+
+    def test_a_kind_a_curator_deprecated_is_left_alone(self):
+        wiki = RunItemWiki()
+        qid = run_item(wiki)
+        (statement,) = wiki.entities[qid]["claims"][P["instance_of"]]
+        statement["rank"] = "deprecated"
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+
+        assert run_item(wiki) == qid
+
+        assert wiki.writes == writes
+        assert wiki.entities == before
+        assert kinds(wiki, qid) == [
+            (ITEMS["extraction_run"], "deprecated", [qid])
+        ]

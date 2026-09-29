@@ -222,6 +222,19 @@ artifact a new QID, changes neither.
   existing. Extraction-run items use the same convention for their
   `instance of`. Every registrar/writer path therefore writes only
   referenced statements (ADR-0003).
+- **A run item states its kind in a second write** (#368). Its `instance
+  of → extraction run` cites the item itself, so it is written once the
+  item has an id, after the write that makes the item under its label. A
+  run cut short between the two leaves the item labelled but untyped, and
+  the next run that finds it by its label types it: unless the item
+  states `instance of → extraction run` already, at any rank and under
+  any reference (a curator's deprecation stands), it gains that
+  statement, stated in itself. This holds for the pipeline's extraction
+  runs and for the place-hierarchy pass's runs alike. An untyped item is
+  missing from the public copy until it is typed ("Living persons and
+  privacy"), and every statement it backs loses its run reference there:
+  an extraction's claims would read as curated, and the place-hierarchy
+  pass's containment, which cites the run alone, as unreferenced.
 - **Registration is part of the write** (ADR-0025 §2; ADR-0010 as
   amended by #103). `ingest run` registers a document just before it
   writes the claims that cite it: its artifact item, its page fragments
@@ -945,7 +958,8 @@ not a signal to grow the schema on.
   that is the value of an `instance of` or `subclass of` statement. An
   item left untyped (a write cut short between its label and its type, a
   reference that gives no kind) is missing from the public copy until it
-  is typed.
+  is typed. A run item left so is typed by the next run that finds it
+  ("Artifacts and registration").
 - **A family is never public** (ADR-0020, as amended by #344). A family
   stands for its people, the people recorded as `member of` it, and is
   private while any of them may be living. The model cannot state that a

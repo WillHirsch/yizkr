@@ -41,7 +41,10 @@ fragments' `instance of` and `part of`, are referenced ``stated in -> the
 artifact item itself``; every statement a container contributes to a
 medium it embeds is referenced ``stated in -> that container`` (see
 docs/MODELING.md, "Artifacts and registration"). No statement is written
-unreferenced (ADR-0003).
+unreferenced (ADR-0003). A run item states its kind by the same
+convention, in a write after the one that makes it, and
+`ensure_self_typed` gives it its kind, whether it was just made or a
+write cut short left it without one.
 
 Idempotent. A Registrar reads the instance once, lag-free
 (`WikiClient.iter_entities`), and keeps what it read current with what it
@@ -244,6 +247,49 @@ def _part_of_claim(
     claim = _item_claim(part_of, whole, stated_in, whole)
     claim.qualifiers.add(String(prop_nr=page_number, value=str(page)))
     return claim
+
+
+# -- an item's kind, stated in the item itself --------------------------------
+
+
+def ensure_self_typed(
+    client: WikiClient,
+    qid: str,
+    kind: str,
+    *,
+    summary: str,
+    dry_run: bool = False,
+) -> bool:
+    """Make the item `qid` state its kind, ``instance of -> kind`` (a
+    manifest item key), referenced ``stated in -> the item itself``: a run
+    item is the document of its own execution, and asserts its kind by
+    existing, as an artifact does (docs/MODELING.md, "Artifacts and
+    registration").
+
+    The statement cites the item, so it is written once the item has an
+    id, in a write after the one that makes it. A write cut short between
+    the two leaves an item with no kind, which the public export leaves
+    out (yizkr.backup), and the statements that cite it lose that
+    reference there. So whatever finds such an item again, as a re-run
+    finds its run item by its label, calls this, and the item gets its
+    kind then. An item that states ``instance of -> kind`` already, at any
+    rank and under any reference, is left as it is: a curator's
+    deprecation of that statement, or a reference of their own on it,
+    stands (CLAUDE.md rules 3 and 4). Returns whether the item lacked the
+    statement; a dry run reads the item and writes nothing.
+    """
+    properties, items = client.vocabulary()
+    instance_of, kind_qid = properties["instance_of"], items[kind]
+    item = client.wbi.item.get(qid)
+    if kind_qid in _existing_claim_targets(item, instance_of):
+        return False
+    if not dry_run:
+        _append(
+            item,
+            _item_claim(instance_of, kind_qid, properties["stated_in"], qid),
+        )
+        item.write(summary=summary)
+    return True
 
 
 def _files_holding(
