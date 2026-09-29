@@ -225,7 +225,12 @@ reads the family history's *'50* as 1850, and reads it right once the
 chunk prompt carries a rule about two-digit years.
 `tests/unit/test_fixture_corpus.py` takes the corpus through whole scratch
 runs under a refusing wiki, and asserts what must come of each stage and
-each trap, with no gold set.
+each trap, with no gold set. Past the driver it holds the run report
+(`yizkr scratch report`) and the clustering stage's identity map to the
+corpus too (#380): the report's aggregates for the corpus, with no
+universe name, file name or SHA-1 in report.md, and each trap's
+clustering outcome, the two the whole-cluster merge rule cannot meet
+(#361) included, each recorded as expected with its reason.
 
 `TRAPS`, in `tests/fixtures/corpus/__init__.py`, names the six traps the
 corpus sets, in #76's words: the documents and people each involves, how
