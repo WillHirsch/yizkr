@@ -52,7 +52,8 @@ save the reviewed CSV, then continues on the next `ingest run`.
 - **Gate 2 — claims** (`awaiting claim review`): *are these extracted facts
   correct?* Fill `<doc>/review.csv` and save as `review.reviewed.csv`. The
   `critique_notes` column surfaces the extraction critic's concerns
-  (ADR-0013). There is no living-status decision: privacy is a runtime
+  (ADR-0013), each on exactly one row, tagged with its axis and category
+  (ADR-0023 §3). There is no living-status decision: privacy is a runtime
   determination, never curation (ADR-0020).
 
 **What keeps it safe.** A gate opens only when its `*.reviewed.csv` exists

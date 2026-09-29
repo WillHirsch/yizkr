@@ -14,8 +14,11 @@ and fill:
   process provenance is for machine writes).
 
 The `critique_notes` column carries the extraction critic's concerns
-(ADR-0013) for the row's subject — flagged mistypes, misapplied
-properties, role-aliases — so the curator sees them at this gate.
+(ADR-0013) — flagged mistypes, misapplied properties, role-aliases — so
+the curator sees them at this gate. Each finding is on exactly one row:
+its claim's, or for a finding about an entity, the row of a claim that
+names it (`critique.attach`). A finding that failed its checks is shown
+on the first row, marked unchecked (`critique.sheet_notes`).
 
 There is no `living` column. Whether a person is possibly living is
 never a review decision: it is a runtime determination from the absence
@@ -252,7 +255,10 @@ def _describe_ref(ref) -> str:
     return str(ref)
 
 
-def _describe_value(value) -> str:
+def describe_value(value) -> str:
+    """A value as a review row shows it: an item by its reference, a date
+    as `YYYY[-MM[-DD]]` with its precision and calendar when they are not
+    the plain ones, a text by its text and language."""
     if isinstance(value, ItemValue):
         return _describe_ref(value.value)
     if isinstance(value, TimeValue):
@@ -281,30 +287,30 @@ def _describe_value(value) -> str:
 def export_review_csv(
     batch: ClaimBatch,
     path: Path,
-    critique_notes: dict[str, str] | None = None,
+    critique_notes: dict[int, str] | None = None,
 ) -> int:
     """Write the review CSV; returns the number of rows.
 
-    `critique_notes` (ADR-0013): entity local_id -> concern from the
-    extraction critic, rendered in the `critique_notes` column so the
-    curator sees flagged mistypes / misapplied properties / role-aliases
-    at this gate. There is no possibly-living warning and no `living`
-    column: privacy is a runtime determination, never a review decision
-    (ADR-0020).
+    `critique_notes` (ADR-0013): row index (the claim's in `batch`) ->
+    the extraction critic's concerns on that row, rendered in the
+    `critique_notes` column so the curator sees flagged mistypes /
+    misapplied properties / role-aliases at this gate. There is no
+    possibly-living warning and no `living` column: privacy is a runtime
+    determination, never a review decision (ADR-0020).
     """
     critique_notes = critique_notes or {}
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         writer.writeheader()
-        for claim in batch.claims:
+        for row, claim in enumerate(batch.claims):
             writer.writerow(
                 {
                     "claim_id": claim_id(claim),
                     "subject": _describe_ref(claim.subject),
                     "property": claim.property,
-                    "value": _describe_value(claim.value),
+                    "value": describe_value(claim.value),
                     "qualifiers": "; ".join(
-                        f"{q.property}={_describe_value(q.value)}"
+                        f"{q.property}={describe_value(q.value)}"
                         for q in claim.qualifiers
                     ),
                     "source_artifact": _describe_ref(claim.source.artifact),
@@ -318,9 +324,7 @@ def export_review_csv(
                     "confidence": claim.confidence
                     if claim.confidence is not None
                     else "",
-                    "critique_notes": critique_notes.get(
-                        getattr(claim.subject, "local_id", None) or "", ""
-                    ),
+                    "critique_notes": critique_notes.get(row, ""),
                     "decision": "",
                     "correction": "",
                     "notes": "",

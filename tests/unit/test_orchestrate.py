@@ -1732,13 +1732,13 @@ class SampledModel(ScriptedModel):
         draw = next(self.draws)
         if prompt.startswith("You review a genealogical extraction"):
             finding = {
-                "target": "e1",
+                "entity": "e1",
+                "axis": "value",
+                "category": "misapplied_property",
                 "issue": f"is the year right? (draw {draw})",
-                "suggestion": "keep",
+                "suggestion": {"note": "keep"},
             }
-            return (
-                json.dumps(finding) + '\n{"done": true, "findings_emitted": 1}'
-            )
+            return json.dumps(finding) + '\n{"done": true}'
         if '"claims_emitted"' in answer:
             claim, sentinel = answer.splitlines()
             sampled = json.loads(claim) | {"confidence": (draw % 9 + 1) / 10}
@@ -1805,6 +1805,89 @@ class TestViews:
             event["event"].startswith("cache-")
             for event in orchestrator.rundir.events()
         )
+
+    def test_a_finding_on_a_resolved_entity_renders_once(self, tmp_path):
+        """The critic's finding on an entity that resolved to a QID still
+        reaches its row, once, and the note names the entity and the
+        finding's axis and category (#113, #386)."""
+        from yizkr.pipeline.resolve import resolve_batch
+
+        class Resolving(Sampled):
+            def _step_resolve(self, doc, batch):
+                return resolve_batch(batch, {"Klara": "Q17"})
+
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "letter.txt").write_text(
+            "Klara was born in 1917."
+        )
+        orchestrator = Resolving(
+            tmp_path / "docs", tmp_path / "state", log=quiet
+        )
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        approve_all_equivalences(doc)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        with open(doc.review, newline="") as handle:
+            (row,) = list(csv.DictReader(handle))
+        assert row["subject"] == "Q17"
+        assert row["critique_notes"].startswith(
+            "critique [value, misapplied_property] e1: is the year right?"
+        )
+        assert row["critique_notes"].count("critique [") == 1
+
+    def test_a_critique_view_in_an_earlier_format_is_made_again(
+        self, tmp_path
+    ):
+        """A critique view whose entries are neither findings nor ones
+        that failed their checks, such as findings with a `target`, is
+        set aside and made again, even while it is current (review of
+        #411)."""
+        orchestrator = make_run(tmp_path)
+        orchestrator.run()
+        (doc,) = orchestrator.documents()
+        doc.critique.write_text(
+            json.dumps([{"target": "e1", "issue": "doubtful"}])
+        )
+        doc.derivations.record(doc.critique)
+        asked = len(orchestrator.calls)
+        orchestrator.run()
+        assert steps(orchestrator.calls[asked:])[0] == "critique"
+        assert json.loads(doc.critique.read_text()) == []
+        (aside,) = this_run(orchestrator, "set-aside")
+        assert aside["stage"] == "critique"
+        assert "neither a finding" in aside["reason"]
+
+    def test_the_log_counts_invalid_findings_apart(self, tmp_path):
+        """The run log counts the concerns flagged apart from the findings
+        that failed their checks, and shows each."""
+
+        class Mixed(SampledModel):
+            def complete(self, prompt, image_paths=()):
+                answer = super().complete(prompt, image_paths)
+                if prompt.startswith("You review a genealogical extraction"):
+                    bad = {"entity": "e7", "axis": "value", "issue": "?"}
+                    return json.dumps(bad) + "\n" + answer
+                return answer
+
+        class Logging(Sampled):
+            def _llm(self, role, doc):
+                return Mixed(self.calls, doc.source.name, self.draws)
+
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "letter.txt").write_text(
+            "Klara was born in 1917."
+        )
+        lines: list[str] = []
+        Logging(
+            tmp_path / "docs", tmp_path / "state", log=collect(lines)
+        ).run()
+        text = "\n".join(lines)
+        assert (
+            "critique: 1 concern(s) flagged for review, 1 invalid kept as "
+            "given" in text
+        )
+        assert "invalid: category: Field required" in text
 
     def test_the_views_are_recorded_by_content(self, tmp_path):
         orchestrator = make_run(tmp_path)

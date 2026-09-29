@@ -601,6 +601,17 @@ def claim(subject, prop, excerpt, sha1, language="de"):
     }
 
 
+def finding(entity, axis, category, issue, **more):
+    """A critic finding as a critique view stores it (#386)."""
+    return {
+        "entity": entity,
+        "axis": axis,
+        "category": category,
+        "issue": issue,
+        **more,
+    }
+
+
 def batch(sha1, entities, claims) -> dict:
     return {
         "schema_version": 1,
@@ -666,10 +677,23 @@ def views() -> dict[str, dict[str, object]]:
                 ],
             ),
             "critique.json": [
-                {"target": "e1 alias: Hilde", "issue": "Hilde of Laudler"},
-                {"target": "claim: e1 spouse", "issue": "Sebastian Löbig"},
-                {"target": "e2", "issue": "Flörburg is a town"},
-                {"target": "", "issue": "the Standesamt Flörburg"},
+                finding("e1", "value", "deictic_alias", "Hilde of Laudler"),
+                finding(
+                    "e1",
+                    "predicate",
+                    "misapplied_property",
+                    "Sebastian Löbig",
+                    claim={
+                        "subject": "e1",
+                        "property": "spouse",
+                        "value": "e3",
+                    },
+                ),
+                finding("e2", "subject", "wrong_kind", "Flörburg is a town"),
+                {
+                    "invalid": {"target": "", "issue": "Standesamt Flörburg"},
+                    "why": ["entity: Field required"],
+                },
             ],
             "extraction/coverage.json": coverage(3, 3, rejected=2, unread=1),
             "detail": {"code": "de", "source": "detected", "confidence": 1},
@@ -689,7 +713,14 @@ def views() -> dict[str, dict[str, object]]:
                     claim("e1", "occupation", "Wwe.", DIRECTORY),
                 ],
             ),
-            "critique.json": [],
+            # a critique with only a finding that failed its checks: no
+            # document with findings (#386)
+            "critique.json": [
+                {
+                    "invalid": {"entity": "e1", "issue": "Wwe."},
+                    "why": ["axis: Field required"],
+                }
+            ],
             "extraction/coverage.json": coverage(
                 2, 2, fallback={"manifest": "input_value='Ursula Löbig'"}
             ),
@@ -707,7 +738,9 @@ def views() -> dict[str, dict[str, object]]:
                 [entity("e1", "Hutmacherei zum Blauen Hut", "organization")],
                 [claim("e1", "instance_of", "Hutmacherei", DECK)],
             ),
-            "critique.json": [{"target": "e1", "issue": "Blauen Hut"}],
+            "critique.json": [
+                finding("e1", "subject", "wrong_kind", "Blauen Hut")
+            ],
             "extraction/coverage.json": coverage(1, 1),
             "detail": {"code": "de", "source": "override", "confidence": 1},
         },
@@ -1059,7 +1092,10 @@ def hostile(tmp_path) -> Path:
     rewrite(
         "extraction/coverage.json", lambda v: v.update(fallback={HOSTILE: 1})
     )
-    rewrite("critique.json", lambda v: v.append({"axis": HOSTILE}))
+    rewrite(
+        "critique.json",
+        lambda v: v.append(finding("e1", HOSTILE, HOSTILE, HOSTILE)),
+    )
     return path
 
 
@@ -1255,7 +1291,8 @@ class TestAggregateOnly:
         assert aggregate["documents"]["failed_by_label"][OTHER] == 1
         content = aggregate["content"]
         assert content["fallbacks"][OTHER] == 1
-        assert content["critic"]["by_class"][OTHER] == 1
+        assert content["critic"]["by_axis"][OTHER] == 1
+        assert content["critic"]["by_category"][OTHER] == 1
         calls = aggregate["calls"]
         assert calls["hits_by_reason"][OTHER] == 2
         assert calls["misses_by_reason"][OTHER] == 1
@@ -1687,13 +1724,35 @@ class TestContent:
         }
         assert content["fallbacks"] == {"manifest": 1}
         critic = content["critic"]
-        assert critic["by_class"] == {
-            "subject": 2,
-            "predicate": 1,
-            "unclassified": 1,
-            "value": 1,
+        # counted by axis and by category (#386); the finding that failed
+        # its checks counts apart, as invalid
+        assert critic["by_axis"] == {"subject": 2, "predicate": 1, "value": 1}
+        assert critic["by_category"] == {
+            "wrong_kind": 2,
+            "deictic_alias": 1,
+            "misapplied_property": 1,
         }
+        assert (critic["findings"], critic["invalid"]) == (4, 2)
         assert (critic["critiques"], critic["documents"]) == (4, 2)
+        text = render_markdown(made["aggregate"])
+        assert "| wrong_kind | 2 |" in text and "| predicate | 1 |" in text
+        # each document's own counts, in the local report
+        assert document(made, CERT)["critique"] == {
+            "findings": 3,
+            "invalid": 1,
+            "by_axis": {"value": 1, "predicate": 1, "subject": 1},
+            "by_category": {
+                "deictic_alias": 1,
+                "misapplied_property": 1,
+                "wrong_kind": 1,
+            },
+        }
+        page = report.render_html(made)
+        assert (
+            "Critic findings: 3; invalid: 1; by axis: predicate 1, subject "
+            "1, value 1; by category: deictic_alias 1, misapplied_property "
+            "1, wrong_kind 1"
+        ) in page
 
     def test_a_view_that_cannot_be_read_counts_nothing_and_is_noted(
         self, made

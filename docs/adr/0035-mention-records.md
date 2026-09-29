@@ -4,6 +4,13 @@ Status: **accepted** (owner decision 2026-09-29, #385). Like ADR-0031
 and ADR-0036, the owner's merge of the PR that adds it records its
 acceptance; #385's implementation carries it out.
 
+Amended by #386 (2026-09-29): the critic's findings are validated records
+that name their entity and claim by id and give their axis and a
+category (ADR-0023 §3), so the sweep's item on the critic's target
+grammar is resolved; and the review sheet's `critique_notes` puts each
+finding on exactly one row (its claim's, else the first row naming its
+entity), not on every row of its subject.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of

@@ -29,6 +29,7 @@ rule does.
 
 from __future__ import annotations
 
+import csv
 import json
 import re
 from collections.abc import Iterable
@@ -54,6 +55,7 @@ from tests.unit.test_scratch import (
 from yizkr.claims import ClaimBatch, EntityRecord, ItemValue, TimeValue
 from yizkr.cli import build_parser
 from yizkr.pipeline import chunking, clustering, llm, scratch
+from yizkr.pipeline.critique import entries, sheet_notes
 from yizkr.pipeline.extract import run_metadata, salvage_valid_claims
 from yizkr.pipeline.gedcom import parse_gedcom
 from yizkr.pipeline.orchestrate import (
@@ -69,6 +71,7 @@ from yizkr.pipeline.report import (
     REPORT_DIR,
     REUSED,
 )
+from yizkr.pipeline.review import export_review_csv
 from yizkr.pipeline.rundir import (
     ALERTS,
     DONE,
@@ -701,14 +704,34 @@ class TestTheTraps:
             fc.EXPORT: {u.Date(1950)},
             fc.DECK: {u.Date(1950)},
         }
-        # the critic flags the early one, on its claim
-        findings = json.loads(
-            runs.views(run)[fc.NARRATIVE].critique.read_text()
-        )
+        # the critic flags the early one, on its claim, as a record with a
+        # listed category (#386)
+        doc = runs.views(run)[fc.NARRATIVE]
+        findings = json.loads(doc.critique.read_text())
         nicholas = answers.RECORDED[fc.NARRATIVE].ids()["nicholas-lobig"]
-        assert [f["target"] for f in findings] == [
-            f"claim: {nicholas} date_of_birth"
-        ]
+        ((finding),) = findings
+        assert (finding["entity"], finding["category"]) == (
+            nicholas,
+            "implausible_value",
+        )
+        assert finding["claim"]["property"] == "date_of_birth"
+        assert finding["claim"]["value"].startswith("1850")
+        # and a review sheet of the batch shows it once, on that claim's
+        # row (#113)
+        batch = runs.batch(run, fc.NARRATIVE)
+        sheet = run.parent / "narrative-review.csv"
+        export_review_csv(
+            batch,
+            sheet,
+            critique_notes=sheet_notes(entries(findings), batch, batch),
+        )
+        with open(sheet, newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        noted = [row for row in rows if row["critique_notes"]]
+        (row,) = noted
+        assert row["critique_notes"].count("critique [") == 1
+        assert row["property"] == "date_of_birth"
+        assert row["value"].startswith("1850")
         for name in (fc.DECK, fc.CERTIFICATE, fc.LETTER):
             assert json.loads(runs.views(run)[name].critique.read_text()) == []
 
@@ -1482,6 +1505,12 @@ class TestTheRunReport:
             "hub keys, not blocked on": summary["hub_keys"],
             "mentions holding them": summary["hub_mentions"],
         }
+        # the critic's one finding, counted by its axis and category
+        # (#386)
+        critic = report.aggregate["content"]["critic"]
+        assert (critic["findings"], critic["invalid"]) == (1, 0)
+        assert critic["by_axis"] == {"value": 1}
+        assert critic["by_category"] == {"implausible_value": 1}
         # every entity of every batch is a mention, all of them clustered
         counts = clusters["counts"]
         entities = report.aggregate["content"]["entities"]

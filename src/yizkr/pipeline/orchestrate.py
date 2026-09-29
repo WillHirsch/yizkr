@@ -1642,7 +1642,7 @@ class Orchestrator:
         return export_review_csv(
             batch,
             doc.review,
-            critique_notes=self._critique_notes(doc),
+            critique_notes=self._critique_notes(doc, batch),
         )
 
     # -- open-schema harness (ADR-0013) --------------------------------------
@@ -1669,7 +1669,12 @@ class Orchestrator:
     def _critique(self, doc: DocumentRun, batch: ClaimBatch) -> None:
         """The batch's critique view (ADR-0013), reused when it stands
         (`_reused_view`) and made otherwise, then recorded."""
-        if self._reused_view(doc, doc.critique, _findings) is not None:
+        if (
+            self._reused_view(
+                doc, doc.critique, _findings, recheck=_unreadable_critique
+            )
+            is not None
+        ):
             return
         findings = self._step_critique(doc, batch)
         changed = _write_view(
@@ -1684,12 +1689,23 @@ class Orchestrator:
 
         anomalies.stored(self.rundir, doc, "critique", findings)
         if findings and changed:
+            from yizkr.pipeline.critique import Invalid, note
+
+            invalid = sum(isinstance(f, Invalid) for f in findings)
             self.log(
-                f"  critique: {len(findings)} concern(s) flagged for review"
+                f"  critique: {len(findings) - invalid} concern(s) flagged "
+                f"for review"
+                + (f", {invalid} invalid kept as given" if invalid else "")
             )
             for finding in findings[:6]:
                 self.log(
-                    f"    - {finding.target}: {finding.issue}", file=sys.stderr
+                    "    - "
+                    + (
+                        f"invalid: {'; '.join(finding.why)}"
+                        if isinstance(finding, Invalid)
+                        else note(finding)
+                    ),
+                    file=sys.stderr,
                 )
 
     def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
@@ -1709,31 +1725,24 @@ class Orchestrator:
             attention=lambda _findings: attention,
         )
 
-    def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
-        """entity local_id -> concatenated critic concerns, for the review
-        CSV `critique_notes` column. Each concern is tagged with the
-        statement-part it doubts (ADR-0023): [subject] / [predicate] /
-        [value], derived from the finding's target."""
-        if not doc.critique.exists():
+    def _critique_notes(
+        self, doc: DocumentRun, rows: ClaimBatch
+    ) -> dict[int, str]:
+        """review row index -> the critic's concerns on that row, joined,
+        for the review CSV `critique_notes` column (critique.sheet_notes):
+        each valid finding on exactly one row, tagged with the
+        statement-part it doubts (ADR-0023) and its category, and each
+        finding that failed its checks on the first row, marked unchecked.
+        `rows` is the batch the sheet lists, the extraction's batch
+        resolved."""
+        if not doc.critique.exists() or not doc.batch.exists():
             return {}
-        from yizkr.pipeline.critique import axis_of
+        from yizkr.pipeline.critique import entries, sheet_notes
 
-        notes: dict[str, str] = {}
-        for finding in json.loads(doc.critique.read_text()):
-            target = finding.get("target", "")
-            # "e01", "e01 alias: X", or "claim: e01 prop" -> the entity id
-            tokens = target.replace("claim:", "").split()
-            entity_id = tokens[0] if tokens else ""
-            if entity_id:
-                axis = axis_of(target)
-                prefix = f"critique [{axis}]: " if axis else "critique: "
-                note = prefix + finding.get("issue", "")
-                notes[entity_id] = (
-                    f"{notes[entity_id]}; {note}"
-                    if entity_id in notes
-                    else note
-                )
-        return notes
+        extracted = ClaimBatch.model_validate_json(doc.batch.read_text())
+        return sheet_notes(
+            entries(json.loads(doc.critique.read_text())), extracted, rows
+        )
 
     def _step_write(self, doc: DocumentRun, batch: ClaimBatch) -> dict:
         from yizkr.pipeline.review import apply_review, is_bulk_accepted
@@ -2500,6 +2509,19 @@ def _findings(text: str) -> list:
     if not isinstance(findings, list):
         raise ValueError("a critique view holds a list of findings")
     return findings
+
+
+def _unreadable_critique(findings: list) -> str | None:
+    """Why a critique view's entries are not each a finding or one that
+    failed its checks (critique.entries), such as findings in an earlier
+    format; None when they are."""
+    from yizkr.pipeline.critique import entries
+
+    try:
+        entries(findings)
+    except ValueError as exc:
+        return str(exc)
+    return None
 
 
 def _csv_has_rows(path: Path) -> bool:
