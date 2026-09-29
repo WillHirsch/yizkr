@@ -879,10 +879,7 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
                 subject.births.append(interval)
             elif prop == "date_of_death":
                 subject.deaths.append(interval)
-            elif (
-                prop in EVENT_DATE_PROPERTIES
-                and subject.kind not in UNION_KINDS
-            ):
+            elif prop in EVENT_DATE_PROPERTIES:
                 subject.when.append(interval)
     by_id = {node.id: node for node in by_local.values()}
     for union in by_local.values():
@@ -894,8 +891,9 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
             by_id[person].kin.update(
                 ("spouse", other) for other in couple if other != person
             )
-        # its weddings date it; they and its ends are keyed by it, save a
-        # partner's death, which stays its principal's own
+        # its weddings date it, never its own date, an observation; they
+        # and its ends are keyed by it, save a partner's death, which
+        # stays its principal's own
         for event_id in sorted(union.starts | union.ends):
             event = by_id[event_id]
             if event.kind == "death" or event.union is not None:

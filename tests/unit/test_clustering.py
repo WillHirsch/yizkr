@@ -1204,6 +1204,29 @@ class TestKeys:
             )
         ] == (AMBIGUOUS, "given/unknown/unknown")
 
+    def test_a_person_with_a_surname_never_meets_by_given_name_alone(self):
+        """A register's Gustav Löbig meets the export's Gustav Löbig, and
+        never its Gustav of another surname: only a person with no
+        surname meets the export by given name."""
+        ged = export(
+            "0 @I8@ INDI\n1 NAME Gustav /Löbig/\n"
+            "0 @I2@ INDI\n1 NAME Gustav /Nertler/\n",
+            {"i8": "gustav-loebig", "i2": "someone"},
+        )
+        book = register(
+            "gustav",
+            [human("e1", "Gustav Löbig")],
+            [],
+            {"e1": "gustav-loebig"},
+        )
+        lone = register(
+            "lone", [human("e1", "Gustav", givens=["Gustav"])], [], {}
+        )
+        pairs = blocked_pairs([ged.manifest, book.manifest, lone.manifest])
+        assert pair(book, "e1", ged, "i8") in pairs
+        assert pair(book, "e1", ged, "i2") not in pairs
+        assert pair(lone, "e1", ged, "i2") in pairs
+
     def test_a_key_only_an_exports_unsplit_form_gives_never_links(self):
         """An export that writes a NAME without slashes, 'Ursula Löbig',
         does not say which word is which: its keys pair with a register's
