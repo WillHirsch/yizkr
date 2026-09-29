@@ -47,7 +47,7 @@ from yizkr.pipeline.llm import (
     tool_failures,
     transcript_destination,
 )
-from yizkr.pipeline.orchestrate import FAILED, REGISTERED, Orchestrator
+from yizkr.pipeline.orchestrate import FAILED, PENDING, Orchestrator
 
 PINNED = "2.1.237"
 PROJECT = "-tmp-yizkr-claude-code"
@@ -874,13 +874,10 @@ class TestVersionPin:
         (folder / "b-letter.txt").write_text("Another letter.")
 
         class Pass(Orchestrator):
-            registered: list[str] = []
-
-            def _step_register(self, doc):
-                self.registered.append(doc.source.name)
-                return "Q100"
+            batched: list[str] = []
 
             def _step_batch(self, doc):
+                self.batched.append(doc.source.name)
                 cli.installed = "2.1.240"  # an update lands mid-pass
                 make_client("claude-code")
                 raise AssertionError("unreachable")
@@ -894,11 +891,11 @@ class TestVersionPin:
         )
         with pytest.raises(CliVersionMismatch):
             orchestrator.run()
-        assert Pass.registered == ["a-letter.txt"]
+        assert Pass.batched == ["a-letter.txt"]
         state = json.loads(
             (tmp_path / "state" / "a-letter" / "state.json").read_text()
         )
-        assert state["status"] == REGISTERED != FAILED
+        assert state["status"] == PENDING != FAILED
 
 
 class TestTranscripts:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import requests
@@ -191,6 +192,24 @@ class WikiClient:
         _, item_labels = self.label_index()
         return item_labels.get(label)
 
+    def iter_entities(self, props: str) -> Iterator[tuple[str, dict]]:
+        """(id, data) for every live entity on the instance, as
+        `wbgetentities` gives it with `props` and English terms only, 50
+        entities a request. Lag-free like `label_index`: it enumerates the
+        API, never the search index or query service, so an entity written
+        moments earlier is there."""
+        ids = self.list_entity_ids()
+        for start in range(0, len(ids), 50):
+            data = self.api_get(
+                {
+                    "action": "wbgetentities",
+                    "ids": "|".join(ids[start : start + 50]),
+                    "props": props,
+                    "languages": "en",
+                }
+            )
+            yield from data.get("entities", {}).items()
+
     def string_statement_index(self, property_pid: str) -> dict[str, str]:
         """Map {statement string value -> entity id} for one property.
 
@@ -205,24 +224,14 @@ class WikiClient:
         exists to prevent, surfaced for the near-duplicate pass rather
         than fatal here (unlike labels, which fail loudly).
         """
-        ids = self.list_entity_ids()
         candidates: dict[str, list[str]] = {}
-        for start in range(0, len(ids), 50):
-            batch = ids[start : start + 50]
-            data = self.api_get(
-                {
-                    "action": "wbgetentities",
-                    "ids": "|".join(batch),
-                    "props": "claims",
-                }
-            )
-            for entity_id, entity in data.get("entities", {}).items():
-                for claim in entity.get("claims", {}).get(property_pid, []):
-                    value = (
-                        claim.get("mainsnak", {}).get("datavalue") or {}
-                    ).get("value")
-                    if isinstance(value, str):
-                        candidates.setdefault(value, []).append(entity_id)
+        for entity_id, entity in self.iter_entities("claims"):
+            for claim in entity.get("claims", {}).get(property_pid, []):
+                value = (claim.get("mainsnak", {}).get("datavalue") or {}).get(
+                    "value"
+                )
+                if isinstance(value, str):
+                    candidates.setdefault(value, []).append(entity_id)
         return {
             value: min(matches, key=lambda qid: int(qid[1:]))
             for value, matches in candidates.items()

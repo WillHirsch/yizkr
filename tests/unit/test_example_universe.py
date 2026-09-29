@@ -220,9 +220,14 @@ class TestNames:
         assert PEOPLE["ursula-loebig-angerring"].generation is None
         assert not values("ursula-loebig-angerring", "father")
         # the directory lists the widow when the other Ursula is a baby
-        (listed,) = u.about("ursula-loebig-angerring", "residence")
+        (listed,) = [
+            a
+            for a in u.about("ursula-loebig-angerring", "residence")
+            if a.source == "directory-1912"
+        ]
         listed_in = dict(listed.qualifiers)["point_in_time"]
-        (born,) = values("ursula-loebig", "date_of_birth")
+        # every source that dates the daughter's birth gives one year
+        (born,) = set(values("ursula-loebig", "date_of_birth"))
         assert listed_in.year - born.year == 1
 
     def test_a_person_without_name_or_sex(self):

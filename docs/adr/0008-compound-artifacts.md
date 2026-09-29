@@ -5,6 +5,8 @@ Amended by #50 (2026-09-27) and #128 (2026-09-28): see Amendments.
 Amended by #289 (2026-09-28): an original excerpt that a compilation
 embeds is an artifact of its own, `part of` the compilation, as the owner
 decided on #178: see Amendments.
+Amended by #103 (2026-09-29): the write registers the deck, its slides
+and its derived media, each by its SHA-1: see Amendments.
 
 ## Context
 
@@ -402,3 +404,40 @@ Still to do, each keeping the two witnesses separable:
    its canary; and a deterministic definition of an image that is a
    whole page, which covers a page stored as strips or tiles, the layers
    of a mixed raster content (MRC) page, and tiny decorative images.
+
+Amended by #103 (2026-09-29): **the write registers the deck, its
+slides and its derived media.** Steps 1 and 2 of `ingest run` above
+move to the write, which registers a deck just before it writes the
+claims that cite it (ADR-0025 §2; ADR-0010, "Registration at write
+time"):
+
+- the deck, found or made by the SHA-1 of its bytes, with one page
+  fragment per slide. A fragment is the item that is an `instance of
+  artifact fragment` and `part of` the deck with the slide's `page
+  number`, so a derived medium, `part of` the deck with a slide
+  qualifier too, is never taken for one: the lookup the #289
+  amendment's registration item asks for;
+- then each image of the record kept in the deck's state directory,
+  found or made by its own SHA-1 under the rules of the #50 amendment
+  and ADR-0010's "Media files", except one: the #50 amendment's adoption
+  of an item without a hash by its label no longer applies. An image is
+  found by its SHA-1 alone, and a new image whose label another item
+  already has takes a content-tagged label. Its bytes are uploaded from
+  the file the record keeps, under the name `"<deck title> <name in the
+  archive>"`. Bytes the archive holds under several names are one
+  medium: the first name labels it (`"<deck title> — <name>"`), and the
+  others are its aliases. Labels are compared and set in the form
+  Wikibase stores them in (separators and control characters trimmed at
+  either end, each run of control characters inside made one space, then
+  NFC). A deck title that would push its images' or its slides' labels,
+  or its slides' descriptions, past the 250 characters Wikibase takes is
+  cut there, ending in "…", since those only display it; so is the list
+  of slides in an image's description;
+- an image the never-ingest list names, by any of its names or by its
+  SHA-1, is left out: neither registered nor uploaded. The deck's own
+  file is uploaded as it is, with whatever it embeds (the owner's
+  decision, 2026-09-29: refusing the deck would add complexity for a case
+  with no meaningful reason to arise).
+
+A compilation's excerpts are registered the same way once follow-up A
+records them.

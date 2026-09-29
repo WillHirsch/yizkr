@@ -234,9 +234,30 @@ directory under `var/backups/` containing:
   mentions an excluded person is dropped — including other people's
   claims about them and orphaned provenance nodes — and transcription
   excerpts (raw source quotations) never enter the public tier at all.
+  Who counts as a person fails closed as well: every item with person
+  evidence in the dump, at any rank (a `human` type, a birth, kinship, a
+  part in a death...), is dropped unless the check released it, and so
+  is every item that states no type, no `instance of` at normal or
+  preferred rank that names an item (the vocabulary and the classes
+  items are typed with aside), and every family, whose people may
+  include a living person.
   The exclusions file records who was excluded and why, for curator
   review. Nothing here publishes anything: the file is an artifact you
   may choose to publish.
+
+  The check runs on the query service, so the export first waits (up to
+  three minutes) for the query service to hold the dump's revision of
+  every item and property, and **refuses to run** while it does not, or
+  when the graph changes during the check: `yizkr backup` then keeps the
+  other dumps, records the refusal in `manifest.json`, prints it on one
+  line and exits non-zero. Run it again once the graph is at rest. The
+  refusal names the entities whose revisions differ: one whose revision
+  never reaches the query service keeps every export refusing until that
+  entity is edited again, and a query service that lacks entities for
+  good (after a restore, or a reset of the query service alone, below)
+  needs a full reload from `full.nt.gz`. Pruning counts a refused run
+  too: with `--keep N`, N refused nights in a row leave no public export
+  among the backups kept.
 
 Schedule it with cron on the host, e.g. nightly at 03:15 keeping two
 weeks:
@@ -279,8 +300,11 @@ docker volume rm yizkr-wikibase_wdqs-data
 docker compose up -d
 ```
 
-(the WDQS updater replays recent changes; for large graphs import
-`full.nt.gz` via loadData.sh instead — see the wdqs image docs.)
+(the WDQS updater replays recent changes only, so the rebuilt query
+service can lack entities the recent changes no longer list, and the
+public export refuses to run until it holds them all: import
+`full.nt.gz` via loadData.sh for a full reload — see the wdqs image
+docs.)
 
 ### Resetting
 

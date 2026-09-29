@@ -47,7 +47,6 @@ from wikibaseintegrator.wbi_enums import WikibaseRank
 from yizkr.backup import exclusion_report
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.queries.publish import prefix_block
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
 from .conftest import register_fictional, wait_for_query_service
@@ -313,19 +312,15 @@ def test_the_export_excludes_whom_no_birth_releases(config, fixture_graph):
 
 
 def test_the_site_badges_whom_the_export_drops(
-    client, config, fixture_graph, tmp_path
+    config, fixture_graph, tmp_path
 ):
     qids = fixture_graph
     fixture = set(qids.values())
     report = exclusion_report(config)
-    properties, items = client.vocabulary()
     builder = SiteBuilder(config, tmp_path / "site")
     people = {
         row["person"]["value"].rsplit("/", 1)[-1]: row
-        for row in builder.run(
-            prefix_block(config.concept_uri)
-            + PEOPLE_QUERY.format(**{**items, **properties})
-        )
+        for row in builder.run(builder._instance_query(PEOPLE_QUERY))
     }
     badged = {
         qid

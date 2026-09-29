@@ -289,9 +289,9 @@ class TestOutcomes:
 
     def test_a_control_request_stops_it(self, tmp_path, factory):
         class Aborting(Run):
-            def _step_register(self, doc):
+            def _derive(self, doc):
                 self.rundir.request("abort", by="test", reason="futile")
-                return super()._step_register(doc)
+                return super()._derive(doc)
 
         orchestrator = Aborting(
             a_folder(tmp_path, "a-letter.txt", "b-note.txt"),
@@ -313,9 +313,9 @@ class TestOutcomes:
         says the run was stopped (a rate-limit pause lands the same way)."""
 
         class Stopping(Run):
-            def _step_register(self, doc):
+            def _derive(self, doc):
                 self.rundir.request(action, by="test", reason="a test")
-                return super()._step_register(doc)
+                return super()._derive(doc)
 
         orchestrator = Stopping(a_folder(tmp_path), tmp_path / "state")
         assert orchestrator.run() == 2
@@ -337,9 +337,9 @@ class TestOutcomes:
         goes through its documents, so it finished."""
 
         class Holding(Run):
-            def _step_register(self, doc):
+            def _derive(self, doc):
                 self.rundir.request("pause", stage="transcription", by="test")
-                return super()._step_register(doc)
+                return super()._derive(doc)
 
         orchestrator = Holding(a_folder(tmp_path), tmp_path / "state")
         orchestrator.run()

@@ -1,8 +1,8 @@
 """Folder/batch orchestration: `yizkr ingest run`.
 
 One command walks every document in a folder through the pipeline —
-register -> transcribe -> extract (or the deterministic GEDCOM adapter)
--> reconcile -> resolve -> export review -> apply review -> write —
+transcribe -> extract (or the deterministic GEDCOM adapter) -> reconcile
+-> resolve -> export review -> apply review -> register and write —
 with per-document state and safe re-runs. Each invocation advances
 every document as far as it can and then STOPS at the human gates:
 
@@ -40,13 +40,17 @@ events in the run directory. The transcription is routed per document
 The PDF renderer the vision engine and the transcription check need is
 checked once, before any document.
 
-Three steps use the wiki: registration, which runs first; resolve, which
-matches labels to the graph's items; and the write. Everything else
-reads nothing from it and writes nothing to it (ADR-0025 §2): the stages
-before the gates; a deck's derived media, which are recorded in its
-directory (`derived-media.json`) and not registered; and the reconcile
-step, which has no roster to match a document's entities against, so it
-proposes nothing and the first gate has nothing to review.
+Two steps use the wiki: resolve, which matches labels to the graph's
+items, and the write, which registers the document first
+(yizkr.pipeline.registrar): its artifact item, a deck's slides as page
+fragments, and a deck's derived media, each found or made by the SHA-1
+of its bytes, just before the claims that cite them are written.
+Everything else reads nothing from the wiki and writes nothing to it
+(ADR-0025 §2): the stages before the gates; a deck's derived media,
+which are recorded in its directory (`derived-media.json`) for the write
+to register; and the reconcile step, which has no roster to match a
+document's entities against, so it proposes nothing and the first gate
+has nothing to review.
 
 Dependencies are make-style by content hash (`derivations.json`): the
 transcription is made from the correction, when there is one; the batch
@@ -67,7 +71,8 @@ it is written before any other file, and no state is saved into a
 directory without it. A directory with files but no `derivations.json`
 was made before the records, or has lost its record, so nothing says
 what its files were derived from; one with files beside its record but
-no `state.json` has lost the registration its views were made for. It
+no `state.json` has lost the state that names the bytes its views were
+made for, which is saved before any view. It
 is set aside whole, as `.<name>.superseded-<n>` in the state directory,
 and the document starts afresh in a new one, as a document whose source
 bytes changed does (ADR-0010: different bytes are a different artifact).
@@ -169,7 +174,7 @@ SUPPORTED_SUFFIXES = (
 )
 
 # document statuses, in pipeline order
-REGISTERED = "registered"
+PENDING = "pending"
 BATCHED = "batched"
 AWAITING_EQUIVALENCES = "awaiting equivalences review"
 RESOLVED = "resolved"
@@ -246,7 +251,8 @@ def route_transcription(source: Path, correction: Path | None = None) -> str:
 class DocumentState:
     file: str
     title: str
-    status: str = "pending"
+    status: str = PENDING
+    # the artifact item the document's latest write registered it as
     artifact_qid: str | None = None
     error: str | None = None
     detail: dict | None = None
@@ -600,7 +606,7 @@ class DocumentRun:
         # why the run cannot take the document on, when it cannot
         self.unreadable: str | None = None
         # a state.json that cannot be read is kept as it is, never saved
-        # over: it may still hold the registration a person can recover
+        # over: it may still hold state a person can recover
         self._state_unread = False
         self.state = DocumentState(file=str(source), title=source.stem)
         try:
@@ -646,12 +652,11 @@ class DocumentRun:
         """Does the directory hold files nothing records the making of:
         anything without the derivations.json that says what its files
         were derived from, or files beside it without the state.json that
-        names the artifact they were made for?
+        names the artifact they were made for, by the SHA-1 of its bytes?
 
         Every directory the orchestrator makes has its record from its
-        first run, and its state from its registration, before any view
-        is made; one without them was made before the records, or has lost
-        them."""
+        first run, and its state before any view is made; one without
+        them was made before the records, or has lost them."""
         if not self.dir.is_dir():
             return False
         if not self.derivations.path.exists():
@@ -770,10 +775,10 @@ class Orchestrator:
         # how many documents to extract (transcribe + chunked extract) at
         # once during serial mode's up-front extract-all phase. Multiplies
         # with chunk_concurrency, so keep the product sane for the engine's
-        # rate/usage limits. Registration, a wiki write, is serialised by a
-        # lock, so only the LLM-heavy extraction actually overlaps.
+        # rate/usage limits. The phase asks nothing of the wiki: the write,
+        # which registers each document, comes after it, one document at a
+        # time.
         self.extract_concurrency = max(1, extract_concurrency)
-        self._wiki_lock = threading.Lock()
         self.env_file = env_file
         self.log = log
         self._config: Config | None = None
@@ -1108,27 +1113,49 @@ class Orchestrator:
     # -- pipeline steps (override points for tests) ---------------------------
 
     def _step_register(self, doc: DocumentRun) -> str:
-        from yizkr.pipeline.registrar import register_artifact
+        """Register the document as its write begins (ADR-0025 §2): its
+        artifact item, found or made by the SHA-1 of the source's bytes
+        (ADR-0010), and for a deck its slides as page fragments and the
+        images it embeds, from the record of them in its directory, each
+        by the SHA-1 of its own bytes (ADR-0008). A source that no longer
+        has the bytes the run read, or that is on the never-ingest list,
+        is refused before anything is registered or uploaded, and an
+        embedded image the list names is left out
+        (yizkr.pipeline.registrar). Returns the artifact's QID."""
+        from yizkr.pipeline.registrar import Registrar
 
         artifact_type = self.artifact_type
         pages = 0
-        if doc.source.suffix.lower() in PRESENTATION_SUFFIXES:
+        if doc.kind == "presentation":
             # a deck is a compound artifact: its slides ARE the page
             # fragments (ADR-0008), so claim locators point into slides
             artifact_type = "presentation"
             pages = len(self._presentation(doc).slides)
-        elif doc.source.suffix.lower() in GEDCOM_SUFFIXES:
+        elif doc.kind == "gedcom":
             artifact_type = "genealogical_report"
-        result = register_artifact(
-            self.client,
-            media_path=doc.source,
+        registrar = Registrar(self.client, exclusions=self.exclusions)
+        result = registrar.register_artifact(
+            doc.source,
             artifact_type=artifact_type,
             title=doc.state.title,
             description=(
                 f"ingested by `yizkr ingest run` from {doc.source.name}"
             ),
             pages=pages,
+            sha1=doc.sha1,
         )
+        if doc.kind == "presentation":
+            record = self._derived_media(doc)
+            derived = registrar.register_derived_media(record, doc.dir)
+            left_out = len(record.media) - len(derived)
+            self.log(
+                f"  derived media: {len(derived)} registered"
+                + (
+                    f", {left_out} left out (never-ingest list)"
+                    if left_out
+                    else ""
+                )
+            )
         return result.artifact_qid
 
     def _presentation(self, doc: DocumentRun):
@@ -1155,13 +1182,24 @@ class Orchestrator:
         record = read_derived_media(doc.dir)
         return record is not None and record.source_sha1 == doc.sha1
 
+    def _derived_media(self, doc: DocumentRun):
+        """The record of the deck's derived media: the one in its
+        directory while it is current (_derived_media_current), and
+        otherwise one made again."""
+        from yizkr.pipeline.presentation import read_derived_media
+
+        record = read_derived_media(doc.dir)
+        if record is None or record.source_sha1 != doc.sha1:
+            record = self._step_derive_media(doc)
+        return record
+
     def _step_derive_media(self, doc: DocumentRun):
         """Record the images the deck embeds in the document's directory
         (presentation.record_derived_media): each by the SHA-1 of its
         bytes, with the deck's own SHA-1 and title and the slides it is
         on, and its bytes kept beside the record. Nothing is read from the
-        wiki or written to it (ADR-0025 §2): registering the images and
-        uploading their bytes is left to the write side. Returns the
+        wiki or written to it (ADR-0025 §2): the write registers the
+        images and uploads their bytes (_step_register). Returns the
         record."""
         from yizkr.pipeline.presentation import record_derived_media
 
@@ -1548,7 +1586,13 @@ class Orchestrator:
         for warning in warnings:
             self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
         doc.approved.write_text(approved.model_dump_json(indent=2))
-        result = BatchWriter(self.client).write_batch(
+        # the artifact the write registered (_step_register), which the
+        # claims cite by the SHA-1 of its bytes
+        registered = doc.state.artifact_qid
+        result = BatchWriter(
+            self.client,
+            artifact_qids={doc.sha1: registered} if registered else None,
+        ).write_batch(
             approved, bulk_accepted=is_bulk_accepted(doc.review_reviewed)
         )
         for warning in result.warnings:
@@ -1672,7 +1716,7 @@ class Orchestrator:
                 )
             # open-schema harness (ADR-0013): surface unmappable relations
             self._surface_gaps(doc)
-        elif doc.state.status in (FAILED, PAUSED, REGISTERED):
+        elif doc.state.status in (PENDING, FAILED, PAUSED):
             # the batch stands, so an earlier failure or pause is over; the
             # gates below re-derive the real status
             doc.state.status = BATCHED
@@ -1784,9 +1828,9 @@ class Orchestrator:
         # document starts over in a fresh directory rather than trusting
         # stale derived state. A directory without derivations.json holds
         # files nothing says were derived from what, and one whose files
-        # have no state.json beside them was made for a registration
-        # nothing records; either starts over the same way. Each is moved
-        # aside whole, reviews included, and nothing in it is deleted
+        # have no state.json beside them was made for bytes nothing
+        # records; either starts over the same way. Each is moved aside
+        # whole, reviews included, and nothing in it is deleted
         # (_set_aside).
         if doc.state.content_sha1 and doc.state.content_sha1 != content_sha1:
             self._set_aside(doc, "content changed")
@@ -1812,9 +1856,9 @@ class Orchestrator:
         # content-identity dedup (ADR-0010): claim this file's bytes; if an
         # earlier document in this run — or one already ingested to
         # completion in a PRIOR run (see run()'s pre-seed) — already claimed
-        # them, this is the same artifact and needs no register/transcribe/
-        # extract/write. Runs every pass (before the artifact_qid guard) so
-        # the canonical keeps its claim on re-runs and the decision is stable.
+        # them, this is the same artifact and needs no transcribe/extract/
+        # register/write. Runs every pass, so the canonical keeps its claim
+        # on re-runs and the decision is stable.
         canonical = self._seen_hashes.get(content_sha1)
         if canonical is not None and canonical != doc.source.name:
             doc.state.status = DUPLICATE
@@ -1827,19 +1871,14 @@ class Orchestrator:
             )
             return DUPLICATE
         self._seen_hashes[content_sha1] = doc.source.name
-
-        if doc.state.artifact_qid is None:
-            # register is a wiki write; the lock keeps concurrent extract-all
-            # documents (extract_concurrency > 1) from racing on the client.
-            with self._wiki_lock:
-                doc.state.artifact_qid = self._step_register(doc)
-            doc.state.status = REGISTERED
+        # a new directory has its state, which names the bytes its views
+        # are made for, before any view is made (DocumentRun.unrecorded)
+        if not doc.state_path.exists():
             doc.save()
-            self.log(f"  registered as {doc.state.artifact_qid}")
 
-        # a deck's derived media are recorded in its directory, not
-        # registered: no wiki access, so no lock. The record is current
-        # while it is there whole (_derived_media_current)
+        # a deck's derived media are recorded in its directory, for the
+        # write to register: no wiki access. The record is current while
+        # it is there whole (_derived_media_current)
         if doc.kind == "presentation" and not self._derived_media_current(doc):
             record = self._step_derive_media(doc)
             self.log(f"  derived media: {len(record.media)} recorded")
@@ -1850,7 +1889,7 @@ class Orchestrator:
         if batch is None:
             batch = self._derive(doc)
             self._derived[doc.sha1] = batch
-        elif doc.state.status in (FAILED, PAUSED, REGISTERED):
+        elif doc.state.status in (PENDING, FAILED, PAUSED):
             doc.state.status = BATCHED
             doc.save()
 
@@ -1924,6 +1963,12 @@ class Orchestrator:
             return doc.state.status
 
         if not derivations.current(doc.write_result):
+            # registration is part of the write: the document's artifact,
+            # and a deck's fragments and derived media, are found or made
+            # by the SHA-1 of their bytes just before the claims that cite
+            # them are written (ADR-0025 §2)
+            doc.state.artifact_qid = self._step_register(doc)
+            self.log(f"  registered as {doc.state.artifact_qid}")
             summary = self._step_write(doc, resolved)
             atomic_write_text(doc.write_result, json.dumps(summary, indent=2))
             derivations.record(doc.write_result)
@@ -2177,7 +2222,7 @@ class Orchestrator:
         # Settle content-dedup (ADR-0010) BEFORE any parallel extraction, so
         # concurrent _advance calls only ever READ the seen-hashes map (the
         # first document in discovery order with a given hash is canonical) —
-        # never two identical files both registering.
+        # never two identical files both extracted.
         for doc in docs:
             try:
                 sha1 = doc.sha1
@@ -2203,7 +2248,8 @@ class Orchestrator:
         `extract_concurrency` documents at a time. Chunks within a document
         already run `chunk_concurrency`-wide, so total concurrent LLM calls
         is the product — the caller keeps it sane for the engine's limits.
-        Wiki writes stay serialised (the `_wiki_lock` in `_advance`)."""
+        Nothing here asks anything of the wiki: each document is registered
+        and written after it, one at a time."""
 
         def extract_one(doc: DocumentRun) -> None:
             self.log(f"{doc.source.name} [{doc.state.status}]")
