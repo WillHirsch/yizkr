@@ -167,11 +167,11 @@ segmentation). It is judged when the extraction ends, done or failed.
 Value: the share; `count`, `of`.
 
 **`truncations`**: more than `max-share` of an extraction's chunk answers
-cut off before their terminal sentinel, over at least `min-count`
-answers: the LLM cache's rejections of chunk answers (`cache-reject`
-events of the extract role whose reason starts `chunk:`), among the
-answers the engine or the cache gave its chunk calls. Value: the share;
-`count`, `of`.
+cut off, their model stopped at the output limit (`max_tokens`) or
+without their terminal sentinel, over at least `min-count` answers: the
+LLM cache's rejections of chunk answers (`cache-reject` events of the
+extract role whose reason starts `chunk:`), among the answers the engine
+or the cache gave its chunk calls. Value: the share; `count`, `of`.
 
 **`schema-rejects`**: more than `max-share` of the claims an extraction
 was given rejected by validation or unread by the parser, over at least

@@ -66,9 +66,10 @@ def batch() -> ClaimBatch:
 
 
 def response(lines: list[dict]) -> str:
+    """A whole critique answer: its findings, then the terminal sentinel
+    the prompt asks for."""
     return "\n".join(
-        [json.dumps(x) for x in lines]
-        + [json.dumps({"done": True, "findings_emitted": len(lines)})]
+        [json.dumps(x) for x in lines] + [json.dumps({"done": True})]
     )
 
 
@@ -107,6 +108,14 @@ class TestCritique:
         assert run_critique(llm, empty) == []
         assert llm.prompts == []  # no wasted call
 
+    def test_the_prompt_asks_for_a_done_line_and_no_count(self):
+        """The answer ends with `{"done": true}`: a count of the findings
+        gated nothing (#7)."""
+        llm = ScriptedLlm(response([]))
+        run_critique(llm, batch())
+        assert llm.prompts[0].endswith('final line:\n{"done": true}\n')
+        assert "emitted" not in llm.prompts[0]
+
     def test_prompt_carries_appellation_routing_guidance(self):
         # ADR-0018: the critic tells the model where a relational term
         # belongs (relative / referred_to_as), not just to drop it.
@@ -122,7 +131,7 @@ class TestCritique:
                 [
                     json.dumps({"target": "e04"}),  # missing issue
                     json.dumps({"issue": "no target"}),
-                    json.dumps({"done": True, "findings_emitted": 0}),
+                    json.dumps({"done": True}),
                 ]
             )
         )
@@ -156,6 +165,24 @@ class Rejecting(ScriptedLlm):
             raise OSError("the cache folder is read-only")
         self.rejected.append((response, reason))
         return self.asked <= self.kept
+
+
+class Stopping(Rejecting):
+    """A client that takes rejections and reports why its model stopped on
+    each answer (`last_report`, as the engines' clients do): `stops` holds
+    each next answer's stop reason, in order."""
+
+    def __init__(self, *responses: str, stops: list[str], kept: int = 0):
+        super().__init__(*responses, kept=kept)
+        self.stops = list(stops)
+        self.report: dict = {}
+
+    def complete(self, prompt, image_paths=()):
+        self.report = {"stop_reason": self.stops.pop(0)}
+        return super().complete(prompt, image_paths)
+
+    def last_report(self):
+        return dict(self.report)
 
 
 FINDING = {"target": "e04", "issue": "agent typed as place"}
@@ -201,6 +228,34 @@ class TestUnfinishedAnswers:
         llm = Rejecting(refusal, refusal, response([FINDING]), kept=2)
         assert run_critique(llm, batch()) == []
         assert len(llm.rejected) == 2
+
+    def test_an_answer_stopped_at_the_output_limit_is_rejected(self):
+        """An answer whose engine reports it stopped at max_tokens is
+        unfinished, even with its sentinel: it gives its findings and is
+        rejected, as one without its sentinel is (#7)."""
+        whole = response([FINDING])
+        llm = Stopping(whole, stops=["max_tokens"])
+        assert [f.target for f in run_critique(llm, batch())] == ["e04"]
+        assert llm.rejected == [(whole, "critique: cut off at max_tokens")]
+
+    def test_an_answer_that_ended_its_turn_is_whole(self):
+        llm = Stopping(response([FINDING]), stops=["end_turn"])
+        assert [f.target for f in run_critique(llm, batch())] == ["e04"]
+        assert llm.rejected == []
+
+    def test_a_kept_answer_is_judged_again_when_asked_once_more(self):
+        """A kept answer without its sentinel is asked for once more, and
+        the engine's answer, stopped at max_tokens, is rejected too."""
+        refusal = "I can't help with reviewing this document."
+        whole = response([FINDING])
+        llm = Stopping(
+            refusal, whole, stops=["end_turn", "max_tokens"], kept=1
+        )
+        assert [f.target for f in run_critique(llm, batch())] == ["e04"]
+        assert llm.rejected == [
+            (refusal, "critique: no terminal sentinel"),
+            (whole, "critique: cut off at max_tokens"),
+        ]
 
     def test_a_failed_rejection_never_raises(self, caplog):
         llm = Rejecting("You've hit your usage limit.", refuse=True)

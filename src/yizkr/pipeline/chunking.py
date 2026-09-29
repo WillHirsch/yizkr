@@ -38,9 +38,11 @@ from yizkr.pipeline.extract import (
     vocabulary_prompt_lines,
 )
 from yizkr.pipeline.llm import (
+    CUT_OFF_AT_LIMIT,
     ConversationalLlmClient,
     ConversationChanged,
     LlmClient,
+    at_output_limit,
     for_attempt,
     reject_response,
 )
@@ -279,8 +281,7 @@ never used for something the vocabulary already holds. Check the
 property list and the persecution-event rule before emitting one.
 
 After the last line, end with exactly one final line:
-{{"done": true, "claims_emitted": N, "gaps_emitted": M}}
-where N and M count the claim and gap lines you emitted.
+{{"done": true}}
 {document_block}"""
 
 
@@ -421,7 +422,8 @@ Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 
 
 class ChunkIncomplete(Exception):
-    """Chunk response truncated: cut off before its terminal sentinel."""
+    """A chunk answer cut off: stopped at the engine's output limit, or
+    without its terminal sentinel."""
 
 
 class ExtractionFailed(RuntimeError):
@@ -439,35 +441,30 @@ class ExtractionFailed(RuntimeError):
 
 
 def parse_chunk_response(
-    response: str, warn: Callable[[str], None] | None = None
+    response: str, *, cut_off: bool = False
 ) -> list[dict]:
-    """NDJSON claims + a terminal sentinel that proves completeness.
+    """The claims of a chunk answer: NDJSON claim lines, then the terminal
+    sentinel, a line whose `done` is true (`{"done": true}`), which shows
+    the answer ran to its end. What else the sentinel carries is not read
+    here (parse_chunk_unread reads it).
 
-    A missing sentinel means the output was cut off mid-stream (silent
-    truncation) and raises ChunkIncomplete — cheap to retry, unlike a
+    An answer is cut off when its engine stopped it at its output limit
+    (`cut_off`, llm.at_output_limit), whatever it holds, the sentinel
+    included, or when it has no sentinel (silent truncation). Either
+    raises ChunkIncomplete, which is cheap to retry, unlike a
     whole-document retry.
-
-    The sentinel's self-reported ``claims_emitted`` is advisory only.
-    Models routinely miscount a dense chunk's claims by one or more, and
-    a present sentinel already proves nothing was truncated — so a count
-    mismatch keeps every parsed claim and is only surfaced via ``warn``.
-    Rejecting a complete, valid response over an off-by-one self-count
-    would discard the whole chunk's extraction (see ADR-0006).
     """
     claims: list[dict] = []
-    sentinel: int | None = None
+    finished = False
     for obj in scan_json_objects(response):
         if obj.get("done") is True:
-            sentinel = obj.get("claims_emitted")
+            finished = True
         elif "subject" in obj and "property" in obj:
             claims.append(obj)
-    if sentinel is None:
+    if cut_off:
+        raise ChunkIncomplete(CUT_OFF_AT_LIMIT)
+    if not finished:
         raise ChunkIncomplete("no terminal sentinel — response truncated?")
-    if sentinel != len(claims) and warn is not None:
-        warn(
-            f"    claim count mismatch: sentinel reported {sentinel}, "
-            f"kept {len(claims)} parsed (response complete)"
-        )
     return claims
 
 
@@ -488,7 +485,7 @@ def parse_chunk_gaps(response: str) -> list[dict]:
     A gap line is ``{"gap": {"subject", "predicate", "object",
     "evidence"?}}``. Malformed gaps are dropped silently — a gap is an
     advisory signal, never a gate, so it must never fail a chunk (that is
-    the sentinel's job, and gaps are counted separately in it).
+    the sentinel's job).
     """
     gaps: list[dict] = []
     for obj in scan_json_objects(response):
@@ -713,11 +710,12 @@ SIDE_OUTPUTS = ("coverage.json", "rejects.json", "gaps.ndjson")
 class ChunkedClaimExtractor:
     """Entity manifest -> packed chunks -> per-chunk calls -> merge.
 
-    Every call goes to `client`. A chunk response cut off before its
-    terminal sentinel is rejected through it (llm.reject_response): behind
-    the LLM cache (ADR-0032) that makes the retry, in this run or the
-    next, ask the engine again rather than be answered with the same text,
-    and a chunk that failed every retry is asked again in the next run. A
+    Every call goes to `client`. A chunk response cut off, at the engine's
+    output limit (llm.at_output_limit) or before its terminal sentinel, is
+    rejected through it (llm.reject_response): behind the LLM cache
+    (ADR-0032) that makes the retry, in this run or the next, ask the
+    engine again rather than be answered with the same text, and a chunk
+    that failed every retry is asked again in the next run. A
     rejected answer the cache kept from an earlier call spends no retry:
     the engine has not answered the chunk yet, and has as many tries as
     it would without the cache.
@@ -1116,9 +1114,10 @@ class ChunkedClaimExtractor:
         self, prompt: str, handle: Any, fallback_prompt: str
     ) -> tuple[list[dict], str]:
         """(claims, response) for one chunk: call (fork if possible) and
-        parse, with retries. A response cut off before its sentinel is
-        rejected, so the retry asks again; one the client kept from an
-        earlier call is asked for once more without spending a retry
+        parse, with retries. A response cut off, at the engine's output
+        limit or before its sentinel (parse_chunk_response), is rejected,
+        so the retry asks again; one the client kept from an earlier call
+        is asked for once more without spending a retry
         (llm.reject_response). A conversation that changed
         (ConversationChanged) is no failure of the chunk: it ends the
         extraction's pass, which starts over."""
@@ -1145,8 +1144,9 @@ class ChunkedClaimExtractor:
             except Exception as exc:
                 last_error = exc
                 continue
+            cut = at_output_limit(self.client, response)
             try:
-                return parse_chunk_response(response, warn=self._log), response
+                return parse_chunk_response(response, cut_off=cut), response
             except ChunkIncomplete as exc:
                 last_error = exc
                 kept = reject_response(self.client, response, f"chunk: {exc}")

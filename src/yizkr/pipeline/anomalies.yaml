@@ -88,8 +88,9 @@ checks:
     enabled: true
 
   # Per document, more than `max-share` of its extraction's chunk calls
-  # failing, of its chunk answers cut off before their sentinel, or of the
-  # claims it was given rejected or unread, over at least `min-count`.
+  # failing, of its chunk answers cut off (at the output limit or before
+  # their sentinel), or of the claims it was given rejected or unread,
+  # over at least `min-count`.
   chunk-failures:
     enabled: true
     max-share: 0.25
