@@ -93,20 +93,21 @@ def _stored_term(term: str) -> str:
 def _fitted(
     text: str, suffix: str = "", *, prefix: str = "", at: str | None = None
 ) -> str:
-    """`prefix + text + suffix` in the stored form (_stored_term), within
-    the TERM_LIMIT characters Wikibase takes: when the whole is longer,
-    `text` is cut, at the last `at` within the room when `at` is given,
-    and ends in "…". The same parts always give the same result. For text
-    that only displays, such as a deck's title in the labels of its slides
-    and images: nothing finds an item by it."""
-    whole = _stored_term(prefix + text + suffix)
+    """`prefix + text + suffix`, whose parts are in the stored form
+    (_stored_term), within the TERM_LIMIT characters Wikibase takes: when
+    the whole is longer, `text` is cut, at the last `at` within the room
+    when `at` is given, and ends in "…". The result is in the stored form
+    too, and the same parts always give the same result. For text that
+    only displays, such as a deck's title in the labels of its slides and
+    images: nothing finds an item by it."""
+    whole = prefix + text + suffix
     room = TERM_LIMIT - len(prefix) - len(suffix) - 1
     if len(whole) <= TERM_LIMIT or room < 1:
         return whole
     cut = text[:room]
     if at is not None and at in cut:
         cut = cut.rsplit(at, 1)[0]
-    return _stored_term(prefix + cut.rstrip() + "…" + suffix)
+    return prefix + cut.rstrip() + "…" + suffix
 
 
 class ExcludedMedia(RuntimeError):

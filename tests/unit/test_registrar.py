@@ -1039,19 +1039,24 @@ class TestLongDeckTitles:
     # 245 characters: the deck's own label takes it whole
     TITLE = ("Hutmacherei zum Blauen Hut, Flörburg " * 7)[:245].strip()
 
-    def test_its_slides_and_images_labels_are_cut_to_fit(self, tmp_path):
+    @pytest.mark.parametrize("form", ["NFC", "NFD"])
+    def test_its_slides_and_images_labels_are_cut_to_fit(self, tmp_path, form):
+        """The cut is made on the title's stored form, so a title given
+        decomposed (NFD) is cut where the composed one is."""
         wiki = StoringWiki()
         registrar = Registrar(wiki)
         deck = deck_file(tmp_path, "long")
+        given = unicodedata.normalize(form, self.TITLE)
         result = registrar.register_artifact(
-            deck, "presentation", self.TITLE, pages=2
+            deck, "presentation", given, pages=2
         )
         # the shop front under two names in the archive: one medium
+        shop = unicodedata.normalize(form, "Flörburg-shop.png")
         record, directory = recorded(
             tmp_path,
             deck,
-            self.TITLE,
-            [("image1.png", IMAGE, [1]), ("image3.png", IMAGE, [2])],
+            given,
+            [(shop, IMAGE, [1]), ("image3.png", IMAGE, [2])],
         )
         derived = registrar.register_derived_media(record, directory)
 
@@ -1064,16 +1069,18 @@ class TestLongDeckTitles:
             assert description.startswith(f"page {page} of Hutmacherei")
             assert description.endswith("…") and len(description) <= 250
         medium = wiki.entities[derived[sha1(IMAGE)]]
-        cut = self.TITLE[:236].rstrip()
-        assert medium["labels"]["en"]["value"] == f"{cut}… — image1.png"
+        # " — Flörburg-shop.png" takes 20 characters, and "…" one
+        label = self.TITLE[:229].rstrip() + "… — Flörburg-shop.png"
+        assert medium["labels"]["en"]["value"] == label
+        assert len(label) <= 250
         # its other name is an alias, cut the same way
         assert [alias["value"] for alias in medium["aliases"]["en"]] == [
-            f"{cut}… — image3.png"
+            self.TITLE[:236].rstrip() + "… — image3.png"
         ]
         # the same cut every time: a second write of the deck writes nothing
         writes = wiki.writes
         again = Registrar(wiki)
-        again.register_artifact(deck, "presentation", self.TITLE, pages=2)
+        again.register_artifact(deck, "presentation", given, pages=2)
         again.register_derived_media(record, directory)
         assert wiki.writes == writes
 
