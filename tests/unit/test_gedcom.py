@@ -3589,19 +3589,11 @@ class TestExcerptClip:
         [
             # an occupation named at length
             ["1 OCCU " + "Master hatter " * 40],
-            # a NOTE continued by CONT lines
-            [
-                "1 BIRT",
-                "2 DATE 7 JAN 1919",
-                note_of(100),
-                *["3 CONT " + note_of(60)[len("2 NOTE ") :]] * 6,
-                "2 SOUR @S1@",
-            ],
             # a NOTE of a placeholder sign (U+2ADC) that NFC writes as two
             # characters: longer as the instance stores it than as written
             ["1 BIRT", "2 DATE 7 JAN 1919", "2 NOTE " + "\u2adc" * 250],
         ],
-        ids=["long-line", "CONT", "longer-in-NFC"],
+        ids=["long-line", "longer-in-NFC"],
     )
     def test_every_excerpt_fits(self, lines):
         batch = adapt_gedcom(gustavs_births(lines), artifact=EXPORT).batch
@@ -3610,6 +3602,31 @@ class TestExcerptClip:
             excerpt = claim.source.transcription_excerpt.text
             assert len(unicodedata.normalize("NFC", excerpt)) <= 400
             assert "\n" not in excerpt
+
+    def test_each_line_of_a_continued_note_is_a_line_of_the_excerpt(self):
+        # (here) the export's NOTE on Gustav's birth runs on over CONT
+        # lines: each is joined as a line of its own, and a clip keeps the
+        # first of them that fit
+        short = ["1 BIRT", "2 DATE 7 JAN 1919", "2 NOTE Issued in 1938."]
+        short.append("3 CONT For the emigration.")
+        batch = adapt_gedcom(gustavs_births(short), artifact=EXPORT).batch
+        (birth,) = claims_for(batch, "i8", "date_of_birth")
+        assert birth.source.transcription_excerpt.text == (
+            "1 BIRT | 2 DATE 7 JAN 1919 | 2 NOTE Issued in 1938."
+            " | For the emigration."
+        )
+        sentence = note_of(60)[len("2 NOTE ") :]
+        long = ["1 BIRT", "2 DATE 7 JAN 1919", "2 NOTE Issued in 1938."]
+        long += [f"3 CONT {sentence}"] * 6 + ["2 SOUR @S1@"]
+        batch = adapt_gedcom(gustavs_births(long), artifact=EXPORT).batch
+        (birth,) = claims_for(batch, "i8", "date_of_birth")
+        excerpt = birth.source.transcription_excerpt.text
+        assert excerpt.startswith(
+            "1 BIRT | 2 DATE 7 JAN 1919 | 2 NOTE Issued in 1938."
+            f" | {sentence} | "
+        )
+        assert f" | … | 2 SOUR @S1@ | cited: {BIRTH_EXTRACT} | " in excerpt
+        assert "\n" not in excerpt and len(excerpt) <= 400
 
     def test_an_excerpt_is_in_the_form_the_instance_stores(self):
         # (here) the export spells Flörburg in decomposed form: the excerpt
