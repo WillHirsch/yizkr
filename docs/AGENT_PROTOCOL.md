@@ -78,11 +78,11 @@ added. The convergence report (#155) lists the open issues under each
 - **Shared resources.** One agent at a time uses the live Wikibase stack
   (live tests, the scratch reset, bootstrap, anything that writes to it);
   live test sessions and the scratch reset also serialise on the
-  live-stack lock (§5). One
-  LLM-heavy task at a time runs on the claude-code subscription. A
-  scratch run holds the subscription for its LLM stages, and holds the live
-  stack only while its reset, register, write, place-reconcile and site
-  stages run; its stages before write never touch the stack.
+  live-stack lock (§5). One LLM-heavy task at a time runs on the
+  claude-code subscription. A scratch run holds the subscription for its
+  LLM stages, and holds the live stack only while its reset, register,
+  write, place-reconcile and site stages run; its stages before write
+  never touch the stack.
 - **Waves.** Agents also share the machine. The orchestrating session
   dispatches in waves that keep test-heavy agents (implementers, fixers
   and reviewers that run tests, mutation specs or the query-engine

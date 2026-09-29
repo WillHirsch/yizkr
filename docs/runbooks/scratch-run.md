@@ -363,15 +363,16 @@ make scratch-reset                  # the same; ARGS="--yes" confirms it
   It then takes the live-stack lock (docs/TESTING.md), waiting while a
   live test session holds it, and holds it to the end, so no live
   session uses the instance while it is reset. Under the lock it reads
-  the kept-state marker, the page `Project:Kept state` on the instance,
-  which keeper mode (#118) writes once the keeper run's write completes
-  (ADR-0025 §6). As a page it goes wherever the instance's database
-  goes, into its backups and through a restore. The reset refuses on a
-  kept instance, and on one whose marker it cannot read: it starts a
-  stopped stack to read it, and a wiki that does not answer, or answers
-  as another wiki than the env file names, leaves it unable to tell. An
-  instance with no database volume holds no graph, so there is nothing
-  to guard.
+  the stack again under these guards, since it may have changed while
+  the reset waited, and reads the kept-state marker, the page
+  `Project:Kept state` on the instance, which keeper mode (#118) writes
+  once the keeper run's write completes (ADR-0025 §6). As a page it goes
+  wherever the instance's database goes, into its backups and through a
+  restore. The reset refuses on a kept instance, and on one whose marker
+  it cannot read: it starts a stopped stack to read it, and a wiki that
+  does not answer, or answers as another wiki than the env file names,
+  leaves it unable to tell. An instance with no database volume holds no
+  graph, so there is nothing to guard.
 - **What it deletes**: the four volumes, and nothing else. The rest of
   what it clears it sets aside, in `reset/<UTC time>/` in the record of
   the instance: the write stage's state, and `LocalSettings.php`. Remove

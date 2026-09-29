@@ -37,12 +37,14 @@ compose files and refuses:
   CONFIRMATION, and otherwise by `--yes`.
 
 It then takes the live-stack lock and holds it to the end, so no live
-test session uses the instance while it is reset, and reads the
-kept-state marker. A kept instance is refused, and so is an instance
-whose marker cannot be read: a stopped stack is started to read it, and
-a stack that does not answer, or answers as another wiki than the one
-these compose files serve, leaves the reset unable to tell. An instance
-with no database volume holds no graph, so there is nothing to guard.
+test session uses the instance while it is reset, reads the stack again
+under these guards, since it may have changed while the reset waited for
+the lock, and reads the kept-state marker. A kept instance is refused,
+and so is an instance whose marker cannot be read: a stopped stack is
+started to read it, and a stack that does not answer, or answers as
+another wiki than the one these compose files serve, leaves the reset
+unable to tell. An instance with no database volume holds no graph, so
+there is nothing to guard.
 
 **What it deletes.** The four volumes, and nothing else. The rest of what
 it clears it sets aside in the instance's record (yizkr.core.instance),
@@ -572,10 +574,28 @@ class InstanceReset:
     # -- the run ----------------------------------------------------------
 
     def run(self) -> ResetReport:
+        """Read the stack, confirm the reset, take the lock, read the stack
+        again, since it may have changed while the reset waited for the
+        lock, and run the steps."""
         plan = read_plan(self.compose, self.runner)
         self.confirm(plan)
-        self.report = ResetReport(plan)
-        steps: list[tuple[str, Callable[[], str]]] = [
+        with contextlib.ExitStack() as held:
+            try:
+                held.enter_context(self.lock())
+            except (TimeoutError, ValueError) as exc:
+                raise ResetRefused(
+                    f"the live-stack lock cannot be held ({exc})"
+                ) from None
+            held_plan = read_plan(self.compose, self.runner)
+            self.report = ResetReport(held_plan)
+            steps = self._steps(held_plan)
+            for number, (name, action) in enumerate(steps, 1):
+                self._step(f"[{number}/{len(steps)}]", name, action)
+        return self.report
+
+    def _steps(self, plan: Plan) -> list[tuple[str, Callable[[], str]]]:
+        """The steps (the module docstring), each with its name."""
+        return [
             ("check the kept-state marker", lambda: self.check_not_kept(plan)),
             ("clear the write-phase state", self.clear_write_state),
             ("stop the stack", self.stop),
@@ -595,16 +615,6 @@ class InstanceReset:
                 lambda: self.smoke(self.config, self.log, self.smoke_timeout),
             ),
         ]
-        with contextlib.ExitStack() as held:
-            try:
-                held.enter_context(self.lock())
-            except (TimeoutError, ValueError) as exc:
-                raise ResetRefused(
-                    f"the live-stack lock cannot be held ({exc})"
-                ) from None
-            for number, (name, action) in enumerate(steps, 1):
-                self._step(f"[{number}/{len(steps)}]", name, action)
-        return self.report
 
     def _step(self, tag: str, name: str, action: Callable[[], str]) -> None:
         self.log(f"{tag} {name}")

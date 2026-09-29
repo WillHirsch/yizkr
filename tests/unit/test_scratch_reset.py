@@ -625,6 +625,7 @@ class TestAReset:
         assert [step.name for step in report.steps] == STEPS
         assert stack_.events == [
             *READS,
+            *READS,
             "down",
             "volume ls",
             "volume rm",
@@ -771,7 +772,7 @@ class TestTheKeptGuard:
             ResetRefused, match="carries the kept-state marker"
         ):
             stack_.reset().run()
-        assert stack_.events == READS
+        assert stack_.events == READS * 2
         self.assert_nothing_removed(stack_, before)
         assert stack_.repopulated == []
 
@@ -829,14 +830,14 @@ class TestTheKeptGuard:
             stack_.reset(
                 client_factory=lambda config: Unsure(config, stack_.wiki)
             ).run()
-        assert stack_.events == READS
+        assert stack_.events == READS * 2
 
     def test_another_wiki_answering_is_refused(self, stack_):
         """The marker read must be the instance's that is reset."""
         stack_.wiki.server = "http://wikibase.peiltal.example"
         with pytest.raises(ResetRefused, match="served as"):
             stack_.reset().run()
-        assert stack_.events == READS
+        assert stack_.events == READS * 2
 
     def test_with_no_database_volume_there_is_nothing_to_guard(self, stack_):
         """An instance with no database holds no graph: the reset needs no
@@ -993,6 +994,22 @@ class TestTheLiveStackLock:
         stack_.wiki.api_get = _recording(stack_.wiki.api_get, order)
         stack_.reset(lock=lock).run()
         assert order.index("lock") < order.index("read")
+
+    def test_the_stack_is_read_again_once_the_lock_is_held(self, stack_):
+        """The reset can wait long for the lock, and the stack can change
+        meanwhile: here it is started again from another checkout."""
+        name = f"{PROJECT}-wikibase-1"
+
+        @contextlib.contextmanager
+        def lock():
+            files = stack_.docker.containers[name][1]
+            stack_.docker.containers[name] = ("/srv/elsewhere/deploy", files)
+            yield
+
+        with pytest.raises(ResetRefused, match="made in /srv/elsewhere"):
+            stack_.reset(lock=lock).run()
+        assert stack_.events == [*READS, "config", "ps"]
+        assert stack_.writes() == []
 
 
 def _recording(api_get, order):
