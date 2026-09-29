@@ -839,7 +839,9 @@ file (`rundir.run_state`, `yizkr stages state <run dir>`):
   counts. `run_state` reads `run.json` before the events and after them,
   and reads all three again, a few times at most, while an invocation
   starts or ends between those two readings: a stage is read against the
-  invocations as they stood while the events were read.
+  invocations as they stood while the events were read; should they
+  still differ after the last reading, the last events are read against
+  the `run.json` read after them.
 
 `yizkr stages state` also counts what the cache did for each role
 (`rundir.cache_counts`): hits and misses by reason, resumes, replays,

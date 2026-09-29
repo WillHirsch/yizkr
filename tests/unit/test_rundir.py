@@ -783,28 +783,36 @@ class TestStagesCutShort:
                 self.emit(run, "done", "critique")
                 self.end(run, "finished")
 
-        states = run_state(Racing(tmp_path, each=finish))
+        racing = Racing(tmp_path, each=finish)
+        states = run_state(racing)
         assert states[(DOC_A, "critique")].status == DONE
+        # one reading disagreed, and the one after it agreed
+        assert racing.event_reads == 2
         assert disagreement(tmp_path) is None
 
     def test_the_reads_are_bounded_while_invocations_keep_starting(
         self, tmp_path
     ):
-        """Invocations that keep starting while run_state reads leave its
-        readings of run.json never agreeing: it stops after a bounded
-        number of reads, with the last events read against the run.json
-        read after them."""
+        """Invocations that keep starting, each starting a stage, while
+        run_state reads leave its readings of run.json never agreeing: it
+        stops after a bounded number of reads, with the last events read
+        against the run.json read after them. So the stage started by the
+        latest invocation those events hold is interrupted: that run.json
+        holds a later invocation, whose start shows the earlier one is
+        over."""
         run = self.invocation(tmp_path, "critique")
         self.emit(run, "started", "critique")
 
         def start_another(reads):
             if reads <= 2 * rundir._READS:
-                self.invocation(tmp_path, "critique")
+                later = self.invocation(tmp_path, "critique")
+                self.emit(later, "started", "critique", subject=DOC_B)
 
         racing = Racing(tmp_path, each=start_another)
         states = run_state(racing)
         assert racing.event_reads == rundir._READS
         assert states[(DOC_A, "critique")].status == INTERRUPTED
+        assert states[(DOC_B, "critique")].status == INTERRUPTED
 
 
 class Racing(RunDir):
