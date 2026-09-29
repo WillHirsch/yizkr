@@ -5,16 +5,17 @@ Wikibase holds at most 400 characters in the text of a string,
 external-id or monolingual text value, whether the value is a
 statement's, a qualifier's or a reference's, and refuses the whole edit
 that sends a longer one. The unit fake refuses such an edit as the
-instance does (`_refuse_over_limit` in test_pipeline.py), so a writer
+instance does (`_refuse_as_the_instance` in test_pipeline.py), so a writer
 that sent one would fail the batch here as it does on the instance. The
 writer counts each text in NFC, the form the instance keeps it in, and
 sends none over the limit:
 
-* a reference's page number or region over the limit is cut at a break
-  between words and ends with " … sha1 " and 12 hex digits of the SHA-1
-  of the whole text, so a re-run finds the block, and two places whose
-  locators agree up to the cut stay two blocks (#381); an excerpt over the
-  limit is cut at a space and ends with "…";
+* a reference's page number, region or excerpt over the limit is cut at
+  a break between words and ends with " … sha1 " and 12 hex digits of the
+  SHA-1 of the whole text, so a re-run finds the block, and two places
+  whose locators or excerpts agree up to the cut stay two blocks (#381,
+  #384; a label, description or alias over the limit Wikibase holds in a
+  term is cut in the same way, test_writer_text_shapes.py);
 * a claim whose own text, its value or a qualifier's, is over the limit
   is refused, never cut (CLAUDE.md rule 5): nothing of it is written,
   the result names it by its claim id, and a warning says why,
@@ -130,7 +131,7 @@ def _item_holding(where: str, kind: str, text: str):
 class TestTheFakeHoldsWhatWikibaseHolds:
     """The fake refuses an edit as the instance does: whole, when a snak
     of it holds a text over 400 characters, a string value counted in NFC
-    and a monolingual text as it is sent (_refuse_over_limit)."""
+    and a monolingual text as it is sent (_refuse_as_the_instance)."""
 
     @pytest.mark.parametrize("length", [400, 401])
     @pytest.mark.parametrize("kind", ["string", "monolingual"])
@@ -180,15 +181,18 @@ def _leaves(first: int, count: int, street: str = "") -> str:
 
 
 def _cause(
-    page: str | None = None, cause: str = "Wassersucht", kind: str = "human"
+    page: str | None = None,
+    cause: str = "Wassersucht",
+    kind: str = "human",
+    label: str = "Eugen Löbig",
 ) -> dict:
     """Eugen's cause of death as the 1909 burial register gives it, on
-    `page`, his ref giving him the kind `kind`."""
+    `page`, his ref giving him the kind `kind` and the label `label`."""
     source = _cites(REGISTER_SHA1, "Todesursache: Wassersucht.")
     if page:
         source["page_number"] = page
     return {
-        "subject": _local("e07", "Eugen Löbig", kind),
+        "subject": _local("e07", label, kind),
         "property": "cause_of_death",
         "value": {
             "type": "monolingual",
@@ -196,6 +200,16 @@ def _cause(
         },
         "source": source,
     }
+
+
+def _quoting(excerpt: str) -> dict:
+    """Eugen's cause of death (_cause), its source quoted by `excerpt`."""
+    claim = _cause()
+    claim["source"]["transcription_excerpt"] = {
+        "text": excerpt,
+        "language": "de",
+    }
+    return claim
 
 
 def _stored_page(wiki: FakeWiki, qid: str) -> str:
@@ -386,25 +400,29 @@ class TestLocatorsOverTheLimit:
         assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
-    def test_places_that_agree_up_to_the_cut_stay_apart(self):
+    @pytest.mark.parametrize("where", ["page number", "excerpt"])
+    def test_places_that_agree_up_to_the_cut_stay_apart(self, where):
         # (here) the register's index gives Eugen's entry on two lists of
         # leaves that agree well past the room, one ending with leaf 500
         # and one with leaf 777; and a third claim gives as its page what
         # the first one's cut keeps, with the mark but without the digest.
-        # Each is a place of its own, and so a reference block of its own
+        # Each is a place of its own, and so a reference block of its own.
+        # So are they as the claims' excerpts, quoting the index (#384)
         common = _leaves(1, 60)
         assert len(common) > TEXT_LIMIT
         first, second = common + " ; Blatt 500", common + " ; Blatt 777"
         start = _to_the_last_space(first)[: -len(_mark(first))] + CUT_MARK
+        claim = _cause if where == "page number" else _quoting
         wiki = FakeWiki(MEDIA, detached=True)
-        batch = _batch_of(_cause(first), _cause(second), _cause(start))
+        batch = _batch_of(claim(first), claim(second), claim(start))
 
         written = BatchWriter(wiki).write_batch(batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
         )
-        assert [page for _, page, _, _ in _places(died)] == [
+        column = 1 if where == "page number" else 3
+        assert [place[column] for place in _places(died)] == [
             _to_the_last_space(first),
             _to_the_last_space(second),
             start,
@@ -450,31 +468,30 @@ class TestLocatorsOverTheLimit:
         assert (again.written, again.skipped) == (0, 1)
         assert wiki.wbi.item.writes == writes
 
-    def test_an_excerpt_over_the_limit_is_cut_at_a_space(self):
-        # (here) the register's entry quoted whole, over and over, as the
-        # excerpt: it is cut at the last space in its first 397 characters,
-        # which falls inside a word, and ends with "…"
-        excerpt = _said_over("Gestorben: 16. März 1909 in Flörburg. ", 450)
-        assert excerpt[396] != " " and excerpt[397] != " "
-        kept = excerpt[: excerpt.rindex(" ", 0, 397)]
-        claim = _cause()
-        claim["source"]["transcription_excerpt"] = {
-            "text": excerpt,
-            "language": "de",
-        }
+    @pytest.mark.parametrize(("excerpt", "stored"), PAGES.values(), ids=PAGES)
+    def test_an_excerpt_over_the_limit_is_cut_as_a_page_is(
+        self, excerpt, stored
+    ):
+        # an excerpt only helps a reader check the claim in its source, as
+        # a page number only places it there, so it is cut as a page is
+        # (#384): (here) an extraction that quotes the register's index as
+        # its excerpt keeps each of the pages above as that page is kept.
+        # So no letter loses its mark where the room holds no space, and a
+        # re-run finds the block
         wiki = FakeWiki(MEDIA, detached=True)
-        batch = _batch_of(claim)
+        batch = _batch_of(_quoting(excerpt))
 
         written = BatchWriter(wiki).write_batch(batch)
 
         (died,) = _statements(
             wiki, written.created_items["e07"], "cause_of_death"
         )
-        ((_, _, _, stored),) = _places(died)
-        assert stored == kept + "…"
+        ((_, _, _, kept),) = _places(died)
+        assert kept == stored
+        assert _not_in_nfc(wiki) == []
         writes = wiki.wbi.item.writes
         again = BatchWriter(wiki).write_batch(batch)
-        assert (again.written, again.skipped) == (0, 1)
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
         assert wiki.wbi.item.writes == writes
 
 
