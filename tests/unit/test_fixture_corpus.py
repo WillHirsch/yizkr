@@ -14,12 +14,24 @@ answers behind the real LLM cache, and face detection may not run. The
 tests assert what must come of each stage and each trap, through the run's
 events, its states and its views, and read claims in the universe's terms
 (said_in); no gold set is kept.
+
+Past the driver, two readers of the run directory are held to the corpus
+too (#380). `yizkr scratch report` (TestTheRunReport) must count the
+corpus's stages, how each came about, the clean corpus's anomalies (none)
+and the clusters, and report.md must say none of it by a universe name, a
+file name or a document's SHA-1. The clustering stage's identity map
+(TestTheTrapsInTheIdentityMap) must meet each trap TRAPS sets for it,
+read in the universe's terms; the two the whole-cluster merge rule cannot
+meet (#361) are recorded as expected, each with its reason, by a strict
+xfail that asserts the merge the rule withholds, so it turns when the
+rule does.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,7 +52,8 @@ from tests.unit.test_scratch import (
     statuses,
 )
 from yizkr.claims import ClaimBatch, EntityRecord, ItemValue, TimeValue
-from yizkr.pipeline import chunking, llm, scratch
+from yizkr.cli import build_parser
+from yizkr.pipeline import chunking, clustering, llm, scratch
 from yizkr.pipeline.extract import run_metadata, salvage_valid_claims
 from yizkr.pipeline.gedcom import parse_gedcom
 from yizkr.pipeline.orchestrate import (
@@ -49,8 +62,29 @@ from yizkr.pipeline.orchestrate import (
     document_kind,
 )
 from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
-from yizkr.pipeline.rundir import ALERTS, DONE, RunDir, run_state, summarise
-from yizkr.pipeline.scratch import BARRIER, EXIT_OK, CorpusStage
+from yizkr.pipeline.report import (
+    COMPUTED,
+    JSON_FILE,
+    MARKDOWN_FILE,
+    REPORT_DIR,
+    REUSED,
+)
+from yizkr.pipeline.rundir import (
+    ALERTS,
+    DONE,
+    FAILED,
+    NEEDS_ATTENTION,
+    PENDING,
+    RunDir,
+    run_state,
+    summarise,
+)
+from yizkr.pipeline.scratch import (
+    BARRIER,
+    CORPUS_DIR,
+    EXIT_OK,
+    CorpusStage,
+)
 from yizkr.pipeline.stages import content_hash, read_jsonl, sha1_file
 
 SOURCES = {source.key: source for source in u.SOURCES}
@@ -559,9 +593,16 @@ class Batches:
 
 
 @pytest.fixture
-def batches(runs) -> Batches:
-    run = runs.run("first")
-    return Batches({name: runs.batch(run, name) for name in fc.DOCUMENTS})
+def first(runs) -> Path:
+    """One whole scratch run over the corpus, the run the traps and the
+    run report are read from. A test that asks for more than one of them
+    invokes the driver once, so the run keeps its one invocation."""
+    return runs.run("first")
+
+
+@pytest.fixture
+def batches(runs, first) -> Batches:
+    return Batches({name: runs.batch(first, name) for name in fc.DOCUMENTS})
 
 
 class TestTheTraps:
@@ -865,3 +906,672 @@ class TestReuse:
             if name != fc.NARRATIVE:
                 assert views[name] == was[name], name
         assert runs.refused.asked == []
+
+
+# -- clustering's trap outcomes -----------------------------------------------
+
+
+# the traps the whole-cluster merge rule (#361) cannot meet, and what it
+# would take to meet each: recorded as expected here (#380), not mended
+HELD_APART = {
+    "merge-carrying-death": "the certificate's mention of Gustav merges "
+    "with the mentions that carry his death",
+    "mirrored-kinship": "the talk's and the export's mentions of Klara, "
+    "which are a confident link, merge",
+}
+
+
+def trap(name: str) -> fc.Trap:
+    (found,) = [entry for entry in fc.TRAPS if entry.name == name]
+    return found
+
+
+@dataclass
+class Identity:
+    """The clustering stage's identity map, with every mention read in
+    the universe's terms: which person, place or occupation of the
+    universe it names, and which document of the corpus names it. No
+    document of the corpus names two mentions of one universe entity, so
+    a universe key and a file name name one mention."""
+
+    map: dict
+    who: dict[str, tuple[str, str]]
+
+    def of(self, key: str) -> dict[str, str]:
+        """The fingerprint of each mention of a universe entity, by the
+        name of the document that gives it."""
+        return {
+            document: fingerprint
+            for fingerprint, (known, document) in self.who.items()
+            if known == key
+        }
+
+    def cluster(self, fingerprint: str) -> str:
+        return self.map["mentions"][fingerprint]["cluster"]
+
+    def method(self, fingerprint: str) -> str:
+        return self.map["mentions"][fingerprint]["method"]
+
+    def clusters_of(self, key: str) -> set[str]:
+        return {self.cluster(f) for f in self.of(key).values()}
+
+    def methods_of(self, key: str) -> set[str]:
+        return {self.method(f) for f in self.of(key).values()}
+
+    def candidate(self, fingerprint: str) -> dict:
+        """The review entry of the candidate cluster a mention is in: its
+        members, its pairs and what makes it conflict. Only an ambiguous
+        or a conflicting cluster is reviewed, since a confident one
+        merged."""
+        (found,) = [
+            entry
+            for entry in self.map["review"]
+            if entry["status"]
+            in (clustering.AMBIGUOUS, clustering.CONFLICTING)
+            and fingerprint in entry["members"]
+        ]
+        return found
+
+    def pair(self, entry: dict, first: str, second: str) -> tuple[str, str]:
+        """(link, evidence) of a pair of a review entry, whichever way
+        round the entry holds it."""
+        (found,) = [
+            pair
+            for pair in entry["pairs"]
+            if set(pair["mentions"]) == {first, second}
+        ]
+        return found["link"], found["evidence"]
+
+    def keys_of(self, fingerprints: Iterable[str]) -> set[tuple[str, str]]:
+        return {self.who[fingerprint] for fingerprint in fingerprints}
+
+    def labels(self) -> set[str]:
+        return {mention["label"] for mention in self.map["mentions"].values()}
+
+
+@pytest.fixture
+def identity(runs, first) -> Identity:
+    """The run's identity map, as the clustering stage left it in its
+    directory, with every mention in the universe's terms."""
+    stage = first / CORPUS_DIR / clustering.STAGE
+    found = json.loads((stage / clustering.IDENTITY_MAP).read_text())
+    documents = {sha1(name): name for name in fc.DOCUMENTS}
+    known = {
+        sha1(name): truth(name, runs.batch(first, name))
+        for name in fc.DOCUMENTS
+    }
+    who = {}
+    for fingerprint, mention in found["mentions"].items():
+        name = documents[mention["document"]]
+        entity = known[mention["document"]][mention["local_id"]]
+        assert (entity, name) not in who.values(), mention["label"]
+        who[fingerprint] = (entity, name)
+    return Identity(found, who)
+
+
+class TestTheTrapsInTheIdentityMap:
+    def test_the_map_names_every_mention_of_every_document(self, identity):
+        """Every entity of every batch is a mention, and each is
+        clustered: the corpus marks none for extraction alone."""
+        assert len(identity.who) == identity.map["summary"]["mentions"]
+        assert {document for _key, document in identity.who.values()} == set(
+            fc.DOCUMENTS
+        )
+        assert identity.map["summary"]["unclustered_mentions"] == 0
+        assert clustering.UNCLUSTERED not in {
+            identity.method(f) for f in identity.who
+        }
+
+    def test_the_homonym_ursulas_stay_apart(self, identity):
+        """The daughter's three mentions and the widow's two make one
+        candidate cluster, which the family history's two make conflict:
+        one manifest told them apart, so the pair cannot link (a soft
+        cannot-link). Nothing in the cluster merges, so no cluster holds
+        both Ursulas and the widow takes none of the daughter's death."""
+        daughter = identity.of("ursula-loebig")
+        widow = identity.of("ursula-loebig-angerring")
+        assert set(daughter) == {fc.NARRATIVE, fc.DECK, fc.EXPORT}
+        assert set(widow) == {fc.NARRATIVE, fc.EXPORT}
+        assert identity.methods_of("ursula-loebig") == {clustering.CONFLICTING}
+        assert identity.methods_of("ursula-loebig-angerring") == {
+            clustering.CONFLICTING
+        }
+        # each mention a cluster of its own, and no cluster shared
+        apart = identity.clusters_of("ursula-loebig")
+        others = identity.clusters_of("ursula-loebig-angerring")
+        assert (len(apart), len(others)) == (3, 2)
+        assert apart & others == set()
+        entry = identity.candidate(daughter[fc.EXPORT])
+        assert set(entry["members"]) == {*daughter.values(), *widow.values()}
+        assert entry["status"] == clustering.CONFLICTING
+        assert entry["conflict"]["how"] == clustering.SOFT
+        assert identity.keys_of(entry["conflict"]["mentions"]) == {
+            ("ursula-loebig", fc.NARRATIVE),
+            ("ursula-loebig-angerring", fc.NARRATIVE),
+        }
+        # and no pair of them is a confident link, kin that agree
+        # included: the export describes its two alike, so each mention
+        # outside it matches both anchors, more than max-anchors allows
+        assert {pair["link"] for pair in entry["pairs"]} == {
+            clustering.AMBIGUOUS
+        }
+        assert {"exact/unknown/agree"} < {
+            pair["evidence"] for pair in entry["pairs"]
+        }
+        assert identity.map["summary"]["multi_anchored_mentions"] == 3
+        assert "never merges them" in trap("homonyms").expected
+
+    def test_mirrored_kinship_is_read_as_one_relation(self, identity, batches):
+        """The talk gives Klara no date and no parent: it says only that
+        Sebastian and Hildegard have her as a child. The export gives her
+        a father and a mother, and no date. Clustering lifts kin from
+        both ends, so the two agree and the pair is a confident link on
+        kinship alone (the evidence reads name/dates/kin). The postcard
+        states it from Klara's end too (her father, its writer); the
+        impossibility filter reads that kin edge, so its two mentions
+        cannot be one person."""
+        klara = identity.of("klara-loebig")
+        deck, export = batches.said(fc.DECK), batches.said(fc.EXPORT)
+        assert values(deck, "sebastian-loebig", "child") >= {"klara-loebig"}
+        assert values(deck, "klara-loebig", "father") == set()
+        assert values(export, "klara-loebig", "father") == {"sebastian-loebig"}
+        assert values(export, "sebastian-loebig", "child") == set()
+        entry = identity.candidate(klara[fc.EXPORT])
+        assert identity.pair(entry, klara[fc.DECK], klara[fc.EXPORT]) == (
+            clustering.CONFIDENT,
+            "exact/unknown/agree",
+        )
+        # the postcard names her father, its writer, from her end, and
+        # his mention there cannot be hers: the kin edge rules it out
+        assert values(batches.said(fc.LETTER), "klara-loebig", "father") == {
+            "sebastian-loebig"
+        }
+        father = identity.of("sebastian-loebig")[fc.LETTER]
+        assert entry["conflict"]["how"] == clustering.HARD
+        assert set(entry["conflict"]["mentions"]) == {
+            father,
+            klara[fc.LETTER],
+        }
+        # its own mention of her links to the export on the name alone,
+        # so no merge rule under discussion takes it in
+        assert identity.pair(entry, klara[fc.LETTER], klara[fc.EXPORT]) == (
+            clustering.AMBIGUOUS,
+            "exact/unknown/unknown",
+        )
+        # and the parents, named from both ends, merge across the corpus
+        for parent in ("sebastian-loebig", "hildegard-loebig"):
+            mentions = identity.of(parent)
+            named = {fc.NARRATIVE, fc.DECK, fc.EXPORT}
+            assert named <= set(mentions), parent
+            assert {identity.method(mentions[n]) for n in named} == {
+                clustering.CONFIDENT
+            }, parent
+            assert len({identity.cluster(mentions[n]) for n in named}) == 1
+
+    def test_the_death_carrying_merge_is_the_one_the_rule_allows(
+        self, identity, batches
+    ):
+        """The certificate's Gustave Lobig links confidently to the
+        export's Gustav Löbig, which carries his death, and so do the
+        family history's and the talk's mentions of him. The postcard's
+        'Gustl' links to the same anchor on nothing: one token, no name
+        match, no date and no kin. The merge rule takes the candidate
+        cluster whole, so that one ambiguous link leaves every mention of
+        him apart, and no merge carries his death to the certificate."""
+        gustav = identity.of("gustav-loebig")
+        assert set(gustav) == set(fc.DOCUMENTS)
+        assert identity.methods_of("gustav-loebig") == {clustering.AMBIGUOUS}
+        assert len(identity.clusters_of("gustav-loebig")) == len(gustav)
+        entry = identity.candidate(gustav[fc.EXPORT])
+        assert entry["status"] == clustering.AMBIGUOUS
+        assert entry["conflict"] is None
+        # the export is the roster the other documents meet, so every
+        # pair of the cluster is a mention with its GEDCOM anchor
+        assert {
+            document: identity.pair(entry, gustav[fc.EXPORT], fingerprint)
+            for document, fingerprint in gustav.items()
+            if document != fc.EXPORT
+        } == {
+            fc.CERTIFICATE: (clustering.CONFIDENT, "exact/agree/unknown"),
+            fc.NARRATIVE: (clustering.CONFIDENT, "exact/agree/agree"),
+            fc.DECK: (clustering.CONFIDENT, "exact/unknown/agree"),
+            fc.LETTER: (clustering.AMBIGUOUS, "none/unknown/unknown"),
+        }
+        # the death the merge would carry is stated by the documents the
+        # certificate's mention links to confidently, and by no other
+        assert (
+            values(
+                batches.said(fc.CERTIFICATE), "gustav-loebig", "date_of_death"
+            )
+            == set()
+        )
+        for name in (fc.NARRATIVE, fc.EXPORT):
+            assert values(
+                batches.said(name), "gustav-loebig", "date_of_death"
+            ) == {u.Date(1996)}, name
+        # a rule that merged over the confident links alone would merge
+        # more of the corpus than this one does, and nothing conflicting
+        linked = identity.map["summary"]["confident_links_only"]
+        assert linked["mentions"] > identity.map["summary"]["merged_mentions"]
+        assert linked["conflicting"] == 0
+
+    def test_the_traps_the_merge_rule_cannot_meet_are_recorded(self):
+        """Each trap the rule cannot meet says so where the corpus
+        describes it, and the xfails of this class are those traps: one
+        each, strict, and each reasoned from HELD_APART, so that dropping
+        one, loosening it or reasoning it otherwise fails here rather
+        than leaving the record to rot."""
+        assert {
+            entry.name for entry in fc.TRAPS if "(#380)" in entry.expected
+        } == set(HELD_APART)
+        assert "no such merge happens" in trap("merge-carrying-death").expected
+        assert "stay unmerged" in trap("mirrored-kinship").expected
+        marks = [
+            mark
+            for name, member in vars(type(self)).items()
+            if name.startswith("test")
+            for mark in getattr(member, "pytestmark", ())
+            if mark.name == "xfail"
+        ]
+        assert sorted(
+            key
+            for mark in marks
+            for key, text in HELD_APART.items()
+            if mark.kwargs["reason"].startswith(text + ": ")
+        ) == sorted(HELD_APART)
+        assert all(mark.kwargs["strict"] for mark in marks)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason=HELD_APART["merge-carrying-death"]
+        + ": the whole-cluster merge rule (#361) takes the candidate "
+        "cluster as it stands, and the postcard's one-token 'Gustl', "
+        "which nothing corroborates, holds it ambiguous. A rule that "
+        "merged over the confident links alone (#66) would merge the "
+        "certificate's mention with them.",
+    )
+    def test_the_certificates_gustav_merges_with_his_death(self, identity):
+        gustav = identity.of("gustav-loebig")
+        assert identity.cluster(gustav[fc.CERTIFICATE]) == identity.cluster(
+            gustav[fc.NARRATIVE]
+        )
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason=HELD_APART["mirrored-kinship"]
+        + ": the postcard's writer blocks with his daughter and is her "
+        "kin, so the candidate cluster of her mentions conflicts (hard), "
+        "and the whole-cluster merge rule (#361) leaves every member of "
+        "a conflicting cluster apart, the two confident links among them "
+        "included. A rule that merged over the confident links alone "
+        "(#66) would merge these two, and the family history's mention "
+        "with them; the postcard's own mention of her would stay apart "
+        "either way, since its one link is ambiguous.",
+    )
+    def test_klaras_mentions_merge(self, identity):
+        """What the rule withholds is the merge of the two mentions its
+        own evidence calls a confident link, not a cluster of all four:
+        the postcard's mention links to the export on nothing but the
+        name, so no rule under discussion merges it."""
+        klara = identity.of("klara-loebig")
+        assert identity.cluster(klara[fc.DECK]) == identity.cluster(
+            klara[fc.EXPORT]
+        )
+
+
+# -- the run report -----------------------------------------------------------
+
+
+# the universe's names as the corpus's documents carry them, which no
+# aggregate may say, whatever it counts
+NAMES = (
+    "Löbig",
+    "Lobig",
+    "Loebig",
+    "Flörburg",
+    "Floerburg",
+    "Fläckfeld",
+    "Flaeckfeld",
+    "Mockburg",
+    "Hesse",
+    "Laudler",
+    "Hildegard",
+    "Hilde",
+    "Ursula",
+    "Sebastian",
+    "Wastl",
+    "Klara",
+    "Clara",
+    "Pünktchen",
+    "Puenktchen",
+    "Gustav",
+    "Gustave",
+    "Gustl",
+    "Gus",
+    "Eugen",
+    "Nicholas",
+    "Florence",
+    "Faxridge",
+    "Angerring",
+    "Hawthorn",
+    "Juniper",
+    "Stupfield",
+    "Australia",
+    "Victoria",
+    "Flund",
+    "hatter",
+)
+# the folded spellings a name of the universe may also be written in
+FOLDINGS = {"ö": "oe", "ä": "ae", "ü": "ue", "ß": "ss"}
+
+
+def universe_names() -> str:
+    """Every name the universe gives a person, a place or an entity, and
+    the spelling of each with its accents folded, as one text a name is
+    looked for in."""
+    found = set()
+    for person in u.PEOPLE:
+        found.update({person.label, *(n.text for n in person.names)})
+    for place in u.PLACES:
+        found.update({place.label, *(n.text for n in place.names)})
+    for entity in u.ENTITIES:
+        found.update({entity.label, *entity.names})
+    folded = set()
+    for name in found:
+        spelling = name.casefold()
+        for accented, plain in FOLDINGS.items():
+            spelling = spelling.replace(accented, plain)
+        folded.add(spelling)
+    return "\n".join(sorted({name.casefold() for name in found} | folded))
+
+
+@dataclass
+class Report:
+    """A run's report, as `yizkr scratch report` writes it: report.md,
+    which may be posted, and report.json, which stays local, with the
+    aggregates report.md is rendered from."""
+
+    markdown: str
+    local: str
+    aggregate: dict
+
+    def stage(self, name: str) -> dict:
+        (row,) = [r for r in self.aggregate["stages"] if r["name"] == name]
+        return row
+
+    def corpus_stage(self, name: str) -> dict:
+        (row,) = [
+            r for r in self.aggregate["corpus_stages"] if r["name"] == name
+        ]
+        return row
+
+
+def report_of(run: Path) -> Report:
+    """`yizkr scratch report` over a run, as the command runs it, and the
+    two files it writes that a test reads."""
+    args = build_parser().parse_args(
+        ["scratch", "report", str(run), "--runs", str(run.parent)]
+    )
+    assert args.func(args) == 0
+    folder = run / REPORT_DIR
+    return Report(
+        (folder / MARKDOWN_FILE).read_text(),
+        (folder / JSON_FILE).read_text(),
+        json.loads((folder / JSON_FILE).read_text())["aggregate"],
+    )
+
+
+def leaks(text: str, identity: Identity) -> list[str]:
+    """What the corpus gives that an aggregate may never say: a name of
+    the universe (NAMES), a label of a mention the run made, a document's
+    file name or its stem, or the start of a document's SHA-1. A name and
+    a label are looked for folded as clustering folds them (accents and
+    case), as well as case-folded, so that a folded spelling is caught
+    too."""
+    lowered, folded = text.casefold(), clustering.fold(text)
+
+    def said(name: str) -> bool:
+        return name.casefold() in lowered or clustering.fold(name) in folded
+
+    found = [name for name in NAMES if said(name)]
+    found += [label for label in identity.labels() if said(label)]
+    found += [
+        name
+        for name in fc.DOCUMENTS
+        if name in text or Path(name).stem in text
+    ]
+    return found + [
+        name
+        for name in fc.DOCUMENTS
+        for digest in (sha1(name),)
+        if digest[:7] in text.casefold()
+    ]
+
+
+@pytest.fixture
+def report(first) -> Report:
+    return report_of(first)
+
+
+class TestTheRunReport:
+    def test_the_report_counts_every_stage_the_corpus_plans(self, report):
+        """Every document of the corpus went through its stages in one
+        invocation, and none was reused, held or failed: the run's first
+        report says so per stage, and its rows count the documents the
+        plan gives each stage."""
+        assert report.aggregate["run"]["complete"] is True
+        assert report.aggregate["run"]["invocations"] == 1
+        assert report.aggregate["run"]["barrier"] == {
+            "documents": len(fc.DOCUMENTS),
+            "failed": 0,
+        }
+        assert report.aggregate["documents"]["planned"] == len(fc.DOCUMENTS)
+        assert report.aggregate["documents"]["by_kind"] == {
+            "media": 2,
+            "gedcom": 1,
+            "presentation": 1,
+            "text": 1,
+        }
+        planned = {
+            stage: sum(
+                stage in DOCUMENT_STAGES[doc.kind]
+                for doc in fc.DOCUMENTS.values()
+            )
+            for _sha1, stage in every_stage()
+        }
+        rows = {row["name"]: row for row in report.aggregate["stages"]}
+        assert set(rows) == set(planned)
+        for name, row in rows.items():
+            assert row["documents"] == planned[name], name
+            assert row[COMPUTED] == planned[name], name
+            assert (row[REUSED], row[PENDING], row[FAILED]) == (0, 0, 0), name
+            assert row[NEEDS_ATTENTION] == 0, name
+        # what sent each computed stage to the engine, and what calls it
+        assert rows["transcription"]["forced"] == {"absent": 2, "no call": 2}
+        assert rows["extraction"]["forced"] == {"absent": 4}
+        assert rows["critique"]["forced"] == {"absent": 4}
+        assert rows["gedcom"]["forced"] == {"no call": 1}
+        # and report.md's stage table is those rows
+        assert "| transcription | 4 | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 0 |" in (
+            report.markdown
+        )
+        assert "| gedcom | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |" in (
+            report.markdown
+        )
+        assert (
+            "| transcription | none | absent 2, no call 2 | none | none |"
+        ) in report.markdown
+
+    def test_the_corpus_stages_are_the_registered_ones_and_the_probe(
+        self, report
+    ):
+        """Past the barrier the clustering stage ran and asked for a
+        look: the corpus leaves clusters it cannot merge on its own. The
+        probe, the test's own stage, ran after it and wants nothing."""
+        assert [row["name"] for row in report.aggregate["corpus_stages"]] == [
+            *registered(),
+            PROBE,
+        ]
+        clustering_row = report.corpus_stage(clustering.STAGE)
+        assert clustering_row["state"] == NEEDS_ATTENTION
+        assert clustering_row["attention"] == {
+            "ambiguous clusters not merged": 1,
+            "ambiguous pairs to adjudicate": 1,
+            "conflicting clusters not merged": 1,
+        }
+        assert clustering_row["failure"] is None
+        assert report.corpus_stage(PROBE) == {
+            "name": PROBE,
+            "state": DONE,
+            "attention": {},
+            "failure": None,
+            "seconds": report.corpus_stage(PROBE)["seconds"],
+        }
+
+    def test_the_clean_corpus_raises_no_anomaly(self, report, first):
+        """No check alerted on the run, and none failed: the corpus is
+        clean, and the report agrees with the alert log."""
+        assert report.aggregate["anomalies"] == {
+            "alerts": 0,
+            "findings": 0,
+            "new": 0,
+            "carried": 0,
+            "by_check": {},
+            "by_stage": {},
+            "check_errors": 0,
+            "rechecks": 0,
+        }
+        assert read_jsonl(first / ALERTS) == []
+        assert (
+            "0 alerts, of 0 findings (a document or the run, a stage and a "
+            "check): 0 new and 0 carried. Checks that failed: 0; rechecks: 0."
+        ) in report.markdown
+
+    def test_the_clusters_are_the_identity_maps_counts(self, report, identity):
+        """The report reads the clustering stage's identity map, so every
+        count it shows is that map's summary, key for key, and the
+        corpus's own invariants hold over both: one mention per entity of
+        every batch, none unclustered, and no hub in a corpus this
+        small. The counts themselves are the map's to change."""
+        clusters = report.aggregate["content"]["clusters"]
+        summary = identity.map["summary"]
+        assert clusters["map"] == "read"
+        assert clusters["status"] == NEEDS_ATTENTION
+        assert clusters["counts"] == {
+            "documents": summary["documents"],
+            "mentions": summary["mentions"],
+            "clustered mentions": summary["clustered_mentions"],
+            "unclustered mentions": summary["unclustered_mentions"],
+            "identity clusters": summary["identity_clusters"],
+            "confident merges": summary["clusters"]["confident"],
+            "mentions merged": summary["cluster_mentions"]["confident"],
+            "ambiguous, left split": summary["clusters"]["ambiguous"],
+            "ambiguous mentions": summary["cluster_mentions"]["ambiguous"],
+            "conflicting": summary["clusters"]["conflicting"],
+            "conflicting mentions": summary["cluster_mentions"]["conflicting"],
+            "conflicting, hard": summary["conflicting_hard"],
+            "singletons": summary["singletons"],
+            "candidate pairs": summary["candidate_pairs"],
+            "confident pairs": summary["confident_pairs"],
+            "ambiguous pairs": summary["ambiguous_pairs"],
+            "adjudication calls": summary["adjudication"][
+                "calls_ambiguous_pairs"
+            ],
+            "hub keys, not blocked on": summary["hub_keys"],
+            "mentions holding them": summary["hub_mentions"],
+        }
+        # every entity of every batch is a mention, all of them clustered
+        counts = clusters["counts"]
+        entities = report.aggregate["content"]["entities"]
+        assert counts["documents"] == len(fc.DOCUMENTS)
+        assert counts["mentions"] == entities["total"]
+        assert counts["clustered mentions"] == counts["mentions"]
+        assert counts["unclustered mentions"] == 0
+        # the corpus is small, so no key is a hub and nothing is held
+        # back from blocking
+        assert (counts["hub keys, not blocked on"], summary["hub_keys"]) == (
+            0,
+            0,
+        )
+        assert counts["mentions holding them"] == 0
+        # and the clusters and the entities count the same kinds
+        assert clusters["by_kind"] == entities["by_kind"]
+        assert set(clusters["by_kind"]) == {
+            "human",
+            "place",
+            "migration",
+            "occupation_class",
+            "vessel",
+        }
+        # the counts report.md shows are those, rendered
+        for label, count in counts.items():
+            assert f"| {label} | {count} |" in report.markdown, label
+
+    def test_a_second_run_is_reported_reused_by_key_match(
+        self, runs, tmp_path
+    ):
+        """A second run makes every view again from fresh state
+        directories, and the LLM cache answers every call it makes: the
+        report counts each stage that calls the engine reused, by the
+        reason the cache gave, and the stages that call it for nothing
+        (a text file, a deck, the GEDCOM adapter) computed with no call.
+        Invoked again, the run keeps how each view came about."""
+        first = runs.run("first")
+        made = report_of(first).aggregate["calls"]["engine"]
+        second = runs.run(
+            "second", fc.copy_to(tmp_path / "elsewhere" / "corpus")
+        )
+        report = report_of(second)
+        rows = {row["name"]: row for row in report.aggregate["stages"]}
+        assert {name: row["reused_by"] for name, row in rows.items()} == {
+            "transcription": {"key match": 2},
+            "extraction": {"key match": 4},
+            "critique": {"key match": 4},
+            "gedcom": {},
+        }
+        assert (rows["transcription"][COMPUTED], rows["gedcom"][COMPUTED]) == (
+            2,
+            1,
+        )
+        assert rows["transcription"]["forced"] == {"no call": 2}
+        assert rows["extraction"][COMPUTED] == 0
+        # every call the first run made of the engine, the cache answers
+        assert report.aggregate["calls"]["engine"] == 0
+        assert report.aggregate["calls"]["hits_by_reason"] == {
+            "key match": made
+        }
+        assert len(events(second, "cache-hit")) == made
+        assert report.aggregate["calls"]["misses_by_reason"] == {}
+        assert report.aggregate["anomalies"]["alerts"] == 0
+        assert "| transcription | key match 2 | no call 2 | none | none |" in (
+            report.markdown
+        )
+        assert "| extraction | key match 4 | none | none | none |" in (
+            report.markdown
+        )
+        # invoked again, every view stands and no stage is made again:
+        # each keeps the way the invocation that made it came by it
+        again = report_of(runs.run("second"))
+        assert again.aggregate["run"]["invocations"] == 2
+        assert {
+            row["name"]: row["reused_by"] for row in again.aggregate["stages"]
+        } == {name: row["reused_by"] for name, row in rows.items()}
+
+    def test_no_universe_name_and_no_sha1_reaches_report_md(
+        self, report, identity
+    ):
+        """report.md is rendered from the aggregates alone, so it says
+        nothing the corpus gives: no name of the universe, no label of a
+        mention the run made, no file name and no document's SHA-1. The
+        local report carries them, so there is something to leak."""
+        assert leaks(report.markdown, identity) == []
+        assert set(leaks(report.local, identity)) >= set(fc.DOCUMENTS)
+
+    def test_every_name_report_md_may_not_say_is_one_the_universe_gives(self):
+        """NAMES is the universe's, not a list of its own: each name is
+        part of a form the universe gives a person, a place or an entity,
+        or of that form with its accents folded."""
+        known = universe_names()
+        assert [name for name in NAMES if name.casefold() not in known] == []
