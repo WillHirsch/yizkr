@@ -12,6 +12,16 @@ derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance),
 and MODELING.md (a human decision's process is the MediaWiki edit history).
 Amended by #136 (2026-09-27): the disagreement report now pairs only values
 from different artifacts (§4).
+Superseded in part by [ADR-0035](0035-mention-records.md) (owner
+decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine
+judgement out of the graph. An extraction's judgement note, a category
+and one sentence, is written inside the extraction-run reference of the
+statement it concerns, as process provenance. It is never used to rank,
+order or filter a value; a statement without one is not thereby certain;
+the public export leaves notes out as free text. The graph still holds no
+confidence number, epistemic qualifier, or per-statement trust or
+acceptance marker. §1, §3–§6 and Rulings 2–6 stand. The consequence "zero
+graph / export / privacy delta" no longer holds.
 
 ## Context
 

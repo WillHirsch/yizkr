@@ -102,6 +102,18 @@ class ScriptedLlm:
         return self.response
 
 
+class Stopping(ScriptedLlm):
+    """A scripted client whose engine reports why its model stopped
+    (`last_report`, as the engines' clients do)."""
+
+    def __init__(self, response: str, stop_reason: str) -> None:
+        super().__init__(response)
+        self.stop_reason = stop_reason
+
+    def last_report(self) -> dict:
+        return {"stop_reason": self.stop_reason}
+
+
 class TestAdjudication:
     def test_verdicts_parse_and_off_list_rulings_drop(self):
         lines = [
@@ -125,7 +137,7 @@ class TestAdjudication:
             json.dumps(  # unknown verdict: dropped
                 {"qid_a": "Q3", "qid_b": "Q2", "verdict": "overlaps"}
             ),
-            json.dumps({"done": True, "proposals_emitted": 3}),
+            json.dumps({"done": True}),
         ]
         llm = ScriptedLlm("\n".join(lines))
         questions = [Question(kind="parent", qid_a="Q3", qid_b="Q2")]
@@ -135,6 +147,30 @@ class TestAdjudication:
         ]
         # the prompt shows full labels — the evidence the model weighs
         assert "Brunnenring 35, Flörburg, Germany" in llm.prompts[0]
+
+    def test_the_prompt_asks_for_a_done_line_and_no_count(self):
+        """The answer ends with `{"done": true}`, whose presence is the
+        gate: a count of the proposals gated nothing (#7)."""
+        llm = ScriptedLlm('{"done": true}')
+        question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
+        assert adjudicate_places(llm, [question], places()) == []
+        assert 'End with exactly:\n{"done": true}\n' in llm.prompts[0]
+        assert "emitted" not in llm.prompts[0]
+
+    @pytest.mark.parametrize(
+        "done", ['{"done": true}', '{"done": true, "proposals_emitted": 7}']
+    )
+    def test_an_answer_stopped_at_the_output_limit_raises(self, done):
+        """Its engine stopped it at max_tokens: it is cut off, sentinel or
+        no (#7)."""
+        verdict = json.dumps({"qid_a": "Q3", "qid_b": "Q2", "verdict": "same"})
+        question = Question(kind="parent", qid_a="Q3", qid_b="Q2")
+        llm = Stopping(f"{verdict}\n{done}", "max_tokens")
+        with pytest.raises(ValueError, match="cut off at max_tokens"):
+            adjudicate_places(llm, [question], places())
+        llm = Stopping(f"{verdict}\n{done}", "end_turn")
+        (proposal,) = adjudicate_places(llm, [question], places())
+        assert proposal.verdict == "same"
 
     def test_missing_sentinel_raises(self):
         llm = ScriptedLlm(

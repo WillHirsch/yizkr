@@ -242,7 +242,15 @@ var/llm-cache/                     (--cache; private, below)
     <key>.replaced-<stamp>.json    an entry a newer one displaced
     <key>.session/<opening>/       an opening turn's session files, under
                                    the SHA-256 of the answer they hold
+    <key>.session/
+      <opening>.replaced-<stamp>/  a session folder a newer keep displaced
 ```
+
+`<stamp>` is the second the thing was moved aside at, in a fixed-width
+UTC form (`20260929T090000Z`), and a random suffix that tells two of one
+second apart. So names of different seconds sort by time, and names of
+one second, or from across a change of the clock, sort in an order of
+their own.
 
 An entry holds `format`, `key`, `components` (the key's components, whose
 canonical JSON hashes to the key), `response`, `origin` (`engine`, or an
@@ -255,17 +263,18 @@ as the attempt that answered reported them): the `session_id` it ran
 in, its `usage` (`input_tokens`, `output_tokens`,
 `cache_creation_input_tokens` and `cache_read_input_tokens`, summed
 over it and any attempts a subscription limit refused before it), its
-`num_turns` and its result's `subtype`. A field its stream did not
-report is left out: a stream cut off before its result event reports no
-usage of its own. None of it is a key component, so two
-calls that send the same are keyed the same whatever their streams
-report, and an answer served again adds nothing to its entry. A fork's
-entry adds how its session was obtained (`session`: `live`, `resumed`,
-`replayed` or `recomputed`) and the `opening_sha256` it was made on. An
-adoption's entry holds the components when its seeder gives them, and
-the provenance its seeder gives, with `adopted_at` (Seeding, below). An
-entry moved aside gains `rejected` (`at`, `reason`, `role`) or
-`replaced` (`at`); an answer recorded as rejected (`record_rejected`)
+`num_turns` and its result's `subtype`, but not its `stop_reason`, which
+its caller judges when the engine gives the answer (Rejection, below). A
+field its stream did not report is left out: a stream cut off before its
+result event reports no usage of its own. None of it is a key component,
+so two calls that send the same are keyed the same whatever their
+streams report, and an answer served again adds nothing to its entry. A
+fork's entry adds how its session was obtained (`session`: `live`,
+`resumed`, `replayed` or `recomputed`) and the `opening_sha256` it was
+made on. An adoption's entry holds the components when its seeder gives
+them, and the provenance its seeder gives, with `adopted_at` (Seeding,
+below). An entry moved aside gains `rejected` (`at`, `reason`, `role`)
+or `replaced` (`at`); an answer recorded as rejected (`record_rejected`)
 has `rejected` from the start. An entry is served only under the key it
 records.
 
@@ -355,10 +364,31 @@ folder and writes nothing, and what calls made through it change (an
 answer rejected, one stored) stays in memory (ADR-0032 §3). A folder the
 cache would refuse to open it refuses too (`CacheRefused`; The cache
 folder, above). A kept session comes back as the names of its files
-only, with no bytes, read through its folder opened once, so one
-replaced meanwhile by renames is never read torn, and looked for again a
-moment later while it is missing. The call estimate reads the cache so,
-beside a run that holds it (docs/runbooks/scratch-run.md, Before a run).
+only, with no bytes, and comes back whole however the holder keeps that
+session meanwhile: a session kept for an answer is never read empty, and
+a read never fails and never waits.
+
+Two things hold it, against a keep that publishes a session by moving the
+folder it finds at the answer's path aside and renaming its own in. The
+folder is opened once and listed through that one handle, so a folder
+renamed as the listing runs is still listed whole. And where a keep is
+between its two renames, the answer's path holding no folder at all, the
+reader takes a folder that keep moved aside
+(`<opening>.replaced-<stamp>/`, the first that lists any file, newest
+first as far as the stamps order them): it holds the session kept for the
+same answer, and no keep touches a folder moved aside again. A path with
+no folder and nothing moved aside beside it is a session not kept yet,
+which is no session: the first keep for an answer renames its folder in
+over nothing.
+
+The reader under the lock (`EngineCache.kept_session`, which a run
+resumes from) reads a folder moved aside the same way, so the two answer
+alike: a keep that ended between its renames, killed or with its rename
+in refused, leaves the session kept for that answer where a run finds it
+and where the estimate counted it.
+
+The call estimate reads the cache so, beside a run that holds it
+(docs/runbooks/scratch-run.md, Before a run).
 `llm.cache_holder` names the process that holds a cache, from its lock
 file's record, without taking the lock.
 
@@ -397,13 +427,52 @@ the cache as it ends one without it. Rejected are:
   of the engine's fails the document, and the next run transcribes it
   again. A stricter check applies to every transcription, the stored
   views included;
-- a chunk response cut off before its terminal sentinel;
-- a critique without its terminal sentinel (a refusal, one cut off, a
-  usage-limit notice): its findings are kept, and the critic never
-  raises;
+- a chunk response cut off: one whose model stopped at the output limit,
+  whatever it holds, or one without its terminal sentinel;
+- a critique cut off at the output limit, or without its terminal
+  sentinel (a refusal, one cut off, a usage-limit notice): its findings
+  are kept, and the critic never raises;
 - a single-call extraction (`ingest extract --strategy single`) with no
-  claim JSON or no valid claim, which fails, or without its terminal
-  sentinel, whose claims are kept.
+  claim JSON or no valid claim, which fails, or one cut off at the output
+  limit or without its terminal sentinel, whose claims are kept.
+
+The terminal sentinel is the line `{"done": true}` that the chunk,
+single-call extraction and critique prompts ask an answer to end with; its
+presence is the gate, and whatever else the line carries is not read. An
+answer whose model stopped at the output limit is cut off whatever it
+holds, its sentinel included: the engine reports why its model stopped
+(`stop_reason`, What a call's stream reported, below; the Anthropic API
+says so on its response), and a `max_tokens` stop is the output limit's
+(`llm.at_output_limit`). Its rejection's reason is the caller's, then
+`cut off at max_tokens` (`chunk: cut off at max_tokens`, say). That is
+judged when the engine gives the answer: an entry keeps no stop reason,
+so an answer the cache gives from one, which no call made now, is judged
+by its text alone. Since the caller rejects a cut-off answer as soon as
+it is given, an entry holds a cut-off chunk, critique or single-call
+answer only when that rejection never came (the process ended first, or
+the rejection failed).
+
+The pinned claude CLI gave up on an answer its model stopped at the output
+limit, when run at a limit of 40 tokens, rather than hand it back: its
+stream ended with an API-error notice, an assistant event whose `error`
+is `max_output_tokens`, and a result that reports `is_error`, with no
+answer. That structure, never the notice's text, makes the call raise
+`llm.OutputLimitReached` (What a call's stream reported, below), and an
+engine that does hand back such an answer, with the stop reason
+`max_tokens`, is read as above. Like any error, it stores nothing, so
+there is no entry to reject, and the next call under the key misses as
+`absent` and asks the engine again. Its callers take it as an answer cut
+off at the output limit:
+
+- a chunk spends a try on it, as on a cut-off answer, and a chunk that
+  gets nothing else fails with `ChunkIncomplete: cut off at max_tokens`;
+- the entity manifest and the segmentation take it as an answer refused,
+  so their fallback tiers stand in, as for a cut-off answer;
+- the critic has no findings from it and still never raises, and the
+  critique stage is done but needs attention, with the reason
+  `critique cut off at max_tokens: no findings`, which a run that reuses
+  the empty critique carries on;
+- a single-call extraction fails with it: there is no claim to keep.
 
 So a parser fix recovers every response the old parser accepted, without
 a call, but not one it rejected.
@@ -414,7 +483,10 @@ The entity manifest and the segmentation behind it are asked in two
 attempts each, and each attempt is keyed apart (`llm.for_attempt`). A
 refused answer is kept, not rejected: a later run is answered attempt by
 attempt from the cache, takes the same fallback, and gives the same
-batch, whatever the engine would answer now. `--refresh extract` or a new
+batch, whatever the engine would answer now. An attempt the claude CLI
+gave up on at the output limit is the exception: it stores nothing, so a
+later run asks it again, and its fallback repeats only if the engine
+gives up again (#390 is to have it replay). `--refresh extract` or a new
 epoch asks again.
 
 **A stricter parser replays a kept answer, rather than rejecting it.** An
@@ -453,12 +525,18 @@ conversation exactly as the fork's context assumes:
 1. **Resumed exactly.** When a conversation is opened, the cache keeps
    what the engine needs to resume it, beside the opening turn's entry and
    under the SHA-256 of the opening answer it holds
-   (`<key>.session/<opening>/`, published whole): for claude-code, the
-   session's transcript files. A fork resumes only the session kept for
+   (`<key>.session/<opening>/`, published whole by renaming its folder
+   into place, over the folder kept for that answer before, which is
+   moved aside and kept): for claude-code, the session's transcript
+   files. A fork resumes only the session kept for
    the opening answer the cache serves, and replays when none is kept for
    it: a session made on another answer (by two callers that opened the
    conversation at once, or a replay whose session could not be kept) is
-   never resumed for it. The files are put back into the CLI's projects
+   never resumed for it. A keep that ended between its two renames leaves
+   the answer's own path with no folder and the session in the folder it
+   moved aside (`<opening>.replaced-<stamp>/`), where a fork resumes it
+   as it would from the path itself, so nothing replays for the want of a
+   session that is kept (Reading a cache as it is, above). The files are put back into the CLI's projects
    folder for `--resume … --fork-session`, and released after the forks,
    as every transcript is. The API engine rebuilds the conversation from
    the opening turn's prompt and cached answer. No call is made; the event
@@ -772,7 +850,7 @@ in, and the kind of call:
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
 | `cache-reject` | a caller's rejection moved an answer aside | `reason` |
 | `cache-adopt` | an answer was seeded as an adoption | `reason` |
-| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns` and `subtype` |
+| `call` | a call reached the engine, with or without the cache (a hit is none; a miss or a replay is one) | `outcome` (`ok`, `error`, `paused` or `interrupted`), `duration_s` (end to end, so it includes any time paced); when there is something to say, `replay` (`true` for a replay of a conversation's opening turn, Conversations and forks), `wait_s` (the part of `duration_s` spent waiting for the subscription), `refused` (how many of its attempts a limit refused), `held` (why it last waited or paused: `usage limit`, `reserve`, `throttle`, `rate limit`, `overloaded`, `usage credits` or `closed`), `error` (the exception's name, never its message), and for a pause for a subscription limit its `window` and `resumes_at` (absent for `usage credits`: the subscription does not say when that clears); and what the call's stream reported of it, below: `model`, `cli_version`, `usage`, `num_turns`, `subtype`, `stop_reason` and `api_error` |
 | `alert` | an anomaly alert was appended | `check`, `status` |
 | `anomaly-recheck` | a recheck of the stored outputs began (docs/ANOMALIES.md) | `config` (the thresholds' digest), `documents` |
 | `anomaly-error` | an anomaly check raised; nothing failed with it | `error` (the exception's name, never its message), `hook` |
@@ -787,14 +865,30 @@ fields are those its final attempt's stream reported: from its init
 event, the `model` it ran on (the model id the configured name resolved
 to, which the `model-mismatch` anomaly check compares with the run
 manifest's, docs/ANOMALIES.md) and the `cli_version`; from its result
-event, its `num_turns` and its `subtype` (`success`, `error_max_turns`,
+event, its `num_turns`, its `subtype` (`success`, `error_max_turns`,
 `error_during_execution`; the CLI reports an API error as a `success`
-whose call fails). The `usage` (the four token counts its cache entry
-keeps, Layout, above) is summed over all its attempts, those a
-subscription limit refused included. A final attempt cut off before its
-result event (a timeout, say) gives no turns or subtype, whatever an
-earlier attempt reported, and no usage of its own; one cut off before
-its init event names no model. A replay is a call, and carries what the replay
+whose call fails) and its `stop_reason`, why its model stopped on its
+final turn (`end_turn`; `max_tokens` when that turn hit the output limit,
+an answer the pipeline takes as cut off, Rejection, above; `refusal`;
+...); and from its last assistant event, the class of API error it
+stands for, its `error` (`api_error`: `max_output_tokens`, `rate_limit`,
+`overloaded`, ...). The stop reason is the result event's alone: an
+assistant event is printed as its content block completes, before the
+model's stop reason is known. The `usage` (the four token counts its
+cache entry keeps, Layout, above) is summed over all its attempts, those
+a subscription limit refused included. A final attempt cut off before its
+result event (a timeout, say) gives no turns, subtype or stop reason,
+whatever an earlier attempt reported, and no usage of its own; one cut
+off before its init event names no model.
+
+A call the CLI gave up on at the output limit (Rejection, above) has the
+outcome `error`, its `error` is `OutputLimitReached`, its `api_error` is
+`max_output_tokens`, and its `stop_reason` is the notice's
+(`stop_sequence`), as CLI 2.1.237 prints them. The anomaly checks count
+such a chunk call as a truncation, never as a failed call
+(docs/ANOMALIES.md). A call that crashed or timed out after the CLI
+printed the notice carries the same `api_error` under another `error`:
+it failed. A replay is a call, and carries what the replay
 used; when it answers as the cache did, the opening turn's entry keeps
 what the original call's stream reported. A call the cache answers, by
 key match or adoption, makes no call, so it has no `call` event and uses

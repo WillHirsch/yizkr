@@ -2,6 +2,13 @@
 
 Status: accepted
 
+Amended by #7 (2026-09-29): the terminal sentinel carries no gap count,
+nor any other (§B).
+
+Amended by [ADR-0035](0035-mention-records.md) (owner decision
+2026-09-29, #385): §A's type hint is given in English, so the
+unclassified-entities query (#91) groups like with like.
+
 ## Context
 
 Two trial defects — a company typed as a `place` (ADR-0012), a form
@@ -64,13 +71,13 @@ property expresses:
     {"gap": {"subject": "<id/label>", "predicate": "<free text>",
              "object": "<id/label/literal>", "evidence": "<excerpt>"}}
 
-and its terminal sentinel gains a gap count:
-`{"done": true, "claims_emitted": N, "gaps_emitted": M}`. Gap lines are
-parsed and aggregated across chunks into a per-document `gaps.ndjson`,
-counted in the run log, and rendered to a `gaps.csv` the curator reads —
-but are **never written to the graph** (they have no property id). A
-relation the model would otherwise have dropped or forced becomes a
-lossless, reviewable "the vocabulary is missing this" signal.
+and its terminal sentinel stays `{"done": true}` (ADR-0006 §3). Gap
+lines are parsed and aggregated across chunks into a per-document
+`gaps.ndjson`, counted in the run log, and rendered to a `gaps.csv` the
+curator reads — but are **never written to the graph** (they have no
+property id). A relation the model would otherwise have dropped or
+forced becomes a lossless, reviewable "the vocabulary is missing this"
+signal.
 
 ### C. Critic pass
 

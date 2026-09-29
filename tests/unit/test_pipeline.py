@@ -5,6 +5,7 @@ import errno
 import hashlib
 import itertools
 import json
+import re
 import subprocess
 import unicodedata
 from pathlib import Path
@@ -121,6 +122,24 @@ class FakeLlm:
         return self.response
 
 
+class Stopping(FakeLlm):
+    """A client that takes rejections, as the LLM cache's does, and
+    reports why its model stopped (`last_report`, as the engines' clients
+    do). No answer is one it kept from an earlier call."""
+
+    def __init__(self, response: str, stop_reason: str) -> None:
+        super().__init__(response)
+        self.stop_reason = stop_reason
+        self.rejected: list[tuple[str, str]] = []
+
+    def last_report(self) -> dict:
+        return {"stop_reason": self.stop_reason}
+
+    def reject(self, response, reason) -> bool:
+        self.rejected.append((response, reason))
+        return False
+
+
 class TestTranscribe:
     def test_text_file_engine(self, tmp_path):
         source = tmp_path / "scan.txt"
@@ -231,6 +250,43 @@ class TestExtract:
             "child: wikibase-item — the subject has the object as a child"
             in llm.prompts[0]
         )
+
+    def test_the_prompt_asks_for_a_done_line_and_no_count(self):
+        """The answer ends with `{"done": true}`: a count of the claims
+        gated nothing (#7)."""
+        llm = FakeLlm(json.dumps({"claims": CLAIMS}))
+        LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert 'final line:\n{"done": true}\n' in llm.prompts[0]
+        assert "emitted" not in llm.prompts[0]
+
+    @pytest.mark.parametrize(
+        ("stop_reason", "rejected"),
+        [
+            ("max_tokens", ["extraction: cut off at max_tokens"]),
+            ("end_turn", []),
+        ],
+    )
+    def test_an_answer_stopped_at_the_output_limit_is_rejected(
+        self, stop_reason, rejected
+    ):
+        """An answer whose engine reports it stopped at max_tokens is cut
+        off, even with its sentinel: its claims are kept, and it is
+        rejected, as one without its sentinel is (#7)."""
+        whole = "\n".join([*map(json.dumps, CLAIMS), '{"done": true}'])
+        llm = Stopping(whole, stop_reason)
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert len(batch.claims) == 2
+        assert llm.rejected == [(whole, reason) for reason in rejected]
+
+    def test_a_cut_answer_stopped_at_the_output_limit_says_so(self):
+        """Cut off twice over, at the output limit and before its
+        sentinel: its claims are kept, and the stop reason names the
+        rejection (#7)."""
+        cut = "\n".join(map(json.dumps, CLAIMS))
+        llm = Stopping(cut, "max_tokens")
+        batch = LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
+        assert len(batch.claims) == 2
+        assert llm.rejected == [(cut, "extraction: cut off at max_tokens")]
 
     def test_llm_extractor_rejects_prose_without_json(self):
         llm = FakeLlm("I could not find any claims, sorry!")
@@ -1297,38 +1353,161 @@ def _snaks(statement: dict) -> list[dict]:
     ]
 
 
-def _refuse_over_limit(item) -> None:
-    """Refuse an edit of `item` as Wikibase does when a snak of one of its
-    statements, in a value, a qualifier or a reference, holds a text of
-    more than 400 characters (its `string-limits`): a string value (of a
-    string or external-id snak) counted in NFC, the form Wikibase puts it
-    in before it checks it, and a monolingual text as it is sent. The
-    whole edit is refused, and nothing of it is kept (#366)."""
+# Wikibase's `illegal-string-chars` check, /^\s|[\v\t]|\s$/u, which it
+# makes of a text value and of a trimmed term, as PHP matches it in the
+# wikibase/wikibase:7 image, by Unicode property (#384): the characters of
+# `\s`, which may not begin or end a text, and those of `[\v\t]`, which may
+# not be in one. Written out here, apart from the writer's own sets, so that
+# a fault in those is never the fake's too
+WIKIBASE_SPACE = "".join(
+    map(
+        chr,
+        (0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x180E)
+        + tuple(range(0x2000, 0x200B))
+        + (0x2028, 0x2029, 0x202F, 0x205F, 0x3000),
+    )
+)
+WIKIBASE_BREAK_OR_TAB = "".join(
+    map(chr, (0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029))
+)
+# the separators (Unicode Z) Wikibase trims from either end of a term
+WIKIBASE_SEPARATORS = "".join(
+    map(
+        chr,
+        (0x20, 0xA0, 0x1680, *range(0x2000, 0x200B), 0x2028, 0x2029)
+        + (0x202F, 0x205F, 0x3000),
+    )
+)
+
+
+def _illegal(text: str) -> bool:
+    """Whether Wikibase's `illegal-string-chars` check refuses `text`."""
+    return bool(text) and (
+        text[0] in WIKIBASE_SPACE
+        or text[-1] in WIKIBASE_SPACE
+        or any(char in WIKIBASE_BREAK_OR_TAB for char in text)
+    )
+
+
+# the characters Wikibase makes U+FFFD in a string value before it checks
+# it (StringNormalizer::cleanupToNFC, through UtfNormal's cleanUp): every
+# control character but the tab, the line feed and the carriage return,
+# and the noncharacters U+FFFE and U+FFFF
+WIKIBASE_CLEANED = "".join(
+    map(chr, (*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0xFFFE, 0xFFFF))
+)
+
+
+def _cleaned_up(text: str) -> str:
+    """A string value as Wikibase cleans it up before it checks it
+    (cleanupToNFC): each character of WIKIBASE_CLEANED made U+FFFD, and
+    the whole in NFC. So Wikibase changes a vertical tab or a form feed in
+    a string value, where it refuses one in a monolingual text (#401's
+    review)."""
+    return unicodedata.normalize(
+        "NFC",
+        "".join(
+            "\N{REPLACEMENT CHARACTER}" if char in WIKIBASE_CLEANED else char
+            for char in text
+        ),
+    )
+
+
+def _kept_term(term: str) -> str:
+    """A label, description or alias as Wikibase keeps it
+    (StringNormalizer::trimToNFC): each run of control characters made one
+    space, the separators at either end trimmed, and the whole in NFC."""
+    term = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", term)
+    return unicodedata.normalize("NFC", term.strip(WIKIBASE_SEPARATORS))
+
+
+def _refusal(name: str, info: str, text: str):
     from wikibaseintegrator.wbi_exceptions import ModificationFailed
 
-    for statements in item.get_json().get("claims", {}).values():
+    return ModificationFailed(
+        {
+            "code": "modification-failed",
+            "info": info,
+            "messages": [{"name": name, "parameters": [text]}],
+        }
+    )
+
+
+def _refuse_as_the_instance(item) -> None:
+    """Refuse an edit of `item` as Wikibase does, whole, when it sends a
+    text Wikibase does not hold, and keep nothing of it:
+
+    * in a snak of one of its statements (a value, a qualifier or a
+      reference), a text of more than 400 characters (its
+      `string-limits`), a string value (of a string or external-id snak)
+      counted as Wikibase cleans it up before it checks it (_cleaned_up),
+      in NFC, and a monolingual text as it is sent (#366); or a text with
+      a line break or a tab in it, or whitespace at either end (its
+      `illegal-string-chars`, #384), a string value again as cleaned up;
+    * a label, description or alias that, as Wikibase keeps it
+      (_kept_term), has more than 250 characters or fails the same check,
+      and an alias with nothing left (#384);
+    * an item whose label and description, as Wikibase keeps them, are
+      the same (its LabelDescriptionNotEqualValidator, #401's review)."""
+    data = item.get_json()
+    for statements in data.get("claims", {}).values():
         for statement in statements:
             for snak in _snaks(statement):
                 datavalue = snak.get("datavalue") or {}
                 if datavalue.get("type") == "string":
-                    text = unicodedata.normalize("NFC", datavalue["value"])
+                    text = _cleaned_up(datavalue["value"])
                 elif datavalue.get("type") == "monolingualtext":
                     text = datavalue["value"]["text"]
                 else:
                     continue
                 if len(text) > 400:
-                    raise ModificationFailed(
-                        {
-                            "code": "modification-failed",
-                            "info": "Must be no more than 400 characters long",
-                            "messages": [
-                                {
-                                    "name": "wikibase-validator-too-long",
-                                    "parameters": ["400", text],
-                                }
-                            ],
-                        }
+                    raise _refusal(
+                        "wikibase-validator-too-long",
+                        "Must be no more than 400 characters long",
+                        text,
                     )
+                if _illegal(text):
+                    raise _refusal(
+                        "wikibase-validator-illegal-string-chars",
+                        "Illegal characters in a text value",
+                        text,
+                    )
+    terms = [
+        *(
+            (term["value"], False)
+            for kind in ("labels", "descriptions")
+            for term in data.get(kind, {}).values()
+        ),
+        *(
+            (alias["value"], True)
+            for aliases in data.get("aliases", {}).values()
+            for alias in aliases
+        ),
+    ]
+    for term, alias in terms:
+        kept = _kept_term(term)
+        if len(kept) > 250:
+            raise _refusal(
+                "wikibase-validator-too-long",
+                "Must be no more than 250 characters long",
+                kept,
+            )
+        if _illegal(kept) or (alias and not kept):
+            raise _refusal(
+                "wikibase-validator-illegal-string-chars",
+                "Illegal characters in a term",
+                kept,
+            )
+    labels = data.get("labels", {})
+    for language, description in data.get("descriptions", {}).items():
+        kept = _kept_term(description["value"])
+        label = labels.get(language)
+        if kept and label and _kept_term(label["value"]) == kept:
+            raise _refusal(
+                "wikibase-validator-label-equals-description",
+                "Label and description must not be the same",
+                kept,
+            )
 
 
 class FakeItems:
@@ -1336,8 +1515,9 @@ class FakeItems:
 
     Every get() returns the one object the store holds, so a write through
     any copy is seen through every other (compare DetachedItems). As an
-    instance does, write() refuses an edit that sends a text over the 400
-    characters Wikibase holds in a value (_refuse_over_limit)."""
+    instance does, write() refuses an edit that sends a text Wikibase does
+    not hold, over its limits or with a line break, a tab or whitespace at
+    either end (_refuse_as_the_instance)."""
 
     def __init__(self) -> None:
         self.store: dict[str, object] = {}
@@ -1350,7 +1530,7 @@ class FakeItems:
         item = WikibaseIntegrator().item.new()
 
         def write(summary=None, **_):
-            _refuse_over_limit(item)
+            _refuse_as_the_instance(item)
             self.writes += 1
             if item.id is None:
                 item.id = f"Q{self._next}"
@@ -1387,10 +1567,12 @@ class DetachedItems(FakeItems):
     As an instance serves it, every text in a copy is in Unicode NFC:
     Wikibase saves string and external-id values, labels, descriptions
     and aliases in NFC, and its API gives every text back in NFC,
-    monolingual text included (#335, #349). `sent` keeps each write's
-    item as the writer sent it. As an instance does, a write that sends
-    a text over the 400 characters Wikibase holds in a value is refused
-    whole, and changes nothing (_refuse_over_limit, #366).
+    monolingual text included (#335, #349), and it keeps a label, a
+    description or an alias trimmed (_kept_term, #384): an empty one is
+    gone, and so is a repeated alias. `sent` keeps each write's item as
+    the writer sent it. As an instance does, a write that sends a text
+    Wikibase does not hold is refused whole, and changes nothing
+    (_refuse_as_the_instance, #366, #384).
 
     Unlike an instance, the store's round trip through `get_json` and
     `from_json` ignores WikibaseIntegrator's `remove` flags: a statement
@@ -1403,7 +1585,7 @@ class DetachedItems(FakeItems):
 
     def _bound(self, item):
         def write(summary=None, **_):
-            _refuse_over_limit(item)
+            _refuse_as_the_instance(item)
             self.writes += 1
             if item.id is None:
                 item.id = f"Q{self._next}"
@@ -1421,8 +1603,22 @@ class DetachedItems(FakeItems):
     def _copy(self, item):
         from wikibaseintegrator import WikibaseIntegrator
 
-        # an instance gives every text back in NFC
+        # an instance gives every text back in NFC, and keeps a term
+        # trimmed
         data = _in_form(item.get_json(), "NFC")
+        for kind in ("labels", "descriptions"):
+            terms = data.get(kind, {})
+            for language, term in list(terms.items()):
+                term["value"] = _kept_term(term["value"])
+                if not term["value"]:
+                    del terms[language]
+        for language, aliases in data.get("aliases", {}).items():
+            kept = {}
+            for alias in aliases:
+                value = _kept_term(alias["value"])
+                if value:
+                    kept.setdefault(value, dict(alias, value=value))
+            data["aliases"][language] = list(kept.values())
         data["lastrevid"] = self.writes
         for statements in data.get("claims", {}).values():
             for statement in statements:

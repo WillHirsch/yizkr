@@ -5,6 +5,7 @@ so the universe cannot quietly lose one while it grows, and they check
 that the GEDCOM rendering says nothing the universe's sources do not.
 """
 
+import random
 import re
 from collections import Counter
 from datetime import date, timedelta
@@ -24,7 +25,7 @@ SOURCES = {source.key: source for source in u.SOURCES}
 
 PERSECUTION_KINDS = ("event", "imprisonment", "release", "deportation")
 
-# Kinship words in the universe's two languages, to spot a kinship term
+# Kinship words in the universe's languages, to spot a kinship term
 # inside an appellation (ADR-0018).
 KINSHIP_WORDS = {
     "aunt", "brother", "cousin", "dad", "daughter", "father", "grandfather",
@@ -33,6 +34,11 @@ KINSHIP_WORDS = {
     "bruder", "großmutter", "großvater", "mutter", "mutti", "neffe",
     "nichte", "oma", "onkel", "opa", "schwester", "sohn", "tante",
     "tochter", "vater", "vati", "vetter",
+    "бабушка", "брат", "двоюродная", "двоюродный", "дедушка", "дочь",
+    "дядя", "жена", "мама", "мать", "муж", "отец", "папа", "племянник",
+    "племянница", "сестра", "сын", "тётя",
+    "beppe", "broer", "dochter", "heit", "mem", "muoike", "neef", "nicht",
+    "oerbeppe", "oerpake", "omke", "pake", "soan", "suster",
 }  # fmt: skip
 
 
@@ -140,6 +146,18 @@ class TestIntegrity:
             text = SOURCES[assertion.source].text
             assert assertion.excerpt in text, assertion
 
+    def test_verbatim_values_occur_in_their_excerpts(self):
+        # the manifest keeps these values as the source words them
+        verbatim = {
+            "age_at_death",
+            "cause_of_death",
+            "nickname",
+            "referred_to_as",
+        }
+        for assertion in u.ASSERTIONS:
+            if assertion.property in verbatim:
+                assert assertion.value in assertion.excerpt, assertion
+
     def test_every_person_is_attested(self):
         mentioned = {a.subject for a in u.ASSERTIONS} | {
             a.value for a in u.ASSERTIONS if isinstance(a.value, str)
@@ -235,6 +253,23 @@ class TestNames:
         assert infant.sex is None
         assert [n.form for n in infant.names] == ["placeholder"]
 
+    def test_people_named_only_by_a_kinship_term(self):
+        # Sybren's letter names his parents only as Mem and heit: each has
+        # a sex and a placeholder name, and the letter's kinship claims
+        unnamed = {
+            person.key
+            for person in u.PEOPLE
+            if person.sex and {n.form for n in person.names} == {"placeholder"}
+        }
+        assert unnamed == {"mr-van-t-nijks", "mrs-van-t-nijks"}
+        for key in unnamed:
+            parent_of = {
+                a.subject
+                for a in u.ASSERTIONS
+                if a.property in {"father", "mother"} and a.value == key
+            }
+            assert parent_of == {"sipkje-faxridge", "sybren-van-t-nijks"}
+
     def test_a_courtesy_title_is_not_kinship(self):
         # ADR-0018: "Nana Maisie" is an appellation, not a relation
         (called,) = u.about("maisie-cutmore", "referred_to_as")
@@ -301,25 +336,43 @@ class TestFamily:
         # and the ego as object, so the term is what the subject is to the
         # object.  The universe's parent edges bear out each one.
         parents: dict[str, set[str]] = {}
+        fathers: dict[str, set[str]] = {}
         for a in u.ASSERTIONS:
             if a.property in {"father", "mother"}:
                 parents.setdefault(a.subject, set()).add(a.value)
+            if a.property == "father":
+                fathers.setdefault(a.subject, set()).add(a.value)
 
         def children(of: set[str]) -> set[str]:
             return {key for key, theirs in parents.items() if theirs & of}
 
+        def up(keys: set[str], generations: int) -> set[str]:
+            for _ in range(generations):
+                keys = set().union(*(parents.get(key, set()) for key in keys))
+            return keys
+
         def aunts_and_uncles(ego: str) -> set[str]:
             mine = parents.get(ego, set())
-            grandparents = set().union(*(parents.get(p, set()) for p in mine))
-            return children(grandparents) - mine
+            return children(up(mine, 1)) - mine
 
+        def of_sex(sex: str, keys: set[str]) -> set[str]:
+            return {key for key in keys if PEOPLE[key].sex == sex}
+
+        def paternal_uncles(ego: str) -> set[str]:
+            father = fathers.get(ego, set())
+            return of_sex("male", children(up(father, 1)) - father)
+
+        # the terms as the sources word them: with a side ("дядя по отцу",
+        # uncle on the father's side) and a degree ("двоюродная сестра",
+        # first cousin; "oerbeppe", great-grandmother)
         derived = {
-            "aunt": lambda ego: {
-                key
-                for key in aunts_and_uncles(ego)
-                if PEOPLE[key].sex == "female"
-            },
+            "aunt": lambda ego: of_sex("female", aunts_and_uncles(ego)),
             "cousin": lambda ego: children(aunts_and_uncles(ego)),
+            "дядя по отцу": paternal_uncles,
+            "двоюродная сестра": lambda ego: of_sex(
+                "female", children(aunts_and_uncles(ego))
+            ),
+            "oerbeppe": lambda ego: of_sex("female", up({ego}, 3)),
         }
         kinship = [a for a in u.ASSERTIONS if a.property == "relative"]
         assert kinship
@@ -337,6 +390,9 @@ class TestFamily:
         } == {
             ("klara-loebig", "nicholas-lobig", "aunt"),
             ("leopold-loebig", "gustav-loebig", "cousin"),
+            ("sebastian-loebig", "rudolf-loebig", "дядя по отцу"),
+            ("klara-loebig", "rudolf-loebig", "двоюродная сестра"),
+            ("mrs-van-t-nijks", "nicholas-lobig", "oerbeppe"),
         }
 
     def test_spouses_in_three_generations(self):
@@ -348,7 +404,8 @@ class TestFamily:
         generations = {
             PEOPLE[next(iter(couple))].generation for couple in couples
         }
-        assert len(couples) == 5
+        # with Rudolf and Nina, and Sipkje's parents
+        assert len(couples) == 7
         assert generations == {1, 2, 3}
 
     def test_a_divorce_dated_by_a_source(self):
@@ -684,6 +741,306 @@ class TestCompilation:
                 if self.MARKED not in a.qualifiers and a.subject in PEOPLE
             }
             assert own - {claim[:2] for claim in read}
+
+
+class TestLanguages:
+    """The sources beyond German and English are in languages drawn for
+    their naming patterns, from the table the module records, with the
+    seed it records (#387)."""
+
+    def test_the_languages_are_the_seeded_draw(self):
+        codes = [code for code, _ in u.LANGUAGE_TABLE]
+        assert len(codes) == len(set(codes))
+        assert not {"de", "en"} & set(codes)
+        drawn = random.Random(u.LANGUAGE_SEED).sample(
+            u.LANGUAGE_TABLE, len(u.LANGUAGES)
+        )
+        assert tuple(code for code, _ in drawn) == u.LANGUAGES
+
+    def test_every_language_is_the_universe_s(self):
+        languages = {"de", "en", *u.LANGUAGES}
+        assert {source.lang for source in u.SOURCES} - {None} == languages
+        named = {
+            name.lang
+            for thing in (*u.PEOPLE, *u.PLACES)
+            for name in thing.names
+        }
+        assert named - {None} <= languages
+
+
+def stems(place: u.Place) -> set[str]:
+    """The first five letters of each capitalised word of a place's
+    names: enough to find the name inflected, or made an adjective
+    ("Калдовский район", "Калдовского района", "Калдовское")."""
+    return {
+        word[:5]
+        for name in (place.label, *(n.text for n in place.names))
+        for word in re.findall(r"\w+", name)
+        if word[0].isupper() and len(word) >= 5
+    }
+
+
+def position(place: u.Place, text: str) -> int:
+    """Where `text` first names `place`, by one of its stems."""
+    found = [
+        word.start()
+        for word in re.finditer(r"\w+", text)
+        if word.group().startswith(tuple(stems(place)))
+    ]
+    assert found, (place.key, text)
+    return min(found)
+
+
+class TestNamingPatterns:
+    """The naming patterns extraction's mention records must handle
+    (#385), each shown by a source in a drawn language (#387). A marker of
+    a marriage, a widow or a death is a claim of its own, never part of a
+    name."""
+
+    PATTERNS = {
+        "surname first, no comma",
+        "married-name marker",
+        "married-name suffix",
+        "masculine and feminine surname",
+        "name particle",
+        "widow",
+        "the late",
+        "patronymic",
+        "kinship side",
+        "kinship degree",
+        "institution by kind and place",
+        "place with containers",
+    }
+
+    @staticmethod
+    def claims(source: str, passage: str, prop: str) -> list[u.Assertion]:
+        """The claims of `prop` that `source` makes from `passage`."""
+        return [
+            a
+            for a in u.ASSERTIONS
+            if a.source == source
+            and a.property == prop
+            and passage in a.excerpt
+        ]
+
+    @staticmethod
+    def written(source: str) -> u.Date:
+        (when,) = [
+            a.value
+            for a in u.about(source, "point_in_time")
+            if a.source == source
+        ]
+        return when
+
+    def test_every_pattern_is_shown_in_a_drawn_language(self):
+        assert set(u.NAMING_PATTERNS) == self.PATTERNS
+        shown_in = set()
+        for pattern, shown in u.NAMING_PATTERNS.items():
+            assert shown, pattern
+            for source, passage in shown:
+                assert SOURCES[source].lang in u.LANGUAGES, (pattern, source)
+                assert passage in SOURCES[source].text, (pattern, passage)
+                # each passage is what a claim of its source is read from
+                assert any(
+                    a.source == source and passage in a.excerpt
+                    for a in u.ASSERTIONS
+                ), (pattern, passage)
+                shown_in.add(SOURCES[source].lang)
+        assert shown_in == set(u.LANGUAGES)
+
+    def test_sibling_patterns_show_different_markers(self):
+        # a widow marker is no "the late" marker, and a side is no degree:
+        # each pattern is shown by passages of its own
+        for first, second in (
+            ("widow", "the late"),
+            ("kinship side", "kinship degree"),
+        ):
+            shown = set(u.NAMING_PATTERNS[first])
+            assert not shown & set(u.NAMING_PATTERNS[second])
+
+    def test_a_surname_written_first(self):
+        for source, passage in u.NAMING_PATTERNS["surname first, no comma"]:
+            written = u.Name(passage, "as_written", SOURCES[source].lang)
+            (person,) = [p for p in u.PEOPLE if written in p.names]
+            assert "," not in passage
+            # the surname leads: his wife took it by marriage
+            wives = {
+                a.subject
+                for a in u.ASSERTIONS
+                if a.property == "spouse" and a.value == person.key
+            }
+            surnames = {
+                a.value.split()[-1]
+                for wife in wives
+                for a in u.about(wife, "married_name")
+            }
+            assert passage.split()[0] in surnames
+
+    def test_a_married_name_marker_parts_two_names(self):
+        for source, passage in u.NAMING_PATTERNS["married-name marker"]:
+            # the passage gives her married name and her own, apart
+            (married,) = self.claims(source, passage, "married_name")
+            (born,) = self.claims(source, passage, "birth_name")
+            assert married.subject == born.subject
+            assert married.value != born.value
+            # the husband's surname is no part of her own
+            assert married.value.split()[-1] not in born.value
+
+    def test_a_married_name_suffix_is_an_appellation_and_a_marriage(self):
+        for source, passage in u.NAMING_PATTERNS["married-name suffix"]:
+            (called,) = self.claims(source, passage, "referred_to_as")
+            (married,) = self.claims(source, passage, "spouse")
+            assert called.value == passage
+            assert married.subject == called.subject
+            # the husband's given name, with a suffix: "his wife"
+            husband = PEOPLE[married.value]
+            words = {
+                word
+                for name in husband.names
+                if name.lang == SOURCES[source].lang
+                for word in name.text.split()
+            }
+            assert any(
+                passage.startswith(word) and passage != word for word in words
+            )
+            # an appellation, never one of her names
+            wife = PEOPLE[called.subject]
+            assert passage not in {name.text for name in wife.names}
+
+    def test_a_surname_s_masculine_and_feminine_forms(self):
+        named = {}
+        for source, passage in u.NAMING_PATTERNS[
+            "masculine and feminine surname"
+        ]:
+            (person,) = [
+                p
+                for p in u.PEOPLE
+                if passage in {name.text for name in p.names}
+            ]
+            named[person.sex] = (person.key, passage.split()[-1], source)
+        (brother, masculine, source), (sister, feminine, _) = (
+            named["male"],
+            named["female"],
+        )
+        assert feminine == masculine + "а"
+        siblings = {
+            frozenset((a.subject, a.value))
+            for a in u.ASSERTIONS
+            if a.property == "sibling" and a.source == source
+        }
+        assert frozenset((brother, sister)) in siblings
+
+    def test_a_name_particle_is_kept_whole(self):
+        for _, passage in u.NAMING_PATTERNS["name particle"]:
+            particle, stem = passage.rsplit(" ", 1)
+            assert particle.islower()
+            bearers = [
+                p
+                for p in u.PEOPLE
+                if any(stem in name.text for name in p.names)
+            ]
+            assert len(bearers) >= 2
+            written = [
+                name.text
+                for p in bearers
+                for name in p.names
+                if stem in name.text
+            ] + [
+                a.value
+                for a in u.ASSERTIONS
+                if a.property in {"birth_name", "married_name"}
+                and stem in a.value
+            ]
+            for text in written:
+                assert passage in text, text
+
+    def test_a_widow_marker_is_a_marriage_and_a_death(self):
+        for source, passage in u.NAMING_PATTERNS["widow"]:
+            (married,) = self.claims(source, passage, "spouse")
+            # her husband had died when the source was written
+            deaths = [
+                a.value
+                for a in u.about(married.value, "date_of_death")
+                if a.source == source
+            ]
+            assert deaths
+            for died in deaths:
+                assert bounds(died)[1] <= _span(self.written(source))[1]
+
+    def test_the_late_marker_bounds_a_death_by_the_writing(self):
+        for source, passage in u.NAMING_PATTERNS["the late"]:
+            (died,) = self.claims(source, passage, "date_of_death")
+            written = self.written(source)
+            assert died.value == u.Date(
+                written.year, written.month, written.day, qualifier="before"
+            )
+            # every date a source gives the death lies within the bound
+            for other in u.about(died.subject, "date_of_death"):
+                assert overlap(other.value, died.value), other
+
+    def test_a_patronymic_names_the_father(self):
+        corroborated = []
+        for source, passage in u.NAMING_PATTERNS["patronymic"]:
+            (claim,) = self.claims(source, passage, "father")
+            # no other source names another father
+            others = {
+                a.value
+                for a in u.about(claim.subject, "father")
+                if a.source != source
+            }
+            assert others <= {claim.value}
+            corroborated.append(bool(others))
+        # and another source names the same father for one of them; the
+        # other patronymic names a man no other source names
+        assert any(corroborated)
+
+    @pytest.mark.parametrize("pattern", ["kinship side", "kinship degree"])
+    def test_a_kinship_term_is_recorded_as_worded(self, pattern):
+        # TestFamily derives each one from the parent edges
+        for source, passage in u.NAMING_PATTERNS[pattern]:
+            (claim,) = self.claims(source, passage, "relative")
+            assert dict(claim.qualifiers) == {"kinship_type": passage}
+
+    def test_an_institution_named_by_its_kind_and_its_place(self):
+        for source, passage in u.NAMING_PATTERNS[
+            "institution by kind and place"
+        ]:
+            (entity,) = [e for e in u.ENTITIES if passage in e.names]
+            assert entity.kind == "organization"
+            # the place its name holds is where the source locates it
+            (located,) = self.claims(source, passage, "location")
+            assert located.subject == entity.key
+            position(PLACES[located.value], passage)
+
+    def test_a_place_named_with_its_containers(self):
+        for source, passage in u.NAMING_PATTERNS["place with containers"]:
+            edges = {
+                (a.subject, a.value)
+                for a in self.claims(source, passage, "part_of")
+            }
+            # one chain, from the place through each container
+            (place,) = {inner for inner, _ in edges} - {
+                outer for _, outer in edges
+            }
+            chain = [place]
+            while outer := [o for i, o in edges if i == chain[-1]]:
+                chain.extend(outer)
+            assert len(chain) == len(edges) + 1 >= 3
+            assert any(
+                path[: len(chain)] == chain
+                for path in u.containment_paths(place)
+            )
+            # named in the passage in that order, inflected or not
+            at = [position(PLACES[key], passage) for key in chain]
+            assert at == sorted(set(at))
+            # and every place the passage names is on the chain
+            words = re.findall(r"\w+", passage)
+            named = {
+                key
+                for key, place in PLACES.items()
+                if any(word.startswith(tuple(stems(place))) for word in words)
+            }
+            assert named == set(chain), (named, chain)
 
 
 @pytest.fixture(scope="module")

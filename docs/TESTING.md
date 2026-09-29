@@ -54,7 +54,15 @@ itself in its own `--help`.
   engine answers behind the real LLM cache, and the wiki refuses every
   read and write. It asserts what must come of each stage and of each of
   the corpus's traps, and how a second run, a run invoked again and a
-  changed extraction prompt reuse the work, with no gold set.
+  changed extraction prompt reuse the work, with no gold set. Past the
+  driver it holds two readers of the run directory to the corpus too
+  (#380): `yizkr scratch report` must count the corpus's stages, how each
+  came about, its anomalies (none, on a clean corpus) and its clusters,
+  and report.md must say none of it by a universe name, a file name or a
+  document's SHA-1; and the clustering stage's identity map must meet the
+  traps `TRAPS` sets for it, read in the universe's terms, with the two
+  the whole-cluster merge rule cannot meet (#361) recorded as expected by
+  a strict `xfail` that turns when the rule does.
 - **Live tests** (`tests/integration`, every module marked `live`) run
   against the deployed stack (`make up` or `make up-local`) through
   `make test-live`, which is `uv run pytest -m live tests/integration -v`.

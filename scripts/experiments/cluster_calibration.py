@@ -9,6 +9,13 @@ what transitive closure does with the rest, and how many adjudication
 calls and owner review rows follow. No LLM calls, no graph access, no
 writes except to ``--out``.
 
+The recommended variants (the kin-surname person key, the first-component
+place token, GEDCOM anchoring, the lifted cannot-link constraints) are
+promoted into the scratch driver's clustering stage,
+``src/yizkr/pipeline/clustering.py`` (#105), whose thresholds live in
+``clustering.yaml`` beside it; this script keeps every variant it
+compared, for recalibration.
+
 Inputs (all paths are arguments; nothing is read from the repo):
 
 * ``--runs DIR ...``: run directories, each with a ``batch.json``
@@ -92,12 +99,12 @@ from yizkr.pipeline.reconcile import (
     ADJUDICATION_PROMPT,
     KINSHIP_PROPERTIES,
     PLACE_KIND,
+    PairFacts,
     PlaceContainment,
     RosterEntity,
     _batch_candidates,
     _batch_pair_facts,
     _name_tokens,
-    _PairFacts,
     _tokens_overlap,
     block_candidates,
     entity_facts,
@@ -796,10 +803,10 @@ def cannot_link(a: Mention, b: Mention) -> bool:
     return not (a.source == "gedcom" and a.kind == b.kind == PLACE_KIND)
 
 
-def lifted_facts(mention: Mention) -> _PairFacts:
+def lifted_facts(mention: Mention) -> PairFacts:
     """impossible_pair's input with local-id kin edges lifted: the
     mention uid stands in for a QID on both sides of every edge."""
-    return _PairFacts(
+    return PairFacts(
         kind=mention.kind,
         label=mention.label,
         qid=mention.uid,
