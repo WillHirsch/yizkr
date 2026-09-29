@@ -149,6 +149,10 @@ original documents it draws on. It therefore holds two witnesses of one
 text: the original, whose writer asserts it, and the compilation, whose
 compiler translated or retyped it, sometimes with machine assistance. The
 two differ in authorship, date and authority, and they can disagree.
+The fictional universe's compilation, *Our Family from Germany*
+(docs/EXAMPLES.md), is an example: where the letter excerpt it embeds
+gives Rahel's address as "Angerring 11", its machine-assisted translation
+reads 71.
 Under ADR-0002 both readings are kept, each attributed to the witness
 that makes it. Were the excerpts fragments of the compilation (#178's
 option 1), the two witnesses would be one source, and the disagreement

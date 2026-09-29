@@ -33,10 +33,15 @@ that may change them, as `ingest run` may, records the latest.
 Run state per document and stage is derived from the run manifest and
 the events alone (never from file modification times or a per-document
 status file): a stage is pending until an event names it; running once
-it has started; done, or needs attention when its output carries
+it has started, and interrupted once the invocation that started it is
+over with no later event for the stage, which the next invocation then
+starts again; done, or needs attention when its output carries
 attention reasons, whether it was made in the run or reused from an
 earlier one; failed, with the reason, until a later start; and pending
-again, with the reason, while the control file holds it.
+again, with the reason, while the control file holds it. Which
+invocation is over is read from run.json and the events that open and
+close invocations (Invocations), and a stage is told interrupted by one
+rule (interrupted), which the live monitor reads it by too.
 """
 
 from __future__ import annotations
@@ -123,6 +128,7 @@ CONTROL_ACTIONS = (PAUSE, RESUME, ABORT)
 # run states of one stage of one document
 PENDING = "pending"
 RUNNING = "running"
+INTERRUPTED = "interrupted"
 DONE = "done"
 FAILED = "failed"
 NEEDS_ATTENTION = "needs attention"
@@ -735,22 +741,151 @@ def _state_from_event(event: dict) -> StageState:
     return StageState(RUNNING)
 
 
+def invocation_of(entry: Mapping[str, Any]) -> str | None:
+    """The invocation an event, or an entry of run.json's `invocations`,
+    names; None when it names none, or names it other than as a string."""
+    invocation = entry.get("invocation")
+    return invocation if isinstance(invocation, str) else None
+
+
+def invocation_records(manifest: Mapping[str, Any]) -> list[dict]:
+    """The invocations run.json records, in the order they started: each
+    entry of its `invocations` that is an object; anything else there is
+    passed over."""
+    entries = manifest.get("invocations")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+class Invocations:
+    """Which of a run's invocations is the latest, and whether it has
+    ended, as run.json and the events that open and close invocations
+    (run-start; run-end or run-interrupted) tell. The events are taken one
+    at a time, in the order they were written (`fold`), so a reader that
+    follows the event log as it grows (the live monitor) and one that
+    reads it whole (run_state) come to the same reading.
+
+    `closing` holds each invocation's closing event (the later, should it
+    have two), and `marker` and `marker_invocation` the latest event that
+    opens or closes an invocation, and the invocation it names."""
+
+    def __init__(self) -> None:
+        self.closing: dict[str | None, dict] = {}
+        self.marker: str | None = None
+        self.marker_invocation: str | None = None
+
+    def fold(self, event: dict) -> None:
+        """Take the log's next event; one that neither opens nor closes an
+        invocation changes nothing."""
+        name = event.get("event")
+        if name not in (RUN_START, RUN_END, RUN_INTERRUPTED):
+            return
+        invocation = invocation_of(event)
+        self.marker, self.marker_invocation = name, invocation
+        if name != RUN_START:
+            self.closing[invocation] = event
+
+    def latest(self, manifest: Mapping[str, Any]) -> tuple[str | None, bool]:
+        """(the latest invocation's id, whether it has ended), from the run
+        manifest and the events taken so far.
+
+        The latest invocation is the last that run.json records, and it
+        has ended once run.json records its end or its closing event has
+        been taken. A run.json that records no invocation leaves it to the
+        events: the latest is the invocation that the latest event opening
+        or closing one names, ended when that event closes it. A killed
+        invocation records no end and has no closing event, so while it is
+        the latest it reads as not ended, as one still running does."""
+        records = invocation_records(manifest)
+        if not records:
+            ended = self.marker in (RUN_END, RUN_INTERRUPTED)
+            return self.marker_invocation, ended
+        last = records[-1]
+        latest = invocation_of(last)
+        return latest, bool(last.get("ended_at")) or latest in self.closing
+
+
+def interrupted(
+    started_by: str | None, latest: str | None, ended: bool
+) -> bool:
+    """Whether a stage whose latest event is its start, by the invocation
+    `started_by`, was cut short: that invocation is over, so nothing runs
+    the stage, and the next invocation starts it again. `latest` and
+    `ended` are the run's latest invocation and whether it has ended
+    (Invocations.latest). Every such stage is cut short once the latest
+    has ended; and one an earlier invocation started is cut short whether
+    the latest has ended or not, since a later start shows that the
+    earlier invocation is over, however it ended, killed included.
+    Otherwise the stage is running: the latest invocation started it and
+    has not ended, or its start, or the run, names no invocation to tell
+    by."""
+    if ended:
+        return True
+    return (
+        latest is not None and started_by is not None and started_by != latest
+    )
+
+
+# how many times run_state reads a run directory while invocations start
+# or end as it reads (_consistent_read)
+_READS = 5
+
+
+def _consistent_read(run: RunDir) -> tuple[list[dict], dict]:
+    """The run's events, and a reading of run.json that holds for them.
+
+    run.json is read before the events and again after them. While the two
+    readings differ in the invocations they record, or in their ends (an
+    invocation started or ended while the events were read), all three
+    are read again, _READS times at most. When they agree, the invocations
+    and ends run.json records held while the events were read. An
+    invocation records its start in run.json before its first event, and
+    its end before its closing event, so a stage an invocation started
+    after the one before it ended is not read against that one, and a
+    stage done just before its invocation ended is not read without its
+    done. When they never agree, the last events are read against the
+    run.json read after them."""
+    for _ in range(_READS):
+        before = run.manifest()
+        events = run.events()
+        manifest = run.manifest()
+        if invocation_records(before) == invocation_records(manifest):
+            break
+    return events, manifest
+
+
 def run_state(run: RunDir) -> dict[tuple[str, str], StageState]:
     """State per (document SHA-1, stage).
 
     Every stage the manifest plans starts as pending, and the latest event
-    for it sets its state. A stage that started and has no later event is
-    running, or was interrupted: the next run starts it again."""
+    for it sets its state. A stage whose latest event is its start is
+    running while the invocation that started it runs, and interrupted
+    once that invocation is over (interrupted): the next invocation starts
+    it again. The events are read with a reading of run.json that holds
+    for them (_consistent_read)."""
+    events, manifest = _consistent_read(run)
     states: dict[tuple[str, str], StageState] = {}
-    for document in run.manifest().get("documents") or []:
+    for document in manifest.get("documents") or []:
         for stage in document.get("stages") or []:
             states[(document["sha1"], stage)] = StageState(PENDING)
-    for event in run.events():
+    invocations = Invocations()
+    # the invocation of each stage's latest event: a running stage's start
+    started_by: dict[tuple[str, str], str | None] = {}
+    for event in events:
+        invocations.fold(event)
         if event.get("event") not in STAGE_EVENTS:
             continue
         subject, stage = event.get("subject"), event.get("stage")
         if subject and stage:
             states[(subject, stage)] = _state_from_event(event)
+            started_by[(subject, stage)] = invocation_of(event)
+    latest, ended = invocations.latest(manifest)
+    for key, invocation in started_by.items():
+        if states[key].status == RUNNING and interrupted(
+            invocation, latest, ended
+        ):
+            states[key] = StageState(INTERRUPTED)
     return states
 
 

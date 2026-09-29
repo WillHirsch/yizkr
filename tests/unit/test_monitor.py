@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.unit.stage_counts import disagreement
 from yizkr.pipeline import monitor
 from yizkr.pipeline.monitor import (
     ABORTED,
@@ -64,14 +65,11 @@ from yizkr.pipeline.monitor import (
     write_status_page,
 )
 from yizkr.pipeline.rundir import (
-    DONE,
-    FAILED,
-    NEEDS_ATTENTION,
-    PENDING,
-    RUNNING,
+    INTERRUPTED,
+    RUN_END,
+    RUN_INTERRUPTED,
     RunDir,
     run_state,
-    summarise,
 )
 
 SOURCES = {source.key: source for source in u.SOURCES}
@@ -428,29 +426,13 @@ def summary(run):
     return summarise_run(run, NOW)
 
 
-def disagreement(run: Path, summary=None) -> str | None:
-    """How the monitor's counts differ from rundir.run_state's for the
-    same files (the monitor's split recombined: done and reused are
-    done, running and interrupted are running; a stage named as the
-    monitor shows it), or None."""
-    summary = summary or summarise_run(run, NOW)
-    expected = {
-        monitor._token(stage): counts
-        for stage, counts in summarise(run_state(RunDir(run))).items()
+def cut_short(run: Path) -> set[tuple[str, str]]:
+    """The (document, stage) pairs run_state reads as interrupted."""
+    return {
+        key
+        for key, state in run_state(RunDir(run)).items()
+        if state.status == INTERRUPTED
     }
-    seen = {}
-    for counts in summary.stages:
-        row = {
-            PENDING: counts.pending - counts.interrupted,
-            RUNNING: counts.running + counts.interrupted,
-            DONE: counts.done + sum(counts.reused.values()),
-            NEEDS_ATTENTION: counts.attention,
-            FAILED: counts.failed,
-        }
-        row = {status: count for status, count in row.items() if count}
-        if row:
-            seen[counts.name] = row
-    return None if seen == expected else f"{seen} != {expected}"
 
 
 def skip_unless_modes_hold(where: Path) -> None:
@@ -684,8 +666,14 @@ class TestAgreement:
         """Random streams through the real writers, compared after every
         write: the stage counts with run_state, the slices with the
         driver's fold, and a monitor that followed the files with one
-        that reads them afresh."""
+        that reads them afresh. Invocations start, end as a driver's do
+        (their end in run.json, then their closing event, or one of them
+        alone) and are killed, so stages are cut short in every way the
+        readers must agree on (#300)."""
         stages = ["transcription", "extraction", "critique"]
+        # comparisons made while the latest invocation had ended and
+        # stages were interrupted
+        cut_short = 0
         for seed in range(4):
             rng = random.Random(seed)
             path = tmp_path / f"run{seed}"
@@ -707,7 +695,20 @@ class TestAgreement:
                         rundir.end(rng.choice(["finished", "stopped"]))
                     rundir = RunDir(path)
                     rundir.start(documents=plan)
-                elif roll < 0.12:
+                elif roll < 0.09:
+                    outcome = rng.choice(["finished", "interrupted", "paused"])
+                    how = rng.choice(["both", "run.json", "event"])
+                    if how != "event":
+                        rundir.end(outcome)
+                    if how != "run.json":
+                        rundir.emit(
+                            RUN_INTERRUPTED
+                            if outcome == "interrupted"
+                            else RUN_END,
+                            outcome=outcome,
+                            statuses={},
+                        )
+                elif roll < 0.16:
                     target = rng.choice(
                         [{}, {"stage": "extraction"}, {"kind": "media"}]
                     )
@@ -744,6 +745,9 @@ class TestAgreement:
                 watcher.refresh()
                 followed = watcher.summary(NOW)
                 assert disagreement(path, followed) is None, (seed, step)
+                cut_short += followed.state != "running" and any(
+                    counts.interrupted for counts in followed.stages
+                )
                 shown = {
                     item.scope: item.state
                     for item in followed.slices
@@ -755,6 +759,7 @@ class TestAgreement:
                     assert [vars(c) for c in fresh.stages] == [
                         vars(c) for c in followed.stages
                     ], (seed, step)
+        assert cut_short
 
 
 class TestReuse:
@@ -924,6 +929,13 @@ class TestInFlightCallsAndTime:
         assert summary.in_flight == []
         assert summary.stage("critique").interrupted == 1
         assert summary.elapsed == 30 + 200
+        # run.json alone records the end: run_state reads the stage the
+        # invocation left started as interrupted too (#300)
+        assert disagreement(path, summary) is None
+        assert cut_short(path) == {
+            (INTERVIEW, "transcription"),
+            (POSTCARD, "critique"),
+        }
 
     def test_the_set_aside_views_are_counted(self, summary):
         assert summary.set_aside == 1
@@ -956,12 +968,22 @@ class TestClosingEvents:
         view = render_terminal(summary, width=200)
         assert "paused: UsageLimitReached | invocation 2" in view
         assert "statuses   3 awaiting-claims, 2 ?, 1 failed" in view
+        # the closing event alone says it ended: run_state reads the stage
+        # it left started as interrupted too (#300)
+        assert disagreement(run, summary) is None
+        assert (POSTCARD, "critique") in cut_short(run)
 
     def test_an_interrupted_invocation(self, run):
         append(run, [event(600, "run-interrupted", statuses={})])
         summary = summarise_run(run, NOW)
         assert summary.state == "interrupted"
         assert summary.stage("critique").interrupted == 1
+        assert summary.stage("critique").running == 0
+        assert disagreement(run, summary) is None
+        assert cut_short(run) == {
+            (INTERVIEW, "transcription"),
+            (POSTCARD, "critique"),
+        }
 
 
 class TestCallEvents:

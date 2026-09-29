@@ -118,8 +118,12 @@ from yizkr.pipeline.rundir import (
     RUNNING,
     SET_ASIDE,
     STAGE_EVENTS,
+    Invocations,
     RunDir,
     fold_control,
+    interrupted,
+    invocation_of,
+    invocation_records,
 )
 from yizkr.pipeline.stages import read_jsonl, staging_path
 
@@ -515,7 +519,8 @@ class StageCounts:
     reused, attention and failed partition its documents: a completed
     output that needs attention counts there, whether it was made or
     reused, and a stage an invocation that has ended left started counts
-    as pending (interrupted: the next invocation starts it again)."""
+    as pending (interrupted, by the rule rundir.run_state reads it by too:
+    the next invocation starts it again)."""
 
     name: str
     pending: int = 0
@@ -826,14 +831,6 @@ def _control_state(path: Path) -> dict[str, str] | None:
     return fold_control([r for r in requests if _foldable(r)]).scopes
 
 
-def _invocations(manifest: dict) -> list[dict]:
-    return [
-        entry
-        for entry in _list(manifest.get("invocations"))
-        if isinstance(entry, dict)
-    ]
-
-
 class RunMonitor:
     """Follows one run directory. `refresh` reads what its files gained
     since the last refresh; `summary` says where the run stands."""
@@ -877,11 +874,10 @@ class RunMonitor:
         self._pause_invocation: str | None = None
         self._last_event_at: datetime | None = None
         self._last_at: dict[str, datetime] = {}
-        self._marker: str | None = None
-        self._marker_invocation: str | None = None
-        # each invocation's closing event, and the documents that failed
-        # in it, by file (else SHA-1)
-        self._closing: dict[str | None, dict] = {}
+        # the events that open and close invocations, taken as run_state
+        # takes them, and the documents that failed in each invocation, by
+        # file (else SHA-1)
+        self._invocations = Invocations()
         self._failures: dict[str | None, dict[Any, tuple]] = {}
         self._failure_invocation: str | None = None
         self._set_aside = 0
@@ -993,8 +989,7 @@ class RunMonitor:
     def _fold_event(self, event: dict) -> None:
         name = event.get("event")
         at = _time(event.get("at"))
-        invocation = event.get("invocation")
-        invocation = invocation if isinstance(invocation, str) else None
+        invocation = invocation_of(event)
         if at is not None:
             if self._last_event_at is None or at > self._last_event_at:
                 self._last_event_at = at
@@ -1011,11 +1006,9 @@ class RunMonitor:
         elif name == DOCUMENT_FAILED:
             self._fold_failure(event, invocation)
         elif name in (RUN_START, RUN_END, RUN_INTERRUPTED):
-            self._marker, self._marker_invocation = name, invocation
+            self._invocations.fold(event)
             if name == RUN_START:
                 self._current.clear()
-            else:
-                self._closing[invocation] = event
         elif name == SET_ASIDE:
             self._set_aside += 1
 
@@ -1267,7 +1260,9 @@ class RunMonitor:
                 rate.engine += attempt.ended_engine
                 rate.calls += attempt.ended_calls
             status = attempt.status
-            if status == RUNNING and _interrupted(attempt, latest, ended):
+            if status == RUNNING and interrupted(
+                attempt.invocation, latest, ended
+            ):
                 counts.pending += 1
                 counts.interrupted += 1
                 remaining[(stage, kind)] += 1
@@ -1337,20 +1332,21 @@ class RunMonitor:
         self, summary: Summary, now: datetime
     ) -> tuple[str | None, bool]:
         """Fill in the run's state and times; (the latest invocation's id,
-        whether it has ended). An invocation has ended when run.json
+        whether it has ended), read as run_state reads them
+        (rundir.Invocations.latest): an invocation has ended when run.json
         records its end, or its closing event says how it ended. What only
         the events can tell is unknown while events.jsonl cannot be read:
         the state of a run.json without invocations, and the time the run
         has been running when an invocation was killed."""
         manifest = self._manifest
-        invocations = _invocations(manifest)
+        invocations = invocation_records(manifest)
         summary.invocations = len(invocations)
         summary.started_at = _time(manifest.get("started_at"))
+        latest, ended = self._invocations.latest(manifest)
+        closing = self._invocations.closing.get(latest)
         if not invocations:
             # a run.json from before invocations were recorded: the last
             # start or close event says whether the run is going
-            latest = self._marker_invocation
-            closing = self._closing.get(latest)
             if EVENTS in self._unreadable:
                 summary.state = UNKNOWN
             else:
@@ -1358,10 +1354,10 @@ class RunMonitor:
                     RUN_START: "running",
                     RUN_END: "finished",
                     RUN_INTERRUPTED: "interrupted",
-                }.get(self._marker or "", "not started")
-            if closing is not None and self._marker != RUN_START:
+                }.get(self._invocations.marker or "", "not started")
+            if ended:
                 self._closed(summary, closing)
-            return latest, self._marker in (RUN_END, RUN_INTERRUPTED)
+            return latest, ended
         total: float | None = 0.0
         for index, entry in enumerate(invocations):
             start = _time(entry.get("started_at"))
@@ -1385,21 +1381,18 @@ class RunMonitor:
                 summary.invocation_elapsed = span
         summary.elapsed = total
         last = invocations[-1]
-        latest = last.get("invocation")
-        latest = latest if isinstance(latest, str) else None
-        closing = self._closing.get(latest)
-        if last.get("ended_at"):
+        if not ended:
+            summary.state = "running"
+        elif last.get("ended_at"):
             outcome = last.get("outcome")
             summary.state = _token(outcome) if outcome else "ended"
             summary.reason = _verbatim(last.get("reason"))
             if closing is not None:
                 summary.statuses = _statuses(closing)
-            return latest, True
-        if closing is not None:
+        else:
+            # ended by its closing event alone
             self._closed(summary, closing)
-            return latest, True
-        summary.state = "running"
-        return latest, False
+        return latest, ended
 
     @staticmethod
     def _closed(summary: Summary, closing: dict) -> None:
@@ -1587,18 +1580,6 @@ def _scope_shown(scope: str) -> str:
     if sep and kind in ("stage", "kind"):
         return f"{kind}:{_token(name)}"
     return "?"
-
-
-def _interrupted(attempt: _Attempt, latest: str | None, ended: bool) -> bool:
-    """Whether a started stage was left by an invocation that has ended,
-    so that nothing runs it now: the next invocation starts it again."""
-    if ended:
-        return True
-    return (
-        latest is not None
-        and attempt.invocation is not None
-        and attempt.invocation != latest
-    )
 
 
 def summarise_run(path: Path | str, now: datetime | None = None) -> Summary:
