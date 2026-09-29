@@ -3368,7 +3368,7 @@ class TestAcrossSources:
 
         province = snylsjum("province", ["Fryslân"], "snylsjum")
         reordered = snylsjum("reordered", ["Nederlân", "fryslan"], "snylsjum")
-        other = snylsjum("other", ["Groningen"], "another-snylsjum")
+        other = snylsjum("other", ["Xxxprovinz"], "another-snylsjum")
         for doc in (province, reordered):
             identity = identity_of(letter, doc)
             assert merged([letter, doc], identity) == [{"snylsjum"}]
