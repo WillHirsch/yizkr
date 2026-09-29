@@ -46,7 +46,11 @@ pytestmark = pytest.mark.live
 
 # the fixture's entities as its source names them, before the marker: Ida,
 # by her married name with her birth name as an alias (ADR-0011), and
-# (here) her sister-in-law Hildegard and the town, Flörburg
+# (here) her sister-in-law Hildegard and the town, Flörburg. Each has a
+# description: Wikibase refuses an item whose label and description are
+# another item's, so a writer that failed to find one of them by its label
+# could not mint a second item under the same label, which would stop
+# every writer's label index on the instance
 ENTITIES = (
     {
         "id": "ida",
@@ -59,8 +63,14 @@ ENTITIES = (
         "id": "hildegard",
         "label": "Text Form Fixture Hildegard Löbig",
         "kind": "human",
+        "summary": "fixture: Hildegard Löbig, Ida's sister-in-law",
     },
-    {"id": "town", "label": "Text Form Fixture Flörburg", "kind": "place"},
+    {
+        "id": "town",
+        "label": "Text Form Fixture Flörburg",
+        "kind": "place",
+        "summary": "fixture: the town of Flörburg",
+    },
 )
 KEYS = [entity["id"] for entity in ENTITIES]
 BIRTH_NAME = "Ida Sörne"
