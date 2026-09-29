@@ -7,6 +7,10 @@ nor any other (§B).
 Amended by #386 (2026-09-29): each critic finding is a validated record
 with an axis and a category, not a `target` string (§C, ADR-0023 §3).
 
+Amended by [ADR-0035](0035-mention-records.md) (owner decision
+2026-09-29, #385): §A's type hint is given in English, so the
+unclassified-entities query (#91) groups like with like.
+
 ## Context
 
 Two trial defects — a company typed as a `place` (ADR-0012), a form

@@ -15,6 +15,16 @@ from different artifacts (§4).
 Amended by #386 (2026-09-29): a critic finding is a validated record that names
 its entity, claim and alias by id and gives its `axis` itself, with a category
 from a fixed list; nothing is derived from a `target` string any more (§3).
+Superseded in part by [ADR-0035](0035-mention-records.md) (owner
+decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine
+judgement out of the graph. An extraction's judgement note, a category
+and one sentence, is written inside the extraction-run reference of the
+statement it concerns, as process provenance. It is never used to rank,
+order or filter a value; a statement without one is not thereby certain;
+the public export leaves notes out as free text. The graph still holds no
+confidence number, epistemic qualifier, or per-statement trust or
+acceptance marker. §1, §3–§6 and Rulings 2–6 stand. The consequence "zero
+graph / export / privacy delta" no longer holds.
 
 ## Context
 

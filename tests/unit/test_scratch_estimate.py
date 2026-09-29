@@ -84,7 +84,7 @@ class Engine:
 
     Its answers: a reading of each image, noting what read it; an entity
     manifest of `fakes.people` people (ten to a chunk; the universe's, over
-    again past its eighteen), or none while
+    again once they run out), or none while
     `fakes.refuse`, which the extractor refuses, and a segmentation of the
     whole text as one unit; a claim per chunk, whose year the
     configuration and the document pick (the configuration alone while
@@ -797,7 +797,7 @@ class TestCounts:
     def test_a_letter_s_length_counts_its_chunks(self, tmp_path, engine):
         """No run to measure it: a letter of some 3000 characters is
         counted two chunks, as its eighteen people make two."""
-        engine.people = len(u.PEOPLE)
+        engine.people = 18
         corpus = Corpus(tmp_path / "corpus")
         long = "\n".join(source.text for source in u.SOURCES)[:3000]
         (corpus.folder / TEXT).write_text(long)
