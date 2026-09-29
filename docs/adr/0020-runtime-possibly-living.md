@@ -316,9 +316,12 @@ participant but kept its label and its date. Now:
   reads the dump by. A statement or a reference whose value is text
   keeps its node, rank, qualifiers and references, or the items it
   cites, without the text; transcription excerpts go by this rule as
-  well as by their own. So the public copy names no one: its people,
-  places, events, artifacts and organizations are known there by QID,
-  type, dates and links alone.
+  well as by their own. Only literals are read: no property of the
+  vocabulary takes a link (a URL, a media file, a shape), whose IRI
+  would carry text, and the instance keeps no sitelinks; a unit test
+  holds the manifest to that. So the public copy names no one: its
+  people, places, events, artifacts and organizations are known there by
+  QID, type, dates and links alone.
 
 ### 5. Vocabulary retired
 

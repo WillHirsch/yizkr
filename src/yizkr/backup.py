@@ -759,6 +759,8 @@ def filter_public_export(
        included, and no wording is read to tell, so none of it leaves. A
        statement or a reference whose value is text keeps its node, rank,
        qualifiers and references, or the items it cites, without the text.
+       Only literals are read: no property of the vocabulary takes a link
+       (a URL, a media file), whose IRI would carry text.
 
     Returns (kept, dropped) line counts. Streams the gzipped dump three
     times, holding only node-hash sets in memory.

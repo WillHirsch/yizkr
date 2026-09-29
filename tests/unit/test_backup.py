@@ -416,6 +416,21 @@ class TestTheFreeText:
     ):
         assert not backup._free_text(term)
 
+    def test_no_property_of_the_vocabulary_takes_a_link(self):
+        # the filter reads text in literals: a URL, a media file or a
+        # shape would be a link, whose text it lets through
+        assert {
+            spec["datatype"] for spec in MANIFEST["properties"].values()
+        } <= {
+            "wikibase-item",
+            "string",
+            "monolingualtext",
+            "external-id",
+            "time",
+            "quantity",
+            "globe-coordinate",
+        }
+
 
 class TestPruning:
     def test_prunes_oldest_beyond_keep(self, tmp_path):
