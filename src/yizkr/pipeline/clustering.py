@@ -1438,8 +1438,10 @@ class _Judge:
         return AMBIGUOUS, described
 
     def contradicts(self, a: _Node, b: _Node) -> str | None:
-        """The evidence of two members of one cluster that were never a
-        pair, when it says they differ; None when it does not."""
+        """The evidence of two members of one cluster, when it says they
+        differ (dates that conflict; for people, kin that conflict or no
+        name match; for places, names neither exact nor nested; for other
+        kinds but events, no name match); None when it does not."""
         name, dates, kin = self.evidence(a, b)
         described = f"{name}/{dates}/{kin}"
         if dates == "conflict":
