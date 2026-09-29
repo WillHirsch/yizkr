@@ -48,6 +48,9 @@ CLI = "9.9.9"
 # what each kind of call's prompt says, as the pipeline words it
 MANIFEST_PROMPT = "manifest of EVERY distinct entity"
 CRITIQUE_PROMPT = "You review a genealogical extraction"
+# the category the recorded critic files a misread year under, which the
+# critic's list does not have
+MISREAD = "misread_value"
 SEGMENTATION_PROMPT = "You segment a document transcription"
 ASSIGNED = "Assigned entities:"
 _SHA1 = re.compile(r"[0-9a-f]{40}")
@@ -167,29 +170,39 @@ class RecordedEngine:
 
     def _critique(self, prompt: str) -> str:
         """The critic's findings: one for each recorded mistake the batch
-        holds, and its sentinel."""
+        holds, on its claim as the prompt lists it, and its sentinel. The
+        recorded critic files a misread year under a category the list
+        does not have, so its finding is kept as given, and fails its
+        checks (#386)."""
         recorded = self._critiqued(prompt)
         self.calls.log("critique", recorded.document)
         ids = recorded.ids()
         findings = []
         for mistake in mistakes_in(recorded):
             subject = ids[mistake.subject]
-            rows = [
-                line
+            listed = [
+                line.split(" | ", 2)[2]
                 for line in prompt.splitlines()
                 if line.startswith(f"{subject} | {mistake.property} | ")
             ]
-            if any(f"year={mistake.read_as.year}" in row for row in rows):
+            year = str(mistake.read_as.year)
+            for value in (v for v in listed if v.startswith(year)):
                 findings.append(
                     {
-                        "target": f"claim: {subject} {mistake.property}",
+                        "entity": subject,
+                        "claim": {
+                            "subject": subject,
+                            "property": mistake.property,
+                            "value": value,
+                        },
+                        "axis": "value",
+                        "category": MISREAD,
                         "issue": mistake.flag,
-                        "suggestion": "read the year again",
+                        "suggestion": {"note": "read the year again"},
                     }
                 )
         lines = [json.dumps(finding) for finding in findings]
-        sentinel = {"done": True, "findings_emitted": len(findings)}
-        return "\n".join([*lines, json.dumps(sentinel)])
+        return "\n".join([*lines, json.dumps({"done": True})])
 
     # -- the engine's calls --------------------------------------------------
 

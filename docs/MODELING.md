@@ -720,8 +720,9 @@ not a signal to grow the schema on.
 - **Machine uncertainty is process, not graph data (ADR-0023).** The
   graph records the *source's* vagueness (circa, ranges, precision) but
   never the *machine's* confidence. Contentiousness surfaces ephemerally
-  at review (the critic's per-concern axis: `[subject]`/`[predicate]`/
-  `[value]`); reappraisal of low-scrutiny machine writes is a structural
+  at review (the critic's per-concern axis and category:
+  `[subject]`/`[predicate]`/`[value]`/`[existence]`, each finding a
+  validated record on exactly one review row, ADR-0023 §3); reappraisal of low-scrutiny machine writes is a structural
   query (`under-witnessed-statements.rq`, the complement of the
   disagreement report), and the bulk-accept disposition lives in the
   reviewed CSV + MediaWiki edit history — never a stored flag.

@@ -974,7 +974,15 @@ def a_text_document(tmp_path, checks, name, claims, *, findings=None):
         checks.stored(
             doc,
             "critique",
-            [{"target": "e1", "issue": "doubtful"}] * findings,
+            [
+                {
+                    "entity": "e1",
+                    "axis": "value",
+                    "category": "misapplied_property",
+                    "issue": "doubtful",
+                }
+            ]
+            * findings,
         )
     return doc
 
@@ -2286,7 +2294,12 @@ class Run(Orchestrator):
 
     def _step_critique(self, doc, batch):
         found = [
-            Finding(target="e1", issue="an organisation typed as a place")
+            Finding(
+                entity="e1",
+                axis="subject",
+                category="wrong_kind",
+                issue="an organisation typed as a place",
+            )
         ] * self.findings.get(doc.source.name, 0)
         return self._run_stage(doc, "critique", lambda: found)
 

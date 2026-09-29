@@ -102,7 +102,8 @@ from typing import Any
 
 from yizkr.claims import load_vocabulary
 from yizkr.pipeline.anomalies import ERROR_EVENT, RECHECK_EVENT, Checks, route
-from yizkr.pipeline.critique import axis_of
+from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
+from yizkr.pipeline.critique import entry as critique_entry
 from yizkr.pipeline.llm import USAGE_TOKENS
 from yizkr.pipeline.monitor import (
     _CLASS_NAME,
@@ -232,8 +233,6 @@ HOLDS = frozenset(
 )
 REQUESTERS = frozenset({"operator", "monitor", "anomaly"})
 ACTIONS = frozenset({"pause", "resume", "abort"})
-AXES = frozenset({"subject", "predicate", "value"})
-UNCLASSIFIED = "unclassified"
 FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
 MAP_STATES = frozenset({"read", "missing", "unreadable"})
 # the leading labels of the reasons stages give an output that needs
@@ -936,19 +935,33 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             document, "critique", directory / VIEWS["critique"], list
         )
         if findings is not None:
-            views["critique"] = Counter(map(_axis, findings))
+            views["critique"] = _critique(findings)
 
 
-def _axis(finding: Any) -> str:
-    """The statement-part a critic finding concerns (ADR-0023), from its
-    target, else as the finding records it; UNCLASSIFIED for none."""
-    if isinstance(finding, dict):
-        target = finding.get("target")
-        axis = axis_of(target) if isinstance(target, str) else None
-        axis = axis or _text(finding.get("axis"))
-        if axis is not None:
-            return axis
-    return UNCLASSIFIED
+def _critique(findings: list) -> dict[str, Any]:
+    """A critique view counted: its valid findings by the statement-part
+    each doubts (ADR-0023) and by category, and the findings that failed
+    their checks (or are no finding at all) as invalid."""
+    counted: dict[str, Any] = {
+        "findings": 0,
+        "invalid": 0,
+        "by_axis": Counter(),
+        "by_category": Counter(),
+    }
+    for stored in findings:
+        try:
+            found = (
+                critique_entry(stored) if isinstance(stored, dict) else None
+            )
+        except (ValueError, TypeError):
+            found = None
+        if not isinstance(found, Finding):
+            counted["invalid"] += 1
+            continue
+        counted["findings"] += 1
+        counted["by_axis"][found.axis] += 1
+        counted["by_category"][found.category] += 1
+    return counted
 
 
 @dataclass
@@ -1214,7 +1227,12 @@ def _document_record(document: Document) -> dict[str, Any]:
         if batch is not None
         else None,
         "coverage": views.get("coverage"),
-        "critique": dict(views["critique"]) if "critique" in views else None,
+        "critique": {
+            key: dict(value) if isinstance(value, Counter) else value
+            for key, value in views["critique"].items()
+        }
+        if "critique" in views
+        else None,
         "unread": dict(document.unread),
         "failed": document.failed,
         "unusable": document.unusable,
@@ -1893,10 +1911,11 @@ def _aggregate_content(
     claims: Counter = Counter()
     zero_claims: Counter = Counter()
     fallbacks: Counter = Counter()
-    findings: Counter = Counter()
+    by_axis: Counter = Counter()
+    by_category: Counter = Counter()
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
-    failed_rejecting = critiques = with_findings = 0
+    failed_rejecting = critiques = with_findings = findings = invalid = 0
     for document in documents.values():
         if not document.planned:
             continue
@@ -1924,9 +1943,13 @@ def _aggregate_content(
             )
         failed_rejecting += document.unusable is not None
         if "critique" in document.views:
+            critique = document.views["critique"]
             critiques += 1
-            findings.update(document.views["critique"])
-            with_findings += bool(document.views["critique"].total())
+            findings += critique["findings"]
+            invalid += critique["invalid"]
+            by_axis.update(critique["by_axis"])
+            by_category.update(critique["by_category"])
+            with_findings += bool(critique["findings"])
     return {
         "batches": batches,
         "entities": {
@@ -1962,11 +1985,13 @@ def _aggregate_content(
         "fallbacks": _by_count(fallbacks),
         "critic": {
             "critiques": critiques,
-            "findings": findings.total(),
+            "findings": findings,
+            "invalid": invalid,
             "documents": with_findings,
-            "per_critique": _mean(findings.total(), critiques),
-            "by_class": _folded(
-                findings, lambda value: _known(value, AXES | {UNCLASSIFIED})
+            "per_critique": _mean(findings, critiques),
+            "by_axis": _folded(by_axis, lambda value: _known(value, AXES)),
+            "by_category": _folded(
+                by_category, lambda value: _known(value, CATEGORIES)
             ),
         },
         "clusters": _aggregate_clusters(clusters, vocabulary),
@@ -2577,15 +2602,22 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             3,
         ),
         _Section(
-            "Critic findings by class",
+            "Critic findings by axis and category",
             [
                 f"{_n(critic['findings'])} findings from "
                 f"{_n(critic['critiques'])} critiques "
                 f"({_n(critic['per_critique'])} a critique), in "
-                f"{_n(critic['documents'])} documents.",
+                f"{_n(critic['documents'])} documents; "
+                f"{_n(critic['invalid'])} failed their checks and are "
+                f"kept as given.",
                 _table(
-                    ("Class", "Findings"),
-                    critic["by_class"].items(),
+                    ("Axis", "Findings"),
+                    critic["by_axis"].items(),
+                    numbers=(1,),
+                ),
+                _table(
+                    ("Category", "Findings"),
+                    critic["by_category"].items(),
                     numbers=(1,),
                 ),
             ],
@@ -3114,8 +3146,12 @@ def _html_document(document: Mapping[str, Any]) -> str:
             f"{', '.join(coverage['fallback']) or 'none'}"
         )
     if document["critique"] is not None:
+        critique = document["critique"]
         items.append(
-            f"Critic findings: {_listed(_by_count(document['critique']))}"
+            f"Critic findings: {critique['findings']}; invalid: "
+            f"{critique['invalid']}; by axis: "
+            f"{_listed(_by_count(critique['by_axis']))}; by category: "
+            f"{_listed(_by_count(critique['by_category']))}"
         )
     items += [
         f"View not read ({stage}): {why}"

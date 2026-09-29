@@ -4,6 +4,8 @@ Status: accepted
 
 Amended by #7 (2026-09-29): the terminal sentinel carries no gap count,
 nor any other (§B).
+Amended by #386 (2026-09-29): each critic finding is a validated record
+with an axis and a category, not a `target` string (§C, ADR-0023 §3).
 
 ## Context
 
@@ -85,9 +87,12 @@ place), an alias that looks like a role/field label rather than a name
 **flags, never rewrites** — findings land in `critique.json`, are
 counted in the run log, and are merged into the claim review CSV's
 `critique_notes` column (renamed from `warning`, ADR-0020) so the curator
-sees them at the existing gate. Each `Finding` also carries a derived
-`axis` — `subject`/`predicate`/`value` from its target grammar — the
-general statement-part decomposition ADR-0023 surfaces per concern. This
+sees them at the existing gate. Each `Finding` is a record naming its
+entity (and a claim or an alias) by id, the statement-part it doubts
+(`axis`: subject/predicate/value/existence, ADR-0023) and a `category`
+from the fixed list kept with the critic prompt; code validates it
+against the batch and the manifest, and keeps one that fails verbatim,
+counted, never repaired (ADR-0023 §3 as amended). This
 is the reconciliation adjudicator's pattern applied to extraction, and it
 is what would have caught both MOTHER and the hat shop without a human
 eyeballing raw output.

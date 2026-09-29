@@ -12,6 +12,9 @@ derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance),
 and MODELING.md (a human decision's process is the MediaWiki edit history).
 Amended by #136 (2026-09-27): the disagreement report now pairs only values
 from different artifacts (§4).
+Amended by #386 (2026-09-29): a critic finding is a validated record that names
+its entity, claim and alias by id and gives its `axis` itself, with a category
+from a fixed list; nothing is derived from a `target` string any more (§3).
 
 ## Context
 
@@ -122,7 +125,25 @@ Add `axis: Literal["subject", "predicate", "value", "existence"] | None` to
 `critique.Finding`, derived mechanically from the existing `target` grammar
 (`e01` → subject; `e01 alias: X` → value; `claim: e01 occupation` → predicate).
 Surface it as an `axis` column beside the existing `confidence` column in the
-review CSV (or as a structured prefix within `critique_notes`). This **is** the
+review CSV (or as a structured prefix within `critique_notes`).
+
+*As amended by #386:* the `target` grammar is gone. Each finding is a record,
+`{entity, claim?, alias?, axis, category, issue, suggestion}`: `entity` is a
+manifest id; `claim` is one claim as the prompt lists it (subject id, property
+key, value, an item value by its id); `alias` is one of the entity's; `axis` is
+one of the four, given by the critic, so the existence axis is expressible;
+`category` is a key of the fixed list kept with the critic prompt
+(`critique.CATEGORIES`); `suggestion` is `{kind?, property?, note}`, where a
+kind or property is a manifest key. Code checks every id against the batch the
+critic reviewed and every key against the model manifest. A record that fails
+is kept verbatim in `critique.json`, with the reasons, beside the valid ones
+(`{"invalid": ..., "why": [...]}`), and counted; it is never repaired. Each
+valid finding goes on exactly one review row, as a structured prefix within
+`critique_notes` (`critique [axis, category] entity: issue`): its claim's row,
+else the row of the first claim whose subject (then value, then a qualifier's
+value) is the entity, and the review rows are matched to the reviewed batch's
+claims through resolution, so a finding on an entity resolved to a QID keeps
+its row. The run report counts findings by axis and by category. This **is** the
 general form of §6 — the same review-layer mechanism, now inherited uniformly by
 every property, with the name axes as instances. `Claim.confidence` stays
 ephemeral and unchanged; the critic still only flags, never rewrites

@@ -1175,12 +1175,19 @@ class TestCritiqueNotes:
 
     def test_critique_notes_render_in_their_column(self, tmp_path):
         csv_path = tmp_path / "review.csv"
-        # notes arrive already formatted (the orchestrator adds "critique:")
+        # notes arrive already formatted, by row (critique.note, attach)
+        source = batch()
+        rows = [
+            index
+            for index, claim in enumerate(source.claims)
+            if getattr(claim.subject, "local_id", None) == "person-1"
+        ]
         export_review_csv(
-            batch(),
+            source,
             csv_path,
             critique_notes={
-                "person-1": "critique: role label 'MOTHER' is not a name"
+                row: "critique: role label 'MOTHER' is not a name"
+                for row in rows
             },
         )
         with open(csv_path, newline="") as f:

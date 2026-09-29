@@ -660,13 +660,19 @@ class TestTheTraps:
             fc.EXPORT: {u.Date(1950)},
             fc.DECK: {u.Date(1950)},
         }
-        # the critic flags the early one, on its claim
+        # the critic flags the early one, on its claim, under a category
+        # its list does not have: the finding is kept as given, with why
+        # it failed its checks (#386)
         findings = json.loads(
             runs.views(run)[fc.NARRATIVE].critique.read_text()
         )
         nicholas = answers.RECORDED[fc.NARRATIVE].ids()["nicholas-lobig"]
-        assert [f["target"] for f in findings] == [
-            f"claim: {nicholas} date_of_birth"
+        ((finding),) = findings
+        assert finding["invalid"]["entity"] == nicholas
+        assert finding["invalid"]["claim"]["property"] == "date_of_birth"
+        assert finding["invalid"]["claim"]["value"].startswith("1850")
+        assert finding["why"] == [
+            "category 'misread_value' is not in the list"
         ]
         for name in (fc.DECK, fc.CERTIFICATE, fc.LETTER):
             assert json.loads(runs.views(run)[name].critique.read_text()) == []

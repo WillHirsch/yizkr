@@ -1492,7 +1492,7 @@ class Orchestrator:
         return export_review_csv(
             batch,
             doc.review,
-            critique_notes=self._critique_notes(doc),
+            critique_notes=self._critique_notes(doc, batch),
         )
 
     # -- open-schema harness (ADR-0013) --------------------------------------
@@ -1534,12 +1534,23 @@ class Orchestrator:
 
         anomalies.stored(self.rundir, doc, "critique", findings)
         if findings and changed:
+            from yizkr.pipeline.critique import Invalid, note
+
+            invalid = sum(isinstance(f, Invalid) for f in findings)
             self.log(
-                f"  critique: {len(findings)} concern(s) flagged for review"
+                f"  critique: {len(findings) - invalid} concern(s) flagged "
+                f"for review"
+                + (f", {invalid} invalid kept as given" if invalid else "")
             )
             for finding in findings[:6]:
                 self.log(
-                    f"    - {finding.target}: {finding.issue}", file=sys.stderr
+                    "    - "
+                    + (
+                        f"invalid: {'; '.join(finding.why)}"
+                        if isinstance(finding, Invalid)
+                        else note(finding)
+                    ),
+                    file=sys.stderr,
                 )
 
     def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
@@ -1559,31 +1570,33 @@ class Orchestrator:
             attention=lambda _findings: attention,
         )
 
-    def _critique_notes(self, doc: DocumentRun) -> dict[str, str]:
-        """entity local_id -> concatenated critic concerns, for the review
-        CSV `critique_notes` column. Each concern is tagged with the
-        statement-part it doubts (ADR-0023): [subject] / [predicate] /
-        [value], derived from the finding's target."""
-        if not doc.critique.exists():
+    def _critique_notes(
+        self, doc: DocumentRun, rows: ClaimBatch
+    ) -> dict[int, str]:
+        """review row index -> the critic's concerns on that row, joined,
+        for the review CSV `critique_notes` column (critique.attach): each
+        valid finding on exactly one row, tagged with the statement-part it
+        doubts (ADR-0023) and its category. `rows` is the batch the sheet
+        lists, the extraction's batch resolved. A finding that failed its
+        checks names nothing a row can be matched by, and stays in the
+        critique view."""
+        if not doc.critique.exists() or not doc.batch.exists():
             return {}
-        from yizkr.pipeline.critique import axis_of
+        from yizkr.pipeline.critique import Finding, attach, entry, note
 
-        notes: dict[str, str] = {}
-        for finding in json.loads(doc.critique.read_text()):
-            target = finding.get("target", "")
-            # "e01", "e01 alias: X", or "claim: e01 prop" -> the entity id
-            tokens = target.replace("claim:", "").split()
-            entity_id = tokens[0] if tokens else ""
-            if entity_id:
-                axis = axis_of(target)
-                prefix = f"critique [{axis}]: " if axis else "critique: "
-                note = prefix + finding.get("issue", "")
-                notes[entity_id] = (
-                    f"{notes[entity_id]}; {note}"
-                    if entity_id in notes
-                    else note
-                )
-        return notes
+        findings = []
+        for stored in json.loads(doc.critique.read_text()):
+            try:
+                found = entry(stored)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(found, Finding):
+                findings.append(found)
+        extracted = ClaimBatch.model_validate_json(doc.batch.read_text())
+        return {
+            row: "; ".join(map(note, attached))
+            for row, attached in attach(findings, extracted, rows).items()
+        }
 
     def _step_write(self, doc: DocumentRun, batch: ClaimBatch) -> dict:
         from yizkr.pipeline.review import apply_review, is_bulk_accepted

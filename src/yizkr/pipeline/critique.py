@@ -8,15 +8,35 @@ never rewrites: findings are surfaced to the human curator at the
 existing review gate. It is the reconciliation adjudicator's pattern
 applied to extraction, and it is what catches the "MOTHER as a name" and
 "hat shop as a place" errors without a human eyeballing raw output.
+
+Each finding is a record that names what it concerns by id: the entity
+(a manifest id), and optionally one claim (its subject id, property key
+and value as the prompt lists them) and one alias; the statement-part it
+doubts (`axis`, ADR-0023); a `category` from CATEGORIES; the issue; and a
+suggestion whose kind or property, when given, is a manifest key. Code
+checks every record against the batch and the model manifest. A record
+that fails is kept verbatim with the reasons it failed (`Invalid`),
+beside the valid ones, and never repaired: nothing is read from a
+finding's wording.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Mapping
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, ValidationError
 
-from yizkr.claims import ClaimBatch, ItemValue
+from yizkr.claims import (
+    Claim,
+    ClaimBatch,
+    EntityRecord,
+    ItemValue,
+    LocalRef,
+    MonolingualValue,
+    load_vocabulary,
+)
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
@@ -25,64 +45,138 @@ from yizkr.pipeline.llm import (
     at_output_limit,
     reject_response,
 )
+from yizkr.pipeline.review import describe_value
 
 logger = logging.getLogger(__name__)
 
+# the universal parts of a statement a finding doubts (ADR-0023)
+AXES = ("subject", "predicate", "value", "existence")
 
-def axis_of(target: str) -> str | None:
-    """Which universal statement-part a Finding concerns (ADR-0023),
-    derived from the `target` grammar: ``claim: e01 prop`` -> predicate,
-    ``e01 alias: X`` -> value, bare ``e01`` -> subject. Unrecognised ->
-    None. This is the general form of ADR-0022 §6's per-name axes,
-    addressable across every property; existence-axis concerns have no
-    target form and stay None.
-    """
-    text = target.strip()
-    if text.startswith("claim:"):
-        return "predicate"
-    if "alias:" in text:
-        return "value"
-    if text and " " not in text:
-        return "subject"
-    return None
+# The patterns the critic flags, by key, each with the line the prompt
+# gives it. A finding names exactly one of these keys.
+CATEGORIES: dict[str, str] = {
+    "wrong_kind": (
+        "an entity whose kind is wrong: a place typed as `human`, a person "
+        "typed as a place, an agent (a company, bank, committee or agency) "
+        "typed as `place` or `human`"
+    ),
+    "role_label_alias": (
+        "a ROLE or FORM-FIELD label recorded as an alias, not a name: "
+        "MOTHER, FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS"
+    ),
+    "kinship_term_alias": (
+        'a kinship term recorded as an alias ("my husband", "our great '
+        'grandmother", "Oma", "Nana Maisie"): it is not a name; suggest '
+        "`relative` + `kinship_type` (a literal kinship term) or "
+        "`referred_to_as` (a courtesy or pet name), NOT an alias (ADR-0018)"
+    ),
+    "deictic_alias": (
+        'a deictic or generic reference recorded as an alias ("the '
+        'deceased", "the above-named", "the child", "the firm")'
+    ),
+    "escape_hatch_misused": (
+        "an entity marked `unclassified_entity` that clearly fits a real "
+        "kind (the escape hatch was used when it should not have been)"
+    ),
+    "misapplied_property": "a claim whose property is plainly misapplied",
+    "office_holder_as_organization": (
+        "a person who holds an office (a registrar, a mayor, a rabbi) typed "
+        "as `organization`"
+    ),
+    "religion_as_occupation": (
+        "a religion or denomination recorded as an `occupation`: suggest "
+        "`religion`"
+    ),
+    "relation_kind_mismatch": (
+        "a claim whose relation takes a kind its value is not (ADR-0031: "
+        "the relation decides the kind): a relation of place (place of "
+        "birth, death or burial, residence, location) takes a place; a "
+        "relation of agency (employer, educated at, member of) takes an "
+        "organization"
+    ),
+}
+
+
+class ClaimRef(BaseModel):
+    """One claim, as the prompt lists it: subject id, property key, and
+    value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str
+    property: str
+    value: str
+
+
+class Suggestion(BaseModel):
+    """What the critic suggests instead: a kind and a property, each a
+    manifest key when given, and a one-line note ("drop" among them)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str | None = None
+    property: str | None = None
+    note: str = ""
 
 
 class Finding(BaseModel):
+    """A valid finding: every id it names is in the batch, every key in
+    the model manifest."""
+
     model_config = ConfigDict(extra="forbid")
 
-    target: str  # "e01", "e01 alias: MOTHER", or "claim: e01 occupation"
+    entity: str
+    claim: ClaimRef | None = None
+    alias: str | None = None
+    axis: str
+    category: str
     issue: str
-    suggestion: str = ""
+    suggestion: Suggestion = Suggestion()
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def axis(self) -> str | None:
-        """subject | predicate | value (ADR-0023), derived from `target`."""
-        return axis_of(self.target)
+
+class Invalid(BaseModel):
+    """A finding that failed its checks: the object the critic gave,
+    verbatim, and why it failed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    invalid: dict[str, Any]
+    why: list[str]
+
+
+# the fields that make an object in a critique answer a finding: one with
+# none of them (a claim or suggestion cut loose from a broken line) is not
+FINDING_FIELDS = frozenset(Finding.model_fields)
+
+
+def entry(stored: Mapping[str, Any]) -> Finding | Invalid:
+    """An entry of a critique view: a finding, or one that failed its
+    checks. Raises ValidationError for neither."""
+    if "invalid" in stored:
+        return Invalid.model_validate(stored)
+    return Finding.model_validate(stored)
 
 
 CRITIQUE_PROMPT = """\
 You review a genealogical extraction for likely mistakes before a human
 curator sees it. You FLAG concerns only; you never rewrite.
 
-Flag, as a genuine concern only:
-- an entity whose kind is wrong — an AGENT (company, bank, committee,
-  agency, school) typed as `place` or `human`; a place typed as
-  `human`; a person typed as a place;
-- an alias that is a ROLE or FORM-FIELD label, not a name — MOTHER,
-  FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS — or a relational /
-  perspectival reference ("my husband", "our great grandmother", "Oma",
-  "Nana Maisie", "the deceased") recorded as if it were a name. These are
-  not names: suggest recording the term as `relative` + `kinship_type`
-  (a literal kinship term) or `referred_to_as` (a courtesy/pet name),
-  NOT as an alias (ADR-0018);
-- an entity marked `unclassified_entity` that clearly fits a real kind
-  (the escape hatch was used when it should not have been);
-- a claim whose property is plainly misapplied.
+Flag a genuine concern only, of one of these categories:
+{categories_block}
 
 A relational appellation CORRECTLY recorded as a `referred_to_as` claim,
 or a kinship term as `relative` + `kinship_type`, is right — do not flag
 it.
+
+Each finding doubts one part of a statement (its axis):
+- subject: which entity it is, or its kind;
+- predicate: the property a claim uses;
+- value: a claim's value, or an alias;
+- existence: whether the entity or claim belongs in the extraction at all.
+
+Kinds (manifest item keys): {kinds}
+
+Properties (manifest property keys): {properties}
 
 Entities (id | kind | label | aliases):
 {entities_block}
@@ -91,13 +185,26 @@ Claims (subject | property | value):
 {claims_block}
 
 Output NDJSON, one finding per line, no prose, no code fences:
-{{"target": "<entity id, or 'e01 alias: MOTHER', or 'claim: e01 occupation'>",
+{{"entity": "<the entity id the finding concerns>",
+"claim": {{"subject": "<subject as listed>", "property": "<property as \
+listed>", "value": "<value as listed>"}} or null,
+"alias": "<the alias as listed>" or null,
+"axis": "<subject | predicate | value | existence>",
+"category": "<one category key above>",
 "issue": "<one line>",
-"suggestion": "<one line: likely-correct kind/name/property, or 'drop'>"}}
-Emit a line ONLY for a genuine concern; emit NONE if the extraction
-looks sound. After the last finding, end with exactly one final line:
+"suggestion": {{"kind": "<kind key>" or null, "property": "<property key>" \
+or null, "note": "<one line, or 'drop'>"}}}}
+Name a claim when the finding concerns one: its entity is then the claim's
+subject or the entity its value names. Name an alias only when the finding
+concerns one of the entity's aliases. Emit a line ONLY for a genuine
+concern; emit NONE if the extraction looks sound. After the last finding,
+end with exactly one final line:
 {{"done": true}}
 """
+
+
+def _categories_block() -> str:
+    return "\n".join(f"- {key}: {line};" for key, line in CATEGORIES.items())
 
 
 def _entities_block(batch: ClaimBatch) -> str:
@@ -111,25 +218,110 @@ def _entities_block(batch: ClaimBatch) -> str:
     return "\n".join(lines)
 
 
+def _ref_id(ref: Any) -> str:
+    """A reference as the prompt lists it: its local id, QID or
+    vocabulary key."""
+    for name in ("local_id", "qid", "key"):
+        value = getattr(ref, name, None)
+        if value:
+            return value
+    return "?"
+
+
+def listed(claim: Claim) -> tuple[str, str, str]:
+    """(subject, property, value): the claim as the prompt lists it, and as
+    a finding names it. An item value is listed by its id, which the
+    entities block labels."""
+    value = claim.value
+    if isinstance(value, ItemValue):
+        rendered = _ref_id(value.value)
+    elif isinstance(value, MonolingualValue):
+        rendered = value.value.text
+    else:
+        rendered = describe_value(value)
+    return _ref_id(claim.subject), claim.property, rendered
+
+
 def _claims_block(batch: ClaimBatch) -> str:
-    lines = []
-    for claim in batch.claims:
-        subject = getattr(claim.subject, "local_id", None) or getattr(
-            claim.subject, "qid", "?"
+    return "\n".join(" | ".join(listed(claim)) for claim in batch.claims)
+
+
+def named(claim: Claim) -> list[str]:
+    """The local ids a claim names: its subject, its value and its
+    qualifiers' values, in that order."""
+    refs = [claim.subject]
+    if isinstance(claim.value, ItemValue):
+        refs.append(claim.value.value)
+    refs.extend(
+        qualifier.value.value
+        for qualifier in claim.qualifiers
+        if isinstance(qualifier.value, ItemValue)
+    )
+    return [ref.local_id for ref in refs if isinstance(ref, LocalRef)]
+
+
+def claim_of(finding: Finding, batch: ClaimBatch) -> int | None:
+    """The index of the first claim of `batch` the finding names, as the
+    prompt lists it, that names the finding's entity; None for none."""
+    if finding.claim is None:
+        return None
+    wanted = (
+        finding.claim.subject,
+        finding.claim.property,
+        finding.claim.value,
+    )
+    return next(
+        (
+            index
+            for index, claim in enumerate(batch.claims)
+            if listed(claim) == wanted and finding.entity in named(claim)
+        ),
+        None,
+    )
+
+
+def check(
+    obj: Mapping[str, Any],
+    batch: ClaimBatch,
+    vocabulary: tuple[Mapping[str, str], Iterable[str]],
+) -> Finding | Invalid:
+    """The finding `obj` gives when every check passes; else `obj`
+    verbatim, with each reason it fails."""
+    raw = dict(obj)
+    try:
+        finding = Finding.model_validate(raw)
+    except ValidationError as exc:
+        why = [
+            f"{'.'.join(map(str, error['loc'])) or 'finding'}: {error['msg']}"
+            for error in exc.errors()
+        ]
+        return Invalid(invalid=raw, why=why)
+    properties, items = vocabulary
+    why: list[str] = []
+    if finding.axis not in AXES:
+        why.append(f"axis {finding.axis!r} is not one of {', '.join(AXES)}")
+    if finding.category not in CATEGORIES:
+        why.append(f"category {finding.category!r} is not in the list")
+    entities: dict[str, EntityRecord] = {e.id: e for e in batch.entities}
+    entity = entities.get(finding.entity)
+    if entity is None:
+        why.append(f"entity {finding.entity!r} is not in the manifest")
+    if finding.claim is not None and claim_of(finding, batch) is None:
+        why.append("no claim is listed as given that names the entity")
+    if (
+        finding.alias is not None
+        and entity is not None
+        and finding.alias not in (entity.label, *entity.aliases)
+    ):
+        why.append(f"alias {finding.alias!r} is not the entity's")
+    suggested = finding.suggestion
+    if suggested.kind is not None and suggested.kind not in set(items):
+        why.append(f"suggested kind {suggested.kind!r} is not a manifest key")
+    if suggested.property is not None and suggested.property not in properties:
+        why.append(
+            f"suggested property {suggested.property!r} is not a manifest key"
         )
-        value = claim.value
-        if isinstance(value, ItemValue):
-            rendered = (
-                getattr(value.value, "label", None)
-                or getattr(value.value, "local_id", None)
-                or getattr(value.value, "qid", "?")
-            )
-        elif value.type == "monolingual":
-            rendered = value.value.text
-        else:
-            rendered = str(getattr(value, "value", value))
-        lines.append(f"{subject} | {claim.property} | {rendered}")
-    return "\n".join(lines)
+    return Invalid(invalid=raw, why=why) if why else finding
 
 
 # what the critique stage says of a critique the engine gave up on at its
@@ -142,8 +334,12 @@ def run_critique(
     batch: ClaimBatch,
     *,
     attention: list[str] | None = None,
-) -> list[Finding]:
-    """Review the batch; return flagged concerns (possibly empty).
+    vocabulary: tuple[Mapping[str, str], Iterable[str]] | None = None,
+) -> list[Finding | Invalid]:
+    """Review the batch; return its findings (possibly none), each valid
+    or kept verbatim as `Invalid`, in the order the critic gave them.
+    `vocabulary` is the model manifest's (property key -> datatype, item
+    keys), loaded when not given.
 
     Advisory only — an unfinished answer never raises (unlike chunk
     extraction): the critic must never block the pipeline, only inform
@@ -163,16 +359,23 @@ def run_critique(
     """
     if not batch.entities and not batch.claims:
         return []
+    properties, items = (
+        vocabulary if vocabulary is not None else load_vocabulary()
+    )
+    vocabulary = (properties, frozenset(items))
     prompt = CRITIQUE_PROMPT.format(
+        categories_block=_categories_block(),
+        kinds=", ".join(sorted(vocabulary[1])),
+        properties=", ".join(sorted(properties)),
         entities_block=_entities_block(batch) or "(none)",
         claims_block=_claims_block(batch) or "(none)",
     )
     try:
         response = client.complete(prompt)
-        findings, unfinished = _read(client, response)
+        findings, unfinished = _read(client, response, batch, vocabulary)
         if unfinished and _reject(client, response, unfinished):
             response = client.complete(prompt)
-            findings, unfinished = _read(client, response)
+            findings, unfinished = _read(client, response, batch, vocabulary)
             if unfinished:
                 _reject(client, response, unfinished)
     except OutputLimitReached:
@@ -183,12 +386,17 @@ def run_critique(
     return findings
 
 
-def _read(client: LlmClient, response: str) -> tuple[list[Finding], str]:
+def _read(
+    client: LlmClient,
+    response: str,
+    batch: ClaimBatch,
+    vocabulary: tuple[Mapping[str, str], Iterable[str]],
+) -> tuple[list[Finding | Invalid], str]:
     """(the findings a critique answer holds, why the answer is unfinished,
     or "" when it is not): the engine stopped it at its output limit
     (llm.at_output_limit), or it has no terminal sentinel. `response` is
     the answer `client` has just given."""
-    findings, finished = _parse_critique(response)
+    findings, finished = _parse_critique(response, batch, vocabulary)
     if at_output_limit(client, response):
         return findings, f"critique: {CUT_OFF_AT_LIMIT}"
     if not finished:
@@ -196,20 +404,24 @@ def _read(client: LlmClient, response: str) -> tuple[list[Finding], str]:
     return findings, ""
 
 
-def _parse_critique(response: str) -> tuple[list[Finding], bool]:
-    """(the findings a critique answer holds, whether it has its terminal
-    sentinel, a line whose `done` is true)."""
-    findings: list[Finding] = []
+def _parse_critique(
+    response: str,
+    batch: ClaimBatch,
+    vocabulary: tuple[Mapping[str, str], Iterable[str]],
+) -> tuple[list[Finding | Invalid], bool]:
+    """(the findings a critique answer holds, each checked against the
+    batch and the manifest, whether it has its terminal sentinel, a line
+    whose `done` is true). An object with none of a finding's fields is
+    not a finding."""
+    findings: list[Finding | Invalid] = []
     finished = False
     for obj in scan_json_objects(response):
         if obj.get("done") is True:
             finished = True
             continue
-        if "target" in obj and "issue" in obj:
-            try:
-                findings.append(Finding.model_validate(obj))
-            except Exception:
-                continue
+        if FINDING_FIELDS.isdisjoint(obj):
+            continue
+        findings.append(check(obj, batch, vocabulary))
     return findings, finished
 
 
@@ -223,3 +435,135 @@ def _reject(client: LlmClient, response: str, reason: str) -> bool:
     except Exception as exc:
         logger.warning("could not reject a critique answer: %s", exc)
         return False
+
+
+# -- the review sheet -------------------------------------------------------
+
+
+def note(finding: Finding) -> str:
+    """A finding as the review sheet's `critique_notes` column shows it:
+    its axis and category, the entity it concerns (and the alias), the
+    issue and the suggestion."""
+    where = finding.entity
+    if finding.alias is not None:
+        where += f" alias {finding.alias!r}"
+    text = f"critique [{finding.axis}, {finding.category}] {where}: "
+    text += finding.issue
+    suggested = finding.suggestion
+    parts = [
+        f"{name} {value}"
+        for name, value in (
+            ("kind", suggested.kind),
+            ("property", suggested.property),
+        )
+        if value is not None
+    ]
+    if suggested.note:
+        parts.append(suggested.note)
+    if parts:
+        text += f" (suggests {'; '.join(parts)})"
+    return text
+
+
+def counterparts(extracted: ClaimBatch, rows: ClaimBatch) -> list[int | None]:
+    """For each claim of `extracted`, the index of the claim of `rows` it
+    became, where `rows` is `extracted` resolved: each local ref either
+    kept or replaced by a QID reference, in order, and a claim resolution
+    made identical to an earlier one dropped. A local id maps to one QID
+    throughout. None for a claim no row matches."""
+    mapped: dict[str, str] = {}
+    found: list[int | None] = []
+    at = 0
+    for claim in extracted.claims:
+        if at < len(rows.claims):
+            seen = _resolved_as(claim, rows.claims[at], mapped)
+            if seen is not None:
+                mapped.update(seen)
+                found.append(at)
+                at += 1
+                continue
+        found.append(
+            next(
+                (
+                    index
+                    for index in range(at)
+                    if _resolved_as(claim, rows.claims[index], mapped)
+                    is not None
+                ),
+                None,
+            )
+        )
+    return found
+
+
+def _resolved_as(
+    claim: Claim, row: Claim, mapped: Mapping[str, str]
+) -> dict[str, str] | None:
+    """The local id -> QID pairs under which `row` is `claim` resolved,
+    consistent with `mapped`; None when it is not."""
+    seen: dict[str, str] = {}
+
+    def same(a: Any, b: Any) -> bool:
+        if isinstance(a, dict) and isinstance(b, dict):
+            if a.get("kind") == "local" and b.get("kind") == "qid":
+                local, qid = a.get("local_id"), b.get("qid")
+                if (
+                    mapped.get(local, qid) != qid
+                    or seen.get(local, qid) != qid
+                ):
+                    return False
+                seen[local] = qid
+                return True
+            return a.keys() == b.keys() and all(same(a[k], b[k]) for k in a)
+        if isinstance(a, list) and isinstance(b, list):
+            return len(a) == len(b) and all(map(same, a, b))
+        return a == b
+
+    return (
+        seen
+        if same(claim.model_dump(mode="json"), row.model_dump(mode="json"))
+        else None
+    )
+
+
+def attach(
+    findings: Iterable[Finding], extracted: ClaimBatch, rows: ClaimBatch
+) -> dict[int, list[Finding]]:
+    """Each finding by the index of the review row it goes on, each on
+    exactly one row. `extracted` is the batch the critic reviewed, and
+    `rows` the batch the review sheet lists, `extracted` resolved
+    (`counterparts`), so that a finding reaches its row whichever of its
+    entities resolved to a QID.
+
+    A finding that names a claim goes on that claim's row. One about an
+    entity goes on the row of the first claim whose subject is the
+    entity, else of the first claim that names it as a value or a
+    qualifier's value. An entity no row names has no row of its own: its
+    finding goes on the sheet's first row, and the note names the entity.
+    With no rows, nothing is attached."""
+    if not rows.claims:
+        return {}
+    where = counterparts(extracted, rows)
+    attached: dict[int, list[Finding]] = {}
+    for finding in findings:
+        index = claim_of(finding, extracted)
+        row = where[index] if index is not None else None
+        if row is None:
+            row = _entity_row(finding.entity, extracted, where)
+        attached.setdefault(row, []).append(finding)
+    return attached
+
+
+def _entity_row(
+    entity: str, extracted: ClaimBatch, where: list[int | None]
+) -> int:
+    for as_subject in (True, False):
+        for index, claim in enumerate(extracted.claims):
+            hit = (
+                getattr(claim.subject, "local_id", None) == entity
+                if as_subject
+                else entity in named(claim)
+            )
+            if hit and where[index] is not None:
+                return where[index]
+    return 0
