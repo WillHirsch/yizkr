@@ -647,6 +647,15 @@ class TestAReset:
             "The instance is reset and repopulated, in 13.5 s:"
         )
         assert [line.split()[-2] for line in summary[1:10]] == ["1.5"] * 9
+        # the start waits for the stack to be healthy
+        (started,) = [c for c in stack_.docker.commands if "up" in c]
+        assert started[-5:] == [
+            "up",
+            "--detach",
+            "--wait",
+            "--wait-timeout",
+            "900",
+        ]
 
     def test_it_removes_the_graph_volumes_and_nothing_else(self, stack_):
         stack_.reset().run()
@@ -772,6 +781,19 @@ class TestTheKeptGuard:
         stack_.reset().run()
         assert stack_.writes() == ["up", "down", "volume rm", "up"]
         assert any("titles" in read for read in stack_.wiki.reads)
+
+    def test_a_volume_the_start_made_is_removed_too(self, stack_):
+        """A start to read the marker makes the volumes that were not
+        there; the reset removes them with the rest."""
+        search_index = f"{PROJECT}_elasticsearch-data"
+        del stack_.docker.volumes[search_index]
+        stack_.wiki.answering = False
+        stack_.docker.containers.clear()
+        stack_.reset().run()
+        removed = [
+            c for c in stack_.docker.commands if c[1:3] == ["volume", "rm"]
+        ]
+        assert [command[3:] for command in removed] == [list(GRAPH)]
 
     def test_a_stopped_kept_instance_is_refused(self, stack_):
         stack_.wiki.edit(KEPT_STATE_PAGE)
