@@ -828,6 +828,7 @@ def identity_map() -> dict:
             "mentions": 14,
             "clustered_mentions": 12,
             "unclustered_mentions": 2,
+            "recordless_mentions": 4,
             "clustered_by_kind": {"human": 8, "place": 3, "loebig_kin": 1},
             "candidate_pairs": 5,
             "confident_pairs": 3,
@@ -1514,6 +1515,8 @@ class TestCorpusStages:
         assert counts["singletons"] == 2
         assert counts["hub keys, not blocked on"] == 3
         assert counts["mentions holding them"] == 40
+        # the mentions without a record, which never link confidently
+        assert counts["recordless mentions"] == 4
         assert clusters["by_kind"] == {"human": 8, "place": 3, OTHER: 1}
 
     def test_a_run_without_the_stage_says_not_run(self, tmp_path):

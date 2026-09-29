@@ -1610,13 +1610,16 @@ class TestCorpusStages:
         path = driver.state_dir / CORPUS_DIR / "clustering"
         identity = json.loads((path / "identity-map.json").read_text())
         # every document's one person, Eugen, born in 1836 as the export
-        # says: a confident cluster of five
-        (merged,) = [
+        # says: the scripted answers carry no mention records, so the five
+        # meet on the exact name and stay apart, an ambiguous candidate
+        # cluster (ADR-0035 §7, rule 1)
+        (candidate,) = [
             entry
-            for entry in identity["clusters"].values()
-            if len(entry["members"]) > 1
+            for entry in identity["review"]
+            if entry["status"] == clustering.AMBIGUOUS
         ]
-        assert (merged["method"], len(merged["members"])) == ("confident", 5)
+        assert len(candidate["members"]) == 5
+        assert identity["summary"]["clusters"]["confident"] == 0
         assert identity["summary"]["gedcom_documents"] == 1
         # the stage's reasons reach its `done` event
         (done,) = [

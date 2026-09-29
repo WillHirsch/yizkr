@@ -183,7 +183,9 @@ rechecks.
   findings that failed their checks, counted apart as invalid;
 - clusters, from the clustering stage's identity map: confident merges,
   ambiguous clusters left split, conflicting clusters (and how many of
-  them hard), singletons, the mentions clustered by kind, the candidate
+  them hard), singletons, the recordless mentions (those of a kind that
+  takes a mention record and have none, which never link confidently,
+  ADR-0035 §7), the mentions clustered by kind, the candidate
   pairs, the adjudication estimate, and the hub keys not blocked on and
   the mentions holding them; `not run` when the run has no clustering
   stage, and the map's state when it is missing or of another format.

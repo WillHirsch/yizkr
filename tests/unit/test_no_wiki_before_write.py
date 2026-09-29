@@ -577,17 +577,20 @@ def test_corpus_clustering_asks_nothing_of_the_wiki(tmp_path, refusals):
     identity = json.loads(
         (context.directory / "identity-map.json").read_text()
     )
-    # the portrait's Eugen and the deck's meet the export's, whose dates
-    # agree; the postcard's Klara meets hers
-    merged = {
+    # the portrait's Eugen and the deck's meet the export's, and the
+    # postcard's Klara meets hers: the scripted answers carry no mention
+    # records, so each meets on its exact name and none merges (ADR-0035
+    # §7, rule 1)
+    candidates = {
         tuple(sorted(identity["mentions"][m]["label"] for m in members))
-        for entry in identity["clusters"].values()
+        for entry in identity["review"]
         if len(members := entry["members"]) > 1
     }
-    assert merged == {
+    assert candidates == {
         ("Eugen Löbig", "Eugen Löbig", "Eugen Löbig"),
         ("Klara Löbig", "Klara Löbig"),
     }
+    assert identity["summary"]["clusters"]["confident"] == 0
 
 
 class ScriptedAdjudicator:
