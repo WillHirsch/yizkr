@@ -107,7 +107,12 @@ class Corpus:
         (self.folder / name).write_text(u.GEDCOM_FIXTURE.read_text() + note)
 
     def sha1(self, name: str) -> str:
-        return sha1((self.folder / name).read_bytes())
+        """The SHA-1 of a file of the folder, or of an image a PDF places,
+        which the engine is shown as the file named for its SHA-1."""
+        path, stem = self.folder / name, Path(name).stem
+        if not path.exists() and re.fullmatch(r"[0-9a-f]{40}", stem):
+            return stem
+        return sha1(path.read_bytes())
 
     def about(self, prompt: str) -> str | None:
         """The file whose transcription the prompt holds, told by the

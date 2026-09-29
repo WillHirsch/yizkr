@@ -13,22 +13,29 @@ follows it as it follows any run.
 **Stages.** Each document takes the per-document stages its kind plans
 (orchestrate.DOCUMENT_STAGES): transcription, which the transcription
 check guards, extraction and the critique; or the GEDCOM adapter for a
-.ged file. Nothing before the barrier reads or writes the wiki: a scratch
-run registers no artifact, and a deck's derived media are recorded in its
-directory (ADR-0025 §2). There is no human stop. When every document's
-per-document stages have ended, done or failed, the run is at the
-**barrier**, and the driver runs the corpus stages registered with it
-(CORPUS_STAGES), in order, over the documents whose stages all
-completed: every one, in each invocation that goes past the barrier, so
-a corpus stage reuses its own outputs while their inputs stand, as the
-views do. Face detection is never a stage of a scratch run.
+.ged file. An image a PDF places within a text-layer page, read on its
+own, is a document of its own, an excerpt (orchestrate.ExcerptRun), which
+takes the same stages once its PDF's transcription has found it, and
+joins the run plan then. Nothing before the barrier reads or writes the
+wiki: a scratch run registers no artifact, and a deck's derived media are
+recorded in its directory (ADR-0025 §2). There is no human stop. When
+every document's per-document stages have ended, done or failed, the run
+is at the **barrier**, and the driver runs the corpus stages registered
+with it (CORPUS_STAGES), in order, over the documents whose stages all
+completed, excerpts among them: every one, in each invocation that goes
+past the barrier, so a corpus stage reuses its own outputs while their
+inputs stand, as the views do. Face detection is never a stage of a
+scratch run.
 
 **Order.** One document of each kind, the first by name, goes through
 every per-document stage first: the canaries. The rest follow stage by
 stage, every transcription before any extraction and every extraction
 before any critique, a document's own stages always in order. So a
 misalignment of any kind shows within the first calls, and each stage's
-rate is known early. `until` stops the run after a stage.
+rate is known early. An excerpt joins as its PDF's transcription ends:
+the invocation's first is the excerpts' canary, which goes through its
+stages next, and the others take their stages rank by rank, after the
+documents in each rank. `until` stops the run after a stage.
 
 **Control.** Before each stage of each document, and before each corpus
 stage, the driver reads the run's control file (rundir.fold_control): a
@@ -107,6 +114,7 @@ from yizkr.pipeline.orchestrate import (
     MODEL_VARIABLE,
     PAUSED,
     DocumentRun,
+    ExcerptRun,
     Orchestrator,
 )
 from yizkr.pipeline.rundir import (
@@ -732,6 +740,15 @@ class ScratchDriver(Orchestrator):
         # (document, stage, role) of each view the stage in hand made
         # under a refresh, recorded once it is saved (_dispatch_one)
         self._refreshing: list[tuple[DocumentRun, str, str]] = []
+        # the SHA-1s of the corpus's documents, which no excerpt is taken
+        # for (_excerpts_of), and the excerpts dispatched in this
+        # invocation, by their SHA-1s
+        self._corpus_sha1s: frozenset[str] = frozenset()
+        self._queued: set[str] = set()
+        # (id of a document, stage) -> where the pair stands in dispatch
+        # order (_stages, _arrivals), and the next place for an excerpt
+        self._slots: dict[tuple[int, str], tuple] = {}
+        self._next_order = 0
 
     # -- stages -----------------------------------------------------------
 
@@ -1257,26 +1274,76 @@ class ScratchDriver(Orchestrator):
             first.setdefault(doc.kind, doc)
         return [doc for doc in docs if first[doc.kind] is doc]
 
+    def _planned(self, doc: DocumentRun) -> list[str]:
+        """The document's stages this invocation is to take."""
+        return [s for s in DOCUMENT_STAGES[doc.kind] if self._within(s)]
+
     def _stages(
         self, docs: Sequence[DocumentRun], canaries: Sequence[DocumentRun]
     ) -> list[tuple[DocumentRun, str]]:
         """Every (document, stage) the invocation is to take, in the order
         it takes them: each canary through its stages, then the rest by
-        the stages' rank, each rank in the documents' order."""
+        the stages' rank, each rank in the documents' order. Each pair's
+        place is kept (`_slots`), for the excerpts that join them
+        (`_arrivals`)."""
+        self._slots = {}
+        for index, doc in enumerate(canaries):
+            for step, stage in enumerate(self._planned(doc)):
+                self._slots[(id(doc), stage)] = (0, index, step)
+        for index, doc in enumerate(docs):
+            if doc not in canaries:
+                for stage in self._planned(doc):
+                    self._slots[(id(doc), stage)] = (1, PHASES[stage], index)
+        self._next_order = len(docs)
+        pairs = [(doc, stage) for doc in docs for stage in self._planned(doc)]
+        return sorted(pairs, key=self._slot)
 
-        def planned(doc: DocumentRun) -> list[str]:
-            return [s for s in DOCUMENT_STAGES[doc.kind] if self._within(s)]
+    def _slot(self, pair: tuple[DocumentRun, str]) -> tuple:
+        return self._slots[(id(pair[0]), pair[1])]
 
-        order = {id(doc): index for index, doc in enumerate(docs)}
-        first = [(doc, stage) for doc in canaries for stage in planned(doc)]
-        rest = [
-            (doc, stage)
-            for doc in docs
-            if doc not in canaries
-            for stage in planned(doc)
+    def _arrivals(self, doc: DocumentRun) -> list[tuple[DocumentRun, str]]:
+        """The (excerpt, stage) pairs that join dispatch once the
+        document's transcription has ended: its excerpts that this
+        invocation has not dispatched yet (_excerpts_of), added to the run
+        plan. The first excerpt of the invocation is the excerpts'
+        canary, recorded among the run's canaries, and goes through its
+        stages next; the others take their stages rank by rank with the
+        rest of the documents, after them in each rank."""
+        new = [
+            excerpt
+            for excerpt in self._excerpts_of(doc, self._corpus_sha1s)
+            if excerpt.sha1 not in self._queued
         ]
-        rest.sort(key=lambda item: (PHASES[item[1]], order[id(item[0])]))
-        return first + rest
+        if not new:
+            return []
+        self._plan_excerpts(new)
+        pairs = []
+        for excerpt in new:
+            canary = not self._queued
+            self._queued.add(excerpt.sha1)
+            if canary:
+                scratch = dict(self.rundir.manifest().get("scratch") or {})
+                known = list(scratch.get("canaries") or [])
+                if excerpt.sha1 not in known:
+                    scratch["canaries"] = [*known, excerpt.sha1]
+                    self.rundir.update_manifest(scratch=scratch)
+            order, self._next_order = self._next_order, self._next_order + 1
+            for step, stage in enumerate(self._planned(excerpt)):
+                self._slots[(id(excerpt), stage)] = (
+                    (0, -1, step) if canary else (1, PHASES[stage], order)
+                )
+                pairs.append((excerpt, stage))
+        return pairs
+
+    def _known_excerpts(self, docs: Sequence[DocumentRun]) -> list[ExcerptRun]:
+        """The excerpts the documents' directories hold now, each once
+        (_excerpts_of): read from files alone, as the run's plan and the
+        barrier take them."""
+        found: dict[str, ExcerptRun] = {}
+        for doc in docs:
+            for excerpt in self._excerpts_of(doc, self._corpus_sha1s):
+                found.setdefault(excerpt.sha1, excerpt)
+        return list(found.values())
 
     def _dispatch(
         self, pending: list[tuple[DocumentRun, str]]
@@ -1338,6 +1405,10 @@ class ScratchDriver(Orchestrator):
             announced.clear()
             doc, stage = chosen
             outcome = self._dispatch_one(doc, stage)
+            if outcome == _ENDED_HERE and stage == "transcription":
+                arrivals = self._arrivals(doc)
+                if arrivals:
+                    pending = sorted([*pending, *arrivals], key=self._slot)
             if outcome == _HELD:
                 # the stage's own check held it, with its event: a request
                 # landed between the two checks. A moment passes before the
@@ -1488,10 +1559,15 @@ class ScratchDriver(Orchestrator):
         self._preflight_documents(docs)
         taken, duplicates = self._canonical(docs)
         canaries = self._canaries(taken)
+        # the excerpts the documents' directories hold already join the
+        # plan; the others join it as their PDFs' transcriptions find them
+        self._excerpts, self._queued = {}, set()
+        self._corpus_sha1s = frozenset(doc.sha1 for doc in docs)
+        known = self._known_excerpts(taken)
 
         self.rundir = RunDir(self.state_dir)
-        fields = self._fields(docs, canaries)
-        past = self._past_barrier_only(fields, taken)
+        fields = self._fields([*docs, *known], canaries)
+        past = self._past_barrier_only(fields, [*taken, *known])
         if past:
             if self.refresh:
                 raise ScratchRefused(
@@ -1536,8 +1612,11 @@ class ScratchDriver(Orchestrator):
                     doc.state.status = PAUSED
                     self._save(doc)
             if stop is None and self._past_the_barrier():
-                stop, failed = self._corpus(taken)
+                stop, failed = self._corpus(
+                    [*taken, *self._known_excerpts(taken)]
+                )
         except KeyboardInterrupt:
+            found = [*found, *self._excerpts.values()]
             self._end_invocation(found, "interrupted")
             self._report("interrupted", None)
             raise
@@ -1549,6 +1628,7 @@ class ScratchDriver(Orchestrator):
             else:
                 outcome = "failed"
             # only the exception's name: its message may quote a document
+            found = [*found, *self._excerpts.values()]
             self._end_invocation(found, outcome, reason=type(exc).__name__)
             self._report(outcome, type(exc).__name__)
             if (
@@ -1560,6 +1640,7 @@ class ScratchDriver(Orchestrator):
             raise
         finally:
             self._close_engines()
+        found = [*found, *self._excerpts.values()]
         if failed is not None:
             outcome, reason = "failed", failed
         elif stop is not None:

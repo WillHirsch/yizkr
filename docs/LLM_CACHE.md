@@ -132,8 +132,14 @@ image 1" for its places, with the pages it is on), and each image's own
 transcription, `derived-media/<sha1>.transcription.json`, which names the
 image by its SHA-1. An image whose reading fails the transcription check
 has none, and the transcription stage's attention says so; the PDF's own
-text goes on to its batch. Nothing extracts the images' transcriptions
-yet, so no claim cites an image, and the write registers none (ADR-0008).
+text goes on to its batch. Each image's transcription is then taken as a
+document of its own, an excerpt, without a call: its extraction and
+critique make the calls any document's do, and cite the image; the write
+registers the images (ADR-0008, as amended by #397). A reused
+transcription is made again when an image it marks has no reading of its
+own, when the record of its images or their bytes are not kept whole, or
+when the never-ingest list names an image it marks: the cache answers
+what it answered before, and the image with no reading is asked again.
 The readings are made in a scratch folder of their own, and nothing is
 written to the document's directory until the stage keeps them. The call
 estimate takes the stage through the same code: it counts a call for each

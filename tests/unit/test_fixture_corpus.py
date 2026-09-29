@@ -62,6 +62,7 @@ from yizkr.pipeline.gedcom import parse_gedcom
 from yizkr.pipeline.orchestrate import (
     BATCH_VOLATILE,
     DOCUMENT_STAGES,
+    EXCERPT,
     document_kind,
 )
 from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
@@ -335,9 +336,11 @@ class TestTheCorpus:
 
     def test_each_document_is_a_kind_the_driver_plans(self):
         assert set(fc.DOCUMENTS) == set(build.documents())
+        # every kind but an excerpt, which is an image a PDF places, found
+        # by its transcription and never a file of the folder (#397)
         assert {doc.kind for doc in fc.DOCUMENTS.values()} == set(
             DOCUMENT_STAGES
-        )
+        ) - {EXCERPT}
         for name, doc in fc.DOCUMENTS.items():
             assert document_kind(fc.FOLDER / name) == doc.kind
             assert doc.source is None or doc.source in SOURCES
