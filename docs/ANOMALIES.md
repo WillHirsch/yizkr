@@ -4,7 +4,8 @@ An unattended whole-corpus run (ADR-0025) has to say when its outputs
 look wrong while it unfolds, and stop a slice that is futile without
 stopping the rest. The anomaly checks do that. They are cheap and call no
 model. They raise alerts for the operator, the live monitor
-([docs/MONITOR.md](MONITOR.md)) and the run report, and a check marked
+([docs/MONITOR.md](MONITOR.md)) and the run report
+([docs/RUN_REPORT.md](RUN_REPORT.md)), and a check marked
 fail-fast pauses its slice through the run's control file.
 
 Alerts are signals. No check changes, moves or drops an output or a

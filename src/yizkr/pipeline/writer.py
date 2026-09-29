@@ -110,6 +110,35 @@ Per batch, the writer:
    that an explicit `instance of` claim keeps its own locator and
    excerpt.
 
+Wikibase holds at most TEXT_LIMIT (400) characters in the text of a
+string, external-id or monolingual text value, whether the value is a
+statement's, a qualifier's or a reference's, and refuses the whole edit
+that sends a longer one. The writer counts each text in the form the
+instance keeps it in (`_stored_string`) and sends none over the limit,
+so that no text value's length stops the batch:
+
+* a claim whose own text, its value or a qualifier's, is over the limit
+  is refused before the first write, and nothing of it is written: no
+  statement, and no item that only it mentions. The result's `refused`
+  names it by its claim id (`claim_id` in yizkr.pipeline.review), its
+  review-sheet id unless the review corrected it, and a warning gives
+  each of its texts over the limit with its length. The text is never
+  cut, as a cut would narrow what the source says (CLAUDE.md rule 5).
+  Every other claim of the batch is written as the steps above say,
+  with its references (rules 1 and 2). An entity's type hint over the
+  limit is left out in the same way, with a warning, wherever the writer
+  would record it;
+* a reference's page number and region only place the claim in its
+  source, as its excerpt only helps a reader check it there, so each is
+  cut to the limit rather than refused: a page number or region at a
+  break between words, ending with CUT_MARK (" …"), "sha1" and the
+  first 12 hex digits of the SHA-1 of the whole text (`_locator_text`),
+  and an excerpt at a space, ending with "…". A cut depends on the text
+  alone, so a re-run builds the block the instance keeps, and is skipped
+  (step 4). The digest keeps two page numbers or regions that agree up
+  to the cut apart, so the two places a source asserts a value in stay
+  two reference blocks.
+
 Nothing here auto-approves: the writer expects the output of
 `apply_review` and trusts the human decisions that produced it, except
 for depicts, whose per-row approval it checks, as above.
@@ -121,7 +150,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 
 from yizkr.claims import (
@@ -142,7 +171,26 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.wiki import WikiClient
-from yizkr.pipeline.review import entity_records, unapproved_depicts
+from yizkr.pipeline.review import (
+    claim_id,
+    entity_records,
+    unapproved_depicts,
+)
+
+# The most characters (Unicode code points) Wikibase holds in the text of a
+# string, external-id or monolingual text value: its `string-limits` for
+# the string and the monolingual text value types, an external id being a
+# string value. It checks every snak of a statement it is sent, the value,
+# each qualifier and each reference, after it has put a string value in
+# NFC, and refuses the whole edit when one is longer.
+TEXT_LIMIT = 400
+# what a page number or region cut to TEXT_LIMIT ends with, before the
+# digest of the whole text (_locator_text)
+CUT_MARK = " …"
+# punctuation that joins the letters or digits on its two sides into one
+# word, which a cut keeps whole: a point or comma inside a number
+# ("1.234", "1,5"), an apostrophe inside a word
+INNER_PUNCTUATION = ".,'\u2019"
 
 
 class UnapprovedDepictsError(ValueError):
@@ -198,8 +246,13 @@ class WriteResult:
     type_statements_written: int = 0
     type_statements_referenced: int = 0
     # what the writer left out and why, such as a kind the vocabulary
-    # lacks (step 2 of the module docstring)
+    # lacks (step 2 of the module docstring) or a claim it refused
     warnings: list[str] = field(default_factory=list)
+    # the claim id (yizkr.pipeline.review.claim_id; its review-sheet id
+    # unless the review corrected it) of each claim refused whole because
+    # its own text is over TEXT_LIMIT, in batch order; a warning says why
+    # for each (the module docstring)
+    refused: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -256,6 +309,102 @@ def _stored_string(text: str) -> str:
     form stays a combining mark, and a compatibility character, such as
     the long s, stays as it is, where NFKC would replace it."""
     return unicodedata.normalize("NFC", text)
+
+
+def _fits(text: str) -> bool:
+    """Whether the instance holds `text` in a text value: it has at most
+    TEXT_LIMIT characters in the form the writer sends it in."""
+    return len(_stored_string(text)) <= TEXT_LIMIT
+
+
+def _value_text(value) -> str | None:
+    """The text of a string, external-id or monolingual text value in the
+    form the writer sends it in (_stored_string); None for other values."""
+    if isinstance(value, StringValue | ExternalIdValue):
+        return _stored_string(value.value)
+    if isinstance(value, MonolingualValue):
+        return _stored_string(value.value.text)
+    return None
+
+
+def _is_mark(char: str) -> bool:
+    """A combining mark (Unicode category M), which belongs to the
+    character before it."""
+    return unicodedata.category(char).startswith("M")
+
+
+def _in_word(text: str, index: int, inner: str = INNER_PUNCTUATION) -> bool:
+    """Whether text[index] belongs to a word: a letter, a digit or a
+    combining mark, or `inner` punctuation with a letter, digit or mark
+    before it and a letter or digit after it."""
+    char = text[index]
+    if char.isalnum() or _is_mark(char):
+        return True
+    return (
+        char in inner
+        and 0 < index < len(text) - 1
+        and (text[index - 1].isalnum() or _is_mark(text[index - 1]))
+        and text[index + 1].isalnum()
+    )
+
+
+def _joined(text: str, end: int, inner: str = INNER_PUNCTUATION) -> bool:
+    """Whether a cut of `text` before text[end] would split what reads as
+    one: a combining mark from the character before it, or a word, whose
+    parts `inner` punctuation joins. With no `inner` punctuation, a word
+    is a run of letters, digits and marks."""
+    return _is_mark(text[end]) or (
+        _in_word(text, end - 1, inner) and _in_word(text, end, inner)
+    )
+
+
+def _locator_text(text: str) -> str:
+    """A reference's page number or region as the writer sends it: in the
+    form the instance keeps text in (_stored_string) and, when that is
+    longer than TEXT_LIMIT, cut to it (the module docstring).
+
+    A cut keeps the longest start of the text that ends at a break
+    between words and leaves room for the mark, and the mark follows it:
+    CUT_MARK, then "sha1" and the first 12 hex digits of the SHA-1 of the
+    whole text in NFC. So no word is kept in part: a page "112" is never
+    kept as "11", nor "1.234" as "1" (INNER_PUNCTUATION), and no letter
+    loses a combining mark. When one word fills the room, as a list of
+    pages with no spaces ("2,3,4") can, the cut falls at its last point,
+    comma or apostrophe, so no number in it is kept in part either; and
+    only when no such start holds anything but spaces, as when one run of
+    letters and digits fills the room, is the text cut inside the run,
+    each letter kept with its marks. The digest keeps two texts that
+    agree up to the cut apart, and apart from a text that reads as the
+    cut's start: the places a source asserts a value in stay a reference
+    block each (step 4).
+
+    The cut depends on the text alone, and keeps it in NFC: a start of a
+    text in NFC is in NFC, and so is it with the mark after it. So a claim
+    written again sends the text the instance keeps, and its reference
+    block is found (step 4)."""
+    text = _stored_string(text)
+    if len(text) <= TEXT_LIMIT:
+        return text
+    digest = hashlib.sha1(text.encode()).hexdigest()[:12]
+    mark = f"{CUT_MARK} sha1 {digest}"
+    room = TEXT_LIMIT - len(mark)
+    end = room
+    while end and _joined(text, end):
+        end -= 1
+    kept = text[:end].rstrip()
+    if not kept:
+        # one word fills the room: its last point, comma or apostrophe
+        end = room
+        while end and _joined(text, end, inner=""):
+            end -= 1
+        kept = text[:end].rstrip()
+    if not kept:
+        # one run of letters and digits fills the room
+        end = room
+        while end and _is_mark(text[end]):
+            end -= 1
+        kept = text[:end] or text[:room]
+    return kept + mark
 
 
 class BatchWriter:
@@ -424,9 +573,11 @@ class BatchWriter:
             self._append(item, claim)
             item.write(summary="ingest: instance of")
         # open-schema escape hatch (ADR-0013): record what an unclassified
-        # entity actually is, so the gap is queryable, not lost
+        # entity actually is, so the gap is queryable, not lost. A hint
+        # the instance cannot hold is left out, with the warning
+        # write_batch gave before its first write
         type_hint = record.type_hint if record else None
-        if type_hint and source_artifact_qid:
+        if type_hint and _fits(type_hint) and source_artifact_qid:
             from wikibaseintegrator.datatypes import String
 
             hint = String(
@@ -579,18 +730,20 @@ class BatchWriter:
         source_ref.add(
             Item(prop_nr=self.properties["stated_in"], value=artifact_qid)
         )
+        # the locators, in NFC and cut to what the instance holds
+        # (_locator_text)
         if claim is not None and claim.source.page_number:
             source_ref.add(
                 String(
                     prop_nr=self.properties["page_number"],
-                    value=_stored_string(claim.source.page_number),
+                    value=_locator_text(claim.source.page_number),
                 )
             )
         if claim is not None and claim.source.region:
             source_ref.add(
                 String(
                     prop_nr=self.properties["relative_position_within_image"],
-                    value=_stored_string(
+                    value=_locator_text(
                         claim.source.region.as_wikibase_string()
                     ),
                 )
@@ -933,7 +1086,8 @@ class BatchWriter:
                     artifact_qid,
                     result,
                 )
-            if found.type_hint:
+            # and so is a type hint the instance cannot hold
+            if found.type_hint and _fits(found.type_hint):
                 self._record_type_statement(
                     found.qid,
                     String(
@@ -944,16 +1098,22 @@ class BatchWriter:
                     result,
                 )
 
-    def _unknown_kinds(self, batch: ClaimBatch) -> list[str]:
+    def _unknown_kinds(
+        self, batch: ClaimBatch, refused: Collection[int]
+    ) -> list[str]:
         """A warning for each entity whose kind the vocabulary lacks, so
         that no kind is recorded for it. An entity's kind is its manifest
         record's or, for a local id without one, that of the first ref to
-        the id, in the order the writer resolves refs: each claim's
-        subject, then its value, then its qualifiers' values."""
+        the id in a claim the writer writes, in the order the writer
+        resolves refs: each claim's subject, then its value, then its
+        qualifiers' values. `refused` holds the places in the batch of
+        the claims the writer refuses, whose refs it never resolves."""
         kinds: dict[str, str | None] = {
             record.id: record.kind for record in self._entity_records.values()
         }
-        for claim in batch.claims:
+        for index, claim in enumerate(batch.claims):
+            if index in refused:
+                continue
             refs = [claim.subject]
             if isinstance(claim.value, ItemValue):
                 refs.append(claim.value.value)
@@ -972,6 +1132,50 @@ class BatchWriter:
             if kind and kind not in self.items
         ]
 
+    @staticmethod
+    def _refusals(batch: ClaimBatch) -> dict[int, str]:
+        """The claims of `batch` whose own text the instance cannot hold,
+        by their place in the batch, each with the warning that names it
+        by its claim id and property and gives each of its texts,
+        its value or a qualifier's, that is over TEXT_LIMIT, with its
+        length in the form the writer sends it in (the module
+        docstring)."""
+        refusals = {}
+        for index, claim in enumerate(batch.claims):
+            texts = [("its value", claim.value)]
+            texts.extend(
+                (f"its {qualifier.property} qualifier", qualifier.value)
+                for qualifier in claim.qualifiers
+            )
+            over = [
+                f"{where} has {length} characters"
+                for where, value in texts
+                if (length := len(_value_text(value) or "")) > TEXT_LIMIT
+            ]
+            if over:
+                refusals[index] = (
+                    f"claim {claim_id(claim)} ({claim.property}) is "
+                    f"refused, and nothing of it is written: "
+                    f"{' and '.join(over)} in Unicode NFC, over the "
+                    f"{TEXT_LIMIT} Wikibase holds in a text value. A cut "
+                    f"would narrow what the source says"
+                )
+        return refusals
+
+    def _type_hints_over_limit(self) -> list[str]:
+        """A warning for each manifest record whose type hint the instance
+        cannot hold, which is left out wherever the writer would record
+        it (the module docstring)."""
+        return [
+            f"entity {record.id!r} has a type hint of "
+            f"{len(_stored_string(record.type_hint))} characters in "
+            f"Unicode NFC, over the {TEXT_LIMIT} Wikibase holds in a text "
+            f"value: it is not recorded, as a cut would narrow what the "
+            f"source says"
+            for record in self._entity_records.values()
+            if record.type_hint and not _fits(record.type_hint)
+        ]
+
     # -- main entry ----------------------------------------------------------
 
     def write_batch(
@@ -979,7 +1183,10 @@ class BatchWriter:
     ) -> WriteResult:
         """Write `batch`. Raises UnapprovedDepictsError, before reading
         from or writing to the instance, when a depicts claim in it lacks
-        its row approval (the module docstring), in a dry run too."""
+        its row approval (the module docstring), in a dry run too. A
+        claim whose own text the instance cannot hold raises nothing: it
+        is refused alone, and the rest of the batch is written (the
+        module docstring)."""
         unapproved = unapproved_depicts(batch)
         if unapproved:
             raise UnapprovedDepictsError(unapproved)
@@ -998,9 +1205,15 @@ class BatchWriter:
         self._mentions = {}
         self._minted = set()
         self._ref_kinds = {}
-        # found before the first write; the kinds are skipped wherever the
-        # writer would record them
-        warnings = self._unknown_kinds(batch)
+        # found before the first write, in a dry run as well: the claims
+        # whose own text the instance cannot hold, which the loop below
+        # leaves out whole
+        refusals = self._refusals(batch)
+        # found before the first write too: the kinds the vocabulary lacks,
+        # of the claims the writer writes, and the type hints the instance
+        # cannot hold, each skipped wherever the writer would record it
+        warnings = self._unknown_kinds(batch, refusals)
+        warnings += [*refusals.values(), *self._type_hints_over_limit()]
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
         # contribute the document's aliases to the existing items here
@@ -1013,7 +1226,12 @@ class BatchWriter:
         result = WriteResult(
             run_qid=self.ensure_run_item(batch), warnings=warnings
         )
-        for claim in batch.claims:
+        for index, claim in enumerate(batch.claims):
+            if index in refusals:
+                # before any of its refs resolves: an item only a refused
+                # claim mentions is never minted
+                result.refused.append(claim_id(claim))
+                continue
             artifact_qid = self._source_artifact_qid(claim.source.artifact)
             subject_qid = self._resolve_ref(
                 claim.subject, result, artifact_qid

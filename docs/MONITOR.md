@@ -11,7 +11,9 @@ and its status page.
 Code: `yizkr.pipeline.monitor`. The run directory's files are described
 in [`docs/LLM_CACHE.md`](LLM_CACHE.md) (The run directory) and
 [`docs/RUN_MANIFEST.md`](RUN_MANIFEST.md); `yizkr.pipeline.rundir` reads
-and writes them.
+and writes them. What a run did, per stage and per document, once it has
+ended or at any point before, is the run report's to say (`yizkr scratch
+report`, [`docs/RUN_REPORT.md`](RUN_REPORT.md)).
 
 ## Using it
 
