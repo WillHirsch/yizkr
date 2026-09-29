@@ -50,8 +50,10 @@ changing what they check:
   which has none: `env_setting`, `Config.load`, `corpus_dir` and
   `load_exclusions` read only what a test gives them. A test that needs
   a setting gives it explicitly: in the environment, or in an env file
-  it names with `$YIZKR_ENV_FILE` or `env_file`. The live tests under
-  tests/integration read the real env file.
+  it names with `$YIZKR_ENV_FILE` or `env_file`. `yizkr backup` reads
+  `<deploy-dir>/.env` directly, not through `resolve_env_file`, so the
+  unit tests always give it a temporary deploy dir. The live tests
+  under tests/integration read the real env file.
 
 test_conftest.py tests the first two and the last two, and
 test_anomalies.py the third.

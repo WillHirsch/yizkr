@@ -232,6 +232,25 @@ class TestHostSettings:
             "YIZKR_EXCLUDE_FILE",
         ]
 
+    def test_the_connection_variables_are_what_config_load_reads(
+        self, tmp_path, monkeypatch
+    ):
+        """CONNECTION_VARIABLES is every key Config.load looks up, and
+        nothing else: the keys are taken from a load that records them."""
+        from yizkr.core import config
+
+        asked: set[str] = set()
+
+        class Recording(dict):
+            def get(self, key, default=None):
+                asked.add(key)
+                return super().get(key, default)
+
+        monkeypatch.setattr(config, "read_env_file", lambda path: Recording())
+        with pytest.raises(config.ConfigError):
+            config.Config.load(tmp_path / "stack.env", require_admin=False)
+        assert asked == set(conftest.CONNECTION_VARIABLES)
+
     def test_no_test_or_fixture_of_a_module_sees_a_host_setting(
         self, module_host_settings
     ):
@@ -276,11 +295,13 @@ class TestHostSettings:
         assert corpus_dir() == tmp_path / "other"
         assert env_setting("YIZKR_CORPUS_DIR") == str(tmp_path / "other")
 
+    @pytest.mark.parametrize("named", ["by default", "in $YIZKR_ENV_FILE"])
     def test_the_list_readers_pass_on_a_host_with_a_never_ingest_list(
-        self, tmp_path, never_ingest
+        self, tmp_path, never_ingest, named
     ):
         """Run from a folder whose deploy/.env names a never-ingest list
-        with a pattern entry, and with the list's variable exported, the
+        with a pattern entry, found by default or named by an exported
+        $YIZKR_ENV_FILE, and with the list's variable exported, the
         tests that ingest without a media file still pass: they read no
         list, and no fixture of a module sees the host's settings."""
         host_files(tmp_path, never_ingest)
@@ -289,6 +310,8 @@ class TestHostSettings:
             for name, value in os.environ.items()
             if name != "YIZKR_ENV_FILE"
         }
+        if named == "in $YIZKR_ENV_FILE":
+            environ["YIZKR_ENV_FILE"] = str(tmp_path / "deploy" / ".env")
         environ["YIZKR_EXCLUDE_FILE"] = str(never_ingest)
         environ["MW_ADMIN_PASS"] = "not-a-password"
         environ["PYTHONPATH"] = str(REPO)

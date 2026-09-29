@@ -55,8 +55,11 @@ itself in its own `--help`.
     never-ingest list or a corpus folder your `deploy/.env` names never
     reaches a unit test. A test that needs a setting gives it: in the
     environment, or in an env file it names with `$YIZKR_ENV_FILE` or
-    `env_file`. The live tests under `tests/integration` read the real
-    env file; the fixture undoes after the last unit test.
+    `env_file`. A test pins the list of connection variables to the
+    keys `Config.load` reads. `yizkr backup` reads `<deploy-dir>/.env`
+    directly, so the unit tests always give it a temporary deploy dir.
+    The live tests under `tests/integration` read the real env file;
+    the fixture undoes after the last unit test.
   - The config directory, the no-op sync calls, the recorded anomaly
     timers, the removed `$YIZKR_ANOMALIES` and the instance record's
     folder are patches held by the test's own `monkeypatch`, so a test
