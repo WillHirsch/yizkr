@@ -39,7 +39,7 @@ from tests.unit.test_scratch_estimate import (  # noqa: F401
 )
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import llm, transcription_check
+from yizkr.pipeline import llm, transcribe, transcription_check
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     FAILED,
@@ -88,6 +88,16 @@ LETTER_SHA1 = hashlib.sha1(png(300, 120, 1, LETTER_IMAGE.data)).hexdigest()
 # an engine's refusal, which the transcription check fails
 REFUSAL = "I'm sorry, but I can't transcribe this document."
 TEXT_LAYER = "pdf-pages:pdf-text-layer/1"
+
+
+@pytest.fixture(autouse=True)
+def renderer(monkeypatch):
+    """The PDF renderer on the host, as far as a run's preflight can tell.
+    A run with a PDF refuses to start without poppler-utils, which reads a
+    PDF whole for the claude-code engine; here a scripted engine reads
+    every file, so no poppler tool runs (test_orchestrate.py's
+    TestPreflight holds the preflight itself)."""
+    monkeypatch.setattr(transcribe, "require_pdf_renderer", lambda *a: None)
 
 
 def typed(*paragraphs: str, **options) -> pdfs.Page:
