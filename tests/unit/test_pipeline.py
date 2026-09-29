@@ -1177,18 +1177,11 @@ class TestCritiqueNotes:
         csv_path = tmp_path / "review.csv"
         # notes arrive already formatted, by row (critique.note, attach)
         source = batch()
-        rows = [
-            index
-            for index, claim in enumerate(source.claims)
-            if getattr(claim.subject, "local_id", None) == "person-1"
-        ]
+        assert len(source.claims) > 1
         export_review_csv(
             source,
             csv_path,
-            critique_notes={
-                row: "critique: role label 'MOTHER' is not a name"
-                for row in rows
-            },
+            critique_notes={1: "critique: role label 'MOTHER' is not a name"},
         )
         with open(csv_path, newline="") as f:
             reader = csv.DictReader(f)
@@ -1197,9 +1190,11 @@ class TestCritiqueNotes:
         assert "critique_notes" in fields
         assert "warning" not in fields  # renamed
         assert "living" not in fields  # retired
-        person1_rows = [r for r in rows if "person-1" in r["subject"]]
-        assert person1_rows
-        assert all("critique:" in r["critique_notes"] for r in person1_rows)
+        # the note is on its own row alone (#113)
+        assert [bool(r["critique_notes"]) for r in rows] == [
+            index == 1 for index in range(len(rows))
+        ]
+        assert rows[1]["critique_notes"].startswith("critique:")
 
     def test_no_critique_leaves_column_blank(self, tmp_path):
         csv_path = tmp_path / "review.csv"

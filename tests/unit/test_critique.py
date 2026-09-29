@@ -450,8 +450,9 @@ class TestUnfinishedAnswers:
 
 def resolved_batch() -> ClaimBatch:
     """The fixture batch with a second claim about the firm, whose
-    subject is the firm itself (so it can resolve to a QID), a claim that
-    names the firm only as its value, and an entity no claim names."""
+    subject is the firm itself (so it can resolve to a QID), a birth, an
+    entity no claim names, and last a residence whose value, an address
+    typed as an organization, no claim has as its subject."""
     data = batch().model_dump(mode="json")
     firm = {"kind": "local", "local_id": "e04", "label": "Blauer Hut"}
     sebastian = data["claims"][0]["subject"]
@@ -476,6 +477,20 @@ def resolved_batch() -> ClaimBatch:
     )
     data["entities"].append(
         {"id": "e05", "label": "Stupfield", "kind": "place"}
+    )
+    data["claims"].append(
+        {
+            "subject": sebastian,
+            "property": "residence",
+            "value": {
+                "type": "item",
+                "value": {"kind": "local", "local_id": "e07"},
+            },
+            "source": {"artifact": SCAN.model_dump(mode="json")},
+        }
+    )
+    data["entities"].append(
+        {"id": "e07", "label": "8 Hawthorn Road", "kind": "organization"}
     )
     return ClaimBatch.model_validate(data)
 
@@ -515,6 +530,9 @@ class TestAttach:
                 "issue": "a wedding year read as a birth",
             }
         ),
+        Finding.model_validate(
+            FINDING | {"entity": "e07", "issue": "an address, not a body"}
+        ),
     ]
 
     def test_each_finding_renders_once_on_its_row(self):
@@ -526,6 +544,8 @@ class TestAttach:
             (0, "role label, not a name"),
             (1, "agent typed as place"),
             (2, "a wedding year read as a birth"),
+            # named only as a value: on that claim's row, not the first
+            (3, "an address, not a body"),
         ]
 
     def test_resolved_entities_keep_their_rows(self):
@@ -537,7 +557,7 @@ class TestAttach:
             {"Sebastian": "Q17", "Blauer Hut": "Q23"},
         )
         assert rows.claims[1].subject.qid == "Q23"
-        assert counterparts(extracted, rows) == [0, 1, 2]
+        assert counterparts(extracted, rows) == [0, 1, 2, 3]
         assert rendered(attach(self.FINDINGS, extracted, rows)) == rendered(
             attach(self.FINDINGS, extracted, extracted)
         )
@@ -557,7 +577,7 @@ class TestAttach:
             if getattr(claim.subject, "local_id", None) in ("e01", "e06"):
                 claim.subject = QID
         rows.claims.pop()  # the twin, identical once both are Q17
-        assert counterparts(extracted, rows) == [0, 1, 2, 2]
+        assert counterparts(extracted, rows) == [0, 1, 2, 3, 2]
         twin_finding = Finding.model_validate(
             {
                 "entity": "e06",
