@@ -437,8 +437,8 @@ def manifest(recorded: Recorded) -> dict:
 
 @cache
 def _datatypes() -> dict[str, str]:
-    manifest = load_manifest()
-    return {key: spec.datatype for key, spec in manifest.properties.items()}
+    vocabulary = load_manifest()
+    return {key: spec.datatype for key, spec in vocabulary.properties.items()}
 
 
 def _time(when: u.Date) -> dict:
@@ -525,7 +525,9 @@ def claims(
                 "qualifiers": [
                     {
                         "property": prop,
-                        "value": _value(recorded, prop, qualifier, "en"),
+                        "value": _value(
+                            recorded, prop, qualifier, recorded.language
+                        ),
                     }
                     for prop, qualifier in assertion.qualifiers
                 ],

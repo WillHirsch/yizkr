@@ -810,9 +810,10 @@ class TestReuse:
         ) == {u.Date(1950)}
         views = view_hashes(runs, sharper)
         was = view_hashes(runs, first)
-        assert views[fc.NARRATIVE][2] == []
-        assert views[fc.NARRATIVE][:2] != was[fc.NARRATIVE][:2]
-        assert views[fc.NARRATIVE][0] == was[fc.NARRATIVE][0]
+        transcription, batch, critique = views[fc.NARRATIVE]
+        assert transcription == was[fc.NARRATIVE][0]
+        assert batch != was[fc.NARRATIVE][1]
+        assert critique == []
         for name in fc.DOCUMENTS:
             if name != fc.NARRATIVE:
                 assert views[name] == was[name], name
