@@ -75,7 +75,7 @@ Line numbers are those of main at 52e2a08, for paths under `src/yizkr/`.
   wiki as the extraction's own remark, beside the record of the run that
   made the claim, never as something the source says. It never ranks or
   hides a value, a claim without one is not thereby certain, and it never
-  reaches the public export.
+  reaches the non-privileged export.
 - **What cannot be structured is counted, never guessed.** Its mentions
   stay apart, and the run report says how many.
 
@@ -591,11 +591,12 @@ run's note, or none. Earlier notes stay, never updated or removed.
   loudly.
 - The run report counts notes by category, and notes written, as
   aggregates (docs/RUN_REPORT.md).
-- The public export drops both note snaks, as it drops excerpts:
-  `filter_public_export`'s predicate list (`backup.py:655`, 808) gains
-  both properties (#363; ADR-0020; MODELING.md, "Living persons and
-  privacy"). The private site may show a note beside its source, labelled
-  as the extraction's remark, never as a mark on the value.
+- The non-privileged export (`public.nt.gz`) drops both note snaks, in
+  any form: `backup.DROPPED_PROPERTIES` names both properties (#363;
+  ADR-0020; MODELING.md, "Living persons and privacy"). An excerpt, by
+  contrast, leaves there with the statement it attests (the owner,
+  2026-09-29). The private site may show a note beside its source,
+  labelled as the extraction's remark, never as a mark on the value.
 - **A note never ranks or filters.** No query, view, report, frontend,
   export or stage uses a note's presence, category or text to rank,
   prefer, order, hide or pick a value. Curation may query notes to choose
