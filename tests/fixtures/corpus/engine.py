@@ -5,12 +5,17 @@ It answers every call the stages before write make of a document of the
 corpus, and tells the document by its bytes: a vision call by the SHA-1 of
 the image it is given, an extraction call by the artifact SHA-1 its prompt
 names, and a critique call by the entity manifest its prompt lists. It
-holds conversations as the API engine does: a conversation is its opening
-turn, kept by no file and resumed from its prompt and answer, so a fork
-behind the LLM cache resumes a conversation the cache answered without a
-call (ADR-0032 §6). Every call it answers is logged, as (what, document),
-with what one of vision, manifest, chunk or critique. A call it has no
-answer for fails the test that made it.
+holds conversations as the claude-code engine does: each is a session,
+whose transcript it gives to be kept (one .jsonl file holding the opening
+turn) and resumes only from such a transcript of the same turn, and it
+forks only a session it holds, for the document the fork's prompt names.
+So a fork behind the LLM cache resumes a conversation the cache answered
+without a call, from the transcript the cache kept (ADR-0032 §6). The text
+a call sends is the claude-code engine's own (`call_text`): an image's
+path goes in the prompt, as the cache's key leaves it out. Every call it
+answers is logged, as (what, document), with what one of vision,
+manifest, chunk or critique. A call it has no answer for fails the test
+that made it.
 """
 
 from __future__ import annotations
@@ -20,7 +25,9 @@ import json
 import os
 import re
 import threading
+import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -34,6 +41,8 @@ from tests.fixtures.corpus.answers import (
     manifest,
     mistakes_in,
 )
+
+from yizkr.pipeline.llm import ClaudeCodeClient
 
 CLI = "9.9.9"
 # what each kind of call's prompt says, as the pipeline words it
@@ -74,6 +83,22 @@ class Calls:
         return [document for kind, document in self.asked if kind == what]
 
 
+@dataclass(frozen=True)
+class Session:
+    """A conversation the recorded engine holds: the document it is about
+    (by SHA-1) and its opening turn."""
+
+    sha1: str
+    prompt: str
+    answer: str
+
+    def transcript(self) -> bytes:
+        """The session's transcript, as a CLI keeps one: a JSON line a
+        turn."""
+        turns = ({"prompt": self.prompt}, {"answer": self.answer})
+        return "".join(json.dumps(turn) + "\n" for turn in turns).encode()
+
+
 class RecordedEngine:
     """What the orchestrator reads off an engine client (its engine, model,
     effort, configuration hash and CLI version), and the recorded answers.
@@ -81,6 +106,7 @@ class RecordedEngine:
 
     engine = "claude-code"
     system_prompt = "You answer for the fixture corpus's recorded model."
+    call_text = ClaudeCodeClient.call_text
 
     def __init__(self, calls: Calls, *, effort=None, model=None) -> None:
         self.calls = calls
@@ -89,6 +115,9 @@ class RecordedEngine:
         self.cli_version = CLI
         self.config_hash = f"recorded-{self.model}-{effort}"
         self.model_identifier = f"claude-code/{CLI}:{self.model}"
+        # session id -> the conversation it holds
+        self._sessions: dict[str, Session] = {}
+        self._lock = threading.Lock()
 
     # -- telling the document --------------------------------------------
 
@@ -183,24 +212,53 @@ class RecordedEngine:
             raise NoAnswer("the recorded model gives no segmentation")
         return self._chunk(prompt)
 
+    def _hold(self, session: str, prompt: str, answer: str) -> str:
+        _recorded, sha1 = self._named(prompt)
+        with self._lock:
+            if session in self._sessions:
+                raise ValueError(f"the session {session} is open already")
+            self._sessions[session] = Session(sha1, prompt, answer)
+        return session
+
     def open_conversation(self, prompt: str) -> tuple[str, Any]:
+        """The entity manifest, as the opening turn of a new session; the
+        handle is the session's id."""
         if MANIFEST_PROMPT not in prompt:
             raise NoAnswer("a conversation opens on the entity manifest")
         answer = self._manifest(prompt)
-        return answer, (prompt, answer)
+        return answer, self._hold(str(uuid.uuid4()), prompt, answer)
 
     def fork(self, handle: Any, prompt: str) -> str:
+        """A chunk, forked from a session held for its document."""
+        _recorded, sha1 = self._named(prompt)
+        with self._lock:
+            session = self._sessions.get(handle)
+        if session is None or session.sha1 != sha1:
+            raise NoAnswer("a fork of no session held for its document")
         return self._chunk(prompt)
 
     def keep_conversation(self, handle: Any) -> dict[str, bytes]:
-        """Nothing beyond the opening turn: the handle is its prompt and
-        answer."""
-        return {}
+        """The session's transcript, one file; none for a session not
+        held."""
+        with self._lock:
+            session = self._sessions.get(handle)
+        if session is None:
+            return {}
+        return {f"recorded/{handle}.jsonl": session.transcript()}
 
     def resume_conversation(
         self, prompt: str, response: str, files: Mapping[str, bytes]
     ) -> Any:
-        return (prompt, response)
+        """The session a kept transcript holds, held again, when it holds
+        this opening turn; ValueError otherwise."""
+        names = [name for name in files if name.endswith(".jsonl")]
+        if len(names) != 1:
+            raise ValueError("the kept files hold no single transcript")
+        (name,) = names
+        if files[name] != Session("", prompt, response).transcript():
+            raise ValueError("the transcript holds another opening turn")
+        return self._hold(Path(name).stem, prompt, response)
 
     def close_conversation(self, handle: Any) -> None:
-        pass
+        with self._lock:
+            self._sessions.pop(handle, None)

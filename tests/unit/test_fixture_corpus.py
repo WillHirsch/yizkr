@@ -33,6 +33,7 @@ from tests.unit.test_no_wiki_before_write import refusals  # noqa: F401
 from tests.unit.test_scratch import (
     MODEL,
     Driver,
+    closing_report,
     events,
     stages_of,
     started,
@@ -48,9 +49,9 @@ from yizkr.pipeline.orchestrate import (
     document_kind,
 )
 from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
-from yizkr.pipeline.rundir import DONE, RunDir
+from yizkr.pipeline.rundir import ALERTS, DONE, RunDir, run_state, summarise
 from yizkr.pipeline.scratch import BARRIER, EXIT_OK, CorpusStage
-from yizkr.pipeline.stages import content_hash, sha1_file
+from yizkr.pipeline.stages import content_hash, read_jsonl, sha1_file
 
 SOURCES = {source.key: source for source in u.SOURCES}
 # the documents the engine is asked about, and the images it reads
@@ -112,7 +113,8 @@ class Probe:
 class Scratch:
     """Scratch runs over a copy of the corpus, each in a run directory of
     its own under one runs directory, all through one LLM cache; the
-    registered corpus stages run, then the probe."""
+    registered corpus stages run, then the probe. `said` keeps what each
+    run's driver logged, its latest invocation's last."""
 
     def __init__(self, tmp_path: Path, calls: Calls, refused) -> None:
         self.folder = fc.copy_to(tmp_path / "corpus")
@@ -120,19 +122,33 @@ class Scratch:
         self.calls = calls
         self.refused = refused
         self.probe = Probe()
+        self.said: dict[str, list[str]] = {}
+        # the folder each run took its corpus from
+        self.folders: dict[str, Path] = {}
 
     def stages(self) -> list[CorpusStage]:
         return [*scratch.CORPUS_STAGES, CorpusStage(PROBE, self.probe)]
 
-    def driver(self, name: str) -> Driver:
+    def driver(self, name: str, **options) -> Driver:
         return Driver(
-            self.folder, self.runs / name, corpus_stages=self.stages()
+            self.folders.get(name, self.folder),
+            self.runs / name,
+            corpus_stages=self.stages(),
+            **options,
         )
 
-    def run(self, name: str) -> Path:
+    def run(self, name: str, folder: Path | None = None) -> Path:
         """Run the run `name`, a new one or, invoked again, the same, to the
-        end; returns its run directory."""
-        driver = self.driver(name)
+        end, over the corpus in `folder` (the copy made first, by
+        default); returns its run directory."""
+        if folder is not None:
+            self.folders[name] = folder
+        said = self.said.setdefault(name, [])
+
+        def log(*args, **kwargs) -> None:
+            said.append(" ".join(map(str, args)))
+
+        driver = self.driver(name, log=log)
         assert driver.run() == EXIT_OK
         return driver.state_dir
 
@@ -457,6 +473,18 @@ class TestTheRun:
         assert set(handed) == set(fc.DOCUMENTS)
         assert scratch.is_complete(run)
         assert manifest["invocations"][-1]["outcome"] == "finished"
+        # the driver's closing report says so, stage by stage
+        said = runs.said["first"]
+        assert "scratch run first: finished" in said
+        done: dict[str, dict[str, int]] = {}
+        for doc in fc.DOCUMENTS.values():
+            for stage in DOCUMENT_STAGES[doc.kind]:
+                counts = done.setdefault(stage, {DONE: 0})
+                counts[DONE] += 1
+        assert closing_report(said) == done
+        assert summarise(run_state(RunDir(run))) == done
+        # and the clean corpus raises no alert
+        assert read_jsonl(run / ALERTS) == []
 
     def test_the_wiki_is_never_asked_and_every_claim_cites_its_document(
         self, runs
@@ -718,12 +746,21 @@ def view_hashes(runs: Scratch, run: Path) -> dict[str, tuple]:
 
 
 class TestReuse:
-    def test_a_second_run_asks_the_engine_nothing(self, runs):
+    def test_a_second_run_asks_the_engine_nothing(self, runs, tmp_path):
         """A new run starts from fresh state directories: every view is
-        made again, and the LLM cache answers every call it makes."""
+        made again, and the LLM cache answers every call it makes. It takes
+        the corpus from another folder: no key depends on where the corpus
+        lives, though an image's call names its path (call_text)."""
         first = runs.run("first")
         asked = len(runs.calls.asked)
-        second = runs.run("second")
+        elsewhere = fc.copy_to(tmp_path / "elsewhere" / "corpus")
+        second = runs.run("second", elsewhere)
+        folders = {
+            run: RunDir(run).manifest()["corpus"]["folder"]
+            for run in (first, second)
+        }
+        assert folders[second] == str(elsewhere.resolve())
+        assert folders[first] != folders[second]
         assert len(runs.calls.asked) == asked
         assert events(second, "call") == []
         assert events(second, "cache-miss") == []
@@ -740,6 +777,7 @@ class TestReuse:
             ("started", PROBE),
             ("done", PROBE),
         ]
+        assert read_jsonl(second / ALERTS) == []
         assert runs.refused.asked == []
 
     def test_invoking_the_run_again_reuses_every_view(self, runs):
@@ -759,6 +797,15 @@ class TestReuse:
         ]
         assert len(runs.probe.handed) == 2
         assert scratch.is_complete(run)
+        # a reused view is checked again, and still raises no alert; the
+        # closing report counts every reused stage done
+        assert read_jsonl(run / ALERTS) == []
+        assert closing_report(runs.said["first"]) == summarise(
+            run_state(RunDir(run))
+        )
+        assert set(closing_report(runs.said["first"])) == {
+            stage for _sha1, stage in every_stage()
+        }
         assert runs.refused.asked == []
 
     def test_a_sharper_chunk_prompt_recomputes_extraction_and_what_follows(
