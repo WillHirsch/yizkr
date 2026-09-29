@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.unit.stage_counts import disagreement
 from tests.unit.test_no_wiki_before_write import (  # noqa: F401
     build_deck,
     refusals,
@@ -39,9 +40,12 @@ from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
 from yizkr.pipeline.rundir import (
     CONTROL,
     DONE,
+    INTERRUPTED,
+    PENDING,
     RunDir,
     RunSettingsConflict,
     run_state,
+    summarise,
 )
 from yizkr.pipeline.scratch import (
     BARRIER,
@@ -331,6 +335,52 @@ def request(run, action, **kwargs):
     """A control request, as the monitor writes one."""
     kwargs.setdefault("by", "monitor")
     return RunDir(run).request(action, **kwargs)
+
+
+class CutShort(Driver):
+    """A driver that Ctrl-C stops in the gravestone photograph's critique,
+    the last stage a run of the small corpus dispatches (TestOrder). The
+    stage itself is cut short: the LLM cache answers its call, as it
+    answers every critique after the first here, so the fake engine never
+    sees it."""
+
+    def _step_critique(self, doc, batch):
+        if doc.source.name != STONE:
+            return super()._step_critique(doc, batch)
+
+        def interrupted():
+            raise KeyboardInterrupt
+
+        return self._run_stage(doc, "critique", interrupted)
+
+
+def counts_of(text: str) -> dict[str, int]:
+    """A stage's counts as the driver and `yizkr stages state` print
+    them ("1 interrupted, 3 pending"), as run_state's summary has them."""
+    return {
+        label: int(count)
+        for count, _, label in (
+            part.partition(" ") for part in text.split(", ")
+        )
+    }
+
+
+def closing_report(said: list[str]) -> dict[str, dict[str, int]]:
+    """The stages' counts in the driver's closing report, the last it
+    logged: the indented lines after the one that says how the invocation
+    ended."""
+    start = max(
+        index
+        for index, line in enumerate(said)
+        if line.startswith("scratch run ")
+    )
+    report = {}
+    for line in said[start + 1 :]:
+        if not line.startswith("  "):
+            break
+        stage, _, counts = line.strip().partition(" ")
+        report[stage] = counts_of(counts.strip())
+    return report
 
 
 # -- the stages, and their order ----------------------------------------------
@@ -840,10 +890,11 @@ class TestControl:
         assert outcome(driver.state_dir) == ("interrupted", None)
         assert events(driver.state_dir)[-1]["event"] == "run-interrupted"
         text = corpus.sha1(TEXT)
-        # the stage cut short counts as running, and the next invocation
-        # makes it, its calls answered by the cache where they can be
+        # the stage cut short counts as interrupted (#300), and the next
+        # invocation makes it, its calls answered by the cache where they
+        # can be
         states = run_state(RunDir(driver.state_dir))
-        assert states[(text, "extraction")].status == "running"
+        assert states[(text, "extraction")].status == INTERRUPTED
         fakes.hook = None
         before = len(fakes.calls)
         again = Driver(corpus.folder, driver.state_dir)
@@ -855,6 +906,73 @@ class TestControl:
         hits = events(driver.state_dir, "cache-hit", invocation=-1)
         assert any(hit.get("subject") == text for hit in hits)
         assert statuses(driver.state_dir) == {DONE}
+
+    def test_every_reading_shows_the_stage_cut_short_interrupted(
+        self, tmp_path, fakes, capsys
+    ):
+        """After Ctrl-C, run_state, the driver's closing report and
+        `yizkr stages state` show the stage cut short as interrupted, not
+        running, and agree with the live monitor (#300)."""
+        corpus = small(tmp_path)
+
+        def hook(what, name):
+            if what == "chunk" and name == TEXT:
+                raise KeyboardInterrupt
+
+        fakes.hook = hook
+        said: list[str] = []
+        log = lambda *args, **kwargs: said.append(" ".join(map(str, args)))  # noqa: E731
+        driver = a_run(tmp_path, corpus, fakes, log=log)
+        with pytest.raises(KeyboardInterrupt):
+            driver.run()
+        run = driver.state_dir
+        expected = summarise(run_state(RunDir(run)))
+        assert expected == {
+            "transcription": {DONE: 1, PENDING: 3},
+            "extraction": {INTERRUPTED: 1, PENDING: 3},
+            "critique": {PENDING: 4},
+        }
+        assert closing_report(said) == expected
+        args = cli.build_parser().parse_args(["stages", "state", str(run)])
+        assert args.func(args) == 0
+        printed = {
+            stage: counts_of(counts.strip())
+            for stage, _, counts in (
+                line.partition(" ")
+                for line in capsys.readouterr().out.splitlines()
+                if not line.startswith("cache ")
+            )
+        }
+        assert printed == expected
+        assert disagreement(run) is None
+        assert monitor.summarise_run(run).stage("extraction").interrupted == 1
+
+    def test_a_stage_cut_short_keeps_the_run_from_other_code(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        """A stage Ctrl-C cut short has not ended, even when every other
+        stage has: an invocation on other code is refused, rather than
+        taken past the barrier alone, which would never make the stage
+        again. On the run's own code the next invocation makes it
+        (#300)."""
+        corpus = small(tmp_path)
+        stone = corpus.sha1(STONE)
+        with pytest.raises(KeyboardInterrupt):
+            command(tmp_path, corpus, fakes, driver=CutShort)
+        (run,) = scratch.runs_in(runs_dir(tmp_path))
+        states = run_state(RunDir(run))
+        assert states.pop((stone, "critique")).status == INTERRUPTED
+        assert {state.status for state in states.values()} == {DONE}
+        before = (run / "run.json").read_bytes()
+        other = dict(RunDir(run).manifest()["code"], commit="f" * 40)
+        with monkeypatch.context() as patched:
+            patched.setattr(scratch, "code_version", lambda: dict(other))
+            with pytest.raises(RunSettingsConflict, match="code.commit"):
+                command(tmp_path, corpus, fakes, resume=run.name)
+        assert (run / "run.json").read_bytes() == before
+        assert command(tmp_path, corpus, fakes, resume=run.name) == EXIT_OK
+        assert started(run, invocation=-1) == [(stone, "critique")]
+        assert statuses(run) == {DONE}
 
     def test_the_stops_in_force_are_those_since_a_start(self, tmp_path):
         run = RunDir(tmp_path / "run")
@@ -1072,7 +1190,9 @@ class TestSubscription:
 
     def test_usage_credits_end_the_driver(self, tmp_path, fakes):
         """A call that ran on usage credits pauses the pass with no time to
-        go on: the driver ends, and never waits."""
+        go on: the driver ends, and never waits. Its closing report shows
+        the extraction the pause cut short as interrupted, as run_state
+        does once the invocation has ended (#300)."""
         corpus = small(tmp_path)
 
         def hook(what, name):
@@ -1083,7 +1203,9 @@ class TestSubscription:
             )
 
         fakes.hook = hook
-        driver = a_run(tmp_path, corpus, fakes)
+        said: list[str] = []
+        log = lambda *args, **kwargs: said.append(" ".join(map(str, args)))  # noqa: E731
+        driver = a_run(tmp_path, corpus, fakes, log=log)
         with pytest.raises(UsageLimitReached):
             driver.run()
         (only,) = RunDir(driver.state_dir).manifest()["invocations"]
@@ -1091,6 +1213,9 @@ class TestSubscription:
             "paused",
             "UsageLimitReached",
         )
+        report = closing_report(said)
+        assert report["extraction"] == {INTERRUPTED: 1, PENDING: 3}
+        assert report == summarise(run_state(RunDir(driver.state_dir)))
 
     def test_an_abort_while_waiting_ends_the_run(self, tmp_path, fakes):
         corpus = small(tmp_path)

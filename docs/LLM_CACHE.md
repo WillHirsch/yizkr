@@ -825,12 +825,23 @@ file (`rundir.run_state`, `yizkr stages state <run dir>`):
   **running** once started; **done**, or **needs attention** with its
   reasons, once completed or reused; **failed** with its reason; or
   **pending** with the reason the control file held it. A stage that
-  started with no later event is **running**. Run state does not look
-  at how the invocation ended, so this includes a stage whose
-  invocation's closing event (`run-end`, `run-interrupted`) follows it,
-  or whose invocation was killed: that stage was cut off. A reader that
-  needs to tell them apart looks for the closing event. The next run
-  starts it again.
+  started with no later event is **running** while the invocation that
+  started it runs, and **interrupted** once that invocation is over:
+  the latest invocation has ended (`run.json` records its end, or the
+  log holds its closing event, `run-end` or `run-interrupted`, wherever
+  in the log it is), or a later invocation has started. The next
+  invocation starts an interrupted stage again. A killed invocation
+  records no end and has no closing event, so while it is the latest,
+  the stages it left started read as running. The live monitor tells a
+  stage cut short by the same rule (`rundir.interrupted`, with
+  `rundir.Invocations`; docs/MONITOR.md), and so do `yizkr stages state`
+  and the scratch driver's closing report, which print `run_state`'s
+  counts. `run_state` reads `run.json` before the events and after them,
+  and reads all three again, a few times at most, while an invocation
+  starts or ends between those two readings: a stage is read against the
+  invocations as they stood while the events were read; should they
+  still differ after the last reading, the last events are read against
+  the `run.json` read after them.
 
 `yizkr stages state` also counts what the cache did for each role
 (`rundir.cache_counts`): hits and misses by reason, resumes, replays,
@@ -889,8 +900,8 @@ sequence's own sum) pauses the pass instead:
 have asked again). The pause unwinds the invocation as any pause does: no
 document fails, the invocation's outcome is `paused`
 (docs/RUN_MANIFEST.md), every call answered before it is in the cache, a
-stage it cut short counts as running and is made in the next run, and the
-paused call's `call` event gives `resumes_at`. A wait ends early, as a
+stage it cut short counts as interrupted and is made in the next run, and
+the paused call's `call` event gives `resumes_at`. A wait ends early, as a
 pause, when the engine's client is closed.
 
 Waits happen inside the call, on the thread that makes it. Ctrl-C
