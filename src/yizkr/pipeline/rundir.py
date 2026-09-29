@@ -69,7 +69,6 @@ from pathlib import Path
 from typing import Any
 
 from yizkr import __version__
-from yizkr.pipeline.llm import USAGE_TOKENS
 from yizkr.pipeline.stages import (
     atomic_write_text,
     canonical_json,
@@ -949,6 +948,11 @@ def usage_counts(
     conversation's opening turn (True), which the cache asked for a
     fork's session although it held the answer, or to every other call
     (False). A call names its stage and role, else counts under "?"."""
+    # imported here, where it is needed, so that what reads a run
+    # directory without its usage (the monitor, say) never loads the
+    # engine's module
+    from yizkr.pipeline.llm import USAGE_TOKENS
+
     counts: dict[str, dict[str, dict[str, int]]] = {}
     for event in run.events():
         if event.get("event") != CALL:
