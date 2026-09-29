@@ -52,6 +52,7 @@ properties:
     label: stated in
     description: reference property; the artifact or artifact fragment that asserts the statement
     datatype: wikibase-item
+    reference: true
     accepts: [artifact, artifact_fragment]
     wikidata: P248
 
@@ -59,6 +60,7 @@ properties:
     label: inferred from extraction run
     description: reference property; the extraction run that produced this machine-written statement
     datatype: wikibase-item
+    reference: true
     accepts: [extraction_run]
     wikidata: P3452
     aliases:
@@ -598,6 +600,8 @@ properties:
       the term states it
     datatype: quantity
 
+  # Held back from the extraction prompts (offered: false): a claim has no
+  # way to name the document it comes from as its subject (ADR-0035 §3.4).
   issued_by:
     label: issued by
     description: >-
@@ -607,6 +611,7 @@ properties:
     datatype: wikibase-item
     accepts: [organization, unclassified_entity]
     wikidata: P2378
+    offered: false
 
   carried_out_by:
     label: carried out by
@@ -634,6 +639,7 @@ properties:
       extraction's own remark, never the source's, and never used to rank
       or filter a value
     datatype: wikibase-item
+    reference: true
     accepts:
       - judgement_kind
       - judgement_relation
@@ -649,6 +655,7 @@ properties:
       remark, never the source's, and never used to rank or filter a
       value
     datatype: string
+    reference: true
 
   # --- partnerships and marriages (ADR-0036) ---
 
@@ -952,8 +959,8 @@ items:
     label: principal
     description: >-
       participant role: the one an event happens to, such as the person
-      born in a birth or who died in a death; an event's date belongs to
-      its principal alone
+      born in a birth or who died in a death; a birth's or a death's date
+      is its principal's alone
   parent:
     label: parent
     description: participant role; a parent of the principal, such as a parent named in a birth record

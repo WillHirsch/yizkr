@@ -720,6 +720,10 @@ def validate_against_manifest(
       no kind here, so it is not checked;
     * a claim of a retired property is refused (ADR-0036), save one in
       `allow_retired`;
+    * a reference property (`stated_in`, the judgement note's) is refused
+      as a claim's or a qualifier's property;
+    * a vocabulary ref to an entity kind (`human`, `place`) is a class,
+      so a property that accepts entities of that kind refuses it;
     * a death's principal is never also its informant (ADR-0035 §3.2).
     """
     properties, items = (
@@ -783,6 +787,12 @@ def validate_against_manifest(
             return
         if prop in acceptance.retired and prop not in allow_retired:
             errors.append(f"{where}: {acceptance.refusal(prop, None)}")
+            return
+        if prop in acceptance.references:
+            errors.append(
+                f"{where}: property {prop!r} is a reference property, "
+                f"written only in a statement's references (ADR-0035 §4)"
+            )
             return
         expected = DATATYPE_TO_VALUE_TYPE.get(datatype)
         if expected is None:

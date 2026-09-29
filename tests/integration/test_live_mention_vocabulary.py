@@ -78,6 +78,22 @@ def superclasses(client, qid: str, subclass_pid: str) -> set[str]:
     }
 
 
+def mapping_page(client, title: str) -> tuple[int, str]:
+    """The mapping page's latest revision id and its text."""
+    data = client.api_get(
+        {
+            "action": "query",
+            "prop": "revisions",
+            "titles": title,
+            "rvprop": "ids|content",
+            "rvslots": "main",
+            "formatversion": "2",
+        }
+    )
+    (revision,) = data["query"]["pages"][0]["revisions"]
+    return revision["revid"], revision["slots"]["main"]["content"]
+
+
 def test_bootstrap_creates_the_new_vocabulary_once(client):
     manifest = load_manifest()
     bootstrap_instance(client, manifest, log=lambda *_: None)
@@ -97,7 +113,13 @@ def test_bootstrap_creates_the_new_vocabulary_once(client):
             client, items[key], properties["subclass_of"]
         ), key
 
+    page = mapping_page(client, manifest.mapping_page)
+    for key in NEW_ITEMS:
+        assert f"[[Item:{items[key]}|" in page[1], key
+
     second = bootstrap_instance(client, manifest, log=lambda *_: None)
+    # the same text again makes no new revision
+    assert mapping_page(client, manifest.mapping_page) == page
     assert second["created"] == 0
     assert second["updated"] == 0
     assert second["statements_added"] == 0

@@ -288,6 +288,8 @@ class TestVocabulary:
         properties, items = vocabulary_prompt_lines()
         keys = {line.split(":")[0].strip() for line in properties.splitlines()}
         assert "spouse" not in keys
+        # held back until a claim can name its own document as subject
+        assert "issued_by" not in keys
         assert {"object_has_role", "civil_status", "started_by"} <= keys
         kinds = entity_kind_prompt_lines()[0].split(", ")
         assert {"partnership", "wedding", "divorce"} <= set(kinds)
@@ -372,7 +374,10 @@ class TestTheRelationDecidesTheKind:
             claim("divorce", "carried_out_by", item("court")),
             # the court prison is where Leopold was held: a place
             claim("imprisonment", "location", item("prison")),
-            # the register office issued the birth register extract
+            # the register office issued the birth register extract. Only
+            # the value's kind is checked here: the subject stands in for
+            # the document, which ADR-0035 §3.4 makes the subject and a
+            # claim has no way to name yet
             claim("birth", "issued_by", item("standesamt")),
             # the escape hatch goes wherever a real kind does
             claim("leopold", "residence", item("hint")),
@@ -446,6 +451,43 @@ class TestTheRelationDecidesTheKind:
     def test_a_value_of_another_kind_is_refused(self, claim_, prop, kind):
         (problem,) = problems(claim_)
         assert f"property {prop!r} does not accept a {kind!r}" in problem
+
+    @pytest.mark.parametrize(
+        ("claim_", "prop", "kind"),
+        [
+            (claim("gustav", "father", vocab("human")), "father", "human"),
+            (
+                claim("birth", "participant", vocab("human")),
+                "participant",
+                "human",
+            ),
+            (
+                claim("imprisonment", "location", vocab("place")),
+                "location",
+                "place",
+            ),
+            (
+                claim("divorce", "carried_out_by", vocab("organization")),
+                "carried_out_by",
+                "organization",
+            ),
+            (
+                claim("marriage", "ended_by", vocab("death")),
+                "ended_by",
+                "death",
+            ),
+        ],
+    )
+    def test_a_kind_named_as_a_class_is_no_entity_of_it(
+        self, claim_, prop, kind
+    ):
+        # a vocabulary ref to an entity kind names the class itself, never
+        # a person, a place or an event of that kind
+        (problem,) = problems(claim_)
+        assert (
+            f"property {prop!r} accepts an entity of kind {kind!r}, not the "
+            f"class itself" in problem
+        )
 
     def test_a_qualifier_is_checked_too(self):
         (problem,) = problems(
@@ -542,6 +584,56 @@ class TestRetiredProperty:
         assert "retired" in acceptance.refusal("spouse", "human")
 
 
+class TestReferenceProperties:
+    """ADR-0035 §4: a judgement note goes only in the extraction-run
+    reference, as `stated in` goes only in a reference (ADR-0003)."""
+
+    REFERENCES = {
+        "stated_in",
+        "inferred_from_extraction_run",
+        "judgement",
+        "judgement_note",
+    }
+
+    def test_the_manifest_marks_them(self, manifest):
+        marked = {k for k, s in manifest.properties.items() if s.reference}
+        assert marked == self.REFERENCES
+        assert load_acceptance().references == frozenset(self.REFERENCES)
+
+    def test_no_prompt_offers_them(self):
+        properties, _ = vocabulary_prompt_lines()
+        keys = {line.split(":")[0].strip() for line in properties.splitlines()}
+        assert not keys & self.REFERENCES
+
+    def test_a_note_is_refused_as_a_claim(self):
+        (problem,) = problems(
+            claim("leopold", "judgement", vocab("judgement_date_reading"))
+        )
+        assert "'judgement' is a reference property" in problem
+
+    def test_and_as_a_qualifier(self):
+        note = {"type": "string", "value": "the postmark read as 1938"}
+        (problem,) = problems(
+            claim(
+                "leopold",
+                "residence",
+                item("prison"),
+                qualifier("judgement_note", note),
+            )
+        )
+        assert "qualifiers[0]" in problem
+        assert "'judgement_note' is a reference property" in problem
+
+    def test_and_salvage_counts_it(self):
+        valid, rejects = salvage_valid_claims(
+            [claim("leopold", "stated_in", item("prison"))],
+            RUN,
+            entities=ENTITIES,
+        )
+        assert valid.claims == []
+        assert "reference property" in rejects[0]["problems"][0]
+
+
 class TestClaimStructure:
     def test_participant_roles(self):
         # Gustav's birth register extract: the boy is its principal, and
@@ -576,6 +668,22 @@ class TestClaimStructure:
             )
         )
         assert "never also its informant" in problem
+
+    def test_a_births_principal_may_be_its_informant(self):
+        # only a death forbids it: a birth's principal cannot report it,
+        # but no rule reads that from the roles
+        assert (
+            problems(
+                claim(
+                    "birth",
+                    "participant",
+                    item("gustav"),
+                    qualifier("object_has_role", vocab("principal")),
+                    qualifier("object_has_role", vocab("informant")),
+                )
+            )
+            == []
+        )
 
     def test_nor_across_two_claims(self):
         principal = claim(
@@ -894,6 +1002,187 @@ class TestMentionRecords:
         plain = EntityRecord(id="e1", label="Ida Löbig", kind="human")
         assert "structure" not in json.loads(plain.model_dump_json())
         assert "structure" not in plain.model_dump()
+
+
+class TestMoreParts:
+    """Every part of a record is held to the forms, not only names."""
+
+    @pytest.mark.parametrize(
+        ("kind", "structure"),
+        [
+            (
+                "place",
+                {"kind": "place", "address": {"written": "9 Hawthorn Road"}},
+            ),
+            (
+                "place",
+                {
+                    "kind": "place",
+                    "address": {
+                        "written": "8 Hawthorn Road",
+                        "street": "Elm Road",
+                    },
+                },
+            ),
+            (
+                "place",
+                {
+                    "kind": "place",
+                    "address": {"written": "8 Hawthorn Road", "number": "9"},
+                },
+            ),
+            (
+                "place",
+                {
+                    "kind": "place",
+                    "names": [{"written": "Stupfield"}],
+                    "within": ["Tasmania"],
+                },
+            ),
+            (
+                "place",
+                {
+                    "kind": "place",
+                    "names": [{"written": "Stupfield", "toponym": "Snylsjum"}],
+                },
+            ),
+            (
+                "place",
+                {
+                    "kind": "place",
+                    "names": [{"written": "Stupfield", "head": "Lager"}],
+                },
+            ),
+            (
+                "organization",
+                {"kind": "organization", "kinds": ["Standesamt"]},
+            ),
+            (
+                "human",
+                {
+                    "kind": "human",
+                    "given": [{"written": "Ida"}],
+                    "titles": ["Dr."],
+                },
+            ),
+            (
+                "human",
+                {
+                    "kind": "human",
+                    "given": [{"written": "Ida"}],
+                    "suffixes": ["Wwe."],
+                },
+            ),
+            ("human", {"kind": "human", "unsplit": ["Löbig Ursula"]}),
+            ("human", {"kind": "human", "patronymics": ["Феликсович"]}),
+            ("human", {"kind": "human", "nicknames": ["Peppi"]}),
+        ],
+    )
+    def test_a_part_no_form_holds_is_an_addition(self, kind, structure):
+        forms = {
+            "place": "8 Hawthorn Road, Stupfield, Victoria",
+            "organization": "Hutmacherei zum Blauen Hut",
+            "human": "Ida Löbig",
+        }
+        (problem,) = structure_problems(record(forms[kind], kind, structure))
+        assert problem.startswith("addition:")
+
+    def test_a_multi_word_part_matches_whole(self):
+        # its last word matches, its first does not
+        (problem,) = structure_problems(
+            record(
+                "Ida Löbig",
+                "human",
+                {"kind": "human", "unsplit": ["Anna Löbig"]},
+            )
+        )
+        assert problem.startswith("addition:")
+
+    def test_a_part_may_come_from_an_alias_alone(self):
+        ida = record(
+            "Ida Löbig",
+            "human",
+            {
+                "kind": "human",
+                "given": [{"written": "Ida"}],
+                "nicknames": ["Peppi"],
+                "surnames": [{"written": "Sörne", "type": "birth"}],
+            },
+            "Peppi",
+            "Ida Sörne",
+        )
+        assert structure_problems(ida) == []
+
+    def test_an_unsplit_form_is_a_name_part(self):
+        # the 1912 directory's "Löbig Ursula" when its order is unsettled
+        ursula = record(
+            "Löbig Ursula",
+            "human",
+            {"kind": "human", "unsplit": ["Löbig Ursula"]},
+        )
+        assert structure_problems(ursula) == []
+
+    def test_the_loader_refuses_a_kind_accepted_twice(self):
+        raw = TestAcceptedKinds.raw_with(
+            "image", {"accepts": ["artifact", "artifact"]}
+        )
+        with pytest.raises(ValidationError, match="repeats a kind"):
+            Manifest.model_validate(raw)
+
+
+class TestRecordsAreNeverWritten:
+    """ADR-0035 §2.6: a record is extraction's reading, never an
+    assertion, so nothing the writer sends depends on it."""
+
+    # the modules that write to the wiki or resolve what it writes
+    WRITE_PATH = ("writer.py", "resolve.py", "registrar.py")
+
+    def test_no_write_path_module_names_a_record(self):
+        import re
+        from pathlib import Path
+
+        import yizkr.pipeline
+
+        folder = Path(yizkr.pipeline.__file__).parent
+        for name in self.WRITE_PATH:
+            text = (folder / name).read_text()
+            assert not re.search(r"\bstructure\b", text), name
+            assert "structure_problems" not in text, name
+
+    def test_a_record_changes_nothing_the_writer_sends(self):
+        from tests.unit.test_pipeline import TREE_SHA1, FakeWiki, _tree_batch
+        from yizkr.claims import GivenName, Surname
+        from yizkr.pipeline.writer import BatchWriter
+
+        def sent(batch):
+            """What the writer sends, but the run item's label, which ends
+            in a fingerprint of the whole batch, the record included."""
+            wiki = FakeWiki({TREE_SHA1: "Q29"}, detached=True)
+            BatchWriter(wiki).write_batch(batch)
+            items = []
+            for item in wiki.wbi.item.sent:
+                label = item["labels"]["en"]["value"]
+                if label.startswith("extraction run "):
+                    label = label.rsplit(" ", 1)[0]
+                items.append(dict(item, labels={"en": label}))
+            return items
+
+        plain = _tree_batch()
+        sebastian = PersonStructure(
+            given=[GivenName(written="Sebastian", standard="Sebastian")],
+            surnames=[Surname(written="Löbig")],
+            nicknames=["Wastl"],
+        )
+        recorded = plain.model_copy(
+            update={
+                "entities": [
+                    entity.model_copy(update={"structure": sebastian})
+                    for entity in plain.entities
+                ]
+            }
+        )
+        assert recorded.entities[0].structure is not None
+        assert sent(recorded) == sent(plain)
 
 
 class TestSettingAside:

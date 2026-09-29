@@ -394,14 +394,15 @@ def vocabulary_prompt_lines() -> tuple[str, str]:
     the organization, not the employee) and what kind of entity a value
     must be (`location` takes a place). Keys and datatypes alone would
     leave the model to guess both, and the manifest already holds the
-    words. A retired property takes no claim, so it is left out
-    (ADR-0036).
+    words. A property no claim may use, a retired or a reference
+    property, is left out, as is one the manifest holds back from prompts
+    (`ManifestProperty.in_prompts`).
     """
     manifest = load_manifest()
     property_lines = "\n".join(
         f"  {key}: {spec.datatype} — {_one_line(spec.description)}"
         for key, spec in sorted(manifest.properties.items())
-        if not spec.retired
+        if spec.in_prompts
     )
     item_lines = "  " + ", ".join(sorted(manifest.items))
     return property_lines, item_lines

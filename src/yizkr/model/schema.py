@@ -70,6 +70,20 @@ class ManifestProperty(BaseModel):
     # validation refuses every claim of it, and no prompt offers it
     # (ADR-0036's `spouse`). It accepts nothing.
     retired: bool = False
+    # A reference property is written only in a statement's references
+    # (ADR-0003; ADR-0035 §4's judgement notes): validation refuses it as
+    # a claim's or a qualifier's property, and no prompt offers it.
+    reference: bool = False
+    # Whether the prompts rendered from the manifest offer the property.
+    # A retired or reference property is never offered, whatever this
+    # says; `issued_by` is held back, since a claim has no way to name
+    # the document it comes from as its subject (ADR-0035 §3.4).
+    offered: bool = True
+
+    @property
+    def in_prompts(self) -> bool:
+        """Whether a prompt rendered from the manifest lists it."""
+        return self.offered and not self.retired and not self.reference
 
 
 class ManifestItem(BaseModel):
@@ -198,12 +212,17 @@ class Manifest(BaseModel):
 @dataclass(frozen=True)
 class Acceptance:
     """What validation reads of the manifest to check a value's kind
-    (ADR-0035 §3.5): each item-valued property's accepted kinds and the
-    retired properties."""
+    (ADR-0035 §3.5): each item-valued property's accepted kinds, the
+    retired and reference properties, and the entity kinds."""
 
     # property key -> a frozenset of item keys, or an AcceptsAnyKind form
     accepts: MappingProxyType
     retired: frozenset[str]
+    # the items an entity may be typed as: named by its key, such an item
+    # is a class, never an entity of that kind
+    entity_kinds: frozenset[str] = frozenset()
+    # the properties written only in references
+    references: frozenset[str] = frozenset()
 
     def refusal(
         self,
@@ -236,6 +255,11 @@ class Acceptance:
             if vocabulary:
                 return None
             return f"property {prop!r} accepts a class, not a {kind!r} entity"
+        if vocabulary and kind in self.entity_kinds:
+            return (
+                f"property {prop!r} accepts an entity of kind {kind!r}, "
+                f"not the class itself"
+            )
         if kind in accepts:
             return None
         return (
@@ -267,6 +291,12 @@ def _acceptance(text: str) -> Acceptance:
         ),
         retired=frozenset(
             key for key, spec in manifest.properties.items() if spec.retired
+        ),
+        entity_kinds=frozenset(
+            key for key, item in manifest.items.items() if item.entity_kind
+        ),
+        references=frozenset(
+            key for key, spec in manifest.properties.items() if spec.reference
         ),
     )
 

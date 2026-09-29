@@ -106,7 +106,20 @@ names `unclassified_entity` (ADR-0013). The manifest does not load when
 an item-valued property declares none. Validation refuses a claim whose
 value is of a kind its property does not accept, and extraction counts it
 among its rejects. An existing item named by its QID has no kind in a
-batch and is not checked.
+batch and is not checked. A vocabulary ref to an entity kind (`human`,
+`place`) names the class, not an entity of it, so only `instance_of` and
+`subclass_of` take one. `part_of`'s list is flat for now: it takes a place
+or an artifact whatever its subject, so a place `part_of` an artifact
+passes the check, which reads the value alone.
+
+**Reference properties** (`stated_in`, `inferred_from_extraction_run`,
+and the judgement note's `judgement` and `judgement_note`) are marked
+`reference: true`: they are written only in a statement's references, so
+validation refuses one as a claim's or a qualifier's property, and no
+prompt offers it. A property may also be held back from the prompts with
+`offered: false` while it stays in the manifest and the bootstrap:
+`issued_by` is, since a claim has no way to name the document it comes
+from as its subject (ADR-0035 §3.4).
 
 **A retired property** stays in the instance and takes no new claim: it
 accepts nothing, validation refuses every claim of it, and no prompt that
