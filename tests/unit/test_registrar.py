@@ -663,25 +663,32 @@ class TestRegisterArtifact:
         self, tmp_path
     ):
         """An item a container registered for these bytes (a deck's
-        derived medium) is the artifact: its own registration adds its own
-        reference to the statements the container made, and replaces
-        none."""
+        derived medium) is the artifact: its own registration, which finds
+        every statement it would make there already, adds its own reference
+        to each, in one write, and replaces none."""
         wiki = FakeWiki()
         deck = wiki.item(SHOP)
+        label = f"{SHOP} — image2.png"
+        wiki.media.store("Shop image2.png", PORTRAIT)
         media = wiki.item(
-            f"{SHOP} — image2.png",
+            label,
             ("media_sha1", sha1(PORTRAIT), None),
+            ("media_file", "File:Shop image2.png", None),
             ("instance_of", ITEMS["photograph"], None),
             stated_in=deck,
         )
+        writes = wiki.writes
 
-        result = register(wiki, scan(tmp_path, PORTRAIT))
+        result = register(wiki, scan(tmp_path, PORTRAIT), title=label)
 
         assert result.artifact_qid == media and not result.created
+        assert wiki.writes == writes + 1
+        assert wiki.media.requests == []  # its file holds the bytes
         claims = wiki.entities[media]["claims"]
         (kind,) = claims[P["instance_of"]]
         (hashed,) = claims[P["media_sha1"]]
-        assert cited(kind) == cited(hashed) == [deck, media]
+        (stored,) = claims[P["media_file"]]
+        assert cited(kind) == cited(hashed) == cited(stored) == [deck, media]
 
     def test_registration_needs_media(self):
         wiki = Untouchable()
