@@ -21,22 +21,21 @@ a source narrated one; the universe's divorce judgment is such a source.
 
 ## Decision
 
-A marriage is its own entity, bounded by events, and the spouse link is
-derived from it. It is a kind of partnership, the generic term for a
-couple's relationship; below, a *union* is any partnership.
+A marriage is its own entity, bounded by events; the spouse link is
+derived from it. A *union* below is any partnership, a marriage included.
 
 ### 1. Vocabulary
 
 | Key | What it is | Wikidata |
 |---|---|---|
-| `partnership` | class, new: a couple's relationship, of any kind. A source that presents two people as a couple without saying they married gives a partnership, which may be a marriage no source identifies; the couple take part with a new role, `partner` | none |
+| `partnership` | class, new: a couple's relationship, of any kind. A source that presents two people as a couple without saying they married gives a partnership, which may be a marriage no source identifies; the couple take part with a new role, `partner` (ADR-0035 §3.2) | none |
 | `marriage` | class, kept and re-described: a subclass of `partnership`, no longer an `event`; the couple take part with role `spouse` (ADR-0035) | Q8445 |
 | `wedding` | event class, new: a ceremony that starts a marriage | an item |
 | `civil_wedding`, `religious_wedding` | subclasses of `wedding`: its kind, where a source states it | an item each |
 | `divorce`, `annulment` | event classes, new: an end that a court or another authority pronounces | an item each |
-| `started_by` | union → the event that began it: its wedding, or each of two ceremonies | none (P26 takes a start time, P580) |
-| `ended_by` | union → the event that ended it: a divorce, an annulment, a partner's own `death` event, or an `event` of unstated kind | none (nearest: end cause, P1534, which names a cause's class) |
-| `spouse` | property, retired: nothing writes it, and the spouse link is a query | P26 |
+| `started_by` | union → the event that began it: its wedding, or each of two ceremonies. It accepts `wedding` and its subclasses (ADR-0035 §3.5) | none (P26 takes a start time, P580) |
+| `ended_by` | union → the event that ended it: a divorce, an annulment, a partner's own `death` event, or an `event` of unstated kind. It accepts `divorce`, `annulment`, `death` and `event` | none (nearest: end cause, P1534, which names a cause's class) |
+| `spouse` | property, retired: it accepts nothing, so validation refuses any claim of it, and no prompt offers it. The spouse link is a query | P26 |
 
 - **`marriage` keeps its key, label and Wikidata id**, and becomes a
   subclass of `partnership` instead of `event`; each scratch run's reset
@@ -46,10 +45,11 @@ couple's relationship; below, a *union* is any partnership.
   link back. A death that ends a union is the partner's own `death` event
   (ADR-0020 §2, ADR-0035 §3.2): `ended_by` points to it, never to a copy.
 - **Each event has its own date** (`point_in_time` at its precision,
-  with `earliest_date`, `latest_date` and a circa of its own), **place**
+  with `earliest_date`, `latest_date` and its own circa), **place**
   (`location`) **and participants** (roles `witness`, `officiant`); a
-  divorce names the court that acts by `carried_out_by` (ADR-0031). The
-  couple take part in the union, and its events reach them through it.
+  divorce names the court that acts by `carried_out_by` (ADR-0031;
+  defined in ADR-0035 §3.4). The couple take part in the union alone,
+  and its events reach them through it.
 - **The spouse link is a query**: two participants of one marriage with
   role `spouse`. The partner link reads every partnership, marriages
   included, and either role: a married couple are partners too. A spouse
