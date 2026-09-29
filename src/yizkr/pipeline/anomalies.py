@@ -151,6 +151,14 @@ EXTRACTION = "extraction"
 CRITIQUE = "critique"
 GEDCOM = "gedcom"
 
+# the `error` of a call event whose answer the claude CLI gave up on at the
+# output token limit: the engine read the give-up from the call's stream
+# (yizkr.pipeline.llm.output_limit_reached) and raised OutputLimitReached.
+# The event's `api_error` (max_output_tokens) does not tell it alone: a
+# call that crashed or timed out after the CLI printed its notice names
+# that class too, and failed.
+OUTPUT_LIMIT_REACHED = "OutputLimitReached"
+
 # the routes whose transcriptions the transcription check judges, by the
 # first part of a transcription's `engine`: an engine's reading and a text
 # file. A curator's correction and a deck's slide text are never judged.
@@ -1443,16 +1451,28 @@ class AnomalyChecks:
                 attempt.truncations += 1
 
     def _call(self, event: dict, subject: str) -> None:
+        """One engine call's event. A call whose answer the engine gave up
+        on at its output limit (the outcome `error`, and the `error`
+        OUTPUT_LIMIT_REACHED) is an answer cut off, not a failed call: a
+        chunk call's counts among the extraction's chunk answers and its
+        truncations, never among its chunk failures, and no such call
+        enters call-failures' window, whose step rule would pause the stage
+        as if the engine were down. Any other call that ended in an error
+        failed, whatever class of API error its event names."""
         outcome = event.get("outcome")
         if outcome not in ("ok", "error"):
             return
         failed = outcome == "error"
+        cut_off = failed and event.get("error") == OUTPUT_LIMIT_REACHED
         attempt = self._attempt_of(subject)
         chunk = event.get("role") == "extract" and event.get("call") != "open"
         if attempt is not None and chunk:
             attempt.chunk_calls += 1
-            attempt.chunk_errors += failed
-            attempt.chunk_answers += not failed
+            attempt.chunk_errors += failed and not cut_off
+            attempt.chunk_answers += cut_off or not failed
+            attempt.truncations += cut_off
+        if cut_off:
+            return
         stage = event.get("stage")
         settings = self.config.checks.call_failures
         if not settings.enabled or not isinstance(stage, str) or not stage:
