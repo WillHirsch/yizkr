@@ -349,8 +349,8 @@ artifacts written before it under the same names only. By default the
 loop takes every document to the gates in one pass, before any is
 written, so siblings in one folder run are invisible to each other, and
 two artifacts naming one person land as two items. A scratch run leaves
-identity to corpus clustering (#105), and #119 removes this per-document
-path; until then, two mechanisms remain:
+identity to corpus clustering (#105; **Corpus clustering** below), and
+#119 removes this per-document path; until then, two mechanisms remain:
 
 - **`yizkr reconcile-graph`** — a separate, curator-run pass that proposes
   duplicate *pairs among items already in the graph* (across every artifact
@@ -397,6 +397,104 @@ path; until then, two mechanisms remain:
   `claude-code` engine (rolling usage windows), higher on `anthropic`
   (API rate limits). Wiki writes stay serialised, so only the LLM-heavy
   extraction overlaps. Default 1.
+
+## Corpus clustering (`clustering.py`, the scratch run's identity map)
+
+A scratch run decides identity once, across the whole corpus, before any
+write (#105, #58). Past the barrier, the scratch driver's first corpus
+stage, `clustering`, clusters the mentions of every document whose
+stages completed, and keeps the result in
+`<run>/corpus/clustering/identity-map.json`. It reads the documents'
+batch views and nothing else: no wiki, no query service, no model
+(`tests/unit/test_no_wiki_before_write.py` runs it under a wiki that
+refuses). The module docstring is the full account; in short:
+
+- **Mentions and fingerprints** (`fingerprints.py`). Every entity of every
+  manifest, the GEDCOM export's included, is a mention. Its fingerprint
+  hashes its artifact's SHA-1, its canonical label, its kind and its
+  excerpt span (the manifest's `mention_lines`), never the manifest's
+  local id, so it survives a manifest renumbered by another extraction.
+  An empty span stands in where there is none (the export's places,
+  occupations and media, a record without lines, the refs of a batch
+  without a manifest), and an occurrence number tells apart two mentions
+  of one batch that are otherwise equal. A cluster id is the hash of its
+  members' sorted fingerprints (#197 builds claim fingerprints and the
+  run diff on the same module).
+- **Names** are read as names: a bracketed part ("formerly Gustav
+  Löbig", an inline nickname) is a form of its own, a name written
+  surname first ("Löbig, Ursula, Wwe.") is read given name first, a
+  maiden name gives a second form wherever it stands ("Löbig, Hildegard
+  geb. Laudler"), and titles, kin and courtesy words, particles and
+  initials are no name tokens. A name that is only a surname ("Frau
+  Löbig", "N.N. Löbig", or "Löbig, Hutmacher", an occupation where the
+  given names would stand) names no one: it makes no key, no name match
+  and no kin agreement.
+- **Blocking** proposes pairs by keys of each kind, never by one shared
+  token: a given name with a different surname for people (a surname may
+  come from the person's kin, and a nickname stands for a given name); a
+  token of the part of a place name before its first comma, but a
+  generic head ("Kreis", "Lager"); one organization name holding the
+  other's distinctive tokens; events through their participants; the
+  whole name otherwise. A mention that key-matches the GEDCOM export
+  pairs with those anchors only. A key more than `max-key-mentions`
+  mentions share is a hub: none of them is blocked on it, the hubs and
+  the mentions holding one are counted, and the review lists them. A
+  key that finds a mention of the export is never a hub, since each
+  mention holding it pairs with its anchors only, and nor is a person's
+  lone token, which only meets the export. Lookups go through indexes,
+  organizations included, so the work grows with the mentions and the
+  pairs proposed.
+- **Cannot-link.** Two ids of one manifest are kept apart (soft). The
+  export's places and occupations are exempt, as the adapter mints one
+  per string, and so are the refs of a batch without a manifest, which
+  are chunk-scoped and never unified. Kin and place containment that the
+  manifests state between their own ids are lifted into mention space,
+  and `reconcile.impossible_pair` (ADR-0017) then rules out a pair one of
+  them joins (hard). Dates never rule a pair out.
+- **Links.** A pair is a confident link only on corroborated evidence:
+  for people a name match with kin that agree or dates that agree (a
+  century or an open "before" agrees with nothing); for places an exact
+  or nested name; for organizations and families a shared name of two
+  distinctive tokens or more, and a shared place too when the name is
+  only an institution's kind ("Städtische Realschule"); for events every
+  participant of the one with fewer merged into one cluster with a
+  participant of the other, and dates that agree, which two births or
+  two deaths need not have when each is its one participant's own (its
+  date, if any, not conflicting with the date the person's own claims
+  give); otherwise an exact name. A mention of no kind never links confidently, and nor does one
+  matching more than `max-anchors` GEDCOM anchors (a place counts those
+  it matches exactly, and those it nests in as one).
+- **Clusters.** The closure over every candidate pair gives the candidate
+  clusters: *conflicting* when one joins a cannot-link pair, else
+  *ambiguous* when any of its links is, or when two members that were
+  never a pair contradict each other (dates, kin of one name whose dates
+  conflict, names that do not match), else *confident*. Unattended, only
+  confident clusters merge; the members of the others stay apart, and are
+  counted.
+- **Thresholds** live in `clustering.yaml` beside the module: the
+  minimum name and place token lengths, GEDCOM anchoring, the hub limit,
+  how far a circa date widens, the widest date range that corroborates,
+  how many GEDCOM anchors a mention may match and still link
+  confidently, and the pairs per adjudication call behind the stage's
+  estimate of the calls. The defaults come from the corpus clustering
+  experiment (#71, `scripts/experiments/cluster_calibration.py`); #74
+  settles them on scratch runs.
+- **The map.** Each mention's fingerprint maps to its cluster and the
+  method that put it there (`confident`, `ambiguous`, `conflicting`,
+  `singleton`, or `unclustered` for a mention its manifest does not mark
+  for extraction). The map's `hash` covers those decisions alone. It also
+  lists each ambiguous or conflicting candidate cluster with its pairs,
+  the evidence for each, and the pair that makes it conflict or the
+  members that contradict, then each hub key with the mentions holding
+  it, and a summary of counts. The stage reuses the
+  map while the documents' batches (by content), the stage's `VERSION`,
+  the source of the modules that make it, the Unicode version and the
+  thresholds stand, and makes it again otherwise; the same decisions give the same cluster ids
+  and hash. What reaches the run's events is counts within fixed labels.
+- **Not yet.** Nothing reads the map to write: the writer resolves through
+  it with #109, adjudication of ambiguous pairs comes with #106, and
+  overrides with never-re-ask with #107. The owner reviews ambiguous and
+  conflicting clusters once, before the keeper run.
 
 ## Face proposals (`ingest/faces.py`, ADR-0005)
 

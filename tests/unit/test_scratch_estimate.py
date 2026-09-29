@@ -351,6 +351,18 @@ class TestCounts:
         assert made == {"transcription": 2, "extraction": 8, "critique": 4}
         assert per_stage(counted, "engine_calls") == made
 
+    def test_the_clustering_stage_makes_no_call(self, tmp_path, engine):
+        """The registered corpus stage, clustering, calls no engine: the
+        estimate says so, rather than that it is not estimated."""
+        counted = estimate_of(tmp_path, small(tmp_path), engine)
+        assert (counted.callless_stages, counted.corpus_stages) == (
+            ["clustering"],
+            [],
+        )
+        text = "\n".join(estimate.describe(counted))
+        assert "- No call: the corpus stage clustering makes none." in text
+        assert "Not estimated" not in text
+
     def test_a_run_the_cache_answers_asks_the_engine_nothing(
         self, tmp_path, engine
     ):
@@ -1562,6 +1574,7 @@ class TestReport:
             duplicates=2,
             unreadable=1,
             corpus_stages=["clusters"],
+            callless_stages=["clustering", "flags"],
             holders=["the runs directory x by process 7"],
             preflight=["the claude CLI has no login"],
         )
@@ -1570,6 +1583,9 @@ class TestReport:
         assert "as the cache answers it: 1 transcription." in text
         assert "- No stage for 2 duplicates and 1 unreadable." in text
         assert "- Not estimated: the corpus stages clusters." in text
+        assert "- No call: the corpus stages clustering, flags make none." in (
+            text
+        )
         assert "- Held now: the runs directory x by process 7." in text
         assert "would refuse it now: the claude CLI has no login" in text
 

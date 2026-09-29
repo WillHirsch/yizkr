@@ -368,12 +368,16 @@ def fetch_place_containment(
 
 
 @dataclass
-class _PairFacts:
+class PairFacts:
     """The subset of an entity's graph facts the impossibility filter reads.
 
     Built from a RosterEntity (graph side) or an EntityRecord + its batch
     claims (new-document side). ``qid`` is None for a batch entity not yet
-    written — its containment is matched by label instead.
+    written — its containment is matched by label instead. Corpus
+    clustering (yizkr.pipeline.clustering) builds it in mention space: a
+    mention's fingerprint stands in for the QID, and its kin are the
+    mentions its manifest relates it to, lifted from the manifest's local
+    ids.
     """
 
     kind: str
@@ -382,8 +386,8 @@ class _PairFacts:
     kin_qids: set[str] = field(default_factory=set)
 
 
-def _roster_pair_facts(roster_entity: RosterEntity) -> _PairFacts:
-    return _PairFacts(
+def _roster_pair_facts(roster_entity: RosterEntity) -> PairFacts:
+    return PairFacts(
         kind=roster_entity.kind,
         label=roster_entity.label,
         qid=roster_entity.qid,
@@ -393,13 +397,13 @@ def _roster_pair_facts(roster_entity: RosterEntity) -> _PairFacts:
 
 def _batch_pair_facts(
     entity: EntityRecord, batch: ClaimBatch | None
-) -> _PairFacts:
+) -> PairFacts:
     """Facts for a not-yet-written batch entity, from its own claims.
 
     A batch entity references others by local id; only relations to items
     ALREADY in the graph (a QidRef) contribute kin_qids — those are the
     only ones the graph-side candidate can be compared against."""
-    facts = _PairFacts(kind=entity.kind, label=entity.label, qid=entity.qid)
+    facts = PairFacts(kind=entity.kind, label=entity.label, qid=entity.qid)
     if batch is None:
         return facts
     for claim in batch.claims:
@@ -416,8 +420,8 @@ def _batch_pair_facts(
 
 
 def impossible_pair(
-    a: _PairFacts,
-    b: _PairFacts,
+    a: PairFacts,
+    b: PairFacts,
     *,
     containment: PlaceContainment | None = None,
 ) -> str | None:

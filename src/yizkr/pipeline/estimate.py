@@ -247,8 +247,10 @@ class Estimate:
     past_barrier_only: bool = False
     duplicates: int = 0
     unreadable: int = 0
-    # the corpus stages the invocation runs, which are not estimated
+    # the corpus stages the invocation runs that may call the engine,
+    # which are not estimated, and those that make no call
     corpus_stages: list[str] = field(default_factory=list)
+    callless_stages: list[str] = field(default_factory=list)
     # who holds the runs directory and the cache now
     holders: list[str] = field(default_factory=list)
     # what the run's preflight would refuse now, beyond what the estimate
@@ -487,7 +489,12 @@ class Estimator(ScratchDriver):
         estimate.past_barrier_only = past
         estimate.duplicates = len(duplicates)
         estimate.unreadable = len(found) - len(docs)
-        estimate.corpus_stages = [s.name for s in self._corpus_in_range()]
+        estimate.corpus_stages = [
+            s.name for s in self._corpus_in_range() if s.calls_engine
+        ]
+        estimate.callless_stages = [
+            s.name for s in self._corpus_in_range() if not s.calls_engine
+        ]
         if past or not taken:
             return estimate
         self._refreshed = self._refreshes_made()
@@ -1039,6 +1046,13 @@ def _notes(estimate: Estimate) -> list[str]:
         if estimate.unreadable:
             taken.append(f"{estimate.unreadable} unreadable")
         notes.append(f"- No stage for {' and '.join(taken)}.")
+    if estimate.callless_stages:
+        one = len(estimate.callless_stages) == 1
+        notes.append(
+            f"- No call: the corpus stage{'' if one else 's'} "
+            + ", ".join(estimate.callless_stages)
+            + (" makes none." if one else " make none.")
+        )
     if estimate.corpus_stages:
         notes.append(
             "- Not estimated: the corpus stages "
