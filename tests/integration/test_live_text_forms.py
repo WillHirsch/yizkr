@@ -9,9 +9,12 @@ labels, an alias and a description, a monolingual value, a string
 qualifier, an external id, the excerpts, and the model identifier its run
 item is named by. It is written, and read back:
 
-* the items and statements hold the fixture's text in NFC, and so does
-  the query service: it reads monolingual text as the instance stores
-  it, which is as the writer sent it;
+* the items and statements hold the fixture's text in NFC. Wikibase
+  keeps a monolingual text as it is sent, but its API gives every text
+  back in NFC, and the query service takes canonically equivalent
+  literals as one term, so only the entity's RDF, which
+  Special:EntityData serves from the stored revision, shows the form
+  the birth name is stored in: NFC, the form the writer sent it in;
 * writing the batch again sends no edit at all: the writer finds each
   item by its label, each alias on its item, each statement with its
   source block, and the run item by its label;
@@ -33,14 +36,15 @@ import unicodedata
 from pathlib import Path
 
 import pytest
+import requests
 from wikibaseintegrator.entities.baseentity import BaseEntity
 
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.core.config import USER_AGENT
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.queries.publish import prefix_block
 
-from .conftest import register_fictional, run_sparql, wait_for_query_service
+from .conftest import register_fictional
 
 pytestmark = pytest.mark.live
 
@@ -246,17 +250,22 @@ def test_the_fixture_is_kept_in_nfc(client, config, fixture_graph):
         for snak in relative["qualifiers"][properties["kinship_type"]]
     ] == [nfc[KINSHIP]]
     assert values("town", "whg_place_id") == [nfc[IDENTIFIER]]
-    # the API gives every text in NFC; the query service reads the birth
-    # name as the instance stores it
+    # the API gives every text back in NFC, and the query service takes
+    # canonically equivalent literals as one term, so only the entity's
+    # RDF, served from its stored revision as it is, shows the form the
+    # birth name is stored in, which is the form the writer sent it in
     ida = written.created_items["ida"]
-    wait_for_query_service(config, client, [ida])
-    query = prefix_block(config.concept_uri) + (
-        "SELECT ?name WHERE {\n"
-        f"  wd:{ida} wdt:{properties['birth_name']} ?name .\n"
-        "}"
+    response = requests.get(
+        f"{config.wikibase_url}/wiki/Special:EntityData/{ida}.ttl",
+        params={"flavor": "dump"},
+        headers={"User-Agent": USER_AGENT},
+        timeout=60,
     )
-    rows = run_sparql(config, query)
-    assert [row["name"]["value"] for row in rows] == [nfc[BIRTH_NAME]]
+    response.raise_for_status()
+    rdf = response.content.decode("utf-8")
+    decomposed = unicodedata.normalize("NFD", BIRTH_NAME)
+    assert f'"{nfc[BIRTH_NAME]}"@de' in rdf
+    assert f'"{decomposed}"@de' not in rdf
 
 
 def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):

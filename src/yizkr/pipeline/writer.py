@@ -242,12 +242,12 @@ def _stored_string(text: str) -> str:
     external-id and monolingual text values and qualifiers, a reference
     block's page number, region and excerpt, a minted item's label,
     description, aliases and type hint, the aliases and type hint it
-    adds to an item it found, and the run item's label. So what it
-    builds for a claim is what the instance gives back for it, and the
-    labels and aliases it looks for are in the form the instance holds
-    them in, whatever form the batch gives them in: a re-run finds
-    everything the first run wrote (steps 2 and 4 of the module
-    docstring).
+    adds to an item it found, and the run item's label and description.
+    So what it builds for a claim is what the instance gives back for
+    it, and the labels and aliases it looks for are in the form the
+    instance holds them in, whatever form the batch gives them in: a
+    re-run finds everything the first run wrote (steps 2 and 4 of the
+    module docstring).
 
     NFC gives a canonically equivalent text, which Unicode defines as
     the same text: a letter and its combining mark become the one
@@ -644,13 +644,15 @@ class BatchWriter:
         item.labels.set("en", label)
         item.descriptions.set(
             "en",
-            f"pipeline {run.pipeline_version}"
-            + (
-                f", commit {run.software_commit}"
-                if run.software_commit
-                else ""
-            )
-            + f", started {run.started_at.isoformat()}",
+            _stored_string(
+                f"pipeline {run.pipeline_version}"
+                + (
+                    f", commit {run.software_commit}"
+                    if run.software_commit
+                    else ""
+                )
+                + f", started {run.started_at.isoformat()}"
+            ),
         )
         item = item.write(summary="ingest: extraction run")
         claim = self._item_claim(

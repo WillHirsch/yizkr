@@ -3336,7 +3336,7 @@ def _labelled(wiki: FakeWiki, label: str) -> list[str]:
 
 # the registration card's batch and, (here) a later one, the compensation
 # file's: each names Ida by her married name, with her birth name as an
-# alias (ADR-0011)
+# alias (ADR-0011); the file adds her name as it writes it
 IDA = {
     "id": "e05",
     "label": "Ida Löbig",
@@ -3371,7 +3371,7 @@ def _compensation_batch() -> ClaimBatch:
                 "Ida Löbig geb. Sörne, geb. 17.4.1881",
             ),
         },
-        entities=(IDA,),
+        entities=(dict(IDA, aliases=["Ida Sörne", "Ida Löbig geb. Sörne"]),),
         run=LATER_RUN,
     )
 
@@ -3456,7 +3456,8 @@ class TestWriterTextInNfc:
     )
     def test_a_later_batch_finds_the_item_in_either_form(self, first, then):
         # the card's batch mints Ida's item; the compensation file's,
-        # which gives her label and alias in the other form, finds it
+        # which gives her label and alias in the other form, finds it, and
+        # adds the name the file gives her by, in NFC
         wiki = FakeWiki(TEXT_MEDIA, detached=True)
         card = BatchWriter(wiki).write_batch(
             _in_form_batch(_card_batch(), first)
@@ -3469,7 +3470,7 @@ class TestWriterTextInNfc:
 
         assert later.created_items["e05"] == ida
         assert _labelled(wiki, "Ida Löbig") == [ida]
-        assert _aliases(wiki, ida) == ["Ida Sörne"]
+        assert _aliases(wiki, ida) == ["Ida Sörne", "Ida Löbig geb. Sörne"]
         assert later.written == 1
         assert _not_in_nfc(wiki) == []
 
@@ -3575,12 +3576,13 @@ class TestWriterTextInNfc:
 
     def test_nfc_is_the_only_change(self):
         # (here) the burial register transcribed as written: the long s,
-        # and the bar that doubles the n of "Brunnenring", a combining
-        # mark over a letter Unicode has no precomposed form of. The batch
-        # gives the umlauts decomposed
+        # the bar that doubles the n of "Brunnenring", a combining mark
+        # over a letter Unicode has no precomposed form of, and the two
+        # spaces the register leaves after the address. The batch gives
+        # the umlauts decomposed
         cause = "Waſſerſucht"
         excerpt = (
-            "Wohnung: Brun̄enring 35. Witwer der Cäcilie Löbig geb. "
+            "Wohnung: Brun\u0304enring 35.  Witwer der Cäcilie Löbig geb. "
             "Tarle. Alter: 73 Jahre. Geſtorben: 16. März 1909 in Flörburg. "
             "Todesurſache: Waſſerſucht."
         )
@@ -3594,8 +3596,8 @@ class TestWriterTextInNfc:
             "source": _cites(REGISTER_SHA1, excerpt),
         }
         batch = _batch_of(_in_form(claim, "NFD"))
-        # NFC leaves the long s and the bar as they are, and composes the
-        # umlauts
+        # NFC leaves the long s, the bar and the spaces as they are, and
+        # composes the umlauts
         assert unicodedata.normalize("NFC", excerpt) == excerpt
         assert unicodedata.normalize("NFKC", cause) != cause
         assert unicodedata.normalize("NFD", excerpt) != excerpt
