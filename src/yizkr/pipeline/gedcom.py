@@ -507,72 +507,99 @@ def _media_names(obje: Record) -> tuple[str, list[str]]:
     return "media object", []
 
 
-# Wikibase caps a text value, the transcription excerpt among them, at 400
-# characters
+# Wikibase caps a text value, the transcription excerpt and the page
+# number among them, at 400 characters
 EXCERPT_LIMIT = 400
-# the mark of a run of lines an excerpt leaves out
+# the mark of a run of lines an excerpt leaves out, or of the pages a page
+# number leaves out
 ELIDED = "…"
+# How a clipped excerpt keeps a line (_excerpt): a line of a citation
+# folded into the claim is kept, the line a folded citation stands beneath
+# next, and any other line after those, in order, while it fits.
+CITATION, CITING, OTHER = range(3)
 
 
-def _excerpt(segments: list[tuple[str, bool]], cited: str) -> str:
+def _excerpt(segments: list[tuple[str, int]], cited: str) -> str:
     """A claim's transcription excerpt from its GEDCOM lines, `segments`,
-    each a line (or a CONT line within one) with whether it belongs to a
-    citation folded into the claim, and `cited`, the titles those
+    each a line (or a CONT line within one) with how a clip keeps it
+    (CITATION, CITING or OTHER), and `cited`, the titles the folded
     citations resolve to (" | cited: ..."), or "".
 
     The lines are joined by " | ", as monolingual text forbids newlines,
     with `cited` after them, in NFC, the form the instance stores text in,
     so that the length counted here is the length the writer counts. An
     excerpt longer than EXCERPT_LIMIT keeps every line of the folded
-    citations and `cited`, and as many of the other lines, from the
-    first, as fit; each run of lines it leaves out is marked ELIDED.
-    Should the citations not fit whole, it keeps as many of all its lines,
-    from the first, as fit. Either way it ends with "clipped, sha1" and
-    the first 12 hex digits of the SHA-1 of the whole excerpt: two claims
-    the whole excerpts keep apart stay apart once clipped, so two
-    citations of one fact are never one claim, while a claim restated line
-    for line is the same claim.
+    citations and `cited`, then the line each folded citation stands
+    beneath, so that the citation is read as that line's, then each of its
+    other lines, in order, that still fits; each run of lines it leaves
+    out is marked ELIDED. Should the citations not fit whole, it keeps as
+    many of all its lines, from the first, as fit, cut back to a whole
+    line where it can. Either way it ends with "clipped, sha1" and the
+    first 12 hex digits of the SHA-1 of the whole excerpt: two claims the
+    whole excerpts keep apart stay apart once clipped, so two citations of
+    one fact are never one claim, while a claim restated line for line is
+    the same claim.
     """
-    segments = [
-        (unicodedata.normalize("NFC", text), citing)
-        for text, citing in segments
-    ]
+    texts = [unicodedata.normalize("NFC", text) for text, _ in segments]
     cited = unicodedata.normalize("NFC", cited)
-    whole = " | ".join(text for text, _ in segments) + cited
+    whole = " | ".join(texts) + cited
     if len(whole) <= EXCERPT_LIMIT:
         return whole
     digest = hashlib.sha1(whole.encode()).hexdigest()[:12]
     tail = f" | clipped, sha1 {digest}"
     room = EXCERPT_LIMIT - len(tail)
-    others = sum(1 for _, citing in segments if not citing)
-    if others < len(segments):
-        # the most of the other lines that fit beside the citations
-        for keep in range(others - 1, -1, -1):
-            text = _kept(segments, keep) + cited
-            if len(text) <= room:
-                return text + tail
-    cut = whole[: room - len(f" | {ELIDED}")]
-    if " | " in cut:
-        cut = cut.rsplit(" | ", 1)[0]
-    return f"{cut} | {ELIDED}{tail}"
+    kept = [keep == CITATION for _, keep in segments]
+    length = len(_kept(texts, kept)) + len(cited)
+    if length > room:
+        cut = whole[: room - len(f" | {ELIDED}")]
+        if " | " in cut:
+            cut = cut.rsplit(" | ", 1)[0]
+        return f"{cut} | {ELIDED}{tail}"
+    for wanted in (CITING, OTHER):
+        for index, (_, keep) in enumerate(segments):
+            if keep != wanted:
+                continue
+            # keeping a line of a run left out splits the run in two, ends
+            # it on one side, or takes the place of its mark
+            before = index > 0 and not kept[index - 1]
+            after = index + 1 < len(kept) and not kept[index + 1]
+            grows = len(texts[index]) + (
+                7 if before and after else 3 if before or after else -1
+            )
+            if length + grows <= room:
+                kept[index] = True
+                length += grows
+    return _kept(texts, kept) + cited + tail
 
 
-def _kept(segments: list[tuple[str, bool]], keep: int) -> str:
-    """`segments` joined by " | ", with every citation line and the first
-    `keep` other lines, and each run of lines left out marked ELIDED."""
+def _kept(texts: list[str], kept: list[bool]) -> str:
+    """The `texts` that `kept` keeps, joined by " | ", with each run of
+    texts left out marked ELIDED."""
     out: list[str] = []
-    others = 0
-    eliding = False
-    for text, citing in segments:
-        if citing or others < keep:
+    for index, text in enumerate(texts):
+        if kept[index]:
             out.append(text)
-            eliding = False
-        elif not eliding:
+        elif index == 0 or kept[index - 1]:
             out.append(ELIDED)
-            eliding = True
-        if not citing:
-            others += 1
     return " | ".join(out)
+
+
+def _page_number(pages: list[str]) -> str:
+    """A reference's page number from the PAGEs of the citations folded
+    into its claim: each distinct one, in NFC, joined by " ; ". One longer
+    than EXCERPT_LIMIT, which a Wikibase string cannot hold, keeps the
+    pages that fit, cut back to a whole page where it can, and ends with
+    " ; " and ELIDED; the excerpt still gives the citations whole, or its
+    clip's key, so two claims whose pages differ past the cut stay two."""
+    page = " ; ".join(
+        dict.fromkeys(unicodedata.normalize("NFC", page) for page in pages)
+    )
+    if len(page) <= EXCERPT_LIMIT:
+        return page
+    page = page[: EXCERPT_LIMIT - len(f" ; {ELIDED}")]
+    if " ; " in page:
+        page = page.rsplit(" ; ", 1)[0]
+    return f"{page} ; {ELIDED}"
 
 
 # GEDCOM NAME TYPE (5.5.1 §, plus common tool values) -> typed-name
@@ -777,22 +804,45 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         # has no unknown value to name them with
         return child.tag in ("MARR", "DIV") and not coupled(parent)
 
-    def further_files(obje: Record) -> None:
-        """Count each FILE of an object after its first, which its media
-        item does not stand for (_media_names)."""
-        for _ in obje.all("FILE")[1:]:
+    def within(record: Record, whole: Sequence[Record] = ()) -> None:
+        """Count, beneath `record`, which the census takes as incorporated
+        wholesale (a citation folded into a claim's reference, a source
+        record a folded citation cites, an OBJE mapped to a media item),
+        each SOUR folded into no claim and each OBJE mapped to no media
+        item, named with its parent's tag (SOUR.OBJE, FILE.SOUR): its line
+        stands in an excerpt, or in none, and no claim holds what it cites
+        or shows. What `whole` holds is counted whole elsewhere."""
+        for child in record.children:
+            if any(child is counted for counted in whole):
+                continue
+            if child.tag == "SOUR" and child.line_number in folded:
+                within(child)
+            elif child.tag in ("SOUR", "OBJE"):
+                count(f"{record.tag}.{child.tag}")
+            else:
+                within(child)
+
+    def mapped_object(obje: Record) -> None:
+        """Count, of an object an image claim maps, each FILE after its
+        first, which its media item does not stand for (_media_names),
+        and what else within it the adapter neither folds nor maps."""
+        further = obje.all("FILE")[1:]
+        for _ in further:
             count("OBJE.FILE")
+        within(obje, further)
 
     def census(record: Record) -> None:
         seen: set[str] = set()
         for child in record.children:
             if child.tag == "SOUR" and child.line_number in folded:
+                within(child)
                 continue
             if child.tag == "OBJE" and child.line_number in mapped:
-                # an object embedded beneath the person, rather than a link
-                # to a level-0 one, has its further files counted here
-                if not child.value.strip().startswith("@"):
-                    further_files(child)
+                # a link to a level-0 object holds no file of the object's
+                if child.value.strip().startswith("@"):
+                    within(child)
+                else:
+                    mapped_object(child)
                 continue
             # only a family's first HUSB and first WIFE are read
             further = child.tag in seen and child.tag in reads_once.get(
@@ -858,9 +908,9 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         the lines of `passage` (by default `record` and every line beneath
         it) as the excerpt, and the SOUR citations directly beneath
         `record` or one of `events` folded in. Only a citation that the
-        passage holds is folded in, so that the excerpt, which keeps the
-        lines of the folded citations before any other (_excerpt), shows
-        it."""
+        passage holds is folded in, so that the excerpt, which a clip
+        keeps the lines of the folded citations of in preference to any
+        other (_excerpt), shows it."""
         passage = record.walk() if passage is None else passage
         folding = {
             id(citation)
@@ -868,15 +918,29 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             for citation in holder.all("SOUR")
         }
         citations = [node for node in passage if id(node) in folding]
-        citing = {
+        folded_in = {id(citation) for citation in citations}
+        in_citations = {
             id(node) for citation in citations for node in citation.walk()
+        }
+        # the records the folded citations stand directly beneath
+        holders = {
+            id(node)
+            for node in passage
+            if any(id(child) in folded_in for child in node.children)
         }
         # monolingual text values forbid newlines: each GEDCOM line, and
         # each CONT line within one, is kept verbatim and joined visibly
         segments = [
-            (text, id(node) in citing)
+            (
+                text,
+                CITATION
+                if id(node) in in_citations
+                else CITING
+                if id(node) in holders and not position
+                else OTHER,
+            )
             for node in passage
-            for text in node.own_line().split("\n")
+            for position, text in enumerate(node.own_line().split("\n"))
         ]
         pages, titles = cited_sources(citations)
         # the verbatim lines carry only the @S..@ pointer; name the cited
@@ -893,7 +957,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         }
         if pages:
             # the citation's PAGE is the reference's locator (ADR-0003)
-            reference["page_number"] = " ; ".join(dict.fromkeys(pages))
+            reference["page_number"] = _page_number(pages)
         return reference
 
     def person_id(xref: str) -> str:
@@ -1496,9 +1560,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
         if root.tag in ("INDI", "FAM"):
             census(root)
         elif root.tag == "SOUR" and root.xref in resolved:
-            continue  # a cited source, resolved to its title (ADR-0021)
+            # a cited source, resolved to its title (ADR-0021), is read no
+            # further, save for an object or a citation within it
+            within(root)
         elif root.tag == "OBJE" and root.line_number in mapped:
-            further_files(root)
+            mapped_object(root)
         else:
             count(root.tag)
 

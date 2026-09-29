@@ -2783,10 +2783,25 @@ PORTRAIT = (
     "0 @O1@ OBJE\n1 FILE studio-portrait-1890s.jpg\n2 FORM jpg\n"
     "2 TITL Studio portrait of the Löbig family\n"
 )
+# (here) a scan of the burial register's sheet 12, as its own object
+SHEET_SCAN = "0 @O2@ OBJE\n1 FILE burial-register-1909-sheet-12.jpg\n"
 PORTRAIT_LINES = (
     "0 @O1@ OBJE | 1 FILE studio-portrait-1890s.jpg | 2 FORM jpg"
     " | 2 TITL Studio portrait of the Löbig family"
 )
+
+
+def text_of(length: int, ending: str = "") -> str:
+    """A text of exactly `length` characters on Eugen's burial register
+    entry, ending (here) with `ending`, and never with a space, which a
+    GEDCOM line would lose."""
+    sentence = (
+        "Burial register of Friedhof Flörburg, 1909, sheet 12: Eugen Löbig, "
+        "master hatter, of Brunnenring 35, buried on 20 March 1909. "
+    )
+    text = (sentence * (length // len(sentence) + 1))[: length - len(ending)]
+    text = (text[:-1] + ".") if text.endswith(" ") else text
+    return text + ending
 
 
 def spouse_sources(text: str) -> list[tuple[str | None, str]]:
@@ -2941,6 +2956,16 @@ class TestMarriageCitations:
         assert [first in excerpts[0], second in excerpts[1]] == [True, True]
         assert [first in excerpts[1], second in excerpts[0]] == [False, False]
 
+    def test_a_marriage_restated_at_another_page_is_a_pair_of_its_own(self):
+        # (here) the export gives the wedding twice, each citing the
+        # judgment, at its second sheet and at its third: the same source,
+        # but not the same citation, line for line
+        text = cited(JUDGMENT) + family(
+            *WEDDING, "2 SOUR @S1@", "3 PAGE Bl. 2",
+            *WEDDING, "2 SOUR @S1@", "3 PAGE Bl. 3",
+        )  # fmt: skip
+        assert [page for page, _ in spouse_sources(text)] == ["Bl. 2", "Bl. 3"]
+
     def test_a_marriage_restated_under_the_same_citation_adds_no_pair(self):
         # (here) the export gives the wedding twice, line for line, each
         # citing the judgment's second sheet, and the divorce once: one
@@ -3074,6 +3099,27 @@ class TestMarriageCitations:
             f"0 @F3@ FAM | {partner} | 1 CHIL @I12@ | 1 SOUR @S1@"
             f" | cited: {COMPENSATION}"
             for partner in partners
+        ]
+
+    @pytest.mark.parametrize("tag", ["HUSB", "WIFE"])
+    def test_a_further_partner_is_left_out_of_a_pairs_excerpt(self, tag):
+        # (here) Leopold and Agnes's family record names a further HUSB or
+        # WIFE, which the census counts: the pair's excerpt names the
+        # partners its claims name, and no other
+        text = (
+            "0 @I99@ INDI\n1 NAME A /B/\n"
+            + cited(JUDGMENT)
+            + family(f"1 {tag} @I99@", *WEDDING, "2 SOUR @S1@")
+        )
+        assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {
+            f"FAM.{tag}": 1
+        }
+        assert spouse_sources(text) == [
+            (
+                None,
+                f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947 | 2 PLAC {FLOERBURG}"
+                f" | 2 SOUR @S1@ | cited: {JUDGMENT}",
+            )
         ]
 
     def test_a_marriage_citation_is_no_citation_of_the_parents(self):
@@ -3273,6 +3319,105 @@ class TestCitationsAndMediaNotHeld:
             "SOUR": 1,
         }
 
+    @pytest.mark.parametrize(
+        ("objects", "counted"),
+        [
+            # a scan embedded in the register's record
+            (["1 OBJE", "2 FILE burial-register-1909.jpg"], {"SOUR.OBJE": 1}),
+            # a link to a scan of the sheet, whose record no image claim
+            # cites either
+            (["1 OBJE @O2@"], {"SOUR.OBJE": 1, "OBJE": 1}),
+        ],
+        ids=["embedded", "linked"],
+    )
+    def test_an_object_within_a_cited_source_record_is_counted(
+        self, objects, counted
+    ):
+        # (here) the burial register's record holds a scan of it, and the
+        # export cites the register for Eugen's burial: the citation is
+        # folded, and the scan, which no media item stands for, counted
+        text = (
+            "\n".join(["0 @S1@ SOUR", f"1 TITL {BURIAL_REGISTER}", *objects])
+            + "\n"
+            + (SHEET_SCAN if "1 OBJE @O2@" in objects else "")
+            + eugen(
+                "1 BURI",
+                "2 PLAC Friedhof Flörburg, Hesse, Germany",
+                "2 SOUR @S1@",
+            )
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.unsupported_tags == counted
+        (burial,) = claims_for(result.batch, "i1", "burial_place")
+        assert burial.source.transcription_excerpt.text.endswith(
+            f" | cited: {BURIAL_REGISTER}"
+        )
+
+    @pytest.mark.parametrize(
+        ("objects", "counted"),
+        [
+            (["3 OBJE", "4 FILE burial-register-1909.jpg"], {"SOUR.OBJE": 1}),
+            (["3 OBJE @O2@"], {"SOUR.OBJE": 1, "OBJE": 1}),
+        ],
+        ids=["embedded", "linked"],
+    )
+    def test_an_object_within_a_folded_citation_is_counted(
+        self, objects, counted
+    ):
+        # (here) the export's citation of the burial register for Eugen's
+        # burial holds a scan of the sheet: the citation is folded, lines
+        # and all, and the scan, which no media item stands for, counted
+        text = (
+            cited(BURIAL_REGISTER)
+            + (SHEET_SCAN if "3 OBJE @O2@" in objects else "")
+            + eugen(
+                "1 BURI",
+                "2 PLAC Friedhof Flörburg, Hesse, Germany",
+                "2 SOUR @S1@",
+                "3 PAGE Bl. 12",
+                *objects,
+            )
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.unsupported_tags == counted
+        (burial,) = claims_for(result.batch, "i1", "burial_place")
+        assert burial.source.page_number == "Bl. 12"
+
+    @pytest.mark.parametrize(
+        ("portrait", "link", "counted"),
+        [
+            # a citation beneath the portrait's FILE
+            (["1 FILE studio-portrait-1890s.jpg", "2 SOUR @S2@"], [], "FILE"),
+            # a citation beneath a NOTE of the person's link
+            (
+                ["1 FILE studio-portrait-1890s.jpg"],
+                ["2 NOTE Eugen stands at the back", "3 SOUR @S2@"],
+                "NOTE",
+            ),
+        ],
+        ids=["FILE", "link-NOTE"],
+    )
+    def test_a_citation_within_a_mapped_object_is_counted(
+        self, portrait, link, counted
+    ):
+        # (here) the studio portrait's record cites the tree, which names
+        # the sitters, and the postcard stands beneath its FILE or beneath
+        # a NOTE of Eugen's link to it: the tree's citation is folded, and
+        # the postcard's, which no claim holds, counted, as is the
+        # postcard's record, which no folded citation cites
+        text = (
+            cited(TREE, POSTCARD)
+            + "\n".join(["0 @O1@ OBJE", *portrait, "1 SOUR @S1@"])
+            + "\n"
+            + eugen("1 OBJE @O1@", *link)
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.unsupported_tags == {f"{counted}.SOUR": 1, "SOUR": 1}
+        (image,) = claims_for(result.batch, "i1", "image")
+        assert image.source.transcription_excerpt.text.endswith(
+            f" | cited: {TREE}"
+        )
+
     def test_a_citation_of_a_persons_link_to_an_object_is_folded(self):
         # (here) the export cites the tree's first sheet beneath Eugen's
         # link to the studio portrait: the link's lines come first in the
@@ -3335,6 +3480,73 @@ class TestEveryPageAndTitle:
         batch = adapt_gedcom(text, artifact=EXPORT).batch
         (burial,) = claims_for(batch, "i1", "burial_place")
         assert burial.source.page_number == "Bl. 12 ; Bl. 13"
+
+    @pytest.mark.parametrize(
+        ("pages", "expected"),
+        [
+            # two citations, each at a long place in the register: the
+            # page number keeps the first, and marks the other left out
+            (
+                [
+                    [f"3 PAGE {text_of(250, ' Bl. 12')}"],
+                    [f"3 PAGE {text_of(250, ' Bl. 13')}"],
+                ],
+                f"{text_of(250, ' Bl. 12')} ; …",
+            ),
+            # one place longer than a page number holds: cut within it
+            ([[f"3 PAGE {text_of(450)}"]], f"{text_of(450)[:396]} ; …"),
+            # two that fill the page number to its last character
+            (
+                [
+                    [f"3 PAGE {text_of(200, ' Bl. 12')}"],
+                    [f"3 PAGE {text_of(197, ' Bl. 13')}"],
+                ],
+                f"{text_of(200, ' Bl. 12')} ; {text_of(197, ' Bl. 13')}",
+            ),
+        ],
+        ids=["two-pages", "one-page", "exactly-400"],
+    )
+    def test_a_page_number_holds_at_most_400_characters(self, pages, expected):
+        # (here) the export cites the burial register for Eugen's burial at
+        # length, as a Wikibase string holds at most 400 characters
+        citations = [
+            line
+            for number, page in enumerate(pages, start=1)
+            for line in (f"2 SOUR @S{number}@", *page)
+        ]
+        text = cited(BURIAL_REGISTER, BURIAL_REGISTER) + eugen(
+            "1 BURI", "2 PLAC Friedhof Flörburg, Hesse, Germany", *citations
+        )
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        (burial,) = claims_for(batch, "i1", "burial_place")
+        assert burial.source.page_number == expected
+        assert len(expected) <= 400
+
+    @pytest.mark.parametrize(
+        ("pages", "expected"),
+        [
+            (["3 PAGE", "3 PAGE Bl. 12"], "Bl. 12"),
+            (["3 PAGE"], None),
+            (
+                ["3 PAGE Bl. 12, " + unicodedata.normalize("NFD", "Löbig")],
+                "Bl. 12, Löbig",
+            ),
+        ],
+        ids=["empty-and-page", "empty", "NFD"],
+    )
+    def test_a_page_number_is_each_page_given_in_nfc(self, pages, expected):
+        # (here) the burial register's citation gives an empty PAGE, or a
+        # page spelt in decomposed form: an empty one is no locator, and a
+        # page number is in NFC, as the instance stores it
+        text = cited(BURIAL_REGISTER) + eugen(
+            "1 BURI",
+            "2 PLAC Friedhof Flörburg, Hesse, Germany",
+            "2 SOUR @S1@",
+            *pages,
+        )
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        (burial,) = claims_for(batch, "i1", "burial_place")
+        assert burial.source.page_number == expected
 
     def test_every_title_of_a_source_record_names_it(self):
         # the Flörburg address book of 1912, (here) titled in German and in
@@ -3499,7 +3711,7 @@ class TestExcerptClip:
     def test_each_run_of_lines_left_out_is_marked(self):
         # (here) a long NOTE stands before the citation, and another after
         # it: the citation's lines stay, between the two marks
-        before, after = note_of(300), note_of(200)
+        before, after = note_of(300), note_of(300)
         lines = ["1 BIRT", "2 DATE 7 JAN 1919", before, "2 SOUR @S1@"]
         lines += ["3 PAGE Nr. 12", after]
         batch = adapt_gedcom(gustavs_births(lines), artifact=EXPORT).batch
@@ -3616,8 +3828,11 @@ class TestExcerptClip:
         ):
             lines = " | ".join(birth).replace("\n", " | ")
             whole = f"{lines} | cited: {title}"
-            assert excerpt.endswith(" | …" + clipped(whole))
-            assert len(excerpt) <= 400
+            # cut back to the last whole line that fits: the quote's TEXT
+            # line is left out whole
+            assert excerpt == (
+                " | ".join(birth[:3]) + " | 3 DATA | …" + clipped(whole)
+            )
 
     @pytest.mark.parametrize(
         "lines",
@@ -3664,18 +3879,76 @@ class TestExcerptClip:
         assert "\n" not in excerpt and len(excerpt) <= 400
 
     def test_an_excerpt_is_in_the_form_the_instance_stores(self):
-        # (here) the export spells Flörburg in decomposed form: the excerpt
-        # is in NFC, as the instance stores text, and its length is the
-        # stored one's
+        # (here) the export spells Flörburg, and the extract's title, in
+        # decomposed form: the excerpt is in NFC, as the instance stores
+        # text, and its length is the stored one's
         place = unicodedata.normalize("NFD", FLOERBURG)
-        text = gustavs_births(
-            ["1 BIRT", "2 DATE 7 JAN 1919", f"2 PLAC {place}"]
+        title = unicodedata.normalize("NFD", BIRTH_EXTRACT)
+        text = f"0 @S1@ SOUR\n1 TITL {title}\n" + person(
+            "I8",
+            "Gustav /Löbig/",
+            "1 BIRT",
+            "2 DATE 7 JAN 1919",
+            f"2 PLAC {place}",
+            "2 SOUR @S1@",
         )
         batch = adapt_gedcom(text, artifact=EXPORT).batch
         (birth,) = claims_for(batch, "i8", "date_of_birth")
         assert birth.source.transcription_excerpt.text == (
-            f"1 BIRT | 2 DATE 7 JAN 1919 | 2 PLAC {FLOERBURG}"
+            f"1 BIRT | 2 DATE 7 JAN 1919 | 2 PLAC {FLOERBURG} | 2 SOUR @S1@"
+            f" | cited: {BIRTH_EXTRACT}"
         )
+
+    def test_a_line_after_one_left_out_is_kept_where_it_fits(self):
+        # Gustav was born on 7 January 1919 and on 1 July 1919: (here) one
+        # BIRT gives both dates, a long NOTE between them, and cites the
+        # tree. The NOTE is left out, and the second date after it kept
+        lines = ["1 BIRT", "2 DATE 7 JAN 1919", note_of(450)]
+        lines += ["2 DATE 1 JUL 1919", "2 SOUR @S2@"]
+        batch = adapt_gedcom(gustavs_births(lines), artifact=EXPORT).batch
+        whole = " | ".join(lines) + f" | cited: {TREE}"
+        for birth in claims_for(batch, "i8", "date_of_birth"):
+            assert birth.source.transcription_excerpt.text == (
+                "1 BIRT | 2 DATE 7 JAN 1919 | … | 2 DATE 1 JUL 1919"
+                f" | 2 SOUR @S2@ | cited: {TREE}" + clipped(whole)
+            )
+
+    def test_a_citation_keeps_the_line_it_stands_beneath(self):
+        # (here) the family record's MARR carries a NOTE of each length
+        # from 150 to 420 characters, and its DIV cites the judgment: the
+        # clip keeps the DIV line the citation stands beneath, whatever
+        # else it leaves out, so the citation is never read as the MARR's
+        for length in range(150, 421):
+            text = cited(JUDGMENT) + family(
+                *WEDDING,
+                f"2 NOTE {text_of(length)}",
+                "1 DIV",
+                "2 DATE 2 JAN 1957",
+                "2 SOUR @S1@",
+                "3 PAGE Bl. 1",
+            )
+            ((_, excerpt),) = spouse_sources(text)
+            lines = excerpt.split(" | ")
+            assert "1 DIV" in lines, length
+            assert lines.index("1 DIV") < lines.index("2 SOUR @S1@"), length
+            assert len(excerpt) <= 400, length
+
+    def test_an_excerpt_of_400_characters_is_whole(self):
+        # (here) a NOTE on Gustav's birth brings its excerpt to exactly 400
+        # characters, which it keeps whole, and then to 401, which it clips
+        head = ["1 BIRT", "2 DATE 7 JAN 1919"]
+        cited_part = f" | 2 SOUR @S1@ | cited: {BIRTH_EXTRACT}"
+        fill = 400 - len(" | ".join(head)) - len(cited_part) - len(" | ")
+        for length, clips in ((fill, False), (fill + 1, True)):
+            note = f"2 NOTE {text_of(length - len('2 NOTE '))}"
+            lines = [*head, note, "2 SOUR @S1@"]
+            batch = adapt_gedcom(gustavs_births(lines), artifact=EXPORT).batch
+            (birth,) = claims_for(batch, "i8", "date_of_birth")
+            whole = " | ".join(lines) + f" | cited: {BIRTH_EXTRACT}"
+            assert len(whole) == length - fill + 400
+            excerpt = birth.source.transcription_excerpt.text
+            assert (excerpt == whole) is not clips
+            assert excerpt.endswith(clipped(whole)) is clips
 
 
 class TestIngestGedcom:
