@@ -293,6 +293,13 @@ has something to say:
 | `error` | the exception's name, never its message |
 | `window`, `resumes_at` | for a pause for a subscription limit: the window, and when the pass can go on (UTC) |
 
+A call event also says whether it is a replay of a conversation's
+opening turn (`replay`), and carries what the call's stream reported of
+it (`model`, `cli_version`, `usage`, `num_turns`, `subtype`;
+docs/LLM_CACHE.md), which the monitor does not show: the run report
+totals the usage (`rundir.usage_counts`), and the anomaly checks compare
+the model with the run's (docs/ANOMALIES.md).
+
 Engine calls are counted from the cache's events when the run has them,
 and from call events otherwise. A `duration_s` or `wait_s` that is not a
 finite, non-negative number of seconds, one too large for a float

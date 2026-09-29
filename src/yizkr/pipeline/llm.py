@@ -36,9 +36,10 @@ before with the same key is answered from it. The pipeline is written
 against the client protocols below and never against the cache, so
 without the wrapper it runs unchanged, calling the engine directly.
 `observed_client` reports every call that reaches the engine as an
-event; a run's clients have it with or without the cache, beneath the
-cache when there is one, so a run's record of its engine calls does not
-depend on the cache.
+event, with what the call's stream reported of it (the model it ran on,
+the tokens it used, how it ended: `stream_report`); a run's clients have
+it with or without the cache, beneath the cache when there is one, so a
+run's record of its engine calls does not depend on the cache.
 """
 
 from __future__ import annotations
@@ -795,6 +796,126 @@ def _as_text(output: str | bytes | None) -> str:
     if isinstance(output, bytes):
         return output.decode("utf-8", errors="replace")
     return output or ""
+
+
+# -- what a call's stream reports ---------------------------------------------
+# A claude-code call's stream-json output (as the pinned 2.1.237 prints it)
+# opens with a system event of subtype init and ends with a result event:
+#
+# * the init event names the model the CLI runs the call on (model: the id
+#   --model names, or the model the CLI resolves an alias or its own default
+#   to), the CLI's version (claude_code_version) and the session the call
+#   runs in (session_id);
+# * the result event says how the call ended (subtype: success,
+#   error_max_turns, error_during_execution, ...; the CLI reports an API
+#   error as a success with is_error), how many turns it took (num_turns)
+#   and the tokens it used (usage: input_tokens, output_tokens,
+#   cache_creation_input_tokens and cache_read_input_tokens, beside details
+#   this engine does not keep).
+#
+# A stream cut off before its result event (a timeout, a crash) reports no
+# usage, turns or subtype, and one cut off before its init event names no
+# model. Each field is kept only in the form expected of it, since each
+# flows into cache entries, call events and alerts: a model id or a subtype
+# that is not a plain token, a count that is not a whole number of at least
+# 0, and a session that is not a UUID are left out.
+
+# the token counts of a call's usage, by the CLI's names for them
+USAGE_TOKENS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+# the fields of a stream report (stream_report), besides the usage
+STREAM_FIELDS = ("model", "cli_version", "session_id", "num_turns", "subtype")
+
+# a model id (claude-sonnet-5-20260901, claude-opus-5-5[1m]), a CLI version
+# (2.1.237) and a result subtype (error_max_turns), as plain tokens
+_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}")
+_VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}")
+_SUBTYPE = re.compile(r"[a-z0-9_]{1,64}")
+
+
+def _token(value: Any, pattern: re.Pattern[str]) -> str | None:
+    """`value` when it is a string that `pattern` matches whole, else
+    None."""
+    return (
+        value if isinstance(value, str) and pattern.fullmatch(value) else None
+    )
+
+
+def _whole(value: Any) -> int | None:
+    """A whole number of at least 0 from a stream, or None."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _session_id(value: Any) -> str | None:
+    """A session id from a stream, in the UUID form the CLI files its
+    transcript under, or None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+def stream_report(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """What a call's stream-json events report of the call: from its init
+    event, the `model` it ran on, the `cli_version` and the `session_id`;
+    from its result event, its `usage` (each of USAGE_TOKENS the event
+    gives), `num_turns` and `subtype`. A field the stream does not give, or
+    gives in another form than expected, is left out; so is a usage that
+    gives no token count. The session is the init event's, else the result
+    event's. Of several, the first init event counts, and the last result
+    event, the one the call ended on."""
+    events = list(events)
+    init = next(
+        (
+            event
+            for event in events
+            if event.get("type") == "system" and event.get("subtype") == "init"
+        ),
+        {},
+    )
+    result = next(
+        (event for event in reversed(events) if event.get("type") == "result"),
+        {},
+    )
+    usage = result.get("usage")
+    tokens = {
+        name: count
+        for name in USAGE_TOKENS
+        if isinstance(usage, dict)
+        and (count := _whole(usage.get(name))) is not None
+    }
+    report = {
+        "model": _token(init.get("model"), _MODEL_ID),
+        "cli_version": _token(init.get("claude_code_version"), _VERSION),
+        "session_id": _session_id(init.get("session_id"))
+        or _session_id(result.get("session_id")),
+        "usage": tokens or None,
+        "num_turns": _whole(result.get("num_turns")),
+        "subtype": _token(result.get("subtype"), _SUBTYPE),
+    }
+    return {name: value for name, value in report.items() if value is not None}
+
+
+def _add_report(call: dict[str, Any], attempt: Mapping[str, Any]) -> None:
+    """Take one attempt's stream report (stream_report) into its call's:
+    each field as the latest attempt that reported it gives it, and the
+    usage summed over the attempts, since each used what it reports."""
+    usage = dict(call.get("usage") or {})
+    for name, count in (attempt.get("usage") or {}).items():
+        usage[name] = usage.get(name, 0) + count
+    call.update(
+        {name: attempt[name] for name in STREAM_FIELDS if name in attempt}
+    )
+    if usage:
+        call["usage"] = usage
 
 
 # -- tool errors ------------------------------------------------------------
@@ -1828,8 +1949,12 @@ class ClaudeCodeClient:
     windows. ``effective_config`` lists what the engine sets for a call
     besides the prompt, and ``config_hash`` fingerprints it for the run
     record and for the LLM cache's keys (ADR-0032), beside the text a call
-    sends (``call_text``, ``system_prompt``). ``last_report`` gives what a
-    call's stream reported: the model that answered and the CLI version.
+    sends (``call_text``, ``system_prompt``). What a call's stream reports
+    (``stream_report``: the model it ran on, the CLI version, the session,
+    the tokens it used, its turns and how it ended) is never part of
+    either: ``last_report`` gives it for the calling thread's last answered
+    call, which the LLM cache keeps beside the answer, and ``last_stream``
+    for its last call, answered or not, which its call event carries.
 
     **Transcripts.** The CLI stores every session under its projects
     directory, and forks resume from there, so sessions stay persistent
@@ -1944,8 +2069,10 @@ class ClaudeCodeClient:
         self.model_identifier = f"claude-code/{self.cli_version}" + (
             f":{self.model}" if self.model else ""
         )
-        # what the stream reported about the calling thread's last call
+        # what the streams reported about the calling thread's last
+        # answered call, and about its last call, answered or not
         self._reports = threading.local()
+        self._streams = threading.local()
         # open conversations: sessions that forks resume, so their
         # transcripts stay in place until the conversation is closed
         self._conversations: set[str] = set()
@@ -2060,10 +2187,19 @@ class ClaudeCodeClient:
         )
 
     def last_report(self) -> dict[str, Any]:
-        """What the stream reported about the calling thread's last
-        successful call: the model that answered it, the CLI version and
-        the session."""
-        return dict(getattr(self._reports, "value", {}))
+        """What the streams reported about the calling thread's last
+        answered call (``last_stream``), with the CLI version the pass is
+        pinned to when they reported none: the model that answered it, the
+        CLI version, the session, the usage, the turns and the subtype."""
+        return copy.deepcopy(getattr(self._reports, "value", {}))
+
+    def last_stream(self) -> dict[str, Any]:
+        """What the streams reported about the calling thread's last call,
+        answered or not (stream_report): each field as the latest of its
+        attempts that reported it gives it, and the usage summed over them.
+        Empty for a call that never ran the CLI, or whose streams reported
+        nothing."""
+        return copy.deepcopy(getattr(self._streams, "value", {}))
 
     def last_pacing(self) -> dict[str, Any]:
         """How the calling thread's last call, answered or not, waited for
@@ -2076,6 +2212,10 @@ class ClaudeCodeClient:
         """The answer to a one-shot call that reads `image_paths`. Raises
         EngineToolError when the call's stream reports that the Read tool
         failed on one of them (tool_failures)."""
+        # a call that fails before it runs reports nothing of an earlier
+        # call's (last_stream, last_pacing)
+        self._streams.value = {}
+        self._pacing.value = {}
         return self._run(
             _fresh_session,
             self.call_text(prompt, image_paths),
@@ -2191,8 +2331,11 @@ class ClaudeCodeClient:
         `arguments()` gives it. Returns the answer and the arguments of the
         attempt that gave it. A hold that would take the call's wait past
         `max_wait`, or a wait that `close` ends, raises UsageLimitReached;
-        `last_pacing` then says what the call waited."""
+        `last_pacing` then says what the call waited. However the call
+        ends, `last_stream` then says what its attempts' streams reported,
+        and once it is answered, `last_report` too."""
         record: dict[str, Any] = {"waited": 0.0, "refused": 0, "held": None}
+        stream: dict[str, Any] = {}
         try:
             self._pin.raise_if_paused()
             while True:
@@ -2205,18 +2348,25 @@ class ClaudeCodeClient:
                 extra_args = arguments()
                 try:
                     text = self._attempt(
-                        extra_args, prompt, hold=hold, inputs=inputs
+                        extra_args,
+                        prompt,
+                        hold=hold,
+                        inputs=inputs,
+                        stream=stream,
                     )
                 except _Refused as refused:
                     record["refused"] += 1
                     record["held"] = refused.refusal.reason
                     self._pacer.refused(refused.refusal, record["refused"])
                     continue
+                pinned = {"cli_version": self.cli_version}
+                self._reports.value = pinned | stream
                 return text, extra_args
         finally:
             self._pacing.value = {
                 name: value for name, value in record.items() if value
             }
+            self._streams.value = stream
 
     def _attempt(
         self,
@@ -2225,11 +2375,14 @@ class ClaudeCodeClient:
         *,
         hold: bool = False,
         inputs: Sequence[Path] = (),
+        stream: dict[str, Any] | None = None,
     ) -> str:
         """One CLI invocation, which the pacer has admitted and is told of
         when it ends, with what its stream reported of the subscription's
-        windows. Its sessions' transcripts are released when it ends,
-        unless ``hold`` keeps a successful call's session open for
+        windows. However it ends, what its stream reported of the call
+        (stream_report) is taken into ``stream``, the report of the call
+        it is an attempt at. Its sessions' transcripts are released when it
+        ends, unless ``hold`` keeps a successful call's session open for
         forking. A call the subscription refused for a limit raises
         _Refused, before any other check. A call whose terminal result
         reports an error that is not a limit (refusal already ruled it
@@ -2278,7 +2431,6 @@ class ClaudeCodeClient:
                     "claude CLI reported an error that is not a "
                     f"subscription limit: {detail or 'no detail'}"
                 )
-            report: dict[str, Any] = {"cli_version": self.cli_version}
             for event in events:
                 if (
                     event.get("type") == "system"
@@ -2290,23 +2442,19 @@ class ClaudeCodeClient:
                     self._pin.check_tools(
                         event.get("tools"), self.ALLOWED_TOOLS
                     )
-                    report = {
-                        "model": event.get("model"),
-                        "cli_version": event.get("claude_code_version")
-                        or self.cli_version,
-                        "session_id": event.get("session_id"),
-                    }
             text = self._assemble_stream(stdout)
             failures = tool_failures(stdout, inputs) if inputs else []
             if failures:
                 raise EngineToolError(failures, text)
             if not text.strip():
                 raise RuntimeError("claude CLI returned no output")
-            self._reports.value = report
             held = hold
             return text
         finally:
-            self._pacer.done(rate_limit_infos(_stream_events(stdout)))
+            reported = _stream_events(stdout)
+            self._pacer.done(rate_limit_infos(reported))
+            if stream is not None:
+                _add_report(stream, stream_report(reported))
             sessions = _session_ids(stdout, extra_args)
             with self._conversations_lock:
                 if held:
@@ -2409,6 +2557,9 @@ OK = "ok"
 ERROR = "error"
 PAUSED = "paused"
 INTERRUPTED = "interrupted"
+# what a call event carries of its streams' report (stream_report): all of
+# it but the session, which names a session of the account (ObservedClient)
+CALL_STREAM_FIELDS = ("model", "cli_version", "usage", "num_turns", "subtype")
 # the stage each role's calls are made in (yizkr.pipeline.orchestrate)
 ROLE_STAGES = {
     "transcribe": "transcription",
@@ -2429,8 +2580,14 @@ class ObservedClient:
     its calls (`last_pacing`), the seconds it waited for the subscription
     (`wait_s`), how many of its attempts a limit `refused` and why it was
     last `held`; a pause for a subscription limit adds its `window` and
-    when the pass can go on (`resumes_at`). A field with nothing to say
-    is left out.
+    when the pass can go on (`resumes_at`). From an engine whose streams
+    report its calls (`last_stream`), it adds what the call's streams
+    reported: the `model` it ran on, the `cli_version`, its `usage`, its
+    `num_turns` and its `subtype`. The session a call ran in is never in
+    its event: it names a session of the account, and the event log is
+    what the monitor and the run report read; the LLM cache keeps it
+    beside the answer. A replay of a conversation's opening turn is
+    marked `replay`. A field with nothing to say is left out.
 
     It wraps the engine's own client, behind the LLM cache when there is
     one, so it reports the calls that reach the engine, the cache's
@@ -2441,7 +2598,13 @@ class ObservedClient:
     # the optional capabilities a wrapper presents by methods of its own,
     # or not at all
     _CAPABILITIES = frozenset(
-        {"open_conversation", "fork", "reject", "attempt"}
+        {
+            "open_conversation",
+            "replay_conversation",
+            "fork",
+            "reject",
+            "attempt",
+        }
     )
 
     def __init__(
@@ -2467,7 +2630,9 @@ class ObservedClient:
             COMPLETE, lambda: self.client.complete(prompt, image_paths)
         )
 
-    def _observe(self, call: str, ask: Callable[[], Any]) -> Any:
+    def _observe(
+        self, call: str, ask: Callable[[], Any], *, replay: bool = False
+    ) -> Any:
         started = time.monotonic()
         outcome, error, pause = OK, None, None
         try:
@@ -2483,7 +2648,12 @@ class ObservedClient:
             raise
         finally:
             self._report(
-                call, outcome, time.monotonic() - started, error, pause
+                call,
+                outcome,
+                time.monotonic() - started,
+                error,
+                pause,
+                replay=replay,
             )
 
     def _report(
@@ -2493,15 +2663,20 @@ class ObservedClient:
         duration: float,
         error: str | None,
         pause: PassPaused | None,
+        *,
+        replay: bool = False,
     ) -> None:
         """Emit the call's event. An event that cannot be recorded is a
         warning, never the call's failure: the answer matters more."""
         last_pacing = getattr(self.client, "last_pacing", None)
         pacing = last_pacing() if callable(last_pacing) else {}
+        last_stream = getattr(self.client, "last_stream", None)
+        stream = last_stream() if callable(last_stream) else {}
         fields: dict[str, Any] = {
             "role": self.role,
             "stage": ROLE_STAGES.get(self.role),
             "call": call,
+            "replay": True if replay else None,
             "outcome": outcome,
             "duration_s": round(duration, 3),
             "wait_s": round(pacing.get("waited") or 0.0, 1) or None,
@@ -2516,6 +2691,8 @@ class ObservedClient:
                 fields["resumes_at"] = pause.resumes_at.isoformat(
                     timespec="seconds"
                 )
+        for name in CALL_STREAM_FIELDS:
+            fields[name] = stream.get(name)
         try:
             self._events(
                 ENGINE_CALL,
@@ -2536,6 +2713,14 @@ class ObservedConversationalClient(ObservedClient):
     def open_conversation(self, prompt: str) -> tuple[str, Any]:
         return self._observe(
             OPEN, lambda: self.client.open_conversation(prompt)
+        )
+
+    def replay_conversation(self, prompt: str) -> tuple[str, Any]:
+        """Open a conversation again whose opening turn the LLM cache
+        answered, for a fork's session (ADR-0032 §6): an opening call like
+        any other, whose event is marked a replay."""
+        return self._observe(
+            OPEN, lambda: self.client.open_conversation(prompt), replay=True
         )
 
     def fork(self, handle: Any, prompt: str) -> str:

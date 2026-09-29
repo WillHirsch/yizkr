@@ -152,3 +152,10 @@ checks:
     min-count: 10
     max-share: 0.5
     fail-fast: true
+
+  # An engine call whose stream reports running on another model than the
+  # run manifest names for its role; for a role it names no model for, or
+  # names one by an alias, another model than the role's first call in
+  # the invocation ran on. Alert only.
+  model-mismatch:
+    enabled: true
