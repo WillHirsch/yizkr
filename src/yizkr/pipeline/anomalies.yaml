@@ -137,11 +137,14 @@ checks:
 
   # A stage failing more than `max-share` of the first `first` documents
   # of a kind it takes in the invocation (of all of them, for a kind with
-  # fewer), or since the kind was last resumed. Its slice is the kind.
+  # fewer), or since the kind was last resumed. Its slice is the kind. A
+  # kind the run plans fewer than `min-documents` documents of is never
+  # judged: no other document of it is left for a pause to protect.
   kind-failures:
     enabled: true
     first: 10
     max-share: 0.5
+    min-documents: 2
     fail-fast: true
 
   # More than `max-share` of a stage's last `window` engine calls failing,
@@ -152,3 +155,10 @@ checks:
     min-count: 10
     max-share: 0.5
     fail-fast: true
+
+  # An engine call whose stream reports running on another model than the
+  # run manifest names for its role; for a role it names no model for, or
+  # names one by an alias, another model than the role's first call in
+  # the invocation ran on. Alert only.
+  model-mismatch:
+    enabled: true

@@ -9,9 +9,9 @@ own, and reads the statement back through the API:
   block for each page, each with its page number and excerpt, and the
   run's block once (rules 1 and 2);
 * the back's page number and the note's words, both given in
-  decomposed form (NFD), are stored in NFC: Wikibase normalizes the text
-  of a string and of a monolingual text to NFC, which is the form the
-  writer sends a reference's text in;
+  decomposed form (NFD), are stored in NFC: the writer sends a
+  reference's text in NFC, Wikibase keeps a string value in NFC, and
+  keeps a monolingual text as sent;
 * writing the batch again adds nothing, and nor does a later run's batch
   that finds the same two places: not even that run's block.
 

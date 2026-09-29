@@ -24,7 +24,9 @@ Per batch, the writer:
    themselves; statements stay reserved for source-attributed claims;
 2. creates items for unresolved `local` subjects/values (reusing an
    existing item on exact label match, so re-runs never duplicate
-   people), writing each minted item's `instance of`, and an
+   people: the label is matched and written in Unicode NFC, the form
+   the instance keeps labels in, whatever form the batch gives it in),
+   writing each minted item's `instance of`, and an
    unclassified entity's `type hint`, with two references: stated in ->
    the artifact that mentions the entity, and inferred from extraction
    run -> the run item. An entity's kind is the extraction's proposal,
@@ -48,11 +50,16 @@ Per batch, the writer:
    already exists, the claim is recorded on that statement rather than
    beside it: an agreeing second source is knowledge, and so is each
    place where one source asserts the value (R2 records who asserts a
-   fact, and where, not just the fact). The claim's source block,
+   fact, and where, not just the fact). The claim is compared as the
+   writer sends it, with every text in it in Unicode NFC, the form the
+   instance keeps text in and gives it back in (`_stored_string`): its
+   string, external-id and monolingual text values and qualifiers, and
+   its source block's page number, region and excerpt. So a claim whose
+   text the batch gives in another form, such as the decomposed form
+   (NFD), finds the statement written for it. The claim's source block,
    `stated in` with its page number, region and excerpt, is compared
    whole with the statement's reference blocks as the instance stores
-   them. So its page number, region and excerpt are sent in Unicode
-   NFC, the form the instance stores text in:
+   them:
    * the statement already carries that block: the claim is skipped
      (safe re-run);
    * otherwise the claim's blocks are APPENDED to the statement, each
@@ -226,12 +233,28 @@ def normalized_type_hint(text: str) -> str:
 
 
 def _stored_string(text: str) -> str:
-    """`text` in the form the instance stores text in: Unicode NFC, to
-    which Wikibase normalizes the text of a string or monolingual text
-    value it is sent. A reference block's page number, region and
-    excerpt are sent in this form, so that the block the writer builds
-    for a claim is equal to the block the instance gives back for it
-    (step 4 of the module docstring)."""
+    """`text` in the form the instance keeps text in: Unicode NFC.
+    Wikibase saves a string value (of a `string` or `external-id` snak)
+    and an item's labels, descriptions and aliases in NFC, and its API
+    gives every text back in NFC, monolingual text included.
+
+    The writer sends the batch's text in this form: a claim's string,
+    external-id and monolingual text values and qualifiers, a reference
+    block's page number, region and excerpt, a minted item's label,
+    description, aliases and type hint, the aliases and type hint it
+    adds to an item it found, and the run item's label and description.
+    So what it builds for a claim is what the instance gives back for
+    it, and the labels and aliases it looks for are in the form the
+    instance holds them in, whatever form the batch gives them in: a
+    re-run finds everything the first run wrote (steps 2 and 4 of the
+    module docstring).
+
+    NFC gives a canonically equivalent text, which Unicode defines as
+    the same text: a letter and its combining mark become the one
+    precomposed character where Unicode has one, and combining marks
+    take their canonical order. A combining mark with no precomposed
+    form stays a combining mark, and a compatibility character, such as
+    the long s, stays as it is, where NFKC would replace it."""
     return unicodedata.normalize("NFC", text)
 
 
@@ -334,10 +357,14 @@ class BatchWriter:
         # canonical label, kind, summary, and the document's aliases
         label = record.label if record else ref.label
         description = (record.summary or None) if record else ref.description
-        if description and len(description) > 250:
-            # MediaWiki hard-caps descriptions at 250 chars; the summary
-            # is a convenience, not an assertion — clip at a word break
-            description = description[:247].rsplit(" ", 1)[0] + "…"
+        if description:
+            description = _stored_string(description)
+            if len(description) > 250:
+                # MediaWiki hard-caps descriptions at 250 chars; the
+                # summary is a convenience, not an assertion — clip at a
+                # word break. The cap counts the characters of the form
+                # the instance stores (_stored_string)
+                description = description[:247].rsplit(" ", 1)[0] + "…"
         instance_of = record.kind if record else ref.instance_of
         aliases = record.aliases if record else []
         if record and record.qid:
@@ -351,6 +378,10 @@ class BatchWriter:
                 f"local ref {ref.local_id!r} has no label; cannot create an "
                 f"item for it (resolve it to a QID or add a label)"
             )
+        # looked for, and written, in the form the instance keeps labels
+        # in, so a label given in another form finds the item written
+        # for it (_stored_string)
+        label = _stored_string(label)
         existing = self.client.find_item_by_label(label)
         if existing:
             if aliases:
@@ -374,7 +405,9 @@ class BatchWriter:
         if description:
             item.descriptions.set("en", description)
         if aliases:
-            item.aliases.set("en", aliases)
+            item.aliases.set(
+                "en", [_stored_string(alias) for alias in aliases]
+            )
         item = item.write(summary="ingest: entity proposed by extraction")
         qid = item.id
         self._minted.add(qid)
@@ -397,7 +430,8 @@ class BatchWriter:
             from wikibaseintegrator.datatypes import String
 
             hint = String(
-                prop_nr=self.properties["type_hint"], value=type_hint
+                prop_nr=self.properties["type_hint"],
+                value=_stored_string(type_hint),
             )
             hint.references = self._references(
                 artifact_qid=source_artifact_qid, run_qid=result.run_qid
@@ -414,6 +448,11 @@ class BatchWriter:
         aliases; matching quality compounds per ingested document). The
         item's own label never counts as a missing alias.
 
+        The document's aliases are compared with the item's label and
+        aliases, and sent, in NFC, the form the instance keeps them in
+        (_stored_string): an alias the item holds, or its label, given in
+        another form is not missing.
+
         The item is read afresh, and the writer's later edits to it start
         from that read, or from a read after the aliases are written, so
         none of them sends the aliases as they stood before: an edit sends
@@ -427,7 +466,7 @@ class BatchWriter:
         existing = {str(alias) for alias in (item.aliases.get("en") or [])}
         missing = [
             alias
-            for alias in aliases
+            for alias in map(_stored_string, aliases)
             if alias and alias != label and alias not in existing
         ]
         if not missing:
@@ -494,14 +533,17 @@ class BatchWriter:
                     value.value, result, source_artifact_qid
                 ),
             )
+        # text, a claim's value or a qualifier's, goes in the form the
+        # instance keeps it in, the form a statement is compared in
+        # (_stored_string)
         if isinstance(value, StringValue):
-            return String(prop_nr=pid, value=value.value)
+            return String(prop_nr=pid, value=_stored_string(value.value))
         if isinstance(value, ExternalIdValue):
-            return ExternalID(prop_nr=pid, value=value.value)
+            return ExternalID(prop_nr=pid, value=_stored_string(value.value))
         if isinstance(value, MonolingualValue):
             return MonolingualText(
                 prop_nr=pid,
-                text=value.value.text,
+                text=_stored_string(value.value.text),
                 language=value.value.language,
             )
         if isinstance(value, TimeValue):
@@ -587,7 +629,9 @@ class BatchWriter:
     def ensure_run_item(self, batch: ClaimBatch) -> str:
         run = batch.extraction_run
         fingerprint = batch_fingerprint(batch)
-        label = (
+        # looked for, and written, in the form the instance keeps labels
+        # in (_stored_string)
+        label = _stored_string(
             f"extraction run {run.started_at.date().isoformat()} "
             f"{run.model_identifier} {fingerprint}"
         )
@@ -600,13 +644,15 @@ class BatchWriter:
         item.labels.set("en", label)
         item.descriptions.set(
             "en",
-            f"pipeline {run.pipeline_version}"
-            + (
-                f", commit {run.software_commit}"
-                if run.software_commit
-                else ""
-            )
-            + f", started {run.started_at.isoformat()}",
+            _stored_string(
+                f"pipeline {run.pipeline_version}"
+                + (
+                    f", commit {run.software_commit}"
+                    if run.software_commit
+                    else ""
+                )
+                + f", started {run.started_at.isoformat()}"
+            ),
         )
         item = item.write(summary="ingest: extraction run")
         claim = self._item_claim(
@@ -635,6 +681,11 @@ class BatchWriter:
         marriage date on a spouse statement, a residence date) is a
         DIFFERENT assertion and must coexist as its own statement
         (ADR-0002), never be swallowed by a bare-value match.
+
+        The claim's text, in its value and qualifiers, is in NFC as
+        `_to_wbi_claim` builds it, the form the instance gives a
+        statement's text back in (_stored_string), so text the batch
+        gives in another form still equals the statement written for it.
         """
         if subject_qid.startswith("(new:"):
             return None
@@ -742,7 +793,8 @@ class BatchWriter:
         A manifest record names its item by an approved equivalence
         (`qid`), by the exact-label match that materialized its local refs
         here, or, once the resolve step has replaced those refs with the
-        item's QID, by the item's English label being the record's label:
+        item's QID, by the item's English label being the record's label
+        in NFC, the form the instance keeps labels in (_stored_string):
         the match the resolve step made. Only in that last case have the
         record's aliases not reached the item yet. A local ref without a
         manifest record that the writer matched by exact label gives the
@@ -753,7 +805,8 @@ class BatchWriter:
         for record in self._entity_records.values():
             qid = record.qid or result.created_items.get(record.id)
             if qid is None:
-                by_label.setdefault(record.label, []).append(record)
+                stored_label = _stored_string(record.label)
+                by_label.setdefault(stored_label, []).append(record)
             else:
                 found.append(_FoundEntity(qid, record.kind, record.type_hint))
         if by_label:
@@ -885,7 +938,7 @@ class BatchWriter:
                     found.qid,
                     String(
                         prop_nr=self.properties["type_hint"],
-                        value=found.type_hint,
+                        value=_stored_string(found.type_hint),
                     ),
                     artifact_qid,
                     result,

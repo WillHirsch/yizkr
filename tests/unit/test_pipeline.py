@@ -1260,6 +1260,14 @@ PROPERTIES = {
     "depicts": "P14",
     "residence": "P15",
     "location": "P16",
+    "birth_name": "P17",
+    "married_name": "P18",
+    "nickname": "P19",
+    "place_of_birth": "P20",
+    "relative": "P21",
+    "kinship_type": "P22",
+    "whg_place_id": "P23",
+    "cause_of_death": "P24",
 }
 ITEMS = {
     "human": "Q1",
@@ -1301,6 +1309,18 @@ class FakeItems:
         return self.store[qid]
 
 
+def _in_form(value, form: str):
+    """`value`, a JSON document, with every string in it in the Unicode
+    normalization form `form` ("NFC", "NFD")."""
+    if isinstance(value, str):
+        return unicodedata.normalize(form, value)
+    if isinstance(value, dict):
+        return {key: _in_form(item, form) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_in_form(item, form) for item in value]
+    return value
+
+
 class DetachedItems(FakeItems):
     """Items as an instance serves them: every get() returns a copy of the
     item as last written, and a write stores the writing copy whole. So a
@@ -1308,9 +1328,11 @@ class DetachedItems(FakeItems):
     an edit sent from a stale read does on an instance: an edit sends the
     item's aliases whole, and its statements as that copy holds them.
 
-    As an instance does, the store keeps the text of every `string` and
-    monolingual text snak in Unicode NFC, the form Wikibase normalizes
-    text to (#335).
+    As an instance serves it, every text in a copy is in Unicode NFC:
+    Wikibase saves string and external-id values, labels, descriptions
+    and aliases in NFC, and its API gives every text back in NFC,
+    monolingual text included (#335, #349). `sent` keeps each write's
+    item as the writer sent it.
 
     Unlike an instance, the store's round trip through `get_json` and
     `from_json` ignores WikibaseIntegrator's `remove` flags: a statement
@@ -1319,6 +1341,7 @@ class DetachedItems(FakeItems):
     def __init__(self) -> None:
         super().__init__()
         self._statement_ids = itertools.count(1)
+        self.sent: list[dict] = []
 
     def _bound(self, item):
         def write(summary=None, **_):
@@ -1329,6 +1352,7 @@ class DetachedItems(FakeItems):
             for statement in item.claims:
                 if statement.id is None:
                     statement.id = f"{item.id}${next(self._statement_ids)}"
+            self.sent.append(item.get_json())
             self.store[item.id] = self._copy(item)
             return item
 
@@ -1338,38 +1362,11 @@ class DetachedItems(FakeItems):
     def _copy(self, item):
         from wikibaseintegrator import WikibaseIntegrator
 
-        data = item.get_json()
+        # an instance gives every text back in NFC
+        data = _in_form(item.get_json(), "NFC")
         data["lastrevid"] = self.writes
         for statements in data.get("claims", {}).values():
             for statement in statements:
-                # an instance stores text in NFC, wherever it is
-                snaks = [
-                    statement["mainsnak"],
-                    *(
-                        snak
-                        for snaks in statement.get("qualifiers", {}).values()
-                        for snak in snaks
-                    ),
-                    *(
-                        snak
-                        for block in statement.get("references", [])
-                        for snaks in block["snaks"].values()
-                        for snak in snaks
-                    ),
-                ]
-                for snak in snaks:
-                    datavalue = snak.get("datavalue")
-                    if not datavalue:
-                        continue
-                    if snak.get("datatype") == "string":
-                        datavalue["value"] = unicodedata.normalize(
-                            "NFC", datavalue["value"]
-                        )
-                    elif snak.get("datatype") == "monolingualtext":
-                        text = datavalue["value"]["text"]
-                        datavalue["value"]["text"] = unicodedata.normalize(
-                            "NFC", text
-                        )
                 # an instance hashes every reference block it stores
                 for block in statement.get("references", []):
                     block.setdefault(
@@ -3181,6 +3178,465 @@ class TestWriterPlaces:
         assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
         assert again.type_statements_referenced == 0
         assert _snapshot(wiki, sebastian) == before
+
+
+# -- writer: the batch's text goes in NFC, as the instance keeps text (#349) -
+
+# A source's text can reach a batch in the decomposed form (NFD), a letter
+# and then its combining mark where NFC has the one precomposed letter: a
+# GEDCOM export can give its names so, and the adapter keeps them as given.
+POSTCARD_SHA1 = hashlib.sha1(
+    b"fictional scan: the 1938 postcard to Klara"
+).hexdigest()
+CARD_SHA1 = hashlib.sha1(
+    b"fictional scan: the 1945 registration card for Ida"
+).hexdigest()
+COMPENSATION_SHA1 = hashlib.sha1(
+    b"fictional scan: the 1953 compensation file for Ida"
+).hexdigest()
+GAZETTEER_SHA1 = hashlib.sha1(
+    "fictional export: a gazetteer's record of Flörburg".encode()
+).hexdigest()
+REGISTER_SHA1 = hashlib.sha1(
+    b"fictional scan: the 1909 burial register"
+).hexdigest()
+TEXT_MEDIA = {
+    POSTCARD_SHA1: "Q30",
+    CARD_SHA1: "Q31",
+    COMPENSATION_SHA1: "Q32",
+    GAZETTEER_SHA1: "Q33",
+    REGISTER_SHA1: "Q34",
+}
+
+
+def _cites(sha1: str, excerpt: str | None = None, language: str = "de"):
+    """A claim's source: the artifact with media `sha1`, quoted."""
+    source = {"artifact": {"kind": "artifact", "sha1": sha1}}
+    if excerpt:
+        source["transcription_excerpt"] = {
+            "text": excerpt,
+            "language": language,
+        }
+    return source
+
+
+def _local(local_id: str, label: str, kind: str = "human") -> dict:
+    return {
+        "kind": "local",
+        "local_id": local_id,
+        "label": label,
+        "instance_of": kind,
+    }
+
+
+# a claim whose own text the batch may give in NFD, by where that text is
+TEXT_CLAIMS = {
+    # the postcard's "Liebes Pünktchen!"
+    "monolingual value": {
+        "subject": _local("e02", "Klara Löbig"),
+        "property": "nickname",
+        "value": {
+            "type": "monolingual",
+            "value": {"text": "Pünktchen", "language": "de"},
+        },
+        "source": _cites(POSTCARD_SHA1, "Liebes Pünktchen!"),
+    },
+    # (here) the compensation file names Hildegard, a witness, as the late
+    # Ida's sister-in-law: a kinship term, as the source words it
+    "string qualifier": {
+        "subject": _local("e06", "Hildegard Löbig"),
+        "property": "relative",
+        "value": {"type": "item", "value": _local("e05", "Ida Löbig")},
+        "qualifiers": [
+            {
+                "property": "kinship_type",
+                "value": {"type": "string", "value": "Schwägerin"},
+            }
+        ],
+        "source": _cites(
+            COMPENSATION_SHA1, "Hildegard Löbig, Schwägerin der Verstorbenen"
+        ),
+    },
+    # (here) a gazetteer that keys the town by its name
+    "external id": {
+        "subject": _local("pl1", "Flörburg", "place"),
+        "property": "whg_place_id",
+        "value": {"type": "external-id", "value": "flörburg"},
+        "source": _cites(GAZETTEER_SHA1),
+    },
+}
+# the text each claim gives, in NFC
+TEXT_OF = {
+    "monolingual value": "Pünktchen",
+    "string qualifier": "Schwägerin",
+    "external id": "flörburg",
+}
+
+
+def _batch_of(*claims: dict, entities: tuple = (), run: dict = RUN):
+    return ClaimBatch.model_validate(
+        {
+            "extraction_run": run,
+            "claims": list(claims),
+            "entities": list(entities),
+        }
+    )
+
+
+def _in_form_batch(batch: ClaimBatch, form: str) -> ClaimBatch:
+    """`batch` with every text in it in the normalization form `form`."""
+    return ClaimBatch.model_validate(
+        _in_form(batch.model_dump(mode="json"), form)
+    )
+
+
+def _texts(value) -> list[str]:
+    """Every string in `value`, a JSON document."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _texts(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _texts(item)]
+    return []
+
+
+def _not_in_nfc(wiki: FakeWiki) -> list[str]:
+    """Each text that a write to `wiki` sent in another form than NFC."""
+    return [
+        text
+        for text in _texts(wiki.wbi.item.sent)
+        if not unicodedata.is_normalized("NFC", text)
+    ]
+
+
+def _values(statement) -> list[str]:
+    """The text of a statement's value and of its qualifiers' values."""
+    values = [statement.mainsnak.datavalue["value"]]
+    values.extend(
+        snak.datavalue["value"]
+        for snaks in statement.qualifiers.qualifiers.values()
+        for snak in snaks
+    )
+    return [
+        value["text"] if isinstance(value, dict) else value
+        for value in values
+        if isinstance(value, str) or "text" in value
+    ]
+
+
+def _labelled(wiki: FakeWiki, label: str) -> list[str]:
+    """The items whose English label is `label`."""
+    return [
+        qid
+        for qid, item in wiki.wbi.item.store.items()
+        if str(item.labels.get("en") or "") == label
+    ]
+
+
+# the registration card's batch and, (here) a later one, the compensation
+# file's: each names Ida by her married name, with her birth name as an
+# alias (ADR-0011); the file adds her name as it writes it
+IDA = {
+    "id": "e05",
+    "label": "Ida Löbig",
+    "aliases": ["Ida Sörne"],
+    "kind": "human",
+}
+
+
+def _card_batch() -> ClaimBatch:
+    return _batch_of(
+        {
+            "subject": _local("e05", "Ida Löbig"),
+            "property": "birth_name",
+            "value": {
+                "type": "monolingual",
+                "value": {"text": "Ida Sörne", "language": "de"},
+            },
+            "source": _cites(CARD_SHA1, "LÖBIG, Ida, née SÖRNE", "en"),
+        },
+        entities=(IDA,),
+    )
+
+
+def _compensation_batch() -> ClaimBatch:
+    return _batch_of(
+        {
+            "subject": _local("e05", "Ida Löbig"),
+            "property": "date_of_birth",
+            "value": {"type": "time", "year": 1881, "month": 4, "day": 17},
+            "source": _cites(
+                COMPENSATION_SHA1,
+                "Ida Löbig geb. Sörne, geb. 17.4.1881",
+            ),
+        },
+        entities=(dict(IDA, aliases=["Ida Sörne", "Ida Löbig geb. Sörne"]),),
+        run=LATER_RUN,
+    )
+
+
+class TestWriterTextInNfc:
+    """Wikibase keeps text in Unicode NFC: it saves string and external-id
+    values, labels, descriptions and aliases in NFC, and its API gives every
+    text back in NFC, monolingual text included (DetachedItems). The writer
+    sends the batch's text in NFC too, so what it compares with the
+    instance, and the labels it finds items by, are in the form the
+    instance gives back: a batch whose text is in NFD writes nothing on a
+    re-run, and finds everything a batch in NFC wrote. NFC is the only
+    change: a combining mark with no precomposed letter stays, and so does
+    a compatibility character."""
+
+    def test_a_gedcom_export_in_nfd_is_written_once(self):
+        from yizkr.pipeline.gedcom import adapt_gedcom
+
+        # (here) the family's export gives Ida's names decomposed
+        text = unicodedata.normalize(
+            "NFD",
+            "0 HEAD\n1 CHAR UTF-8\n"
+            "0 @S1@ SOUR\n1 TITL Post-war registration card for Ida Löbig\n"
+            "0 @I5@ INDI\n1 NAME Ida /Löbig/\n2 TYPE married\n"
+            "1 NAME Ida /Sörne/\n2 TYPE birth\n2 NICK Peppi\n"
+            "1 BIRT\n2 DATE 17 APR 1881\n2 PLAC Moshausen\n2 SOUR @S1@\n"
+            "0 TRLR\n",
+        )
+        exported = ArtifactRef.from_bytes(text.encode())
+        batch = adapt_gedcom(text, artifact=exported).batch
+        assert _in_form_batch(batch, "NFC") != batch
+        wiki = FakeWiki({exported.sha1: "Q27"}, detached=True)
+
+        first = BatchWriter(wiki).write_batch(batch)
+
+        assert _not_in_nfc(wiki) == []
+        ida = first.created_items["i5"]
+        assert _labelled(wiki, "Ida Löbig") == [ida]
+        assert _aliases(wiki, ida) == ["Ida Sörne"]
+        (married,) = _statements(wiki, ida, "married_name")
+        (born,) = _statements(wiki, ida, "birth_name")
+        assert (_values(married), _values(born)) == (
+            ["Ida Löbig"],
+            ["Ida Sörne"],
+        )
+        # a re-run finds Ida by her label, her aliases and every statement
+        # written for her, and sends nothing
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert again.created_items["i5"] == ida
+        assert (again.written, again.referenced) == (0, 0)
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("first", ["NFD", "NFC"])
+    @pytest.mark.parametrize("case", TEXT_CLAIMS, ids=TEXT_CLAIMS)
+    def test_a_claim_in_either_form_is_one_statement(self, case, first):
+        # the claim twice in one batch, in each form, and then again
+        claim = TEXT_CLAIMS[case]
+        second = "NFC" if first == "NFD" else "NFD"
+        batch = _batch_of(_in_form(claim, first), _in_form(claim, second))
+        assert _in_form(claim, "NFD") != claim
+        wiki = FakeWiki(TEXT_MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        subject = written.created_items[claim["subject"]["local_id"]]
+        (statement,) = _statements(wiki, subject, claim["property"])
+        assert _values(statement) == [TEXT_OF[case]]
+        assert (written.written, written.referenced, written.skipped) == (
+            1,
+            0,
+            1,
+        )
+        assert _not_in_nfc(wiki) == []
+        before = _snapshot(wiki, subject)
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 2)
+        assert _snapshot(wiki, subject) == before
+
+    @pytest.mark.parametrize(
+        ("first", "then"), [("NFC", "NFD"), ("NFD", "NFC")]
+    )
+    def test_a_later_batch_finds_the_item_in_either_form(self, first, then):
+        # the card's batch mints Ida's item; the compensation file's,
+        # which gives her label and alias in the other form, finds it, and
+        # adds the name the file gives her by, in NFC
+        wiki = FakeWiki(TEXT_MEDIA, detached=True)
+        card = BatchWriter(wiki).write_batch(
+            _in_form_batch(_card_batch(), first)
+        )
+        ida = card.created_items["e05"]
+
+        later = BatchWriter(wiki).write_batch(
+            _in_form_batch(_compensation_batch(), then)
+        )
+
+        assert later.created_items["e05"] == ida
+        assert _labelled(wiki, "Ida Löbig") == [ida]
+        assert _aliases(wiki, ida) == ["Ida Sörne", "Ida Löbig geb. Sörne"]
+        assert later.written == 1
+        assert _not_in_nfc(wiki) == []
+
+    def test_an_equivalence_in_nfd_adds_no_alias_of_the_label(self):
+        # a reviewer approves the tree's Sebastian as the certificate's;
+        # the tree's batch gives his label decomposed. It is his label in
+        # another form, never an alias of his
+        wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
+        certificate = BatchWriter(wiki).write_batch(_certificate_batch())
+        sebastian = certificate.created_items["e01"]
+        tree = _approved(
+            _in_form_batch(_tree_batch(), "NFD"), {"e03": sebastian}
+        )
+
+        BatchWriter(wiki).write_batch(tree)
+
+        assert _aliases(wiki, sebastian) == ["Wastl"]
+        writes = wiki.wbi.item.writes
+        BatchWriter(wiki).write_batch(tree)
+        assert wiki.wbi.item.writes == writes
+
+    def test_a_record_in_nfd_reaches_the_item_the_resolve_step_found(self):
+        # the tree's refs to Sebastian give his label in NFC, and the
+        # resolve step matched them to his item; its manifest record gives
+        # the label decomposed. The record's kind and alias reach the item
+        wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
+        certificate = BatchWriter(wiki).write_batch(_certificate_batch())
+        sebastian = certificate.created_items["e01"]
+        tree = _tree_batch()
+        (record,) = tree.entities
+        tree = tree.model_copy(
+            update={
+                "entities": [
+                    record.model_copy(
+                        update={
+                            "label": unicodedata.normalize("NFD", SEBASTIAN)
+                        }
+                    )
+                ]
+            }
+        )
+
+        written = BatchWriter(wiki).write_batch(
+            resolve_batch(tree, {SEBASTIAN: sebastian})
+        )
+
+        assert _aliases(wiki, sebastian) == ["Wastl"]
+        (kind,) = _statements(wiki, sebastian, "instance_of")
+        assert _sources(kind)[2:] == [(["Q29"], []), ([], [written.run_qid])]
+
+    def test_a_run_named_in_nfd_finds_its_run_item_again(self):
+        # a model identifier is free text: (here) a local model's, given
+        # decomposed
+        run = dict(
+            RUN,
+            model_identifier=unicodedata.normalize(
+                "NFD", "fake-model für Kurrent"
+            ),
+        )
+        batch = ClaimBatch.model_validate(
+            dict(
+                _certificate_batch().model_dump(mode="json"),
+                extraction_run=run,
+            )
+        )
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        first = BatchWriter(wiki).write_batch(batch)
+        assert _not_in_nfc(wiki) == []
+        writes = wiki.wbi.item.writes
+
+        again = BatchWriter(wiki).write_batch(batch)
+
+        assert again.run_qid == first.run_qid
+        assert wiki.wbi.item.writes == writes
+
+    def test_a_summary_is_capped_as_the_instance_counts_it(self):
+        # Sebastian's summary: 248 characters in NFC, the form the instance
+        # stores and caps at 250, and more in the decomposed form the batch
+        # gives it in. It is his description whole
+        summary = (
+            "Hatter of Flörburg, born on 15 February 1862, son of the "
+            "master hatter Eugen Löbig and Cäcilie Löbig née Tarle; married "
+            "Hildegard Laudler of Fläckfeld at Flörburg on 15 December "
+            "1905; owner of the Hutmacherei zum Blauen Hut after his "
+            "father's death"
+        )
+        decomposed = unicodedata.normalize("NFD", summary)
+        assert len(summary) <= 250 < len(decomposed)
+        batch = _certificate_batch()
+        (record,) = batch.entities
+        batch = batch.model_copy(
+            update={
+                "entities": [record.model_copy(update={"summary": decomposed})]
+            }
+        )
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        item = wiki.wbi.item.get(written.created_items["e01"])
+        assert str(item.descriptions.get("en")) == summary
+        assert _not_in_nfc(wiki) == []
+
+    def test_nfc_is_the_only_change(self):
+        # (here) the burial register transcribed as written: the long s,
+        # the bar that doubles the n of "Brunnenring", a combining mark
+        # over a letter Unicode has no precomposed form of, and the two
+        # spaces the register leaves after the address. The batch gives
+        # the umlauts decomposed
+        cause = "Waſſerſucht"
+        excerpt = (
+            "Wohnung: Brun\u0304enring 35.  Witwer der Cäcilie Löbig geb. "
+            "Tarle. Alter: 73 Jahre. Geſtorben: 16. März 1909 in Flörburg. "
+            "Todesurſache: Waſſerſucht."
+        )
+        claim = {
+            "subject": _local("e07", "Eugen Löbig"),
+            "property": "cause_of_death",
+            "value": {
+                "type": "monolingual",
+                "value": {"text": cause, "language": "de"},
+            },
+            "source": _cites(REGISTER_SHA1, excerpt),
+        }
+        batch = _batch_of(_in_form(claim, "NFD"))
+        # NFC leaves the long s, the bar and the spaces as they are, and
+        # composes the umlauts
+        assert unicodedata.normalize("NFC", excerpt) == excerpt
+        assert unicodedata.normalize("NFKC", cause) != cause
+        assert unicodedata.normalize("NFD", excerpt) != excerpt
+        wiki = FakeWiki(TEXT_MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        eugen = written.created_items["e07"]
+        (died,) = _statements(wiki, eugen, "cause_of_death")
+        assert _values(died) == [cause]
+        assert [place[3] for place in _places(died)] == [excerpt]
+        assert _not_in_nfc(wiki) == []
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("found", [False, True], ids=["minted", "found"])
+    def test_a_type_hint_goes_in_nfc(self, found):
+        # (here) the directory lists the firm under the heading
+        # "Hutgeschäfte": its extraction gives the firm no kind, and that
+        # word as its type hint, decomposed. The firm is new, or the
+        # interview's batch minted it first
+        wiki = FakeWiki(
+            {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
+        )
+        if found:
+            BatchWriter(wiki).write_batch(_firm_batch())
+        directory = _directory_batch(
+            "unclassified_entity",
+            type_hint=unicodedata.normalize("NFD", "Hutgeschäft"),
+        )
+
+        written = BatchWriter(wiki).write_batch(directory)
+
+        firm = written.created_items["firm"]
+        hints = _by_value(_statements(wiki, firm, "type_hint"))
+        assert "Hutgeschäft" in hints
+        assert _not_in_nfc(wiki) == []
 
 
 class TestPrivacyDefaults:
