@@ -17,12 +17,11 @@ the order PDFium extracts it. Text drawn in an invisible render mode, as
 an OCR layer over a scan is, text that falls outside the page, and text
 that an image painted after it covers, is not part of it: none of it can
 be seen on the page, and an OCR layer is a machine's reading, not the
-page's text. A text layer is
-**usable** when it holds a letter or a digit and at most
-`MAX_UNREADABLE_SHARE` of its characters, whitespace aside, are ones no
-text is written in: the replacement character, private-use and
-unassigned code points, lone surrogates and control characters, which is
-what a font without a usable Unicode map extracts as.
+page's text. A text layer is **usable** when it holds a letter or a digit
+and at most `MAX_UNREADABLE_SHARE` of its characters, whitespace aside,
+are ones no text is written in: the replacement character, private-use
+and unassigned code points, lone surrogates and control characters, which
+is what a font without a usable Unicode map extracts as.
 
 **How each page is read** (its method, which the transcription records):
 
@@ -326,6 +325,8 @@ class _Layout:
 def _read(
     document: Any, directory: Path, excluded: Callable[[str], bool]
 ) -> PdfPages:
+    """`read_pages` of an open document: every page's layout first, and
+    only then, when a page reads from its text layer, the files."""
     layouts = []
     for index in range(len(document)):
         page = document[index]
