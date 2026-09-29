@@ -463,19 +463,23 @@ and reference the artifact itself or the producing run.
 - Unpacking is deterministic (documented ZIP+XML), never generative;
   only claim extraction from the slide text uses an LLM.
 - **A compilation's original excerpts are artifacts of their own**
-  (planned: ADR-0008 as amended by #289 lists what is still to do,
-  starting with #176). A compilation sets text of its own (a typed
-  translation, commentary) beside images of excerpts from the originals
-  it draws on: two witnesses of one text, which may disagree. An image
-  that a PDF places within one of its pages is a derived item like a
-  deck's: keyed by its SHA-1, `part_of` the PDF once per page it is on
-  (page-number qualified), and labelled "<title> — page <n>, image <k>".
-  An image that is a whole page, as a scanned page is, is that page.
-  A PDF with a text layer is read page by page, and each image placed
+  (ADR-0008 as amended by #289, #176 and #397). A compilation sets text
+  of its own (a typed translation, commentary) beside images of excerpts
+  from the originals it draws on: two witnesses of one text, which may
+  disagree. An image that a PDF places within one of its pages is a
+  derived item like a deck's: keyed by its SHA-1, `part_of` the PDF once
+  per page it is on (page-number qualified), labelled "<title> — page
+  <n>, image <k>" for its first place, and an `instance of` photograph.
+  An image that is a whole page, as a scanned page is, is that page. A
+  PDF with a text layer is read page by page, and each image placed
   within one of its text-layer pages has a transcription of its own
-  (ADR-0008 as amended by #176); until those transcriptions are
-  extracted, every claim read from a PDF cites the PDF, and is read from
-  its own text.
+  (ADR-0008 as amended by #176), which is extracted as a document of its
+  own, an excerpt, whose claims cite the image; the write registers the
+  image's item, after the PDF, before any claim that cites it (ADR-0008
+  as amended by #397). The same image in several PDFs is one item and
+  one excerpt; an image whose bytes a document of the corpus has is that
+  document. An image placed within a page read by vision is read with
+  that page, as the compilation's.
 - A claim cites the witness that asserts it. A claim read from the
   compilation's own text cites the compilation, with its page as the
   locator; a claim read from an excerpt cites the excerpt, with no page

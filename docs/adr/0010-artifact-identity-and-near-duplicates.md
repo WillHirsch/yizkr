@@ -18,6 +18,9 @@ write time").
 Amended by #368 (2026-09-29): an item left with a page fragment's label
 and no statements is never taken for the fragment (§1, "Registration at
 write time").
+Amended by #397 (2026-09-29): a written excerpt, an image a PDF places
+read as a document of its own (ADR-0008), seeds content dedup across
+runs as a written document does (§1).
 
 ## Context
 
@@ -218,7 +221,10 @@ extracted, or written. "Already claimed" spans two scopes:
 - **within the run** — an earlier document in the same folder pass
   (alphabetically-first is canonical, deterministically);
 - **across runs** — a document ingested to completion (`written`) in a
-  prior run. `run()` pre-seeds the run's seen-hashes from persisted
+  prior run, an excerpt among them (ADR-0008 as amended by #397, whose
+  directories are in the state directory's `excerpts/`): a file added
+  later with an excerpt's bytes is that excerpt's duplicate. `run()`
+  pre-seeds the run's seen-hashes from persisted
   per-document state (`_prior_written_hashes`), so a renamed identical
   file added later is recognised before any LLM pass, not merely deduped
   at the graph by the writer afterwards. Only `written` documents seed
