@@ -662,10 +662,11 @@ class TestAttach:
         )
 
     def test_fewer_rows_than_the_batch_resolved_match_none(self):
-        """Agnes's residence alone is not the household resolved: no
-        claim is matched, not even the one it could be (review of #411)."""
+        """Leopold's first residence alone is not the household resolved:
+        no claim is matched, not even the one it is, and nothing fails
+        (review of #411)."""
         extracted = household()
-        rows = extracted.model_copy(update={"claims": extracted.claims[2:]})
+        rows = extracted.model_copy(update={"claims": extracted.claims[:1]})
         assert counterparts(extracted, rows) == [None, None, None]
 
     def test_an_entity_resolved_before_is_not_an_equivalence(self):
