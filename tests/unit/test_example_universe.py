@@ -146,6 +146,18 @@ class TestIntegrity:
             text = SOURCES[assertion.source].text
             assert assertion.excerpt in text, assertion
 
+    def test_verbatim_values_occur_in_their_excerpts(self):
+        # the manifest keeps these values as the source words them
+        verbatim = {
+            "age_at_death",
+            "cause_of_death",
+            "nickname",
+            "referred_to_as",
+        }
+        for assertion in u.ASSERTIONS:
+            if assertion.property in verbatim:
+                assert assertion.value in assertion.excerpt, assertion
+
     def test_every_person_is_attested(self):
         mentioned = {a.subject for a in u.ASSERTIONS} | {
             a.value for a in u.ASSERTIONS if isinstance(a.value, str)
@@ -836,6 +848,16 @@ class TestNamingPatterns:
                 shown_in.add(SOURCES[source].lang)
         assert shown_in == set(u.LANGUAGES)
 
+    def test_sibling_patterns_show_different_markers(self):
+        # a widow marker is no "the late" marker, and a side is no degree:
+        # each pattern is shown by passages of its own
+        for first, second in (
+            ("widow", "the late"),
+            ("kinship side", "kinship degree"),
+        ):
+            shown = set(u.NAMING_PATTERNS[first])
+            assert not shown & set(u.NAMING_PATTERNS[second])
+
     def test_a_surname_written_first(self):
         for source, passage in u.NAMING_PATTERNS["surname first, no comma"]:
             written = u.Name(passage, "as_written", SOURCES[source].lang)
@@ -861,6 +883,8 @@ class TestNamingPatterns:
             (born,) = self.claims(source, passage, "birth_name")
             assert married.subject == born.subject
             assert married.value != born.value
+            # the husband's surname is no part of her own
+            assert married.value.split()[-1] not in born.value
 
     def test_a_married_name_suffix_is_an_appellation_and_a_marriage(self):
         for source, passage in u.NAMING_PATTERNS["married-name suffix"]:
@@ -955,15 +979,20 @@ class TestNamingPatterns:
                 assert overlap(other.value, died.value), other
 
     def test_a_patronymic_names_the_father(self):
+        corroborated = []
         for source, passage in u.NAMING_PATTERNS["patronymic"]:
             (claim,) = self.claims(source, passage, "father")
-            # the father every other source names
+            # no other source names another father
             others = {
                 a.value
                 for a in u.about(claim.subject, "father")
                 if a.source != source
             }
-            assert others == {claim.value}
+            assert others <= {claim.value}
+            corroborated.append(bool(others))
+        # and another source names the same father for one of them; the
+        # other patronymic names a man no other source names
+        assert any(corroborated)
 
     @pytest.mark.parametrize("pattern", ["kinship side", "kinship degree"])
     def test_a_kinship_term_is_recorded_as_worded(self, pattern):
@@ -1004,6 +1033,14 @@ class TestNamingPatterns:
             # named in the passage in that order, inflected or not
             at = [position(PLACES[key], passage) for key in chain]
             assert at == sorted(set(at))
+            # and every place the passage names is on the chain
+            words = re.findall(r"\w+", passage)
+            named = {
+                key
+                for key, place in PLACES.items()
+                if any(word.startswith(tuple(stems(place))) for word in words)
+            }
+            assert named == set(chain), (named, chain)
 
 
 @pytest.fixture(scope="module")

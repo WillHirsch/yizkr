@@ -26,10 +26,13 @@ Friesland. Every town, street, firm, institution, ship and document is
 invented.
 
 Its sources are in German and English, and in two languages drawn for
-their naming patterns (#387): Russian and Frisian. They were drawn at
-random with a fixed seed from a table of European languages; the module
-records the table and the seed (`LANGUAGE_TABLE`, `LANGUAGE_SEED`), and
-`tests/unit/test_example_universe.py` draws them again.
+their naming patterns (#387): Russian and West Frisian. They were drawn
+at random with a fixed seed from a table of European languages; the
+module records the table and the seed (`LANGUAGE_TABLE`,
+`LANGUAGE_SEED`), and `tests/unit/test_example_universe.py` draws them
+again. #400's description, which added these sources, gives every other
+specific drawn for them, each with its table, its seed and its value,
+and the script that draws them again.
 
 ## The world
 
@@ -85,8 +88,8 @@ became the Lobigs.
 
 Rudolf went to the Soviet Union in 1936 and worked as a fitter in
 Koshnovka. He married Nina Sartina there in 1938 and died there on
-6 March 1941. In 1958 Nina, whose brother is Pavel Sartin, wrote to
-Leopold and sent him Rudolf's death certificate.
+6 March 1941. In 1958 Nina, daughter of Vasily Sartin and sister of
+Pavel Sartin, wrote to Leopold and sent him Rudolf's death certificate.
 
 Florence's mother, Sipkje Faxridge, born van 't Nijks, came from Snylsjum
 in Friesland. In 1952 her brother Sybren van 't Nijks wrote to her in
@@ -103,7 +106,7 @@ a neighbour in Stupfield whom Nicholas calls *Nana Maisie*.
 
 Twenty-one invented documents carry transcribed text (`Source.text`), and
 every assertion quotes the passage that makes it (`Assertion.excerpt`).
-The module glosses each Russian and Frisian text in English, in a
+The module glosses each Russian and West Frisian text in English, in a
 comment above it.
 
 | Key | What | Language |
@@ -119,7 +122,7 @@ comment above it.
 | `death-certificate-1941` | Rudolf's Soviet death certificate: his name surname first, with a patronymic, and his village with its district, oblast and republic, a field each | Russian |
 | `registration-card-1945` | Ida's post-war card, with her son Leopold's arrest | English |
 | `naturalisation-1952` | Gustav's naturalisation as Gustave Lobig | English |
-| `letter-to-sipkje-1952` | Sybren van 't Nijks in Snylsjum to his sister Sipkje, Florence's mother, in Stupfield: their widowed mother is now Nicholas's great-grandmother | Frisian |
+| `letter-to-sipkje-1952` | Sybren van 't Nijks in Snylsjum to his sister Sipkje, Florence's mother, in Stupfield: their widowed mother is now Nicholas's great-grandmother | West Frisian |
 | `compensation-file-1953` | Leopold's claim for his late mother Ida: her deportation | German |
 | `gravestone-photo-1956` | photograph of Eugen and Cäcilie's gravestone | German |
 | `divorce-judgment-1957` | the Landgericht Rekau's judgment divorcing Leopold and Agnes | German |
@@ -137,17 +140,17 @@ comment above it.
 | Birth, married and nick names (ADR-0011) | Ida: born *Ida Sörne*, married *Ida Löbig*, nickname *Peppi*; likewise Cäcilie (*Cilli*) and Hildegard (*Hilde*) |
 | German and English forms | Löbig/Lobig, Gustav/Gustave, Klara/Clara, Flörburg/Floerburg, Gerichtsgefängnis Peiltal/Peiltal court prison, Hutmacherei zum Blauen Hut/the Blue Hat, Hutmacher/hatter |
 | Diminutives | German *Wastl, Cilli, Hilde, Gustl, Rudi*; English *Gus*; pet names *Muckel, Peppi, Pünktchen* |
-| Names as sources write them (ADR-0022) | *Cäcilie Löbig geb. Tarle*; *Hildegard Löbig geborene Laudler*; *Agnes Löbig geb. Nertler*; *LÖBIG, Ida, née SÖRNE*; *Gustave LOBIG (formerly Gustav LÖBIG)*; *Löbig, Ursula, Wwe.*; *Mrs Cutmore*; *Sebastian 'Wastl'*; *Лёбиг Рудольф Феликсович*; *Нина Филипповна Сартина*; *S. Faxridge-van 't Nijks*; *S. van 't Nijks*; the placeholder *N.N. Löbig* |
+| Names as sources write them (ADR-0022) | *Cäcilie Löbig geb. Tarle*; *Hildegard Löbig geborene Laudler*; *Agnes Löbig geb. Nertler*; *LÖBIG, Ida, née SÖRNE*; *Gustave LOBIG (formerly Gustav LÖBIG)*; *Löbig, Ursula, Wwe.*; *Mrs Cutmore*; *Sebastian 'Wastl'*; *Лёбиг Рудольф Феликсович*; *Нина Васильевна Сартина*; *S. Faxridge-van 't Nijks*; *S. van 't Nijks*; the placeholder *N.N. Löbig* |
 | A surname written first, with no comma | *Лёбиг Рудольф Феликсович*: surname, given name and patronymic, in the 1941 death certificate's form |
-| A patronymic | *Феликсович*, "son of Felix" (the certificate): a `father` claim, which the school report and the tree corroborate |
+| A patronymic | *Феликсович*, "son of Felix" (the certificate): a `father` claim, which the school report and the tree corroborate; *Васильевна*, "daughter of Vasily" (the 1958 letter): a `father` claim naming Vasily Sartin, whom no other source names |
 | A married-name marker | *по мужу Лёбиг*, "Löbig by her husband" (the 1958 letter); *S. Faxridge-van 't Nijks*, her husband's surname, a hyphen, then her own (the 1952 letter). Each passage gives a `married_name` and a `birth_name` |
-| A married-name marker written as a suffix | *Рудольфиха*, Rudolf's name with the suffix *-иха*, "Rudolf's wife": what Nina's village calls her (the 1958 letter). It is a `referred_to_as` appellation and a `spouse` claim, never one of her names |
+| A married-name marker written as a suffix | *Рудольфиха*, Rudolf's given name with the colloquial suffix *-иха*, "Rudolf's wife": what Nina's village calls her (the 1958 letter). Russian uses such forms in rural speech, never in an official name, so it is a `referred_to_as` appellation and a `spouse` claim, never one of her names |
 | A surname with a masculine and a feminine form | *Сартин* and *Сартина*: Pavel Sartin and his sister Nina (the 1958 letter) |
-| A name particle | *van 't Nijks*, kept whole in every name that carries it: *Sybren van 't Nijks*, *S. Faxridge-van 't Nijks* (the 1952 letter) |
+| A name particle | *van 't Nijks*, kept whole in every name that carries it: *S. van 't Nijks* and *S. Faxridge-van 't Nijks* (the 1952 letter's envelope) |
 | Widow and "the late" markers | *вдова Вашего покойного брата Рудольфа*, "the widow of your late brother Rudolf" (the 1958 letter); *Se is widdo sûnt ús sillige heit stoarn is*, "she is a widow since our late father died" (the 1952 letter). A widow marker is a `spouse` claim, and "the late" a death *before* the letter's date: Rudolf's, which the certificate gives as 6 March 1941 and the tree as 1941 |
 | Kinship terms with a side and a degree | *дядя по отцу*, "uncle on the father's side" (Sebastian), and *двоюродная сестра*, "first cousin" (Klara), with Rudolf as the ego (the 1958 letter); *oerbeppe*, "great-grandmother" (Sipkje's mother), with Nicholas as the ego (the 1952 letter). Each is `relative` + `kinship_type`, worded as the source words it, and each follows from the parent edges |
 | An institution named by its kind and its place | *Калдовское районное бюро ЗАГС*, the civil registry of Kaldovsky District, whose name it takes as an adjective (the certificate); *it tichelwurk fan Snylsjum*, "the Snylsjum brickworks" (the 1952 letter) |
-| A place named with its containers | *д. Кошновка Калдовского района Чадской области*, "Koshnovka village, Kaldovsky district, Chadsk oblast", in the genitive (the 1958 letter), and the certificate's form, a field each; *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân*, the 1952 letter's sender. Each container is a `part_of` claim |
+| A place named with its containers | *д. Кошновка Калдовского района Чадской области*, "Koshnovka village, Kaldovsky district, Chadsk oblast", its district and oblast in the genitive (the 1958 letter), and the certificate's form, a field each; *Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân*, the 1952 letter's sender. Each container is a `part_of` claim |
 | Homonyms (ADR-0017) | two Ursula Löbigs: Sebastian's daughter, born 1911, and a widow in the 1912 directory; a one-year-old cannot be that widow. The 2008 family history names both, one line apart |
 | Mirrored kinship | Sebastian and Hildegard's children, stated from both ends: the parents' `child` claims in the 2008 family history and the 2018 talk; the children's `father` and `mother` elsewhere (the tree, the GEDCOM rendering), and the postcard's *Dein Vater* |
 | Two-digit years | *I was born in '50* (the interview, the 2008 family history) and *Dad died in '96*: the century is the reader's to supply, which the fixture corpus's recorded model gets wrong once (below) |
@@ -163,7 +166,7 @@ comment above it.
 | A place with no known location | Klurnau |
 | Persecution events (ADR-0014) | Leopold's arrest (3 Sep 1939), imprisonment in the Peiltal court prison and release (1 Oct 1939); Ida's deportation to Lager Klurnau (21 Aug 1942) and liberation at Klurnau (28 Jan 1945). Emigrations are `migration` events too |
 | Contradictory dates (ADR-0002) | Gustav born 7 Jan 1919 (civil register) and 1 July 1919 (naturalisation): day and month transposed. Also Fläckfeld's district, and Rahel's address in July 1939 (the booklet, below) |
-| Refinement, not contradiction | Eugen died 1909 (gravestone) and 16 Mar 1909 (burial register); Klara left in '38 or '39 (interview) and on 22 June 1938 (postcard); Leopold born 1914 (tree) and 29 May 1914 (judgment), Agnes likewise; Leopold held "in Peiltal" and in its court prison; Ida deported to Klurnau (card) and to Lager Klurnau (compensation file) |
+| Refinement, not contradiction | Eugen died 1909 (gravestone) and 16 Mar 1909 (burial register); Klara left in '38 or '39 (interview) and on 22 June 1938 (postcard); Leopold born 1914 (tree) and 29 May 1914 (judgment), Agnes likewise; Leopold held "in Peiltal" and in its court prison; Ida deported to Klurnau (card) and to Lager Klurnau (compensation file); Rudolf died 1941 (tree), 6 March 1941 (certificate) and before 25 December 1958 (the 1958 letter) |
 | Uncertain dates | circa: Cäcilie *c. 1833* (`ABT 1833`); before: the firm gone *before 1926* (`BEF 1926`); after: Rahel died *after 1945* (`AFT 1945`); between: Klara left *between 1938 and 1939* (`BET 1938 AND 1939`); decade: the studio portrait, *1890s* (`BET 1890 AND 1899`) |
 | An embedded original and its translation, as two witnesses (ADR-0008, amended) | *Our Family from Germany* (2011), Nicholas's compilation, sets an image of the top of Sebastian's 1939 letter to Klara (`letter-excerpt-1939`, an artifact of its own, `part of` the booklet on page 6) beside his translation. Where the letter says Rahel now lives at *Angerring 11*, the translation reads *Angerring 71*: each witness gives Rahel's address its own value. The booklet says its translations were done with translation software, so each claim read from the translation carries `sourcing_circumstances` → `machine_assisted` and no claim of the excerpt does. The caption and the commentary are not translations and carry no marker; the commentary says what the letter does not, that Gustav was Ursula's younger brother (`sibling`) |
 | A person without name or sex | the infant of 1922, *N.N. Löbig* (`SEX U`) |

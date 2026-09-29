@@ -280,8 +280,9 @@ class TestTheUniverse:
             if prop in disagreement.COMPARED
         }
         # the refinements of a compared property: Eugen's death, Cäcilie's
-        # birth, Klara's emigration, the arrest, Leopold's and Agnes's births
-        assert len(refined) == 6
+        # birth, Klara's emigration, the arrest, Leopold's and Agnes's
+        # births, and Rudolf's death
+        assert len(refined) == 7
         assert not {(row.entity, row.property) for row in rows} & refined
 
 

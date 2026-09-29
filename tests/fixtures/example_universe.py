@@ -34,7 +34,7 @@ The family, in four generations:
   certificate.
 * Florence's mother, Sipkje Faxridge, born van 't Nijks, came from
   Snylsjum in Friesland.  Her brother Sybren writes to her in Stupfield in
-  1952, in Frisian: their widowed mother has become Nicholas's
+  1952, in West Frisian: their widowed mother has become Nicholas's
   great-grandmother.
 
 Flörburg became Bad Flörburg in 1954, so it is named two ways over
@@ -57,7 +57,7 @@ Ursula Löbigs and give his birth and his father's death in two-digit years
 naturalisation certificate, the 1938 postcard and a GEDCOM export of the
 Lobig line they make the fixture corpus (tests/fixtures/corpus, #76).
 
-The Russian and Frisian sources (#387) carry the naming patterns that
+The Russian and West Frisian sources (#387) carry the naming patterns that
 extraction's mention records must handle (#385), and ``NAMING_PATTERNS``
 says where each one is: a surname written first, a patronymic, a
 married-name marker (one of them a suffix), a surname's masculine and
@@ -155,9 +155,9 @@ class Name:
     """One form of a name.
 
     ``form`` for people: birth, married, nickname, diminutive,
-    anglicised, as_written (whole, as one source writes it) or
-    placeholder; for places: official, historical, transliterated or
-    translated.
+    anglicised, as_written (whole, as one source writes it), given (a
+    given name alone, as a child's patronymic gives it) or placeholder;
+    for places: official, historical, transliterated or translated.
     """
 
     text: str
@@ -480,11 +480,11 @@ PEOPLE = (
         _names(
             ("Нина Сартина", "birth", "ru"),
             ("Нина Лёбиг", "married", "ru"),
-            ("Нина Филипповна Сартина", "as_written", "ru"),
+            ("Нина Васильевна Сартина", "as_written", "ru"),
         ),
         note=(
             "Rudolf's wife from 1938, in the Soviet Union, and his widow; "
-            "her village calls her Рудольфиха, Rudolf's wife."
+            "her village calls her Рудольфиха, colloquial for Rudolf's wife."
         ),
     ),
     Person(
@@ -494,6 +494,17 @@ PEOPLE = (
         3,
         _names(("Павел Сартин", "birth", "ru")),
         note="Nina's brother: his surname is the masculine form of hers.",
+    ),
+    Person(
+        "vasily-sartin",
+        "Vasily Sartin",
+        "male",
+        2,
+        _names(("Василий", "given", "ru")),
+        note=(
+            "Nina's father, named only in her patronymic, Васильевна "
+            "(daughter of Vasily); no source gives his surname or dates."
+        ),
     ),
     Person(
         "sipkje-faxridge",
@@ -523,7 +534,7 @@ PEOPLE = (
     ),
     Person(
         "mr-van-t-nijks",
-        "Mr van 't Nijks",
+        "Mr Van 't Nijks",
         "male",
         1,
         _names(("N.N. van 't Nijks", "placeholder", None)),
@@ -535,7 +546,7 @@ PEOPLE = (
     ),
     Person(
         "mrs-van-t-nijks",
-        "Mrs van 't Nijks",
+        "Mrs Van 't Nijks",
         "female",
         1,
         _names(("N.N. van 't Nijks", "placeholder", None)),
@@ -1260,7 +1271,7 @@ SOURCES = (
         ),
     ),
     # English gloss: "Koshnovka village, Kaldovsky district, Chadsk
-    # oblast, 25 December 1958. Dear Leopold! Nina Filippovna Sartina,
+    # oblast, 25 December 1958. Dear Leopold! Nina Vasilyevna Sartina,
     # Löbig by her husband, the widow of your late brother Rudolf, writes to
     # you. You asked for his death certificate: I enclose it. Rudolf came
     # to Koshnovka in 1936 and worked as a fitter on the collective farm.
@@ -1278,7 +1289,7 @@ SOURCES = (
             "д. Кошновка Калдовского района Чадской области, 25 декабря "
             "1958 г.\n"
             "Дорогой Леопольд!\n"
-            "Пишет Вам Нина Филипповна Сартина, по мужу Лёбиг, вдова Вашего "
+            "Пишет Вам Нина Васильевна Сартина, по мужу Лёбиг, вдова Вашего "
             "покойного брата Рудольфа. Вы просили прислать свидетельство о "
             "его смерти, посылаю.\n"
             "Рудольф приехал в Кошновку в 1936 году и работал слесарем в "
@@ -2792,9 +2803,16 @@ ASSERTIONS = tuple(
             "nina-sartina",
             "birth_name",
             "Нина Сартина",
-            "Нина Филипповна Сартина, по мужу Лёбиг",
+            "Нина Васильевна Сартина, по мужу Лёбиг",
         ),
         ("nina-sartina", "married_name", "Нина Лёбиг", "по мужу Лёбиг"),
+        # her patronymic: Vasilyevna, daughter of Vasily
+        (
+            "nina-sartina",
+            "father",
+            "vasily-sartin",
+            "Нина Васильевна Сартина",
+        ),
         # "вдова" (widow) states the marriage, and "покойного" (the late)
         # a death before the letter: claims, not parts of a name
         (
@@ -2849,7 +2867,11 @@ ASSERTIONS = tuple(
             "В 1938 году мы поженились",
         ),
         # a married-name marker written as a suffix: Rudolf + -иха, his
-        # wife, as her village calls her
+        # wife, as her village calls her (colloquial; never an official name)
+        # ADR-0018 routes a relational reference one way, as kinship or as
+        # an appellation; this one gives two claims: what she is called, an
+        # appellation and no kinship term (referred_to_as), and, since its
+        # suffix is a married-name marker, whose wife she is (spouse)
         (
             "nina-sartina",
             "referred_to_as",
@@ -2893,7 +2915,7 @@ ASSERTIONS = tuple(
             {"point_in_time": Date(1958, 12, 25)},
             "д. Кошновка Калдовского района Чадской области",
         ),
-        # the village with its district and oblast, in the genitive
+        # the village, with its district and oblast in the genitive
         (
             "koshnovka",
             "part_of",
@@ -3066,6 +3088,9 @@ REFINEMENTS = (
     ("leopold-loebig", "date_of_birth"),
     # 1912 (tree) narrowed to 20 April 1912 (divorce judgment).
     ("agnes-loebig", "date_of_birth"),
+    # 1941 (tree) narrowed to 6 March 1941 (certificate), and bounded by
+    # the 1958 letter's "the late".
+    ("rudolf-loebig", "date_of_death"),
 )
 
 # The naming patterns that extraction's mention records must handle
@@ -3082,7 +3107,7 @@ NAMING_PATTERNS = {
     ),
     "married-name suffix": (("letter-to-leopold-1958", "Рудольфиха"),),
     "masculine and feminine surname": (
-        ("letter-to-leopold-1958", "Нина Филипповна Сартина"),
+        ("letter-to-leopold-1958", "Нина Васильевна Сартина"),
         ("letter-to-leopold-1958", "Павел Сартин"),
     ),
     "name particle": (("letter-to-sipkje-1952", "van 't Nijks"),),
@@ -3094,7 +3119,10 @@ NAMING_PATTERNS = {
         ("letter-to-leopold-1958", "покойного"),
         ("letter-to-sipkje-1952", "sillige"),
     ),
-    "patronymic": (("death-certificate-1941", "Феликсович"),),
+    "patronymic": (
+        ("death-certificate-1941", "Феликсович"),
+        ("letter-to-leopold-1958", "Васильевна"),
+    ),
     "kinship side": (("letter-to-leopold-1958", "дядя по отцу"),),
     "kinship degree": (
         ("letter-to-leopold-1958", "двоюродная сестра"),
