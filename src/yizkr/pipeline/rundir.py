@@ -19,10 +19,13 @@ a torn last line before its own record, so a writer that dies mid-write
 loses only the record it was writing wherever the lock holds
 (_append_line says where it does not). Every stage start,
 completion and failure is an event, and so is every view a run reuses
-(yizkr.pipeline.orchestrate) and every answer the LLM cache gives or
-cannot give (yizkr.pipeline.llmcache); the driver, the live monitor, the
-anomaly checks and pacing all read and write these files, and
-docs/LLM_CACHE.md and docs/RUN_MANIFEST.md are their contract.
+(yizkr.pipeline.orchestrate), every answer the LLM cache gives or cannot
+give (yizkr.pipeline.llmcache) and every call that reaches the engine,
+with what its stream reported of it (yizkr.pipeline.llm); the driver,
+the live monitor, the anomaly checks and pacing all read and write these
+files, and docs/LLM_CACHE.md and docs/RUN_MANIFEST.md are their
+contract. `cache_counts` and `usage_counts` total, from the events,
+what the cache did and what the engine's calls used.
 
 The manifest records settings and hashes, never a prompt or any document
 content. It describes the run as its latest invocation ran it. A run
@@ -117,6 +120,9 @@ CACHE_EVENTS = (
     "cache-reject",
     "cache-adopt",
 )
+# a call that reached the engine, with what its stream reported of it
+# (yizkr.pipeline.llm.ObservedClient)
+CALL = "call"
 
 # control actions; "start" is the marker a new invocation writes, after
 # which earlier requests no longer apply
@@ -371,10 +377,17 @@ def model_alias(name: str | None) -> bool:
     its form, and passes."""
     if not name or not name.strip():
         return False
-    base = _MODEL_SELECTOR.sub("", name.strip())
+    base = model_base(name)
     return base.lower().endswith("-latest") or not any(
         character.isdigit() for character in base
     )
+
+
+def model_base(name: str) -> str:
+    """A model name without a context-window selector after it
+    (`claude-opus-5-5` for `claude-opus-5-5[1m]`): the selector picks a
+    context window, not the model."""
+    return _MODEL_SELECTOR.sub("", name.strip())
 
 
 class ModelAliasRefused(ValueError):
@@ -915,6 +928,61 @@ def cache_counts(run: RunDir) -> dict[str, dict[str, int]]:
             label = f"{label}: {event['reason']}"
         role = counts.setdefault(event.get("role") or "?", {})
         role[label] = role.get(label, 0) + 1
+    return counts
+
+
+def usage_counts(
+    run: RunDir, *, replays: bool | None = None
+) -> dict[str, dict[str, dict[str, int]]]:
+    """stage -> role -> what the calls that reached the engine used:
+    lifetime totals, over every invocation the run directory has seen,
+    from its `call` events. A call the LLM cache answered, by key match or
+    by adoption, reached no engine, used nothing and has no call event.
+
+    Each total counts the `calls`, those whose event carries a usage
+    (`reported`), and sums the tokens those carry, by the CLI's names for
+    them (llm.USAGE_TOKENS), each 0 when none was reported. A call's usage
+    is summed over its attempts, so a call whose final attempt was cut off
+    before its result event is reported with what its earlier attempts,
+    refused for a limit, used, and one none of whose attempts reported
+    any is not reported: the sums are of what was reported. A usage of
+    zeros is reported. `replays` narrows the calls to the replays of a
+    conversation's opening turn (True), which the cache asked for a
+    fork's session although it held the answer, or to every other call
+    (False). A call names its stage and role, else counts under "?"."""
+    # imported here, where it is needed, so that what reads a run
+    # directory without its usage (the monitor, say) never loads the
+    # engine's module
+    from yizkr.pipeline.llm import USAGE_TOKENS
+
+    counts: dict[str, dict[str, dict[str, int]]] = {}
+    for event in run.events():
+        if event.get("event") != CALL:
+            continue
+        if replays is not None and (event.get("replay") is True) != replays:
+            continue
+        stage, role = event.get("stage"), event.get("role")
+        totals = counts.setdefault(
+            stage if isinstance(stage, str) and stage else "?", {}
+        ).setdefault(
+            role if isinstance(role, str) and role else "?",
+            {"calls": 0, "reported": 0, **dict.fromkeys(USAGE_TOKENS, 0)},
+        )
+        totals["calls"] += 1
+        usage = event.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        tokens = {
+            name: usage[name]
+            for name in USAGE_TOKENS
+            if isinstance(usage.get(name), int)
+            and not isinstance(usage[name], bool)
+            and usage[name] >= 0
+        }
+        if tokens:
+            totals["reported"] += 1
+            for name, count in tokens.items():
+                totals[name] += count
     return counts
 
 
