@@ -77,11 +77,12 @@ added. The convergence report (#155) lists the open issues under each
   report, spot-checks) don't count.
 - **Shared resources.** One agent at a time uses the live Wikibase stack
   (live tests, the scratch reset, bootstrap, anything that writes to it);
-  live test sessions also serialise on the live-stack lock (§5). One
-  LLM-heavy task at a time runs on the claude-code subscription. A
-  scratch run holds the subscription for its LLM stages, and holds the live
-  stack only while its reset, register, write, place-reconcile and site
-  stages run; its stages before write never touch the stack.
+  live test sessions and the scratch reset also serialise on the
+  live-stack lock (§5). One LLM-heavy task at a time runs on the
+  claude-code subscription. A scratch run holds the subscription for its
+  LLM stages, and holds the live stack only while its reset, register,
+  write, place-reconcile and site stages run; its stages before write
+  never touch the stack.
 - **Waves.** Agents also share the machine. The orchestrating session
   dispatches in waves that keep test-heavy agents (implementers, fixers
   and reviewers that run tests, mutation specs or the query-engine
@@ -237,11 +238,12 @@ feature, decision, ingestion pass). An agent that files an issue with
   session runs `make test-live` and posts the results on the PR before
   merge. Live tests run on the one instance, which scratch runs reset
   (ADR-0025), and hold the live stack while they run (§3). They write
-  fictional fixture data only. The session ends by clearing the recorded
-  instance-contents key, or by resetting and re-running the write stage of
-  the latest scratch run, so that no scratch run mistakes the instance for
-  one it wrote (#199). Once the instance is kept, live tests wait for
-  #159's decision on where they run.
+  fictional fixture data only. The live-test harness clears the recorded
+  instance-contents key as each session starts and as it ends, and any
+  write voids the record anyway, so no scratch run mistakes the instance
+  for one it wrote (#199; docs/runbooks/scratch-run.md, Reset the
+  instance). Once the instance is kept, live tests wait for #159's
+  decision on where they run.
 - **Live tests run centrally, as soon as the draft opens.** The
   orchestrating session runs them for a PR that needs them, or hands the
   run to one session, in parallel with the first review rather than after
@@ -259,8 +261,8 @@ feature, decision, ingestion pass). An agent that files an issue with
   live-stack lock (#253, docs/TESTING.md) when its first test that uses
   the stack sets up, and holds it to the end; a second session waits,
   saying who holds the lock. No one checks by hand for another live
-  session. Only live test sessions and the mutation harness take the
-  lock, so the scratch reset, bootstrap and other writers still get the
+  session. Live test sessions, the mutation harness and the scratch
+  reset take the lock; bootstrap and other writers don't, and get the
   stack from the orchestrating session (§3).
 - **`needs:scratch-diff`** goes on any PR that changes a stage before
   write that already runs (§2). The procedure:
@@ -316,6 +318,11 @@ issue whose work reads them is `exec:local-agent`:
   inventory, and private experiment outputs;
 - backups (`yizkr backup` output and stack archives) and the exclusion
   list;
+- the record of the instance (`~/.local/state/yizkr/instances`, or
+  `$YIZKR_INSTANCE_STATE`): the instance-contents record, the host-side
+  kept-state marker, where the stack runs from, the write stage's state,
+  and what each scratch reset set aside, the wiki's `LocalSettings.php`
+  among it;
 - any live or dev graph: the Wikibase stack, its query service, and their
   volumes and dumps.
 

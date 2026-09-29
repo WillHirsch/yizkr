@@ -4,11 +4,13 @@ A scratch run takes every non-excluded source of the corpus through every
 stage, unattended, from fresh state directories (ADR-0025, ADR-0032).
 `yizkr scratch run` is the one command that runs it; this page is how to
 count the calls one is to make, run it, follow it, pause, abort and
-resume it, and read what it did. The parts have their own references:
-the live monitor in [docs/MONITOR.md](../MONITOR.md), the views, the LLM
-cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
-`run.json` in [docs/RUN_MANIFEST.md](../RUN_MANIFEST.md). Code:
-`yizkr.pipeline.scratch`, and `yizkr.pipeline.estimate` for the estimate.
+resume it, read what it did, and reset the instance for it. The parts
+have their own references: the live monitor in
+[docs/MONITOR.md](../MONITOR.md), the views, the LLM cache and the run
+directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and `run.json` in
+[docs/RUN_MANIFEST.md](../RUN_MANIFEST.md). Code:
+`yizkr.pipeline.scratch`, `yizkr.pipeline.estimate` for the estimate,
+and `yizkr.reset` for the reset.
 
 ## Before a run
 
@@ -60,10 +62,13 @@ cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and
   answer and the instance must carry no kept-state marker. No such stage
   is registered yet (below), so a run needs no stack. A refusal lists
   every problem it found.
-- **The kept-state marker.** Nothing reads the marker yet: keeper mode
-  (#118) writes it, and its reader comes with the write side (#199,
-  #200). Until then the driver cannot tell a kept instance from another,
-  so it refuses every corpus stage that touches the wiki.
+- **The kept-state marker** is the page `Project:Kept state` on the
+  instance and the file `kept.json` in the record of the instance:
+  keeper mode (#118) writes both, and `yizkr scratch reset` refuses while
+  either is there (Reset the instance, below). The driver takes the same
+  reader (`yizkr.core.instance.instance_is_kept`) when the write side
+  (#200) registers its stages; until then it cannot tell a kept instance
+  from another, so it refuses every corpus stage that touches the wiki.
 - **The estimate.** `uv run yizkr scratch estimate`, with the options
   the run is to take, counts the engine calls that `yizkr scratch run`
   would make now, per stage and in all: the calls of the stages whose
@@ -293,6 +298,180 @@ claims), and **failed** a document's stage that failed, with the reason
 in the run's events and the document's `state.json`. `yizkr stages
 state` counts done and reused views together, as done.
 
+## Reset the instance
+
+`yizkr scratch reset` takes the one instance back to a fresh start and
+repopulates it for a scratch run (ADR-0025 §1). In the development stage
+it is the only sanctioned way to reset the instance. Code:
+`yizkr.reset`, and `yizkr.core.instance` for the record of the instance.
+
+```sh
+uv run yizkr scratch reset          # asks you to type "reset" first
+uv run yizkr scratch reset --yes    # confirmed; needed without a terminal
+make scratch-reset                  # the same; ARGS="--yes" confirms it
+```
+
+Either way it first says which instance, compose project and volumes it
+is about to reset.
+
+- **The steps.** Each one prints how long it took, and the end lists
+  them all:
+  1. check the kept-state marker, and refuse on a kept instance
+     (Guards, below);
+  2. clear the write-phase state: the recorded instance-contents key is
+     cleared, and the write stage's state set aside (The record of the
+     instance, below);
+  3. stop the stack: `docker compose down`, which keeps the volumes,
+     after recording where the stack runs from (`stack.json`, below);
+  4. remove the graph volumes: the database (`mysql-data`), the search
+     index (`elasticsearch-data`), the query service (`wdqs-data`), and
+     the wiki's uploaded media (`wikibase-image-data`), which only the
+     database refers to. Kept, the media would leave each run's uploads
+     beside the last run's files, and a thumbnail of a file of the same
+     name could show the last run's bytes. QuickStatements' volume and
+     traefik's certificates stay;
+  5. set `LocalSettings.php` aside: the wiki's settings belong to the
+     database just removed, and the Wikibase image installs MediaWiki
+     afresh only when there are none, as on a first boot;
+  6. start the stack, `docker compose up --detach --wait`, and wait for
+     its API, up to `--start-timeout` seconds (default 900);
+  7. bootstrap the manifest, 8. publish the queries, and 9. run the
+     smoke test (`--smoke-timeout`, default 300 s), as `yizkr bootstrap`,
+     `yizkr publish-queries` and `yizkr smoke-test` do.
+- **No backup.** It takes none (ADR-0024 §7): everything written to the
+  instance is lost. It never touches the LLM cache, a run directory or
+  its reports, or the corpus.
+- **Local settings.** Every reset installs a fresh `LocalSettings.php`,
+  so keep the wiki's local settings in `deploy/config/Extensions.php` or
+  `deploy/config/Uploads.php`, which the compose file mounts into
+  `LocalSettings.d`, never in `LocalSettings.php`.
+- **The stack.** One env file gives the reset its connection settings
+  and the compose files their variables: `--env-file`, else
+  `$YIZKR_ENV_FILE`, else `deploy/.env`, as for every command. The
+  compose files are in its directory (`--deploy-dir` names another):
+  `docker-compose.yml`, unless `--compose-file` names the ones the stack
+  was started with. The compose project and the volume names are read
+  from `docker compose config`, and no file in `deploy/` changes but
+  `config/LocalSettings.php`, which is moved. From a worktree, point
+  `$YIZKR_ENV_FILE` at the main checkout's `deploy/.env`: the stack runs
+  from that checkout's deploy directory, and the reset refuses any
+  other. While the stack has containers, stopped ones included, their
+  labels say where it was started from; with none, the reset checks the
+  deploy directory and compose files that the last reset recorded in
+  `stack.json`.
+- **Guards.** Before it changes anything, the reset refuses:
+  - `COMPOSE_PROJECT_NAME`: docker compose would take the stack for
+    another project than its compose files name, with other volumes,
+    which the reset would remove;
+  - `DOCKER_HOST` or `DOCKER_CONTEXT`, or a docker context other than
+    `default`: the reset moves a file beside the compose files, so it
+    works on the local Docker engine only. It reads these settings in the
+    environment, and in the env file in each form docker compose reads
+    there (`NAME=value`, `export NAME=value`, `NAME: value`), whatever
+    the value;
+  - compose files that do not declare the four volumes under the keys
+    Wikibase Suite Deploy gives them, or declare one external;
+  - a stack whose containers, stopped ones included, were made from
+    another directory or other compose files, or, with no container,
+    that the last reset ran from elsewhere, as another project or on
+    another Docker engine (`stack.json`): starting it from here would
+    swap its config directory, and its `LocalSettings.php`, for another
+    checkout's, and after a restart another engine can answer behind the
+    local socket, with none of the stack's volumes. A record from before
+    engines were recorded names none, and only a record that names
+    another engine is refused on that count;
+  - a volume of one of those names that Docker Compose did not make for
+    this project as that volume: it removes the stack's own volumes and
+    nothing else;
+  - a stack that docker cannot read;
+  - a reset that is not confirmed: at a terminal, by typing `reset`;
+    otherwise by `--yes`.
+
+  It then takes the live-stack lock (docs/TESTING.md), waiting while a
+  live test session holds it, and holds it to the end, so no live
+  session uses the instance while it is reset. Under the lock it reads
+  the stack again under these guards, since it may have changed while
+  the reset waited, and refuses one that names another project, other
+  volumes or another config directory than the one it confirmed. Then it
+  reads the kept-state marker (below), and refuses a kept instance. It
+  asks the wiki first. A wiki that answers must be served by this
+  engine's stack, with the project's database volume and a running
+  `wikibase` container: otherwise it is served from elsewhere (another
+  Docker engine behind the local socket, say), and the reset cannot tell
+  which instance it would reset. A wiki that answers as another wiki
+  than the env file names is refused too. With the database volume
+  there and no answer, the reset starts the stack to read the marker,
+  and refuses if it still cannot. Only no answer and no database volume
+  mean the instance holds no graph to guard.
+- **The kept-state marker** is kept twice, and the reset refuses if
+  either says the instance is kept: the page `Project:Kept state` on the
+  instance, which goes wherever its database goes, into backups and
+  through a restore; and the file `kept.json` in the record of the
+  instance, which holds when the instance cannot be read, or another
+  engine answers for it. Keeper mode (#118) writes both once the keeper
+  run's write completes (ADR-0025 §6). Removing them is a deliberate
+  owner step, taken only to give up the kept state: delete the page as
+  the wiki's admin, and remove `kept.json` by hand.
+- **What it deletes**: the four volumes, and nothing else. The rest of
+  what it clears it sets aside, in `reset/<UTC time>/` in the record of
+  the instance: the write stage's state, and `LocalSettings.php`, which
+  holds the wiki's secret key and database password. The folder is
+  private to you; clear old ones by hand when you no longer want them.
+- **Again.** Every step is safe to repeat, so a reset that failed or
+  was interrupted is finished by running it again: it removes only the
+  volumes there are and sets aside only what is there, and the
+  bootstrap, the queries and the smoke test are idempotent.
+- **When the stack cannot start.** A reset cut short while the stack
+  installed MediaWiki can leave a half-installed database, whose wiki
+  never answers; the reset then refuses, since it cannot tell whether
+  the instance is kept. If you are sure it is not kept, and there is no
+  `kept.json` in the record of the instance, finish by hand in the
+  deploy directory, with the compose files the stack was started with (a
+  `-f` for each, as the reset's refusal names them), then run
+  `yizkr scratch reset` again:
+
+  ```sh
+  docker compose -f docker-compose.yml down
+  docker volume rm yizkr-wikibase_mysql-data \
+      yizkr-wikibase_elasticsearch-data yizkr-wikibase_wdqs-data \
+      yizkr-wikibase_wikibase-image-data
+  mv config/LocalSettings.php \
+      ~/.local/state/yizkr/instances/<host>/reset/LocalSettings.php.$(date -u +%Y%m%dT%H%M%SZ)
+  ```
+
+  The volume names are the project's (`yizkr-wikibase`, from the
+  compose file's `name`) and each volume's key;
+  `docker compose config --volumes` lists the keys.
+- **Exit status**: 0 when it finished; 1 when it was refused or a step
+  failed, saying which; 130 on Ctrl-C.
+
+**The record of the instance.** What a scratch run needs to know about
+the instance, outside it, is kept per user, apart from any checkout, so
+that every checkout and worktree on the machine shares it as they share
+the instance: in `$YIZKR_INSTANCE_STATE` (default
+`~/.local/state/yizkr/instances`, under `$XDG_STATE_HOME` when that is
+set), in a private folder named after the instance's host.
+
+- `contents.json`, the instance-contents record: the key of what the
+  scratch write stage wrote (#200), the run that wrote it, and the
+  instance's newest revision and newest log entry as the write finished.
+  It stands only while those stay the same, so any other write, by a
+  live test, a command or a hand in the wiki, voids it, and the next
+  scratch run resets first. The live-test harness (as each session
+  starts and ends), `yizkr bootstrap` and the reset also clear it
+  outright, and the cleared record names who cleared it, when, and from
+  which process.
+- `kept.json`: the host-side kept-state marker (above).
+- `stack.json`: the deploy directory, compose files, project and Docker
+  engine (its id, from `docker info`) that the last reset stopped the
+  stack from. When it cannot be read, the reset refuses, and says to
+  remove it by hand once you know where the stack runs from.
+- `write/`: the write stage's state between its invocations (#200),
+  which the reset sets aside.
+- `reset/`: what each reset set aside.
+
+It is local-only data (docs/AGENT_PROTOCOL.md §6).
+
 ## What stays local
 
 Everything a run writes is under `var/`, and is local-only data
@@ -322,8 +501,8 @@ Nothing from them goes into the repository, GitHub or a cloud session.
 
 - Of the corpus stages only clustering (#105) is registered, and it
   touches no wiki. The stages that do, the reset, register, write and
-  site stages (#200, with #199 and #103) and place-hierarchy
-  reconciliation (#201), register themselves as they land. Until then a
-  run finishes after clustering, and needs no stack. The estimate counts
-  the per-document stages' calls, says that clustering makes none, and
-  names any corpus stage it does not count.
+  site stages (#200, with #103; the reset stage runs the reset above)
+  and place-hierarchy reconciliation (#201), register themselves as they
+  land. Until then a run finishes after clustering, and needs no stack.
+  The estimate counts the per-document stages' calls, says that
+  clustering makes none, and names any corpus stage it does not count.

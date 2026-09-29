@@ -16,6 +16,8 @@
                            driver to stop or go on
     yizkr scratch report   what a scratch run did, per stage and per
                            document, from its run directory alone
+    yizkr scratch reset    reset the instance and repopulate it for a
+                           scratch run; refuses on a kept instance
 
 Connection settings come from deploy/.env (or $YIZKR_ENV_FILE /
 --env-file); see deploy/README.md.
@@ -90,6 +92,18 @@ def cmd_bootstrap(args) -> int:
     )
     config = Config.load(args.env_file)
     print(f"Wikibase: {config.wikibase_url}")
+    if not args.dry_run:
+        from yizkr.core.instance import clear_contents
+
+        # the scratch write stage does not make this write, so no scratch
+        # run may take the instance for one it wrote (yizkr.core.instance)
+        try:
+            clear_contents(config, "yizkr bootstrap")
+        except (OSError, ValueError) as exc:
+            sys.exit(
+                f"the recorded instance-contents key cannot be cleared "
+                f"({exc}), so the bootstrap writes nothing"
+            )
     bootstrap_instance(WikiClient(config), manifest, dry_run=args.dry_run)
     return 0
 
@@ -964,6 +978,41 @@ def cmd_scratch_import_transcriptions(args) -> int:
     return 0
 
 
+def cmd_scratch_reset(args) -> int:
+    from yizkr import reset
+    from yizkr.pipeline.scratch import (
+        EXIT_FAILED,
+        EXIT_INTERRUPTED,
+        EXIT_OK,
+    )
+
+    try:
+        report = reset.reset_instance(
+            env_file=args.env_file,
+            deploy_dir=args.deploy_dir,
+            compose_files=args.compose_file,
+            yes=args.yes,
+            start_timeout=args.start_timeout,
+            smoke_timeout=args.smoke_timeout,
+        )
+    except reset.ResetRefused as exc:
+        print(f"the reset is refused: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    except reset.ResetFailed as exc:
+        print(f"the reset failed: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    except KeyboardInterrupt:
+        print(
+            "interrupted: every step is safe to repeat, so `yizkr scratch "
+            "reset` again finishes the reset",
+            file=sys.stderr,
+        )
+        return EXIT_INTERRUPTED
+    for line in reset.describe(report):
+        print(line)
+    return EXIT_OK
+
+
 def cmd_detect_faces(args) -> int:
     from yizkr.pipeline.faces import Gallery, make_detector, proposals_to_batch
 
@@ -1623,8 +1672,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _scratch_parsers(sub, effort_choices) -> None:
     """`yizkr scratch`: the scratch driver and its call estimate
     (docs/runbooks/scratch-run.md), the import of archived transcriptions
-    for its calls (docs/LLM_CACHE.md, Seeding), and the run monitor's
-    commands (docs/MONITOR.md)."""
+    for its calls (docs/LLM_CACHE.md, Seeding), the run monitor's
+    commands (docs/MONITOR.md), and the reset of the instance for a run."""
     from yizkr.pipeline import scratch
     from yizkr.pipeline.rundir import CONTROL_ACTIONS
 
@@ -1632,7 +1681,8 @@ def _scratch_parsers(sub, effort_choices) -> None:
         "scratch",
         help="whole-corpus scratch runs: import archived transcriptions for "
         "one's calls, estimate its calls, run it, follow it, pause, resume "
-        "or abort it (docs/runbooks/scratch-run.md)",
+        "or abort it, and reset the instance for it "
+        "(docs/runbooks/scratch-run.md)",
     )
     ssub = group.add_subparsers(dest="action", required=True)
     runs_help = (
@@ -1760,6 +1810,8 @@ def _scratch_parsers(sub, effort_choices) -> None:
     )
     p.set_defaults(func=cmd_scratch_report)
 
+    _scratch_reset_parser(ssub)
+
     for action in CONTROL_ACTIONS:
         p = ssub.add_parser(
             action,
@@ -1775,6 +1827,58 @@ def _scratch_parsers(sub, effort_choices) -> None:
         slice_.add_argument("--kind", help="only this document kind")
         p.add_argument("--reason", default="", help="why, for the log")
         p.set_defaults(func=cmd_scratch_control)
+
+
+def _scratch_reset_parser(ssub) -> None:
+    """`yizkr scratch reset` (docs/runbooks/scratch-run.md, Reset the
+    instance)."""
+    from yizkr import reset
+
+    p = ssub.add_parser(
+        "reset",
+        help="reset the instance and repopulate it for a scratch run: stop "
+        "the stack, remove its graph volumes (database, search index, query "
+        "service, uploaded media), start it afresh, bootstrap the manifest, "
+        "publish the queries and run the smoke test, timing each step. It "
+        "refuses on a kept instance, holds the live-stack lock, and takes "
+        "no backup (docs/runbooks/scratch-run.md, Reset the instance)",
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm the reset without being asked; a reset run without a "
+        "terminal needs it",
+    )
+    p.add_argument(
+        "--deploy-dir",
+        type=Path,
+        help="the stack's deploy directory (default: the directory of the "
+        "env file, which its compose files read)",
+    )
+    p.add_argument(
+        "--compose-file",
+        action="append",
+        metavar="FILE",
+        help="a compose file the stack was started with, relative to "
+        "--deploy-dir (repeatable; default docker-compose.yml)",
+    )
+    p.add_argument(
+        "--start-timeout",
+        type=float,
+        default=reset.DEFAULT_START_TIMEOUT,
+        metavar="SECONDS",
+        help="how long the stack may take to start and be healthy "
+        f"(default {reset.DEFAULT_START_TIMEOUT:g})",
+    )
+    p.add_argument(
+        "--smoke-timeout",
+        type=int,
+        default=reset.DEFAULT_SMOKE_TIMEOUT,
+        metavar="SECONDS",
+        help="how long the smoke test waits for the query service "
+        f"(default {reset.DEFAULT_SMOKE_TIMEOUT})",
+    )
+    p.set_defaults(func=cmd_scratch_reset)
 
 
 def _scratch_plan_options(p, effort_choices, runs_help: str) -> None:

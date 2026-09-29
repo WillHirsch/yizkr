@@ -60,6 +60,19 @@ recompute (each miss's reason, and replays), and the run-to-run diff
 (#198) attributes a recompute to the key component that changed; §3 is
 amended in place.
 
+Amended by #199 (2026-09-29): the reset also removes the wiki's uploaded
+media, which only the database refers to, and sets the wiki's
+LocalSettings.php aside so that the wiki installs afresh; it holds the
+live-stack lock while it runs, and a reset without a terminal needs
+`--yes`. The kept-state marker is kept twice, as a page on the instance
+and as a record on the host, and the reset refuses if either says kept,
+if it cannot read the page, if a wiki answers that the local engine's
+stack does not serve, or if, with no container of the stack, the engine
+is not the one the last reset recorded. The instance-contents record
+names the instance's newest revision and log entry, so any write the
+scratch write stage did not make voids it, a manual edit included; §1,
+§6 and §8 are amended in place.
+
 ## Context
 
 ADR-0024 §7 set up a *development stage*: until the owner declares a
@@ -119,12 +132,18 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   scratch driver (#194), runs it.
 - **It writes to the one existing instance, which one command resets and
   repopulates per run** (#199). The reset stops the stack, removes its
-  graph volumes, starts it, bootstraps the manifest, publishes the
-  queries and runs the smoke test. It clears write-phase state but never
-  the stage store, the corpus or run reports, and it takes no backup
-  (ADR-0024 §7). There is no separate dev stack. The scratch write stage
-  refuses unless its own run reset the instance, so scratch writes never
-  mix with other state (#200).
+  graph volumes (the database, the search index, the query service and
+  the wiki's uploaded media), sets the wiki's LocalSettings.php aside so
+  that the wiki installs afresh, starts it, bootstraps the manifest,
+  publishes the queries and runs the smoke test. It holds the live-stack
+  lock while it runs, refuses on an instance that carries the kept-state
+  marker (§6), whose marker it cannot read, or whose wiki the local
+  Docker engine's stack does not serve, and needs `--yes` without a
+  terminal. It clears write-phase state but never the stage store, the
+  corpus or run reports, and it takes no backup (ADR-0024 §7). There is
+  no separate dev stack. The scratch write stage refuses unless its own
+  run reset the instance, so scratch writes never mix with other state
+  (#200).
 - **Scratch writes keep every non-negotiable rule that applies to a
   write.** Every claim is written at normal rank with both references:
   `stated in` the artifact or fragment with its locator, and `inferred
@@ -154,7 +173,10 @@ The owner replaced that plan on 2026-09-27, for four reasons.
   would vanish at the next reset and hide the defect. Any write to the
   instance that the scratch write stage did not make (a live test, a
   manual edit, an experiment) clears the recorded instance-contents key,
-  so the next scratch run resets first (#199).
+  so the next scratch run resets first (#199). The record names the
+  instance's newest revision and newest log entry as the write stage
+  finished, so any other write voids it; the live-test harness,
+  `yizkr bootstrap` and the reset also clear it outright.
 - **No owner decisions about the data are taken or carried in the
   development stage.** There is nothing to carry forward, so fingerprint
   carry-forward (#125) applies between kept runs only, from the keeper
@@ -390,9 +412,14 @@ note.
   outputs, reusing them, and applies cluster review and ratification
   (ADR-0026, ADR-0027). It is the first run anyone ratifies.
 - **The kept-state stage follows.** CLAUDE.md rule 3 applies in full,
-  milestone backups start (ADR-0024 §7), and keeper mode writes a
-  kept-state marker so the reset command refuses on the instance (#118,
-  #199).
+  milestone backups start (ADR-0024 §7), and keeper mode writes the
+  kept-state marker twice, as the page `Project:Kept state` on the
+  instance and as `kept.json` in the instance's record on the host, so
+  the reset command refuses on it (#118, #199). The page goes wherever
+  the instance's database goes, into its backups and through a restore;
+  the host-side record holds when the instance cannot be read, or
+  another Docker engine answers for it. Removing either is a deliberate
+  owner step.
 - **Development continues without an instance.** From then on,
   `needs:scratch-diff` runs stop `--until` the last stage before write,
   so they need no instance.
@@ -418,10 +445,9 @@ ruling before the keeper run.
 - `needs:scratch-diff` replaces `needs:eval`, and `stage:*` labels mark
   work that changes a stage before write. `req:*` labels stay on epics
   only.
-- Live tests run on the one instance, which scratch runs reset. A
-  live-test session ends by clearing the recorded instance-contents key,
-  or by resetting and re-running the write stage of the latest scratch
-  run.
+- Live tests run on the one instance, which scratch runs reset. The
+  live-test harness clears the recorded instance-contents key as a
+  session starts and as it ends, and any write voids the record (§1).
 - A scratch run holds the claude-code subscription for its LLM stages,
   and holds the live stack only while its reset, register, write,
   place-reconcile and site stages run.

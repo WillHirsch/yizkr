@@ -7,7 +7,7 @@ COMPOSE_LOCAL = docker compose -f docker-compose.yml -f docker-compose.localhost
 export UID := $(shell id -u)
 export GID := $(shell id -g)
 
-.PHONY: install hooks test test-live lint fmt up down up-local cli bootstrap smoke publish-queries wdqs-sandbox-up wdqs-sandbox-down
+.PHONY: install hooks test test-live lint fmt up down up-local cli bootstrap smoke publish-queries scratch-reset wdqs-sandbox-up wdqs-sandbox-down
 
 install:            ## create/update the uv-managed venv (with dev tools)
 	$(UV) sync --dev
@@ -63,6 +63,10 @@ smoke:              ## deployment smoke test
 
 publish-queries:    ## publish the SPARQL library to wiki pages
 	$(UV) run yizkr publish-queries
+
+# Deletes the instance's graph: it asks first, or takes ARGS="--yes".
+scratch-reset:      ## reset and repopulate the instance for a scratch run (docs/runbooks/scratch-run.md)
+	$(UV) run yizkr scratch reset $(ARGS)
 
 # Query reviews: a throwaway, network-less query engine, separate from the
 # stack, one per checkout. Load a scripts/synthetic_graph.py graph into it

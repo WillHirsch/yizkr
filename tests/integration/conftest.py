@@ -9,6 +9,11 @@ A session that uses the stack holds the live-stack lock (live_lock.py)
 from its first stack test to its end, so live sessions take turns on
 the one instance.
 
+The session writes to the instance, and the scratch write stage does not
+make those writes, so the session clears the recorded instance-contents
+key (yizkr.core.instance) once it holds the lock, and again as it ends:
+the next scratch run resets the instance first (#199).
+
 A claim cites its artifact by the SHA-1 of the artifact's media (#102),
 so every artifact a test's claims cite is registered with media of its
 own: `register_fictional` gives it a small PNG whose bytes its title
@@ -31,10 +36,14 @@ import requests
 from yizkr.claims import ArtifactRef
 from yizkr.core import sparql
 from yizkr.core.config import USER_AGENT, Config
+from yizkr.core.instance import clear_contents
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.registrar import register_artifact
 
 from .live_lock import hold_for_session
+
+# who a live session's clearing of the instance-contents record names
+LIVE_TESTS = "live tests"
 
 
 @pytest.fixture(scope="session")
@@ -55,6 +64,10 @@ def config(request) -> Config:
     # taken once the session knows which stack it uses, before it first
     # contacts it
     request.getfixturevalue("live_stack_lock")
+    # before any test writes, and again at the session's end, while the
+    # lock is still held
+    clear_contents(config, LIVE_TESTS)
+    request.addfinalizer(lambda: clear_contents(config, LIVE_TESTS))
     try:
         requests.get(
             f"{config.wikibase_url}/w/api.php",
