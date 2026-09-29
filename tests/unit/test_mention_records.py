@@ -566,6 +566,13 @@ class TestRetiredProperty:
         (problem,) = problems(claim("leopold", "spouse", existing))
         assert "is retired" in problem
 
+    def test_even_one_of_another_datatype(self):
+        # refused as retired before its value is read, so the refusal is
+        # the one problem, never a datatype mismatch
+        text = {"type": "string", "value": "Agnes"}
+        (problem,) = problems(claim("leopold", "spouse", text))
+        assert "is retired" in problem
+
     def test_and_salvage_counts_it(self):
         valid, rejects = salvage_valid_claims(
             [claim("leopold", "spouse", item("agnes"))], RUN, entities=ENTITIES

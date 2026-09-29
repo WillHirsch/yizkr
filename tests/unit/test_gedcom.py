@@ -4958,6 +4958,10 @@ class TestPartsBesideTheValue:
         ida, _ = record_of(text, "i7")
         assert parts(ida.structure)["given"] == ["Ida"]
         assert parts(ida.structure)["titles"] == ["Frau Dr."]
+        # a value that starts with its first word alone keeps its words
+        text = person("I7", "Frau Ida /Löbig/", "2 NPFX Frau Dr.")
+        ida, _ = record_of(text, "i7")
+        assert parts(ida.structure)["given"] == ["Frau", "Ida"]
 
     def test_a_prefix_the_value_does_not_start_with_stays(self):
         # only a prefix the given part starts with is taken from it
@@ -4992,6 +4996,11 @@ class TestQuotesAndSlashes:
         gustav_entity, _ = record_of(person("I8", name), "i8")
         assert parts(gustav_entity.structure)["nicknames"] == ["Gustl"]
         assert parts(gustav_entity.structure)["given"] == ["Gustav"]
+
+    def test_an_apostrophe_within_a_word_opens_no_quote(self):
+        # though a later word ends with one: a quote opens a word
+        entity, _ = record_of(person("I18", "S. van't Nijks' /Tarle/"), "i18")
+        assert "nicknames" not in parts(entity.structure)
 
     def test_an_apostrophe_opening_a_word_is_no_quote(self):
         entity, _ = record_of(person("I18", "S. van 't /Nijks/"), "i18")
@@ -5091,7 +5100,17 @@ class TestUnionShapes:
     @pytest.mark.parametrize(
         ("kind", "wedding"),
         [
-            *WEDDING_TYPES.items(),
+            ("civil", "civil_wedding"),
+            ("civil ceremony", "civil_wedding"),
+            ("civil marriage", "civil_wedding"),
+            ("Standesamt", "civil_wedding"),
+            ("standesamtlich", "civil_wedding"),
+            ("religious", "religious_wedding"),
+            ("religious ceremony", "religious_wedding"),
+            ("religious marriage", "religious_wedding"),
+            ("church", "religious_wedding"),
+            ("church wedding", "religious_wedding"),
+            ("kirchlich", "religious_wedding"),
             ("  Civil   Marriage ", "civil_wedding"),
             ("KIRCHLICH", "religious_wedding"),
         ],
@@ -5106,6 +5125,13 @@ class TestUnionShapes:
             f"f5-{wedding.replace('_', '-')}": wedding,
         }
         assert result.unsupported_tags == {}
+
+    def test_the_wedding_types_are_those_pinned_above(self):
+        assert set(WEDDING_TYPES) == {
+            "civil", "civil ceremony", "civil marriage", "standesamt",
+            "standesamtlich", "religious", "religious ceremony",
+            "religious marriage", "church", "church wedding", "kirchlich",
+        }  # fmt: skip
 
     def test_types_of_one_kind_make_one_wedding(self):
         result = adapt_gedcom(
