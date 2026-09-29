@@ -1,0 +1,110 @@
+0 HEAD
+1 SOUR yizkr-example-universe
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I3@ INDI
+1 NAME Sebastian /Löbig/
+2 TYPE birth
+2 NICK Wastl
+1 SEX M
+1 BIRT
+2 DATE 15 FEB 1862
+2 PLAC Flörburg, Hesse, Germany
+1 DEAT
+2 DATE 1945
+1 OCCU Hatter
+1 FAMS @F2@
+0 @I4@ INDI
+1 NAME Hildegard /Laudler/
+2 TYPE birth
+2 NICK Hilde
+1 NAME Hildegard /Löbig/
+2 TYPE married
+1 SEX F
+1 BIRT
+2 DATE 19 MAR 1876
+2 PLAC Fläckfeld, Kreis Mockburg, Hesse, Germany
+1 DEAT
+2 DATE 1968
+1 FAMS @F2@
+0 @I10@ INDI
+1 NAME Ursula /Löbig/
+1 SEX F
+1 FAMC @F2@
+0 @I9@ INDI
+1 NAME Klara /Löbig/
+2 TYPE birth
+2 NICK Pünktchen
+1 NAME Clara /Lobig/
+2 TYPE immigrant
+1 SEX F
+1 BIRT
+2 DATE 1917
+1 DEAT
+2 DATE 2001
+1 RESI
+2 DATE 19 AUG 1938
+2 PLAC 31 Juniper Street, Stupfield, Victoria, Australia
+1 FAMC @F2@
+0 @I8@ INDI
+1 NAME Gustav /Löbig/
+2 TYPE birth
+2 NICK Gustl
+1 NAME Gustave /Lobig/
+2 TYPE immigrant
+1 SEX M
+1 BIRT
+2 DATE 7 JAN 1919
+2 PLAC Flörburg, Hesse, Germany
+1 DEAT
+2 DATE 1996
+1 BURI
+2 PLAC Stupfield, Victoria, Australia
+1 OCCU Hatter
+1 RESI
+2 DATE 1952
+2 PLAC 8 Hawthorn Road, Stupfield, Victoria, Australia
+1 FAMC @F2@
+1 FAMS @F4@
+0 @I14@ INDI
+1 NAME Florence /Faxridge/
+2 TYPE birth
+1 NAME Florence /Lobig/
+2 TYPE married
+1 SEX F
+1 BIRT
+2 DATE 1914
+1 DEAT
+2 DATE 1963
+1 FAMS @F4@
+0 @I15@ INDI
+1 NAME Nicholas /Lobig/
+1 SEX M
+1 BIRT
+2 DATE 1950
+2 PLAC Stupfield, Victoria, Australia
+1 DEAT
+1 FAMC @F4@
+0 @I16@ INDI
+1 NAME Ursula /Löbig/
+1 SEX F
+1 RESI
+2 DATE 1912
+2 PLAC Angerring 57, Flörburg, Hesse, Germany
+0 @F2@ FAM
+1 HUSB @I3@
+1 WIFE @I4@
+1 CHIL @I10@
+1 CHIL @I9@
+1 CHIL @I8@
+1 MARR
+2 DATE 15 DEC 1905
+2 PLAC Flörburg, Hesse, Germany
+0 @F4@ FAM
+1 HUSB @I8@
+1 WIFE @I14@
+1 CHIL @I15@
+1 MARR
+2 DATE 1942
+0 TRLR
