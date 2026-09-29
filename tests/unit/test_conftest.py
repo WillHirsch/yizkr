@@ -1,7 +1,8 @@
 """Offline tests for the unit tests' own defaults (tests/unit/conftest.py,
 #254): one BLAS thread unless the environment gives a thread count, sync
-calls that flush nothing unless a test is marked `real_fsync`, and a
-record of the instance of each test's own (#199).
+calls that flush nothing unless a test is marked `real_fsync`, a
+record of the instance of each test's own (#199), and no settings from
+the host (#422).
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ import errno
 import hashlib
 import os
 import posix
+import subprocess
+import sys
 import warnings
 from pathlib import Path
 
@@ -165,3 +168,147 @@ class TestInstanceRecord:
             == (hashlib.sha1(request.node.nodeid.encode()).hexdigest()[:16])
         )
         assert not root.exists()
+
+
+REPO = Path(__file__).resolve().parents[2]
+
+# The two tests that read a never-ingest list from the host's deploy/.env
+# before the unit tests were kept from the host's settings (#422).
+LIST_READERS = [
+    "tests/unit/test_llmcache.py::TestTheSingleCallExtractor::"
+    "test_ingest_extract_calls_through_its_cache",
+    "tests/unit/test_llmcache.py::TestTheSingleCallExtractor::"
+    "test_ingest_extract_refuses_a_cache_git_would_track",
+]
+# and what a module's fixture sees, which sets up before any test's own
+MODULE_CHECK = (
+    "tests/unit/test_conftest.py::TestHostSettings::"
+    "test_no_test_or_fixture_of_a_module_sees_a_host_setting"
+)
+
+
+def host_files(root: Path, never_ingest: Path) -> None:
+    """A deploy/.env and a .env in `root`, as a developer's machine has,
+    naming the never-ingest list, a corpus folder and a wiki."""
+    (root / "deploy").mkdir()
+    settings = (
+        f"YIZKR_EXCLUDE_FILE={never_ingest}\n"
+        f"YIZKR_CORPUS_DIR={root / 'corpus'}\n"
+        "WIKIBASE_URL=http://wiki.example\n"
+    )
+    for env in (root / "deploy" / ".env", root / ".env"):
+        env.write_text(settings)
+
+
+@pytest.fixture
+def never_ingest(tmp_path) -> Path:
+    """A never-ingest list with a pattern entry."""
+    path = tmp_path / "never-ingest.txt"
+    path.write_text("postcard-*.png\n")
+    return path
+
+
+@pytest.fixture(scope="module")
+def module_host_settings() -> list[str]:
+    """The host's settings a module's fixture sees."""
+    return conftest.host_settings(os.environ)
+
+
+class TestHostSettings:
+    def test_the_host_settings_are_the_yizkr_and_connection_variables(self):
+        environ = {
+            "YIZKR_EXCLUDE_FILE": "never.txt",
+            "YIZKR_ENV_FILE": "deploy/.env",
+            "YIZKR_INSTANCE_STATE": "records",
+            "MW_ADMIN_PASS": "not-a-password",
+            "WIKIBASE_URL": "http://wiki.example",
+            "PATH": "/usr/bin",
+            "OPENBLAS_NUM_THREADS": "1",
+        }
+        assert conftest.host_settings(environ) == [
+            "MW_ADMIN_PASS",
+            "WIKIBASE_URL",
+            "YIZKR_ENV_FILE",
+            "YIZKR_EXCLUDE_FILE",
+        ]
+
+    def test_no_test_or_fixture_of_a_module_sees_a_host_setting(
+        self, module_host_settings
+    ):
+        assert module_host_settings == []
+        assert conftest.host_settings(os.environ) == []
+
+    def test_no_default_env_file_is_read(
+        self, tmp_path, monkeypatch, never_ingest
+    ):
+        """A deploy/.env and a .env in the working directory, as the
+        repository root holds on a developer's machine, are not found:
+        what reads settings sees none, as on CI."""
+        from yizkr.core.config import (
+            Config,
+            ConfigError,
+            env_setting,
+            resolve_env_file,
+        )
+        from yizkr.core.corpus import corpus_dir, load_exclusions
+
+        host_files(tmp_path, never_ingest)
+        monkeypatch.chdir(tmp_path)
+        assert resolve_env_file() is None
+        assert env_setting("YIZKR_EXCLUDE_FILE") == ""
+        assert load_exclusions(required=False) is None
+        assert corpus_dir() is None
+        with pytest.raises(ConfigError, match="WIKIBASE_URL"):
+            Config.load(require_admin=False)
+
+    def test_a_setting_a_test_gives_is_read(
+        self, tmp_path, monkeypatch, never_ingest
+    ):
+        """In an env file the test names, or in the environment."""
+        from yizkr.core.config import env_setting
+        from yizkr.core.corpus import corpus_dir, load_exclusions
+
+        host_files(tmp_path, never_ingest)
+        monkeypatch.setenv("YIZKR_ENV_FILE", str(tmp_path / "deploy/.env"))
+        assert load_exclusions(required=True).patterns == ("postcard-*.png",)
+        assert corpus_dir() == tmp_path / "corpus"
+        monkeypatch.setenv("YIZKR_CORPUS_DIR", str(tmp_path / "other"))
+        assert corpus_dir() == tmp_path / "other"
+        assert env_setting("YIZKR_CORPUS_DIR") == str(tmp_path / "other")
+
+    def test_the_list_readers_pass_on_a_host_with_a_never_ingest_list(
+        self, tmp_path, never_ingest
+    ):
+        """Run from a folder whose deploy/.env names a never-ingest list
+        with a pattern entry, and with the list's variable exported, the
+        tests that ingest without a media file still pass: they read no
+        list, and no fixture of a module sees the host's settings."""
+        host_files(tmp_path, never_ingest)
+        environ = {
+            name: value
+            for name, value in os.environ.items()
+            if name != "YIZKR_ENV_FILE"
+        }
+        environ["YIZKR_EXCLUDE_FILE"] = str(never_ingest)
+        environ["MW_ADMIN_PASS"] = "not-a-password"
+        environ["PYTHONPATH"] = str(REPO)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--basetemp",
+                str(tmp_path / "basetemp"),
+                *(str(REPO / test) for test in [*LIST_READERS, MODULE_CHECK]),
+            ],
+            cwd=tmp_path,
+            env=environ,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "3 passed" in result.stdout
