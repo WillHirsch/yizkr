@@ -584,22 +584,27 @@ def image_bytes(obj: Any) -> tuple[bytes, str]:
 
 def _write_vision(document: Any, layout: _Layout, directory: Path) -> Path:
     """Write what the vision engine reads of a vision page: its one
-    covering image as held, when it draws nothing else, or else a
-    rendering of the page as PNG."""
+    covering image as held, when it draws nothing else and PDFium can
+    give its bytes, or else a rendering of the page as PNG."""
     page = document[layout.number - 1]
     try:
+        held = None
         if layout.lone_image is not None:
             obj = _objects(page)[layout.lone_image][0]
-            data, suffix = image_bytes(obj)
-        else:
+            try:
+                held = image_bytes(obj)
+            except (pdfium.PdfiumError, ValueError):
+                held = None
+        if held is None:
             width, height = page.get_size()
             bitmap = page.render(
                 scale=RENDER_LONG_EDGE / max(width, height, 1)
             )
             try:
-                data, suffix = bitmap_png(bitmap), PNG_SUFFIX
+                held = bitmap_png(bitmap), PNG_SUFFIX
             finally:
                 bitmap.close()
+        data, suffix = held
     finally:
         page.close()
     path = directory / f"page-{layout.number}{suffix}"

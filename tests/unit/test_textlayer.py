@@ -36,6 +36,12 @@ SOURCES = {source.key: source for source in u.SOURCES}
 EXTRACT = SOURCES["birth-extract-1938"].text
 EXCERPT = SOURCES["letter-excerpt-1939"].text
 TITLE = "Our Family from Germany. Compiled by Nicholas Lobig. Stupfield, 2011."
+# an image in a filter PDFium does not know, so it cannot decode it
+BROKEN = pdfs.Image(
+    "/Width 100 /Height 100 /ColorSpace /DeviceGray /BitsPerComponent 8 "
+    "/Filter /Fictional",
+    b"no image stream PDFium can read",
+)
 CAPTION = "Wastl to Klara, July 1939."
 TRANSLATION = (
     "Translation: Flörburg, Brunnenring 35, 28 July 1939. Dear Pünktchen! "
@@ -274,6 +280,14 @@ class TestWhatVisionReads:
         result = read(tmp_path, typed(TITLE), page)
         assert result.pages[1].vision.suffix == PNG_SUFFIX
 
+    def test_a_scan_pdfium_cannot_decode_is_rendered(self, tmp_path):
+        """A page's one image in a filter PDFium does not know: it cannot
+        be given as held, and the page is rendered instead."""
+        page = pdfs.Page().image(BROKEN, 0, 0, pdfs.WIDTH, pdfs.HEIGHT)
+        result = read(tmp_path, typed(TITLE), page)
+        assert methods(result) == [TEXT_LAYER, VISION]
+        assert result.pages[1].vision.name == "page-2.png"
+
     def test_a_rendering_is_the_same_every_time(self, tmp_path):
         page = scan().text(["Stadtarchiv Flörburg"], y=20)
         first = read(tmp_path / "first", typed(TITLE), page)
@@ -380,6 +394,16 @@ class TestImages:
         assert result.images == {}
         assert result.pages[0].images == []
         assert written(tmp_path) == []
+
+    def test_an_image_pdfium_cannot_decode_is_noted(self, tmp_path):
+        page = self.booklet_page(BROKEN)
+        result = read(tmp_path, page)
+        assert result.images == {}
+        assert result.pages[0].images == []
+        assert result.notes == [
+            "page 1, image 1: PDFium could not give its bytes, so it is not "
+            "read"
+        ]
 
     def test_no_image_is_read_on_a_page_read_by_vision(self, tmp_path):
         page = scan().image(pdfs.gray(300, 120), 72, 480, 300, 200)

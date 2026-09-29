@@ -459,6 +459,26 @@ class TestImages:
         assert not derived_transcription(doc.dir, LETTER_SHA1).exists()
         assert LETTER_SHA1 in read_derived_media(doc.dir).media
 
+    def test_an_image_that_cannot_be_read_needs_attention(self, tmp_path):
+        broken = pdfs.Image(
+            "/Width 100 /Height 100 /ColorSpace /DeviceGray "
+            "/BitsPerComponent 8 /Filter /Fictional",
+            b"no image stream PDFium can read",
+        )
+        corpus = folder(tmp_path, booklet=booklet(broken))
+        orchestrator = run(tmp_path, corpus, Reader({}))
+        doc = document(orchestrator, "booklet.pdf")
+        assert doc.state.status == AWAITING_CLAIMS
+        (done,) = [
+            event
+            for event in this_run(orchestrator, "done")
+            if event["stage"] == "transcription"
+        ]
+        assert done["attention"] == [
+            "page 6, image 1: PDFium could not give its bytes, so it is not "
+            "read"
+        ]
+
     def test_nothing_is_written_until_the_stage_keeps_it(self, tmp_path):
         """The route writes nothing into the document's directory, so a
         caller that only counts calls (the call estimate) keeps nothing:
