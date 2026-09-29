@@ -554,9 +554,13 @@ class TestReadDump:
     def test_places_artifacts_events_and_vocabulary_are_no_people(
         self, tmp_path, vocabulary
     ):
+        # nor is a family that carries no person evidence (an appellation's
+        # perspective is none), though the export drops it as a family
         _, items = vocabulary
         found = self.reading(tmp_path, vocabulary)
-        assert not found.people & (set(OTHERS) | set(items.values()))
+        assert not found.people & (
+            set(OTHERS) | set(FAMILIES) | set(items.values())
+        )
 
     @staticmethod
     def one(tmp_path, vocabulary, build) -> DumpReading:
