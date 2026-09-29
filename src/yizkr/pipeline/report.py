@@ -1,11 +1,12 @@
 """The run report: what a run did, per stage and per document, read from
-its run directory alone (`yizkr scratch report`; ADR-0025 §3).
+its run directory (`yizkr scratch report`; ADR-0025 §3).
 
 It reports a run that went to the end, one still running, and one that
 stopped short (stopped by the control file, paused, interrupted, refused,
 failed or killed): every count is what the run directory holds as it is
-read. It reads the run directory and nothing else, never the wiki, the
-engine or the LLM cache:
+read. It reads the run directory, and the model manifest for the names
+report.md may give claims and entities (claims.load_vocabulary); never
+the wiki, the engine, the LLM cache or the corpus:
 
     run.json         the plan (each document's SHA-1, file, kind and
                      stages), what shapes the run, and each invocation's
@@ -25,7 +26,10 @@ reads them: run.json before the events and again after them, and all of
 it again, a few times at most, while an invocation starts or ends in
 between. A stage is told cut short (interrupted) by the rule the live
 monitor and run_state use (rundir.interrupted), so the report's states
-agree with theirs.
+agree with theirs. A run.json that cannot be read or holds no JSON
+object, and an event log that cannot be read, are refused (ReportError);
+any other field of another shape than the pipeline writes counts as
+nothing, and the report goes on.
 
 **Per stage**, each document's stage is pending (held, while the control
 file holds it), running, interrupted, computed, reused, needs attention
@@ -61,12 +65,15 @@ document, so they stay in the run directory, local-only data as the rest
 of it is (docs/AGENT_PROTOCOL.md §6). report.md is rendered from the
 aggregates alone (`aggregate`), which hold counts, rates, times and the
 names of the pipeline's own vocabulary: never a document's name, a file
-name, a path, a label, an excerpt or a quote. Every name in them is
-checked against a fixed vocabulary (stages, kinds, roles, statuses,
-reasons, the anomaly checks) or the model manifest (properties and item
-keys), and one it does not know is counted as OTHER. No document appears
-in them, not even by its SHA-1, and neither does the never-ingest list's
-hash, which a short list could be recovered from by guessing.
+name, a path, a label, an excerpt, a quote, or a number a document gives.
+Every name in them is checked against a fixed vocabulary (stages, kinds,
+roles, statuses, reasons, the anomaly checks) or the model manifest
+(properties and item keys), and one it does not know is counted as
+OTHER; an exception is named by its class alone. No document appears in
+them, not even by its SHA-1, and neither does the never-ingest list's
+hash, which a short list could be recovered from by guessing, nor the
+hash of the code's difference from its commit, which a small difference
+could be confirmed by.
 
 Some counts need what the run directory does not hold, and the report
 says so (NOT_AVAILABLE) rather than count none: depicts proposals, since
@@ -93,7 +100,9 @@ from typing import Any
 from yizkr.claims import load_vocabulary
 from yizkr.pipeline.anomalies import ERROR_EVENT, RECHECK_EVENT, Checks, route
 from yizkr.pipeline.critique import axis_of
+from yizkr.pipeline.llm import USAGE_TOKENS
 from yizkr.pipeline.monitor import (
+    _CLASS_NAME,
     _duration,
     _exception_name,
     _seconds,
@@ -106,6 +115,7 @@ from yizkr.pipeline.orchestrate import DOCUMENT_STAGES, MODEL_ROLES
 from yizkr.pipeline.rundir import (
     ALERTS,
     CACHE_EVENTS,
+    CALL,
     CONTROL,
     DOCUMENT_FAILED,
     DONE,
@@ -123,7 +133,6 @@ from yizkr.pipeline.rundir import (
     SET_ASIDE,
     STAGE_EVENTS,
     Invocations,
-    RunDir,
     interrupted,
     invocation_of,
     invocation_records,
@@ -164,16 +173,6 @@ RUN = "run"
 # whether the run's call events carry what the calls used
 RECORDED = "recorded"
 
-# the engine's call event (yizkr.pipeline.llm.ENGINE_CALL)
-CALL = "call"
-# the tokens a call's stream reports it used, by the claude CLI's names
-# for them, as the engine's call event carries them (its `usage`)
-USAGE_TOKENS = (
-    "input_tokens",
-    "output_tokens",
-    "cache_creation_input_tokens",
-    "cache_read_input_tokens",
-)
 # the clustering stage and its output (in CORPUS_DIR/<stage>/)
 CLUSTERING = "clustering"
 IDENTITY_MAP = "identity-map.json"
@@ -245,6 +244,7 @@ ATTENTION_LABELS = frozenset(
         "ambiguous clusters not merged",
         "conflicting clusters not merged",
         "ambiguous pairs to adjudicate",
+        "hub keys not blocked on",
     }
 )
 # the leading labels of a document's failure outside its stages; any
@@ -317,6 +317,12 @@ def _count(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
     return max(0, value)
+
+
+def _list(value: Any) -> list:
+    """A list a file gives, or none: whatever else a field holds counts
+    as nothing."""
+    return value if isinstance(value, list) else []
 
 
 class _Unreadable:
@@ -717,14 +723,29 @@ class _Fold:
         self.failure_invocation = invocation
 
 
+def _manifest(path: Path) -> dict:
+    """The run manifest, run.json, which the driver replaces whole:
+    ReportError when it cannot be read or holds no JSON object, since the
+    plan and the invocations the report reads the run by are in it."""
+    try:
+        manifest = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError) as exc:
+        raise ReportError(
+            f"{path / MANIFEST} cannot be read ({type(exc).__name__}), and "
+            "the report reads the run by its plan and its invocations"
+        ) from None
+    if not isinstance(manifest, dict):
+        raise ReportError(f"{path / MANIFEST} holds no JSON object")
+    return manifest
+
+
 def _read(path: Path) -> tuple[_Fold, dict]:
     """The run's events, folded, and a reading of run.json that holds for
     them: run.json is read before the events and again after them, and
     all of it again while the two readings differ in the invocations they
     record, _READS times at most, as rundir.run_state reads them."""
-    run = RunDir(path)
     for _ in range(_READS):
-        before = run.manifest()
+        before = _manifest(path)
         fold = _Fold()
         try:
             for event in _lines(path / EVENTS):
@@ -734,7 +755,7 @@ def _read(path: Path) -> tuple[_Fold, dict]:
                 f"{path / EVENTS} cannot be read ({type(exc).__name__}), "
                 "and the report is made from the run's events"
             ) from None
-        manifest = run.manifest()
+        manifest = _manifest(path)
         if invocation_records(before) == invocation_records(manifest):
             break
     return fold, manifest
@@ -747,8 +768,8 @@ def _read(path: Path) -> tuple[_Fold, dict]:
 class Document:
     """One document of the run: its SHA-1 and kind, the files planned with
     its bytes, its stages as the events leave them, what its views hold,
-    the views that could not be read, and its alerts, failures and
-    set-asides."""
+    the views that could not be read, and its alerts, failures (every
+    document-failed event that names it) and set-asides."""
 
     sha1: str
     kind: str | None
@@ -762,6 +783,10 @@ class Document:
     alerts: list[dict] = field(default_factory=list)
     failures: list[dict] = field(default_factory=list)
     set_aside: list[dict] = field(default_factory=list)
+    # whether the document counts as failed (_failed), and the claims a
+    # failed extraction's reason says it could not use
+    failed: bool = False
+    unusable: int | None = None
 
     def completed(self, stage: str) -> bool:
         attempt = self.stages.get(stage)
@@ -881,9 +906,9 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
     )
     if batch is not None:
         entities = [
-            e for e in batch.get("entities") or [] if isinstance(e, dict)
+            e for e in _list(batch.get("entities")) if isinstance(e, dict)
         ]
-        claims = [c for c in batch.get("claims") or [] if isinstance(c, dict)]
+        claims = [c for c in _list(batch.get("claims")) if isinstance(c, dict)]
         views["batch"] = {
             "stage": stage,
             "entities": Counter(_text(e.get("kind")) or "?" for e in entities),
@@ -1025,6 +1050,8 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
         if failure["subject"] in documents:
             documents[failure["subject"]].failures.append(failure)
     failed = _failed(documents, fold, latest)
+    for document in documents.values():
+        document.unusable = _unusable(document.stages.get("extraction"))
     alerts = _alerts(path, documents)
     control = _control(path)
     vocabulary = _Vocabulary.of(manifest)
@@ -1069,7 +1096,9 @@ def _failed(
     for: each whose stage failed, as its latest events leave it, and each
     that the latest invocation failed outside its stages, a document whose
     source could not be read (and so has no SHA-1) among them, as the
-    live monitor counts them."""
+    live monitor counts them. Each is marked `failed` among `documents`
+    when it is one of them; `planned` says whether the run plans it, and
+    `kind` is the kind the plan gives it, else the one its event does."""
     failed: dict[Any, dict] = {}
     for document in documents.values():
         stage = next(
@@ -1088,7 +1117,32 @@ def _failed(
         if subject is not None and subject in failed:
             continue
         failed[subject or key] = dict(failure)
+    for failure in failed.values():
+        document = documents.get(failure["subject"])
+        failure["planned"] = document is not None and document.planned
+        if document is not None:
+            document.failed = True
+            failure["kind"] = document.kind or failure["kind"]
     return list(failed.values())
+
+
+def _unusable(attempt: Attempt | None) -> int | None:
+    """The claims a failed extraction's reason says it could not use:
+    every one validation rejected, and the objects the parser could not
+    read (chunking.ExtractionFailed), as the anomaly checks read them;
+    None for any other stage's state or reason. The reason can quote a
+    model's answer, so the number stays with its document, local."""
+    reason = attempt.reason if attempt is not None else None
+    if (
+        attempt is None
+        or attempt.status != FAILED
+        or not reason
+        or not reason.startswith(_FAILED_EXTRACTION)
+    ):
+        return None
+    unusable = sum(map(int, _EVERY_CLAIM_REJECTED.findall(reason)))
+    unusable += sum(map(int, _UNREAD_OBJECTS.findall(reason)))
+    return unusable or None
 
 
 def _control(path: Path) -> list[dict] | None:
@@ -1159,6 +1213,8 @@ def _document_record(document: Document) -> dict[str, Any]:
         "coverage": views.get("coverage"),
         "critique": dict(views["critique"]) if "critique" in views else None,
         "unread": dict(document.unread),
+        "failed": document.failed,
+        "unusable": document.unusable,
         "alerts": document.alerts,
         "failures": document.failures,
         "set_aside": document.set_aside,
@@ -1240,7 +1296,7 @@ def _run(
         else None,
         "corpus_stages": [
             stage
-            for stage in scratch.get("corpus_stages") or []
+            for stage in _list(scratch.get("corpus_stages"))
             if isinstance(stage, str)
         ],
         "started_at": _text(manifest.get("started_at")),
@@ -1308,6 +1364,8 @@ def _clusters(path: Path, fold: _Fold) -> dict[str, Any]:
         "confident pairs": number("confident_pairs"),
         "ambiguous pairs": number("ambiguous_pairs"),
         "adjudication calls": number("adjudication", "calls_ambiguous_pairs"),
+        "hub keys, not blocked on": number("hub_keys"),
+        "mentions holding them": number("hub_mentions"),
     }
     by_kind = summary.get("clustered_by_kind")
     record["by_kind"] = (
@@ -1393,24 +1451,36 @@ def _attention_label(reason: Any) -> str:
     return _known(reason_label(reason), ATTENTION_LABELS)
 
 
+def _exception(name: Any) -> str | None:
+    """The class an exception's name names, without the module path
+    before it (`ExtractionFailed` for `yizkr.pipeline.chunking.
+    ExtractionFailed`); None when `name` is no exception's name
+    (monitor._exception_name)."""
+    if not isinstance(name, str) or not _exception_name(name):
+        return None
+    return _CLASS_NAME.fullmatch(name).group(1)
+
+
 def _failure_label(reason: Any) -> str:
-    """A failure as the aggregates show it: the exception it names, or
-    the label of a document's failure outside its stages; else OTHER."""
+    """A failure as the aggregates show it: the class of the exception it
+    names, or the label of a document's failure outside its stages; else
+    OTHER."""
     label = failure_label(reason)
-    if label in FAILURE_LABELS or _exception_name(label):
+    if label in FAILURE_LABELS:
         return label
-    return OTHER
+    return _exception(label) or OTHER
 
 
 def _stop_reason(reason: Any, vocabulary: _Vocabulary) -> str | None:
     """Why an invocation ended short, as the aggregates show it: the
-    exception it names, or the slices that stopped it (`kind:media
-    aborted`), each of a known stage or kind; else OTHER; None for no
-    reason."""
+    class of the exception it names, or the slices that stopped it
+    (`kind:media aborted`), each of a known stage or kind; else OTHER;
+    None for no reason."""
     if not isinstance(reason, str) or not reason:
         return None
-    if _exception_name(reason):
-        return reason
+    found = _exception(reason)
+    if found is not None:
+        return found
     for part in reason.split("; "):
         match = _STOP.fullmatch(part)
         what, _, name = (match.group(1) if match else "").partition(":")
@@ -1553,10 +1623,11 @@ def _aggregate_run(
         "code": {
             "version": _version(code.get("version")),
             "commit": _hexed(code.get("commit")),
+            # only whether the code differed from its commit: the hash of
+            # a small difference would confirm a guess at it
             "dirty": code.get("dirty")
             if isinstance(code.get("dirty"), bool)
             else None,
-            "diff": _hexed(code.get("diff_sha256")),
             "past_barrier_commit": _hexed(past.get("commit")),
         },
         "engine": {
@@ -1619,8 +1690,17 @@ def _aggregate_documents(
         "routes": _by_count(routes),
         "language_resolved": _by_count(resolved),
         "failed": len(failed),
+        # the planned documents that failed, by the kind the plan gives
+        # each; the others (a source that could not be read has no SHA-1
+        # to plan) by the kind their events give
+        "failed_by_kind": _folded(
+            Counter(f["kind"] for f in failed if f["planned"]), _kind
+        ),
+        "failed_unplanned": sum(not f["planned"] for f in failed),
+        "failed_unplanned_by_kind": _folded(
+            Counter(f["kind"] for f in failed if not f["planned"]), _kind
+        ),
         "failed_unread": sum(f["subject"] is None for f in failed),
-        "failed_by_kind": _folded(Counter(f["kind"] for f in failed), _kind),
         "failed_by_label": _folded(
             Counter(f["reason"] for f in failed), _failure_label
         ),
@@ -1702,12 +1782,19 @@ def _aggregate_stages(
             shown.calls += totals.calls
             shown.seconds += totals.seconds
             shown.timed += totals.timed
-    return [_stage_row(name, row) for name, row in rows.items()]
+    by_cache = fold.calls.cache_events > 0
+    return [_stage_row(name, row, by_cache) for name, row in rows.items()]
 
 
-def _stage_row(name: str, row: dict[str, Any]) -> dict[str, Any]:
+def _stage_row(
+    name: str, row: dict[str, Any], by_cache: bool
+) -> dict[str, Any]:
+    """A stage's row. Its engine calls are the cache's misses and replays
+    when the run has the cache's events (`by_cache`), and else the
+    engine's call events, as the live monitor counts them."""
     totals = row.pop("totals")
     completed = row[COMPUTED] + row[REUSED] + row[NEEDS_ATTENTION]
+    engine = totals.engine if by_cache else totals.calls
     return {
         "name": name,
         **{
@@ -1716,9 +1803,11 @@ def _stage_row(name: str, row: dict[str, Any]) -> dict[str, Any]:
         },
         "failure_rate": _share(row[FAILED], row["documents"]),
         "attention_rate": _share(row[NEEDS_ATTENTION], completed),
-        "engine_calls": totals.engine,
+        "engine_calls": engine,
         "cached_calls": totals.cached,
-        "cache_share": _share(totals.cached, totals.engine + totals.cached),
+        "cache_share": _share(totals.cached, engine + totals.cached)
+        if by_cache
+        else None,
         "call_events": totals.calls,
         "timed": totals.timed,
         "seconds": round(totals.seconds, 3),
@@ -1804,7 +1893,7 @@ def _aggregate_content(
     findings: Counter = Counter()
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
-    failed_rejecting = failed_rejected = critiques = with_findings = 0
+    failed_rejecting = critiques = with_findings = 0
     for document in documents.values():
         if not document.planned:
             continue
@@ -1830,18 +1919,7 @@ def _aggregate_content(
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
-        extraction = document.stages.get("extraction")
-        reason = extraction.reason if extraction is not None else None
-        if (
-            extraction is not None
-            and extraction.status == FAILED
-            and reason
-            and reason.startswith(_FAILED_EXTRACTION)
-        ):
-            unusable = sum(map(int, _EVERY_CLAIM_REJECTED.findall(reason)))
-            unusable += sum(map(int, _UNREAD_OBJECTS.findall(reason)))
-            failed_rejecting += bool(unusable)
-            failed_rejected += unusable
+        failed_rejecting += document.unusable is not None
         if "critique" in document.views:
             critiques += 1
             findings.update(document.views["critique"])
@@ -1870,7 +1948,6 @@ def _aggregate_content(
             "documents": with_rejects,
             "rate": _share(rejected + unread, rejected + unread + given),
             "failed_extractions": failed_rejecting,
-            "failed_extraction_claims": failed_rejected,
         },
         "zero_claims": {
             "documents": zero_claims.total(),
@@ -1929,7 +2006,13 @@ def _aggregate_clusters(
 
 
 def _aggregate_calls(fold: _Fold, vocabulary: _Vocabulary) -> dict[str, Any]:
+    """The calls: those that reached the engine and those the cache
+    answered. The engine's are the cache's misses and replays when the
+    run has the cache's events, and else its call events (a run made
+    without the cache), as the live monitor counts them."""
     calls = fold.calls
+    by_cache = calls.cache_events > 0
+    engine = calls.engine if by_cache else calls.events
     roles: dict[str, Counter] = {}
     for role, counts in calls.roles.items():
         shown = roles.setdefault(_known(role, ROLES), Counter())
@@ -1937,9 +2020,11 @@ def _aggregate_calls(fold: _Fold, vocabulary: _Vocabulary) -> dict[str, Any]:
             shown[key] += counts[key]
     return {
         "cache_events": calls.cache_events,
-        "engine": calls.engine,
+        "engine": engine,
         "cached": calls.cached,
-        "cache_share": _share(calls.cached, calls.engine + calls.cached),
+        "cache_share": _share(calls.cached, engine + calls.cached)
+        if by_cache
+        else None,
         "hits_by_reason": _folded(
             calls.hits, lambda value: _known(value, HIT_REASONS)
         ),
@@ -1969,12 +2054,7 @@ def _aggregate_calls(fold: _Fold, vocabulary: _Vocabulary) -> dict[str, Any]:
             "refused": calls.refused,
             "holds": _folded(calls.holds, lambda value: _known(value, HOLDS)),
             "errors": _folded(
-                calls.errors,
-                lambda value: (
-                    value
-                    if isinstance(value, str) and _exception_name(value)
-                    else OTHER
-                ),
+                calls.errors, lambda value: _exception(value) or OTHER
             ),
             "models": _folded(
                 calls.models,
@@ -2166,11 +2246,7 @@ def _run_section(run: Mapping[str, Any]) -> _Section:
         (
             "Code",
             (code["commit"] or "unknown")
-            + (
-                f", dirty (diff {code['diff'] or '?'})"
-                if code["dirty"]
-                else ""
-            )
+            + (", dirty" if code["dirty"] else "")
             + (f", version {code['version']}" if code["version"] else "")
             + (
                 f"; past the barrier on {code['past_barrier_commit']}"
@@ -2239,9 +2315,12 @@ def _documents_section(documents: Mapping[str, Any]) -> _Section:
         ),
     ]
     items = [
-        f"Failed: {_n(documents['failed'])}, "
+        f"Failed: {_n(documents['failed'])}; by reason: "
+        f"{_listed(documents['failed_by_label'])}",
+        f"Of them not planned: {_n(documents['failed_unplanned'])} "
+        f"({_listed(documents['failed_unplanned_by_kind'])}), "
         f"{_n(documents['failed_unread'])} of them before their source "
-        f"could be read; by reason: {_listed(documents['failed_by_label'])}",
+        "could be read",
         f"Set aside to be made again: {_listed(documents['set_aside'])}",
         "Documents with a view that could not be read: "
         f"{_n(documents['views_not_read'])}",
@@ -2478,8 +2557,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                     f"{_n(rejects['extractions'])} extractions",
                     f"Rate: {_pct(rejects['rate'])} of the claims given",
                     "Extractions that failed with every claim rejected or "
-                    f"unread: {_n(rejects['failed_extractions'])}, with "
-                    f"{_n(rejects['failed_extraction_claims'])} claims",
+                    f"unread: {_n(rejects['failed_extractions'])}",
                     f"Fallback tiers taken: {_listed(content['fallbacks'])}",
                 ]
             ],
@@ -2562,7 +2640,11 @@ def _calls_sections(calls: Mapping[str, Any]) -> list[_Section]:
     events = calls["engine_calls"]
     blocks: list[Any] = [
         f"{_n(calls['engine'])} calls reached the engine and the LLM cache "
-        f"answered {_n(calls['cached'])} ({_pct(calls['cache_share'])}).",
+        f"answered {_n(calls['cached'])} ({_pct(calls['cache_share'])})."
+        if calls["cache_events"]
+        else f"{_n(calls['engine'])} calls reached the engine, as the "
+        "engine's call events count them: the run has no events of the LLM "
+        "cache.",
     ]
     if calls["by_role"]:
         blocks.append(
@@ -2917,10 +2999,10 @@ def _doc_name(document: Mapping[str, Any]) -> str:
 def _html_documents(report: Mapping[str, Any]) -> list[str]:
     documents = report["documents"]
     parts = ['<h2 id="each-document">Each document</h2>']
+    # failed now, as the aggregates count it (_failed): a document that
+    # failed in one invocation and was made in a later one is not
     lists = (
-        ("Failed", lambda d: any(
-            s["status"] == FAILED for s in d["stages"].values()
-        ) or d["failures"]),
+        ("Failed", lambda d: d["failed"]),
         ("Needs attention", lambda d: any(
             s["status"] == NEEDS_ATTENTION for s in d["stages"].values()
         )),
@@ -3040,6 +3122,11 @@ def _html_document(document: Mapping[str, Any]) -> str:
         f"Failed ({failure['invocation'] or '?'}): {failure['reason']}"
         for failure in document["failures"]
     ]
+    if document["unusable"] is not None:
+        items.append(
+            "Its extraction failed with every claim rejected or unread: "
+            f"{document['unusable']}, as its reason says"
+        )
     items += [
         f"Set aside ({record['stage'] or 'its directory'}): "
         f"{record['reason']}; kept as {record['kept']}"
@@ -3078,22 +3165,13 @@ def write_report(
 ) -> dict[str, Path]:
     """Build the report of the run directory at `path`, and write
     report.json, report.html and report.md into its REPORT_DIR, each
-    replaced whole. The folder is made private to its owner (mode 700)
-    when it is made here; one that is a symbolic link, or no folder, is
-    refused (ReportError), as is a folder that cannot be made or written.
+    replaced whole, in a folder private to its owner (_private_folder).
+    ReportError for a folder that cannot be made, opened or written.
     Returns each file's path by its name."""
     path = Path(path)
     report = build(path, now=now)
     folder = path / REPORT_DIR
-    if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
-        raise ReportError(f"{folder} is not a folder of its own")
-    try:
-        folder.mkdir(mode=0o700)
-        os.chmod(folder, 0o700)
-    except FileExistsError:
-        pass
-    except OSError as exc:
-        raise ReportError(f"{folder} cannot be made: {exc}") from None
+    _private_folder(folder)
     written = {}
     for name, text in (
         (JSON_FILE, render_json(report)),
@@ -3108,3 +3186,31 @@ def write_report(
             ) from None
         written[name] = folder / name
     return written
+
+
+def _private_folder(folder: Path) -> None:
+    """Make `folder` when it is not there, and make it private to its
+    owner (mode 700) every time, a folder there already included: it is
+    opened as a folder, never through a symbolic link, and its mode is
+    set through what was opened. ReportError for a symbolic link,
+    anything else that is no folder, and a folder that cannot be made,
+    opened or made private."""
+    try:
+        folder.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise ReportError(f"{folder} cannot be made: {exc}") from None
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(folder, flags | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ReportError(
+            f"{folder} is not a folder of its own ({type(exc).__name__})"
+        ) from None
+    try:
+        os.fchmod(descriptor, 0o700)
+    except OSError as exc:
+        raise ReportError(f"{folder} cannot be made private: {exc}") from None
+    finally:
+        os.close(descriptor)

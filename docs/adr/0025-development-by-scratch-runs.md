@@ -301,7 +301,11 @@ futile, and explain itself afterwards.
   (2026-09-27): a recompute is attributed through the LLM cache's entries
   for its calls, which keep their keys' components (the prompt, a file,
   the model, the config hash, the attempt, the epoch), compared with the
-  baseline's calls (ADR-0032 §11).
+  baseline's calls (ADR-0032 §11). Amended by #124 (2026-09-29): the
+  report reads the run directory alone, so it gives what the cache's
+  events record of each recompute (each miss's reason, and replays), and
+  the run-to-run diff (§4, #198) attributes a recompute to the key
+  component that changed.
 
 ### 4. Checking prompt, schema and model changes: `needs:scratch-diff`
 

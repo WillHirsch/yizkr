@@ -20,6 +20,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
+import re
+import shutil
 import tracemalloc
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -41,6 +44,7 @@ from tests.unit.test_scratch import (  # noqa: F401
     small,
 )
 from yizkr.pipeline import llm, report
+from yizkr.pipeline.monitor import RunMonitor
 from yizkr.pipeline.orchestrate import slugify
 from yizkr.pipeline.report import (
     COMPUTED,
@@ -901,6 +905,258 @@ def document(made: dict, sha1: str) -> dict:
     return next(d for d in made["documents"] if d["sha1"] == sha1)
 
 
+def upto(seconds: float) -> list:
+    """The stream as far as the driver had written it at `seconds`."""
+    return [
+        entry
+        for entry in STREAM
+        if datetime.fromisoformat(entry[1]["at"])
+        <= T0 + timedelta(seconds=seconds)
+    ]
+
+
+def without(entries, event: str, **where) -> list:
+    """The entries but the `event` events whose fields match `where`."""
+    return [
+        entry
+        for entry in entries
+        if entry[1].get("event") != event
+        or any(entry[1].get(key) != value for key, value in where.items())
+    ]
+
+
+# the fixture run in each state a report can find a run in
+STATES = (
+    "finished",
+    "running",
+    "paused",
+    "stopped",
+    "killed first",
+    "killed latest",
+)
+
+
+def run_in(state: str) -> tuple[list, dict, datetime]:
+    """The fixture run in `state` (STATES): its logs, its run.json, and
+    when it is read. Running: the second invocation, in the postcard's
+    extraction. Paused: the first invocation ended for the subscription,
+    the postcard's extraction cut short. Stopped: the second invocation,
+    ended by the abort of the decks. Killed first or latest: that
+    invocation recorded no end, and wrote no closing event."""
+    plan, entries, now = manifest(), STREAM, NOW
+    invocations = plan["invocations"]
+    if state == "running":
+        plan["invocations"] = invocations[:2]
+        invocations[1] |= {"ended_at": None, "outcome": None}
+        del invocations[1]["reason"]
+        plan["ended_at"] = None
+        entries, now = upto(3615), T0 + timedelta(seconds=3700)
+    elif state == "paused":
+        plan["invocations"], plan["ended_at"] = invocations[:1], at(600)
+        entries = upto(600)
+    elif state == "stopped":
+        plan["invocations"], plan["ended_at"] = invocations[:2], at(3700)
+        plan["scratch"]["complete"] = False
+        entries = upto(3700)
+    elif state == "killed first":
+        invocations[0] |= {"ended_at": None, "outcome": None}
+        del invocations[0]["reason"]
+        entries = without(STREAM, "run-end", invocation=FIRST)
+    elif state == "killed latest":
+        invocations[2] |= {"ended_at": None, "outcome": None}
+        plan["ended_at"] = None
+        entries = without(STREAM, "run-end", invocation=THIRD)
+        entries = without(entries, "done", stage="clustering")
+    return entries, plan, now
+
+
+# -- a run that names things in every field the aggregates name --------------
+
+HOSTILE = "Laudler"
+LOWER = "laudler estate"
+
+
+def hostile_stream() -> list:
+    """The fixture's stream, with a universe name in every field of the
+    events and requests that the aggregates name something by."""
+    return [
+        *STREAM,
+        # an engine call: its role, stage, outcome, hold and error
+        event(7300, "call", THIRD, subject=CERT, kind="media", role=HOSTILE,
+              stage=HOSTILE, outcome=HOSTILE, held=HOSTILE, error=LOWER,
+              duration_s=1.0, usage={"input_tokens": 1}),
+        # the cache's answers: a hit's reason, as a stage's reuse reason
+        # too, and a miss's
+        event(7301, "started", THIRD, subject=CARD, kind="text",
+              stage="critique"),
+        event(7302, "cache-hit", THIRD, subject=CARD, kind="text",
+              role="critique", reason=LOWER),
+        event(7303, "done", THIRD, subject=CARD, kind="text",
+              stage="critique"),
+        event(7304, "cache-hit", THIRD, subject=CERT, kind="media",
+              role=HOSTILE, reason=HOSTILE),
+        event(7305, "cache-miss", THIRD, subject=CERT, kind="media",
+              role="extract", reason=HOSTILE),
+        # a stage and a kind no plan knows, and an attention label that is
+        # no pipeline label
+        event(7306, "started", THIRD, subject=CERT, kind=HOSTILE,
+              stage=HOSTILE),
+        event(7307, "done", THIRD, subject=CERT, kind=HOSTILE, stage=HOSTILE,
+              attention=[f"{LOWER}: Hildegard"]),
+        # a corpus stage that failed with a lowercase label
+        event(7308, "started", THIRD, stage="laudler"),
+        event(7309, "failed", THIRD, stage="laudler",
+              reason=f"{LOWER} (Hildegard Laudler)"),
+        # a document that failed with a lowercase label
+        event(7310, "document-failed", THIRD, file="Laudler.jpg",
+              kind="media", reason=f"{LOWER} (Hildegard Laudler)"),
+        ("control.jsonl", {"at": at(7311), "action": HOSTILE,
+                           "scope": f"kind:{HOSTILE}", "by": HOSTILE,
+                           "reason": HOSTILE}),
+        ("control.jsonl", {"at": at(7312), "action": "pause",
+                           "scope": HOSTILE, "by": "operator",
+                           "reason": HOSTILE}),
+    ]  # fmt: skip
+
+
+def hostile_plan() -> dict:
+    """run.json, with a universe name in every field the aggregates name
+    something by."""
+    plan = manifest()
+    plan["mode"] = HOSTILE
+    plan["project_stage"] = HOSTILE
+    plan["engine"] = {"name": HOSTILE, "cli_version": HOSTILE}
+    plan["code"]["version"] = HOSTILE
+    plan["roles"][HOSTILE] = {"model": "Hildegard Laudler", "effort": HOSTILE}
+    plan["roles"]["transcribe"]["client"]["model"] = "Hildegard Laudler"
+    plan["scratch"]["until"] = HOSTILE
+    plan["documents"][0]["kind"] = HOSTILE
+    plan["invocations"][-1] |= {"outcome": HOSTILE, "reason": HOSTILE}
+    return plan
+
+
+@pytest.fixture
+def hostile(tmp_path) -> Path:
+    """The fixture run with a name in every field the aggregates name
+    something by: its events, its requests, its run.json and the views'
+    route, language resolution, fallback tier and critic finding."""
+    path = record(tmp_path / "hostile", hostile_stream(), plan=hostile_plan())
+    cert = path / slugify(Path(FILES[CERT][0]).stem)
+
+    def rewrite(name: str, change) -> None:
+        value = json.loads((cert / name).read_text())
+        change(value)
+        (cert / name).write_text(json.dumps(value))
+
+    rewrite("transcription.json", lambda v: v.update(engine=f"{HOSTILE}:x"))
+    rewrite(
+        "state.json",
+        lambda v: v["detail"]["language"].update(source=HOSTILE),
+    )
+    rewrite(
+        "extraction/coverage.json", lambda v: v.update(fallback={HOSTILE: 1})
+    )
+    rewrite("critique.json", lambda v: v.append({"axis": HOSTILE}))
+    return path
+
+
+# -- rewriting a run's words, and nothing else --------------------------------
+
+# the names the fixture's documents carry, longest first, and a SHA-1 for
+# each document's in its place
+SWAPPED_NAMES = sorted(
+    {name for name in NAMES if not name.startswith("/") and len(name) > 3}
+    | {"Hilde", "Cäcilie", "Tarle", "Cilli", "Ida", "Angerring"},
+    key=len,
+    reverse=True,
+)
+SWAPPED_SHA1S = {sha1: _sha1("other " + sha1) for sha1 in FILES}
+
+
+def swapped(name: str) -> str:
+    """A made-up word as long as `name`, in its case, the same each time."""
+    digest = hashlib.sha1(name.encode()).hexdigest()
+    word = "".join(chr(ord("k") + int(c, 16) % 10) for c in digest)
+    word = word[: len(name)]
+    return word.capitalize() if name[0].isupper() else word
+
+
+def rewritten(value):
+    """A JSON value with every document's name and SHA-1 in it replaced."""
+    if isinstance(value, dict):
+        return {rewritten(k): rewritten(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [rewritten(v) for v in value]
+    if not isinstance(value, str):
+        return value
+    for old, new in SWAPPED_SHA1S.items():
+        for size in (40, 12, 10, 8):
+            value = value.replace(old[:size], new[:size])
+    for name in SWAPPED_NAMES:
+        for form in (name, name.lower(), name.upper()):
+            value = re.sub(
+                r"(?<![A-Za-z])" + re.escape(form) + r"(?![a-z])",
+                swapped(form),
+                value,
+            )
+    return value
+
+
+def scramble(path: Path, rng, odd: list, rate: float) -> None:
+    """Swap leaves of every JSON file of a run directory, and now and then
+    a whole object or list, for values of other types (`odd`), each with
+    the chance `rate`."""
+
+    def mutated(value):
+        if isinstance(value, dict | list) and rng.random() < rate / 3:
+            return rng.choice(odd)
+        if isinstance(value, dict):
+            return {key: mutated(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [mutated(item) for item in value]
+        return rng.choice(odd) if rng.random() < rate else value
+
+    for file in sorted(path.rglob("*")):
+        if not file.is_file() or file.suffix not in (".json", ".jsonl"):
+            continue
+        lines = file.read_text(encoding="utf-8").split("\n")
+        out = []
+        for line in lines:
+            try:
+                out.append(json.dumps(mutated(json.loads(line))))
+            except ValueError:
+                out.append(line)
+        file.write_text("\n".join(out), encoding="utf-8")
+
+
+def rewritten_line(line: str) -> str:
+    """A log's line rewritten (rewritten); one that holds no JSON as it
+    is."""
+    try:
+        return json.dumps(rewritten(json.loads(line)))
+    except ValueError:
+        return line
+
+
+def rewrite_run(path: Path) -> None:
+    """Rewrite every JSON file of a run directory with its documents'
+    names and SHA-1s replaced (rewritten), and nothing else changed."""
+    for file in sorted(path.rglob("*")):
+        if not file.is_file() or file.suffix not in (".json", ".jsonl"):
+            continue
+        text = file.read_text(encoding="utf-8")
+        if file.suffix == ".jsonl":
+            file.write_text(
+                "\n".join(map(rewritten_line, text.split("\n"))),
+                encoding="utf-8",
+            )
+        else:
+            try:
+                file.write_text(json.dumps(rewritten(json.loads(text))))
+            except ValueError:
+                file.write_text(rewritten(text))
+
+
 def disagreement(path: Path, made: dict) -> str | None:
     """How the report's status of each document's stage differs from
     rundir.run_state's for the same files, or None: a pending stage the
@@ -949,9 +1205,150 @@ class TestAggregateOnly:
         local = written["report.json"].read_text()
         assert set(leaks(local)) >= {"Laudler", "Stupfield", UNREAD}
 
-    def test_every_string_the_aggregates_hold_is_vocabulary(self, made):
+    @pytest.mark.parametrize("fixture", ["run", "hostile"])
+    def test_no_string_the_aggregates_hold_carries_a_name(
+        self, request, fixture
+    ):
+        made = build(request.getfixturevalue(fixture), now=NOW)
         found = [s for s in strings(made["aggregate"]) if leaks(s)]
         assert found == []
+
+    def test_every_field_the_aggregates_name_is_checked(self, hostile):
+        """A name in each field the aggregates name something by folds
+        into OTHER, wherever it comes from: an event, a request, run.json
+        or a view."""
+        made = build(hostile, now=NOW)
+        aggregate = made["aggregate"]
+        assert leaks(render_markdown(aggregate)) == []
+        run = aggregate["run"]
+        assert (run["mode"], run["project_stage"], run["state"]) == (
+            OTHER,
+            OTHER,
+            OTHER,
+        )
+        assert run["reason"] == OTHER and run["until"] == OTHER
+        assert run["engine"] == {"name": OTHER, "cli_version": None}
+        assert run["code"]["version"] is None
+        assert run["roles"][OTHER] == {
+            "model": OTHER,
+            "effort": OTHER,
+            "epoch": None,
+            "refresh": False,
+            "config": None,
+        }
+        assert run["roles"]["transcribe"]["model"] == OTHER
+        assert aggregate["documents"]["by_kind"][OTHER] == 1
+        assert aggregate["documents"]["routes"][OTHER] == 1
+        assert aggregate["documents"]["language_resolved"][OTHER] == 1
+        assert stage_row(made, OTHER)["attention_labels"] == {OTHER: 1}
+        assert stage_row(made, "critique")["reused_by"][OTHER] == 1
+        (corpus,) = [s for s in aggregate["corpus_stages"] if s["failure"]]
+        assert (corpus["name"], corpus["failure"]) == (OTHER, OTHER)
+        assert aggregate["documents"]["failed_by_label"][OTHER] == 1
+        content = aggregate["content"]
+        assert content["fallbacks"][OTHER] == 1
+        assert content["critic"]["by_class"][OTHER] == 1
+        calls = aggregate["calls"]
+        assert calls["hits_by_reason"][OTHER] == 2
+        assert calls["misses_by_reason"][OTHER] == 1
+        assert calls["by_role"][OTHER]["cached"] == 1
+        engine = calls["engine_calls"]
+        assert engine["outcomes"][OTHER] == 1
+        assert engine["holds"][OTHER] == 1
+        assert engine["errors"][OTHER] == 1
+        assert engine["by_role"][OTHER] == 1
+        usage = [
+            (row["role"], row["calls"], row["reported"])
+            for row in calls["usage"]["by_stage"]
+            if row["stage"] == OTHER
+        ]
+        assert usage == [(OTHER, 1, 1)]
+        control = aggregate["control"]
+        assert control["by_action"][OTHER] == 1
+        assert control["by_requester"][OTHER] == 1
+        assert control["pauses"][OTHER] == 1
+
+    def test_report_md_is_the_same_whatever_the_documents_say(self, tmp_path):
+        """Every document's name and SHA-1, in every file of the run
+        directory, replaced by other words and hashes: report.md comes out
+        the same, byte for byte."""
+        first = record(tmp_path / "first")
+        second = tmp_path / "second"
+        shutil.copytree(first, second)
+        rewrite_run(second)
+        assert render_markdown(build(first, now=NOW)["aggregate"]) == (
+            render_markdown(build(second, now=NOW)["aggregate"])
+        )
+        # the rewriting changed what the local report holds
+        assert (
+            build(second, now=NOW)["documents"]
+            != (build(first, now=NOW)["documents"])
+        )
+
+    def test_a_number_a_failure_quotes_does_not_reach_report_md(
+        self, tmp_path
+    ):
+        """A failed extraction's reason can quote the model's answer,
+        which can quote a document: a number in it stays local."""
+        quoted = (
+            "ExtractionFailed: no claims extracted: 1 of 2 chunks failed "
+            "(c1: input_value='Nicholas Lobig, 8 Hawthorn Road: validation "
+            "rejected every claim (4711)'); validation rejected every claim "
+            "(2)"
+        )
+        entries = [
+            (name, entry | {"reason": quoted})
+            if entry.get("reason") == INTERVIEW_FAILURE
+            and entry.get("invocation") == THIRD
+            else (name, entry)
+            for name, entry in STREAM
+        ]
+        made = build(record(tmp_path / "run", entries), now=NOW)
+        text = render_markdown(made["aggregate"])
+        assert "4,71" not in text and "4711" not in text
+        assert (
+            made["aggregate"]["content"]["rejects"]["failed_extractions"] == 1
+        )
+        assert document(made, INTERVIEW)["unusable"] == 4713
+        assert "4713" in report.render_html(made)
+
+    def test_an_exception_is_named_by_its_class_alone(self, tmp_path):
+        dotted = "yizkr.pipeline.chunking.ExtractionFailed"
+        entries = [
+            (name, entry | {"reason": f"{dotted}: Nicholas Lobig"})
+            if entry.get("reason") == INTERVIEW_FAILURE
+            else (name, entry)
+            for name, entry in STREAM
+        ]
+        entries.append(
+            call(7299, CERT, "extract", THIRD, 1.0, outcome="error",
+                 error="yizkr.pipeline.llm.EngineError")
+        )  # fmt: skip
+        plan = manifest()
+        plan["invocations"][-1] |= {
+            "outcome": "failed",
+            "reason": "yizkr.pipeline.llm.UsageLimitReached",
+        }
+        made = build(record(tmp_path / "run", entries, plan=plan), now=NOW)
+        aggregate = made["aggregate"]
+        assert stage_row(made, "extraction")["failure_labels"] == {
+            "ExtractionFailed": 1
+        }
+        assert aggregate["run"]["reason"] == "UsageLimitReached"
+        assert aggregate["calls"]["engine_calls"]["errors"]["EngineError"] == 3
+        assert "yizkr." not in render_markdown(aggregate)
+
+    def test_the_code_says_only_whether_it_was_dirty(self, tmp_path):
+        plan = manifest()
+        diff = hashlib.sha256(b"a small fictional edit").hexdigest()
+        plan["code"] |= {"dirty": True, "diff_sha256": diff}
+        made = build(record(tmp_path / "run", plan=plan), now=NOW)
+        assert made["aggregate"]["run"]["code"]["dirty"] is True
+        text = render_markdown(made["aggregate"])
+        assert "| Code | 0123456789ab, dirty, version 0.1.0 |" in text
+        assert diff[:8] not in text
+        # the local report keeps it
+        assert made["run"]["code"]["diff_sha256"] == diff
 
     def test_names_it_does_not_know_are_counted_as_other(self, made):
         content = made["aggregate"]["content"]
@@ -1037,9 +1434,6 @@ class TestStages:
             "view current"
         )
 
-    def test_the_statuses_agree_with_run_state(self, run, made):
-        assert disagreement(run, made) is None
-
     def test_calls_and_time_are_counted_per_stage(self, made):
         # over every attempt: the deck's failed one included, and the
         # postcard's that the subscription cut short
@@ -1094,6 +1488,23 @@ class TestCorpusStages:
         )
         clusters = build(run, now=NOW)["aggregate"]["content"]["clusters"]
         assert clusters == {"status": NEEDS_ATTENTION, "map": "unreadable"}
+
+    def test_the_clustering_stage_s_hub_key_label_is_known(self, tmp_path):
+        hub = "hub keys not blocked on: 3 keys, held by 40 mentions"
+        entries = [
+            (name, entry | {"attention": [*CLUSTERED, hub]})
+            if entry.get("stage") == "clustering"
+            and entry.get("event") == "done"
+            else (name, entry)
+            for name, entry in STREAM
+        ]
+        made = build(record(tmp_path / "run", entries), now=NOW)
+        (clustering,) = made["aggregate"]["corpus_stages"]
+        assert clustering["attention"] == {
+            "ambiguous clusters not merged": 1,
+            "conflicting clusters not merged": 1,
+            "hub keys not blocked on": 1,
+        }
 
 
 # -- the anomalies ------------------------------------------------------------
@@ -1169,6 +1580,14 @@ class TestContent:
             "RuntimeError": 1,
             "its source cannot be read": 1,
         }
+        # the kind table counts the planned documents of each kind that
+        # failed: the interview; a source that could not be read is never
+        # planned, and counts apart, by the kind its event gives
+        assert documents["failed_by_kind"] == {"text": 1}
+        assert documents["failed_unplanned"] == 1
+        assert documents["failed_unplanned_by_kind"] == {"media": 1}
+        text = render_markdown(made["aggregate"])
+        assert "| media | 2 | 0 |" in text and "| text | 3 | 1 |" in text
         assert made["failed_unread"] == [
             {"file": UNREAD, "kind": "media", "reason": UNREADABLE}
         ]
@@ -1292,6 +1711,32 @@ class TestCallsAndTime:
         text = render_markdown(made["aggregate"])
         assert "| all |  | 16 | 5 | 3,400 | 650 | 90 | 800 |" in text
 
+    def test_a_run_without_the_cache_counts_its_call_events(self, tmp_path):
+        """A run made without the LLM cache (`ingest run --no-cache`) has
+        no cache events: its calls that reached the engine are its call
+        events, as the monitor counts them."""
+        plan = manifest()
+        plan["cache"] = None
+        entries = [
+            entry
+            for entry in STREAM
+            if not str(entry[1].get("event")).startswith("cache-")
+        ]
+        made = build(record(tmp_path / "run", entries, plan=plan), now=NOW)
+        calls = made["aggregate"]["calls"]
+        assert (calls["engine"], calls["cached"], calls["cache_share"]) == (
+            16,
+            0,
+            None,
+        )
+        for row in made["aggregate"]["stages"]:
+            assert row["engine_calls"] == row["call_events"]
+            assert row["cache_share"] is None
+        assert stage_row(made, "extraction")["engine_calls"] == 12
+        assert "16 calls reached the engine, as the engine's call events " in (
+            render_markdown(made["aggregate"])
+        )
+
     def test_the_engine_s_call_events(self, made):
         events = made["aggregate"]["calls"]["engine_calls"]
         assert events["count"] == 16
@@ -1330,25 +1775,64 @@ class TestCallsAndTime:
 # -- runs in other states -----------------------------------------------------
 
 
-def upto(seconds: float, name: str = "events.jsonl") -> list:
-    """The stream as far as the driver had written it at `seconds`."""
-    return [
-        entry
-        for entry in STREAM
-        if datetime.fromisoformat(entry[1]["at"])
-        <= T0 + timedelta(seconds=seconds)
-    ]
+def in_state(tmp_path: Path, state: str) -> tuple[Path, dict, datetime]:
+    """The fixture run recorded in `state` (run_in), its report, and when
+    the report was made."""
+    entries, plan, now = run_in(state)
+    path = record(tmp_path / state.replace(" ", "-"), entries, plan=plan)
+    return path, build(path, now=now), now
+
+
+def monitor_rows(path: Path, now: datetime) -> dict[str, tuple]:
+    """The live monitor's stage counts, by stage, in the report's columns:
+    its pending less the held and the interrupted, which it counts among
+    them; and its done and reused together, as completed."""
+    monitor = RunMonitor(path)
+    monitor.refresh()
+    return {
+        stage.name: (
+            stage.pending - stage.held - stage.interrupted,
+            stage.held,
+            stage.interrupted,
+            stage.running,
+            stage.done + sum(stage.reused.values()),
+            stage.attention,
+            stage.failed,
+        )
+        for stage in monitor.summary(now).stages
+    }
+
+
+def report_rows(made: dict) -> dict[str, tuple]:
+    """The report's stage counts, by stage, as monitor_rows gives the
+    monitor's: computed and reused together, as completed."""
+    return {
+        row["name"]: (
+            row[PENDING],
+            row[HELD],
+            row[INTERRUPTED],
+            row[RUNNING],
+            row[COMPUTED] + row[REUSED],
+            row[NEEDS_ATTENTION],
+            row[FAILED],
+        )
+        for row in made["aggregate"]["stages"]
+    }
 
 
 class TestRunStates:
+    @pytest.mark.parametrize("state", STATES)
+    def test_the_statuses_agree_with_run_state(self, tmp_path, state):
+        path, made, _now = in_state(tmp_path, state)
+        assert disagreement(path, made) is None
+
+    @pytest.mark.parametrize("state", STATES)
+    def test_the_statuses_agree_with_the_monitor(self, tmp_path, state):
+        path, made, now = in_state(tmp_path, state)
+        assert report_rows(made) == monitor_rows(path, now)
+
     def test_a_running_run_is_a_snapshot(self, tmp_path):
-        plan = manifest()
-        plan["invocations"][1] |= {"ended_at": None, "outcome": None}
-        del plan["invocations"][1]["reason"]
-        plan["invocations"] = plan["invocations"][:2]
-        plan["ended_at"] = None
-        path = record(tmp_path / "run", upto(3615), plan=plan)
-        made = build(path, now=T0 + timedelta(seconds=3700))
+        _path, made, _now = in_state(tmp_path, "running")
         aggregate = made["aggregate"]
         assert aggregate["run"]["state"] == "running"
         # to now, the running invocation's time
@@ -1358,7 +1842,6 @@ class TestRunStates:
         assert postcard["extraction"]["status"] == RUNNING
         assert postcard["critique"]["status"] == PENDING
         assert stage_row(made, "extraction")[RUNNING] == 1
-        assert disagreement(path, made) is None
         text = render_markdown(aggregate)
         assert "The run is still running" in text
         assert leaks(text) == []
@@ -1366,17 +1849,12 @@ class TestRunStates:
     def test_a_stage_the_ended_invocation_left_started_is_interrupted(
         self, tmp_path
     ):
-        plan = manifest()
-        plan["invocations"] = plan["invocations"][:1]
-        plan["ended_at"] = at(600)
-        path = record(tmp_path / "run", upto(600), plan=plan)
-        made = build(path, now=NOW)
+        _path, made, _now = in_state(tmp_path, "paused")
         postcard = document(made, POSTCARD)["stages"]["extraction"]
         assert postcard["status"] == INTERRUPTED
         assert stage_row(made, "extraction")[INTERRUPTED] == 1
         assert made["aggregate"]["run"]["state"] == "paused"
         assert made["aggregate"]["run"]["reason"] == "UsageLimitReached"
-        assert disagreement(path, made) is None
 
     def test_a_stage_done_as_its_invocation_ends_between_the_reads(
         self, tmp_path, monkeypatch
@@ -1414,12 +1892,7 @@ class TestRunStates:
         assert len(reads) == 2
 
     def test_an_aborted_run_holds_what_the_abort_held(self, tmp_path):
-        plan = manifest()
-        plan["invocations"] = plan["invocations"][:2]
-        plan["ended_at"] = at(3700)
-        plan["scratch"]["complete"] = False
-        path = record(tmp_path / "run", upto(3700), plan=plan)
-        made = build(path, now=NOW)
+        _path, made, _now = in_state(tmp_path, "stopped")
         run = made["aggregate"]["run"]
         assert (run["state"], run["reason"]) == (
             "stopped",
@@ -1442,21 +1915,23 @@ class TestRunStates:
         text = render_markdown(made["aggregate"])
         assert "stopped: kind:presentation aborted" in text
         assert leaks(text) == []
-        assert disagreement(path, made) is None
 
     def test_a_killed_invocation_runs_to_its_last_event(self, tmp_path):
-        plan = manifest()
-        plan["invocations"][0] |= {"ended_at": None, "outcome": None}
-        del plan["invocations"][0]["reason"]
-        entries = [e for e in STREAM if e[1].get("event") != "run-end"
-                   or e[1]["invocation"] != FIRST]  # fmt: skip
-        path = record(tmp_path / "run", entries, plan=plan)
-        made = build(path, now=NOW)
+        _path, made, _now = in_state(tmp_path, "killed first")
         run = made["run"]
         assert run["invocations"][0]["end"] == "killed"
         assert run["invocations"][0]["seconds"] == 170
         assert made["aggregate"]["run"]["ends"]["killed"] == 1
-        assert disagreement(path, made) is None
+
+    def test_a_killed_latest_invocation_reads_as_running(self, tmp_path):
+        """A killed invocation records no end and has no closing event, so
+        while it is the latest it reads as running, as in the monitor."""
+        _path, made, _now = in_state(tmp_path, "killed latest")
+        aggregate = made["aggregate"]
+        assert aggregate["run"]["state"] == "running"
+        assert aggregate["corpus_stages"][0]["state"] == RUNNING
+        # its time runs to now, as a running invocation's does
+        assert aggregate["run"]["seconds"] == 600 + 100 + (10800 - 7200)
 
     def test_an_empty_run(self, tmp_path):
         path = tmp_path / "run"
@@ -1495,6 +1970,12 @@ class TestFiles:
         # written again, each is replaced whole
         assert write_report(run, now=NOW) == written
 
+    def test_a_folder_there_already_is_made_private(self, run):
+        (run / REPORT_DIR).mkdir(mode=0o755)
+        os.chmod(run / REPORT_DIR, 0o755)
+        write_report(run, now=NOW)
+        assert os.stat(run / REPORT_DIR).st_mode & 0o777 == 0o700
+
     def test_no_document_directory_can_take_the_folder_s_name(self):
         assert REPORT_DIR.startswith(".")
         assert slugify(REPORT_DIR) != REPORT_DIR
@@ -1503,12 +1984,25 @@ class TestFiles:
         page = write_report(run, now=NOW)["report.html"].read_text()
         for sha1 in FILES:
             assert f'id="doc-{sha1[:12]}"' in page
-            assert f'href="#doc-{sha1[:12]}"' in page or sha1 not in (
-                DECK,
-                INTERVIEW,
-                DIRECTORY,
-                CARD,
+        lists = {
+            title: re.findall(r'href="#doc-([0-9a-f]{12})"', links)
+            for title, links in re.findall(
+                r"<p><strong>(.*?)</strong> \(\d+\): (.*?)</p>", page
             )
+        }
+        # failed now, as the aggregates count it: the deck failed in the
+        # first invocation and was made in the third
+        assert lists == {
+            "Failed": [INTERVIEW[:12]],
+            "Needs attention": [DIRECTORY[:12], CARD[:12]],
+            "With alerts": [
+                CERT[:12],
+                DIRECTORY[:12],
+                CARD[:12],
+                INTERVIEW[:12],
+            ],
+            "With a view that could not be read": [CARD[:12]],
+        }
         assert "Hutmacherei zum Blauen Hut.pptx" in page
         assert "&lt;script" not in page and "<script" not in page
         assert "critique.json cannot be read (JSONDecodeError)" in page
@@ -1523,15 +2017,85 @@ class TestFiles:
 
     def test_a_folder_that_is_a_link_is_refused(self, run, tmp_path):
         elsewhere = tmp_path / "elsewhere"
-        elsewhere.mkdir()
+        elsewhere.mkdir(mode=0o755)
+        os.chmod(elsewhere, 0o755)
         (run / REPORT_DIR).symlink_to(elsewhere)
         with pytest.raises(ReportError, match="not a folder of its own"):
             write_report(run, now=NOW)
         assert list(elsewhere.iterdir()) == []
+        # and the folder it names keeps its mode
+        assert os.stat(elsewhere).st_mode & 0o777 == 0o755
+
+    def test_a_report_folder_that_is_a_file_is_refused(self, run):
+        (run / REPORT_DIR).write_text("a file of its own")
+        with pytest.raises(ReportError, match="not a folder of its own"):
+            write_report(run, now=NOW)
 
     def test_no_run_json_no_report(self, tmp_path):
         with pytest.raises(ReportError, match="no run.json"):
             build(tmp_path)
+
+    @pytest.mark.parametrize(
+        "text",
+        ['{"run_id": "20260929T090000Z-0a1b2c", ', "[1, 2]", '"a run"'],
+        ids=["torn", "a list", "a string"],
+    )
+    def test_a_run_json_that_holds_no_object_is_refused(self, run, text):
+        (run / "run.json").write_text(text)
+        with pytest.raises(ReportError, match="run.json"):
+            build(run, now=NOW)
+
+    def test_a_run_json_it_cannot_read_is_refused(self, run):
+        (run / "run.json").chmod(0)
+        try:
+            if os.access(run / "run.json", os.R_OK):
+                pytest.skip("this process reads a file whatever its mode")
+            with pytest.raises(ReportError, match="cannot be read"):
+                build(run, now=NOW)
+        finally:
+            (run / "run.json").chmod(0o600)
+
+    def test_fields_of_other_shapes_are_passed_over(self, run):
+        """A batch whose entities or claims are no list, and a run.json
+        whose corpus stages are none, count nothing, and the report goes
+        on."""
+        directory = run / slugify(Path(FILES[CERT][0]).stem)
+        batch = json.loads((directory / "batch.json").read_text())
+        batch |= {"entities": 1, "claims": "Hildegard Laudler"}
+        (directory / "batch.json").write_text(json.dumps(batch))
+        plan = json.loads((run / "run.json").read_text())
+        plan["scratch"]["corpus_stages"] = 5
+        (run / "run.json").write_text(json.dumps(plan))
+        made = build(run, now=NOW)
+        assert document(made, CERT)["batch"]["entities"] == {}
+        assert document(made, CERT)["batch"]["claims"] == {}
+        assert made["run"]["corpus_stages"] == []
+        assert leaks(render_markdown(made["aggregate"])) == []
+
+    def test_malformed_files_never_stop_the_report(self, tmp_path):
+        """The fixture run with leaves of its files swapped for values of
+        other types, at random from fixed seeds: the report is made and
+        rendered every time, or refused (ReportError) when run.json itself
+        holds no object."""
+        base = record(tmp_path / "base")
+        odd = [None, True, 0, -1, 1.5, float("inf"), "", "x", [], {}, [1],
+               {"a": 1}, "Laudler", 10**30]  # fmt: skip
+        refused = 0
+        for seed in range(50):
+            rng = random.Random(seed)
+            path = tmp_path / f"round-{seed}"
+            shutil.copytree(base, path)
+            scramble(path, rng, odd, rng.choice([0.02, 0.05, 0.1]))
+            try:
+                made = build(path, now=NOW)
+            except ReportError as exc:
+                assert "run.json" in str(exc)
+                refused += 1
+                continue
+            render_markdown(made["aggregate"])
+            report.render_html(made)
+            report.render_json(made)
+        assert refused < 50
 
     def test_an_event_log_it_cannot_read_is_refused(self, run):
         (run / "events.jsonl").chmod(0)

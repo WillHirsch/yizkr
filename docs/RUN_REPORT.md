@@ -34,18 +34,25 @@ directory's `.report` folder and prints where:
 | `report.json` | everything the page shows, as data | never |
 
 Run again, it replaces each file whole. The folder is made private to its
-owner (mode 700), and a `.report` that is a symbolic link, or no folder,
-is refused. No document's directory can take the name: the orchestrator
-names them by slugs, which never start with a dot, and a directory it sets
-aside by `.<name>.superseded-<n>`. A run directory that holds no
-`run.json`, or whose `events.jsonl` cannot be read, is refused with a
-message; an `alerts.jsonl` or `control.jsonl` that cannot be read leaves
-its sections "not available".
+owner (mode 700) every time, one there already included; a `.report` that
+is a symbolic link, or no folder, is refused. No document's directory can
+take the name: the orchestrator names them by slugs, which never start
+with a dot, and a directory it sets aside by `.<name>.superseded-<n>`.
 
-**It reads the run directory alone**: never the wiki or its query
-service, the engine, the LLM cache or the corpus. A unit test writes the
-report under the refusing wiki of `tests/unit/test_no_wiki_before_write.py`
-with an engine factory that fails if asked. It reads:
+A run directory is refused, with a message, when it holds no `run.json`,
+when its `run.json` cannot be read or holds no JSON object, or when its
+`events.jsonl` cannot be read: the report reads the run by its plan, its
+invocations and its events. An `alerts.jsonl` or `control.jsonl` that
+cannot be read leaves its section "not available". Anything else of
+another shape than the pipeline writes (a field of another type in a
+log, a view or `run.json`, a line that is no JSON object) counts as
+nothing and is passed over: a malformed file never stops the report.
+
+**It reads the run directory, and the model manifest.** It never reads
+the wiki or its query service, the engine, the LLM cache or the corpus: a
+unit test writes the report under the refusing wiki of
+`tests/unit/test_no_wiki_before_write.py` with an engine factory that
+fails if asked. It reads:
 
 - `run.json`: the plan (each document's SHA-1, file, kind and stages),
   what shaped the run, and each invocation's start, end and outcome;
@@ -56,7 +63,12 @@ with an engine factory that fails if asked. It reads:
   of two that name one SHA-1 (a file with another's bytes), the one that
   is no duplicate holds the views;
 - a corpus stage's outputs: the clustering stage's
-  `corpus/clustering/identity-map.json` (#105), its summary alone.
+  `corpus/clustering/identity-map.json` (#105), its summary alone;
+- and one file outside the run directory: the model manifest,
+  `src/yizkr/model/manifest.yaml` as the code has it when the report is
+  made. Its properties and item keys are the names `report.md` may give
+  claims and entities (below), so a property or kind the run's batches
+  hold that today's manifest does not is counted as `other`.
 
 The logs are read a line at a time and folded as they are read, so a
 whole-corpus run's log is never held in memory: a unit test reads a log of
@@ -65,28 +77,35 @@ several megabytes within a third of its size. They are read as
 them, and all of it again while an invocation starts or ends in between,
 and a stage an ended invocation left started is interrupted by the rule
 the monitor and `run_state` use (`rundir.interrupted`). So the report's
-statuses agree with `yizkr stages state` and the monitor's, and unit tests
-check that they do.
+statuses agree with `yizkr stages state` and the monitor's. Unit tests
+check both for a run that finished, one still running, one paused with a
+stage cut short, one stopped, and one whose first or latest invocation
+was killed.
 
 ## What it shows
 
 **The run.** Its mode and project stage; whether the latest invocation
-is running or how it ended, and why (the exception it names, or the
-slices that stopped it); whether it went through every stage; each
-invocation's span, summed into the run's wall time (a killed invocation's
-runs to its last event, as in the monitor); the barrier; the code, the
-engine and its CLI, and each role's model, effort, epoch, refresh and
-client configuration hash. A run still running is a snapshot, and says
-so.
+is running or how it ended, and why (the class of the exception it
+names, or the slices that stopped it); whether it went through every
+stage; each invocation's span, summed into the run's wall time (a killed
+invocation's runs to its last event, as in the monitor); the barrier; the
+code's commit and version, and whether the code differed from its commit
+(`dirty`); the engine and its CLI; and each role's model, effort, epoch,
+refresh and client configuration hash. A run still running is a
+snapshot, and says so.
 
 **Documents.** The documents planned (a SHA-1 planned twice is one
 document) by kind; languages, by the transcriptions read, and by kind;
 the transcription routes (vision, text file, slide text, correction) and
 how each language was resolved (detected, fallback, override); the
-documents that failed, each once, with the exception or the label its
-failure leads with, those whose source could not be read among them; the
-views set aside to be made again; and the documents with a view that
-could not be read.
+documents that failed, each once: those whose stage failed, as their
+latest events leave them, and those the latest invocation failed outside
+their stages, with the class of the exception or the label their failure
+leads with. The kind table counts the planned documents of each kind
+that failed; a failed document the run does not plan (a source that
+could not be read has no SHA-1 to plan) is counted apart, by the kind
+its event gives. Also the views set aside to be made again, and the
+documents with a view that could not be read.
 
 **Stages.** One row per stage, in plan order. Its columns partition the
 stage's documents, as their latest events leave them:
@@ -106,12 +125,20 @@ A view made in one invocation and reused by a later one of the same run
 (every stage a resumed scratch run takes again) counts as that
 invocation made it: computed, or reused by the cache's reasons. The live
 monitor counts it `view current`, since it shows what each invocation
-does; the report says how the run came by the view.
+does; the report says how the run came by the view. A scratch run keeps
+its settings across its invocations (docs/RUN_MANIFEST.md), so every view
+it counts as made was made with them. An `ingest run` state directory
+need not: each `ingest run` records the settings it ran with in place of
+the last one's, and a view one run made stands in the next while its
+inputs are unchanged, whatever that run's settings. So the report counts
+such a view as made, and cannot say with which settings, until each
+invocation records its own (#255).
 
 For each stage, the report gives its reuse by reason, its attention and
 failure labels, its calls (to the engine, from the cache, and the
 engine's call events) and its time (the attempts that ended, start to
-end), with its cache share and its failure and attention rates.
+end), with its cache share, its failure rate, of all its documents,
+pending ones included, and its attention rate, of its completed ones.
 
 **What sent a computed stage to the engine** is what the cache's events
 record of its calls: each miss's reason, `absent` (the cache held no
@@ -122,8 +149,8 @@ when it answered otherwise); `no call` for a stage that makes none, and
 `no cache` for calls made without the cache. Which component of an absent
 call's key changed (the prompt, a file, the model, the configuration, the
 attempt, the epoch) is kept by the cache's entry, not the run directory,
-and shows only against a baseline run's calls (ADR-0032 §11): that is the
-run-to-run diff's to say (#198).
+and shows only against a baseline run's calls: the run-to-run diff (#198)
+attributes a recompute to it (ADR-0025 §3, ADR-0032 §11).
 
 **Corpus stages.** Each corpus stage the run registered or ran, with its
 state and attention labels, or `not run`; a run with none says so.
@@ -140,8 +167,10 @@ rechecks.
 - claims by property;
 - rejects: the claims validation rejected and the objects the parser
   could not read, from each extraction's coverage, with their rate among
-  the claims given, and the extractions that failed with every claim
-  rejected or unread;
+  the claims given; and how many extractions failed with every claim
+  rejected or unread. A failed extraction's reason can quote a model's
+  answer, which can quote a document, so the number of claims it gives
+  stays with its document, in `report.html` and `report.json`;
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
 - critic findings by class: the statement-part each concerns (subject,
@@ -149,16 +178,20 @@ rechecks.
 - clusters, from the clustering stage's identity map: confident merges,
   ambiguous clusters left split, conflicting clusters (and how many of
   them hard), singletons, the mentions clustered by kind, the candidate
-  pairs and the adjudication estimate; `not run` when the run has no
-  clustering stage, and the map's state when it is missing or of another
-  format.
+  pairs, the adjudication estimate, and the hub keys not blocked on and
+  the mentions holding them; `not run` when the run has no clustering
+  stage, and the map's state when it is missing or of another format.
 
 **Calls and the cache.** The calls that reached the engine and those the
 cache answered, in all and per role; hits and misses by reason; resumes,
 replays (and those that answered otherwise), rejections and adoptions;
-and what the engine's call events say: outcomes, errors by name, engine
-time, waits for the subscription, attempts a limit refused, why calls
-were held, and the model the engine reported for each call.
+and what the engine's call events say: outcomes, errors by exception
+class, engine time, waits for the subscription, attempts a limit
+refused, why calls were held, and the model the engine reported for each
+call. The calls that reached the engine are the cache's misses and
+replays; a run made without the cache (`ingest run --no-cache`) has no
+cache events, so its engine calls are its call events, as the monitor
+counts them.
 
 **Usage.** The tokens each call's stream reported it used (input,
 output, cache creation and cache read), per stage and role as the call
@@ -183,12 +216,17 @@ never counted as none:
   stage keeps them among its outputs (#112); until then it says they are
   not available.
 
+The page's drill-down lists, with links, the documents that failed (as
+`report.md` counts them), those that need attention, those with alerts,
+and those with a view that could not be read.
+
 ## report.md: aggregates alone
 
 `report.md` is rendered from the report's `aggregate` section and nothing
 else, and the aggregates hold counts, rates, times and names of the
 pipeline's own vocabulary, never a document's name, a file name, a path,
-a label, an excerpt or a quote (docs/AGENT_PROTOCOL.md §7):
+a label, an excerpt, a quote, or a number a document gives
+(docs/AGENT_PROTOCOL.md §7):
 
 - every name in them is checked against a fixed vocabulary (stages,
   kinds, roles, statuses, reasons, outcomes, holds, requesters, the
@@ -197,22 +235,30 @@ a label, an excerpt or a quote (docs/AGENT_PROTOCOL.md §7):
   is counted as `other`;
 - a reason is shown by its leading label only, and only when the label is
   one the pipeline writes (an attention reason's, or a failure outside a
-  stage's), or by the exception a failure names; anything else is
-  `other`;
+  stage's), or by the class of the exception a failure names, without its
+  module path; anything else is `other`;
 - a language is shown only as a two- or three-letter code, with at most a
   region; a model only as a full model id; the run id, the code's commit
-  and the configuration hashes only in their own forms;
+  and the configuration hashes only in their own forms; and of the code's
+  difference from its commit only that there is one, never its hash,
+  which would confirm a guess at a small difference;
 - no document appears, not even by its SHA-1, and no path: not the
   corpus folder, the cache or the never-ingest list, nor that list's hash,
   which a short list could be recovered from by guessing (#255).
 
-A unit test (`tests/unit/test_run_report.py`) runs the report over a
-fictional run whose file names, paths, labels, excerpts, reasons, alert
+Unit tests (`tests/unit/test_run_report.py`) guard it three ways. A
+fictional run's file names, paths, labels, excerpts, reasons, alert
 fields and identity map carry names from the example universe
-(docs/EXAMPLES.md), and asserts that none of them, and no document's
-SHA-1, appears anywhere in `report.md` or in any string of the
-aggregates. Still, re-read `report.md` before posting it (the self-review
-of docs/AGENT_PROTOCOL.md §7).
+(docs/EXAMPLES.md), and none of them, nor any document's SHA-1, may
+appear in `report.md` or in any string of the aggregates. The same run
+carries a name in every field the aggregates name something by (a stage,
+a kind, a role, a reason, an outcome, a hold, an error, a requester, a
+route, a fallback tier, a critic's class, the mode, the state, the engine,
+a model, the code's version), and each must fold into `other`. And the
+run rewritten, with every document's name and SHA-1 replaced in every file
+of its directory, must give a `report.md` the same byte for byte. Still,
+re-read `report.md` before posting it (the self-review of
+docs/AGENT_PROTOCOL.md §7).
 
 `report.html` and `report.json` hold file names, and reasons that can
 quote a document, so they are local-only data like the rest of the run
