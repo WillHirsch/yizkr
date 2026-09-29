@@ -43,7 +43,7 @@ can be checked except by a model reading wording.
    relations in that source call for. Of the relations of agency, the
    manifest has `employer`, `educated_at` and `member_of`; until it has
    one for "issued by" or "carried out by", such a relation is a gap
-   (ADR-0013).
+   (ADR-0013). #385's extraction revision adds both.
 
 2. **A site named as where something happened is a place.** A camp,
    ghetto or memorial named as where someone died is a place: an item of
