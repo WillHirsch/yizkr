@@ -507,17 +507,22 @@ class TestCallEvents:
         assert event["usage"] == tokens(5)
 
     def test_a_call_whose_stream_reports_nothing_carries_none_of_it(self, cli):
+        """Nothing of the call before it, either: a fork whose stream has
+        neither an init nor a result event carries no report."""
         seen, emit = recorder()
         client = observed_client(
-            ClaudeCodeClient(model=MODEL), role="critique", events=emit
+            ClaudeCodeClient(model=MODEL), role="extract", events=emit
         )
-        client.complete("Critique the batch.")
+        _, handle = client.open_conversation("List the entities.")
+        client.fork(handle, "Extract chunk 1.")
         cli.edit = lambda events: [
             e for e in events if e.get("type") == "assistant"
         ]
-        client.complete("Critique the batch again.")
-        assert "usage" in seen[0]
-        assert not set(llm.CALL_STREAM_FIELDS) & seen[1].keys()
+        client.fork(handle, "Extract chunk 2.")
+        client.close_conversation(handle)
+        assert [event["call"] for event in seen] == ["open", "fork", "fork"]
+        assert "usage" in seen[1]
+        assert not set(llm.CALL_STREAM_FIELDS) & seen[2].keys()
 
     def test_a_call_that_never_ran_carries_nothing_of_an_earlier_one(
         self, cli
