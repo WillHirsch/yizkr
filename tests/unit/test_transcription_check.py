@@ -62,6 +62,7 @@ from yizkr.pipeline.transcription_check import (
     FAIL,
     FLAG,
     MIN_TEXT_CHARS_PER_PAGE,
+    NOT_A_RECORD,
     REFUSAL,
     SHORT_OUTPUT_CHARS,
     SIGNATURES,
@@ -848,11 +849,22 @@ class TestPreflight:
 
 class TestTranscribers:
     def test_vision_failure_raises_and_returns_nothing(self, tmp_path):
-        transcriber = LlmVisionTranscriber(FakeLlm(FAILURES[0][1]))
+        # the engine's note of a failing tool, in place of the record
+        transcriber = LlmVisionTranscriber(FakeLlm(Raw(FAILURES[0][1])))
         with pytest.raises(TranscriptionCheckFailed) as caught:
             transcriber.transcribe(scan_file(tmp_path))
-        assert caught.value.check.signature == "pdf-renderer"
+        assert caught.value.check.failure == NOT_A_RECORD
         assert transcriber.last_check == caught.value.check
+
+    def test_a_record_holding_a_tool_s_words_passes_with_a_flag(
+        self, tmp_path
+    ):
+        """The record parsed, so the words of its page are a source's,
+        whatever they say: the failing signatures only flag them."""
+        transcriber = LlmVisionTranscriber(FakeLlm(FAILURES[0][1]))
+        result = transcriber.transcribe(scan_file(tmp_path))
+        assert result.flag == "pdf-renderer"
+        assert transcriber.last_check.passed
 
     def test_vision_pdf_uses_its_page_count(self, tmp_path, monkeypatch):
         monkeypatch.setattr(transcribe.shutil, "which", all_tools)
@@ -866,6 +878,26 @@ class TestTranscribers:
             transcriber.transcribe(scan_file(tmp_path, "scan.pdf"))
         assert caught.value.check.failure == TOO_SHORT
         assert caught.value.check.pages == 5
+
+    def test_a_vision_pdf_s_record_gives_exactly_its_pages(
+        self, tmp_path, monkeypatch
+    ):
+        """Read whole, a PDF's record gives no more pages than the PDF
+        has; an image's may (an open book)."""
+        monkeypatch.setattr(transcribe.shutil, "which", all_tools)
+        monkeypatch.setattr(
+            transcription_check.subprocess, "run", FakeRun("Pages: 1\n")
+        )
+        answer = record_answer(a_page(), a_page())
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            LlmVisionTranscriber(FakeLlm(answer)).transcribe(
+                scan_file(tmp_path, "scan.pdf")
+            )
+        assert caught.value.check.failure == "pages-extra"
+        image = LlmVisionTranscriber(FakeLlm(answer)).transcribe(
+            scan_file(tmp_path)
+        )
+        assert len(image.pages) == 2
 
     def test_passing_output_is_the_unchecked_output(self, tmp_path):
         # the check adds a verdict and changes nothing in the transcription
@@ -889,7 +921,7 @@ class TestTranscribers:
         """A failing answer the client kept from an earlier call is
         rejected, and the engine is asked in the same call, as it would be
         without the cache; its answer is checked in its place (#230)."""
-        failing = FAILURES[0][1]
+        failing = Raw(FAILURES[0][1])
         llm = KeepingLlm(failing, a_page())
         result = LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert result.text == page_text(a_page())
@@ -897,14 +929,15 @@ class TestTranscribers:
         assert llm.rejected == [(answered(failing), True)]
 
     def test_the_engines_failing_answer_is_not_asked_for_again(self, tmp_path):
-        llm = KeepingLlm(FAILURES[0][1], a_page(), kept=0)
+        failing = Raw(FAILURES[0][1])
+        llm = KeepingLlm(failing, a_page(), kept=0)
         with pytest.raises(TranscriptionCheckFailed):
             LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert llm.calls == 1
-        assert llm.rejected == [(answered(FAILURES[0][1]), False)]
+        assert llm.rejected == [(answered(failing), False)]
 
     def test_a_kept_answer_is_asked_for_once_more_at_most(self, tmp_path):
-        failing = FAILURES[0][1]
+        failing = Raw(FAILURES[0][1])
         llm = KeepingLlm(failing, failing, a_page(), kept=2)
         with pytest.raises(TranscriptionCheckFailed):
             LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
@@ -1040,7 +1073,7 @@ class TestToolErrors:
     def test_a_kept_answer_asked_for_again_can_meet_a_tool_error(
         self, tmp_path
     ):
-        failing = FAILURES[0][1]
+        failing = Raw(FAILURES[0][1])
         llm = ScriptedLlm(failing, tool_error("pdf-renderer-missing"), kept=1)
         with pytest.raises(TranscriptionCheckFailed) as caught:
             LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
@@ -1049,8 +1082,9 @@ class TestToolErrors:
         assert llm.rejected == [(answered(failing), True)]
 
     def test_through_the_claude_code_engine(self, tmp_path, monkeypatch):
-        """The signal decides whatever the answer says; the wording
-        signatures stay a backstop for an answer with no tool error."""
+        """The signal decides whatever the answer says; for an answer
+        with no tool error, the record decides, and a record's wording
+        only flags it."""
         cli = install_fake_cli(monkeypatch, tmp_path)
         scan = tmp_path / "scan.png"
         scan.write_bytes(b"png placeholder")
@@ -1061,10 +1095,12 @@ class TestToolErrors:
             transcriber.transcribe(scan)
         assert caught.value.check.tool_error == "pdf-renderer-missing"
         cli.tool_events = read_events(scan.resolve())
-        cli.answer = record_answer(FAILURES[0][1])
+        cli.answer = FAILURES[0][1]
         with pytest.raises(TranscriptionCheckFailed) as caught:
             transcriber.transcribe(scan)
-        assert caught.value.check.signature == "pdf-renderer"
+        assert caught.value.check.failure == NOT_A_RECORD
+        cli.answer = record_answer(FAILURES[0][1])
+        assert transcriber.transcribe(scan).flag == "pdf-renderer"
         cli.answer = record_answer(a_page())
         assert transcriber.transcribe(scan).text == page_text(a_page())
 
@@ -1216,14 +1252,14 @@ class TestOrchestratorContract:
     def test_failed_check_is_not_kept_and_is_retried(
         self, tmp_path, monkeypatch
     ):
-        engine = FakeLlm(FAILURES[0][1], a_page())
+        engine = FakeLlm(Raw(FAILURES[0][1]), a_page())
         orch, scan = self.orchestrator(tmp_path, monkeypatch, engine)
         folder = scan.parent
 
         doc = DocumentRun(folder / "scan.png", tmp_path / "state")
         assert orch.advance(doc, stop_after_extract=True) == FAILED
         assert "TranscriptionCheckFailed" in doc.state.error
-        assert "pdf-renderer" in doc.state.error
+        assert "(not-a-record)" in doc.state.error
         assert not doc.transcription.exists()
         assert not doc.batch.exists()
 

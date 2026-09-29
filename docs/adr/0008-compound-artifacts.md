@@ -503,7 +503,7 @@ did so on 2026-09-29, in the review of its PR.
   view), is never read from the text layer: its page is read by vision,
   which reads what the page shows. Were a text layer ever given without
   such text, `[redacted]` would stand where it lies, never nothing, as
-  the owner decided; #389's transcription record is to carry the mark
+  the owner decided; #389's transcription record carries the mark
   through what the vision engine writes too. Each of these is the
   owner's decision.
 - **Known limits of hidden text** (from the review of #176): text hidden
@@ -614,9 +614,18 @@ the compilation's.
 - A curator's correction of a PDF's transcription
   (`transcription.corrected.txt`) replaces the PDF's own text only: its
   excerpts come from the record its reading kept.
-- **The transcription record (#389).** Excerpts take their language and
-  class from the kept reading's record once #389's record lands; until
-  then, py3langid and the wording check apply.
+- **The transcription record (#389, ADR-0037).** An excerpt's
+  transcription is the kept reading, so its class, its pages and its flag
+  are the reading's record's, never its kind's, and its language is the
+  one that holds most of the record's text (resolution `record`);
+  py3langid guesses it only for a reading with no record. The kept
+  reading is judged by the record check, as any vision reading is.
+- **An image the record reads no text in is no excerpt.** An image whose
+  kept reading's record calls no page `transcribed` (a photograph with no
+  writing, called `blank`; a scanner's colour chart, called
+  `not-a-document-page`) passes the check and is kept, but holds nothing
+  to extract, so it is no excerpt; the write still registers it as the
+  PDF's image.
 - **Decided by default** (the owner may override): an excerpt's status
   is independent of its PDF's; an excerpt's write may register its PDF's
   item (its identity, no claims) before the PDF's own review is

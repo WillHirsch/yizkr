@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
-from tests.fixtures import pdfs
+from tests.fixtures import pdfs, records
 from tests.fixtures.records import page_text, record_answer, record_page
 from tests.unit.test_llmcache import (
     CachedRun,
@@ -414,6 +414,36 @@ class TestTheRoute:
         # no call saw the PDF whole, so it has no class
         assert transcription.document_class is None
 
+    def test_a_page_with_nothing_to_read_is_blank(self, tmp_path):
+        corpus = folder(tmp_path, booklet=booklet())
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
+        pages = transcription_of(doc).pages
+        assert [(p.provenance.method, p.status) for p in pages[1:5]] == [
+            ("text-layer", "transcribed"),
+            ("none", "blank"),
+            ("none", "blank"),
+            ("none", "blank"),
+        ]
+
+    def test_a_flagged_vision_page_flags_the_pdf(self, tmp_path):
+        """The flag of a vision page's reading, here from its notes, is
+        the transcription's."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reading = json.dumps(
+            {
+                "document_class": "unclassified",
+                "pages": [
+                    record_page(1, SECOND, notes="No image was provided.")
+                ],
+            }
+        )
+        reader = Reader({"page-2": reading})
+        doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
+        transcription = transcription_of(doc)
+        assert transcription.flag == "media-missing"
+        assert transcription.pages[1].notes == "No image was provided."
+
     def test_a_garbled_text_layer_is_read_by_vision(self, tmp_path):
         """The second page's font extracts as private-use characters: the
         page is read by vision, from a rendering of it."""
@@ -794,18 +824,8 @@ class TestAScratchRun:
 
 def stricter_check(monkeypatch, phrase: str) -> None:
     """Make the transcription check stricter, as a change to it would:
-    `phrase` becomes a failure's signature."""
-    signature = transcription_check._signature(
-        "stricter",
-        transcription_check.TOOL_FAILURE,
-        re.escape(phrase),
-        tier=transcription_check.FAIL,
-    )
-    monkeypatch.setattr(
-        transcription_check,
-        "SIGNATURES",
-        (*transcription_check.SIGNATURES, signature),
-    )
+    a text holding `phrase` fails (records.stricter_check)."""
+    records.stricter_check(monkeypatch, re.escape(phrase))
 
 
 def set_asides(orchestrator: CachedRun, kind: str = "media") -> list[dict]:
@@ -839,6 +859,117 @@ class TestReuse:
             "Klara left Flörburg first."
         )
         assert (doc.dir / "transcription.superseded-1.json").exists()
+
+    @pytest.mark.parametrize(
+        "status", ["blank", "illegible", "not-a-document-page"]
+    )
+    def test_a_vision_page_with_nothing_to_read_is_reused(
+        self, tmp_path, status
+    ):
+        """A page the record of its reading calls blank, illegible or not
+        a document page needs no text when it is made, and is checked on
+        reuse as it was then: three runs read it once, and set nothing
+        aside."""
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reading = json.dumps(
+            {
+                "document_class": "unclassified",
+                "pages": [record_page(1, "", status=status)],
+            }
+        )
+        reader = Reader({"page-2": reading})
+        for _run in range(3):
+            again = run(tmp_path, corpus, reader)
+            assert set_asides(again) == []
+        assert reader.names() == ["page-2.jpg"]
+        doc = document(again, "family-history.pdf")
+        assert transcription_of(doc).pages[1].status == status
+        assert not (doc.dir / "transcription.superseded-1.json").exists()
+
+    @pytest.mark.parametrize("whole", [False, True])
+    def test_the_flag_is_the_one_the_check_raises_now(
+        self, tmp_path, monkeypatch, whole
+    ):
+        """A reused transcription carries the flag of the check made now:
+        one the check now raises is added, and one it raises no more is
+        dropped. The flag is no part of the content, so nothing is made
+        again, and the transcription-flag alert follows it."""
+        if whole:
+            read_whole(monkeypatch)
+        corpus = folder(tmp_path, family_history=history(scanned()))
+        reader = Reader(
+            {
+                "page-2": SECOND,
+                "family-history.pdf": record_answer(FIRST, SECOND),
+            }
+        )
+
+        def flags(orchestrator):
+            doc = document(orchestrator, "family-history.pdf")
+            alerts = [
+                event["check"]
+                for event in this_run(orchestrator, "alert")
+                if event.get("check") == "transcription-flag"
+            ]
+            return orchestrator._transcription(doc).flag, alerts
+
+        assert flags(run(tmp_path, corpus, reader)) == (None, [])
+        with monkeypatch.context() as patch:
+            flagging = transcription_check._signature(
+                "flagged-now",
+                transcription_check.TOOL_FAILURE,
+                r"followed her in 1939",
+            )
+            patch.setattr(
+                transcription_check,
+                "SIGNATURES",
+                (*transcription_check.SIGNATURES, flagging),
+            )
+            again = run(tmp_path, corpus, reader)
+            assert set_asides(again) == []
+            assert flags(again) == ("flagged-now", ["transcription-flag"])
+        again = run(tmp_path, corpus, reader)
+        assert set_asides(again) == []
+        assert flags(again) == (None, [])
+        assert len(reader.names()) == 1
+
+    def test_an_image_reading_kept_without_its_record_is_made_again(
+        self, tmp_path
+    ):
+        corpus = folder(tmp_path, booklet=booklet())
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
+        kept = derived_transcription(doc.dir, LETTER_SHA1)
+        view = json.loads(kept.read_text())
+        del view["document_class"]
+        kept.write_text(json.dumps(view))
+        again = run(tmp_path, corpus, reader)
+        (aside,) = set_asides(again)
+        assert "(not-a-record)" in aside["reason"]
+        assert aside["reason"].endswith(f"(image {LETTER_SHA1[:12]})")
+        assert "document_class" in json.loads(kept.read_text())
+
+    def test_a_pdf_read_whole_is_checked_for_its_page_count_on_reuse(
+        self, tmp_path, monkeypatch
+    ):
+        """A reused record of a PDF read whole that gives more pages than
+        the PDF has fails the check, as it would when made."""
+        read_whole(monkeypatch)
+        corpus = folder(tmp_path, family_history=history())
+        reading = record_answer(FIRST, SECOND, SECOND)
+        reader = Reader(
+            {"family-history.pdf": [reading, record_answer(FIRST, SECOND)]}
+        )
+        monkeypatch.setattr(
+            transcription_check, "media_page_count", lambda path: None
+        )
+        run(tmp_path, corpus, reader)
+        monkeypatch.setattr(
+            transcription_check, "media_page_count", lambda path: 2
+        )
+        again = run(tmp_path, corpus, reader)
+        (aside,) = set_asides(again)
+        assert "(pages-extra)" in aside["reason"]
 
     def test_text_read_from_a_text_layer_is_never_checked(
         self, tmp_path, monkeypatch
@@ -1051,6 +1182,10 @@ class TestTheView:
             assert hashed(read) != hashed(
                 made("text-layer", TEXT_LAYER, **field)
             )
+        # the document's class is content too
+        letter = read.model_copy(update={"document_class": "letter"})
+        certificate = read.model_copy(update={"document_class": "certificate"})
+        assert len({hashed(read), hashed(letter), hashed(certificate)}) == 3
 
 
 # -- the keys -----------------------------------------------------------------

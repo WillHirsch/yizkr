@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures import records
 from tests.fixtures.records import page_text, record_answer
 from tests.unit.test_scratch import (  # noqa: F401
     CLI,
@@ -89,8 +90,9 @@ GRAVESTONE = record_answer(
     GRAVESTONE_TEXT, document_class="unclassified", languages=["de"]
 )
 # what a vision engine answered when its PDF renderer was missing, in the
-# engine's own voice: a tool failure, never a transcription
-TOOL_FAILURE = record_answer(
+# engine's own voice and in place of the record: a tool failure, never a
+# transcription
+TOOL_FAILURE = (
     "I'll read the image file.\n"
     "The image could not be rendered: pdftoppm: command not found. "
     "Install poppler-utils and try again."
@@ -548,8 +550,7 @@ class TestTheCheck:
         assert report.counts() == {IMPORTED: 1, REJECTED: 1}
         stone = outcome_of(report, corpus.sha1(STONE))
         assert stone.outcome == REJECTED
-        assert "tool-failure" in stone.detail
-        assert "pdf-renderer" in stone.detail
+        assert "(not-a-record)" in stone.detail
         # recorded as a rejected answer under the call's key, never live
         (entry,) = rejected(tmp_path)
         assert entry["response"] == TOOL_FAILURE
@@ -607,6 +608,30 @@ class TestTheCheck:
         assert "(too-short)" in found.detail
         assert live(tmp_path) == []
 
+    def test_a_scan_pdf_s_reading_gives_exactly_its_pages(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """An archived reading of a PDF read whole that gives more pages
+        than the PDF has is rejected, as the run would reject it."""
+        corpus = small(tmp_path)
+        archive = an_archive(
+            tmp_path,
+            corpus,
+            **{PHOTO: record_answer(corpus.texts[PHOTO], "Rückseite")},
+        )
+        monkeypatch.setattr(
+            transcription_check, "media_page_count", lambda path: 1
+        )
+        monkeypatch.setattr(
+            transcription_check,
+            "is_pdf",
+            lambda path: path.name == PHOTO,
+        )
+        report = import_(tmp_path, archive, corpus)
+        (found,) = report.outcomes
+        assert found.outcome == REJECTED
+        assert "(pages-extra)" in found.detail
+
     def test_a_stricter_check_reaches_an_adoption_in_the_run(
         self, tmp_path, engine, monkeypatch
     ):
@@ -617,17 +642,7 @@ class TestTheCheck:
         archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
         import_(tmp_path, archive, corpus)
         # a signature the archive's reading has, and the engine's has not
-        signature = transcription_check._signature(
-            "slashed-names",
-            transcription_check.TOOL_FAILURE,
-            r"Muckel /",
-            tier=transcription_check.FAIL,
-        )
-        monkeypatch.setattr(
-            transcription_check,
-            "SIGNATURES",
-            (*transcription_check.SIGNATURES, signature),
-        )
+        records.stricter_check(monkeypatch, r"Muckel /", "slashed-names")
         run = transcribe_only(tmp_path, corpus, engine)
         (reject,) = events(run, "cache-reject")
         assert reject["subject"] == corpus.sha1(PHOTO)
@@ -649,17 +664,7 @@ class TestTheCheck:
         corpus = small(tmp_path)
         archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
         import_(tmp_path, archive, corpus)
-        signature = transcription_check._signature(
-            "slashed-names",
-            transcription_check.TOOL_FAILURE,
-            r"Muckel /",
-            tier=transcription_check.FAIL,
-        )
-        monkeypatch.setattr(
-            transcription_check,
-            "SIGNATURES",
-            (*transcription_check.SIGNATURES, signature),
-        )
+        records.stricter_check(monkeypatch, r"Muckel /", "slashed-names")
         report = import_(tmp_path, archive, corpus)
         assert [o.outcome for o in report.outcomes] == [REJECTED]
         assert live(tmp_path) == []

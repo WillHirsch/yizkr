@@ -323,11 +323,16 @@ re-running one step in isolation — but for a normal ingest you only ever run
   unambiguous signal: a tool error the engine's stream reports, an
   answer the engine stopped at its output limit, an answer that is not
   the record (a page without a status among the ways; a refusal in any
-  language), a record with fewer pages than the media, a blank output,
-  fewer than 3 letters or digits per page the record calls transcribed
-  in a document of two or more pages, a tool token no source writes (the
+  language), a record with fewer pages than the media (or, for a PDF
+  read whole, more), a blank output, fewer than 3 letters or digits per
+  page the record calls transcribed in a document of two or more pages,
+  and, in a text with no record only, a tool token no source writes (the
   PDF renderer missing, a traceback, an API error) or an output that is
-  wholly the engine's announcement ("Let me read the image."). Editorial
+  wholly the engine's announcement ("Let me read the image."). Inside a
+  record every signature only flags, and the flag tier reads each page's
+  notes too (ADR-0037 §3). A record's near-miss shapes (a page number
+  given as a number, null text, a code in capitals) are normalised, not
+  refused. Editorial
   marks don't count, and a single image has no floor, since a photograph
   may carry no text at all. The engine's phrases in English ("I couldn't
   open the PDF", "I can't transcribe this", "unable to comply with your

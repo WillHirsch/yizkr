@@ -31,8 +31,11 @@ run) only on a signal that is unambiguous:
   transcription record (a page without a status among the ways,
   `parse_record`), or a stored vision transcription holds no record.
 * **Pages missing** (`pages-missing`): the record gives fewer pages than
-  the media has. It may give more, since one image can show two pages of
-  a document (an open book).
+  the media has. The record of an image may give more, since one image
+  can show two pages of a document (an open book).
+* **Pages beyond the PDF** (`pages-extra`): the record of a PDF read
+  whole gives more pages than the PDF has, so its page markers would
+  point at pages the PDF lacks.
 * **Empty or implausibly short**: a blank output; or, for a document of
   two or more pages, fewer than `MIN_TEXT_CHARS_PER_PAGE` letters or
   digits per page, counted outside editorial marks, over the pages the
@@ -43,20 +46,30 @@ run) only on a signal that is unambiguous:
   sparse genuine pages, such as a caption on the back of a photograph or
   a date stamp, pass. A single image has no floor, because a photograph
   may carry no text at all.
-* **A failing signature**: a token no source document writes, which
-  matches anywhere (``pdftoppm``, a Python traceback, an API error type),
-  or an output that is wholly the engine's announcement of what it will
-  do ("Let me take a look at the image.").
+* **A failing signature**, in a text with no record only: a token no
+  source document writes, which matches anywhere (``pdftoppm``, a Python
+  traceback, an API error type), or an output that is wholly the
+  engine's announcement of what it will do ("Let me take a look at the
+  image."). An answer that parses as the record is the engine's reading
+  whatever its pages' texts say: the narration and tool output around a
+  record fail it as not the record, and the answer is the text after the
+  engine's last tool result (yizkr.pipeline.llm), so inside a record
+  such words are a source's own ("I will bring the documents to
+  Stupfield."). There every signature only flags.
 
 **It flags** an output whose wording matches one of the other
 signatures, phrases in the engine's own voice (English, so a note in
 another language is never matched): a note that it could not see the
-media, a refusal, an AI disclaimer. Such phrases are also the words of
-letters and emails, correspondence about family research among them, so
-a match proves nothing: the output passes, carries the flag (its
-signature's name) in the stage output, and raises an alert for review
-(docs/ANOMALIES.md, `transcription-flag`). Each signature's tier and
-reason are in `SIGNATURES`.
+media, a refusal, an AI disclaimer; and, for a record, any signature.
+Such phrases are also the words of letters and emails, correspondence
+about family research among them, so a match proves nothing: the output
+passes, carries the flag (its signature's name) in the stage output, and
+raises an alert for review (docs/ANOMALIES.md, `transcription-flag`).
+The record's `notes`, the engine's own words about each page, are read
+the same way, each note on its own, after the text: a note that the
+engine could not see the image flags the output ("No image was
+provided."), and never fails it. Each signature's tier and reason are in
+`SIGNATURES`.
 
 The flagging signatures match outside editorial brackets, because the
 engine marks what it cannot read in brackets (``[illegible]``). Some
@@ -150,16 +163,20 @@ EMPTY = "empty"
 CUT_OFF = "cut-off"
 NOT_A_RECORD = "not-a-record"
 PAGES_MISSING = "pages-missing"
+PAGES_EXTRA = "pages-extra"
 
+# How an output fails. A refusal is never one: every refusal signature
+# only flags (a failing signature is a tool failure's), and a refusal in
+# place of the record fails as not-a-record.
 Failure = Literal[
     "tool-error",
     "tool-failure",
-    "refusal",
     "too-short",
     "empty",
     "cut-off",
     "not-a-record",
     "pages-missing",
+    "pages-extra",
 ]
 
 # what a signature's match does: fail the output, or flag it and let it
@@ -438,9 +455,10 @@ def in_engine_voice(subject: str, match: re.Match[str]) -> bool:
 
 # Each signature's tier: FAIL for a token no source document writes and
 # for an output that is wholly the engine's announcement, which leave no
-# doubt; FLAG for the phrases in the engine's voice, which a letter or an
-# email may also write, so that a match is a question for a reader and
-# never a verdict.
+# doubt in a text with no record; FLAG for the phrases in the engine's
+# voice, which a letter or an email may also write, so that a match is a
+# question for a reader and never a verdict. In a record's text and notes
+# every signature is FLAG (check_transcription).
 SIGNATURES: tuple[Signature, ...] = (
     # -- tool and engine failures: tokens no source document writes ------
     # Poppler is also a surname, so the bare word counts as the package
@@ -695,6 +713,7 @@ def check_transcription(
     cut_off: bool = False,
     record: TranscriptionRecord | None = None,
     expect_record: bool = False,
+    whole_pdf: bool = False,
 ) -> TranscriptionCheck:
     """Judge one transcription of a document of `pages` pages.
 
@@ -705,7 +724,10 @@ def check_transcription(
     the engine stopped the answer at its output limit: either fails the
     output, whatever it says. `record` is the transcription record `text`
     was made from, if any; `expect_record` fails a text that has none (a
-    vision transcription).
+    vision transcription). With a record, no wording fails the output:
+    every signature, in its text or its notes, only flags it.
+    `whole_pdf` says the media is a PDF read whole, whose record gives
+    exactly its pages.
     """
     chars = text_char_count(text)
     floor = minimum_text_chars(pages)
@@ -758,7 +780,17 @@ def check_transcription(
             f"the record gives {len(record.pages)} of the media's {pages} "
             "pages",
         )
-    found = find_signature(text, FAIL)
+    if (
+        whole_pdf
+        and record is not None
+        and pages is not None
+        and len(record.pages) > pages
+    ):
+        return failed(
+            PAGES_EXTRA,
+            f"the record gives {len(record.pages)} pages for a PDF of {pages}",
+        )
+    found = find_signature(text, FAIL) if record is None else None
     if found is not None:
         signature, phrase = found
         phrase = _cap(phrase)
@@ -781,7 +813,13 @@ def check_transcription(
             f"below the floor of {floor} ({MIN_TEXT_CHARS_PER_PAGE} per "
             "page)",
         )
-    found = find_signature(text, FLAG)
+    found, where = find_signature(text, FLAG if record is None else None), ""
+    if found is None and record is not None:
+        for page in record.pages:
+            found = find_signature(page.notes) if page.notes else None
+            if found is not None:
+                where = f" of page {page.page}'s notes"
+                break
     if found is not None:
         signature, phrase = found
         phrase = _cap(phrase)
@@ -791,8 +829,9 @@ def check_transcription(
             signature=signature.name,
             matched=phrase,
             reason=(
-                f"the wording reads like {_what(signature)} (signature "
-                f"{signature.name}: {phrase!r}); flagged for review"
+                f"the wording{where} reads like {_what(signature)} "
+                f"(signature {signature.name}: {phrase!r}); flagged for "
+                "review"
             ),
             **verdict,
         )
@@ -805,11 +844,13 @@ def check_answer(
     tool_failures: Sequence[ToolFailure] = (),
     *,
     cut_off: bool = False,
+    whole_pdf: bool = False,
 ) -> tuple[TranscriptionCheck, TranscriptionRecord | None]:
     """Judge an engine's answer to the transcription prompt: the verdict,
     and the record it holds when it holds one. An answer that does not
     parse as the record fails (`not-a-record`), and one that does is
-    judged by `check_transcription` on the record's text."""
+    judged by `check_transcription` on the record's text (`whole_pdf` as
+    there)."""
     if tool_failures or cut_off or not answer.strip():
         return (
             check_transcription(answer, pages, tool_failures, cut_off=cut_off),
@@ -830,7 +871,16 @@ def check_answer(
             None,
         )
     text, _spans = record_text(record.pages)
-    return check_transcription(text, pages, record=record), record
+    return (
+        check_transcription(text, pages, record=record, whole_pdf=whole_pdf),
+        record,
+    )
+
+
+def is_pdf(media_path: Path) -> bool:
+    """Whether the media at `media_path` is a PDF, whose record, read
+    whole, gives exactly its pages (check_transcription's `whole_pdf`)."""
+    return media_path.suffix.lower() == ".pdf"
 
 
 def require_valid_transcription(

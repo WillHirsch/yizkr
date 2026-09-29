@@ -18,11 +18,20 @@ record:
   engine's own words about the page, which are never part of its text.
 
 `parse_record` reads an answer as the record, and raises `RecordError`
-when it is not one: not a JSON object, a page without a status, a status
-or a class outside the record's vocabulary, pages out of order, or a page
-the record calls transcribed that holds no text. The transcription check
-fails such an answer (yizkr.pipeline.transcription_check): whether an
-answer is the record is a question of its structure, never its words.
+when it is not one: not a JSON object, a field the record does not have,
+a page without a status, a status or a class outside the record's
+vocabulary, page numbers that are not 1, 2, 3... in order, or a page the
+record calls transcribed that holds no text (`page` is a JSON integer, so
+a string or a boolean fails). The transcription check fails such an
+answer (yizkr.pipeline.transcription_check): whether an answer is the
+record is a question of its structure, never its words.
+
+A few harmless near-misses of the record's shape are normalised rather
+than refused, since they say the same: a `printed_page` given as a JSON
+number is its string ("12"); a `text`, `notes` or `languages` given as
+null is empty; and a language code is lower-cased ("DE" is "de", "de-DE"
+is "de-de", since a record's language code, as a claim's, may carry a
+region subtag).
 
 A record's text (`record_text`) is its pages' texts in order, each opened
 by its `[Page N]` marker, N the physical index, so that every claim read
@@ -49,6 +58,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -124,12 +134,39 @@ class RecordPage(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    page: int = Field(ge=1)
+    # a JSON integer: a page number given as a string or a boolean fails
+    page: int = Field(ge=1, strict=True)
     printed_page: str | None = None
     status: PageStatus
     text: str = ""
     languages: list[LanguageCode] = Field(default_factory=list)
     notes: str = ""
+
+    @field_validator("printed_page", mode="before")
+    @classmethod
+    def _a_number_as_written(cls, value: object) -> object:
+        """A page number given as a JSON number is its string."""
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            return str(int(value)) if float(value).is_integer() else str(value)
+        return value
+
+    @field_validator("text", "notes", mode="before")
+    @classmethod
+    def _null_text_is_empty(cls, value: object) -> object:
+        return "" if value is None else value
+
+    @field_validator("languages", mode="before")
+    @classmethod
+    def _codes_in_lower_case(cls, value: object) -> object:
+        """No languages given as null is none; each code is lower-cased."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [
+                code.lower() if isinstance(code, str) else code
+                for code in value
+            ]
+        return value
 
     @model_validator(mode="after")
     def _transcribed_holds_text(self) -> RecordPage:

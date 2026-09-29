@@ -25,7 +25,7 @@ import shutil
 import pytest
 
 from tests.fixtures import pdfs
-from tests.fixtures.records import page_text
+from tests.fixtures.records import page_text, record_answer, record_page
 from tests.unit.test_orchestrate import this_run
 from tests.unit.test_pdf_pages import (
     CAPTION,
@@ -68,6 +68,7 @@ from tests.unit.test_scratch import (  # noqa: F401
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import scratch
+from yizkr.pipeline.language import detect_language
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     DUPLICATE,
@@ -230,6 +231,62 @@ class TestAnExcerpt:
         orchestrator._excerpts = {}
         orchestrator.exclusions = ExclusionList.parse(f"{LETTER_SHA1}\n")
         assert orchestrator._excerpts_of(doc, ()) == []
+
+    def test_the_language_and_class_are_the_reading_s_record_s(self, tmp_path):
+        """An excerpt's language comes from its reading's record, not from
+        a guess at its text, and its class is the record's, never its
+        kind."""
+        address = "Flörburg, Brunnenring 35"
+        assert detect_language(address)[0] != "de"
+        corpus = folder(tmp_path, booklet=booklet())
+        reading = record_answer(address, languages=["de"])
+        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: reading}))
+        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        transcription = transcription_of(excerpt)
+        assert transcription.language == "de"
+        assert excerpt.state.detail["language"]["source"] == "record"
+        assert transcription.document_class == "letter"
+
+    @pytest.mark.parametrize("status", ["blank", "not-a-document-page"])
+    def test_an_image_the_record_reads_no_text_in_is_no_excerpt(
+        self, tmp_path, status
+    ):
+        """A photograph with no writing, or a colour chart: the reading
+        passes, and is kept, but there is nothing to extract."""
+        corpus = folder(tmp_path, booklet=booklet())
+        reading = json.dumps(
+            {
+                "document_class": "photograph",
+                "pages": [record_page(1, "", status=status)],
+            }
+        )
+        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: reading}))
+        doc = document(orchestrator, "booklet.pdf")
+        assert derived_transcription(doc.dir, LETTER_SHA1).is_file()
+        assert orchestrator._excerpts == {}
+        assert not (tmp_path / "state" / EXCERPTS_DIR).exists()
+        assert LETTER_SHA1 not in planned(orchestrator)
+
+    def test_a_flagged_reading_is_an_excerpt_with_its_flag(self, tmp_path):
+        corpus = folder(tmp_path, booklet=booklet())
+        reading = json.dumps(
+            {
+                "document_class": "letter",
+                "pages": [
+                    record_page(
+                        1,
+                        EXCERPT,
+                        languages=["de"],
+                        notes="No image was provided.",
+                    )
+                ],
+            },
+            ensure_ascii=False,
+        )
+        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: reading}))
+        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        assert transcription_of(excerpt).flag == "media-missing"
+        assert excerpt.batch.exists()
 
     def test_an_image_without_a_reading_is_no_excerpt(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet())

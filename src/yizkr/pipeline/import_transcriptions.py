@@ -690,6 +690,7 @@ class _Adopter:
         from yizkr.pipeline.transcription_check import (
             TranscriptionCheckFailed,
             check_answer,
+            is_pdf,
             media_page_count,
         )
 
@@ -707,7 +708,11 @@ class _Adopter:
         key, components = keyed
         record = media.chosen
         text = str(record.text)
-        check, _record = check_answer(text, pages=media_page_count(media.scan))
+        check, _record = check_answer(
+            text,
+            pages=media_page_count(media.scan),
+            whole_pdf=is_pdf(media.scan),
+        )
         provenance = _provenance(record, sha1, check)
         live = self.cache.get(key)
         same = live is not None and live.get("response") == text

@@ -100,8 +100,8 @@ from its stage's `failed` event, and on a reused transcription view the
 check fails again and the orchestrator sets aside, read from its
 `set-aside` event (carried). Value `true`; `failure` is the kind of
 failure (`tool-error`, `cut-off`, `not-a-record`, `pages-missing`,
-`tool-failure`, `empty`, `too-short`), and `signature` the name of the
-signature that matched, when one did. Only the kind and the name are read
+`pages-extra`, `tool-failure`, `empty`, `too-short`), and `signature`
+the name of the signature that matched, when one did. Only the kind and the name are read
 from the reason; the rest of it can quote the output. A recheck judges a
 stored vision transcription with its transcription record, and fails one
 without (ADR-0037).
@@ -109,9 +109,12 @@ without (ADR-0037).
 **`transcription-flag`**: a transcription the check passed with a flag:
 its wording matched a signature of the flag tier, a phrase in the
 engine's voice that a letter may also write (a refusal, a note that the
-media could not be read). The transcription goes on downstream; its stage
-output carries the flag (`flag`), which this check reads, for review.
-Value `true`; `signature` is the signature's name.
+media could not be read); for a transcription with a record, any
+signature, in a page's text or in its notes (ADR-0037 §3). The
+transcription goes on downstream; its stage output carries the flag
+(`flag`), which this check reads, for review. A reused transcription
+carries the flag of the check made on reuse. Value `true`; `signature`
+is the signature's name.
 
 **`transcription-sparse`**: a vision transcription with fewer letters and
 digits per page than `min-chars-per-page`, for a document of at least

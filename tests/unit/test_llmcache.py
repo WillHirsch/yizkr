@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures import records
 from tests.fixtures.records import page_text, record_answer
 from tests.unit.test_orchestrate import (
     ScriptedOrchestrator,
@@ -39,7 +40,7 @@ from tests.unit.test_orchestrate import (
     this_run,
 )
 from yizkr.claims import ArtifactRef, ClaimBatch
-from yizkr.pipeline import llm, llmcache, transcription_check
+from yizkr.pipeline import llm, llmcache
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.extract import LlmClaimExtractor
 from yizkr.pipeline.llm import (
@@ -2215,17 +2216,11 @@ def reading(text: str):
 
 def stricter_check(monkeypatch) -> None:
     """Make the transcription check stricter, as a change to it would: a
-    signature for the service notice."""
-    signature = transcription_check._signature(
-        "reading-service-notice",
-        transcription_check.TOOL_FAILURE,
+    signature for the service notice (records.stricter_check)."""
+    records.stricter_check(
+        monkeypatch,
         r"reading service will be offline",
-        tier=transcription_check.FAIL,
-    )
-    monkeypatch.setattr(
-        transcription_check,
-        "SIGNATURES",
-        (*transcription_check.SIGNATURES, signature),
+        "reading-service-notice",
     )
 
 

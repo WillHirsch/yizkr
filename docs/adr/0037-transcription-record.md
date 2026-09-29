@@ -54,11 +54,28 @@ transcription_record`):
 | `pages[].notes` | the engine's own words about the page (damage, a stamp, another hand), never part of its text |
 
 The record is strict: every page has a status, the pages are numbered
-1, 2, 3… in order, a page called `transcribed` holds text, the class and
-the status come from the vocabulary above, the language codes are
-codes, and no other field is allowed. An answer that is one fenced code
-block holding the object is read as the object; anything before or after
-it is not.
+1, 2, 3… in order (each `page` a JSON integer, so `"1"` or `true`
+fails), a page called `transcribed` holds text, the class and the status
+come from the vocabulary above, the language codes are codes, and no
+other field is allowed. A missing or unknown status, an unknown class
+and bad page numbers fail the answer.
+
+A few harmless near-misses of the record's shape say what the record
+says, and are **normalised, not refused** (a Pydantic before-validator
+on each field): a `printed_page` given as a JSON number becomes its
+string (`12` is `"12"`); a `text`, `notes` or `languages` given as null
+is empty; and a language code is lower-cased (`"DE"` is `"de"`). A
+record's language code, as a claim's, may carry a region subtag, so
+`"de-DE"` is kept as `"de-de"`; were the record's language type ISO 639
+only, it would be reduced to its primary subtag instead.
+
+An answer that is one fenced code block holding the object (tagged
+`json` or not) is read as the object; anything before or after it is
+not. **Prose around the JSON** ("Here is the record:" before it, "I hope
+this helps" after it) makes the answer not the record, and it is asked
+again on the next run. That stays so for now: scratch run 1's count of
+`not-a-record` failures decides whether the parser is loosened to take
+the single JSON object an answer holds.
 
 ### 2. The transcription view carries the record
 
@@ -74,7 +91,10 @@ a page's printed number, status, languages or notes, or to the class,
 changes the transcription's content hash, as a change to its text does,
 and extraction is made again. Each page's provenance (the method that
 read it and the engine) and the check's flag are not, as the engine is
-not (`TRANSCRIPTION_VOLATILE`).
+not (`TRANSCRIPTION_VOLATILE`). A reused view carries the flag of the
+check made on reuse, not the one it was made with, so a change to the
+flag tier reaches every stored transcription without making any of them
+again.
 
 **Vision pages of a PDF read page by page** (ADR-0008, as amended) fill
 the same fields: a page read by vision takes them from its reading's
@@ -83,12 +103,18 @@ order, the printed numbers joined, the languages in order of mention,
 the notes joined, and `transcribed` if any of them is); a page read from
 its text layer is `transcribed`, with no printed number, languages or
 notes, since no engine read it; and a page with nothing to read is
-`blank`. Such a PDF has no `document_class`: no call saw it whole.
+`blank`. Such a PDF has no `document_class`: no call saw it whole. On
+reuse, each page read by vision is checked as its reading was when the
+page was made: with the one-page record its stored fields make
+(`Transcription.page_record`), so that a page the record calls blank,
+illegible or not a document page, which needed no text then, needs none
+on reuse either. The PDF's flag is its first vision page's.
 
 **Page numbers for extraction** are read from the record through
 `Transcription.printed_pages()`: the printed page numbers by physical
-index. Extraction's chunking does not read them yet; that is a
-follow-up, since the chunker is being rewritten in parallel (#407).
+index. Extraction's chunking does not read them yet: `printed_pages()`
+without a caller is this decision's scope, and extraction reading page
+numbers from the record is a follow-up.
 
 ### 3. The check reads the record
 
@@ -105,20 +131,40 @@ is transcribed again on the next run:
   (`not-a-record`). A refusal in any language is not the record, so it
   fails without any signature;
 - a record that gives fewer pages than the media has (`pages-missing`);
-  more is allowed, for an image of an open book;
+  more is allowed for an image, which may show an open book, but the
+  record of a PDF read whole gives exactly the PDF's pages, and more
+  fail (`pages-extra`), since its page markers would point at pages the
+  PDF lacks;
 - a blank output, or, for a document of two or more pages, fewer than
   three letters or digits per page the record calls `transcribed`
   (`too-short`); blank, illegible and not-a-document pages are the
   engine's plain statement and need no text;
-- a token no source document writes (``pdftoppm``, a traceback, an API
-  error) or an output that is wholly the engine's announcement: the
-  signatures of the **fail** tier.
+- in a text with **no record** only (a text file's), a token no source
+  document writes (``pdftoppm``, a traceback, an API error) or an output
+  that is wholly the engine's announcement: the signatures of the
+  **fail** tier.
+
+**With a record parsed, no wording fails a page's text**: every
+signature, `narration-only` and `shell-error` among them, only flags it.
+Inside a parsed record such a match can only misfire: narration and tool
+output around the record already fail it as not the record, and the
+answer is the text after the last tool result (§5), so a postcard's one
+line "I will bring the documents to Stupfield." is a source's sentence,
+not an announcement.
 
 The other signatures, phrases in the engine's voice that a letter may
 also write, are the **flag** tier (#214's fallback): a match passes the
 transcription, which goes downstream carrying the signature's name in its
 `flag`, and raises a `transcription-flag` alert for review
-(docs/ANOMALIES.md). They read the record's text only, never its notes.
+(docs/ANOMALIES.md). The flag tier reads the record's text and then each
+page's `notes`, the engine's own words, each note on its own: a note
+saying the engine could not see the image ("No image was provided.")
+flags the transcription, and never fails it.
+
+The signatures are English only, an accepted known limit: a refusal in
+German, Russian or Frisian written as a transcribed page's text passes
+unflagged, as does such a note. Outside a record, a refusal in any
+language fails as not the record.
 
 ### 4. The language hint comes from the record
 
@@ -129,7 +175,9 @@ listed first; a record that names none takes the fallback code. The
 resolution is recorded as `record`. An explicit `--language` still
 forces its code. py3langid runs only on a text that has no record (a text
 file, a correction, slide text, a PDF read page by page), and reads it
-outside its editorial marks (ADR-0015, as amended).
+outside its editorial marks (ADR-0015, as amended). An excerpt (ADR-0008,
+as amended by #397) is the reading of its image, so its language, like
+its class and its pages, comes from that reading's record.
 
 ### 5. The answer is taken from the stream's structure
 
@@ -144,11 +192,13 @@ assistant events hold no text.
 
 The anomaly checks' distributions (entity and claim yield, critic rate)
 compare a document with the documents of its class: the class its record
-gives. A text with no record takes its class from the entity manifest
-once the manifest states one; until then it is `unclassified`, compared
-within its kind among the unclassified documents, and each distribution
-alert says so (`document_class`, and `class_source`: `record` or
-`none`).
+gives, whatever its kind. A text with no record takes its class from the
+entity manifest once the manifest states one; until then it is
+`unclassified`. Every `unclassified` document, whether its record says so
+or it has none, is compared within its kind among the unclassified
+documents, so that the unclassified scans and the PDFs read page by page
+are one sample. Each distribution alert says which class it was measured
+in (`document_class`, and `class_source`: `record` or `none`).
 
 ### 7. Cache keys and the seeded archive
 
@@ -159,6 +209,32 @@ left were made with the earlier prompt, so `scratch
 import-transcriptions` adopts none of them; and one that were offered
 under the current prompt would still need to be the record, since the
 import judges an archived reading as the run judges an answer.
+
+## Decided by the orchestrator (2026-09-29; the owner may override)
+
+On the review's owner questions, following #389 and this ADR:
+
+1. **Wording inside a record.** With a record parsed, no wording
+   signature fails a page's text: `narration-only` and `shell-error`
+   included, they only flag (§3). Without a record, the fail tier is
+   unchanged.
+2. **Near-miss shapes** are normalised, not refused: a numeric
+   `printed_page` becomes a string; null text, notes or languages become
+   empty; language codes are lower-cased, and a region-tagged code is
+   kept, since the record's language type is not ISO 639 only (§1). A
+   missing or unknown status, an unknown class and bad page numbers
+   still fail.
+3. **Prose around the JSON** stays not-a-record for now; scratch run 1's
+   `not-a-record` count decides whether to loosen it (§1).
+4. **Notes.** The flag tier also reads each page's `notes`, with the
+   same signatures: a flag, never a failure (§3).
+5. **Whole-PDF page counts.** The record of a PDF read whole gives
+   exactly the PDF's pages: more fail, as fewer already do (§3).
+6. **Page numbers.** `printed_pages()` without a caller is the intended
+   scope; extraction reading them is a follow-up (§2).
+7. **Refusals in other languages** written as a page's text pass
+   unflagged: English-only flag signatures are an accepted known limit
+   (§3).
 
 ## Consequences
 

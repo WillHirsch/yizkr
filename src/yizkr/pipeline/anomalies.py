@@ -126,6 +126,7 @@ from yizkr.pipeline.rundir import (
 from yizkr.pipeline.stages import canonical_json, read_jsonl, sha256_text
 from yizkr.pipeline.transcription_check import (
     check_transcription,
+    is_pdf,
     media_page_count,
     text_char_count,
 )
@@ -572,11 +573,13 @@ def check_verdict(
     engine: Any,
     page_count: int | None,
     transcription: Any = None,
+    whole_pdf: bool = False,
 ) -> Finding | None:
     """The transcription check's verdict on a stored transcription, when
     it fails: only for the routes it judges (CHECKED_ROUTES). A vision
     transcription is judged with its record (`transcription`, the stored
-    output), and fails without one."""
+    output), and fails without one; `whole_pdf` says its medium is a PDF,
+    whose record gives exactly its pages."""
     if (
         not config.checks.transcription_check.enabled
         or route(engine) not in CHECKED_ROUTES
@@ -588,6 +591,7 @@ def check_verdict(
         pages=page_count,
         record=_record(transcription) if vision else None,
         expect_record=vision,
+        whole_pdf=whole_pdf,
     )
     if check.passed:
         return None
@@ -763,10 +767,12 @@ def document_pages(
 
 def _class_of(facts: _Facts) -> tuple[str, str | None]:
     """What a document's measures are compared within: its document class
-    (its record's `document_class`), and, for a document without one,
-    which is UNCLASSIFIED, its kind too, so that a GEDCOM export, a deck
-    and a text file are never measured against one another."""
-    if facts.class_source == "record":
+    (its record's `document_class`), and, for an UNCLASSIFIED document,
+    one without a record or whose record places it in no class, its kind
+    too, so that a GEDCOM export, a deck and a text file are never
+    measured against one another, and every unclassified document of a
+    kind is measured in one sample."""
+    if facts.class_source == "record" and facts.document_class != UNCLASSIFIED:
         return (facts.document_class, None)
     return (UNCLASSIFIED, facts.kind)
 
@@ -2062,6 +2068,7 @@ def _recheck_document(checks: AnomalyChecks, doc: _Recorded) -> None:
                 engine=transcription.get("engine"),
                 page_count=checks._medium_pages(doc),
                 transcription=transcription,
+                whole_pdf=doc.kind == "media" and is_pdf(Path(doc.source)),
             )
             if isinstance(text, str)
             else None

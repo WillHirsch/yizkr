@@ -138,6 +138,7 @@ from yizkr.pipeline.transcription_check import (
     TranscriptionCheckFailed,
     check_answer,
     check_transcription,
+    is_pdf,
     media_page_count,
 )
 from yizkr.pipeline.transcription_record import (
@@ -383,6 +384,30 @@ class Transcription(BaseModel):
         except ValidationError:
             return None
 
+    def page_record(self, page: TranscribedPage) -> TranscriptionRecord | None:
+        """The one-page record of one of its pages, as the reading of
+        one image with no class: the page's text and its record's fields,
+        numbered 1. A page of a PDF read page by page that the vision
+        engine read is checked by it, as its reading was when the page was
+        made. None when the page's fields are not a record's page (a page
+        called transcribed with no text)."""
+        try:
+            return TranscriptionRecord(
+                document_class=UNCLASSIFIED,
+                pages=[
+                    RecordPage(
+                        page=1,
+                        printed_page=page.printed_page,
+                        status=page.status,
+                        text=self.page_text(page),
+                        languages=page.languages,
+                        notes=page.notes,
+                    )
+                ],
+            )
+        except ValidationError:
+            return None
+
     def printed_pages(self) -> dict[int, str]:
         """The page numbers printed on the transcription's pages, by their
         physical index (`page`): each page that gives one. Empty for a
@@ -487,6 +512,7 @@ class _CheckedTranscriber:
                     pages=pages,
                     record=transcription.record(),
                     expect_record=self.expects_record,
+                    whole_pdf=is_pdf(media_path),
                 )
                 if self.last_check.passed:
                     if self.last_check.flagged:

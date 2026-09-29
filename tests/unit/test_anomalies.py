@@ -656,6 +656,23 @@ class TestLanguage:
         checks.stored(doc, "transcription", vision(MARRIAGE))
         assert "language-unexpected" not in checks_raised(run)
 
+    def test_a_language_the_record_gives_can_be_unexpected(self, tmp_path):
+        """The record's language is the engine's reading, not a choice
+        the run made, so it is compared with the expected ones."""
+        run, checks = make_checks(
+            tmp_path,
+            {"checks": {"language-unexpected": {"expected": ["en"]}}},
+        )
+        doc = a_doc(
+            tmp_path,
+            "letter.png",
+            kind="media",
+            language={"code": "ru", "source": "record", "confidence": None},
+        )
+        checks.stored(doc, "transcription", vision(MARRIAGE, "ru"))
+        alert = only(run, "language-unexpected")
+        assert (alert["value"], alert["limit"]) == ("ru", ["en"])
+
     def test_a_language_detected_with_low_confidence(self, tmp_path):
         run, checks = make_checks(tmp_path)
         doc = a_doc(tmp_path, "grave.png", kind="media", text=GRAVESTONE)
@@ -1041,10 +1058,12 @@ class TestDistributions:
     }
 
     @staticmethod
-    def a_classed_document(tmp_path, checks, name, claims, document_class):
+    def a_classed_document(
+        tmp_path, checks, name, claims, document_class, kind="media"
+    ):
         """A one-page scan whose transcription record gives its class,
         stored with `claims` claims."""
-        doc = a_doc(tmp_path, name, kind="media", text=NATURALISATION)
+        doc = a_doc(tmp_path, name, kind=kind, text=NATURALISATION)
         transcription = vision(NATURALISATION, "en")
         transcription.document_class = document_class
         checks.stored(doc, "transcription", transcription)
@@ -1074,6 +1093,43 @@ class TestDistributions:
             "certificate",
             "record",
         )
+
+    def test_a_class_is_one_sample_whatever_the_kind(self, tmp_path):
+        """A certificate an excerpt shows is measured against the scanned
+        certificates: the class decides, not the kind."""
+        run, checks = make_checks(tmp_path, self.SMALL)
+        for n in range(3):
+            self.a_classed_document(
+                tmp_path, checks, f"cert{n}.png", 30, "certificate"
+            )
+        self.a_classed_document(
+            tmp_path, checks, "excerpt.png", 1, "certificate", "excerpt"
+        )
+        alert = only(run, "claim-yield")
+        assert alert["subject"] == sha1_of("excerpt.png")[:12]
+        assert (alert["document_class"], alert["samples"]) == (
+            "certificate",
+            3,
+        )
+
+    def test_the_unclassified_of_a_kind_are_one_sample(self, tmp_path):
+        """A scan its record calls unclassified and one read with no
+        record are measured together, within their kind."""
+        run, checks = make_checks(tmp_path, self.SMALL)
+        for n in range(3):
+            self.a_classed_document(
+                tmp_path, checks, f"scan{n}.png", 30, UNCLASSIFIED
+            )
+        doc = a_doc(tmp_path, "pages.pdf", kind="media", text=NATURALISATION)
+        checks.stored(doc, "transcription", vision(NATURALISATION, "en"))
+        checks.stored(doc, "extraction", a_batch("en"))
+        alert = only(run, "claim-yield")
+        assert alert["subject"] == sha1_of("pages.pdf")[:12]
+        assert (alert["document_class"], alert["class_source"]) == (
+            UNCLASSIFIED,
+            "none",
+        )
+        assert alert["samples"] == 3
 
     def test_a_document_without_a_record_is_unclassified_and_says_so(
         self, tmp_path
@@ -2705,9 +2761,17 @@ class TestRecheck:
         self, tmp_path
     ):
         state = tmp_path / "state"
+        # a text file's tool failure fails
         a_recorded_document(
             state,
             "page.png",
+            text="pdftoppm: command not found",
+            engine="text-file:x",
+        )
+        # a record's text holding the same words only flags it (ADR-0037)
+        a_recorded_document(
+            state,
+            "caption.png",
             text="pdftoppm: command not found",
             engine="llm-vision:fake-model",
         )
@@ -2787,6 +2851,30 @@ class TestRecheck:
         )
         assert [a for a in alerts if a["check"] == "claim-yield"] == []
 
+    def test_a_whole_pdf_s_record_gives_exactly_its_pages(self, tmp_path):
+        """A record of two pages is too many for a PDF of one, read whole,
+        and not for an image, which may show an open book."""
+        state = tmp_path / "state"
+        for name in ("extract.pdf", "book.png"):
+            directory = a_recorded_document(
+                state, name, text=MARRIAGE, engine="llm-vision:fake-model"
+            )
+            two = Transcription.from_record(
+                parse_record(record_answer(MARRIAGE, MARRIAGE)),
+                artifact=ArtifactRef(sha1=sha1_of(name)),
+                language="de",
+                engine="llm-vision:fake-model",
+            )
+            (directory / "transcription.json").write_text(
+                two.model_dump_json()
+            )
+        alerts = recheck(state, load_config(), page_count=lambda path: 1)
+        assert [
+            (alert["subject"], alert["failure"])
+            for alert in alerts
+            if alert["check"] == "transcription-check"
+        ] == [(sha1_of("extract.pdf")[:12], "pages-extra")]
+
     def test_a_document_the_checks_cannot_read_stops_no_other(self, tmp_path):
         state = tmp_path / "state"
         broken = a_recorded_document(
@@ -2797,7 +2885,7 @@ class TestRecheck:
             state,
             "b.png",
             text="pdftoppm: command not found",
-            engine="llm-vision:fake-model",
+            engine="text-file:x",
         )
         alerts = recheck(state, load_config())
         assert [

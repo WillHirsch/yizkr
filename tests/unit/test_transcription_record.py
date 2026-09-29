@@ -32,8 +32,10 @@ from yizkr.pipeline.transcribe import (
     Transcription,
 )
 from yizkr.pipeline.transcription_check import (
+    CHECK_VERSION,
     CUT_OFF,
     NOT_A_RECORD,
+    PAGES_EXTRA,
     PAGES_MISSING,
     TOO_SHORT,
     TranscriptionCheckFailed,
@@ -114,11 +116,74 @@ class TestTheRecord:
             "[" + record_answer(CAPTION) + "]",
             # a record cut short
             record_answer(CAPTION)[:-3],
+            # a field the record does not have, beside its pages
+            json.dumps(
+                {
+                    "document_class": "letter",
+                    "pages": [record_page(1, CAPTION)],
+                    "confidence": 0.9,
+                }
+            ),
+            # nesting too deep to read
+            "[" * 100000 + "]" * 100000,
+            # prose after the fenced record: only a block alone is read
+            "```json\n" + record_answer(CAPTION) + "\n```\nHope this helps!",
         ],
     )
     def test_an_answer_that_is_not_one_record_object_is_refused(self, answer):
         with pytest.raises(RecordError):
             parse_record(answer)
+
+    def test_a_record_in_an_untagged_fence_parses(self):
+        answer = "```\n" + record_answer(CAPTION) + "\n```"
+        assert parse_record(answer).pages[0].text == CAPTION
+
+    def test_harmless_near_misses_are_normalised(self):
+        """A page number printed as a JSON number, null text, notes or
+        languages, and a language code in capitals, say what the record
+        says: they are normalised, not refused (ADR-0037 §1)."""
+        record = parse_record(
+            a_record(
+                {
+                    "page": 1,
+                    "printed_page": 12,
+                    "status": "blank",
+                    "text": None,
+                    "languages": None,
+                    "notes": None,
+                },
+                {
+                    "page": 2,
+                    "printed_page": "iv",
+                    "status": "transcribed",
+                    "text": POSTCARD,
+                    "languages": ["DE", "de-DE", "En"],
+                    "notes": "",
+                },
+            )
+        )
+        blank, written = record.pages
+        assert (blank.printed_page, blank.text, blank.notes) == ("12", "", "")
+        assert blank.languages == []
+        assert written.printed_page == "iv"
+        # the record's language code, as a claim's, may carry a region
+        # subtag, so a region-tagged code keeps it
+        assert written.languages == ["de", "de-de", "en"]
+
+    @pytest.mark.parametrize(
+        "page",
+        [
+            {"page": "1", "status": "transcribed", "text": CAPTION},
+            {"page": True, "status": "transcribed", "text": CAPTION},
+            {"page": 1.5, "status": "transcribed", "text": CAPTION},
+            {"page": 1, "printed_page": True, "status": "blank"},
+            {"page": 1, "status": None, "text": CAPTION},
+            {"page": 1, "status": "Transcribed", "text": CAPTION},
+        ],
+    )
+    def test_bad_page_numbers_and_statuses_still_fail(self, page):
+        with pytest.raises(RecordError):
+            parse_record(a_record(page))
 
     @pytest.mark.parametrize(
         "page, why",
@@ -323,6 +388,92 @@ class TestTheCheckReadsTheRecord:
         assert (check.passed, check.flagged) == (True, True)
         assert check.signature == "refusal-request"
         assert record is not None
+
+    @pytest.mark.parametrize(
+        "line, signature",
+        [
+            # a postcard's one line, in the words of an announcement
+            ("I will bring the documents to Stupfield.", "narration-only"),
+            ("Let me take a look at the image.", "narration-only"),
+            (
+                "cat: page-1.png: No such file or directory",
+                "shell-error",
+            ),
+            ("pdftoppm: command not found", "pdf-renderer"),
+        ],
+    )
+    def test_no_wording_fails_a_record(self, line, signature):
+        """With a record parsed, a failing signature only flags its
+        text (ADR-0037 §3); a text with no record still fails on it."""
+        check, record = check_answer(record_answer(line), pages=1)
+        assert record is not None
+        assert (check.passed, check.flagged) == (True, True)
+        assert check.signature == signature
+        bare = check_transcription(line, pages=1)
+        assert (bare.passed, bare.signature) == (False, signature)
+
+    def test_the_notes_are_read_for_a_flag(self):
+        """A note, the engine's own words about its page, is read as the
+        text is, each on its own: one saying it saw no image flags the
+        record, and never fails it."""
+        unseen = a_record(
+            record_page(1, CAPTION),
+            record_page(2, "", status="blank", notes="No image was provided."),
+        )
+        check, _record = check_answer(unseen, pages=2)
+        assert (check.passed, check.flagged) == (True, True)
+        assert check.signature == "media-missing"
+        assert "page 2's notes" in check.reason
+        plain = a_record(
+            record_page(1, CAPTION, notes="Written in pencil."),
+            record_page(2, "", status="blank", notes="The back of the card."),
+        )
+        check, _record = check_answer(plain, pages=2)
+        assert check.passed and not check.flagged
+        # the signatures are English only: a German note is not matched
+        german = a_record(
+            record_page(
+                1, "", status="blank", notes="Es wurde kein Bild übergeben."
+            )
+        )
+        check, _record = check_answer(german, pages=1)
+        assert check.passed and not check.flagged
+
+    def test_a_whole_pdf_s_record_gives_exactly_its_pages(self):
+        """A record of a PDF read whole with more pages than the PDF
+        fails, as one with fewer does; an image's may give more."""
+        answer = record_answer(NATURALISATION, CAPTION, CAPTION)
+        check, _record = check_answer(answer, pages=2, whole_pdf=True)
+        assert (check.passed, check.failure) == (False, PAGES_EXTRA)
+        assert "3 pages for a PDF of 2" in check.reason
+        assert check_answer(answer, pages=3, whole_pdf=True)[0].passed
+        assert check_answer(answer, pages=2)[0].passed
+        check, _record = check_answer(answer, pages=4, whole_pdf=True)
+        assert check.failure == PAGES_MISSING
+
+    def test_a_single_image_has_no_floor(self):
+        check, _record = check_answer(record_answer("K."), pages=1)
+        assert check.passed
+        assert check.min_text_chars == 0
+
+    def test_the_floor_counts_no_page_the_record_does_not_call_read(self):
+        """A page that is not a document page holds letters, which do
+        not count toward the floor of the pages called transcribed."""
+        answer = a_record(
+            record_page(1, "[illegible]"),
+            record_page(
+                2, "colour control patches", status="not-a-document-page"
+            ),
+        )
+        check, _record = check_answer(answer, pages=2)
+        assert (check.passed, check.failure) == (False, TOO_SHORT)
+
+    def test_a_verdict_names_the_check_that_reads_the_record(self):
+        """The check's version rose when it began reading the record, so
+        a verdict tells the record's check from the wording's."""
+        assert CHECK_VERSION == 3
+        check, _record = check_answer(record_answer(CAPTION), pages=1)
+        assert check.version == 3
 
 
 class FakeClient:
@@ -607,6 +758,19 @@ class TestTheAnswerIsTakenFromTheStream:
             {"type": "result", "result": "Let me read the image."},
         )
         assert ClaudeCodeClient._assemble_stream(stdout) == ""
+
+    def test_a_text_block_that_is_no_string_is_passed_over(self):
+        record = record_answer(CAPTION)
+        stdout = stream(
+            assistant({"type": "text", "text": None}),
+            assistant(text(record)),
+        )
+        assert ClaudeCodeClient._assemble_stream(stdout) == record
+        stdout = stream(
+            assistant({"type": "text", "text": ["no"]}),
+            {"type": "result", "result": "from the result"},
+        )
+        assert ClaudeCodeClient._assemble_stream(stdout) == "from the result"
 
     def test_without_assistant_text_the_result_event_answers(self):
         stdout = stream(
