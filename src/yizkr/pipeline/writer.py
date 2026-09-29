@@ -17,7 +17,9 @@ Per batch, the writer:
    to the artifact item carrying that `media SHA-1` (ADR-0010). This
    happens before anything is written: a batch that cites media no item
    carries is refused whole, since its statements would have no source
-   to reference;
+   to reference. A claim whose subject is its own source document (an
+   `artifact` subject, such as an `issued_by` claim; ADR-0035 §3.4) is
+   written on that artifact item;
 1. mints an extraction-run item from the batch metadata (idempotent:
    matched by a deterministic label containing the batch content hash),
    with its run details in the label/description — items describe
@@ -620,7 +622,14 @@ class BatchWriter:
         supplied by the caller nor in the index read earlier, the index
         is read afresh, so media registered since then still resolves.
         """
-        wanted = sorted({claim.source.artifact.sha1 for claim in batch.claims})
+        wanted = sorted(
+            {claim.source.artifact.sha1 for claim in batch.claims}
+            | {
+                claim.subject.sha1
+                for claim in batch.claims
+                if isinstance(claim.subject, ArtifactRef)
+            }
+        )
         cached = self._media_sha1_index or {}
         if any(
             sha1 not in self._artifact_qids and sha1 not in cached
@@ -645,12 +654,15 @@ class BatchWriter:
 
     def _resolve_ref(
         self,
-        ref: EntityRef,
+        ref: EntityRef | ArtifactRef,
         result: WriteResult,
         source_artifact_qid: str | None,
     ) -> str:
         if isinstance(ref, VocabRef):
             return self.items[ref.key]
+        if isinstance(ref, ArtifactRef):
+            # a claim's own source document, resolved in step 0
+            return self._artifact_qids[ref.sha1]
         if isinstance(ref, QidRef):
             qid = ref.qid
         elif isinstance(ref, LocalRef):

@@ -75,18 +75,22 @@ Rules — these mirror the archive's non-negotiable conventions:
 {property_keys}
 - Vocabulary item keys available for "vocab" references:
 {item_keys}
-- Dating a marriage, a residence or any other period: a marriage's date
-  is `start_time` on the `spouse` claim, and the date the source gives
-  for its end (a divorce, an annulment, widowhood) is its `end_time`; a
-  move in and a move out date a `residence` the same way. `point_in_time`
-  on a spouse or residence claim only records a date at which the source
-  presents the marriage or the residence as holding (a census, a
-  directory entry), never a wedding date; a document that merely names a
-  spouse gives no such date. A range bounds one end: a start takes
-  `earliest_date` and `latest_start_date`, an end takes
-  `earliest_end_date` and `latest_date`. Married "between X and Y" is
-  start_time X with earliest_date X and latest_start_date Y; divorced
-  "before Z" is end_time Z with latest_date Z. These pairs bound
+- Marriages and partnerships are entities bounded by events (ADR-0036);
+  no property links two spouses directly: the couple are each a
+  `participant` of the `marriage` (or `partnership`) with the
+  `object_has_role` `spouse` (or `partner`), and the union is
+  `started_by` its wedding and `ended_by` its end, each an event with its
+  own date and place.
+- Dating a period: a residence, an occupation or a membership is dated
+  by its `start_time` and `end_time` qualifiers, a move in and a move out
+  as its start and end. `point_in_time` on such a claim only records a
+  date at which the source presents it as holding (a census, a
+  directory entry). A marriage has no dates of its own: its wedding and
+  its end are events, each with its own `point_in_time`. A range bounds
+  one end: a start takes `earliest_date` and `latest_start_date`, an end
+  takes `earliest_end_date` and `latest_date`. Moved in "between X and
+  Y" is start_time X with earliest_date X and latest_start_date Y; moved
+  out "before Z" is end_time Z with latest_date Z. These pairs bound
   `start_time` and `end_time` qualifiers; an entity's own `start_time` or
   `end_time` claim (a firm's founding, a detention's start) is a date
   value that `earliest_date` and `latest_date` bound.

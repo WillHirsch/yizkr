@@ -600,8 +600,8 @@ properties:
       the term states it
     datatype: quantity
 
-  # Held back from the extraction prompts (offered: false): a claim has no
-  # way to name the document it comes from as its subject (ADR-0035 §3.4).
+  # The subject is the source document itself, named by its content key
+  # as a claim's source is (document_subject, ADR-0035 §3.4).
   issued_by:
     label: issued by
     description: >-
@@ -611,7 +611,7 @@ properties:
     datatype: wikibase-item
     accepts: [organization, unclassified_entity]
     wikidata: P2378
-    offered: false
+    document_subject: true
 
   carried_out_by:
     label: carried out by

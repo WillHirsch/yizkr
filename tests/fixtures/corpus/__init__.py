@@ -150,10 +150,12 @@ TRAPS = (
         "history and the talk give the parents their children (`child`).",
         "Each document's claims state the kinship the way it does, from the "
         "child's end or the parents'; clustering reads the two ends as one "
-        "(#105). Under the whole-cluster merge rule (#361), Klara's mentions "
-        "stay unmerged, in a conflicting cluster: the postcard's 'Klara's "
-        "father' blocks with her and is her kin. That is expected under the "
-        "rule, not a split to mend here (#380).",
+        "(#105). The postcard's writer is labelled by its own words, 'Dein "
+        "Vater', a kinship term and no name (ADR-0035), so he never blocks "
+        "with her. Under the whole-cluster merge rule (#361), Klara's "
+        "mentions stay unmerged, in an ambiguous cluster: the postcard's "
+        "own mention of her links to the export on the name alone. That is "
+        "expected under the rule, not a split to mend here (#380).",
     ),
     Trap(
         "death-date",
