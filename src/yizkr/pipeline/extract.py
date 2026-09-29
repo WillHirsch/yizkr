@@ -43,7 +43,12 @@ from yizkr.claims import (
     validate_against_manifest,
 )
 from yizkr.model.schema import load_manifest
-from yizkr.pipeline.llm import LlmClient, reject_response
+from yizkr.pipeline.llm import (
+    CUT_OFF_AT_LIMIT,
+    LlmClient,
+    at_output_limit,
+    reject_response,
+)
 from yizkr.pipeline.transcribe import Transcription
 
 EXTRACTION_PROMPT = """\
@@ -91,8 +96,7 @@ Output NDJSON: one complete claim JSON object per line — no wrapper
 object, no code fences, no prose. Each claim matches the "Claim"
 definition of the JSON Schema below. After the last claim, end with
 exactly one final line:
-{{"done": true, "claims_emitted": N}}
-where N is the number of claim lines you emitted.
+{{"done": true}}
 
 {schema}
 
@@ -435,11 +439,15 @@ class LlmClaimExtractor:
     An answer the extractor cannot fully use is rejected through the
     client (llm.reject_response), so that a client that keeps answers
     asks the engine again next time rather than serving it: one with no
-    claim JSON or no valid claim (the extraction then fails), and one
-    without its terminal sentinel, which may be cut off (the claims it
+    claim JSON or no valid claim (the extraction then fails), and one cut
+    off, which the engine stopped at its output limit
+    (llm.at_output_limit) or which has no terminal sentinel (the claims it
     holds are still returned). An answer the client kept from an earlier
     call is asked for once more when it is rejected, and the engine's
-    answer is used in its place, as it would be without the cache."""
+    answer is used in its place, as it would be without the cache. A call
+    the engine gave up on at its output limit (llm.OutputLimitReached)
+    gave no answer and so no claim: the extraction fails with it, and the
+    cache keeps nothing for it, so the next run asks again."""
 
     def __init__(
         self,
@@ -485,6 +493,7 @@ class LlmClaimExtractor:
                 raise _KeptAnswerRejected(reason)
 
         response = self.client.complete(prompt)
+        cut_off = at_output_limit(self.client, response)
         if self.raw_dump is not None:
             # Engine output is expensive; persist it before anything that
             # can fail, so a parse/validation error is debuggable and the
@@ -520,7 +529,9 @@ class LlmClaimExtractor:
                 f"every extracted claim failed validation "
                 f"({len(rejects)} rejects):\n  {detail}"
             )
-        if not finished:
+        if cut_off:
+            reject_answer(response, f"extraction: {CUT_OFF_AT_LIMIT}")
+        elif not finished:
             reject_answer(response, "extraction: no terminal sentinel")
         return batch
 

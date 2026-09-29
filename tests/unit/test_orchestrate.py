@@ -2252,6 +2252,41 @@ class TestRunDirectory:
         again = run_state(orchestrator.rundir)[(doc.sha1, "extraction")]
         assert again == extraction
 
+    def test_a_critique_the_engine_gave_up_on_needs_attention(self, tmp_path):
+        """A critique the claude CLI gave up on at the output limit has
+        no findings: the stage is done, but needs attention with its
+        reason, and a run that reuses the empty critique carries the
+        reason on, rather than take it for a sound extraction's (#7)."""
+        from yizkr.pipeline.llm import OutputLimitReached
+
+        class GivesUp(ScriptedModel):
+            def complete(self, prompt, image_paths=()):
+                if prompt.startswith("You review a genealogical extraction"):
+                    self.calls.append(f"critique:{self.name}")
+                    raise OutputLimitReached()
+                return super().complete(prompt, image_paths)
+
+        class Critic(ScriptedOrchestrator):
+            def _llm(self, role, doc):
+                return GivesUp(self.calls, doc.source.name)
+
+        folder = tmp_path / "docs"
+        folder.mkdir()
+        (folder / "letter.txt").write_text("Ursula was born in 1911.")
+        orchestrator = Critic(folder, tmp_path / "state", log=quiet)
+        assert orchestrator.run() == 2
+        (doc,) = orchestrator.documents()
+        critique = run_state(orchestrator.rundir)[(doc.sha1, "critique")]
+        assert critique.status == NEEDS_ATTENTION
+        assert critique.reason == "critique cut off at max_tokens: no findings"
+        assert orchestrator.run() == 2
+        (reused,) = [
+            event
+            for event in this_run(orchestrator, "reused")
+            if event["stage"] == "critique"
+        ]
+        assert reused["attention"] == [critique.reason]
+
     def test_a_held_stage_pauses_the_document(self, tmp_path):
         """A pause request for a stage stops its dispatch; nothing fails,
         and the next run resumes."""
