@@ -3354,34 +3354,81 @@ class TestCitationsAndMediaNotHeld:
         )
 
     @pytest.mark.parametrize(
-        ("objects", "counted"),
+        ("text", "counted"),
         [
-            (["3 OBJE", "4 FILE burial-register-1909.jpg"], {"SOUR.OBJE": 1}),
-            (["3 OBJE @O2@"], {"SOUR.OBJE": 1, "OBJE": 1}),
+            # the export's citation of the burial register for Eugen's
+            # burial holds a scan of the sheet, embedded or linked
+            (
+                cited(BURIAL_REGISTER)
+                + eugen(
+                    "1 BURI",
+                    "2 PLAC Friedhof Flörburg, Hesse, Germany",
+                    "2 SOUR @S1@",
+                    "3 PAGE Bl. 12",
+                    "3 OBJE",
+                    "4 FILE burial-register-1909.jpg",
+                ),
+                {"SOUR.OBJE": 1},
+            ),
+            (
+                cited(BURIAL_REGISTER)
+                + SHEET_SCAN
+                + eugen(
+                    "1 BURI",
+                    "2 PLAC Friedhof Flörburg, Hesse, Germany",
+                    "2 SOUR @S1@",
+                    "3 PAGE Bl. 12",
+                    "3 OBJE @O2@",
+                ),
+                {"SOUR.OBJE": 1, "OBJE": 1},
+            ),
+            # the studio portrait's record cites the tree, and its citation
+            # holds a scan of the tree's sheet
+            (
+                cited(TREE)
+                + PORTRAIT
+                + "1 SOUR @S1@\n2 OBJE\n3 FILE tree-sheet-1.jpg\n"
+                + eugen("1 OBJE @O1@"),
+                {"SOUR.OBJE": 1},
+            ),
+            # Eugen's link to the portrait cites the tree likewise
+            (
+                cited(TREE)
+                + PORTRAIT
+                + eugen(
+                    "1 OBJE @O1@",
+                    "2 SOUR @S1@",
+                    "3 OBJE",
+                    "4 FILE tree-sheet-1.jpg",
+                ),
+                {"SOUR.OBJE": 1},
+            ),
         ],
-        ids=["embedded", "linked"],
+        ids=["embedded", "linked", "in-an-object", "in-a-link"],
     )
     def test_an_object_within_a_folded_citation_is_counted(
-        self, objects, counted
+        self, text, counted
     ):
-        # (here) the export's citation of the burial register for Eugen's
-        # burial holds a scan of the sheet: the citation is folded, lines
-        # and all, and the scan, which no media item stands for, counted
-        text = (
-            cited(BURIAL_REGISTER)
-            + (SHEET_SCAN if "3 OBJE @O2@" in objects else "")
-            + eugen(
-                "1 BURI",
-                "2 PLAC Friedhof Flörburg, Hesse, Germany",
-                "2 SOUR @S1@",
-                "3 PAGE Bl. 12",
-                *objects,
-            )
-        )
+        # the citation is folded, lines and all, and the scan, which no
+        # media item stands for, counted, wherever the folded citation
+        # stands
         result = adapt_gedcom(text, artifact=EXPORT)
         assert result.unsupported_tags == counted
-        (burial,) = claims_for(result.batch, "i1", "burial_place")
-        assert burial.source.page_number == "Bl. 12"
+        assert result.batch.claims
+
+    def test_a_further_files_citation_is_counted_with_it(self):
+        # (here) the export cites the tree beneath the studio portrait's
+        # back: the back's FILE is counted, and stands for its citation,
+        # which is not counted again; the tree's record, which no folded
+        # citation cites, is
+        text = (
+            cited(TREE)
+            + PORTRAIT
+            + "1 FILE studio-portrait-1890s-back.jpg\n2 SOUR @S1@\n"
+            + eugen("1 OBJE @O1@")
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        assert result.unsupported_tags == {"OBJE.FILE": 1, "SOUR": 1}
 
     @pytest.mark.parametrize(
         ("portrait", "link", "counted"),
@@ -3740,20 +3787,102 @@ class TestExcerptClip:
         assert len(excerpts) == 2 and excerpts[0] != excerpts[1]
         assert all(len(excerpt) <= 400 for excerpt in excerpts)
 
-    def test_a_citation_outlasts_a_first_line_too_long_to_keep(self):
+    def test_a_first_line_too_long_to_keep_is_cut_beside_its_citation(self):
         # (here) the export writes Gustav's trade over and over, citing the
-        # naturalisation: the occupation's own line is left out, and its
-        # citation kept
+        # naturalisation: the citation is kept whole, and the occupation's
+        # own line, which names the record, cut to the room it leaves
         trade = "1 OCCU " + "Master hatter, " * 30
         lines = [trade.strip(), "2 SOUR @S1@"]
-        text = cited("Naturalisation of Gustave Lobig") + person(
-            "I8", "Gustav /Löbig/", *lines
-        )
+        title = "Naturalisation of Gustave Lobig"
+        text = cited(title) + person("I8", "Gustav /Löbig/", *lines)
         batch = adapt_gedcom(text, artifact=EXPORT).batch
         (occupation,) = claims_for(batch, "i8", "occupation")
-        whole = " | ".join(lines) + " | cited: Naturalisation of Gustave Lobig"
+        whole = " | ".join(lines) + f" | cited: {title}"
+        rest = f" | 2 SOUR @S1@ | cited: {title}" + clipped(whole)
         assert occupation.source.transcription_excerpt.text == (
-            "… | 2 SOUR @S1@ | cited: Naturalisation of Gustave Lobig"
+            trade[: 400 - len(rest) - 1].rstrip() + "…" + rest
+        )
+
+    @pytest.mark.parametrize(
+        ("after", "mark"),
+        [([], ""), (["2 DATE 1909"], " | …")],
+        ids=["alone", "before-a-date"],
+    )
+    def test_a_first_line_too_long_to_keep_is_cut_to_the_room_left(
+        self, after, mark
+    ):
+        # (here) the export writes Eugen's trade over and over and cites
+        # nothing: the occupation's own line is cut to the room left, and
+        # a DATE after it, which no longer fits, is left out
+        trade = "1 OCCU " + "Master hatter, " * 30
+        lines = [trade.strip(), *after]
+        batch = adapt_gedcom(eugen(*lines), artifact=EXPORT).batch
+        (occupation,) = claims_for(batch, "i1", "occupation")
+        tail = mark + clipped(" | ".join(lines))
+        assert occupation.source.transcription_excerpt.text == (
+            trade[: 400 - len(tail) - 1].rstrip() + "…" + tail
+        )
+
+    @pytest.mark.parametrize(
+        ("room", "first"),
+        [(9, "1 OCCU M…"), (8, "…")],
+        ids=["tag-and-a-letter", "tag-alone"],
+    )
+    def test_a_cut_first_line_keeps_its_tag_and_some_value(self, room, first):
+        # (here) the export writes Eugen's trade over and over, and cites
+        # the burial register for it at such length that the citation
+        # leaves the occupation's line `room` characters: a cut keeps the
+        # line's level and tag and a letter of its value, or the line is
+        # left out
+        trade = ("1 OCCU " + "Master hatter, " * 30).strip()
+        head = " | 2 SOUR @S1@ | 3 PAGE "
+        cited_part = f" | cited: {BURIAL_REGISTER}"
+        page = text_of(400 - 29 - room - len(head) - len(cited_part))
+        lines = [trade, "2 SOUR @S1@", f"3 PAGE {page}"]
+        text = cited(BURIAL_REGISTER) + eugen(*lines)
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        (occupation,) = claims_for(batch, "i1", "occupation")
+        whole = " | ".join(lines) + cited_part
+        assert occupation.source.transcription_excerpt.text == (
+            first + head + page + cited_part + clipped(whole)
+        )
+
+    def test_citations_that_fill_the_room_exactly_are_kept_whole(self):
+        # (here) the burial register's citation of Eugen as a master hatter
+        # is exactly as long as the room a clip leaves: the excerpt keeps
+        # it whole, at 400 characters, and no other line
+        head = " | 2 SOUR @S1@ | 3 PAGE "
+        cited_part = f" | cited: {BURIAL_REGISTER}"
+        page = text_of(400 - 29 - len("…") - len(head) - len(cited_part))
+        lines = ["1 OCCU Master hatter", "2 DATE 1909", "2 SOUR @S1@"]
+        lines.append(f"3 PAGE {page}")
+        text = cited(BURIAL_REGISTER) + eugen(*lines)
+        batch = adapt_gedcom(text, artifact=EXPORT).batch
+        (occupation,) = claims_for(batch, "i1", "occupation")
+        whole = " | ".join(lines) + cited_part
+        excerpt = occupation.source.transcription_excerpt.text
+        assert excerpt == "…" + head + page + cited_part + clipped(whole)
+        assert len(excerpt) == 400
+
+    def test_a_continuation_of_a_citing_line_waits_its_turn(self):
+        # (here) the DIV line the judgment's citation stands beneath runs
+        # on over a CONT line, after a NOTE on the wedding: the clip keeps
+        # the DIV line before any other, but its continuation only in its
+        # turn, after the NOTE, where it no longer fits
+        note = f"2 NOTE {text_of(100)}"
+        divorce = "1 DIV Divorced by the Landgericht Rekau"
+        more = "by its judgment of 2 January 1957"
+        after = ["2 DATE 2 JAN 1957", "2 SOUR @S1@", f"2 NOTE {text_of(300)}"]
+        text = cited(JUDGMENT) + family(
+            *WEDDING, note, divorce, f"2 CONT {more}", *after
+        )
+        # the CONT line is a line of the excerpt of its own
+        pieces = [PARTNERS, *WEDDING, note, divorce, more, *after]
+        whole = " | ".join(pieces) + f" | cited: {JUDGMENT}"
+        ((_, excerpt),) = spouse_sources(text)
+        assert excerpt == (
+            f"{PARTNERS} | 1 MARR | 2 DATE 8 FEB 1947 | 2 PLAC {FLOERBURG}"
+            f" | {note} | {divorce} | … | 2 SOUR @S1@ | … | cited: {JUDGMENT}"
             + clipped(whole)
         )
 

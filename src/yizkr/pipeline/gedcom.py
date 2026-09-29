@@ -525,6 +525,8 @@ ELIDED = "…"
 # folded into the claim is kept, the line a folded citation stands beneath
 # next, and any other line after those, in order, while it fits.
 CITATION, CITING, OTHER = range(3)
+# a GEDCOM line's level, its xref if it has one, and its tag, before a value
+_LINE_HEAD = re.compile(r"\d+ (?:@[^@]+@ )?\S+ ")
 
 
 def _excerpt(segments: list[tuple[str, int]], cited: str) -> str:
@@ -571,12 +573,20 @@ def _excerpt(segments: list[tuple[str, int]], cited: str) -> str:
             # it on one side, or takes the place of its mark
             before = index > 0 and not kept[index - 1]
             after = index + 1 < len(kept) and not kept[index + 1]
-            grows = len(texts[index]) + (
-                7 if before and after else 3 if before or after else -1
-            )
-            if length + grows <= room:
+            marks = 7 if before and after else 3 if before or after else -1
+            if length + len(texts[index]) + marks <= room:
                 kept[index] = True
-                length += grows
+                length += len(texts[index]) + marks
+            elif index == 0 and (head := _LINE_HEAD.match(texts[0])):
+                # the passage's first line names its record: one too long
+                # for the room left is cut to it, provided it keeps its
+                # level and tag and something of its value
+                spare = room - length - marks - len(ELIDED)
+                cut = texts[0][: max(spare, 0)]
+                if len(cut.rstrip()) > head.end():
+                    texts[0] = cut.rstrip() + ELIDED
+                    kept[0] = True
+                    length += len(texts[0]) + marks
     return _kept(texts, kept) + cited + tail
 
 
