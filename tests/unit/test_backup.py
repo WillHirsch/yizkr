@@ -400,6 +400,7 @@ UNTYPED = {
     "Q429": "a label only",
     "Q433": "typed with an unknown value only",
     "Q434": "typed with no value only",
+    "Q462": "named in an instance of qualifier, which makes no class",
 }
 # Q410 redirects to Q402, whom the check does not release; Q418 to Q401,
 # whom it does; Q435 to Q429, which states no type. A photograph depicts
@@ -459,7 +460,11 @@ def export_dump(vocabulary) -> Dump:
     typed("Q411", "organization")
     typed("Q412", "event")
     dump.says("Q412", "participant", entity("Q411"))
-    typed("Q413", "occupation_class")
+    typed(
+        "Q413",
+        "occupation_class",
+        qualifiers=[("instance_of", entity("Q462"))],
+    )
     typed("Q414", "place")
     dump.says("Q414", "nickname", '"Gus"@en')
     typed("Q416", "deportation", rank="Deprecated")

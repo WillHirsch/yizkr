@@ -32,11 +32,11 @@ redirects to.
 The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes the
 public export from it, and reads public.nt.gz: it mentions the released
 person, the plain vessel and the migration by QID, and none of the other
-seven. The export first waits for the query service to hold the dump's
-revision of every item and property, a redirect's aside, so on a stack
-at rest, a merge included, the export must run, not refuse. The site
-lists the six that have person evidence, and badges the five the export
-drops.
+eight, the label-only item and the redirect included. The export first
+waits for the query service to hold the dump's revision of every item and
+property, a redirect's aside, so on a stack at rest, a merge included,
+the export must run, not refuse. The site lists the seven that have
+person evidence, and badges the six the export drops.
 
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
