@@ -164,15 +164,26 @@ for a refused segmentation, as its coverage side output records it
 calls failing, over at least `min-count` of them: the engine's `call`
 events of the extraction with the outcome `error`, among its calls other
 than a conversation's opening turn (the entity manifest and the
-segmentation). It is judged when the extraction ends, done or failed.
-Value: the share; `count`, `of`.
+segmentation). A call whose answer the claude CLI gave up on at the
+output limit, whose `error` is `OutputLimitReached`, is a truncation,
+below, not a failure. It is judged when the extraction ends, done or
+failed. Value: the share; `count`, `of`.
 
 **`truncations`**: more than `max-share` of an extraction's chunk answers
-cut off before their terminal sentinel, over at least `min-count`
-answers: the LLM cache's rejections of chunk answers (`cache-reject`
-events of the extract role whose reason starts `chunk:`), among the
-answers the engine or the cache gave its chunk calls. Value: the share;
-`count`, `of`.
+cut off, over at least `min-count` answers, among the answers the engine
+or the cache gave its chunk calls. A chunk answer is cut off when:
+- its model stopped at the output limit (`max_tokens`), or it has no
+  terminal sentinel: the LLM cache rejects it, and the `cache-reject`
+  event of the extract role gives a reason that starts `chunk:`;
+- the claude CLI gave up on it at the output limit and handed back
+  none: the chunk call's `call` event has the outcome `error`, and its
+  `error` is `OutputLimitReached`, which the engine raises when it reads
+  that give-up in the call's stream (docs/LLM_CACHE.md). The event's
+  `api_error`, `max_output_tokens`, does not tell it alone: a call that
+  crashed or timed out after the CLI printed its notice names that class
+  too, under another `error`, and is a failed call.
+
+Value: the share; `count`, `of`.
 
 **`schema-rejects`**: more than `max-share` of the claims an extraction
 was given rejected by validation or unread by the parser, over at least
@@ -231,9 +242,13 @@ judged. Value: the failures; `of` (the documents counted), `first`,
 `pause`.
 
 **`call-failures`**: more than `max-share` of a stage's last `window`
-engine calls failing (`call` events with the outcome `error`; calls
-paused or interrupted are not counted), once it has made at least
-`min-count`. It fires as `stage-failures` does. Its slice is the stage;
+engine calls failing (`call` events with the outcome `error`), once it has
+made at least `min-count`. Calls paused or interrupted are not counted.
+Nor is a call whose answer the claude CLI gave up on at the output limit
+(`error` `OutputLimitReached`): the engine answered it, so it says
+nothing of an engine down, and it is left out of the window. A call that
+crashed or timed out after the CLI printed its notice is counted, as a
+failed call. It fires as `stage-failures` does. Its slice is the stage;
 fail-fast by default. Value: the share; `count`, `of`, `pause`.
 
 ### The engine's model
@@ -424,9 +439,11 @@ check.
 
 ## Limits
 
-- **Truncations are seen only with the LLM cache**: a cut-off chunk
+- **Truncations are seen partly without the LLM cache**: a cut-off chunk
   answer is rejected through the cache, whose event says so. Without it
-  (`--no-cache`) the retry is only another call.
+  (`--no-cache`) the retry is only another call, and only the calls the
+  claude CLI gave up on at the output limit, which their own events
+  show, are counted.
 - **Calls are measured where the run made them.** Chunk failures and
   truncations are judged on extractions made in the invocation; a reused
   batch keeps no record of its calls, so it is judged on its stored
