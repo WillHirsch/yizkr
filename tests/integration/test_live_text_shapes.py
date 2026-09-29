@@ -3,11 +3,12 @@ writer's LINE_BREAKS, WHITESPACE, `_locator_text` and `_term_text`).
 
 Wikibase refuses a text value that holds a line break or a tab, or has
 whitespace at either end (its `illegal-string-chars` check,
-/^\\s|[\\v\\t]|\\s$/u, which PHP matches by Unicode property), and a label,
+/^\\s|[\\v\\t]|\\s$/u, which PHP matches by Unicode property), a label,
 description or alias of more than 250 characters once it has trimmed it,
-and it refuses the whole edit that sends one. A fictional fixture writes
-one batch of eight claims about Eugen Löbig and his daughter-in-law
-Hildegard, as (here) the 1909 burial register gives them, and reads them
+and an item whose label and description are the same, and it refuses the
+whole edit that sends one. A fictional fixture writes one batch of nine
+claims about Eugen Löbig, his daughter-in-law Hildegard and his son
+Sebastian, as (here) the 1909 burial register gives them, and reads them
 back through the API:
 
 * the first gives his cause of death over two lines, the third his age at
@@ -32,6 +33,10 @@ back through the API:
   with a line break before it, a tab inside and a space after it, agrees
   with Eugen's well past the cut: she has an item of her own, whose label
   is hers trimmed and cut;
+* Sebastian, named by the ninth claim, has a summary that is his label
+  with a space after it: his item is made without a description, and the
+  first write of the fixture's version says so in a warning (#401's
+  review);
 * the batch's model identifier makes the run item's label longer than the
   instance holds: it is cut with the digest of the whole label, which
   holds the batch's fingerprint;
@@ -41,13 +46,14 @@ back through the API:
 Every entity's label carries a marker: six hex digits of a hash over the
 fixture, its cited SHA-1 replaced by "A", and over the writer's source, as
 test_live_text_limits.py's labels do, so each version of the fixture and
-of the writer meets the fixture as a first write does. Each entity has a
-description, so a writer that failed to find one by its label could not
-mint a second item under it. The source is registered with a fictional
-PNG of its own (register_fictional), which the claims cite by SHA-1
-(#102). Like every live test it writes fictional data to the one
-instance, so the session that runs it ends by clearing the recorded
-instance-contents key (docs/AGENT_PROTOCOL.md §5).
+of the writer meets the fixture as a first write does. Eugen and Hildegard
+have descriptions, so a writer that failed to find one of them by its
+label could not mint a second item under it; one that failed to find
+Sebastian would send an edit on the rewrite, which counts them. The source
+is registered with a fictional PNG of its own (register_fictional), which
+the claims cite by SHA-1 (#102). Like every live test it writes fictional
+data to the one instance, so the session that runs it ends by clearing the
+recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -134,6 +140,8 @@ ENTITIES = (
         "kind": "human",
         "summary": "fixture: Hildegard Löbig, Eugen's daughter-in-law",
     },
+    # his summary is his label with a space after it (batch_content)
+    {"id": "sebastian", "label": "Sebastian Löbig", "kind": "human"},
 )
 # the page and excerpt of his date of death, over several lines, and as
 # the instance keeps them
@@ -161,13 +169,15 @@ RUN = {
 
 def labels_of(marker: str) -> dict[str, str]:
     """Each entity's label as the fixture's refs and records give it, the
-    marker after the fixture's name, then the index's heading: Hildegard's
-    with a line break before it, a tab inside and a space after it."""
+    marker after the fixture's name, then, for Eugen and Hildegard, the
+    index's heading: Hildegard's with a line break before it, a tab inside
+    and a space after it."""
     return {
         "eugen": f"Text Shape Fixture ({marker}) {INDEX} Eugen Löbig",
         "hildegard": (
             f"\nText Shape Fixture ({marker}) {INDEX}\tHildegard Löbig "
         ),
+        "sebastian": f"Text Shape Fixture ({marker}) Sebastian Löbig",
     }
 
 
@@ -236,7 +246,7 @@ def batch_content(sha1: str, labels: dict[str, str]) -> dict:
             "source": cites("Angezeigt von der Schwiegertochter."),
         }
 
-    return {
+    content = {
         "extraction_run": RUN,
         "claims": [
             of_eugen(
@@ -259,11 +269,23 @@ def batch_content(sha1: str, labels: dict[str, str]) -> dict:
                 text(f"Muckel{NO_BREAK_SPACE}"),
                 "Eugen Löbig, genannt Muckel.",
             ),
+            {
+                "subject": ref("sebastian"),
+                "property": "father",
+                "value": {"type": "item", "value": ref("eugen")},
+                "source": cites("Sohn: Sebastian Löbig, Hutmacher."),
+            },
         ],
         "entities": [
             dict(entity, label=labels[entity["id"]]) for entity in ENTITIES
         ],
     }
+    # Sebastian's summary is his label, a space after it
+    (sebastian,) = [
+        entity for entity in content["entities"] if entity["id"] == "sebastian"
+    ]
+    sebastian["summary"] = f"{labels['sebastian']} "
+    return content
 
 
 def fixture_marker() -> str:
@@ -348,13 +370,11 @@ def terms(client, qids: list[str]) -> dict[str, dict]:
 
 def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     source, batch, written = fixture_graph
-    # the first write of this version writes the date of death and the
-    # kinship, and records the long excerpts on the date's statement; a
-    # later session's write finds all four there
-    assert (written.written, written.referenced, written.skipped) in (
-        (2, 2, 0),
-        (0, 0, 4),
-    )
+    # the first write of this version writes the date of death, the
+    # kinship and Sebastian's father, and records the long excerpts on the
+    # date's statement; a later session's write finds all five there
+    first = (written.written, written.referenced, written.skipped)
+    assert first in ((3, 2, 0), (0, 0, 5))
     refused = [claim_id(batch.claims[index]) for index in (0, 2, 6, 7)]
     assert written.refused == refused
     faults = [
@@ -368,13 +388,24 @@ def test_no_text_of_the_batch_stops_it(client, fixture_graph):
         "(nickname) is refused, and nothing of it is written: its value "
         "holds whitespace at its end,",
     ]
-    for warning, cid, fault in zip(
-        written.warnings, refused, faults, strict=True
-    ):
+    refusals = [w for w in written.warnings if w.startswith("claim ")]
+    for warning, cid, fault in zip(refusals, refused, faults, strict=True):
         assert warning.startswith(f"claim {cid} {fault}")
+    # the first write of this version mints Sebastian, without the
+    # description that would be his label, and says so
+    assert [w for w in written.warnings if w not in refusals] == (
+        [
+            "entity 'sebastian' has a description that is its label: its "
+            "item is made without one, as Wikibase refuses an item whose "
+            "label and description are the same"
+        ]
+        if first == (3, 2, 0)
+        else []
+    )
     eugen = written.created_items["eugen"]
     hildegard = written.created_items["hildegard"]
-    assert eugen != hildegard
+    sebastian = written.created_items["sebastian"]
+    assert len({eugen, hildegard, sebastian}) == 3
     # nothing of the refused claims is on the instance
     for key in ("cause_of_death", "age_at_death", "nickname"):
         assert statements(client, eugen, key) == []
@@ -397,9 +428,17 @@ def test_no_text_of_the_batch_stops_it(client, fixture_graph):
     assert cited(client, died, "inferred_from_extraction_run") == [
         written.run_qid
     ]
+    (father,) = statements(client, sebastian, "father")
+    assert father["mainsnak"]["datavalue"]["value"]["id"] == eugen
+    assert cited(client, father, "stated_in") == [source]
     # the terms, as the instance keeps them
     marker = fixture_marker()
-    kept = terms(client, [eugen, hildegard, written.run_qid])
+    kept = terms(client, [eugen, hildegard, sebastian, written.run_qid])
+    assert kept[sebastian] == {
+        "label": labels_of(marker)["sebastian"],
+        "description": None,
+        "aliases": [],
+    }
     assert kept[eugen] == {
         "label": label_kept(marker, "eugen"),
         "description": cut(SUMMARY, TERM_LIMIT),
@@ -423,6 +462,7 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
     qids = [
         written.created_items["eugen"],
         written.created_items["hildegard"],
+        written.created_items["sebastian"],
         written.run_qid,
     ]
     before = (
@@ -430,6 +470,7 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
         [
             statements(client, qids[0], "date_of_death"),
             statements(client, qids[1], "relative"),
+            statements(client, qids[2], "father"),
         ],
     )
     edits: list[str | None] = []
@@ -447,11 +488,13 @@ def test_a_rewrite_sends_no_edit(client, fixture_graph, monkeypatch):
     assert again.run_qid == written.run_qid
     assert again.created_items == written.created_items
     assert again.refused == written.refused
-    assert (again.written, again.referenced, again.skipped) == (0, 0, 4)
+    assert all(warning.startswith("claim ") for warning in again.warnings)
+    assert (again.written, again.referenced, again.skipped) == (0, 0, 5)
     assert (
         terms(client, qids),
         [
             statements(client, qids[0], "date_of_death"),
             statements(client, qids[1], "relative"),
+            statements(client, qids[2], "father"),
         ],
     ) == before

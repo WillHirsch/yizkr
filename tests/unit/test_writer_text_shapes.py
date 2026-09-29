@@ -50,6 +50,8 @@ from tests.unit.test_pipeline import (
     TEXT_CLAIMS,
     TEXT_OF,
     TREE_SHA1,
+    WIKIBASE_BREAK_OR_TAB,
+    WIKIBASE_SPACE,
     FakeWiki,
     _aliases,
     _batch_of,
@@ -107,7 +109,6 @@ ZERO_WIDTH_SPACE = "\N{ZERO WIDTH SPACE}"
 # itself refuses a line feed or a carriage return before anything is sent,
 # so the fake is shown the other line breaks
 REFUSED_TEXTS = {
-    "a vertical tab inside": "Blatt\x0b12",
     "a line separator inside": f"Blatt{LINE_SEPARATOR}12",
     "a next line (NEL) inside": f"Blatt{NEXT_LINE}12",
     "a tab inside": "Blatt\t12",
@@ -115,6 +116,12 @@ REFUSED_TEXTS = {
     "a no-break space at its end": f"Blatt 12{NO_BREAK_SPACE}",
     "an ideographic space at its end": f"Blatt 12{IDEOGRAPHIC_SPACE}",
     "a Mongolian vowel separator at its start": f"{VOWEL_SEPARATOR}Blatt 12",
+}
+# and the line breaks Wikibase refuses in a monolingual text alone: it
+# makes each U+FFFD in a string value before it checks it (#401's review)
+MONOLINGUAL_REFUSED = {
+    "a vertical tab inside": "Blatt\x0b12",
+    "a form feed at its end": "Blatt 12\x0c",
 }
 # and by what gives it a shape Wikibase holds
 HELD_TEXTS = {
@@ -142,6 +149,24 @@ class TestTheFakeRefusesWhatWikibaseRefuses:
             item.write()
 
         assert (wiki.wbi.item.writes, wiki.wbi.item.store) == (0, {})
+
+    @pytest.mark.parametrize("kind", ["string", "monolingual"])
+    @pytest.mark.parametrize("where", ["value", "qualifier", "reference"])
+    @pytest.mark.parametrize(
+        "text", MONOLINGUAL_REFUSED.values(), ids=MONOLINGUAL_REFUSED
+    )
+    def test_a_vertical_tab_or_form_feed_in_a_string_value_is_changed(
+        self, text, where, kind
+    ):
+        wiki, item = _item_holding(where, kind, text)
+
+        if kind == "monolingual":
+            with pytest.raises(ModificationFailed, match="Illegal characters"):
+                item.write()
+            assert wiki.wbi.item.store == {}
+        else:
+            item.write()
+            assert wiki.wbi.item.writes == 1
 
     @pytest.mark.parametrize("kind", ["string", "monolingual"])
     @pytest.mark.parametrize("text", HELD_TEXTS.values(), ids=HELD_TEXTS)
@@ -189,6 +214,18 @@ class TestTheFakeRefusesWhatWikibaseRefuses:
             item.aliases.set("en", [alias])
 
         with pytest.raises(ModificationFailed):
+            item.write()
+
+        assert wiki.wbi.item.store == {}
+
+    def test_an_item_whose_label_is_its_description_is_refused(self):
+        # the two compared as Wikibase keeps them
+        wiki = FakeWiki(detached=True)
+        item = wiki.wbi.item.new()
+        item.labels.set("en", "Eugen Löbig")
+        item.descriptions.set("en", "Eugen Löbig ")
+
+        with pytest.raises(ModificationFailed, match="must not be the same"):
             item.write()
 
         assert wiki.wbi.item.store == {}
@@ -272,8 +309,8 @@ class TestClaimsOfAShapeTheInstanceRefuses:
         assert written.warnings == [
             f"claim {cid} ({refused['property']}) is refused, and nothing "
             f"of it is written: {WHERE[case]} {fault}, which Wikibase "
-            f"refuses in a text value. A cut or any other change would "
-            f"alter what the source says"
+            f"refuses or changes in a text value. A cut or any other change "
+            f"would alter what the source says"
         ]
         assert _quotes(written.warnings, TEXT_OF[case]) == []
         # the certificate's birth is written, with both its references
@@ -319,9 +356,9 @@ class TestClaimsOfAShapeTheInstanceRefuses:
             f"claim {claim_id(batch.claims[0])} (nickname) is refused, and "
             f"nothing of it is written: its value has 411 characters in "
             f"Unicode NFC, over the 400 Wikibase holds in a text value; its "
-            f"value holds a line break, which Wikibase refuses in a text "
-            f"value. A cut or any other change would alter what the source "
-            f"says"
+            f"value holds a line break, which Wikibase refuses or changes in "
+            f"a text value. A cut or any other change would alter what the "
+            f"source says"
         )
 
 
@@ -426,6 +463,29 @@ class TestLocatorsGoOnOneLine:
         # the block cites the register, and gives no page, or no excerpt
         assert _places(died) == [("Q34", None, None, excerpt)]
 
+    @pytest.mark.parametrize("where", ["page number", "excerpt"])
+    def test_places_apart_in_whitespace_alone_are_one(self, where):
+        # the register's page given twice, the second time with a tab
+        # before it and a line break after it: as the instance keeps them,
+        # one place, and so one block (#401's review)
+        first, second = "Blatt 12, Flörburg", "\tBlatt 12, Flörburg\n"
+        claim = _cause if where == "page number" else _quoting
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(
+            _batch_of(claim(first), claim(second))
+        )
+
+        assert (written.written, written.referenced, written.skipped) == (
+            1,
+            0,
+            1,
+        )
+        (died,) = _statements(
+            wiki, written.created_items["e07"], "cause_of_death"
+        )
+        assert len(_places(died)) == 1
+
     def test_a_long_locator_goes_on_one_line_before_it_is_cut(self):
         # (here) the leaves of the register's index that point to Eugen's
         # entry, one to a line: the page goes on one line, and is then cut,
@@ -461,9 +521,18 @@ class TestTypeHintSpacing:
                 "Hutmacher und Hutgeschäfte, Mützenmacher",
             ),
             (f"{NO_BREAK_SPACE}Hutgeschäft{LINE_SEPARATOR}", "Hutgeschäft"),
+            (
+                f"Hut{VOWEL_SEPARATOR}geschäft{VOWEL_SEPARATOR}",
+                "Hut geschäft",
+            ),
             (" \n", None),
         ],
-        ids=["over two lines", "whitespace at either end", "whitespace alone"],
+        ids=[
+            "over two lines",
+            "whitespace at either end",
+            "a Mongolian vowel separator inside and at its end",
+            "whitespace alone",
+        ],
     )
     @pytest.mark.parametrize("found", [False, True], ids=["minted", "found"])
     def test_a_type_hint_goes_with_single_spaces(self, found, given, kept):
@@ -555,6 +624,11 @@ LABELS = {
     "over the limit": (LONG_SEBASTIAN, _term_cut(LONG_SEBASTIAN)),
     "in NFD, over the limit": (
         unicodedata.normalize("NFD", LONG_SEBASTIAN),
+        _term_cut(LONG_SEBASTIAN),
+    ),
+    # trimmed before it is cut, and its digest of the label trimmed
+    "over the limit, with whitespace around it": (
+        f"\n{LONG_SEBASTIAN} ",
         _term_cut(LONG_SEBASTIAN),
     ),
 }
@@ -657,6 +731,46 @@ class TestTerms:
         else:
             assert description == summary
 
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["write", "plan"])
+    def test_a_description_that_is_the_label_is_left_out(self, dry_run):
+        # (here) the certificate's extraction gives Sebastian a summary of
+        # his name alone, a space after it: as the instance keeps them, his
+        # label and description would be the same, which it refuses. His
+        # item is made without a description, and a warning says so, in a
+        # dry run too (#401's review)
+        batch = _certificate_batch()
+        (record,) = batch.entities
+        batch = batch.model_copy(
+            update={
+                "entities": [
+                    record.model_copy(update={"summary": f"{SEBASTIAN} "})
+                ]
+            }
+        )
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+
+        written = BatchWriter(wiki, dry_run=dry_run).write_batch(batch)
+
+        assert written.warnings == [
+            "entity 'e01' has a description that is its label: its item is "
+            "made without one, as Wikibase refuses an item whose label and "
+            "description are the same"
+        ]
+        if dry_run:
+            assert wiki.wbi.item.writes == 0
+            return
+        sebastian = written.created_items["e01"]
+        item = wiki.wbi.item.get(sebastian)
+        assert (str(item.labels.get("en")), item.descriptions.get("en")) == (
+            SEBASTIAN,
+            None,
+        )
+        # a re-run finds him, warns of nothing and writes nothing
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.created_items["e01"], again.warnings) == (sebastian, [])
+        assert wiki.wbi.item.writes == writes
+
     @pytest.mark.parametrize("found", [False, True], ids=["minted", "found"])
     def test_aliases_go_as_the_instance_keeps_them(self, found):
         # (here) the tree gives Sebastian's pet name as a transcription
@@ -744,3 +858,136 @@ class TestTerms:
         (kind,) = _statements(wiki, sebastian, "instance_of")
         assert kind.mainsnak.datavalue["value"]["id"] == ITEMS["human"]
         assert _sources(kind)[2:] == [(["Q29"], []), ([], [written.run_qid])]
+
+    def test_a_record_with_no_label_the_instance_keeps_reaches_no_item(self):
+        # (here) the register's extraction lists in its manifest an entity
+        # whose label is whitespace alone, of the kind human and with the
+        # alias "Muckel", and makes no claim of it; the batch's one claim is
+        # about Flörburg, an item with a German label and no English one.
+        # A label with nothing the instance keeps names no item: the kind
+        # and the alias reach none, least of all Flörburg (#401's review)
+        wiki = FakeWiki(MEDIA, detached=True)
+        town = wiki.wbi.item.new()
+        town.labels.set("de", "Flörburg")
+        town = town.write()
+        keyed = dict(
+            TEXT_CLAIMS["external id"],
+            subject={"kind": "qid", "qid": town.id},
+        )
+        blank = {
+            "id": "blank",
+            "label": " \n",
+            "kind": "human",
+            "aliases": ["Muckel"],
+            "extract": False,
+        }
+
+        written = BatchWriter(wiki).write_batch(
+            _batch_of(keyed, entities=(blank,))
+        )
+
+        assert written.written == 1
+        assert _aliases(wiki, town.id) == []
+        assert _statements(wiki, town.id, "instance_of") == []
+        assert (
+            written.type_statements_written,
+            written.type_statements_referenced,
+        ) == (0, 0)
+
+
+# -- every character of the instance's classes --------------------------------
+
+# each character of the fake's own classes (test_pipeline.py), written out
+# apart from the writer's, and each control character (#401's review)
+SPACES = {f"U+{ord(char):04X}": char for char in WIKIBASE_SPACE}
+BREAKS = {f"U+{ord(char):04X}": char for char in WIKIBASE_BREAK_OR_TAB}
+CONTROLS = {
+    f"U+{code:04X}": chr(code) for code in (*range(0x20), *range(0x7F, 0xA0))
+}
+SHAPED = {**SPACES, **CONTROLS}
+
+
+class TestEveryCharacterOfTheInstancesClasses:
+    """Each character Wikibase counts as whitespace, or as a line break or
+    tab, as the fake writes its classes out, and each control character,
+    taken through a claim, a page number, an excerpt and a label: none
+    stops the batch, and each re-run finds what the first wrote."""
+
+    @pytest.mark.parametrize("at", ["start", "end"])
+    @pytest.mark.parametrize("char", SPACES.values(), ids=SPACES)
+    def test_whitespace_at_either_end_of_a_claim_refuses_it(self, char, at):
+        words = TEXT_OF["monolingual value"]
+        text = char + words if at == "start" else words + char
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(
+            _batch_of(_saying("monolingual value", text), BIRTH)
+        )
+
+        assert (written.written, len(written.refused)) == (1, 1)
+        (warning,) = written.warnings
+        assert f"whitespace at its {at}" in warning
+
+    @pytest.mark.parametrize("case", TEXT_CLAIMS, ids=TEXT_CLAIMS)
+    @pytest.mark.parametrize("char", BREAKS.values(), ids=BREAKS)
+    def test_a_line_break_or_tab_inside_a_claim_refuses_it(self, char, case):
+        # in a string value, the instance would change a vertical tab or a
+        # form feed rather than refuse it: the writer refuses the claim all
+        # the same, as a change would alter what the source says
+        words = TEXT_OF[case]
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(
+            _batch_of(_saying(case, words + char + words), BIRTH)
+        )
+
+        assert (written.written, len(written.refused)) == (1, 1)
+        (warning,) = written.warnings
+        assert ("a tab" if char == "\t" else "a line break") in warning
+
+    @pytest.mark.parametrize("where", ["page number", "excerpt"])
+    @pytest.mark.parametrize("char", SPACES.values(), ids=SPACES)
+    def test_a_locator_of_any_whitespace_goes_on_one_line(self, char, where):
+        given = f"{char}Blatt 12{char}Flörburg{char}"
+        if char == "\t":
+            inside = " "
+        elif char in WIKIBASE_BREAK_OR_TAB:
+            inside = " | "
+        else:
+            # in NFC, which makes U+2000 and U+2001 the spaces U+2002 and
+            # U+2003
+            inside = unicodedata.normalize("NFC", char)
+        claim = _cause(given) if where == "page number" else _quoting(given)
+        batch = _batch_of(claim)
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        (died,) = _statements(
+            wiki, written.created_items["e07"], "cause_of_death"
+        )
+        ((_, page, _, excerpt),) = _places(died)
+        kept = page if where == "page number" else excerpt
+        assert kept == f"Blatt 12{inside}Flörburg"
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("char", SHAPED.values(), ids=SHAPED)
+    def test_a_label_of_any_shape_finds_its_item_again(self, char):
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        batch = _named(
+            _certificate_batch(), f"{char}Sebastian{char}Löbig{char}"
+        )
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        sebastian = written.created_items["e01"]
+        label = str(wiki.wbi.item.get(sebastian).labels.get("en"))
+        assert label.startswith("Sebastian") and label.endswith("Löbig")
+        assert _labelled(wiki, label) == [sebastian]
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert again.created_items["e01"] == sebastian
+        assert wiki.wbi.item.writes == writes

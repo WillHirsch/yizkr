@@ -1334,6 +1334,30 @@ def _illegal(text: str) -> bool:
     )
 
 
+# the characters Wikibase makes U+FFFD in a string value before it checks
+# it (StringNormalizer::cleanupToNFC, through UtfNormal's cleanUp): every
+# control character but the tab, the line feed and the carriage return,
+# and the noncharacters U+FFFE and U+FFFF
+WIKIBASE_CLEANED = "".join(
+    map(chr, (*range(0x09), 0x0B, 0x0C, *range(0x0E, 0x20), 0xFFFE, 0xFFFF))
+)
+
+
+def _cleaned_up(text: str) -> str:
+    """A string value as Wikibase cleans it up before it checks it
+    (cleanupToNFC): each character of WIKIBASE_CLEANED made U+FFFD, and
+    the whole in NFC. So Wikibase changes a vertical tab or a form feed in
+    a string value, where it refuses one in a monolingual text (#401's
+    review)."""
+    return unicodedata.normalize(
+        "NFC",
+        "".join(
+            "\N{REPLACEMENT CHARACTER}" if char in WIKIBASE_CLEANED else char
+            for char in text
+        ),
+    )
+
+
 def _kept_term(term: str) -> str:
     """A label, description or alias as Wikibase keeps it
     (StringNormalizer::trimToNFC): each run of control characters made one
@@ -1361,20 +1385,22 @@ def _refuse_as_the_instance(item) -> None:
     * in a snak of one of its statements (a value, a qualifier or a
       reference), a text of more than 400 characters (its
       `string-limits`), a string value (of a string or external-id snak)
-      counted in NFC, the form Wikibase puts it in before it checks it,
-      and a monolingual text as it is sent (#366); or a text with a line
-      break or a tab in it, or whitespace at either end (its
-      `illegal-string-chars`, #384);
+      counted as Wikibase cleans it up before it checks it (_cleaned_up),
+      in NFC, and a monolingual text as it is sent (#366); or a text with
+      a line break or a tab in it, or whitespace at either end (its
+      `illegal-string-chars`, #384), a string value again as cleaned up;
     * a label, description or alias that, as Wikibase keeps it
       (_kept_term), has more than 250 characters or fails the same check,
-      and an alias with nothing left (#384)."""
+      and an alias with nothing left (#384);
+    * an item whose label and description, as Wikibase keeps them, are
+      the same (its LabelDescriptionNotEqualValidator, #401's review)."""
     data = item.get_json()
     for statements in data.get("claims", {}).values():
         for statement in statements:
             for snak in _snaks(statement):
                 datavalue = snak.get("datavalue") or {}
                 if datavalue.get("type") == "string":
-                    text = unicodedata.normalize("NFC", datavalue["value"])
+                    text = _cleaned_up(datavalue["value"])
                 elif datavalue.get("type") == "monolingualtext":
                     text = datavalue["value"]["text"]
                 else:
@@ -1415,6 +1441,16 @@ def _refuse_as_the_instance(item) -> None:
             raise _refusal(
                 "wikibase-validator-illegal-string-chars",
                 "Illegal characters in a term",
+                kept,
+            )
+    labels = data.get("labels", {})
+    for language, description in data.get("descriptions", {}).items():
+        kept = _kept_term(description["value"])
+        label = labels.get(language)
+        if kept and label and _kept_term(label["value"]) == kept:
+            raise _refusal(
+                "wikibase-validator-label-equals-description",
+                "Label and description must not be the same",
                 kept,
             )
 

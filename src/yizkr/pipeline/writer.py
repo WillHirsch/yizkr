@@ -37,7 +37,11 @@ Per batch, the writer:
    one (ADR-0007, read through `entity_records` in yizkr.pipeline.review,
    as the depicts gate reads it): the record gives the label, the
    summary as description, the kind, type hint and aliases; otherwise
-   the ref gives its own label, description and kind. The document's
+   the ref gives its own label, description and kind. A minted item
+   whose description would be its label gets none, with a warning, as
+   Wikibase refuses an item whose label and description are the same.
+   A ref, or its record, whose label holds nothing the instance keeps
+   raises ValueError, as one with no label does. The document's
    aliases go onto the item it names, minted or reused, append-only;
    those of an entity an approved equivalence names go on before any
    claim is written. A kind the vocabulary lacks is recorded for no
@@ -116,27 +120,34 @@ Wikibase holds at most TEXT_LIMIT (400) characters in the text of a
 string, external-id or monolingual text value, whether the value is a
 statement's, a qualifier's or a reference's, and no text value that
 holds a line break or a tab, or has whitespace at either end
-(LINE_BREAKS, WHITESPACE). It trims a label, a description or an alias
-and keeps it in a form of its own (`_stored_term`), in at most
-TERM_LIMIT (250) characters. It refuses the whole edit that sends a
-text it does not hold. The writer checks each text in the form the
-instance keeps it in, and sends none that the instance would refuse,
-so that no text's length or shape stops the batch:
+(LINE_BREAKS, WHITESPACE), save that it changes a vertical tab or a form
+feed in a string value into U+FFFD rather than refusing it. It trims a
+label, a description or an alias and keeps it in a form of its own
+(`_stored_term`), in at most TERM_LIMIT (250) characters, and refuses an
+item whose label and description are the same. It refuses the whole edit
+that sends a text it does not hold. The writer checks each text in the
+form the instance keeps it in, and sends none that the instance would
+refuse, so that no text's length or shape stops the batch, with one
+exception: a local ref whose label holds nothing the instance keeps
+raises ValueError when the writer comes to mint its item, as one with no
+label does (step 2), after the claims before it are written:
 
 * a claim whose own text, its value or a qualifier's, is over the limit,
   or holds a line break or a tab, or has whitespace at either end, is
   refused before the first write, and nothing of it is written: no
-  statement, and no item that only it mentions. The result's `refused`
-  names it by its claim id (`claim_id` in yizkr.pipeline.review), its
-  review-sheet id unless the review corrected it, and a warning says
-  what keeps each of its texts out, quoting none of them. The text is
-  never cut or changed, as that would alter what the source says
-  (CLAUDE.md rule 5). Every other claim of the batch is written as the
-  steps above say, with its references (rules 1 and 2). An entity's type
-  hint is free text that the writer compares ignoring its spacing (step
-  5), so it goes with each run of whitespace in it made one space
-  (`_hint_text`), and one still over the limit is left out in the same
-  way, with a warning, wherever the writer would record it;
+  statement, and no item that only it mentions. That holds for a
+  vertical tab or a form feed in a string value too, which the instance
+  would change. The result's `refused` names it by its claim id
+  (`claim_id` in yizkr.pipeline.review), its review-sheet id unless the
+  review corrected it, and a warning says what keeps each of its texts
+  out, quoting none of them. The text is never cut or changed, as that
+  would alter what the source says (CLAUDE.md rule 5). Every other claim
+  of the batch is written as the steps above say, with its references
+  (rules 1 and 2). An entity's type hint is free text that the writer
+  compares ignoring its spacing (step 5), so it goes with each run of
+  whitespace in it made one space (`_hint_text`), and one still over the
+  limit is left out in the same way, with a warning, wherever the writer
+  would record it;
 * a reference's page number and region only place the claim in its
   source, as its excerpt only helps a reader check it there, so each is
   put on one line and cut to the limit rather than refused
@@ -212,9 +223,15 @@ CUT_MARK = " …"
 # What else Wikibase refuses in a text value, and in a term once it has
 # trimmed it: its `illegal-string-chars` check, /^\s|[\v\t]|\s$/u, finds a
 # line break or a tab anywhere, or whitespace at either end. PHP matches
-# `\v` and `\s` by Unicode property: `\v` is LINE_BREAKS, and `\s` is
-# WHITESPACE, which holds them, the tab and the space separators. Python's
-# str.isspace() differs, counting U+001C to U+001F and not U+180E.
+# `\v` and `\s` by Unicode property (PCRE2 with UCP): `\v` is LINE_BREAKS,
+# and `\s`, the union of `\p{Z}`, `\h` and `\v`, is WHITESPACE: the line
+# breaks, the tab, the space separators, and U+180E, which `\h` holds
+# though Unicode has made it a format character (Cf). Python's
+# str.isspace() differs, counting U+001C to U+001F and not U+180E. Before
+# the check, Wikibase cleans a string value up (cleanupToNFC), making a
+# vertical tab or a form feed in it U+FFFD, so it refuses those two in
+# monolingual text alone; the writer counts them as line breaks in every
+# text value, as the instance either refuses or changes them.
 LINE_BREAKS = "".join(map(chr, (0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029)))
 WHITESPACE = LINE_BREAKS + "".join(
     map(
@@ -303,7 +320,8 @@ class WriteResult:
     type_statements_written: int = 0
     type_statements_referenced: int = 0
     # what the writer left out and why, such as a kind the vocabulary
-    # lacks (step 2 of the module docstring) or a claim it refused
+    # lacks (step 2 of the module docstring), a claim it refused, or the
+    # description of an item it minted when that is the item's label
     warnings: list[str] = field(default_factory=list)
     # the claim id (yizkr.pipeline.review.claim_id; its review-sheet id
     # unless the review corrected it) of each claim refused whole because
@@ -401,7 +419,8 @@ def _faults(text: str) -> list[str]:
     ]
     if shapes:
         faults.append(
-            f"holds {_listed(shapes)}, which Wikibase refuses in a text value"
+            f"holds {_listed(shapes)}, which Wikibase refuses or changes in "
+            f"a text value"
         )
     return faults
 
@@ -683,14 +702,24 @@ class BatchWriter:
                     witnesses.append(witness)
             result.created_items[ref.local_id] = existing
             return existing
+        # the summary is a convenience, not an assertion: it goes as the
+        # instance keeps a term, cut to what it holds (_term_text), and not
+        # at all when that is the label, as Wikibase refuses an item whose
+        # label and description are the same; a warning says so, in a dry
+        # run too
+        description = _term_text(description or "")
+        if description == label:
+            description = ""
+            result.warnings.append(
+                f"entity {ref.local_id!r} has a description that is its "
+                f"label: its item is made without one, as Wikibase refuses "
+                f"an item whose label and description are the same"
+            )
         if self.dry_run:
             result.created_items[ref.local_id] = f"(new:{ref.local_id})"
             return result.created_items[ref.local_id]
         item = self.client.wbi.item.new()
         item.labels.set("en", label)
-        # the summary is a convenience, not an assertion: it goes as the
-        # instance keeps a term, cut to what it holds (_term_text)
-        description = _term_text(description or "")
         if description:
             item.descriptions.set("en", description)
         names = _terms(aliases)
@@ -1084,8 +1113,10 @@ class BatchWriter:
         item's QID, by the item's English label being the record's label
         in the form the instance keeps labels in (_term_text): the match
         the resolve step made. Only in that last case have the
-        record's aliases not reached the item yet. A local ref without a
-        manifest record that the writer matched by exact label gives the
+        record's aliases not reached the item yet. A record whose label
+        holds nothing the instance keeps names no item this way, as an
+        item with no English label matches no record. A local ref without
+        a manifest record that the writer matched by exact label gives the
         kind on its own `instance_of`, cited to its own claim's artifact.
         """
         found: list[_FoundEntity] = []
@@ -1094,7 +1125,8 @@ class BatchWriter:
             qid = record.qid or result.created_items.get(record.id)
             if qid is None:
                 stored_label = _term_text(record.label)
-                by_label.setdefault(stored_label, []).append(record)
+                if stored_label:
+                    by_label.setdefault(stored_label, []).append(record)
             else:
                 found.append(_FoundEntity(qid, record.kind, record.type_hint))
         if by_label:
