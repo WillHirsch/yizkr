@@ -82,7 +82,7 @@ whole, as it reads an image (`yizkr.pipeline.textlayer` defines each
 term; ADR-0008 as amended by #176). A page is read:
 
 - by nothing (the method `none`), when it draws nothing and shows no
-  annotation but a link;
+  annotation (a link or a pop-up shows nothing);
 - by one vision call of its own, when it shows text in an annotation (a
   free-text annotation, or a form field whose value is text); when it
   hides text it draws visibly, under an image or a filled path painted
@@ -93,7 +93,8 @@ term; ADR-0008 as amended by #176). A page is read:
   that fills the page); and when its text layer is empty, garbage, or
   garbled, a replacement character standing within a word. The engine is
   given the page's one image as the PDF holds it, where the page draws
-  nothing else and shows no annotation, or else a rendering of it;
+  nothing else, the image covers it upright, and it shows no annotation,
+  or else a rendering of it;
 - from its text layer otherwise, deterministically, with no model call
   (the method `pdf-text-layer`, version 1, read with pypdfium2, which
   pyproject.toml pins). The text layer is what the page draws visibly: an
