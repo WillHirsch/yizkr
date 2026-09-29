@@ -221,34 +221,40 @@ directory under `var/backups/` containing:
 - `media.tar.gz` — uploaded artifact files.
 - `full.nt.gz` — complete RDF dump. Portable export; also what a full
   WDQS reload imports (WDQS state itself is derived and not backed up).
-- `public.nt.gz` + `public-exclusions.json` — the possibly-living-
-  excluded export (R7, ADR-0020). "Possibly living" is a runtime
-  determination from the absence of death evidence, not a stored flag.
-  Conservative by construction: a person is included only on positive
-  evidence they are not living (any death evidence — a date, place, or
-  cause of death, a burial place, or a death event — or births that all
-  lie beyond the cutoff, `--cutoff-years` (by default
-  `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`), each read at the
-  latest year it allows: docs/MODELING.md, "Living persons and
-  privacy"); *unknown means excluded*. Every triple that
-  mentions an excluded person is dropped — including other people's
-  claims about them and orphaned provenance nodes — and transcription
-  excerpts (raw source quotations) never enter the public tier at all.
-  Who counts as a person fails closed as well: every item with person
-  evidence in the dump, at any rank (a `human` type, a birth, kinship, a
-  part in a death...), is dropped unless the check released it, and so
-  is every item that states no type, no `instance of` at normal or
-  preferred rank that names an item (the vocabulary and the classes
-  items are typed with aside), and every family, whose people may
+- `public.nt.gz` + `public-exclusions.json` — the non-privileged
+  export, which leaves out every possibly-living person (R7, ADR-0020).
+  "Possibly living" is a runtime determination from the absence of death
+  evidence, not a stored flag. Conservative by construction: a person is
+  included only on positive evidence they are not living (any death
+  evidence — a date, place, or cause of death, a burial place, or a
+  death event — or births that all lie beyond the cutoff,
+  `--cutoff-years` (by default `DEFAULT_CUTOFF_YEARS` in
+  `yizkr.core.privacy`), each read at the latest year it allows:
+  docs/MODELING.md, "Living persons and privacy"); *unknown means
+  excluded*. Every triple that mentions an excluded person is dropped —
+  including other people's claims about them and orphaned provenance
+  nodes. Who counts as a person fails closed as well: every item with
+  person evidence in the dump, at any rank (a `human` type, a birth,
+  kinship, a part in a death...), is dropped unless the check released
+  it, and so is every item that states no type, no `instance of` at
+  normal or preferred rank that names an item (the vocabulary and the
+  classes items are typed with aside), every family, whose people may
   include a living person, and every event that any of these took part
-  in. No free text leaves but the vocabulary's own terms: no label,
-  description, alias, name, title, excerpt, page number or other text
-  that a source, the pipeline or a curator wrote, since any of it can
-  name someone the export leaves out. So the public copy names no one:
-  its items are known by QID, type, dates and links alone.
-  The exclusions file records who was excluded and why, for curator
-  review. Nothing here publishes anything: the file is an artifact you
-  may choose to publish.
+  in. Everything else leaves as it is, text included: whatever is
+  recorded about a released person (their labels, descriptions, names,
+  and the source excerpts of their statements) and about every item that
+  is no person. Only the extractor's judgement notes are dropped. So a
+  text about a released person, or a document's title, can name a
+  possibly living relative: the export is a non-privileged view, not a
+  public copy (the owner, 2026-09-29). A dump that holds a sitelink or a
+  property of a type the model does not use (a URL, a media file) makes
+  the export refuse: `yizkr backup` keeps the other dumps, records the
+  refusal in `manifest.json` and exits non-zero.
+  Nothing here publishes anything. `public.nt.gz` is the only file of a
+  backup that may be shared, and only with those a non-privileged view
+  is for. `public-exclusions.json` is for curator review and stays on
+  the machine with the backup: it gives every item left out by QID, with
+  why, a birth year and the events it took part in among the reasons.
 
   The check runs on the query service, so the export first waits (up to
   three minutes) for the query service to hold the dump's revision of
@@ -281,7 +287,8 @@ nightly after the backup, for example:
 `var/site` is built from the LIVE graph and therefore includes living
 people: serve it on the LAN only (any static server works, e.g.
 `python -m http.server -d var/site 8080`). An internet-facing variant
-must be built from the public export instead.
+needs a public copy, which `public.nt.gz` is not: its texts can name a
+possibly living relative of a released person (#163).
 
 Copy `var/backups/` off-machine (rsync, restic, a NAS — anything);
 a backup that lives only on the server it backs up is not a backup.

@@ -747,14 +747,14 @@ not a signal to grow the schema on.
   and nothing the reviewer must decide. Privacy falls out of what
   sources already assert; a curator who knows a person is dead records
   that as an ordinary death assertion, not a flag.
-- The public export (`yizkr backup`) is **conservative**: a person
-  enters it only on positive evidence they are not living — any death
-  evidence above, or births beyond the cutoff (`--cutoff-years`, by
-  default `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown
-  means excluded.** Exclusion removes every
-  mention (other people's claims about them, orphaned provenance nodes),
-  and transcription excerpts — raw source quotations, which can name
-  anyone — never enter the public tier.
+- The export (`yizkr backup`'s `public.nt.gz`, a non-privileged view,
+  not a public copy) is **conservative**: a person enters it only on
+  positive evidence they are not living — any death evidence above, or
+  births beyond the cutoff (`--cutoff-years`, by default
+  `DEFAULT_CUTOFF_YEARS` in `yizkr.core.privacy`). **Unknown means
+  excluded.** Exclusion removes every mention (other people's claims
+  about them, orphaned provenance nodes), and a transcription excerpt —
+  a raw source quotation — leaves only with a statement it attests.
 - **Who is a person fails closed too** (ADR-0020, as amended by #344).
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
@@ -803,18 +803,21 @@ not a signal to grow the schema on.
   whatever its kind, that has a `participant` statement at any rank
   whose value it leaves out, a redirect to one included. An event so
   left out may itself be a participant, and the rule applies again.
-- **No free text leaves the instance but the vocabulary's** (ADR-0020,
-  as amended by #363). A label, a description, an alias, a name, a
-  title, a cause of death, and in a reference an excerpt, a page number
-  or any other text snak can name anyone, a person the export leaves
-  out included, and the export reads no wording to tell. So the only
-  text it keeps is the terms (label, description, aliases) of the
-  vocabulary's items and properties, as the model manifest gives them,
-  and the dump header's format version; every other literal goes but a
-  time, a number or a coordinate. A statement whose value is text keeps
-  its node, rank, qualifiers and references without it. The public copy
-  therefore names no one: its items are known by QID, type, dates and
-  links alone.
+- **Everything about a released person stays, text included** (ADR-0020,
+  as amended by #363). The owner decided (2026-09-29): "I don't intend
+  to make a completely public copy, so any non-privileged view can
+  include all information on confirmed-deceased people." So the export
+  keeps a released person's labels, descriptions, aliases, names and
+  titles, their statements' values and the excerpts of the references
+  those statements keep, and everything about an item that is no person
+  (a place, an organization, an artifact, the vocabulary, an event whose
+  participants are all released). Such a text can name a possibly living
+  relative, and it is visible in the non-privileged view. The extractor's
+  judgement notes never leave (ADR-0035), in any form. A line the export
+  cannot read as a triple is dropped, and a dump that holds a sitelink,
+  whose page's own triples never name its entity, or a property of a
+  type the model does not use (a URL, a media file, a shape) makes the
+  export refuse to run.
 - The check runs on the query service, so the export waits for the query
   service to hold the dump's revision of every item and property, and
   **refuses to run** while it does not, or when the graph changes during

@@ -16,11 +16,13 @@ evidence from its own dump and drops every such item the check did not
 release, every item that states no type, and every family; and it
 refuses to run while the query service, where the check runs, does not
 hold the dump's revisions (§4, Ruling 6).
-Amended by #363 (2026-09-29): the public export drops every event that
-an item it drops took part in, and carries no free text but the
-vocabulary's: no label, description, alias, name, title or reference
-text that a source, the pipeline or a curator wrote, since any of it can
-name a person the export leaves out (§4, Ruling 6).
+Amended by #363 (2026-09-29): the export is a non-privileged view, not
+a public copy (the owner, 2026-09-29). It keeps everything recorded about
+a person the check releases, and about every item that is no person,
+text included, and leaves out every possibly-living person with the
+events they took part in. It drops the extractor's judgement notes and
+any line it cannot read, and refuses a dump that holds a sitelink or a
+property of a type the model does not use (§4, Ruling 6).
 
 ## Context
 
@@ -136,7 +138,8 @@ is renamed **`critique_notes`** to reflect its now-single role (ADR-0013).
 - **Public export** (`yizkr backup`): `exclusion_report` queries the death
   signals above, reads births with the shared module's query, and calls
   the shared predicate; every triple mentioning an excluded person is
-  still dropped, and excerpts still never leave.
+  still dropped. (Amended by #363: the export is a non-privileged view,
+  and an excerpt leaves with the statement it attests; see below.)
 - **Private static site** (`yizkr publish-site`): includes everyone but
   badges each subject the export would drop ("possibly living — never in
   public exports"), computed at render time with the same births query
@@ -277,12 +280,24 @@ from the database while the check reads the query service. Now:
 The rulings dated 2026-09-29 are the owner's, on the questions this
 amendment raised.
 
-Amended by #363 (2026-09-29): what the export keeps of the items it
-keeps fails closed too. An event that an item it leaves out took part
-in, and free text on any item, could still name that item or give its
-facts: the birth event of a possibly living person, say, lost its
-participant but kept its label and its date. Now:
+Amended by #363 (2026-09-29): the export is a non-privileged view. The
+owner decided (2026-09-29): "I don't intend to make a completely public
+copy, so any non-privileged view can include all information on
+confirmed-deceased people." The export, still written as
+`public.nt.gz`, is that view, and what it keeps of the items it keeps
+follows:
 
+- **Everything about a released person stays, text included**: their
+  labels, descriptions, aliases, names and titles, their statements'
+  values, and the excerpts of the references those statements keep. So
+  does everything about an item that is no person: a place, an
+  organization, an artifact, the vocabulary, an event whose
+  participants are all released. A transcription excerpt leaves with the
+  statement it attests, and goes with a statement dropped: a reference
+  that no statement kept derives from is swept. Accepted consequence:
+  free text about a released person, or a document's title, can name a
+  possibly living relative, and it is visible in the non-privileged
+  view. A public copy would need rules of its own (#163).
 - **An event goes with its participants** (#363). An event stands for
   those who took part in it, as a family stands for its people: its
   date and place are theirs, and its label is written after them ("Death
@@ -295,33 +310,26 @@ participant but kept its label and its date. Now:
   participant, so the rule applies again until no more go, and a
   redirect to such an event goes with it. An event whose participants
   are all kept stays.
-- **No free text leaves but the vocabulary's** (#363). A label, a
-  description, an alias, a name, a title, a cause of death, and in a
-  reference an excerpt, a page number or any other text snak, whatever
-  its property, can name anyone, a person the export leaves out
-  included: an event is labelled after its participants, a family's
-  description names its members, an artifact's title can name its
-  subject, and a person's description is a summary of their dates and
-  kin. The export does not read wording to tell (no word lists, no
-  name-guessing), so it leaves out every triple whose object is free
-  text (`backup.filter_public_export`, its fourth filter): every literal
-  but a time, a number or a coordinate, as dumpRdf.php types them
-  (`xsd:dateTime`, `xsd:integer`, `xsd:decimal`, `xsd:double`,
-  `geo:wktLiteral`). A plain string, a text in a language and a literal of
-  any other type are free text; so is a date dumpRdf.php could not type,
-  which it writes as a plain string. Two kinds of text are kept, as
-  their provenance names no one: the terms (label, description, aliases)
-  of the vocabulary's items and properties, which the model manifest
-  gives, and the dump's header, whose format version is what a loader
-  reads the dump by. A statement or a reference whose value is text
-  keeps its node, rank, qualifiers and references, or the items it
-  cites, without the text; transcription excerpts go by this rule as
-  well as by their own. Only literals are read: no property of the
-  vocabulary takes a link (a URL, a media file, a shape), whose IRI
-  would carry text, and the instance keeps no sitelinks; a unit test
-  holds the manifest to that. So the public copy names no one: its
-  people, places, events, artifacts and organizations are known there by
-  QID, type, dates and links alone.
+- **The judgement notes never leave** (ADR-0035): the export drops every
+  snak of the `judgement` and `judgement_note` properties, in any form,
+  a reference's included (`backup.DROPPED_PROPERTIES`). They are the
+  extractor's remarks on its own reading, not information on anyone. A
+  property the instance's vocabulary does not yet hold drops nothing.
+- **The export reads the dump strictly.** A line that is not a triple as
+  dumpRdf.php writes one (a subject, a predicate and an object, one space
+  apart, and a closing dot) is dropped, whatever it holds, and lines end
+  at a newline alone.
+- **It refuses a dump it is not made to filter** (`UnfilterableDump`,
+  recorded by the backup as a lagging query service is). A sitelink: its
+  page's own triples (its name, its language, its site) never name the
+  entity it is about, so leaving the entity out would leave its page's
+  name behind. Or a property of a type the model does not use, anything
+  but an item, a string, a monolingual text, an external identifier, a
+  time, a quantity or a globe coordinate (a URL, a media file, a shape),
+  whose values the export has not been reviewed for. A unit test holds
+  the manifest to the model's types. The unit, calendar and globe of a
+  quantity, a time or a coordinate are IRIs that carry no text: Wikibase
+  takes each only as an entity's IRI.
 
 ### 5. Vocabulary retired
 
@@ -350,10 +358,12 @@ is strictly safer, since the determination is now absence-of-death only.
    with person evidence, read at every rank, that the check has not
    released, every item that states no type, and every family (#374
    holds the full rule for families), and refuses to run while the query
-   service does not hold the dump's revisions (amended by #344). It drops
-   every event that an item it drops took part in, and carries no free
-   text but the vocabulary's terms and the dump's header (amended by
-   #363).
+   service does not hold the dump's revisions (amended by #344). It is a
+   non-privileged view: it keeps everything about released people and
+   items that are no person, text included, drops every event that an
+   item it drops took part in and the judgement notes, and refuses a dump
+   that holds a sitelink or a property of another type than the model's
+   (amended by #363).
 
 ## Consequences
 
@@ -378,16 +388,17 @@ is strictly safer, since the determination is now absence-of-death only.
   is typed. An item that a person-only statement marks is dropped as a
   person (a place with a nickname, a firm with an occupation), and that
   statement keeps it out at any rank: fail closed, accepted.
-- The public copy names no one (amended by #363): no label, description,
-  alias or other text leaves but the vocabulary's, so a reader of it
-  sees who is linked to whom, and when and where, by QID, but not what
-  anyone or anything is called, and a site built from it (#163) can show
-  no names. Text leaves only once a rule can know that it names no one
-  left out; none is given yet. An event with a participant left out goes
-  whole: a marriage of a released person and a possibly living one, and,
-  while every family is left out, every event a family took part in.
-  An item that is no event but carries a `participant` statement goes by
-  the same rule.
+- The export is a non-privileged view, not a public copy (amended by
+  #363; the owner, 2026-09-29): every text recorded about a released
+  person or an item that is no person leaves with it, a source's excerpt
+  included, so a text can name a possibly living relative. An event with
+  a participant left out goes whole: a marriage of a released person and
+  a possibly living one, and, while every family is left out, every
+  event a family took part in. An item that is no event but carries a
+  `participant` statement goes by the same rule. A dump that holds a
+  sitelink or a property of another type than the model's makes the
+  export refuse until it is removed: the backup keeps its other dumps and
+  records the refusal.
 - Docs move with the code: MODELING.md "Living persons and privacy",
   `deploy/README.md`, and `pipeline/README.md` are updated in the same
   change; ADR-0018's exclusion note now points here.

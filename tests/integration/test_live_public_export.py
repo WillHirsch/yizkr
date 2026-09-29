@@ -1,7 +1,8 @@
-"""Live validation that the public export keeps only the people the check
-releases, and leaves out what states no type (#344), the events of those
-it leaves out, and every free text but the vocabulary's (#363; ADR-0020;
-docs/MODELING.md, "Living persons and privacy").
+"""Live validation that the non-privileged export (public.nt.gz) keeps
+only the people the check releases, and leaves out what states no type
+(#344) and the events of those it leaves out, while every text about what
+it keeps stays (#363; ADR-0020; docs/MODELING.md, "Living persons and
+privacy").
 
 A fictional fixture writes, under labels that carry a marker of the
 fixture's content (test_live_privacy.py's write_fixture):
@@ -19,12 +20,12 @@ fixture's content (test_live_privacy.py's write_fixture):
 * a family with a religion, which is no person evidence: the export
   leaves every family out, as any of its people may be living;
 * a person typed human and born in 1990, "Named In Text", whom texts on
-  other items name: a birth event they take part in, labelled for them
-  and dated 1990; the family's description; the released person's
-  description; and a letter's title, its page's label and description,
-  and its file's name, which is made from the title. The letter is the
-  source of their birth, and the excerpt of the released person's death
-  names them too.
+  other items name: a birth event they take part in, labelled "Birth of"
+  and their label, and dated 1990; the family's description; the
+  released person's description; and a letter's title, its page's label
+  and description, and its file's name, which is made from the title.
+  The letter is the source of their birth, and the excerpt of the
+  released person's death names them too.
 
 The two whose type a curator deprecated or outranked carry a religion
 beside it, which is no person evidence, so that their type is what marks
@@ -38,16 +39,19 @@ public export in full. A vessel's part in a migration does not make it a
 person, but a `human` type at any rank does. An item that states no type
 is left out, whatever else it holds, and a redirect goes with the item it
 redirects to. An event that one of those left out takes part in is left
-out too: the migration, for its vessel typed human, and the birth. No
-label, description, alias or other text leaves but the vocabulary's.
+out too: the migration, for its vessel typed human, and the birth. Every
+text about what the export keeps stays, one naming a possibly living
+person included (owner, 2026-09-29).
 
 The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes the
-public export from it, and reads public.nt.gz: it mentions the released
-person, the plain vessel, the letter and its page by QID, and none of the
-others, the label-only item, the family, the redirect, the migration and
-the birth included; no text in it spells "Named In Text", in any case or
-with any separators; the kept fixture items keep no label, description
-or alias; and the vocabulary keeps its own. The export first waits for
+export from it, and reads public.nt.gz: it mentions the released person,
+the plain vessel, the letter and its page by QID, and none of the others,
+the label-only item, the family, the redirect, the migration and the
+birth included. The released person's description and death excerpt,
+the letter's title and its page's label and description leave as
+written, "Named In Text" and all; the labels of the person named, of
+their birth, and the family's description do not; and the vocabulary
+keeps its terms. The export first waits for
 the query service to hold the dump's revision of every item and
 property, a redirect's aside, so on a stack at rest, a merge included,
 the export must run, not refuse. The site lists the eight that have
@@ -87,10 +91,8 @@ QID_TOKEN = re.compile(r"Q[1-9]\d*\b")
 LABEL_ONLY = "Export Fixture Label Only"
 MERGED_AWAY = "Export Fixture Merged Away"
 # the person whom texts on other items name, the export leaves out (born
-# in 1990); their name in any case, with any separators, as a file's name
-# made from a title spells it
+# in 1990)
 NAMED = "Export Fixture Named In Text"
-NAMED_ANYHOW = re.compile(r"named[\W_]*in[\W_]*text", re.IGNORECASE)
 LETTER = f"Export fixture letter to {NAMED}"
 # the predicates of an entity's terms: its label, under each of the three
 # names dumpRdf.php gives one, its description and its aliases
@@ -104,12 +106,15 @@ TERMS = (
 
 
 def local(
-    role: str, kind: str | None = "human", description: str | None = None
+    role: str,
+    kind: str | None = "human",
+    description: str | None = None,
+    label: str | None = None,
 ) -> dict:
     ref = {
         "kind": "local",
         "local_id": f"export-{role.replace(' ', '-')}",
-        "label": f"Export Fixture {role.title()}",
+        "label": label or f"Export Fixture {role.title()}",
     }
     if kind:
         ref["instance_of"] = kind
@@ -132,7 +137,11 @@ ENTITIES = {
         "family", kind="family", description=f"the family of {NAMED}"
     ),
     "named in text": local("named in text"),
-    "birth of named in text": local("birth of named in text", kind="birth"),
+    # labelled after its participant, as an event's label is: "Birth of"
+    # and the person's label, verbatim
+    "birth of named in text": local(
+        "birth of named in text", kind="birth", label=f"Birth of {NAMED}"
+    ),
 }
 # the roles public.nt.gz mentions; every other one (the item with a label
 # only, and the redirect a merge leaves, too) it leaves out
@@ -482,22 +491,38 @@ def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
         )
 
 
-def test_no_free_text_but_the_vocabularys_leaves(
+def test_what_is_kept_leaves_with_its_text(
     config, client, fixture_graph, exported
 ):
     lines = public_lines(exported)
-    # no text names the person left out: not a label, a description, a
-    # title, an excerpt or a file's name
-    assert not [line for line in lines if NAMED_ANYHOW.search(line)]
-    # the fixture's kept items keep no terms of their own
-    kept = tuple(f"/entity/{fixture_graph[role]}>" for role in PRESENT)
-    assert not [
-        line
-        for line in lines
-        if line.split(" ", 1)[0].endswith(kept)
-        and line.split(" ", 2)[1] in TERMS
-    ]
-    # while the vocabulary keeps its own
+    text = "\n".join(lines)
+
+    def term(role: str, terms: str) -> str:
+        entity = client.wbi.item.get(fixture_graph[role])
+        return f'"{getattr(entity, terms).get("en")}"@en'
+
+    # every text about what the export keeps stays, as written, one that
+    # names the person it leaves out included (owner, 2026-09-29): the
+    # released person's description and their death's excerpt, the
+    # letter's title and its page's label and description
+    for role, terms in (
+        ("released", "descriptions"),
+        ("letter", "labels"),
+        ("letter page", "labels"),
+        ("letter page", "descriptions"),
+    ):
+        assert NAMED in term(role, terms)
+        assert term(role, terms) in text
+    assert f'"the father of {NAMED} died in 1995"@en' in text
+    # what is recorded about what it leaves out goes with it: the named
+    # person's label, their birth's, and the family's description
+    for role, terms in (
+        ("named in text", "labels"),
+        ("birth of named in text", "labels"),
+        ("family", "descriptions"),
+    ):
+        assert term(role, terms) not in text
+    # and the vocabulary keeps its terms
     _, items = client.vocabulary()
     human = f"<{config.concept_uri}/entity/{items['human']}>"
     assert f'{human} {TERMS[0]} "human"@en .' in lines

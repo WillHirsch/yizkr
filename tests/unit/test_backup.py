@@ -6,8 +6,8 @@ reads person evidence from its own dump, at every rank, and drops every
 item with any that the check did not release, and every item that states
 no type; and it refuses to run while the query service, where the check
 runs, lags the dump. It drops every event that an item it drops took
-part in, and carries no free text but the vocabulary's (#363): a label,
-a description or a title can name a person it leaves out."""
+part in, and the judgement notes, and keeps every text about what it
+keeps: it is a non-privileged view (#363; the owner, 2026-09-29)."""
 
 import datetime
 import gzip
@@ -54,7 +54,7 @@ from yizkr.backup import (
 )
 from yizkr.core.config import Config
 from yizkr.core.privacy import BIRTHS_QUERY, people_selection
-from yizkr.model.schema import read_manifest_data
+from yizkr.model.schema import load_manifest, read_manifest_data
 from yizkr.queries.publish import prefix_block
 
 
@@ -166,49 +166,99 @@ REF_DEAD = "a" * 40  # reference used only by the excluded person
 REF_SHARED = "b" * 40  # reference used by an included person too
 VALUE_DEAD = "c" * 40  # value node reachable only via REF_DEAD
 VALUE_LIVE = "d" * 40  # value node reachable via REF_SHARED
-# a time, typed as dumpRdf.php types one: no free text (#363)
+REF_TEXT = "e" * 40  # a reference with a page number and an excerpt
+REF_RUN = "1" * 40  # a run's reference, with a judgement note
 TIME = "^^<http://www.w3.org/2001/XMLSchema#dateTime>"
+W = "http://w.lan"
+RDFS_LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
+PREF_LABEL = "<http://www.w3.org/2004/02/skos/core#prefLabel>"
+ALT_LABEL = "<http://www.w3.org/2004/02/skos/core#altLabel>"
+NAME = "<http://schema.org/name>"
+# the three names dumpRdf.php gives an entity's label
+LABELS = (RDFS_LABEL, PREF_LABEL, NAME)
+DESCRIPTION = "<http://schema.org/description>"
+DERIVED_FROM = "<http://www.w3.org/ns/prov#wasDerivedFrom>"
+# the datatypes of the properties the export is made to filter
+READABLE_DATATYPES = {
+    "wikibase-item",
+    "string",
+    "monolingualtext",
+    "external-id",
+    "time",
+    "quantity",
+    "globe-coordinate",
+}
+
+
+def rdf_type(datatype: str) -> str:
+    """The name Wikibase gives a datatype in its RDF, as a property's
+    wikibase:propertyType: each word of it capitalised, run together."""
+    return "".join(
+        word[:1].upper() + word[1:]
+        for word in datatype.replace("-", " ").split()
+    )
+
+
+def nt(text: str) -> str:
+    """`text` as dumpRdf.php writes a literal's lexical form: a quote, a
+    backslash and a control character escaped, and every character
+    outside printable ASCII as \\u or \\U."""
+    escapes = {
+        '"': '\\"',
+        "\\": "\\\\",
+        "\b": "\\b",
+        "\t": "\\t",
+        "\n": "\\n",
+        "\f": "\\f",
+        "\r": "\\r",
+    }
+    return "".join(
+        escapes.get(char)
+        or (
+            char
+            if 0x20 <= ord(char) < 0x7F
+            else f"\\u{ord(char):04X}"
+            if ord(char) < 0x10000
+            else f"\\U{ord(char):08X}"
+        )
+        for char in text
+    )
 
 
 class TestPublicFilter:
     LINES = [
         # the excluded person's own triples: entity, statement node, sitelink
-        '<http://w.lan/entity/Q76> <http://x/p> "Nicholas" .',
+        f'<http://w.lan/entity/Q76> {RDFS_LABEL} "Nicholas"@en .',
         f'<http://w.lan/entity/statement/Q76-aaaa-bbbb> <http://x/p> "1950-01-01T00:00:00Z"{TIME} .',  # noqa: E501
         "<http://w.lan/wiki/Item:Q76> <http://schema.org/about> <http://w.lan/entity/Q76> .",  # noqa: E501
         # someone else's claim ABOUT the excluded person
         "<http://w.lan/entity/Q72> <http://w.lan/prop/direct/P7> <http://w.lan/entity/Q76> .",  # noqa: E501
         # an includable person whose QID shares a prefix (Q7 vs Q76)
-        '<http://w.lan/entity/Q7> <http://x/p> "Gustav" .',
+        f'<http://w.lan/entity/Q7> {RDFS_LABEL} "Gustav"@en .',
         # unrelated triple
-        '<http://w.lan/entity/Q100> <http://x/p> "place" .',
+        f'<http://w.lan/entity/Q100> {RDFS_LABEL} "place"@en .',
         # provenance: the excluded person's statement uses REF_DEAD
-        f"<http://w.lan/entity/statement/Q76-cccc> <http://www.w3.org/ns/prov#wasDerivedFrom> <http://w.lan/reference/{REF_DEAD}> .",  # noqa: E501
+        f"<http://w.lan/entity/statement/Q76-cccc> {DERIVED_FROM} <http://w.lan/reference/{REF_DEAD}> .",  # noqa: E501
         # REF_DEAD's content quotes source text naming the living person
         f'<http://w.lan/reference/{REF_DEAD}> <http://w.lan/prop/reference/P8> "Nicholas 1950"@en .',  # noqa: E501
         f"<http://w.lan/reference/{REF_DEAD}> <http://w.lan/prop/reference/value/P9> <http://w.lan/value/{VALUE_DEAD}> .",  # noqa: E501
         f'<http://w.lan/value/{VALUE_DEAD}> <http://x/time> "1950-01-01T00:00:00Z"{TIME} .',  # noqa: E501
         # provenance shared with an included person's statement
-        f"<http://w.lan/entity/statement/Q7-dddd> <http://www.w3.org/ns/prov#wasDerivedFrom> <http://w.lan/reference/{REF_SHARED}> .",  # noqa: E501
+        f"<http://w.lan/entity/statement/Q7-dddd> {DERIVED_FROM} <http://w.lan/reference/{REF_SHARED}> .",  # noqa: E501
         f"<http://w.lan/reference/{REF_SHARED}> <http://w.lan/prop/reference/P8> \"Gustav 'Gustl' 1919\"@en .",  # noqa: E501
         f"<http://w.lan/reference/{REF_SHARED}> <http://w.lan/prop/reference/value/P9> <http://w.lan/value/{VALUE_LIVE}> .",  # noqa: E501
         f'<http://w.lan/value/{VALUE_LIVE}> <http://x/time> "1919-01-01T00:00:00Z"{TIME} .',  # noqa: E501
     ]
-    # The entities whose own text these tests keep, as the export keeps
-    # the vocabulary's, so that each rule here is seen on its own; the
-    # free text has tests of its own (TestTheFreeText). An excerpt is text
-    # on a reference, which no vocabulary holds.
-    TEXT_KEPT = {"Q7", "Q72", "Q76", "Q100"}
 
     def filter(
-        self, tmp_path: Path, excluded: set[str], excerpt_pids=frozenset()
+        self, tmp_path: Path, excluded: set[str], dropped_pids=frozenset()
     ):
         full = tmp_path / "full.nt.gz"
         public = tmp_path / "public.nt.gz"
         with gzip.open(full, "wt") as handle:
             handle.write("\n".join(self.LINES) + "\n")
         kept, dropped = filter_public_export(
-            full, public, excluded, excerpt_pids, vocabulary=self.TEXT_KEPT
+            full, public, excluded, dropped_pids
         )
         with gzip.open(public, "rt") as handle:
             return kept, dropped, handle.read()
@@ -231,12 +281,21 @@ class TestPublicFilter:
         assert REF_SHARED in content
         assert VALUE_LIVE in content
 
-    def test_excerpts_never_enter_the_public_export(self, tmp_path):
-        _, _, content = self.filter(tmp_path, set(), excerpt_pids={"P8"})
-        assert (
-            "Gustav 'Gustl' 1919" not in content
-        )  # excerpt gone even for the dead
-        assert REF_SHARED in content  # the reference node itself survives
+    def test_an_excerpt_leaves_with_the_statement_it_attests(self, tmp_path):
+        # what is recorded about a person the check releases stays, the
+        # source's own words included (owner, 2026-09-29; #363); the
+        # excerpt of a dropped statement goes with it
+        _, _, content = self.filter(tmp_path, {"Q76"})
+        assert "Gustav 'Gustl' 1919" in content
+        assert "Nicholas 1950" not in content
+
+    def test_a_dropped_property_never_leaves(self, tmp_path):
+        # P8 as a judgement note's property (#363; ADR-0035), on every
+        # reference; the reference nodes themselves survive
+        _, _, content = self.filter(tmp_path, set(), dropped_pids={"P8"})
+        assert "Gustav 'Gustl' 1919" not in content
+        assert "Nicholas 1950" not in content
+        assert REF_SHARED in content
         assert VALUE_LIVE in content
 
     def test_qid_prefix_does_not_collide(self, tmp_path):
@@ -244,192 +303,107 @@ class TestPublicFilter:
         assert "Gustav" not in content
         assert '"Nicholas"' in content  # Q76 untouched by excluding Q7
 
-    def test_no_exclusions_passes_everything_but_free_text(self, tmp_path):
-        # the two excerpts are text on a reference, which leaves at no time
-        kept, dropped, content = self.filter(tmp_path, set())
-        assert (kept, dropped) == (len(self.LINES) - 2, 2)
-        assert "Nicholas 1950" not in content
-        assert "Gustav 'Gustl' 1919" not in content
+    def test_no_exclusions_passes_everything(self, tmp_path):
+        kept, dropped, _ = self.filter(tmp_path, set())
+        assert (kept, dropped) == (len(self.LINES), 0)
 
 
-W = "http://w.lan"
-RDFS_LABEL = "<http://www.w3.org/2000/01/rdf-schema#label>"
-PREF_LABEL = "<http://www.w3.org/2004/02/skos/core#prefLabel>"
-ALT_LABEL = "<http://www.w3.org/2004/02/skos/core#altLabel>"
-NAME = "<http://schema.org/name>"
-# the three names dumpRdf.php gives an entity's label
-LABELS = (RDFS_LABEL, PREF_LABEL, NAME)
-DESCRIPTION = "<http://schema.org/description>"
-DERIVED_FROM = "<http://www.w3.org/ns/prov#wasDerivedFrom>"
-INTEGER = "^^<http://www.w3.org/2001/XMLSchema#integer>"
-REF_TEXT = "e" * 40  # a reference with a page number and an excerpt
-REF_RUN = "1" * 40  # a run's reference, with a note of the model's
-VALUE_TIME = "f" * 40  # a time's value node
-VALUE_PLACE = "0" * 40  # a coordinate's value node
+class TestWhatTheFilterReads:
+    """The filter reads each line as a triple dumpRdf.php writes, and drops
+    a line it cannot read (#363). Text leaves as it is: whatever is
+    recorded about what the export keeps, a released person's text
+    included (owner, 2026-09-29). The judgement notes' properties, P21 and
+    P22 here, go in any form (ADR-0035)."""
 
-
-class TestTheFreeText:
-    """The public export carries no free text but the vocabulary's (#363):
-    a label, a description, an alias, a name, a title, or a reference's
-    excerpt, page number or note can name a person the export leaves
-    out, and no wording is read to tell. A time, a number or a coordinate
-    is no free text. The vocabulary here is the class Q1 and the property
-    P5; Q300 is a released person, Q301 an artifact and Q302 an
-    extraction run, all kept."""
-
-    # the dump's header, with the format version loaders read
-    HEADER = [
-        "<http://wikiba.se/ontology#Dump> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://schema.org/Dataset> .",  # noqa: E501
-        '<http://wikiba.se/ontology#Dump> <http://schema.org/softwareVersion> "1.0.0" .',  # noqa: E501
-        f'<http://wikiba.se/ontology#Dump> <http://schema.org/dateModified> "2026-09-29T03:15:00Z"{TIME} .',  # noqa: E501
-    ]
-    # the vocabulary's own terms, as the model manifest gives them
-    TERMS = [
-        f'<{W}/entity/Q1> {RDFS_LABEL} "human"@en .',
-        f'<{W}/entity/Q1> {PREF_LABEL} "human"@en .',
-        f'<{W}/entity/Q1> {NAME} "human"@en .',
-        f'<{W}/entity/Q1> {DESCRIPTION} "person known to the archive"@en .',
-        f'<{W}/entity/Q1> {ALT_LABEL} "person"@en .',
-        f'<{W}/entity/P5> {RDFS_LABEL} "date of birth"@en .',
-        f'<{W}/entity/P5> {DESCRIPTION} "date on which the subject was born"@en .',  # noqa: E501
-    ]
-    # the kept items and their statements: every node, and the values that
-    # are a time, a number or a coordinate
-    STRUCTURE = [
-        f"<{W}/entity/Q1> <{W}/prop/P9> <{W}/entity/statement/Q1-aaaa> .",
-        f"<{W}/entity/Q300> <{W}/prop/P10> <{W}/entity/statement/Q300-bbbb> .",  # noqa: E501
-        f"<{W}/entity/statement/Q300-bbbb> <http://wikiba.se/ontology#rank> <http://wikiba.se/ontology#NormalRank> .",  # noqa: E501
+    # lines that leave as they are: a label under each of its three names,
+    # a description that names a possibly living relative, an alias, a
+    # name as a statement's value, a string qualifier with quotes, a
+    # reference's page number and excerpt, a date dumpRdf.php could not
+    # type, a literal of any other type, the header's version, blank
+    # nodes, and a property whose id begins as a note's does
+    READABLE = [
+        f'<{W}/entity/Q300> {RDFS_LABEL} "Gustav L\\u00F6big"@de .',
+        f'<{W}/entity/Q300> {PREF_LABEL} "Gustav L\\u00F6big"@de .',
+        f'<{W}/entity/Q300> {NAME} "Gustav L\\u00F6big"@de .',
+        f'<{W}/entity/Q300> {DESCRIPTION} "father of Nicholas Lobig, born 1950"@en .',  # noqa: E501
+        f'<{W}/entity/Q300> {ALT_LABEL} "Gustl"@de-ch .',
+        f'<{W}/entity/statement/Q300-bbbb> <{W}/prop/statement/P10> "Gustav L\\u00F6big"@de .',  # noqa: E501
+        f'<{W}/entity/statement/Q300-bbbb> <{W}/prop/qualifier/P11> "son of \\"Wastl\\"" .',  # noqa: E501
         f"<{W}/entity/statement/Q300-bbbb> {DERIVED_FROM} <{W}/reference/{REF_TEXT}> .",  # noqa: E501
-        f"<{W}/reference/{REF_TEXT}> <{W}/prop/reference/P12> <{W}/entity/Q301> .",  # noqa: E501
+        f'<{W}/reference/{REF_TEXT}> <{W}/prop/reference/P13> "6" .',
+        f'<{W}/reference/{REF_TEXT}> <{W}/prop/reference/P3> "Gustav, Vater von Nicholas Lobig"@de .',  # noqa: E501
         f"<{W}/entity/statement/Q300-bbbb> {DERIVED_FROM} <{W}/reference/{REF_RUN}> .",  # noqa: E501
         f"<{W}/reference/{REF_RUN}> <{W}/prop/reference/P20> <{W}/entity/Q302> .",  # noqa: E501
-        f"<{W}/entity/Q301> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://wikiba.se/ontology#Item> .",  # noqa: E501
-        f'<{W}/entity/Q300> <{W}/prop/direct/P5> "1919-01-07T00:00:00Z"{TIME} .',  # noqa: E501
-        f"<{W}/entity/Q300> <{W}/prop/P5> <{W}/entity/statement/Q300-cccc> .",
-        f"<{W}/entity/statement/Q300-cccc> <{W}/prop/statement/value/P5> <{W}/value/{VALUE_TIME}> .",  # noqa: E501
-        f'<{W}/value/{VALUE_TIME}> <http://wikiba.se/ontology#timeValue> "1919-01-07T00:00:00Z"{TIME} .',  # noqa: E501
-        f'<{W}/value/{VALUE_TIME}> <http://wikiba.se/ontology#timePrecision> "11"{INTEGER} .',  # noqa: E501
-        f'<{W}/entity/Q300> <{W}/prop/direct/P14> "+2"^^<http://www.w3.org/2001/XMLSchema#decimal> .',  # noqa: E501
-        f'<{W}/entity/Q301> <{W}/prop/direct/P15> "Point(0 0)"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .',  # noqa: E501
-        f"<{W}/entity/Q301> <{W}/prop/P15> <{W}/entity/statement/Q301-dddd> .",
-        f"<{W}/entity/statement/Q301-dddd> <{W}/prop/statement/value/P15> <{W}/value/{VALUE_PLACE}> .",  # noqa: E501
-        f'<{W}/value/{VALUE_PLACE}> <http://wikiba.se/ontology#geoLatitude> "0.0"^^<http://www.w3.org/2001/XMLSchema#double> .',  # noqa: E501
-    ]
-    KEPT = HEADER + TERMS + STRUCTURE
-    # what goes: every other literal, typed or not
-    TEXT = [
-        # a released person's terms, as the extraction wrote them
-        f'<{W}/entity/Q300> {RDFS_LABEL} "Gustav Löbig"@de .',
-        f'<{W}/entity/Q300> {PREF_LABEL} "Gustav Löbig"@de .',
-        f'<{W}/entity/Q300> {NAME} "Gustav Löbig"@de .',
-        f'<{W}/entity/Q300> {DESCRIPTION} "father of Nicholas Lobig, born 1950"@en .',  # noqa: E501
-        f'<{W}/entity/Q300> {ALT_LABEL} "Gustave Lobig"@en .',
-        f'<{W}/entity/Q300> {ALT_LABEL} "Gustl"@de-ch .',
-        # a name as a statement's value, and its truthy form
-        f'<{W}/entity/statement/Q300-bbbb> <{W}/prop/statement/P10> "Gustav Löbig"@de .',  # noqa: E501
-        f'<{W}/entity/Q300> <{W}/prop/direct/P10> "Gustav Löbig"@de .',
-        # a string qualifier, quoting within its quotes
-        f'<{W}/entity/statement/Q300-bbbb> <{W}/prop/qualifier/P11> "son of \\"Wastl\\", father of Nicholas ." .',  # noqa: E501
-        # a reference's page number and excerpt, and a note of the model's
-        # in a run's reference, of any reference property
-        f'<{W}/reference/{REF_TEXT}> <{W}/prop/reference/P13> "6, the entry for Nicholas Lobig" .',  # noqa: E501
-        f'<{W}/reference/{REF_TEXT}> <{W}/prop/reference/P3> "Gustav, Vater von Nicholas Lobig"@de .',  # noqa: E501
-        f'<{W}/reference/{REF_RUN}> <{W}/prop/reference/P21> "identity" .',
-        f'<{W}/reference/{REF_RUN}> <{W}/prop/reference/P22> "took the Nicholas of the letter for Nicholas Lobig"@en .',  # noqa: E501
-        # a vocabulary item's statement is no term of its own
-        f'<{W}/entity/statement/Q1-aaaa> <{W}/prop/statement/P9> "Nicholas Lobig" .',  # noqa: E501
-        # a date dumpRdf.php cannot type, which it writes as a string
+        f'<{W}/reference/{REF_RUN}> <{W}/prop/reference/P220> "kept" .',
         f'<{W}/entity/Q300> <{W}/prop/direct/P5> "+1950-00-00T00:00:00Z" .',
-        # a literal of any other type
-        f'<{W}/entity/Q300> <{W}/prop/direct/P16> "Nicholas Lobig"^^<http://www.w3.org/2001/XMLSchema#string> .',  # noqa: E501
-        f'<{W}/entity/Q300> <{W}/prop/direct/P16> "Nicholas"^^<http://www.w3.org/1998/Math/MathML> .',  # noqa: E501
-        # an artifact's title and its media file's name
-        f'<{W}/entity/Q301> {RDFS_LABEL} "A few pages of family history, by Nicholas Lobig"@en .',  # noqa: E501
-        f'<{W}/entity/Q301> <{W}/prop/direct/P18> "File:Nicholas Lobig family history.png" .',  # noqa: E501
+        f'<{W}/entity/Q300> <{W}/prop/direct/P16> "x"^^<http://www.w3.org/1998/Math/MathML> .',  # noqa: E501
+        '<http://wikiba.se/ontology#Dump> <http://schema.org/softwareVersion> "1.0.0" .',  # noqa: E501
+        f"<{W}/prop/novalue/P10> <http://www.w3.org/2002/07/owl#complementOf> _:genid1 .",  # noqa: E501
+        f"_:genid1 <http://www.w3.org/2002/07/owl#onProperty> <{W}/prop/direct/P10> .",  # noqa: E501
+    ]
+    # the judgement notes, in every form one could take: a category and a
+    # sentence in a run's reference, as ADR-0035 writes them, a
+    # qualifier, a statement's link, its value and its truthy form
+    NOTES = [
+        f"<{W}/reference/{REF_RUN}> <{W}/prop/reference/P21> <{W}/entity/Q303> .",  # noqa: E501
+        f'<{W}/reference/{REF_RUN}> <{W}/prop/reference/P22> "took the Nicholas of the letter for Nicholas Lobig"@en .',  # noqa: E501
+        f'<{W}/entity/statement/Q300-bbbb> <{W}/prop/qualifier/P22> "a note as a qualifier" .',  # noqa: E501
+        f"<{W}/entity/Q300> <{W}/prop/P22> <{W}/entity/statement/Q300-eeee> .",
+        f'<{W}/entity/statement/Q300-eeee> <{W}/prop/statement/P22> "a note as a value" .',  # noqa: E501
+        f'<{W}/entity/Q300> <{W}/prop/direct/P22> "a note as a value" .',
+    ]
+    # lines that are no triple as dumpRdf.php writes one: tab-separated,
+    # spaced twice, without the closing dot, a bare text, and one line
+    # that a raw carriage return runs through, read as one
+    UNREADABLE = [
+        f'<{W}/entity/Q300>\t{RDFS_LABEL}\t"Nicholas Lobig"@en .',
+        f'<{W}/entity/Q300>  {RDFS_LABEL} "Nicholas Lobig"@en .',
+        f'<{W}/entity/Q300> {RDFS_LABEL} "Nicholas Lobig"@en',
+        "Nicholas Lobig",
+        f'<{W}/entity/Q300> {ALT_LABEL} "Nicholas\rLobig"@en .',
     ]
 
-    def filter(self, tmp_path: Path, vocabulary) -> tuple[int, int, list]:
+    def filter(self, tmp_path: Path, dropped_pids) -> tuple[int, int, list]:
         full = tmp_path / "full.nt.gz"
         public = tmp_path / "public.nt.gz"
         with gzip.open(full, "wt", encoding="utf-8") as handle:
-            handle.write("\n".join(self.TEXT + self.KEPT) + "\n")
-        kept, dropped = filter_public_export(
-            full, public, set(), vocabulary=vocabulary
+            handle.write(
+                "\n".join(self.READABLE + self.NOTES + self.UNREADABLE) + "\n"
+            )
+        kept, dropped = filter_public_export(full, public, set(), dropped_pids)
+        with gzip.open(public, "rt", encoding="utf-8", newline="\n") as handle:
+            return kept, dropped, handle.read().split("\n")[:-1]
+
+    def test_text_leaves_as_it_is_and_the_notes_go(self, tmp_path):
+        kept, dropped, lines = self.filter(tmp_path, {"P21", "P22"})
+        assert lines == self.READABLE
+        assert (kept, dropped) == (
+            len(self.READABLE),
+            len(self.NOTES) + len(self.UNREADABLE),
         )
-        with gzip.open(public, "rt", encoding="utf-8") as handle:
-            return kept, dropped, handle.read().splitlines()
 
-    def test_only_the_vocabularys_text_leaves(self, tmp_path):
-        kept, dropped, lines = self.filter(tmp_path, {"Q1", "P5"})
-        assert lines == self.KEPT
-        assert (kept, dropped) == (len(self.KEPT), len(self.TEXT))
-
-    def test_no_text_leaves_by_default_but_the_headers(self, tmp_path):
-        # with no vocabulary named, even the vocabulary's terms go
-        _, _, lines = self.filter(tmp_path, frozenset())
-        assert lines == self.HEADER + self.STRUCTURE
-
-    def test_no_text_of_a_reference_leaves(self, tmp_path):
-        # an excerpt that names a person the export leaves out goes with
-        # no excerpt property named, and so do a page number and a note
-        # in a run's reference, whatever their property; the references
-        # keep what they cite
-        _, _, lines = self.filter(tmp_path, {"Q1", "P5"})
-        assert [line for line in lines if line.startswith(f"<{W}/ref")] == [
-            f"<{W}/reference/{REF_TEXT}> <{W}/prop/reference/P12> <{W}/entity/Q301> .",  # noqa: E501
-            f"<{W}/reference/{REF_RUN}> <{W}/prop/reference/P20> <{W}/entity/Q302> .",  # noqa: E501
-        ]
-        assert not [line for line in lines if "Nicholas" in line]
-
-    @pytest.mark.parametrize(
-        "term",
-        [
-            '"Nicholas Lobig" .',
-            '"Nicholas Lobig"@en .',
-            '"Gustl"@de-ch .',
-            '"say \\"Nicholas\\" ." .',
-            '"Nicholas"^^<http://www.w3.org/2001/XMLSchema#string> .',
-            '"Nicholas"^^<http://example.org/any-other-type> .',
-            '"+1950-00-00T00:00:00Z" .',
-            '"Nicholas Lobig"@en.',
-            '"Nicholas Lobig" .\n',
-        ],
-    )
-    def test_a_literal_is_free_text(self, term):
-        assert backup._free_text(term)
-
-    @pytest.mark.parametrize(
-        "term",
-        [
-            f'"1950-01-01T00:00:00Z"{TIME} .',
-            f'"11"{INTEGER} .\n',
-            '"+2"^^<http://www.w3.org/2001/XMLSchema#decimal> .',
-            '"0.0"^^<http://www.w3.org/2001/XMLSchema#double> .',
-            '"Point(0 0)"^^<http://www.opengis.net/ont/geosparql#wktLiteral> .',  # noqa: E501
-            f'"1950"{INTEGER}.',
-            "<http://w.lan/entity/Q76> .",
-            "_:genid1 .",
-        ],
-    )
-    def test_a_time_a_number_a_coordinate_or_a_node_is_no_free_text(
-        self, term
+    def test_a_line_it_cannot_read_is_dropped_whatever_it_holds(
+        self, tmp_path
     ):
-        assert not backup._free_text(term)
+        # with no property dropped, the notes leave, and only the lines it
+        # cannot read go: the one a carriage return runs through as one
+        kept, dropped, lines = self.filter(tmp_path, frozenset())
+        assert lines == self.READABLE + self.NOTES
+        assert dropped == len(self.UNREADABLE)
 
     def test_no_property_of_the_vocabulary_takes_a_link(self):
-        # the filter reads text in literals: a URL, a media file or a
-        # shape would be a link, whose text it lets through
+        # the export is made to filter the types the model uses; a URL, a
+        # media file or a shape would make it refuse to run
         assert {
             spec["datatype"] for spec in MANIFEST["properties"].values()
-        } <= {
-            "wikibase-item",
-            "string",
-            "monolingualtext",
-            "external-id",
-            "time",
-            "quantity",
-            "globe-coordinate",
-        }
+        } <= READABLE_DATATYPES
+
+    def test_the_readable_types_are_the_manifests(self):
+        # as the dump names them (wikibase:propertyType)
+        assert {
+            f"<{ONTOLOGY}{rdf_type(datatype)}>"
+            for datatype in READABLE_DATATYPES
+        } == backup._MODEL_TYPES
 
 
 class TestPruning:
@@ -511,14 +485,14 @@ class Dump:
         self.revisions[qid] = revision
         self.lines += [
             f"{entity(qid)} {RDF_TYPE} <{ONTOLOGY}{kind}> .",
-            *(f'{entity(qid)} {term} "{label}"@en .' for term in LABELS),
+            *(f'{entity(qid)} {term} "{nt(label)}"@en .' for term in LABELS),
             *(
-                [f'{entity(qid)} {DESCRIPTION} "{description}"@en .']
+                [f'{entity(qid)} {DESCRIPTION} "{nt(description)}"@en .']
                 if description
                 else []
             ),
             *(
-                f'{entity(qid)} {ALT_LABEL} "{alias}"@en .'
+                f'{entity(qid)} {ALT_LABEL} "{nt(alias)}"@en .'
                 for alias in aliases
             ),
         ]
@@ -666,12 +640,19 @@ DROPPED = (
     | set(EVENTS)
 )
 # Texts that name Nicholas Lobig (born 1950, possibly living), whom no
-# item of the fixture stands for: a released person's description, an
-# artifact's title and its file's name, the description of an event he is
-# not recorded as taking part in, a family's description, and a page
-# number and an excerpt. None leaves, as no free text does but the
-# vocabulary's (#363).
-NAMED = "Nicholas"
+# item of the fixture stands for. On what the export keeps they stay, as
+# every text does there (owner, 2026-09-29; #363): a released person's
+# description, an artifact's title, an event's description, a reference's
+# excerpt and page number. On the family it leaves out, the description
+# goes with it.
+TEXTS_KEPT = [
+    '"father of Nicholas Lobig, born 1950"@en',
+    '"an artifact, A few pages of family history, by Nicholas Lobig"@en',
+    '"a library talk by Nicholas Lobig, 2018"@en',
+    '"Gustav, Vater von Nicholas"@de',
+    '"2, beside Nicholas Lobig"',
+]
+TEXTS_DROPPED = ['"the Lobigs of Stupfield, Nicholas among them"@en']
 # every item that states no type, people included
 NO_TYPE = {
     "Q402",
@@ -688,13 +669,29 @@ NO_TYPE = {
 
 def export_dump(vocabulary) -> Dump:
     properties, items = vocabulary
+    manifest = load_manifest()
     dump = Dump(vocabulary)
     dump.header()
+    # the vocabulary, with the terms and types the manifest gives it
     for key, pid in properties.items():
-        dump.entity(pid, key, kind="Property")
+        spec = manifest.properties[key]
+        dump.entity(
+            pid,
+            spec.label,
+            description=spec.description,
+            aliases=spec.aliases,
+            kind="Property",
+        )
+        dump.lines.append(
+            f"{entity(pid)} <{ONTOLOGY}propertyType> "
+            f"<{ONTOLOGY}{rdf_type(spec.datatype)}> ."
+        )
     for key, qid in items.items():
-        dump.entity(qid, key)
-    # the texts that name Nicholas Lobig (NAMED)
+        spec = manifest.items[key]
+        dump.entity(
+            qid, spec.label, description=spec.description, aliases=spec.aliases
+        )
+    # the texts that name Nicholas Lobig (TEXTS_KEPT, TEXTS_DROPPED)
     texts = {
         "Q401": {
             "description": "father of Nicholas Lobig, born 1950",
@@ -946,6 +943,30 @@ class TestReadDump:
         found = self.reading(tmp_path, vocabulary)
         assert found.participants == PARTICIPANTS
 
+    def test_property_types_and_sitelinks(self, tmp_path, vocabulary):
+        # a property's type, as the dump names it, and what a sitelink's
+        # page is about; an entity's data node is about it too, and is no
+        # sitelink (#363)
+        def build(dump):
+            dump.entity("P900", "homepage", kind="Property")
+            dump.lines += [
+                f"{entity('P900')} <{ONTOLOGY}propertyType> <{ONTOLOGY}Url> .",
+                "<https://el.example/wiki/Page> <http://schema.org/about> "
+                f"{entity('Q450')} .",
+            ]
+
+        found = self.one(tmp_path, vocabulary, build)
+        assert found.property_types == {"P900": f"<{ONTOLOGY}Url>"}
+        assert found.sitelinks == {"Q450"}
+
+    def test_the_fixtures_properties_are_all_readable(
+        self, tmp_path, vocabulary
+    ):
+        properties, _ = vocabulary
+        found = self.reading(tmp_path, vocabulary)
+        assert set(found.property_types) == set(properties.values())
+        assert backup.unfilterable(found) == []
+
     def test_redirects_and_revisions(self, tmp_path, vocabulary):
         _, items = vocabulary
         found = self.reading(tmp_path, vocabulary)
@@ -1106,6 +1127,19 @@ class TestPublicExclusions:
         assert "Q412" not in dropped
         # an event dropped for another reason keeps it
         assert dropped["Q416"] == backup.NO_TYPE
+
+    def test_a_family_or_an_untyped_item_takes_its_event_with_it(self):
+        # each the one participant left out of its event
+        reading = DumpReading(
+            people={"Q401"},
+            families={"Q446"},
+            untyped={"Q429"},
+            participants={"Q480": {"Q401", "Q446"}, "Q481": {"Q429"}},
+        )
+        dropped = public_exclusions(reading, report_of({"Q401"}))
+        left_out = backup.PARTICIPANT_LEFT_OUT.format
+        assert dropped["Q480"] == left_out("Q446")
+        assert dropped["Q481"] == left_out("Q429")
 
     def test_an_event_of_released_people_stays(self):
         # Q401 is released; Q472 carries no person evidence
@@ -1351,40 +1385,65 @@ class TestExportPublic:
         # stay
         assert set(OTHERS) | set(items.values()) <= mentioned
 
-    def test_no_free_text_but_the_vocabularys_leaves(
-        self, tmp_path, vocabulary
-    ):
+    def test_what_is_kept_leaves_with_its_text(self, tmp_path, vocabulary):
+        # every text on what the export keeps stays, one naming a possibly
+        # living relative included (owner, 2026-09-29; #363): a released
+        # person's labels, description, alias and name, an artifact's
+        # title, an event's description, a reference's excerpt and page
+        # number, and the vocabulary's terms as dumpRdf.php writes them
         properties, items = vocabulary
         self.export(tmp_path, vocabulary)
         text, _ = self.public(tmp_path)
-        # nothing names Nicholas Lobig: not a released person's description,
-        # an artifact's title or its file's name, an event's or a family's
-        # description, a page number or an excerpt
-        assert NAMED not in text
-        # every plain string and text in a language left is a term of the
-        # vocabulary's items and properties, or the dump's header's version
-        vocabulary_terms = {
-            entity(qid) for qid in [*properties.values(), *items.values()]
-        }
-        texts = {
-            line.split(" ", 1)[0]
-            for line in text.splitlines()
-            if re.search(r'"(@[a-z-]+)? \.$', line)
-        }
-        assert texts == vocabulary_terms | {f"<{ONTOLOGY}Dump>"}
-        # a released person keeps no label, description or alias; the
-        # statement of a name keeps its node and reference, not its text
+        for kept in TEXTS_KEPT:
+            assert kept in text
         for term in (*LABELS, DESCRIPTION, ALT_LABEL):
-            assert f"{entity('Q401')} {term} " not in text
-        assert '"Gustav Löbig"@de' not in text
+            assert f"{entity('Q401')} {term} " in text
+        assert '"Gustav Löbig"@de' in text
+        family = load_manifest().items["family"]
+        assert (
+            f"{entity(items['family'])} {DESCRIPTION} "
+            f'"{nt(family.description)}"@en .'
+        ) in text
+        # what is recorded about an item left out goes with it: the
+        # description of a family, and the labels of the people left out
+        for dropped in TEXTS_DROPPED:
+            assert dropped not in text
+        for qid in DROPPED:
+            assert f"{entity(qid)} {RDFS_LABEL} " not in text
+
+    def test_the_judgement_notes_never_leave(self, tmp_path, vocabulary):
+        # the extractor's remark on its own reading, in a run's reference
+        # (ADR-0035), goes; the reference keeps what it cites (#363)
+        properties, items = vocabulary
+        noted = {**properties, "judgement": "P998", "judgement_note": "P999"}
+        dump = export_dump(vocabulary)
+        dump.properties = noted
+        dump.says(
+            "Q401",
+            "occupation",
+            entity("Q413"),
+            reference=[
+                ("stated_in", entity("Q466")),
+                ("judgement", entity(items["circa"])),
+                ("judgement_note", '"the postmark read as 1938"@en'),
+            ],
+        )
+        dump.write(tmp_path / "full.nt.gz")
+        clock = Clock()
+        export_public(
+            config(),
+            tmp_path,
+            run=ExportRun(dump.revisions, tuple(PEOPLE)),
+            vocabulary=(noted, items),
+            lag_timeout=60,
+            sleep=clock.sleep,
+            clock=clock,
+        )
+        text, _ = self.public(tmp_path)
+        assert "the postmark read as 1938" not in text
+        assert f"/prop/reference/P998> {entity(items['circa'])} ." not in text
         stated_in = f"<{CONCEPT}/prop/reference/{properties['stated_in']}>"
         assert f"{stated_in} {entity('Q466')} ." in text
-        # a time is no free text
-        date_of_death = properties["date_of_death"]
-        assert (
-            f"{entity('Q401')} <{CONCEPT}/prop/direct/{date_of_death}> "
-            f"{dated(1996)} ."
-        ) in text
 
     def test_an_event_goes_with_a_participant_left_out(
         self, tmp_path, vocabulary
@@ -1486,6 +1545,49 @@ class TestExportPublic:
         assert not (tmp_path / "public.nt.gz").exists()
         assert not (tmp_path / "public-exclusions.json").exists()
 
+    @pytest.mark.parametrize(
+        ("line", "named"),
+        [
+            (
+                f"{entity('P900')} <{ONTOLOGY}propertyType> <{ONTOLOGY}Url> .",
+                "P900 (Url)",
+            ),
+            (
+                f"{entity('P901')} <{ONTOLOGY}propertyType> "
+                f"<{ONTOLOGY}CommonsMedia> .",
+                "P901 (CommonsMedia)",
+            ),
+            (
+                "<https://el.example/wiki/Page> <http://schema.org/about> "
+                f"{entity('Q401')} .",
+                "Q401 (a sitelink)",
+            ),
+        ],
+    )
+    def test_a_dump_with_a_link_is_refused(
+        self, tmp_path, vocabulary, line, named
+    ):
+        # a property whose values are links, or a sitelink: an IRI that
+        # can carry text, which the filter does not read (#363)
+        dump = export_dump(vocabulary)
+        dump.write(tmp_path / "full.nt.gz", [*dump.lines, line])
+        runner = ExportRun(dump.revisions, tuple(PEOPLE))
+        clock = Clock()
+        with pytest.raises(backup.UnfilterableDump, match=re.escape(named)):
+            export_public(
+                config(),
+                tmp_path,
+                run=runner,
+                vocabulary=vocabulary,
+                lag_timeout=60,
+                sleep=clock.sleep,
+                clock=clock,
+            )
+        # refused before the query service is asked, and nothing written
+        assert runner.queries == []
+        assert not (tmp_path / "public.nt.gz").exists()
+        assert not (tmp_path / "public-exclusions.json").exists()
+
     def test_the_export_refuses_when_the_graph_changes_meanwhile(
         self, tmp_path, vocabulary
     ):
@@ -1506,11 +1608,12 @@ class TestTheBackupsPublicExport:
     @pytest.fixture
     def backed_up(self, tmp_path, vocabulary, monkeypatch):
         dump = export_dump(vocabulary)
+        extra: list[str] = []  # lines the dump holds beside the fixture's
 
         def dumped(name):
             def write(deploy_dir, out_path, compose_files=None):
                 if name == "rdf":
-                    dump.write(out_path)
+                    dump.write(out_path, dump.lines + extra)
                 else:
                     out_path.write_bytes(b"fictional")
 
@@ -1537,7 +1640,8 @@ class TestTheBackupsPublicExport:
             ),
         )
 
-        def backed_up(revisions=None, keep=0):
+        def backed_up(revisions=None, keep=0, lines=()):
+            extra[:] = lines
             runner = ExportRun(dump.revisions, ["Q401"], revisions)
             monkeypatch.setattr(backup.sparql, "runner", lambda config: runner)
             return run_backup(
@@ -1571,6 +1675,23 @@ class TestTheBackupsPublicExport:
         assert manifest["pruned"] == ["20260101T000000Z"]
         assert not (out_dir / "public.nt.gz").exists()
         # the refusal carries the manifest, for the command to report
+        assert refused.value.manifest == manifest
+
+    def test_an_unfilterable_dump_leaves_the_backup_recorded(
+        self, tmp_path, backed_up
+    ):
+        # a sitelink on Q401: the export refuses, as it does for a lag (#363)
+        sitelink = (
+            "<https://el.example/wiki/Page> <http://schema.org/about> "
+            f"{entity('Q401')} ."
+        )
+        with pytest.raises(backup.UnfilterableDump) as refused:
+            backed_up(lines=[sitelink])
+        (out_dir,) = tmp_path.iterdir()
+        manifest = json.loads((out_dir / "manifest.json").read_text())
+        assert set(manifest["components"]) == {"database", "media", "rdf"}
+        assert "Q401 (a sitelink)" in manifest["public_export_refused"]
+        assert not (out_dir / "public.nt.gz").exists()
         assert refused.value.manifest == manifest
 
 
