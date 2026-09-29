@@ -1,14 +1,17 @@
 """Offline tests for the unit tests' own defaults (tests/unit/conftest.py,
-#254): one BLAS thread unless the environment gives a thread count, and
-sync calls that flush nothing unless a test is marked `real_fsync`.
+#254): one BLAS thread unless the environment gives a thread count, sync
+calls that flush nothing unless a test is marked `real_fsync`, and a
+record of the instance of each test's own (#199).
 """
 
 from __future__ import annotations
 
 import errno
+import hashlib
 import os
 import posix
 import warnings
+from pathlib import Path
 
 import pytest
 
@@ -127,3 +130,21 @@ class TestSyncCalls:
                 call(pipe)
             assert refused.value.errno == errno.EINVAL
         assert os.sync is posix.sync
+
+
+class TestInstanceRecord:
+    def test_each_test_keeps_its_own_record_of_the_instance(
+        self, request, tmp_path_factory
+    ):
+        """In the session's temporary directory, apart from the user's
+        own record, named for the test, and not made until written."""
+        from yizkr.core.instance import state_root
+
+        root = state_root()
+        assert root.is_relative_to(tmp_path_factory.getbasetemp())
+        assert not root.is_relative_to(Path.home() / ".local")
+        assert (
+            root.name
+            == (hashlib.sha1(request.node.nodeid.encode()).hexdigest()[:16])
+        )
+        assert not root.exists()

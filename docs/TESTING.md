@@ -40,12 +40,16 @@ itself in its own `--help`.
     removes `$YIZKR_ANOMALIES`, so the checks run on their default
     thresholds whatever the environment names. The one test that needs a
     real timer takes the real one, which test_anomalies.py saves.
+  - `$YIZKR_INSTANCE_STATE` names a folder of each test's own, which
+    nothing makes until the test writes there, so no unit test reads or
+    clears the developer's record of the instance
+    (docs/runbooks/scratch-run.md, Reset the instance).
   - The config directory, the no-op sync calls, the recorded anomaly
-    timers and the removed `$YIZKR_ANOMALIES` are patches held by the
-    test's own `monkeypatch`, so a test that calls `monkeypatch.undo()`
-    loses them for the rest of its run. A test that needs a patch for
-    part of its run scopes it with `with monkeypatch.context() as patch:`
-    instead.
+    timers, the removed `$YIZKR_ANOMALIES` and the instance record's
+    folder are patches held by the test's own `monkeypatch`, so a test
+    that calls `monkeypatch.undo()` loses them for the rest of its run. A
+    test that needs a patch for part of its run scopes it with
+    `with monkeypatch.context() as patch:` instead.
 - **The offline end-to-end scratch run**
   (`tests/unit/test_fixture_corpus.py`, a unit test like the rest) takes
   the fixture corpus (`tests/fixtures/corpus/`, docs/EXAMPLES.md) through
@@ -63,7 +67,14 @@ itself in its own `--help`.
   fixture data under deterministic labels, so a re-run reuses its
   entities, and that reuse is part of what they check. They run on the
   one instance that scratch runs reset, and take turns on it through the
-  live-stack lock (below). A PR that changes a write path carries
+  live-stack lock (below). Since the scratch write stage does not make
+  their writes, each session clears the recorded instance-contents key
+  once it holds the lock, and again as it ends, so the next scratch run
+  resets the instance first (docs/runbooks/scratch-run.md, Reset the
+  instance). `tests/integration/test_live_scratch_reset.py` resets the
+  instance, twice, so its resetting tests run only when
+  `YIZKR_LIVE_RESET=1` asks for them, in a session of their own. A PR
+  that changes a write path carries
   `needs:live-test`, and a substantial change to one gets a live test of
   its own (CLAUDE.md). Its live run comes as soon as the draft opens
   (AGENT_PROTOCOL §5), because the stack enforces what no unit test
@@ -340,8 +351,13 @@ path, though a leading `~` is expanded.
   working directory, in the checkout where it left the mutant, and says
   that it has ended and that the lock is held by a process with no
   record of its own.
-- **Only live test sessions and the harness take it.** A scratch run's
-  reset and write, `yizkr bootstrap` and other writers to the stack
-  don't, so the orchestrating session still gives the stack to one agent
-  at a time (AGENT_PROTOCOL §3). Live test sessions need no check by hand
-  for another one: the lock makes them wait their turn.
+- **Live test sessions, the harness and the reset take it.**
+  `yizkr scratch reset` takes the lock before it reads the kept-state
+  marker and holds it to its end, waiting while a live session holds it,
+  as a live session waits while a reset runs. A caller that holds the
+  lock already, as a live test of the reset does, gives the reset its
+  own hold (`yizkr.reset.InstanceReset`, `lock`). A scratch run's write,
+  `yizkr bootstrap` and other writers to the stack don't take it, so the
+  orchestrating session still gives the stack to one agent at a time
+  (AGENT_PROTOCOL §3). Live test sessions need no check by hand for
+  another one: the lock makes them wait their turn.
