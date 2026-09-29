@@ -1379,8 +1379,10 @@ class TestEvents:
 
     def test_two_births_that_name_one_father_stay_apart(self):
         """Klara's birth and Gustav's each name their father as a
-        participant: the Sebastians merge, the children do not, and nor do
-        the births."""
+        participant, and each is dated to the 1910s, so their dates agree:
+        the Sebastians merge, the children do not, and nor do the births,
+        since every participant of one must be merged with one of the
+        other's."""
 
         def birth(key: str, child: str, truth: str) -> Doc:
             return document(
@@ -1396,6 +1398,7 @@ class TestEvents:
                     ("e2", "spouse", item("e3")),
                     ("e4", "participant", item("e1")),
                     ("e4", "participant", item("e2")),
+                    ("e4", "point_in_time", decade),
                 ],
                 {
                     "e1": truth,
@@ -1404,6 +1407,8 @@ class TestEvents:
                     "e4": f"{truth} birth",
                 },
             )
+
+        decade = {"type": "time", "year": 1910, "precision": "decade"}
 
         docs = [
             birth("postcard-1938", "Klara Löbig", "klara-loebig"),
@@ -1451,6 +1456,42 @@ class TestEvents:
             for entry in identity["review"]
             if set(entry["members"]) == births
         ]
+        assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
+            (AMBIGUOUS, "exact/conflict/unknown")
+        ]
+        # one participant each: the tree dates her birth event 1917 and
+        # gives her born 1919 too, the postcard's event says 1919. The
+        # Klaras' births overlap and they merge; the events' own dates
+        # conflict, and so does their link
+        tree = document(
+            "family-tree-1984",
+            [
+                entity("e1", "Klara Löbig"),
+                entity("e2", "Birth of Klara Löbig", "birth"),
+            ],
+            [
+                ("e1", "date_of_birth", day(1919)),
+                ("e2", "participant", item("e1")),
+                ("e2", "point_in_time", day(1917)),
+            ],
+            {"e1": "klara-loebig", "e2": "klara-birth"},
+        )
+        card = document(
+            "postcard-1938",
+            [
+                entity("e1", "Klara Löbig"),
+                entity("e2", "Birth of Klara Löbig", "birth"),
+            ],
+            [
+                ("e2", "participant", item("e1")),
+                ("e2", "point_in_time", day(1919)),
+            ],
+            {"e1": "klara-loebig", "e2": "klara-birth"},
+        )
+        docs = [tree, card]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == [{"klara-loebig"}]
+        (review,) = identity["review"]
         assert [(p["link"], p["evidence"]) for p in review["pairs"]] == [
             (AMBIGUOUS, "exact/conflict/unknown")
         ]
