@@ -338,8 +338,11 @@ class TestTheRoute:
         scratch.mkdir()
         monkeypatch.setattr(tempfile, "tempdir", str(scratch))
         corpus = folder(tmp_path, booklet=booklet())
-        run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        # the orchestrator keeps each view it made in the run, so what
+        # rides on one lives as long as it does
+        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
         assert not list(scratch.glob("yizkr-pdf-*"))
+        assert transcription_of(document(orchestrator, "booklet.pdf"))
 
     def test_a_pdf_pdfium_cannot_read_is_read_whole(self, tmp_path):
         corpus = folder(tmp_path, scan=b"%PDF-1.4 fictional")

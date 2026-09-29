@@ -344,7 +344,7 @@ class TestImages:
         """An image under MIN_IMAGE_SIDE pixels on a side, or under
         MIN_IMAGE_PIXELS in all, could hold no more than a word."""
         page = self.booklet_page(pdfs.gray(300, 120))
-        page.image(pdfs.gray(20, 400, shade=1), 400, 100, 20, 400)
+        page.image(pdfs.gray(20, 600, shade=1), 400, 100, 20, 600)
         page.image(pdfs.gray(99, 100, shade=2), 400, 50, 99, 100)
         kept = pdfs.gray(100, 100, shade=3)
         page.image(kept, 72, 50, 100, 100)
