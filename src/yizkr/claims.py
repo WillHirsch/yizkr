@@ -28,7 +28,8 @@ The schema makes the archive's core conventions structural:
 Vocabulary: `property` fields and vocabulary references hold *manifest
 keys* (e.g. ``spouse``, ``circa``) from model/manifest.yaml — stable,
 instance-independent names. `validate_against_manifest()` checks that
-keys exist and that each value's type matches the property's datatype.
+keys exist, that each value's type matches the property's datatype, and
+that an item value is of a kind its property accepts (ADR-0035 §3.5).
 Local P/Q ids never appear in pipeline JSON (they differ per instance);
 only the writer resolves keys to ids, at write time.
 
