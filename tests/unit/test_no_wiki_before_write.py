@@ -19,13 +19,13 @@ its check, extraction (entity manifest, chunks, critique), the GEDCOM
 adapter, a deck's slide text and derived media, the reconcile step, and
 the per-document adjudication (`reconcile.adjudicate`) given a roster.
 Corpus clustering, cluster adjudication and flags have no code yet; #105,
-#106 and #112 require them to run under this refusing wiki. Two steps
-before the write that are outside that list still use the wiki in
-`ingest run`, and the orchestrator here replaces them: registration,
-which runs first until write-time registration (#103) takes its place,
-and the resolve step's exact-label read, which goes with the
-identity-map writer (#109). A document stops at the claim-review gate,
-so the write itself is never reached.
+#106 and #112 require them to run under this refusing wiki. One step
+before the write that is outside that list still uses the wiki in
+`ingest run`, and the orchestrator here replaces it: the resolve step's
+exact-label read, which goes with the identity-map writer (#109).
+Registration is part of the write (#103), so nothing here replaces it: a
+document stops at the claim-review gate, the write is never reached, and
+the refusing wiki shows that nothing is registered before it.
 
 Every document and deck is fictional (docs/EXAMPLES.md).
 """
@@ -38,7 +38,6 @@ import json
 import os
 import shutil
 import socket
-import threading
 import zipfile
 from pathlib import Path
 
@@ -325,54 +324,29 @@ def quiet(*args, **kwargs) -> None:
     pass
 
 
-class HeldLock:
-    """The orchestrator's wiki lock, knowing which thread holds it."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._holder: int | None = None
-
-    def __enter__(self):
-        self._lock.acquire()
-        self._holder = threading.get_ident()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self._holder = None
-        self._lock.release()
-
-    def held_here(self) -> bool:
-        return self._holder == threading.get_ident()
-
-
 class BeforeTheWrite(Orchestrator):
     """`ingest run`'s orchestrator with the wiki refusing and the engine
-    scripted. Registration and the resolve step, which use the wiki and
-    are not steps #128 covers, are replaced: registration names a fixed
-    artifact item, and resolve leaves the batch as it is. Each recording
-    of a deck's derived media is noted, with whether the thread that made
-    it held the wiki lock."""
+    scripted. The resolve step, which uses the wiki and is not a step
+    #128 covers, is replaced: it leaves the batch as it is. Registration,
+    part of the write, is not replaced. Each recording of a deck's derived
+    media is noted by the deck's file name."""
 
     def __init__(self, folder: Path, state_dir: Path, refusals, **kwargs):
         kwargs.setdefault("exclusions", ExclusionList())
         super().__init__(folder, state_dir, log=quiet, **kwargs)
         self._client = Refusing(refusals, "wiki")
         self._config = Refusing(refusals, "connection settings")
-        self._wiki_lock = HeldLock()
-        # (file name, the wiki lock held) per recording of derived media
-        self.recordings: list[tuple[str, bool]] = []
+        # the file name of the deck, per recording of its derived media
+        self.recordings: list[str] = []
 
     def _llm(self, role, doc):
         return ScriptedEngine(doc.sha1, *PEOPLE[doc.source.name])
-
-    def _step_register(self, doc):
-        return "Q23"
 
     def _step_resolve(self, doc, batch):
         return batch
 
     def _step_derive_media(self, doc):
-        self.recordings.append((doc.source.name, self._wiki_lock.held_here()))
+        self.recordings.append(doc.source.name)
         return super()._step_derive_media(doc)
 
 
@@ -470,8 +444,8 @@ def test_every_transcription_names_its_document_by_its_bytes(
 ):
     """Whichever route makes a transcription view (vision, a text file, a
     deck's slide text or a curator's correction), it names its artifact
-    by the SHA-1 of the source's bytes, never by the QID registration gave
-    it (#127)."""
+    by the SHA-1 of the source's bytes (#127): no QID exists before the
+    write registers the document (#103)."""
     folder = corpus(tmp_path)
 
     def views(orchestrator) -> dict[str, tuple[str, dict]]:
@@ -482,8 +456,7 @@ def test_every_transcription_names_its_document_by_its_bytes(
             if doc.kind == "gedcom":
                 continue
             text = doc.transcription.read_text()
-            assert doc.state.artifact_qid == "Q23"
-            assert "Q23" not in text
+            assert doc.state.artifact_qid is None
             view = json.loads(text)
             key = {"kind": "artifact", "sha1": sha1(doc.source.read_bytes())}
             found[doc.kind] = (view["engine"].split(":")[0], view["artifact"])
@@ -511,8 +484,8 @@ def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     tmp_path, refusals
 ):
     """Serial mode's extract-all pass (ADR-0019) runs documents in
-    parallel; a deck's derived media are recorded without the lock that
-    registration takes."""
+    parallel, a deck's derived media recorded among them, and asks
+    nothing of the wiki."""
     orchestrator = BeforeTheWrite(
         corpus(tmp_path),
         tmp_path / "state",
@@ -523,7 +496,7 @@ def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     assert orchestrator.run() == 2
 
     assert refusals.asked == []
-    assert orchestrator.recordings == [(DECK, False)]
+    assert orchestrator.recordings == [DECK]
     docs = orchestrator.documents()
     states = run_state(orchestrator.rundir)
     for doc in docs:
@@ -685,7 +658,7 @@ class TestTheRecordIsCurrentWhileItIsWhole:
     def assert_made_again(recorded, second, deck) -> None:
         """The second run recorded the media again, and each medium's
         file is a regular file holding its bytes."""
-        assert second.recordings == [(DECK, False)]
+        assert second.recordings == [DECK]
         assert read_derived_media(deck.dir) == recorded
         for key, medium in recorded.media.items():
             path = deck.dir / medium.file
@@ -702,7 +675,7 @@ class TestTheRecordIsCurrentWhileItIsWhole:
             (deck.dir / DERIVED_MEDIA).unlink()
 
         recorded, second, deck = self.run_twice(tmp_path, refusals, delete)
-        assert second.recordings == [(DECK, False)]
+        assert second.recordings == [DECK]
         assert read_derived_media(deck.dir) == recorded
 
     def test_a_record_that_lost_bytes_is_made_again(self, tmp_path, refusals):
@@ -710,7 +683,7 @@ class TestTheRecordIsCurrentWhileItIsWhole:
             (deck.dir / DERIVED_MEDIA_DIR / f"{sha1(PORTRAIT)}.png").unlink()
 
         recorded, second, deck = self.run_twice(tmp_path, refusals, lose)
-        assert second.recordings == [(DECK, False)]
+        assert second.recordings == [DECK]
         assert read_derived_media(deck.dir) == recorded
 
     def test_a_truncated_medium_is_made_again(self, tmp_path, refusals):
@@ -806,7 +779,7 @@ class TestTheRecordIsCurrentWhileItIsWhole:
             path.write_text(json.dumps(data))
 
         recorded, second, deck = self.run_twice(tmp_path, refusals, redirect)
-        assert second.recordings == [(DECK, False)]
+        assert second.recordings == [DECK]
         assert read_derived_media(deck.dir) == recorded
 
     def test_a_damaged_record_is_made_again(self, tmp_path, refusals):
@@ -814,7 +787,7 @@ class TestTheRecordIsCurrentWhileItIsWhole:
             (deck.dir / DERIVED_MEDIA).write_text('{"source_sha1": ')
 
         recorded, second, deck = self.run_twice(tmp_path, refusals, damage)
-        assert second.recordings == [(DECK, False)]
+        assert second.recordings == [DECK]
         assert read_derived_media(deck.dir) == recorded
 
     def test_a_record_for_other_deck_bytes_is_made_again(
@@ -831,7 +804,7 @@ class TestTheRecordIsCurrentWhileItIsWhole:
         recorded, second, deck = self.run_twice(
             tmp_path, refusals, another_deck
         )
-        assert second.recordings == [(DECK, False)]
+        assert second.recordings == [DECK]
         assert read_derived_media(deck.dir) == recorded
 
     def test_a_directory_without_a_record_gets_one(self, tmp_path, refusals):
@@ -848,7 +821,7 @@ class TestTheRecordIsCurrentWhileItIsWhole:
             state.save(deck.state_path)
 
         recorded, second, deck = self.run_twice(tmp_path, refusals, registered)
-        assert second.recordings == [(DECK, False)]
+        assert second.recordings == [DECK]
         assert read_derived_media(deck.dir) == recorded
 
     def test_a_deck_without_images_is_recorded_once(self, tmp_path, refusals):
