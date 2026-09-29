@@ -661,6 +661,21 @@ class TestAttach:
             attach(self.FINDINGS, extracted, rows)
         )
 
+    def test_fewer_rows_than_the_batch_resolved_match_none(self):
+        """Agnes's residence alone is not the household resolved: no
+        claim is matched, not even the one it could be (review of #411)."""
+        extracted = household()
+        rows = extracted.model_copy(update={"claims": extracted.claims[2:]})
+        assert counterparts(extracted, rows) == [None, None, None]
+
+    def test_an_entity_resolved_before_is_not_an_equivalence(self):
+        """An entity whose qid the extraction already had is not replayed
+        as an approved equivalence (review of #411)."""
+        data = household().model_dump(mode="json")
+        data["entities"][3]["qid"] = "Q9"
+        extracted = ClaimBatch.model_validate(data)
+        assert counterparts(extracted, extracted) == [0, 1, 2]
+
     def test_rows_that_are_not_the_batch_resolved_match_none(self):
         extracted = resolved_batch()
         rows = extracted.model_copy(update={"claims": extracted.claims[1:]})
@@ -818,6 +833,31 @@ class TestListings:
             }
         )
         assert claim_of(second, batch_) == 1
+
+    def test_a_backslash_n_and_a_line_break_list_apart(self):
+        rows = listings(
+            listing_batch(
+                ("occupation", {"type": "string", "value": "a\\nb"}),
+                ("occupation", {"type": "string", "value": "a\nb"}),
+            )
+        )
+        assert [value for *_, value in rows] == ["a\\\\nb", "a\\nb"]
+
+    def test_a_number_already_taken_is_skipped(self):
+        """`Hutmacher`, `Hutmacher (#2)` and `Hutmacher` list three ways:
+        the third takes the first number free (review of #411)."""
+        rows = listings(
+            listing_batch(
+                ("occupation", {"type": "string", "value": "Hutmacher"}),
+                ("occupation", {"type": "string", "value": "Hutmacher (#2)"}),
+                ("occupation", {"type": "string", "value": "Hutmacher"}),
+            )
+        )
+        assert [value for *_, value in rows] == [
+            "Hutmacher",
+            "Hutmacher (#2)",
+            "Hutmacher (#3)",
+        ]
 
     def test_a_line_break_is_listed_escaped(self):
         batch_ = listing_batch(

@@ -251,16 +251,19 @@ def _value(claim: Claim) -> str:
 def listings(batch: ClaimBatch) -> list[tuple[str, str, str]]:
     """(subject, property, value) for each claim of the batch, in order:
     each claim as the prompt lists it, and as a finding names it. A claim
-    that lists as an earlier one does has its value numbered (`... (#n)`), so
-    that every listing names one claim."""
-    seen: dict[tuple[str, str, str], int] = {}
+    that lists as an earlier listing does has its value numbered
+    (`... (#n)`), with the first number free, so that every listing names
+    one claim."""
+    taken: set[tuple[str, str, str]] = set()
     found = []
     for claim in batch.claims:
         listing = (_ref_id(claim.subject), claim.property, _value(claim))
-        seen[listing] = seen.get(listing, 0) + 1
-        if seen[listing] > 1:
-            listing = (*listing[:2], f"{listing[2]} (#{seen[listing]})")
-        found.append(listing)
+        numbered, n = listing, 1
+        while numbered in taken:
+            n += 1
+            numbered = (*listing[:2], f"{listing[2]} (#{n})")
+        taken.add(numbered)
+        found.append(numbered)
     return found
 
 
