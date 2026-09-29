@@ -134,10 +134,25 @@ class TestDates:
         assert quals[0]["property"] == "sourcing_circumstances"
 
 
+# The one retired property the adapter still states (ADR-0036 §5 has it
+# make marriages instead).
+RETIRED_SPOUSE = frozenset({"spouse"})
+
+
 class TestAdapter:
     def test_batch_is_manifest_valid_and_deterministic(self):
         first = fixture_result()
-        assert validate_against_manifest(first.batch) == []
+        assert (
+            validate_against_manifest(
+                first.batch, allow_retired=RETIRED_SPOUSE
+            )
+            == []
+        )
+        # the couples' spouse claims are all the adapter's own check lets
+        # through (ADR-0036 retires the property)
+        problems = validate_against_manifest(first.batch)
+        assert problems
+        assert all("'spouse' is retired" in p for p in problems)
         second = fixture_result()
         assert first.batch.claims == second.batch.claims
         assert first.batch.entities == second.batch.entities
@@ -638,7 +653,10 @@ class TestMediaObjects:
 
     def test_batch_stays_manifest_valid(self):
         batch = adapt_gedcom(CENSUS_GEDCOM, artifact=EXPORT).batch
-        assert validate_against_manifest(batch) == []
+        assert (
+            validate_against_manifest(batch, allow_retired=RETIRED_SPOUSE)
+            == []
+        )
 
     def test_shared_object_is_one_media_item(self):
         gedcom = (

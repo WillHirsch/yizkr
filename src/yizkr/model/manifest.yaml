@@ -29,18 +29,21 @@ properties:
     label: instance of
     description: class of which this entity is a particular example and member
     datatype: wikibase-item
+    accepts: class
     wikidata: P31
 
   subclass_of:
     label: subclass of
     description: all instances of this class are also instances of that class
     datatype: wikibase-item
+    accepts: class
     wikidata: P279
 
   part_of:
     label: part of
     description: this entity is a part of that entity; links an artifact fragment to its artifact
     datatype: wikibase-item
+    accepts: [place, artifact, unclassified_entity]
     wikidata: P361
 
   # --- provenance (ADR-0003 reference pattern) ---
@@ -49,12 +52,14 @@ properties:
     label: stated in
     description: reference property; the artifact or artifact fragment that asserts the statement
     datatype: wikibase-item
+    accepts: [artifact, artifact_fragment]
     wikidata: P248
 
   inferred_from_extraction_run:
     label: inferred from extraction run
     description: reference property; the extraction run that produced this machine-written statement
     datatype: wikibase-item
+    accepts: [extraction_run]
     wikidata: P3452
     aliases:
       - inferred from
@@ -142,12 +147,14 @@ properties:
     label: place of birth
     description: place where the subject was born, as asserted by a source
     datatype: wikibase-item
+    accepts: [place, unclassified_entity]
     wikidata: P19
 
   place_of_death:
     label: place of death
     description: place where the subject died, as asserted by a source
     datatype: wikibase-item
+    accepts: [place, unclassified_entity]
     wikidata: P20
 
   age_at_death:
@@ -166,25 +173,33 @@ properties:
       judgement (ADR-0007), used when a curator prefers a statement
       over an item merge
     datatype: wikibase-item
+    accepts: subject
     wikidata: P460
 
   father:
     label: father
     description: male parent of the subject
     datatype: wikibase-item
+    accepts: [human, unclassified_entity]
     wikidata: P22
 
   mother:
     label: mother
     description: female parent of the subject
     datatype: wikibase-item
+    accepts: [human, unclassified_entity]
     wikidata: P25
 
   spouse:
     label: spouse
-    description: the subject has the object as their spouse
+    description: >-
+      retired (ADR-0036): a marriage is an entity whose couple take part
+      in it with the role spouse, and the spouse link is derived from it
+      by a query; this property takes no new claim
     datatype: wikibase-item
     wikidata: P26
+    retired: true
+    accepts: []
 
   child:
     label: child
@@ -193,6 +208,7 @@ properties:
       the inverse of father/mother, stored when a source frames the
       relation from the parent's side
     datatype: wikibase-item
+    accepts: [human, unclassified_entity]
     wikidata: P40
 
   relative:
@@ -200,8 +216,10 @@ properties:
     description: >-
       generic kinship fallback (ADR-0014): a source-asserted compound
       relation (aunt, cousin, in-law) that primitives cannot yet capture
-      unambiguously; qualify with kinship type, verbatim
+      unambiguously; qualify with kinship_type, verbatim, and with
+      kinship_class, side, degree and removes (ADR-0035)
     datatype: wikibase-item
+    accepts: [human, unclassified_entity]
     wikidata: P1038
 
   kinship_type:
@@ -220,6 +238,7 @@ properties:
       non-relative "Nana Maisie") — ADR-0018. Optional; omit when the ego
       is not a modelled entity. Never mint an entity to fill it.
     datatype: wikibase-item
+    accepts: [human, family, unclassified_entity]
 
   sex_or_gender:
     label: sex or gender
@@ -228,12 +247,14 @@ properties:
       prerequisite for the kinship calculus to derive gendered terms
       (aunt vs uncle, grandmother vs grandfather) — ADR-0014
     datatype: wikibase-item
+    accepts: [male, female]
     wikidata: P21
 
   residence:
     label: residence
     description: place where the person resided
     datatype: wikibase-item
+    accepts: [place, unclassified_entity]
     wikidata: P551
 
   sibling:
@@ -243,6 +264,7 @@ properties:
       never derived from shared parents (a source asserting both
       parent relations has not asserted siblinghood)
     datatype: wikibase-item
+    accepts: [human, unclassified_entity]
     wikidata: P3373
 
   occupation:
@@ -251,6 +273,7 @@ properties:
       occupation or profession of the person; values are occupation
       items whose labels keep the source's exact wording
     datatype: wikibase-item
+    accepts: [occupation_class, unclassified_entity]
     wikidata: P106
 
   employer:
@@ -260,12 +283,14 @@ properties:
       source; orthogonal to occupation (what they do vs whom they work
       for) — ADR-0012. Date with start/end time qualifiers
     datatype: wikibase-item
+    accepts: [organization, unclassified_entity]
     wikidata: P108
 
   burial_place:
     label: place of burial
     description: place where the subject is buried, as asserted by a source
     datatype: wikibase-item
+    accepts: [place, unclassified_entity]
     wikidata: P119
 
   cause_of_death:
@@ -290,6 +315,7 @@ properties:
     label: country of citizenship
     description: the country (a place) whose citizen the subject is, as asserted by a source
     datatype: wikibase-item
+    accepts: [place, unclassified_entity]
     wikidata: P27
 
   religion:
@@ -304,6 +330,7 @@ properties:
     label: educated at
     description: organization (school, college) the person was educated at, as asserted by a source
     datatype: wikibase-item
+    accepts: [organization, unclassified_entity]
     wikidata: P69
 
   member_of:
@@ -312,6 +339,7 @@ properties:
       organization or family the person is or was a member of, as
       asserted by a source (ADR-0014 families / ADR-0018)
     datatype: wikibase-item
+    accepts: [organization, family, unclassified_entity]
     wikidata: P463
 
   gave_refuge_to:
@@ -321,19 +349,25 @@ properties:
       (ADR-0014); asymmetric hospitality — co-residence ("lived with")
       is instead derived from a shared residence
     datatype: wikibase-item
+    accepts: [human, unclassified_entity]
 
   # --- events ---
 
   participant:
     label: participant
-    description: person or group that took part in the event
+    description: >-
+      person or family that took part in the event, or one of the couple
+      of a partnership or marriage; qualify with object_has_role to say
+      how they took part
     datatype: wikibase-item
+    accepts: [human, family, unclassified_entity]
     wikidata: P710
 
   location:
     label: location
     description: place where the event or subject is located
     datatype: wikibase-item
+    accepts: [place, unclassified_entity]
     wikidata: P276
 
   point_in_time:
@@ -358,6 +392,7 @@ properties:
     label: time period
     description: named time period the subject occurred in; use instead of dates when the source speaks in periods
     datatype: wikibase-item
+    accepts: [time_period_class]
     wikidata: P2348
 
   # --- uncertainty (docs/MODELING.md, "Uncertainty and time") ---
@@ -367,8 +402,8 @@ properties:
     description: >-
       qualifier; earliest possible date for the statement's date (its value
       or its point in time), for ranges and vague sources; on a statement
-      with start or end time qualifiers (a marriage, a residence), the
-      earliest its start can be
+      with start or end time qualifiers (a residence, an employment),
+      the earliest its start can be
     datatype: time
     wikidata: P1319
 
@@ -377,8 +412,8 @@ properties:
     description: >-
       qualifier; latest possible date for the statement's date (its value or
       its point in time), for ranges and vague sources; on a statement with
-      start or end time qualifiers (a marriage, a residence), the latest its
-      end can be
+      start or end time qualifiers (a residence, an employment), the latest
+      its end can be
     datatype: time
     wikidata: P1326
 
@@ -386,13 +421,14 @@ properties:
     label: sourcing circumstances
     description: qualifier for how a source states the value, e.g. circa; never narrow what a source says
     datatype: wikibase-item
+    accepts: [circa]
     wikidata: P1480
 
   latest_start_date:
     label: latest start date
     description: >-
       qualifier; on a statement with start or end time qualifiers (a
-      marriage, a residence), the latest its start can be: with
+      residence, an employment), the latest its start can be: with
       earliest_date, the range a source gives the start. Never on a
       start_time claim, which earliest_date and latest_date bound
     datatype: time
@@ -402,7 +438,7 @@ properties:
     label: earliest end date
     description: >-
       qualifier; on a statement with start or end time qualifiers (a
-      marriage, a residence), the earliest its end can be: with
+      residence, an employment), the earliest its end can be: with
       latest_date, the range a source gives the end. Never on an end_time
       claim, which earliest_date and latest_date bound
     datatype: time
@@ -414,6 +450,7 @@ properties:
     label: depicts
     description: person or thing depicted in the artifact; on photographs, qualified with relative position within image
     datatype: wikibase-item
+    accepts: any
     wikidata: P180
 
   image:
@@ -424,6 +461,7 @@ properties:
       bytes never fetched (ADR-0021). Looser than depicts, which is a
       confirmed depiction with an image region
     datatype: wikibase-item
+    accepts: [artifact]
     wikidata: P18
 
   # --- places ---
@@ -499,6 +537,138 @@ properties:
       fits — the input to the next vocabulary round, never a substitute
       for a real class
     datatype: string
+
+  # --- claim structure (ADR-0035 §3) ---
+
+  object_has_role:
+    label: object has role
+    description: >-
+      qualifier on participant: how the person took part, as one of the
+      participant role items (principal, parent, partner, spouse,
+      informant, witness, officiant); one participant may hold several
+      roles
+    datatype: wikibase-item
+    accepts: [principal, parent, partner, spouse, informant, witness, officiant]
+    wikidata: P3831
+
+  kinship_class:
+    label: kinship class
+    description: >-
+      qualifier on relative: the class of the kinship term, as one of the
+      kin_ items (kin_cousin for "cousin", kin_grandparent for "great
+      grandmother"), beside its wording in kinship_type; kin_relative
+      where the class is unclear
+    datatype: wikibase-item
+    accepts:
+      - kin_parent
+      - kin_child
+      - kin_sibling
+      - kin_grandparent
+      - kin_grandchild
+      - kin_aunt_or_uncle
+      - kin_niece_or_nephew
+      - kin_cousin
+      - kin_parent_in_law
+      - kin_child_in_law
+      - kin_sibling_in_law
+      - kin_relative
+
+  side:
+    label: kinship side
+    description: >-
+      qualifier on relative: paternal or maternal, only where the kinship
+      term itself states the side ("uncle on the father's side"); never
+      inferred
+    datatype: wikibase-item
+    accepts: [paternal, maternal]
+
+  degree:
+    label: kinship degree
+    description: >-
+      qualifier on relative: how many "great-"s the kinship term has
+      (aunt 0, great-aunt 1), or a cousin's number (second cousin 2);
+      only where the term states it
+    datatype: quantity
+
+  removes:
+    label: removes
+    description: >-
+      qualifier on relative, for cousins only: how many times removed the
+      term says the cousin is (second cousin once removed: 1); only where
+      the term states it
+    datatype: quantity
+
+  issued_by:
+    label: issued by
+    description: >-
+      document -> the organization that issued it, such as the register
+      office that issued a certificate; the subject is the source
+      document itself
+    datatype: wikibase-item
+    accepts: [organization, unclassified_entity]
+    wikidata: P2378
+
+  carried_out_by:
+    label: carried out by
+    description: >-
+      event -> the organization that carried it out, such as the court
+      that pronounced a divorce; a person who performs an event is its
+      participant with the role officiant instead
+    datatype: wikibase-item
+    accepts: [organization, unclassified_entity]
+
+  civil_status:
+    label: civil status
+    description: >-
+      a person's civil status as a source states it (unmarried: never
+      married; married; widowed; divorced), dated as the source dates it;
+      it names no partner and makes no marriage
+    datatype: wikibase-item
+    accepts: [unmarried, married, widowed, divorced]
+
+  judgement:
+    label: judgement
+    description: >-
+      reference property: the category of the extraction's judgement note
+      on this statement, beside inferred from extraction run; the
+      extraction's own remark, never the source's, and never used to rank
+      or filter a value
+    datatype: wikibase-item
+    accepts:
+      - judgement_kind
+      - judgement_relation
+      - judgement_date_reading
+      - judgement_identity
+      - judgement_other
+
+  judgement_note:
+    label: judgement note
+    description: >-
+      reference property: one sentence in English naming the judgement
+      call the extraction made on this statement; the extraction's own
+      remark, never the source's, and never used to rank or filter a
+      value
+    datatype: string
+
+  # --- partnerships and marriages (ADR-0036) ---
+
+  started_by:
+    label: started by
+    description: >-
+      partnership or marriage -> the event that began it: its wedding,
+      or a civil wedding or religious wedding where the source states
+      the kind (each of two ceremonies, if it had both)
+    datatype: wikibase-item
+    accepts: [wedding, civil_wedding, religious_wedding, unclassified_entity]
+
+  ended_by:
+    label: ended by
+    description: >-
+      partnership or marriage -> the event that ended it: a divorce, an
+      annulment, a partner's own death event, or an event of unstated
+      kind
+    datatype: wikibase-item
+    accepts: [divorce, annulment, death, event, unclassified_entity]
 
 # `entity_kind: true` marks an item the extractor may type a
 # document-mentioned entity as (ADR-0007 manifest pass). The extraction
@@ -606,6 +776,24 @@ items:
       mistyping it as a person or place
     entity_kind: true
 
+  partnership:
+    label: partnership
+    description: >-
+      a couple's relationship, of any kind: two people a source presents
+      as a couple without saying they married. The couple are its
+      participants, with the role partner (ADR-0036)
+    entity_kind: true
+
+  marriage:
+    label: marriage
+    description: >-
+      a marriage, as an entity and not an event: the couple are its
+      participants, with the role spouse; started_by points to its
+      wedding, ended_by to a divorce, an annulment or a death (ADR-0036)
+    subclass_of: partnership
+    wikidata: Q8445
+    entity_kind: true
+
   # --- event types (subclasses of event) ---
 
   birth:
@@ -620,12 +808,6 @@ items:
     subclass_of: event
     entity_kind: true
 
-  marriage:
-    label: marriage
-    description: event of persons marrying
-    subclass_of: event
-    wikidata: Q8445
-    entity_kind: true
 
   migration:
     label: migration
@@ -658,6 +840,47 @@ items:
     label: release
     description: event of a person being released from detention or imprisonment (ADR-0014)
     subclass_of: event
+    entity_kind: true
+
+  wedding:
+    label: wedding
+    description: >-
+      event: the ceremony that starts a marriage, with its own date,
+      place, witnesses and officiant; the couple take part in the
+      marriage, not in the wedding (ADR-0036)
+    subclass_of: event
+    wikidata: Q49836
+    entity_kind: true
+
+  civil_wedding:
+    label: civil wedding
+    description: a wedding before a civil authority, such as a registrar, where the source states that kind (ADR-0036)
+    subclass_of: wedding
+    entity_kind: true
+
+  religious_wedding:
+    label: religious wedding
+    description: a wedding in a religious ceremony, where the source states that kind (ADR-0036)
+    subclass_of: wedding
+    entity_kind: true
+
+  divorce:
+    label: divorce
+    description: >-
+      event: the end of a marriage that a court or another authority
+      pronounces; carried_out_by names the authority (ADR-0036)
+    subclass_of: event
+    wikidata: Q93190
+    entity_kind: true
+
+  annulment:
+    label: annulment
+    description: >-
+      event: a court's or another authority's declaration that a marriage
+      is void, which ends it; carried_out_by names the authority
+      (ADR-0036)
+    subclass_of: event
+    wikidata: Q701040
     entity_kind: true
 
   # --- artifact types (subclasses of artifact) ---
@@ -722,6 +945,114 @@ items:
     label: female
     description: sex-or-gender value; the kinship calculus uses it for gendered terms (ADR-0014)
     wikidata: Q6581072
+
+  # --- participant roles (object_has_role values, ADR-0035 §3.2) ---
+
+  principal:
+    label: principal
+    description: >-
+      participant role: the one an event happens to, such as the person
+      born in a birth or who died in a death; an event's date belongs to
+      its principal alone
+  parent:
+    label: parent
+    description: participant role; a parent of the principal, such as a parent named in a birth record
+  partner:
+    label: partner
+    description: participant role; one of the couple of a partnership (ADR-0036)
+  spouse:
+    label: spouse
+    description: participant role; one of the couple of a marriage (ADR-0036)
+  informant:
+    label: informant
+    description: participant role; the person who reported the event to the record's keeper, such as the one who reported a birth or a death
+  witness:
+    label: witness
+    description: participant role; a witness of the event that the source names
+  officiant:
+    label: officiant
+    description: participant role; the person who performed the event, such as the registrar or cleric who conducted a wedding
+
+  # --- kinship classes (kinship_class values, ADR-0035 §3.3) ---
+
+  kin_parent:
+    label: parent (kinship class)
+    description: kinship class; a parent, for a literal term that reduces to no primitive
+  kin_child:
+    label: child (kinship class)
+    description: kinship class; a child, for a literal term that reduces to no primitive
+  kin_sibling:
+    label: sibling (kinship class)
+    description: kinship class; a sibling, for a literal term that reduces to no primitive
+  kin_grandparent:
+    label: grandparent
+    description: kinship class; a grandparent, with each "great-" counted in degree
+  kin_grandchild:
+    label: grandchild
+    description: kinship class; a grandchild, with each "great-" counted in degree
+  kin_aunt_or_uncle:
+    label: aunt or uncle
+    description: kinship class; an aunt or an uncle, with each "great-" counted in degree
+  kin_niece_or_nephew:
+    label: niece or nephew
+    description: kinship class; a niece or a nephew, with each "great-" counted in degree
+  kin_cousin:
+    label: cousin
+    description: kinship class; a cousin, its number in degree and its removes in removes, where the term states them
+  kin_parent_in_law:
+    label: parent-in-law
+    description: kinship class; a parent-in-law
+  kin_child_in_law:
+    label: child-in-law
+    description: kinship class; a son-in-law or a daughter-in-law
+  kin_sibling_in_law:
+    label: sibling-in-law
+    description: kinship class; a brother-in-law or a sister-in-law
+  kin_relative:
+    label: relative (kinship class)
+    description: kinship class; a relative whose kind the term does not make clear
+
+  # --- kinship sides (side values) ---
+
+  paternal:
+    label: paternal
+    description: kinship side; on the father's side, where the term states it
+  maternal:
+    label: maternal
+    description: kinship side; on the mother's side, where the term states it
+
+  # --- civil statuses (civil_status values, ADR-0035 §3.1) ---
+
+  unmarried:
+    label: unmarried
+    description: civil status; never married
+  married:
+    label: married
+    description: civil status; married
+  widowed:
+    label: widowed
+    description: civil status; widowed
+  divorced:
+    label: divorced
+    description: civil status; divorced
+
+  # --- judgement note categories (judgement values, ADR-0035 §4) ---
+
+  judgement_kind:
+    label: "judgement: kind"
+    description: judgement note category; which kind an entity was typed as
+  judgement_relation:
+    label: "judgement: relation"
+    description: judgement note category; which relation a statement was recorded as
+  judgement_date_reading:
+    label: "judgement: date reading"
+    description: judgement note category; how a date was read
+  judgement_identity:
+    label: "judgement: identity"
+    description: judgement note category; which entity a mention was read as
+  judgement_other:
+    label: "judgement: other"
+    description: judgement note category; any other judgement call
 
   # --- schema source (see schema_source_item above) ---
 

@@ -58,7 +58,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -75,7 +77,12 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
-from yizkr.model.schema import DEFAULT_MANIFEST, load_manifest
+from yizkr.model.schema import (
+    DEFAULT_MANIFEST,
+    Acceptance,
+    load_acceptance,
+    load_manifest,
+)
 
 SCHEMA_VERSION = 1
 
@@ -488,6 +495,115 @@ class ExtractionRunMetadata(StrictModel):
         return value
 
 
+# ---------------------------------------------------------------------------
+# Mention records (ADR-0035 §2)
+# ---------------------------------------------------------------------------
+#
+# What an entity's names are made of, read from its label and aliases as
+# the document writes them. A record is extraction's reading, not
+# something the source asserts, so no field of it is ever written to the
+# wiki (ADR-0035 §2.6); it is input to identity. Every field is optional,
+# and each list holds forms as written.
+
+
+class GivenName(StrictModel):
+    """A given name as written, with the full form a diminutive or an
+    abbreviation stands for where the document supports one. An initial
+    has no standard form."""
+
+    written: str = Field(min_length=1)
+    standard: str | None = Field(default=None, min_length=1)
+    initial: bool = False
+
+
+class Surname(StrictModel):
+    """A surname as written, its particles kept in it. It is `birth` or
+    `married` only where the source marks it so (ADR-0011)."""
+
+    written: str = Field(min_length=1)
+    type: Literal["birth", "married", "other"] = "other"
+
+
+class PersonStructure(StrictModel):
+    """A person's mention record (ADR-0035 §2.1). Only a `name` status
+    keys: the other statuses say the label names no one."""
+
+    kind: Literal["human"] = "human"
+    status: Literal[
+        "name", "role", "kinship", "courtesy", "placeholder", "description"
+    ] = "name"
+    given: list[GivenName] = []
+    surnames: list[Surname] = []
+    # names formed from the father's given name: a name part of their
+    # own, never a surname
+    patronymics: list[str] = []
+    nicknames: list[str] = []
+    # honorifics, ranks, and generational and status words: never keys
+    titles: list[str] = []
+    suffixes: list[str] = []
+    # name forms whose given name and surname the source does not tell
+    # apart
+    unsplit: list[str] = []
+
+
+class PlaceName(StrictModel):
+    """One of a place's own names as written, with its toponym and its
+    generic head where they can be told apart ("Lager Klurnau": head
+    Lager, toponym Klurnau)."""
+
+    written: str = Field(min_length=1)
+    toponym: str | None = Field(default=None, min_length=1)
+    head: str | None = Field(default=None, min_length=1)
+
+
+class Address(StrictModel):
+    """A street and a house number, as written, in the source's order."""
+
+    written: str = Field(min_length=1)
+    street: str | None = Field(default=None, min_length=1)
+    number: str | None = Field(default=None, min_length=1)
+
+
+class PlaceStructure(StrictModel):
+    """A place's mention record (ADR-0035 §2.2). Only a `toponym` status
+    keys; the containers only decide nesting."""
+
+    kind: Literal["place"] = "place"
+    status: Literal["toponym", "deictic", "generic"] = "toponym"
+    names: list[PlaceName] = []
+    address: Address | None = None
+    # the places the source puts it in, in the source's order
+    within: list[str] = []
+
+
+class OrganizationStructure(StrictModel):
+    """An organisation's mention record (ADR-0035 §2.3): its proper
+    names, the words naming its kind of institution, and its places,
+    which it carries in its names or its `location` claims name."""
+
+    kind: Literal["organization"] = "organization"
+    names: list[str] = []
+    kinds: list[str] = []
+    places: list[str] = []
+
+
+class FamilyStructure(StrictModel):
+    """A family's mention record (ADR-0035 §2.4)."""
+
+    kind: Literal["family"] = "family"
+    surnames: list[str] = []
+
+
+MentionStructure = Annotated[
+    PersonStructure | PlaceStructure | OrganizationStructure | FamilyStructure,
+    Field(discriminator="kind"),
+]
+
+# The entity kinds that take a mention record; every other kind has none
+# (ADR-0035 §2.5).
+STRUCTURED_KINDS = ("human", "place", "organization", "family")
+
+
 class EntityRecord(StrictModel):
     """One document-scoped entity from the extraction's entity manifest
     (ADR-0007).
@@ -532,6 +648,21 @@ class EntityRecord(StrictModel):
     # next vocabulary round instead of the entity being mistyped.
     type_hint: str | None = None
     qid: str | None = Field(default=None, pattern=r"^Q[1-9]\d*$")
+    # The mention record (ADR-0035 §2): what the entity's names are made
+    # of, for identity only and never written. Its variant matches the
+    # entity's kind; `structure_problems` checks it against the label and
+    # aliases. The extraction prompts do not ask for it, so the JSON
+    # Schema they carry leaves it out, and an entity without one
+    # serialises as if the field did not exist, so its content hashes are
+    # unchanged.
+    structure: SkipJsonSchema[MentionStructure | None] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_structure(self, handler: SerializerFunctionWrapHandler):
+        data = handler(self)
+        if self.structure is None and isinstance(data, dict):
+            data.pop("structure", None)
+        return data
 
 
 class ClaimBatch(StrictModel):
@@ -571,21 +702,41 @@ def validate_against_manifest(
     batch: ClaimBatch,
     manifest_path=DEFAULT_MANIFEST,
     vocabulary: tuple[dict[str, str], set[str]] | None = None,
+    acceptance: Acceptance | None = None,
+    allow_retired: frozenset[str] = frozenset(),
 ) -> list[str]:
-    """Check every key and datatype in the batch against the manifest.
+    """Check every key, datatype and value kind in the batch against the
+    manifest.
 
     Returns a list of human-readable problems (empty means valid), so a
     pipeline step can report them all at once instead of failing one at
-    a time.
+    a time. Beyond keys and datatypes:
+
+    * an item value's kind must be one its property accepts (ADR-0031,
+      ADR-0035 §3.5). A local ref's kind is its entity's, from the
+      batch's entity manifest or else its own `instance_of`; a
+      vocabulary ref's is its key. An existing item named by its QID has
+      no kind here, so it is not checked;
+    * a claim of a retired property is refused (ADR-0036), save one in
+      `allow_retired`;
+    * a death's principal is never also its informant (ADR-0035 §3.2).
     """
     properties, items = (
         vocabulary
         if vocabulary is not None
         else load_vocabulary(manifest_path)
     )
+    acceptance = (
+        acceptance
+        if acceptance is not None
+        else load_acceptance(manifest_path)
+    )
     errors: list[str] = []
 
     entity_ids: set[str] = {entity.id for entity in batch.entities}
+    entity_kinds: dict[str, str] = {
+        entity.id: entity.kind for entity in batch.entities
+    }
     seen_entity_ids: set[str] = set()
     for e_index, entity in enumerate(batch.entities):
         where = f"entities[{e_index}]"
@@ -615,10 +766,22 @@ def validate_against_manifest(
                     f"batch's entity manifest"
                 )
 
-    def check_property_value(prop: str, value, where: str) -> None:
+    def kind_of(ref) -> str | None:
+        if isinstance(ref, VocabRef):
+            return ref.key
+        if isinstance(ref, LocalRef):
+            return entity_kinds.get(ref.local_id, ref.instance_of)
+        return None
+
+    def check_property_value(
+        prop: str, value, where: str, subject_kind: str | None
+    ) -> None:
         datatype = properties.get(prop)
         if datatype is None:
             errors.append(f"{where}: unknown property key {prop!r}")
+            return
+        if prop in acceptance.retired and prop not in allow_retired:
+            errors.append(f"{where}: {acceptance.refusal(prop, None)}")
             return
         expected = DATATYPE_TO_VALUE_TYPE.get(datatype)
         if expected is None:
@@ -634,19 +797,200 @@ def validate_against_manifest(
             )
         if isinstance(value, ItemValue):
             check_ref(value.value, f"{where}.value")
+            if prop not in acceptance.retired:
+                refusal = acceptance.refusal(
+                    prop,
+                    kind_of(value.value),
+                    subject_kind,
+                    vocabulary=isinstance(value.value, VocabRef),
+                )
+                if refusal is not None:
+                    errors.append(f"{where}.value: {refusal}")
 
+    def ref_key(ref) -> str:
+        if isinstance(ref, LocalRef):
+            return f"local:{ref.local_id}"
+        if isinstance(ref, QidRef):
+            return f"qid:{ref.qid}"
+        return f"vocab:{ref.key}"
+
+    # roles each person holds in each death, across the batch's claims
+    death_roles: dict[tuple[str, str], set[str]] = {}
     for index, claim in enumerate(batch.claims):
         where = f"claims[{index}]"
+        subject_kind = kind_of(claim.subject)
         check_ref(claim.subject, f"{where}.subject")
-        check_property_value(claim.property, claim.value, where)
+        check_property_value(claim.property, claim.value, where, subject_kind)
         for q_index, qualifier in enumerate(claim.qualifiers):
             check_property_value(
                 qualifier.property,
                 qualifier.value,
                 f"{where}.qualifiers[{q_index}]",
+                subject_kind,
             )
+        if (
+            claim.property == "participant"
+            and subject_kind == "death"
+            and isinstance(claim.value, ItemValue)
+        ):
+            roles = death_roles.setdefault(
+                (ref_key(claim.subject), ref_key(claim.value.value)), set()
+            )
+            roles.update(
+                qualifier.value.value.key
+                for qualifier in claim.qualifiers
+                if qualifier.property == "object_has_role"
+                and isinstance(qualifier.value, ItemValue)
+                and isinstance(qualifier.value.value, VocabRef)
+            )
+            if {"principal", "informant"} <= roles:
+                errors.append(
+                    f"{where}: a death's principal is never also its "
+                    f"informant (ADR-0035 §3.2)"
+                )
 
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Mention record checks (ADR-0035 §5)
+# ---------------------------------------------------------------------------
+
+
+def _fold(text: str) -> str:
+    """Case and accents folded after Unicode normalisation."""
+    decomposed = unicodedata.normalize(
+        "NFD", unicodedata.normalize("NFC", text).casefold()
+    )
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", _fold(text))
+
+
+def _occurs(part: str, forms: list[list[str]], open_end: bool = False) -> bool:
+    """Whether `part` occurs in one of the forms, folded, as whole words.
+    With `open_end`, its last word may end inside a form's word, as a
+    family's surname does in "the Löbigs"."""
+    words = _words(part)
+    if not words:
+        return False
+    size = len(words)
+    for form in forms:
+        for start in range(len(form) - size + 1):
+            window = form[start : start + size]
+            if window[:-1] != words[:-1]:
+                continue
+            last = window[-1]
+            if last == words[-1] or (open_end and last.startswith(words[-1])):
+                return True
+    return False
+
+
+def structure_problems(entity: EntityRecord) -> list[str]:
+    """Why an entity's mention record cannot stand (ADR-0035 §5), each
+    reason first: empty when it can, or when it has none.
+
+    * `kind`: the record's variant is not the entity's kind;
+    * `addition`: a part occurs in neither the label nor an alias, folded,
+      as whole words. The model may divide and label a name, never add
+      to it. A given name's standard form is exempt, as are an
+      organisation's places, which its `location` claims may name;
+    * `initial`: an initial gives a standard form;
+    * `no name part`: a person whose status is `name` has no name part;
+    * `no toponym`: a place whose status is `toponym` has no name and no
+      address.
+    """
+    structure = entity.structure
+    if structure is None:
+        return []
+    if structure.kind != entity.kind:
+        return [
+            f"kind: a {structure.kind!r} record on a {entity.kind!r} entity"
+        ]
+    forms = [_words(form) for form in (entity.label, *entity.aliases)]
+    problems: list[str] = []
+    parts: list[str] = []
+    open_parts: list[str] = []
+    if isinstance(structure, PersonStructure):
+        parts += [name.written for name in structure.given]
+        parts += [name.written for name in structure.surnames]
+        parts += structure.patronymics + structure.nicknames
+        parts += structure.titles + structure.suffixes + structure.unsplit
+        for name in structure.given:
+            if name.initial and name.standard is not None:
+                problems.append(
+                    f"initial: the initial {name.written!r} gives the "
+                    f"standard form {name.standard!r}"
+                )
+        named = (
+            structure.given
+            or structure.surnames
+            or structure.patronymics
+            or structure.nicknames
+            or structure.unsplit
+        )
+        if structure.status == "name" and not named:
+            problems.append("no name part: a name status with no name part")
+    elif isinstance(structure, PlaceStructure):
+        for name in structure.names:
+            parts += [name.written]
+            parts += [part for part in (name.toponym, name.head) if part]
+        if structure.address is not None:
+            address = structure.address
+            parts += [address.written]
+            parts += [
+                part for part in (address.street, address.number) if part
+            ]
+        parts += structure.within
+        if structure.status == "toponym" and not (
+            structure.names or structure.address
+        ):
+            problems.append(
+                "no toponym: a toponym status with no name and no address"
+            )
+    elif isinstance(structure, OrganizationStructure):
+        parts += structure.names + structure.kinds
+    else:
+        open_parts += structure.surnames
+    for part, open_end in [(p, False) for p in parts] + [
+        (p, True) for p in open_parts
+    ]:
+        if not _occurs(part, forms, open_end=open_end):
+            problems.append(
+                f"addition: {part!r} occurs in neither the label nor an alias"
+            )
+    return problems
+
+
+def set_aside_structure(entity: dict) -> tuple[dict, list[str]]:
+    """An entity of an entity manifest, as the model wrote it, with its
+    mention record set aside when the record cannot stand (ADR-0035 §5),
+    and the reasons.
+
+    The entity keeps its label, aliases and kind: a record that fails is
+    dropped, never the entity or the manifest, and the entity is then
+    recordless. A record that does not parse gives the reason `schema`;
+    one that parses gives those of `structure_problems`. An entity that
+    is invalid without its record is returned as it is, for the
+    manifest's own validation to report.
+    """
+    if entity.get("structure") is None:
+        return entity, []
+    rest = {key: value for key, value in entity.items() if key != "structure"}
+    try:
+        record = EntityRecord.model_validate(entity)
+    except ValidationError as exc:
+        try:
+            EntityRecord.model_validate(rest)
+        except ValidationError:
+            return entity, []
+        first = exc.errors()[0]
+        location = ".".join(str(step) for step in first["loc"])
+        return rest, [f"schema: {location}: {first['msg']}"]
+    problems = structure_problems(record)
+    return (rest, problems) if problems else (entity, [])
 
 
 # ---------------------------------------------------------------------------
