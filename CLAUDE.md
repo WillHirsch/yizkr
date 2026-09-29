@@ -71,7 +71,7 @@ values and N source-attributed values, and everything still works.*
   `stage:*` label; ADR-0025, ADR-0032). There is no gold set or
   synthetic eval.
 - Lint/format: ruff (`make lint` / `make fmt`); CI runs lint + unit
-  tests on every push.
+  tests on every push to a pull request and on every commit to main.
 - Reads: SPARQL against the bundled query service.
 - Bulk human review: CSV artifacts consumable by OpenRefine.
 - Idempotency: all bootstrap/import scripts must be safely re-runnable.
