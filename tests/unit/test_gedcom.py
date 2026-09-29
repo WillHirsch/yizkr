@@ -3842,8 +3842,15 @@ class TestExcerptClip:
             # a NOTE of a placeholder sign (U+2ADC) that NFC writes as two
             # characters: longer as the instance stores it than as written
             ["1 BIRT", "2 DATE 7 JAN 1919", "2 NOTE " + "\u2adc" * 250],
+            # a NOTE of many short CONT lines, which the clip packs in
+            [
+                "1 BIRT",
+                "2 DATE 7 JAN 1919",
+                "2 NOTE Issued in 1938.",
+                *["3 CONT For the emigration."] * 40,
+            ],
         ],
-        ids=["long-line", "longer-in-NFC"],
+        ids=["long-line", "longer-in-NFC", "many-lines"],
     )
     def test_every_excerpt_fits(self, lines):
         batch = adapt_gedcom(gustavs_births(lines), artifact=EXPORT).batch
@@ -3914,11 +3921,12 @@ class TestExcerptClip:
             )
 
     def test_a_citation_keeps_the_line_it_stands_beneath(self):
-        # (here) the family record's MARR carries a NOTE of each length
-        # from 150 to 420 characters, and its DIV cites the judgment: the
-        # clip keeps the DIV line the citation stands beneath, whatever
-        # else it leaves out, so the citation is never read as the MARR's
-        for length in range(150, 421):
+        # (here) the family record's MARR carries a NOTE of each length up
+        # to 330 characters, and its DIV cites the judgment, with a long
+        # NOTE after the citation: the clip keeps the DIV line the
+        # citation stands beneath before any other line it could keep, so
+        # the citation is never read as the MARR's
+        for length in range(1, 331):
             text = cited(JUDGMENT) + family(
                 *WEDDING,
                 f"2 NOTE {text_of(length)}",
@@ -3926,6 +3934,7 @@ class TestExcerptClip:
                 "2 DATE 2 JAN 1957",
                 "2 SOUR @S1@",
                 "3 PAGE Bl. 1",
+                f"2 NOTE {text_of(300)}",
             )
             ((_, excerpt),) = spouse_sources(text)
             lines = excerpt.split(" | ")
