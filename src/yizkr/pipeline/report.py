@@ -218,7 +218,7 @@ ROUTES = frozenset(
 )
 # how a page of a PDF read page by page is read (yizkr.pipeline.textlayer)
 PAGE_METHODS = frozenset({"text-layer", "vision", "none"})
-RESOLUTIONS = frozenset({"detected", "fallback", "override"})
+RESOLUTIONS = frozenset({"record", "detected", "fallback", "override"})
 HIT_REASONS = frozenset({KEY_MATCH, "adopted"})
 MISS_REASONS = frozenset({"absent", "rejected", "refresh"})
 FORCED = MISS_REASONS | {NO_CALL, NO_CACHE, REPLAY, REPLAY_CHANGED}

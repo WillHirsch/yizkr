@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.records import page_text, record_answer
 from tests.unit.test_orchestrate import (
     ScriptedOrchestrator,
     approve_all_claims,
@@ -2158,8 +2159,9 @@ LETTER_REF = ArtifactRef.from_bytes(b"fictional scan: a Loebig letter")
 
 
 def person(prompt: str) -> tuple[str, int]:
-    """The first word and year of a prompt's first numbered line."""
-    match = re.search(r"^1: (.*)$", prompt, re.M)
+    """The first word and year of a prompt's first numbered line, past
+    a page marker."""
+    match = re.search(r"^\d+: (?!\[Page \d+\]$)(.*)$", prompt, re.M)
     line = match.group(1) if match else ""
     words = re.findall(r"[A-Za-z]+", line)
     year = re.search(r"\b(1[5-9]\d\d)\b", line)
@@ -2173,7 +2175,7 @@ def pipeline_answers(kind, prompt, opening):
     letter, answers the entity manifest and the chunks from the document
     it is shown, and the critic with no findings."""
     if prompt.startswith(TRANSCRIPTION_PROMPT):
-        return LETTER
+        return record_answer(LETTER)
     if "manifest of EVERY distinct entity" in prompt:
         name, _ = person(prompt)
         entity = {"id": "e1", "label": name, "kind": "human"}
@@ -2205,7 +2207,7 @@ def reading(text: str):
 
     def answer(kind, prompt, opening):
         if prompt.startswith(TRANSCRIPTION_PROMPT):
-            return text
+            return record_answer(text)
         return pipeline_answers(kind, prompt, opening)
 
     return answer
@@ -2218,6 +2220,7 @@ def stricter_check(monkeypatch) -> None:
         "reading-service-notice",
         transcription_check.TOOL_FAILURE,
         r"reading service will be offline",
+        tier=transcription_check.FAIL,
     )
     monkeypatch.setattr(
         transcription_check,
@@ -2363,7 +2366,7 @@ class TestThePipeline:
                 )
         assert len(found["engine"]) == 3
         assert found["replay"] == found["engine"] == found["no-cache"]
-        assert found["engine"]["a-scan"]["transcription"] == LETTER
+        assert found["engine"]["a-scan"]["transcription"] == page_text(LETTER)
         # the engine took part in both live runs, the same calls each time
         engine, uncached = runs["engine"][0], runs["no-cache"][0]
         assert sorted(engine.calls) == sorted(uncached.calls)
@@ -2557,13 +2560,15 @@ class TestThePipeline:
         assert "reading-service-notice" in aside["reason"]
         assert aside["kept"] == "transcription.superseded-1.json"
         kept = json.loads((doc.dir / aside["kept"]).read_text())
-        assert kept["text"] == NOTICE
+        assert kept["text"] == page_text(NOTICE)
         assert "transcription" not in {
             event["stage"] for event in this_run(again, "reused")
         }
         # the engine was asked once for the scan, and its answer is the view
         assert transcriptions(engine) == 1
-        assert json.loads(doc.transcription.read_text())["text"] == READ_AGAIN
+        assert json.loads(doc.transcription.read_text())["text"] == page_text(
+            READ_AGAIN
+        )
         if cached:
             (reject,) = this_run(again, "cache-reject")
             assert reject["role"] == "transcribe"
@@ -2654,7 +2659,7 @@ class TestThePipeline:
             == (
                 2,
                 AWAITING_EQUIVALENCES,
-                READ_AGAIN,
+                page_text(READ_AGAIN),
                 1,
             )
         )

@@ -221,10 +221,12 @@ BATCH_VOLATILE = (
     "extraction_run.pipeline_version",
 )
 # the fields of a transcription that say what made it (the route and the
-# engine build, and each page's provenance in a PDF read page by page),
-# left out of its content hash: a page's place in the text and the images
-# it names are content, as its text is
-TRANSCRIPTION_VOLATILE = ("engine", "pages.provenance")
+# engine build, and each page's provenance), and the transcription
+# check's flag, which says what the check made of it: left out of its
+# content hash. A page's place in the text, the images it names and its
+# record's fields (its printed page number, status, languages and notes)
+# are content, as its text and its document class are (ADR-0037)
+TRANSCRIPTION_VOLATILE = ("engine", "pages.provenance", "flag")
 # the event that says a stage's view was current and stands
 REUSED = "reused"
 
@@ -1316,22 +1318,28 @@ class Orchestrator:
         self, doc: DocumentRun, transcription
     ) -> str | None:
         """Why the transcription check fails `transcription` of the
-        document now, or None when it passes. A PDF read page by page is
+        document now, or None when it passes. A vision transcription made
+        whole is checked with its record, and fails without one; a text
+        file's, which has none, by its text. A PDF read page by page is
         checked where the vision engine read it: the text of each page it
         read, as the reading of one image, and the transcription of each
         image placed within a page that the document's directory keeps
         (`_image_failure`). Its text-layer pages are the document's own
         text and are never checked. It reads files only, and writes none."""
         from yizkr.pipeline.textlayer import VISION
+        from yizkr.pipeline.transcribe import PDF_PAGES
         from yizkr.pipeline.transcription_check import (
             TranscriptionCheckFailed,
             check_transcription,
             media_page_count,
         )
 
-        if transcription.pages is None:
+        if not transcription.engine.startswith(f"{PDF_PAGES}:"):
             check = check_transcription(
-                transcription.text, pages=media_page_count(doc.source)
+                transcription.text,
+                pages=media_page_count(doc.source),
+                record=transcription.record(),
+                expect_record=transcription.engine.startswith("llm-vision:"),
             )
             return (
                 None if check.passed else str(TranscriptionCheckFailed(check))
@@ -1373,7 +1381,9 @@ class Orchestrator:
             return f"the transcription of {image} cannot be read ({_why(exc)})"
         if kept.artifact.sha1 != sha1:
             return f"the transcription of {image} names another image"
-        check = check_transcription(kept.text, pages=1)
+        check = check_transcription(
+            kept.text, pages=1, record=kept.record(), expect_record=True
+        )
         if check.passed:
             return None
         return f"{TranscriptionCheckFailed(check)} ({image})"
@@ -1384,6 +1394,8 @@ class Orchestrator:
         read page by page made beside its transcription, its images and
         their transcriptions, is kept first (`_keep_reading`), and what
         of it needs attention is the stage's attention."""
+        from yizkr.pipeline.transcribe import PDF_PAGES
+
         method = route_transcription(doc.source, doc.correction)
         transcription, resolution = self._run_stage(
             doc,
@@ -1411,7 +1423,7 @@ class Orchestrator:
         changed = _write_view(
             doc.transcription, transcription.model_dump_json(indent=2)
         )
-        if transcription.pages is not None and changed:
+        if transcription.engine.startswith(f"{PDF_PAGES}:") and changed:
             self.log(f"  {doc.source.name}: {_read_by_page(transcription)}")
         if self.language == "auto" and changed:
             self.log(f"  {doc.source.name}: language {resolution.describe()}")

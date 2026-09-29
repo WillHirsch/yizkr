@@ -1,0 +1,610 @@
+"""The transcription record (#389, ADR-0037): the vision engine answers a
+record per page, and code reads the record instead of the wording. The
+check fails an answer that is not the record, a page without a status, an
+answer cut off at the output limit and a record missing pages; the
+language hint comes from the record; the answer is the text after the
+last tool result; and the record's page numbers are read through
+`Transcription.printed_pages`.
+
+Every text is a source of the fictional universe (docs/EXAMPLES.md), in
+its English, German, Russian and Frisian, or invented engine text.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from tests.fixtures import example_universe as u
+from tests.fixtures.records import page_text, record_answer, record_page
+from yizkr.claims import ArtifactRef
+from yizkr.model.schema import load_manifest
+from yizkr.pipeline.language import (
+    detect_language,
+    record_language,
+    resolve_language,
+)
+from yizkr.pipeline.llm import ClaudeCodeClient, OutputLimitReached
+from yizkr.pipeline.transcribe import (
+    TRANSCRIPTION_PROMPT,
+    LlmVisionTranscriber,
+    Transcription,
+)
+from yizkr.pipeline.transcription_check import (
+    CUT_OFF,
+    NOT_A_RECORD,
+    PAGES_MISSING,
+    TOO_SHORT,
+    TranscriptionCheckFailed,
+    check_answer,
+    check_transcription,
+)
+from yizkr.pipeline.transcription_record import (
+    EDITORIAL_MARKS,
+    UNCLASSIFIED,
+    RecordError,
+    RecordPage,
+    artifact_classes,
+    document_classes,
+    main_language,
+    merged,
+    parse_record,
+    record_text,
+)
+
+SOURCES = u.by_key()
+POSTCARD = SOURCES["postcard-1938"].text
+FRISIAN = SOURCES["letter-to-sipkje-1952"].text
+RUSSIAN = SOURCES["letter-to-leopold-1958"].text
+NATURALISATION = SOURCES["naturalisation-1952"].text
+CAPTION = "Wastl to Klara, July 1939."
+# the postcard's greeting as a faded reading gives it
+FADED = "Liebe Klara, [illegible] [illegible] [?] Dein Vater"
+
+
+def a_record(*pages: dict, document_class: str = "letter") -> str:
+    return json.dumps(
+        {"document_class": document_class, "pages": list(pages)},
+        ensure_ascii=False,
+    )
+
+
+class TestTheRecord:
+    def test_a_record_parses_with_every_field(self):
+        record = parse_record(
+            a_record(
+                record_page(
+                    1,
+                    POSTCARD,
+                    languages=["de"],
+                    printed_page="2",
+                    notes="the stamp is torn off",
+                ),
+                record_page(2, "", status="blank"),
+            )
+        )
+        assert record.document_class == "letter"
+        first, second = record.pages
+        # the physical index and the number printed on the page are apart
+        assert (first.page, first.printed_page) == (1, "2")
+        assert (first.status, first.languages) == ("transcribed", ["de"])
+        assert first.text == POSTCARD
+        assert first.notes == "the stamp is torn off"
+        assert (second.status, second.text, second.languages) == (
+            "blank",
+            "",
+            [],
+        )
+
+    def test_a_record_alone_in_a_fenced_block_parses(self):
+        answer = "```json\n" + record_answer(CAPTION) + "\n```"
+        assert parse_record(answer).pages[0].text == CAPTION
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            # prose, in any language: a refusal is not the record
+            "I'm sorry, but I can't transcribe this document.",
+            "Es tut mir leid, ich kann dieses Dokument nicht abschreiben.",
+            "Извините, я не могу расшифровать этот документ.",
+            # the engine's narration before the record
+            "Let me read the image.\n" + record_answer(CAPTION),
+            # not one object
+            "[" + record_answer(CAPTION) + "]",
+            # a record cut short
+            record_answer(CAPTION)[:-3],
+        ],
+    )
+    def test_an_answer_that_is_not_one_record_object_is_refused(self, answer):
+        with pytest.raises(RecordError):
+            parse_record(answer)
+
+    @pytest.mark.parametrize(
+        "page, why",
+        [
+            # a page with no status: the unambiguous signal the check reads
+            (
+                {"page": 1, "text": CAPTION, "languages": ["en"]},
+                "pages.0.status",
+            ),
+            (
+                {"page": 1, "status": "partly read", "text": CAPTION},
+                "pages.0.status",
+            ),
+            # a page it calls transcribed must hold text
+            ({"page": 1, "status": "transcribed", "text": " "}, "no text"),
+            (
+                {"page": 1, "status": "blank", "languages": ["english"]},
+                "languages",
+            ),
+            (
+                {"page": 1, "status": "blank", "confidence": 0.9},
+                "confidence",
+            ),
+        ],
+    )
+    def test_a_page_outside_the_contract_is_refused(self, page, why):
+        with pytest.raises(RecordError, match="not the transcription record"):
+            parse_record(a_record(page))
+        with pytest.raises(RecordError) as caught:
+            parse_record(a_record(page))
+        assert why in str(caught.value)
+        # the reason never quotes the answer
+        assert CAPTION not in str(caught.value)
+
+    def test_the_pages_are_numbered_from_one_in_order(self):
+        for numbers in ([2], [1, 3], [2, 1], [1, 1]):
+            pages = [record_page(n, CAPTION) for n in numbers]
+            with pytest.raises(RecordError, match="numbered"):
+                parse_record(a_record(*pages))
+
+    def test_the_class_is_one_of_the_manifests_or_unclassified(self):
+        manifest = load_manifest()
+        assert artifact_classes() == tuple(
+            key
+            for key, item in manifest.items.items()
+            if item.subclass_of == "artifact"
+        )
+        assert {"photograph", "certificate", "letter"} <= set(
+            artifact_classes()
+        )
+        assert document_classes() == (*artifact_classes(), UNCLASSIFIED)
+        for document_class in document_classes():
+            answer = record_answer(CAPTION, document_class=document_class)
+            assert parse_record(answer).document_class == document_class
+        for other in ("artifact", "diary", ""):
+            with pytest.raises(RecordError, match="document class"):
+                parse_record(record_answer(CAPTION, document_class=other))
+        with pytest.raises(RecordError):
+            parse_record(json.dumps({"pages": [record_page(1, CAPTION)]}))
+
+    def test_the_text_opens_each_page_with_its_marker(self):
+        record = parse_record(
+            a_record(
+                record_page(1, CAPTION),
+                record_page(2, "", status="blank"),
+                record_page(3, "[illegible]", status="illegible"),
+            )
+        )
+        text, spans = record_text(record.pages)
+        assert text == (
+            f"[Page 1]\n{CAPTION}\n\n[Page 2]\n\n[Page 3]\n[illegible]"
+        )
+        assert [text[start:end] for start, end in spans] == [
+            CAPTION,
+            "",
+            "[illegible]",
+        ]
+
+    def test_an_image_of_several_pages_merges_into_one_pdf_page(self):
+        pages = [
+            RecordPage(
+                page=1,
+                printed_page="12",
+                status="blank",
+                languages=[],
+                notes="a pasted-in photograph",
+            ),
+            RecordPage(
+                page=2,
+                printed_page="13",
+                status="transcribed",
+                text=CAPTION,
+                languages=["en", "de"],
+                notes="pencil",
+            ),
+        ]
+        one = merged(pages, 6)
+        assert (one.page, one.printed_page, one.status) == (
+            6,
+            "12, 13",
+            "transcribed",
+        )
+        assert one.text == CAPTION
+        assert one.languages == ["en", "de"]
+        assert one.notes == "a pasted-in photograph; pencil"
+        blank = merged([pages[0]], 2)
+        assert (blank.status, blank.printed_page) == ("blank", "12")
+
+
+class TestTheCheckReadsTheRecord:
+    def test_a_record_passes_and_is_judged_on_its_text(self):
+        check, record = check_answer(
+            record_answer(FRISIAN, document_class="letter", languages=["fy"]),
+            pages=1,
+        )
+        assert check.passed and not check.flagged
+        assert record.pages[0].languages == ["fy"]
+        assert check.record_pages == 1
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            # a refusal the English signatures never match
+            "Извините, я не могу расшифровать этот документ.",
+            "It spyt my, mar ik kin dit dokumint net oerskriuwe.",
+            # a page without a status
+            a_record({"page": 1, "text": RUSSIAN, "languages": ["ru"]}),
+        ],
+    )
+    def test_an_answer_that_is_not_the_record_fails(self, answer):
+        check, record = check_answer(answer, pages=1)
+        assert record is None
+        assert (check.passed, check.failure) == (False, NOT_A_RECORD)
+        assert check.signature is None
+
+    def test_a_record_missing_pages_fails(self):
+        answer = record_answer(NATURALISATION, CAPTION)
+        check, _record = check_answer(answer, pages=3)
+        assert (check.passed, check.failure) == (False, PAGES_MISSING)
+        assert "2 of the media's 3 pages" in check.reason
+        assert check_answer(answer, pages=2)[0].passed
+
+    def test_an_image_may_show_two_pages(self):
+        """One photograph of an open book is two pages of the document."""
+        answer = record_answer(NATURALISATION, CAPTION)
+        assert check_answer(answer, pages=1)[0].passed
+
+    def test_pages_the_record_calls_blank_need_no_text(self):
+        """The floor counts the pages the record calls transcribed: blank
+        and illegible pages are the engine's plain statement."""
+        answer = a_record(
+            record_page(1, CAPTION),
+            record_page(2, "", status="blank"),
+            record_page(3, "[illegible]", status="illegible"),
+            record_page(4, "", status="not-a-document-page"),
+        )
+        check, _record = check_answer(answer, pages=4)
+        assert check.passed
+        assert check.min_text_chars == 3
+        # a page it calls transcribed that holds only marks is too short
+        marks = a_record(
+            record_page(1, "[illegible]"), record_page(2, "", status="blank")
+        )
+        check, _record = check_answer(marks, pages=2)
+        assert (check.passed, check.failure) == (False, TOO_SHORT)
+        assert "1 transcribed pages" in check.reason
+
+    def test_an_answer_cut_off_at_the_output_limit_fails(self):
+        check, record = check_answer(record_answer(CAPTION), cut_off=True)
+        assert (check.passed, check.failure, record) == (False, CUT_OFF, None)
+
+    def test_a_vision_transcription_without_a_record_fails(self):
+        check = check_transcription(CAPTION, pages=1, expect_record=True)
+        assert (check.passed, check.failure) == (False, NOT_A_RECORD)
+        assert check_transcription(CAPTION, pages=1).passed
+
+    def test_the_wording_of_a_record_only_flags_it(self):
+        answer = record_answer("I'm unable to assist with this request.")
+        check, record = check_answer(answer, pages=1)
+        assert (check.passed, check.flagged) == (True, True)
+        assert check.signature == "refusal-request"
+        assert record is not None
+
+
+class FakeClient:
+    """An engine's client that gives `answers` in turn, and reports the
+    stop reason its model gave each (`last_report`), as the engines'
+    clients do."""
+
+    model_identifier = "fake-model"
+
+    def __init__(self, *answers, stop_reason: str = "end_turn") -> None:
+        self.answers = list(answers)
+        self.stop_reason = stop_reason
+        self.prompts: list[str] = []
+        self.rejected: list[str] = []
+
+    def complete(self, prompt, image_paths=()):
+        self.prompts.append(prompt)
+        answer = self.answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    def last_report(self) -> dict:
+        return {"stop_reason": self.stop_reason}
+
+    def reject(self, response, reason) -> bool:
+        self.rejected.append(reason)
+        return False
+
+
+def a_scan(tmp_path, name="postcard.png"):
+    path = tmp_path / name
+    path.write_bytes(b"fictional scan of the postcard")
+    return path
+
+
+class TestTheTranscriber:
+    def test_the_prompt_asks_for_the_record(self):
+        for mark in EDITORIAL_MARKS:
+            assert mark in TRANSCRIPTION_PROMPT
+        assert "[redacted]" in TRANSCRIPTION_PROMPT
+        for field in (
+            "document_class",
+            "printed_page",
+            "status",
+            "languages",
+            "notes",
+        ):
+            assert f'"{field}"' in TRANSCRIPTION_PROMPT
+        for document_class in document_classes():
+            assert f'"{document_class}"' in TRANSCRIPTION_PROMPT
+        for status in ("transcribed", "blank", "illegible"):
+            assert f'"{status}"' in TRANSCRIPTION_PROMPT
+        assert '"not-a-document-page"' in TRANSCRIPTION_PROMPT
+
+    def test_the_record_reaches_the_view(self, tmp_path):
+        answer = a_record(
+            record_page(
+                1,
+                POSTCARD,
+                languages=["de"],
+                printed_page="1",
+                notes="postmark faint",
+            ),
+            record_page(2, "", status="blank"),
+        )
+        client = FakeClient(answer)
+        transcription = LlmVisionTranscriber(
+            client, language="auto"
+        ).transcribe(a_scan(tmp_path))
+        assert client.prompts == [TRANSCRIPTION_PROMPT]
+        assert transcription.document_class == "letter"
+        assert transcription.language == "de"
+        assert transcription.text == f"[Page 1]\n{POSTCARD}\n\n[Page 2]"
+        first, second = transcription.pages
+        assert transcription.page_text(first) == POSTCARD
+        assert (first.printed_page, first.status, first.languages) == (
+            "1",
+            "transcribed",
+            ["de"],
+        )
+        assert first.notes == "postmark faint"
+        assert first.provenance.method == "vision"
+        assert first.provenance.engine == "llm-vision:fake-model"
+        assert (second.status, transcription.page_text(second)) == (
+            "blank",
+            "",
+        )
+        assert transcription.record() == parse_record(answer)
+        assert transcription.flag is None
+
+    def test_the_record_s_page_numbers_are_read_by_their_accessor(
+        self, tmp_path
+    ):
+        """Extraction reads the page numbers printed on the pages from the
+        record, by the physical index, not from the text."""
+        answer = a_record(
+            record_page(1, CAPTION, printed_page="iv"),
+            record_page(2, NATURALISATION, printed_page="12"),
+            record_page(3, "", status="blank"),
+        )
+        transcription = LlmVisionTranscriber(FakeClient(answer)).transcribe(
+            a_scan(tmp_path)
+        )
+        assert transcription.printed_pages() == {1: "iv", 2: "12"}
+        text_file = Transcription(
+            artifact=ArtifactRef(sha1="a" * 40), text=CAPTION, engine="x"
+        )
+        assert text_file.printed_pages() == {}
+
+    @pytest.mark.parametrize(
+        "text, languages, code",
+        [
+            (FRISIAN, ["fy"], "fy"),
+            (RUSSIAN, ["ru"], "ru"),
+            (FADED, ["de"], "de"),
+        ],
+    )
+    def test_the_language_hint_comes_from_the_record(
+        self, tmp_path, text, languages, code
+    ):
+        client = FakeClient(record_answer(text, languages=languages))
+        transcriber = LlmVisionTranscriber(client, language="auto")
+        assert transcriber.transcribe(a_scan(tmp_path)).language == code
+        assert transcriber.last_resolution.source == "record"
+
+    def test_an_explicit_language_is_still_forced(self, tmp_path):
+        client = FakeClient(record_answer(FRISIAN, languages=["fy"]))
+        transcriber = LlmVisionTranscriber(client, language="nl")
+        assert transcriber.transcribe(a_scan(tmp_path)).language == "nl"
+
+    def test_a_record_naming_no_language_falls_back(self, tmp_path):
+        answer = a_record(
+            record_page(1, "", status="blank"), document_class="photograph"
+        )
+        transcriber = LlmVisionTranscriber(
+            FakeClient(answer), language="auto", fallback_language="de"
+        )
+        transcription = transcriber.transcribe(a_scan(tmp_path))
+        assert transcription.language == "de"
+        assert transcriber.last_resolution.source == "fallback"
+
+    def test_an_answer_the_cli_gave_up_on_fails_as_cut_off(self, tmp_path):
+        client = FakeClient(OutputLimitReached(), record_answer(CAPTION))
+        transcriber = LlmVisionTranscriber(client)
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            transcriber.transcribe(a_scan(tmp_path))
+        assert caught.value.check.failure == CUT_OFF
+        assert isinstance(caught.value.__cause__, OutputLimitReached)
+        # nothing was kept, so nothing is asked for again in the call
+        assert len(client.prompts) == 1
+
+    def test_an_answer_stopped_at_max_tokens_fails_and_is_rejected(
+        self, tmp_path
+    ):
+        """An answer whose engine reports the stop reason max_tokens is
+        cut off, whatever it holds, a whole record included."""
+        client = FakeClient(record_answer(CAPTION), stop_reason="max_tokens")
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            LlmVisionTranscriber(client).transcribe(a_scan(tmp_path))
+        assert caught.value.check.failure == CUT_OFF
+        assert len(client.rejected) == 1
+        assert "(cut-off)" in client.rejected[0]
+
+    def test_a_prose_answer_fails_and_is_rejected(self, tmp_path):
+        client = FakeClient("Извините, я не могу расшифровать этот документ.")
+        transcriber = LlmVisionTranscriber(client)
+        with pytest.raises(TranscriptionCheckFailed) as caught:
+            transcriber.transcribe(a_scan(tmp_path))
+        assert caught.value.check.failure == NOT_A_RECORD
+        assert transcriber.last_check == caught.value.check
+        assert caught.value.check.pages == 1
+        assert len(client.rejected) == 1
+
+    def test_a_flagged_record_goes_on_with_its_flag(self, tmp_path):
+        client = FakeClient(record_answer("I can't transcribe this document."))
+        transcriber = LlmVisionTranscriber(client)
+        transcription = transcriber.transcribe(a_scan(tmp_path))
+        assert transcription.flag == "refusal-transcribe"
+        assert transcriber.last_check.flagged
+        assert json.loads(transcription.model_dump_json())["flag"] == (
+            "refusal-transcribe"
+        )
+
+
+class TestLanguageOutsideTheMarks:
+    def test_the_marks_are_not_read_as_words(self):
+        """The faded greeting reads as the German it is: the marks are the
+        transcription's, not the postcard's."""
+        code, confidence = detect_language(FADED)
+        assert code == "de"
+        assert confidence >= 0.5
+        resolution = resolve_language(FADED, "auto", fallback="en")
+        assert (resolution.code, resolution.source) == ("de", "detected")
+
+    def test_a_line_of_marks_alone_is_too_short_to_detect(self):
+        line = "[illegible] [?] [redacted] [Page 2] 19.8.38 [?] [illegible]"
+        assert detect_language(line) == (None, 0.0)
+
+    def test_the_record_s_main_language_holds_most_of_its_text(self):
+        pages = [
+            RecordPage(
+                page=1, status="transcribed", text=CAPTION, languages=["en"]
+            ),
+            RecordPage(
+                page=2,
+                status="transcribed",
+                text=POSTCARD,
+                languages=["de", "en"],
+            ),
+            RecordPage(page=3, status="blank"),
+        ]
+        assert main_language(pages) == "de"
+        assert main_language(pages[:1]) == "en"
+        assert main_language(pages[2:]) is None
+        # a tie goes to the language listed first
+        tie = [
+            RecordPage(
+                page=1, status="transcribed", text="Abc", languages=["fy"]
+            ),
+            RecordPage(
+                page=2, status="transcribed", text="Xyz", languages=["nl"]
+            ),
+        ]
+        assert main_language(tie) == "fy"
+        assert record_language(pages, "auto").code == "de"
+        assert record_language(pages, "en").source == "override"
+
+
+def stream(*events: dict) -> str:
+    return "\n".join(json.dumps(event) for event in events)
+
+
+def assistant(*blocks: dict) -> dict:
+    return {"type": "assistant", "message": {"content": list(blocks)}}
+
+
+def text(value: str) -> dict:
+    return {"type": "text", "text": value}
+
+
+TOOL_USE = {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}
+TOOL_RESULT = {
+    "type": "user",
+    "message": {
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}
+        ]
+    },
+}
+
+
+class TestTheAnswerIsTakenFromTheStream:
+    def test_narration_before_a_tool_call_is_no_part_of_the_answer(self):
+        record = record_answer(CAPTION)
+        stdout = stream(
+            assistant(text("Let me read the image."), TOOL_USE),
+            TOOL_RESULT,
+            assistant(text(record)),
+            {"type": "result", "result": record},
+        )
+        assert ClaudeCodeClient._assemble_stream(stdout) == record
+
+    def test_only_the_text_after_the_last_tool_result_counts(self):
+        stdout = stream(
+            assistant(text("I'll read the first page."), TOOL_USE),
+            TOOL_RESULT,
+            assistant(text("Now the second."), TOOL_USE),
+            TOOL_RESULT,
+            assistant(text('{"document_class": ')),
+            assistant(text('"letter"}')),
+        )
+        # a continuation across turns still joins, with no separator
+        assert ClaudeCodeClient._assemble_stream(stdout) == (
+            '{"document_class": "letter"}'
+        )
+
+    def test_a_model_that_spoke_only_before_its_tool_result_gave_none(self):
+        stdout = stream(
+            assistant(text("Let me read the image."), TOOL_USE),
+            TOOL_RESULT,
+            {"type": "result", "result": "Let me read the image."},
+        )
+        assert ClaudeCodeClient._assemble_stream(stdout) == ""
+
+    def test_without_assistant_text_the_result_event_answers(self):
+        stdout = stream(
+            assistant(TOOL_USE),
+            {"type": "result", "result": "from the result"},
+        )
+        assert ClaudeCodeClient._assemble_stream(stdout) == "from the result"
+
+    def test_a_record_after_narration_is_read_as_the_record(self):
+        """What the check sees is the record alone, never the narration
+        before the tool call."""
+        record = record_answer(CAPTION)
+        stdout = stream(
+            assistant(text("Let me read the image.")),
+            assistant(TOOL_USE),
+            TOOL_RESULT,
+            assistant(text(record)),
+        )
+        answer = ClaudeCodeClient._assemble_stream(stdout)
+        check, parsed = check_answer(answer, pages=1)
+        assert check.passed
+        assert parsed.pages[0].text == CAPTION
+        assert page_text(CAPTION) == record_text(parsed.pages)[0]

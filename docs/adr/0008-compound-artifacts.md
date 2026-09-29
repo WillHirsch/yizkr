@@ -9,6 +9,14 @@ Amended by #103 (2026-09-29): the write registers the deck, its slides
 and its derived media, each by its SHA-1: see Amendments.
 Amended by #176 (2026-09-29): a PDF is read page by page, and each image
 placed within its text-layer pages is read on its own: see Amendments.
+Amended by #389 (2026-09-29): every page of a transcription carries the
+transcription record's fields (ADR-0037): a page read by vision takes
+them from its reading's record, merged into one page where the image
+shows several; a page read from its text layer is `transcribed`, with no
+printed page number, languages or notes; a page with nothing to read is
+`blank`. A PDF read whole has the pages its record gives, each read by
+vision, and its `document_class`; a PDF read page by page gives none,
+since no call saw it whole.
 
 ## Context
 

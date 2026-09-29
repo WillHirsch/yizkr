@@ -23,8 +23,8 @@ cached answers.
 
 The checks, which docs/ANOMALIES.md describes one by one:
 
-* transcription: the transcription check's verdicts, and a vision
-  transcription sparse for its pages;
+* transcription: the transcription check's verdicts and flags, and a
+  vision transcription sparse for its pages;
 * language: a detected language outside the expected ones, detected with
   low confidence, or detected confidently on very short text; and a
   batch whose excerpts are mostly tagged with another language than its
@@ -34,7 +34,8 @@ The checks, which docs/ANOMALIES.md describes one by one:
   its chunk calls that failed, of its chunk answers cut off and of the
   claims it was given that were rejected or unread;
 * distributions: entities and claims per page, and critic findings per
-  item reviewed, far from the median of the run's documents of the kind;
+  item reviewed, far from the median of the run's documents of the class
+  (`document_class`);
 * rates: a stage's failures over a rolling window of its dispatches, its
   failures among the first documents of a kind, and the failures among
   its recent engine calls;
@@ -128,6 +129,7 @@ from yizkr.pipeline.transcription_check import (
     media_page_count,
     text_char_count,
 )
+from yizkr.pipeline.transcription_record import UNCLASSIFIED
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +257,7 @@ class FirstOfKind(Check):
 
 class Checks(_Settings):
     transcription_check: Check
+    transcription_flag: Check
     transcription_sparse: Sparse
     language_unexpected: Expected
     language_low_confidence: Confidence
@@ -434,10 +437,10 @@ def language_findings(
 ) -> list[Finding]:
     """Findings on how a document's language was resolved, as the run
     records it (yizkr.pipeline.language.LanguageResolution: its `code`,
-    its `source`, detected, fallback or override, and its `confidence`),
-    for a transcription of `letters` letters and digits. A language the
-    run was told (override) or fell back to for want of a guess is the
-    operator's, and is never judged."""
+    its `source`, record, detected, fallback or override, and its
+    `confidence`), for a transcription of `letters` letters and digits.
+    A language the run was told (override) or fell back to for want of a
+    guess is the operator's, and is never judged."""
     if not isinstance(resolution, Mapping):
         return []
     checks = config.checks
@@ -450,7 +453,7 @@ def language_findings(
     if (
         unexpected.enabled
         and expected
-        and source == "detected"
+        and source in ("detected", "record")
         and _primary(code) not in expected
     ):
         found.append(
@@ -504,11 +507,18 @@ def transcription_findings(
     engine: Any,
     page_count: int | None,
     resolution: Any,
+    flag: Any = None,
 ) -> list[Finding]:
-    """Findings on one transcription: a vision transcription sparse for
-    its `page_count` pages, and how its language was resolved."""
+    """Findings on one transcription: the transcription check's `flag` on
+    its wording, as its stage output carries it; a vision transcription
+    sparse for its `page_count` pages; and how its language was
+    resolved."""
     letters = text_char_count(text)
     found = []
+    if config.checks.transcription_flag.enabled and isinstance(flag, str):
+        found.append(
+            Finding("transcription-flag", True, None, {"signature": flag})
+        )
     sparse = config.checks.transcription_sparse
     if (
         sparse.enabled
@@ -538,17 +548,47 @@ def verdict(failure: Any, signature: Any = None) -> Finding:
     return Finding("transcription-check", True, None, fields)
 
 
+def _record(transcription: Any) -> Any:
+    """The transcription record a stored transcription was made from, or
+    None when it has none or cannot be read."""
+    from yizkr.pipeline.transcribe import Transcription
+
+    if isinstance(transcription, Mapping):
+        try:
+            transcription = Transcription.model_validate(transcription)
+        except (ValueError, TypeError):
+            return None
+    record = getattr(transcription, "record", None)
+    try:
+        return record() if callable(record) else None
+    except (ValueError, TypeError):
+        return None
+
+
 def check_verdict(
-    config: AnomalyConfig, *, text: str, engine: Any, page_count: int | None
+    config: AnomalyConfig,
+    *,
+    text: str,
+    engine: Any,
+    page_count: int | None,
+    transcription: Any = None,
 ) -> Finding | None:
     """The transcription check's verdict on a stored transcription, when
-    it fails: only for the routes it judges (CHECKED_ROUTES)."""
+    it fails: only for the routes it judges (CHECKED_ROUTES). A vision
+    transcription is judged with its record (`transcription`, the stored
+    output), and fails without one."""
     if (
         not config.checks.transcription_check.enabled
         or route(engine) not in CHECKED_ROUTES
     ):
         return None
-    check = check_transcription(text, pages=page_count)
+    vision = route(engine) == VISION
+    check = check_transcription(
+        text,
+        pages=page_count,
+        record=_record(transcription) if vision else None,
+        expect_record=vision,
+    )
     if check.passed:
         return None
     return verdict(check.failure, check.signature)
@@ -721,6 +761,32 @@ def document_pages(
     return max(1.0, len(text) / chars_per_page)
 
 
+def _class_of(facts: _Facts) -> tuple[str, str | None]:
+    """What a document's measures are compared within: its document class
+    (its record's `document_class`), and, for a document without one,
+    which is UNCLASSIFIED, its kind too, so that a GEDCOM export, a deck
+    and a text file are never measured against one another."""
+    if facts.class_source == "record":
+        return (facts.document_class, None)
+    return (UNCLASSIFIED, facts.kind)
+
+
+def _with_class(finding: Finding, facts: _Facts) -> Finding:
+    """A distribution finding that says which class it was measured in,
+    and where the class came from ("record", or "none" for a document
+    without one)."""
+    return Finding(
+        finding.check,
+        finding.value,
+        finding.limit,
+        {
+            **finding.fields,
+            "document_class": facts.document_class,
+            "class_source": facts.class_source,
+        },
+    )
+
+
 # -- reading the run's events -------------------------------------------------
 
 
@@ -794,6 +860,11 @@ class _Facts:
     distribution checks."""
 
     kind: str | None
+    # the class its record gives (document_class), and where the class
+    # came from: "record", or "none" for a document without one, which is
+    # UNCLASSIFIED
+    document_class: str = UNCLASSIFIED
+    class_source: str = "none"
     letters: int | None = None
     language: Any = None
     pages: float | None = None
@@ -1179,8 +1250,8 @@ class AnomalyChecks:
         self._current: dict[str, str] = {}
         self._facts: dict[str, _Facts] = {}
         self._pages: dict[str, int | None] = {}
-        # each distribution's values so far, by (measure, kind)
-        self._samples: dict[tuple[str, str | None], list[float]] = {}
+        # each distribution's values so far, by (measure, class, kind)
+        self._samples: dict[tuple, list[float]] = {}
         self._stage_windows: dict[str, _Rolling] = {}
         self._call_windows: dict[str, _Rolling] = {}
         # each role's model, and what it is taken from (the run manifest,
@@ -1286,6 +1357,9 @@ class AnomalyChecks:
         page_count = self._medium_pages(doc)
         facts.letters = text_char_count(text)
         facts.language = _get(transcription, "language")
+        document_class = _get(transcription, "document_class")
+        if isinstance(document_class, str) and document_class:
+            facts.document_class, facts.class_source = document_class, "record"
         facts.pages = document_pages(
             doc.kind, text, page_count, self.config.chars_per_page
         )
@@ -1301,6 +1375,7 @@ class AnomalyChecks:
             engine=_get(transcription, "engine"),
             page_count=page_count,
             resolution=(doc.state.detail or {}).get("language"),
+            flag=_get(transcription, "flag"),
         )
 
     def _batch(self, doc: Any, facts: _Facts, batch: Any) -> list[Finding]:
@@ -1345,19 +1420,20 @@ class AnomalyChecks:
     def _against_run(
         self, facts: _Facts, names: Sequence[str]
     ) -> list[Finding]:
-        """Each measure against the run's documents of the kind so far,
-        which it then joins; each kind's values are kept in order."""
+        """Each measure against the run's documents of the class so far
+        (`_class_of`), which it then joins; each class's values are kept
+        in order."""
         found = []
         for name in names:
             value = facts.measures.get(name)
             if value is None:
                 continue
-            samples = self._samples.setdefault((name, facts.kind), [])
+            samples = self._samples.setdefault((name, *_class_of(facts)), [])
             finding = outlier(
                 name, self.config.checks.outlier(name), value, samples
             )
             if finding is not None:
-                found.append(finding)
+                found.append(_with_class(finding, facts))
             bisect.insort(samples, value)
         return found
 
@@ -1985,6 +2061,7 @@ def _recheck_document(checks: AnomalyChecks, doc: _Recorded) -> None:
                 text=text,
                 engine=transcription.get("engine"),
                 page_count=checks._medium_pages(doc),
+                transcription=transcription,
             )
             if isinstance(text, str)
             else None
@@ -2029,9 +2106,10 @@ def recheck(
     Each stored transcription meets the transcription check as it is now,
     as a run's reuse of it would (only on the routes the check judges),
     and every output meets the per-output checks. The distribution checks
-    compare each document with every other document of its kind in the
-    run, not only the ones before it. The rate checks, which read a run's
-    dispatches and calls rather than its outputs, are not checked again.
+    compare each document with every other document of its class in the
+    run (`_class_of`), not only the ones before it. The rate checks, which
+    read a run's dispatches and calls rather than its outputs, are not
+    checked again.
     A document whose outputs the checks cannot read is an `anomaly-error`
     event, and the others are checked. Nothing is written into a
     document's directory."""
@@ -2050,12 +2128,15 @@ def recheck(
     for stage, names in _MEASURES.items():
         for name in names:
             settings = checks.config.checks.outlier(name)
-            by_kind: dict[Any, list[tuple[float, _Recorded]]] = {}
+            by_class: dict[Any, list[tuple[float, _Recorded]]] = {}
             for doc in documents:
-                value = checks._facts_of(doc).measures.get(name)
+                facts = checks._facts_of(doc)
+                value = facts.measures.get(name)
                 if value is not None:
-                    by_kind.setdefault(doc.kind, []).append((value, doc))
-            for measured in by_kind.values():
+                    by_class.setdefault(_class_of(facts), []).append(
+                        (value, doc)
+                    )
+            for measured in by_class.values():
                 others = len(measured) - 1
                 if not settings.enabled or others < settings.min_samples:
                     continue
@@ -2067,7 +2148,7 @@ def recheck(
                     finding = _against(name, settings, value, median, others)
                     if finding is not None:
                         checks._raise(
-                            finding,
+                            _with_class(finding, checks._facts_of(doc)),
                             stage=stage,
                             subject=doc.sha1,
                             kind=doc.kind,

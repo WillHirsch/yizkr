@@ -45,6 +45,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.records import record_answer
 from tests.unit.test_presentation import (
     IMAGE_REL,
     NOTES_REL,
@@ -291,7 +292,10 @@ class ScriptedEngine:
 
     def complete(self, prompt: str, image_paths=()) -> str:
         if image_paths:
-            return SOURCES["studio-photo-1890s"].text
+            return record_answer(
+                SOURCES["studio-photo-1890s"].text,
+                document_class="photograph",
+            )
         if "manifest of EVERY distinct entity" in prompt:
             return json.dumps(
                 {

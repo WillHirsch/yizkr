@@ -25,32 +25,50 @@ artifact is registered on. The transcription itself is NOT written to
 the graph — only the claims extracted from it are, each carrying its
 fragment locator and excerpt (ADR-0003).
 
+The vision engine answers with the transcription record (ADR-0037,
+yizkr.pipeline.transcription_record): the document's class, and per page
+the number printed on it, a status, its text with the editorial marks,
+its languages and notes. The transcription keeps the record: its `pages`
+hold each page's fields, `page` being the page's physical index and
+`printed_page` the number printed on it, and its `document_class` the
+class; its text opens each page with a ``[Page N]`` marker. Its language
+is the one that holds most of the record's text
+(language.record_language). A text file's transcription has no record,
+and its language is detected from its text.
+
 Every engine's `transcribe()` runs the transcription check
 (`yizkr.pipeline.transcription_check`) on its output and raises
 `TranscriptionCheckFailed` instead of returning an output that fails it:
-a tool-failure message or a refusal is never handed on as a
-transcription. The check runs on every output, whether the engine made
-it in this call or the LLM cache kept it from an earlier one (ADR-0032).
-The vision transcriber rejects a failing output through its client, so
-that a client that keeps answers never serves it again; when the failing
-output was one the client kept, rather than the engine's answer now, it
-asks once more, and the engine's answer is checked in its place, as it
-would have been without the cache. An engine whose own record of the call
-says its Read tool failed on the input raises `EngineToolError` instead of
-answering (yizkr.pipeline.llm); the transcriber checks that as a tool
-error, which fails the output whatever it says. Nothing kept that answer,
-so it is not asked for again: the document fails, and the next run asks
-the engine again, unless the failed call was a refresh
-(`--refresh transcribe`). A refreshed call that raises replaces nothing,
-so the answer the cache kept and the transcription view stay, and the
-next run reuses them without asking the engine
-(yizkr.pipeline.transcription_check). `transcribe_unchecked()` is the
-transcription step alone, for a caller that runs the check as a step of
-its own; an engine error, the tool error among them, still raises from
-it. A caller that keeps transcriptions checks the ones it reuses again
+a tool-failure message, or an answer that is not the record (a refusal,
+in any language), is never handed on as a transcription. An output the
+check passes with a flag carries the flag (`Transcription.flag`). The
+check runs on every output, whether the engine made it in this call or
+the LLM cache kept it from an earlier one (ADR-0032). The vision
+transcriber rejects a failing output through its client, so that a client
+that keeps answers never serves it again; when the failing output was one
+the client kept, rather than the engine's answer now, it asks once more,
+and the engine's answer is checked in its place, as it would have been
+without the cache. An answer whose engine reports the stop reason
+max_tokens (llm.at_output_limit) is cut off, and fails and is rejected
+so. An engine whose own record of the call says its Read tool failed on
+the input raises `EngineToolError` instead of answering
+(yizkr.pipeline.llm); the transcriber checks that as a tool error, which
+fails the output whatever it says. A claude CLI that gave up on its
+answer at the output limit raises `OutputLimitReached`, and the
+transcriber checks that as cut off. Nothing kept either answer, so it is
+not asked for again: the document fails, and the next run asks the engine
+again, unless the failed call was a refresh (`--refresh transcribe`). A
+refreshed call that raises replaces nothing, so the answer the cache kept
+and the transcription view stay, and the next run reuses them without
+asking the engine (yizkr.pipeline.transcription_check).
+`transcribe_unchecked()` is the transcription step alone, for a caller
+that runs the check as a step of its own; an engine error, the tool error
+among them, still raises from it, and so does an answer it cannot make a
+transcription of (`UnreadableAnswer`: not the record, or cut off). A
+caller that keeps transcriptions checks the ones it reuses again
 (yizkr.pipeline.orchestrate), so a stricter check applies to every
-transcription, apart from its reading of tool errors, which only a call
-records (yizkr.pipeline.transcription_check).
+transcription, apart from its reading of tool errors and of a cut-off
+answer, which only a call records (yizkr.pipeline.transcription_check).
 
 A PDF read page by page (`PdfPageTranscriber`) has one transcription of
 its own text: its pages in order, each opened by a ``[Page N]`` marker so
@@ -60,10 +78,13 @@ bytes (``[Page 6, image 1: sha1:…]``), but what is read from the image is
 never part of it: the image's own transcription names the image, so that
 the claims read from each cite the witness that makes them (ADR-0008).
 The transcription's `pages` hold, page by page, where the page's text
-lies in `text` and the images placed within it, which are content, and
-apart from them the page's provenance: the method that read it
-(text-layer, vision, or none, for a page with nothing to read), what made
-it, and how many annotations its text layer leaves unread. The check runs
+lies in `text`, the images placed within it and the record's fields,
+which are content, and apart from them the page's provenance: the method
+that read it (text-layer, vision, or none, for a page with nothing to
+read), what made it, and how many annotations its text layer leaves
+unread. A page read by vision takes the record's fields from its
+reading; a text-layer page is transcribed, and a page with nothing to
+read blank. The check runs
 on the reading of each page and each image the vision engine read, as on
 any vision transcription, and never on text read from a text layer: that
 is the document's own text, read without an engine, which no engine
@@ -83,7 +104,8 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-from collections.abc import Callable, Iterable
+import textwrap
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol
@@ -93,27 +115,93 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    ValidationError,
     model_serializer,
     model_validator,
 )
 
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline.language import LanguageResolution, resolve_language
-from yizkr.pipeline.llm import EngineToolError, LlmClient, reject_response
+from yizkr.pipeline.language import (
+    LanguageResolution,
+    record_language,
+    resolve_language,
+)
+from yizkr.pipeline.llm import (
+    EngineToolError,
+    LlmClient,
+    OutputLimitReached,
+    at_output_limit,
+    reject_response,
+)
 from yizkr.pipeline.transcription_check import (
     TranscriptionCheck,
     TranscriptionCheckFailed,
+    check_answer,
     check_transcription,
     media_page_count,
 )
+from yizkr.pipeline.transcription_record import (
+    BLANK,
+    TRANSCRIBED,
+    UNCLASSIFIED,
+    LanguageCode,
+    PageStatus,
+    RecordPage,
+    TranscriptionRecord,
+    artifact_classes,
+    merged,
+    page_marker,
+    printed_pages,
+    record_text,
+)
 
-TRANSCRIPTION_PROMPT = """\
-Transcribe every piece of text visible in this image of a historical
-document, exactly as written. Preserve line breaks, spelling mistakes,
-abbreviations, and uncertain readings; mark illegible passages with
-[illegible] and uncertain readings with [?]. Do not translate, do not
-normalise, do not add commentary — output the transcription only.
+
+def _transcription_prompt(classes: Sequence[str]) -> str:
+    """The prompt that asks for the transcription record (ADR-0037),
+    naming the document classes it may give: `classes` and UNCLASSIFIED."""
+    listed = ", ".join(f'"{name}"' for name in classes)
+    document_class = textwrap.fill(
+        f'- "document_class": what the document is, one of {listed}, or '
+        f'"{UNCLASSIFIED}" when none of them fits.',
+        width=72,
+        subsequent_indent="  ",
+    )
+    return f"""\
+Transcribe this historical document (an image, or a PDF of one or more
+pages) exactly as written, and answer with the transcription record: one
+JSON object and nothing else, in this form:
+
+{{"document_class": "...", "pages": [{{"page": 1, "printed_page": null,
+"status": "transcribed", "text": "...", "languages": ["de"],
+"notes": ""}}]}}
+
+{document_class}
+- "pages": one object for each page, in order. An image is one page,
+  unless it shows several pages of a document (an open book): then one
+  object for each page it shows.
+- "page": the page's place, 1 for the first, 2 for the next, and so on.
+- "printed_page": the page number printed or written on the page,
+  exactly as written ("iv", "12", "3a"), or null when it shows none.
+- "status": "transcribed" for a page whose text you read, in whole or in
+  part; "blank" for a page with no text (a photograph without any
+  writing, an empty reverse); "illegible" for a page with text of which
+  nothing can be read; "not-a-document-page" for anything that is not a
+  page of the document (a colour chart, a ruler, a scanner's cover).
+- "text": every piece of text visible on the page, exactly as written.
+  Preserve line breaks, spelling mistakes, abbreviations and uncertain
+  readings; mark illegible passages with [illegible], uncertain readings
+  with [?], and text that is blacked out or covered with [redacted]. Do
+  not translate, do not normalise, and put no commentary in the text.
+  An empty string for a page with no text.
+- "languages": the language codes (ISO 639-1, such as "en", "de", "ru",
+  "fy") of the languages the page's text is written in, the one that
+  holds most of it first; an empty list for a page with no text.
+- "notes": anything you have to say about the page (damage, a stamp, a
+  hand other than the main one), or an empty string.
 """
+
+
+TRANSCRIPTION_PROMPT = _transcription_prompt(artifact_classes())
 
 # The poppler-utils tools a PDF needs: the renderer the vision engine
 # reads pages through, and the page counter the transcription check uses.
@@ -178,11 +266,14 @@ class PageProvenance(BaseModel):
 
 
 class TranscribedPage(BaseModel):
-    """One page of a PDF read page by page: its place in the PDF (`page`,
-    from 1), where its text lies in the transcription's `text` (`start` to
-    `end`, after its markers), the images placed within it that have
-    transcriptions of their own, by the SHA-1 of their bytes in their
-    order on the page, and, apart from that content, its provenance."""
+    """One page of a transcription: its place in the media (`page`, from
+    1, the physical index), where its text lies in the transcription's
+    `text` (`start` to `end`, after its markers), the images placed within
+    it that have transcriptions of their own, by the SHA-1 of their bytes
+    in their order on the page, and the transcription record's fields
+    (ADR-0037): the page number printed on it (`printed_page`), its
+    `status`, the `languages` its text is written in and the engine's
+    `notes`. Apart from that content, its provenance."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -190,6 +281,10 @@ class TranscribedPage(BaseModel):
     start: int = Field(ge=0)
     end: int = Field(ge=0)
     images: list[Sha1] = Field(default_factory=list)
+    printed_page: str | None = None
+    status: PageStatus
+    languages: list[LanguageCode] = Field(default_factory=list)
+    notes: str = ""
     provenance: PageProvenance
 
 
@@ -197,9 +292,15 @@ class Transcription(BaseModel):
     """A transcription of one artifact's media. `artifact` names the
     artifact by the SHA-1 of the media's bytes: the key its claims cite,
     and part of the transcription's content, which depends on no
-    instance. `pages` are a PDF read page by page, page by page
-    (`TranscribedPage`); a transcription made whole has none, and holds
-    no `pages` key."""
+    instance. `pages` are its pages in order (`TranscribedPage`): a vision
+    transcription's, from its record, and a PDF read page by page's; a
+    transcription with no pages (a text file's, a correction, a deck's
+    slide text) holds no `pages` key. `document_class` is the class its
+    record gives (a vision transcription made whole), and is absent
+    otherwise. `flag` names the signature the transcription check flagged
+    its wording by, when it did (yizkr.pipeline.transcription_check), and
+    is absent otherwise; like the provenance, it is no part of its
+    content hash."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -207,7 +308,9 @@ class Transcription(BaseModel):
     text: str = Field(min_length=1)
     language: str = Field(default="en", pattern=r"^[a-z]{2,3}(-[a-z0-9-]+)?$")
     engine: str = Field(min_length=1)
+    document_class: str | None = None
     pages: list[TranscribedPage] | None = None
+    flag: str | None = None
     # what a page-by-page reading made beside the transcription, for its
     # caller to keep (PdfReading); never part of the view
     _reading: Any = PrivateAttr(default=None)
@@ -229,12 +332,13 @@ class Transcription(BaseModel):
         return self
 
     @model_serializer(mode="wrap")
-    def _without_absent_pages(self, handler: Any) -> dict[str, Any]:
-        """The transcription as written: a transcription made whole
-        holds no `pages` key at all."""
+    def _without_absent_fields(self, handler: Any) -> dict[str, Any]:
+        """The transcription as written: one with no pages, class or flag
+        holds no key for it."""
         data = handler(self)
-        if self.pages is None:
-            data.pop("pages", None)
+        for name in ("pages", "document_class", "flag"):
+            if getattr(self, name) is None:
+                data.pop(name, None)
         return data
 
     @property
@@ -252,9 +356,91 @@ class Transcription(BaseModel):
         """The text of one page, as `pages` places it."""
         return self.text[page.start : page.end]
 
+    def record(self) -> TranscriptionRecord | None:
+        """The transcription record this transcription was made from: its
+        class and its pages, each with its text; None for one that has no
+        class (no record, or a PDF read page by page), and for a stored
+        one whose fields the record no longer accepts (a class the
+        manifest has since dropped, say), which the check then fails as
+        holding no record."""
+        if self.document_class is None or not self.pages:
+            return None
+        try:
+            return TranscriptionRecord(
+                document_class=self.document_class,
+                pages=[
+                    RecordPage(
+                        page=page.page,
+                        printed_page=page.printed_page,
+                        status=page.status,
+                        text=self.page_text(page),
+                        languages=page.languages,
+                        notes=page.notes,
+                    )
+                    for page in self.pages
+                ],
+            )
+        except ValidationError:
+            return None
+
+    def printed_pages(self) -> dict[int, str]:
+        """The page numbers printed on the transcription's pages, by their
+        physical index (`page`): each page that gives one. Empty for a
+        transcription without pages, or whose pages show none. A page's
+        physical index is its place in the media; the number printed on
+        it may differ, or be no number at all ("iv")."""
+        return printed_pages(self.pages or ())
+
+    @classmethod
+    def from_record(
+        cls,
+        record: TranscriptionRecord,
+        *,
+        artifact: ArtifactRef,
+        language: str,
+        engine: str,
+    ) -> Transcription:
+        """A vision transcription made whole, from its record: its text is
+        the record's (transcription_record.record_text), each page's
+        fields are the record's, and each page's provenance is the vision
+        engine that read it."""
+        text, spans = record_text(record.pages)
+        return cls(
+            artifact=artifact,
+            text=text,
+            language=language,
+            engine=engine,
+            document_class=record.document_class,
+            pages=[
+                TranscribedPage(
+                    page=page.page,
+                    start=start,
+                    end=end,
+                    printed_page=page.printed_page,
+                    status=page.status,
+                    languages=page.languages,
+                    notes=page.notes,
+                    provenance=PageProvenance(method="vision", engine=engine),
+                )
+                for page, (start, end) in zip(record.pages, spans, strict=True)
+            ],
+        )
+
 
 class Transcriber(Protocol):
     def transcribe(self, media_path: Path) -> Transcription: ...
+
+
+class UnreadableAnswer(RuntimeError):
+    """The engine's answer is not the transcription record, or the engine
+    stopped it at its output limit: `check` is the transcription check's
+    failing verdict, and `response` the answer, for its client to
+    reject."""
+
+    def __init__(self, check: TranscriptionCheck, response: str) -> None:
+        self.check = check
+        self.response = response
+        super().__init__(check.reason)
 
 
 class _CheckedTranscriber:
@@ -263,6 +449,9 @@ class _CheckedTranscriber:
 
     # the check behind the last transcribe(), for callers to record
     last_check: TranscriptionCheck | None = None
+    # whether the engine's transcriptions carry a record, and one without
+    # fails the check
+    expects_record = False
 
     def transcribe_unchecked(self, media_path: Path) -> Transcription:
         raise NotImplementedError
@@ -272,9 +461,10 @@ class _CheckedTranscriber:
         the check is rejected; one its client kept from an earlier call,
         rather than the engine's answer now, is asked for once more, and
         the engine's answer is checked in its place. An engine that reports
-        a tool failing on the input answers nothing: the check fails it as
-        a tool error, and it is not asked for again, since nothing kept
-        it."""
+        a tool failing on the input, or that the claude CLI gave up on at
+        its output limit, answers nothing: the check fails it as a tool
+        error or as cut off, and it is not asked for again, since nothing
+        kept it. An output that passes with a flag carries the flag."""
         pages = media_page_count(media_path)
         for _ask in range(2):
             try:
@@ -284,11 +474,24 @@ class _CheckedTranscriber:
                     exc.response, pages=pages, tool_failures=exc.failures
                 )
                 raise TranscriptionCheckFailed(self.last_check) from exc
-            self.last_check = check_transcription(
-                transcription.text, pages=pages
-            )
-            if self.last_check.passed:
-                return transcription
+            except OutputLimitReached as exc:
+                self.last_check = check_transcription(
+                    "", pages=pages, cut_off=True
+                )
+                raise TranscriptionCheckFailed(self.last_check) from exc
+            except UnreadableAnswer as exc:
+                self.last_check = exc.check.model_copy(update={"pages": pages})
+            else:
+                self.last_check = check_transcription(
+                    transcription.text,
+                    pages=pages,
+                    record=transcription.record(),
+                    expect_record=self.expects_record,
+                )
+                if self.last_check.passed:
+                    if self.last_check.flagged:
+                        transcription.flag = self.last_check.signature
+                    return transcription
             failed = TranscriptionCheckFailed(self.last_check)
             if not self._reject(failed):
                 break
@@ -301,6 +504,8 @@ class _CheckedTranscriber:
 
 
 class LlmVisionTranscriber(_CheckedTranscriber):
+    expects_record = True
+
     def __init__(
         self,
         client: LlmClient,
@@ -317,22 +522,31 @@ class LlmVisionTranscriber(_CheckedTranscriber):
 
     def transcribe_unchecked(self, media_path: Path) -> Transcription:
         """The engine's reading of the media at `media_path`, named by the
-        SHA-1 of its bytes, which are hashed before the engine is asked.
-        Its `engine` names the client that made the reading: the one
-        asked, or, for a reading the client's cache adopted rather than
-        an engine gave (an archived transcription), the one the adoption
-        names (`made_by`)."""
+        SHA-1 of its bytes, which are hashed before the engine is asked:
+        the transcription its record makes (`Transcription.from_record`),
+        in the language the record gives (language.record_language). Its
+        `engine` names the client that made the reading: the one asked,
+        or, for a reading the client's cache adopted rather than an engine
+        gave (an archived transcription), the one the adoption names
+        (`made_by`). Raises UnreadableAnswer for an answer the engine cut
+        off at its output limit (llm.at_output_limit), or that is not the
+        record."""
         self._response = None
         artifact = ArtifactRef.from_path(media_path)
         text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
         self._response = text
-        self.last_resolution = resolve_language(
-            text, self.language, fallback=self.fallback_language
+        check, record = check_answer(
+            text, cut_off=at_output_limit(self.client, text)
+        )
+        if record is None:
+            raise UnreadableAnswer(check, text)
+        self.last_resolution = record_language(
+            record.pages, self.language, fallback=self.fallback_language
         )
         made_by = getattr(text, "made_by", None)
-        return Transcription(
+        return Transcription.from_record(
+            record,
             artifact=artifact,
-            text=text,
             language=self.last_resolution.code,
             engine=f"llm-vision:{made_by or self.client.model_identifier}",
         )
@@ -350,7 +564,8 @@ class LlmVisionTranscriber(_CheckedTranscriber):
 class TextFileTranscriber(_CheckedTranscriber):
     """Wrap an existing transcription file (manual or external tool): the
     text is the file's, and the transcription names the media it is of,
-    the `media_path` given to transcribe(), by the SHA-1 of its bytes."""
+    the `media_path` given to transcribe(), by the SHA-1 of its bytes. It
+    has no record: its language is detected from its text."""
 
     def __init__(
         self,
@@ -533,20 +748,34 @@ class PdfPageTranscriber:
         in order: each page opened by its marker and the markers of the
         images placed within it, then its text, read by its method. A page
         with nothing to read is its markers alone, read by no method: what
-        made it is the text-layer method, which found nothing on it."""
+        made it is the text-layer method, which found nothing on it, and
+        its status is blank. A page read by vision takes its text and the
+        record's fields from the record of its reading, merged into one
+        page (transcription_record.merged); a page read from its text
+        layer is transcribed, with no printed page number, languages or
+        notes, since no engine read it. The transcription carries the
+        flag of the first vision page the check flagged."""
         from yizkr.pipeline import textlayer
 
         method = f"{textlayer.METHOD}/{textlayer.VERSION}"
         by_text_layer = f"{method} ({textlayer.LIBRARY})"
         text, pages, bodies = "", [], []
+        flag = None
         for page in read.pages:
-            marks = [f"[Page {page.number}]"] + [
+            marks = [page_marker(page.number)] + [
                 f"[Page {page.number}, image {place}: sha1:{sha1}]"
                 for place, sha1 in page.images
             ]
+            fields: dict[str, Any] = {
+                "status": TRANSCRIBED if page.text else BLANK
+            }
             if page.method == textlayer.VISION:
                 reading = self._read_by_vision(page.vision)
-                body, engine = reading.text.strip(), reading.engine
+                record = reading.record()
+                one = merged(record.pages, page.number)
+                body, engine = one.text.strip(), reading.engine
+                fields = one.model_dump(exclude={"page", "text"})
+                flag = flag or reading.flag
             else:
                 body, engine = page.text, by_text_layer
             opening = ("\n\n" if text else "") + "\n".join(marks)
@@ -560,6 +789,7 @@ class PdfPageTranscriber:
                     start=start,
                     end=len(text),
                     images=[sha1 for _place, sha1 in page.images],
+                    **fields,
                     provenance=PageProvenance(
                         method=page.method,
                         engine=engine,
@@ -578,6 +808,7 @@ class PdfPageTranscriber:
             language=self.last_resolution.code,
             engine=f"{PDF_PAGES}:{method}",
             pages=pages,
+            flag=flag,
         )
 
 

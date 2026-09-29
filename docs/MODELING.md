@@ -137,10 +137,13 @@ Every statement carries at least one reference with:
   canvas+xywh URI (W2)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
-  detects each document's language from its transcription by default
-  (`--language auto`, ADR-0015), so a mixed-language folder tags each
-  excerpt correctly; the extractor may still tag individual excerpts in
-  their own language (a quoted passage in another tongue)
+  takes each document's language from its transcription by default
+  (`--language auto`, ADR-0015): from the transcription record the vision
+  engine fills, which names the languages each page is written in
+  (ADR-0037), and otherwise by detection from the text outside its
+  editorial marks. So a mixed-language folder tags each excerpt
+  correctly; the extractor may still tag individual excerpts in their own
+  language (a quoted passage in another tongue)
 
 Machine-written statements add a second reference:
 - inferred from extraction run → extraction-run item

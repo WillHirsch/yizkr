@@ -1,11 +1,15 @@
 """Transcription check: is an engine's output a reading of its pages?
 
-A vision engine answers in text whatever happens, so a tool failure (the
-PDF renderer missing on the host, a CLI error, a usage-limit notice) or a
-refusal comes back shaped like a transcription. `Transcription` only asks
-for a non-empty string, and language detection reads such text as
-confidently as any other. This step runs after transcription and decides
-whether the output may go downstream. It fails the output on any of:
+A vision engine answers whatever happens, so a tool failure (the PDF
+renderer missing on the host, a CLI error, a usage-limit notice) or a
+refusal can come back in place of a transcription. The engine is asked
+for the transcription record (yizkr.pipeline.transcription_record,
+ADR-0037), and this step, run after transcription, decides from the
+record's structure whether the output may go downstream, and reads its
+wording only to flag it.
+
+**It fails** the output (the document is transcribed again on the next
+run) only on a signal that is unambiguous:
 
 * **A tool error**: the engine's own record of the call says that its
   Read tool failed on the input and nothing made up for it
@@ -17,49 +21,61 @@ whether the output may go downstream. It fails the output on any of:
   The engine raises `EngineToolError` for such a call rather than return
   its answer, so the LLM cache never keeps one (ADR-0032), and the
   transcribers turn it into this verdict. The record goes with the call:
-  a stored transcription view, or an answer the cache kept, has none, and
-  the signatures below judge it, as they judge the output of an engine
-  that reports no tool errors (the API engine) and a failure no tool
-  reports.
-* **A signature**: a phrase in the engine's own voice that no source
-  document writes. Tool-specific tokens (``pdftoppm``, a Python
-  traceback, an API error type) match anywhere. The other signatures,
-  such as "As an AI", match outside editorial brackets, because the
-  transcription prompt asks the engine to mark what it cannot read in
-  brackets (``[illegible]``), and a bracketed note is that convention
-  at work. Any match fails the whole output: a multi-page reading that
-  failed on one page is missing that page.
+  a stored transcription view, or an answer the cache kept, has none.
+* **Cut off** (`cut-off`): the engine stopped the answer at its output
+  limit: the claude CLI gave up on it (`OutputLimitReached`), or the
+  engine reports the stop reason max_tokens of it
+  (`yizkr.pipeline.llm.at_output_limit`). The answer is incomplete
+  whatever it holds.
+* **Not the record** (`not-a-record`): the answer does not parse as the
+  transcription record (a page without a status among the ways,
+  `parse_record`), or a stored vision transcription holds no record.
+* **Pages missing** (`pages-missing`): the record gives fewer pages than
+  the media has. It may give more, since one image can show two pages of
+  a document (an open book).
+* **Empty or implausibly short**: a blank output; or, for a document of
+  two or more pages, fewer than `MIN_TEXT_CHARS_PER_PAGE` letters or
+  digits per page, counted outside editorial marks, over the pages the
+  record calls transcribed (every page, for a text with no record). A
+  page the record calls blank, illegible or not a document page is the
+  engine's plain statement, and needs no text. The floor sits far below
+  any written page (a typed page holds well over a thousand) so that
+  sparse genuine pages, such as a caption on the back of a photograph or
+  a date stamp, pass. A single image has no floor, because a photograph
+  may carry no text at all.
+* **A failing signature**: a token no source document writes, which
+  matches anywhere (``pdftoppm``, a Python traceback, an API error type),
+  or an output that is wholly the engine's announcement of what it will
+  do ("Let me take a look at the image.").
 
-  Some engine phrases are also the words of a letter or an email, such
-  as correspondence about family research, so those signatures count
-  only where the engine speaks for itself. A note about the media or the
-  request, or a refusal to transcribe ("I couldn't open the PDF", "No
-  image was provided", "I'm unable to assist with this request", "I
-  can't transcribe this document"), counts where it opens the output, a
-  page section (after a heading such as "Page 2" or "[Page 2]") or a
-  line labelled "Note:", "NB:", "Error:" or "Warning:", or where it names
-  the pages it skipped ("I was unable to read page 2 of the PDF", "The
-  remaining pages could not be read"); and only while it names the
-  task's medium, document or request plainly. Correspondence names its
-  own by what it holds ("the PDF of the census page", "your request for
-  copies of the register"), who sent it ("the attachment you sent"),
-  what it came in ("in the envelope"), where it was opened ("on my
-  computer") or what writing it carries ("the old handwriting on the
-  back of the photograph"); such a note is the source's own sentence, as
-  is one in the middle of a text that names no page. A bare decline ("I
-  can't help with that", "I'm unable to complete this task") counts only
-  opening a short output, and the engine's announcement of what it will
-  do ("Let me take a look at the image.") only as the whole output.
-* **Implausible length**: a document of two or more pages must hold at
-  least `MIN_TEXT_CHARS_PER_PAGE` letters or digits per page, counted
-  outside editorial brackets. The floor sits far below any written page
-  (a typed page holds well over a thousand) so that sparse genuine
-  pages, such as a caption on the back of a photograph, a date stamp or a
-  blank reverse, pass, and only near-empty output fails. A single image
-  has no floor, because a photograph may carry no text at all; the
-  signatures cover a single page's failures. Judging yield against what
-  a document of its kind should hold is a softer question, for alerts
-  rather than this gate.
+**It flags** an output whose wording matches one of the other
+signatures, phrases in the engine's own voice (English, so a note in
+another language is never matched): a note that it could not see the
+media, a refusal, an AI disclaimer. Such phrases are also the words of
+letters and emails, correspondence about family research among them, so
+a match proves nothing: the output passes, carries the flag (its
+signature's name) in the stage output, and raises an alert for review
+(docs/ANOMALIES.md, `transcription-flag`). Each signature's tier and
+reason are in `SIGNATURES`.
+
+The flagging signatures match outside editorial brackets, because the
+engine marks what it cannot read in brackets (``[illegible]``). Some
+count only where the engine speaks for itself. A note about the media or
+the request, or a refusal to transcribe ("I couldn't open the PDF", "No
+image was provided", "I'm unable to assist with this request", "I can't
+transcribe this document"), counts where it opens the output, a page
+section (after a heading such as "Page 2" or "[Page 2]") or a line
+labelled "Note:", "NB:", "Error:" or "Warning:", or where it names the
+pages it skipped ("I was unable to read page 2 of the PDF", "The
+remaining pages could not be read"); and only while it names the task's
+medium, document or request plainly. Correspondence names its own by what
+it holds ("the PDF of the census page", "your request for copies of the
+register"), who sent it ("the attachment you sent"), what it came in ("in
+the envelope"), where it was opened ("on my computer") or what writing it
+carries ("the old handwriting on the back of the photograph"); such a
+note is the source's own sentence, as is one in the middle of a text that
+names no page. A bare decline ("I can't help with that", "I'm unable to
+complete this task") counts only opening a short output.
 
 A failed output is never valid: `require_valid_transcription` and the
 transcribers raise `TranscriptionCheckFailed`, whose message is the
@@ -67,25 +83,27 @@ recorded reason, and nothing is returned for a caller to keep.
 
 This module is the single definition of a failed transcription: code that
 judges a transcription, whether freshly made, kept or imported, calls
-`check_transcription` rather than keeping patterns of its own. The step
-has its own name and version (`CHECK_STAGE`, `CHECK_VERSION`), which
-each verdict records: a change to what it fails on (a signature, the
-floor, the page count, or the tool errors) bumps `CHECK_VERSION`. No key
-needs it. The transcribers check every output they return, whether the
-engine made it in this call or the LLM cache kept it from an earlier one,
-and the orchestrator checks every transcription view it reuses (ADR-0032
-§1), so a stricter check applies to every transcription, the stored ones
-included (docs/LLM_CACHE.md). Its reading of tool errors is the
-exception. Only a call has that record, so a stricter reading reaches the
-calls made after it and nothing made before: a transcription view, or an
-answer the cache kept, made before it passes on the signatures alone.
-Such a transcription meets the new reading only when the engine is asked
-again for it, in a fresh state directory with none of the transcribe
-role's answers in the LLM cache (moved out of it, or a new cache
-directory). A refresh (`--refresh transcribe`) is no remedy: when the
-refreshed call raises, nothing is stored, so the kept answer and the view
-stay, and the next run reuses them. Nor is an epoch, which keys only the
-runs it is given for.
+`check_answer` (an engine's answer) or `check_transcription` (a text, and
+its record if it has one) rather than keeping patterns of its own. The
+step has its own name and version (`CHECK_STAGE`, `CHECK_VERSION`), which
+each verdict records: a change to what it fails or flags on (a signature,
+its tier, the floor, the page count, the record, or the tool errors)
+bumps `CHECK_VERSION`. No key needs it. The transcribers check every
+output they return, whether the engine made it in this call or the LLM
+cache kept it from an earlier one, and the orchestrator checks every
+transcription view it reuses (ADR-0032 §1), so a stricter check applies
+to every transcription, the stored ones included (docs/LLM_CACHE.md).
+Its reading of tool errors and of a cut-off answer is the exception. Only
+a call has that record, so a stricter reading reaches the calls made
+after it and nothing made before: a transcription view, or an answer the
+cache kept, made before it passes on the rest of the check alone. Such a
+transcription meets the new reading only when the engine is asked again
+for it, in a fresh state directory with none of the transcribe role's
+answers in the LLM cache (moved out of it, or a new cache directory). A
+refresh (`--refresh transcribe`) is no remedy: when the refreshed call
+raises, nothing is stored, so the kept answer and the view stay, and the
+next run reuses them. Nor is an epoch, which keys only the runs it is
+given for.
 """
 
 from __future__ import annotations
@@ -100,9 +118,18 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from yizkr.pipeline.llm import ToolFailure, describe_tool_failures
+from yizkr.pipeline.transcription_record import (
+    EDITORIAL_MARK,
+    TRANSCRIBED,
+    RecordError,
+    TranscriptionRecord,
+    outside_editorial_marks,
+    parse_record,
+    record_text,
+)
 
 CHECK_STAGE = "transcription-check"
-CHECK_VERSION = 2
+CHECK_VERSION = 3
 
 # The fewest letters or digits per page a transcription of two or more
 # pages may hold; see the module docstring for why it is this low.
@@ -112,10 +139,6 @@ MIN_TEXT_CHARS_PER_PAGE = 3
 # an output this short (characters, outside editorial brackets).
 SHORT_OUTPUT_CHARS = 300
 
-# An editorial mark: a bracketed note on one line, such as [illegible],
-# [?], [stamp] or [page 2: faded]. Longer bracketed runs are left alone.
-EDITORIAL_MARK = re.compile(r"\[[^\[\]\n]{0,200}\]")
-
 # the longest matched phrase a verdict records
 _QUOTE_CHARS = 80
 
@@ -124,10 +147,26 @@ TOOL_FAILURE = "tool-failure"
 REFUSAL = "refusal"
 TOO_SHORT = "too-short"
 EMPTY = "empty"
+CUT_OFF = "cut-off"
+NOT_A_RECORD = "not-a-record"
+PAGES_MISSING = "pages-missing"
 
 Failure = Literal[
-    "tool-error", "tool-failure", "refusal", "too-short", "empty"
+    "tool-error",
+    "tool-failure",
+    "refusal",
+    "too-short",
+    "empty",
+    "cut-off",
+    "not-a-record",
+    "pages-missing",
 ]
+
+# what a signature's match does: fail the output, or flag it and let it
+# pass
+FAIL = "fail"
+FLAG = "flag"
+Tier = Literal["fail", "flag"]
 
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".tif", ".tiff"})
 
@@ -140,6 +179,7 @@ class Signature:
     name: str
     kind: Literal["tool-failure", "refusal"]
     pattern: re.Pattern[str]
+    tier: Tier = FLAG
     # match against the text with editorial marks removed
     outside_marks: bool = True
     # apply only to outputs of at most SHORT_OUTPUT_CHARS characters
@@ -154,6 +194,7 @@ def _signature(
     kind: Literal["tool-failure", "refusal"],
     pattern: str,
     *,
+    tier: Tier = FLAG,
     outside_marks: bool = True,
     short_output_only: bool = False,
     engine_voice: bool = False,
@@ -162,6 +203,7 @@ def _signature(
         name,
         kind,
         re.compile(pattern, re.IGNORECASE),
+        tier=tier,
         outside_marks=outside_marks,
         short_output_only=short_output_only,
         engine_voice=engine_voice,
@@ -394,6 +436,11 @@ def in_engine_voice(subject: str, match: re.Match[str]) -> bool:
     )
 
 
+# Each signature's tier: FAIL for a token no source document writes and
+# for an output that is wholly the engine's announcement, which leave no
+# doubt; FLAG for the phrases in the engine's voice, which a letter or an
+# email may also write, so that a match is a question for a reader and
+# never a verdict.
 SIGNATURES: tuple[Signature, ...] = (
     # -- tool and engine failures: tokens no source document writes ------
     # Poppler is also a surname, so the bare word counts as the package
@@ -407,18 +454,21 @@ SIGNATURES: tuple[Signature, ...] = (
         r"|\bpoppler[-_ ]utils\b"
         r"|(?-i:\b(?:install(?:ed|ing)?|from)\s+poppler\b)"
         r"|\bPDF render(?:er|ing)\b",
+        tier=FAIL,
         outside_marks=False,
     ),
     _signature(
         "traceback",
         TOOL_FAILURE,
         r"\bTraceback \(most recent call last\)",
+        tier=FAIL,
         outside_marks=False,
     ),
     _signature(
         "shell-error",
         TOOL_FAILURE,
         r"\bcommand not found\b|\bNo such file or directory\b|\bENOENT\b",
+        tier=FAIL,
         outside_marks=False,
     ),
     _signature(
@@ -432,6 +482,7 @@ SIGNATURES: tuple[Signature, ...] = (
         r"|\bCredit balance is too low\b"
         r"|\bPrompt is too long\b"
         r"|\b(?:Reached max|maximum number of) turns\b",
+        tier=FAIL,
         outside_marks=False,
     ),
     # -- the engine could not see the media ------------------------------
@@ -478,6 +529,7 @@ SIGNATURES: tuple[Signature, ...] = (
         "narration-only",
         TOOL_FAILURE,
         rf"\A\W*{_ANNOUNCING}\s*\Z",
+        tier=FAIL,
     ),
     # -- refusals: the engine declines, in its own voice ------------------
     # declining to transcribe the task's document, or nothing named, as an
@@ -529,7 +581,9 @@ SIGNATURES: tuple[Signature, ...] = (
 
 
 class TranscriptionCheck(BaseModel):
-    """The check step's verdict on one transcription."""
+    """The check step's verdict on one transcription: failed (`failure`
+    says how), passed, or passed with a flag (`flagged`, with the
+    signature that matched)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -537,6 +591,8 @@ class TranscriptionCheck(BaseModel):
     version: int = CHECK_VERSION
     passed: bool
     failure: Failure | None = None
+    # a passed output whose wording a flagging signature matched
+    flagged: bool = False
     signature: str | None = None
     # the matched phrase (at most 80 characters), quoted in the reason
     matched: str | None = None
@@ -547,6 +603,8 @@ class TranscriptionCheck(BaseModel):
     # letters and digits outside editorial marks
     text_chars: int
     pages: int | None = None
+    # the pages the record gives, for an output that has one
+    record_pages: int | None = None
     min_text_chars: int = 0
     reason: str | None = None
 
@@ -560,11 +618,6 @@ class TranscriptionCheckFailed(RuntimeError):
             f"transcription check v{check.version} failed "
             f"({check.failure}): {check.reason}"
         )
-
-
-def outside_editorial_marks(text: str) -> str:
-    """`text` with each editorial mark replaced by a space."""
-    return EDITORIAL_MARK.sub(" ", text)
 
 
 def text_char_count(text: str) -> int:
@@ -592,8 +645,11 @@ def _keep_page_mark(mark: re.Match[str]) -> str:
     return " "
 
 
-def find_signature(text: str) -> tuple[Signature, str] | None:
-    """The first signature `text` matches, with the matched phrase.
+def find_signature(
+    text: str, tier: Tier | None = None
+) -> tuple[Signature, str] | None:
+    """The first signature `text` matches, with the matched phrase; of
+    the signatures of `tier` alone, when one is given.
 
     An engine-voice signature matches only where `in_engine_voice` holds,
     and reads the text with the page marks ("[Page 2]") that open a line
@@ -601,6 +657,8 @@ def find_signature(text: str) -> tuple[Signature, str] | None:
     unmarked = outside_editorial_marks(text).strip()
     paged = EDITORIAL_MARK.sub(_keep_page_mark, text).strip()
     for signature in SIGNATURES:
+        if tier is not None and signature.tier != tier:
+            continue
         if signature.short_output_only and len(unmarked) > SHORT_OUTPUT_CHARS:
             continue
         if not signature.outside_marks:
@@ -621,75 +679,158 @@ def _cap(phrase: str) -> str:
     return phrase
 
 
+def _what(signature: Signature) -> str:
+    return (
+        "a tool or engine failure"
+        if signature.kind == TOOL_FAILURE
+        else "a refusal"
+    )
+
+
 def check_transcription(
     text: str,
     pages: int | None = None,
     tool_failures: Sequence[ToolFailure] = (),
+    *,
+    cut_off: bool = False,
+    record: TranscriptionRecord | None = None,
+    expect_record: bool = False,
 ) -> TranscriptionCheck:
     """Judge one transcription of a document of `pages` pages.
 
-    `pages` is None when the page count is unknown; the length floor
-    then does not apply, and the signatures still do. `tool_failures` are
-    the tool errors the engine's record of the call reports on its input
-    (`EngineToolError.failures`): any of them fails the output, whatever
-    it says.
+    `pages` is None when the page count is unknown; the length floor and
+    the record's page count then do not apply, and the rest does.
+    `tool_failures` are the tool errors the engine's record of the call
+    reports on its input (`EngineToolError.failures`), and `cut_off` says
+    the engine stopped the answer at its output limit: either fails the
+    output, whatever it says. `record` is the transcription record `text`
+    was made from, if any; `expect_record` fails a text that has none (a
+    vision transcription).
     """
     chars = text_char_count(text)
     floor = minimum_text_chars(pages)
-    verdict = {"text_chars": chars, "pages": pages, "min_text_chars": floor}
+    if record is not None:
+        texts = [
+            page.text for page in record.pages if page.status == TRANSCRIBED
+        ]
+        chars = sum(map(text_char_count, texts))
+        floor = minimum_text_chars(pages) and (
+            MIN_TEXT_CHARS_PER_PAGE * len(texts)
+        )
+    verdict = {
+        "text_chars": chars,
+        "pages": pages,
+        "min_text_chars": floor,
+        "record_pages": len(record.pages) if record is not None else None,
+    }
+
+    def failed(failure: Failure, reason: str, **fields) -> TranscriptionCheck:
+        return TranscriptionCheck(
+            passed=False, failure=failure, reason=reason, **verdict, **fields
+        )
+
     if tool_failures:
         first = tool_failures[0]
-        return TranscriptionCheck(
-            passed=False,
-            failure=TOOL_ERROR,
+        return failed(
+            TOOL_ERROR,
+            "the engine's record of the call reports a tool failing on "
+            "the input, so the output is not a reading of it: "
+            f"{describe_tool_failures(tool_failures)}",
             tool=first.tool,
             tool_error=first.error,
-            reason=(
-                "the engine's record of the call reports a tool failing on "
-                "the input, so the output is not a reading of it: "
-                f"{describe_tool_failures(tool_failures)}"
-            ),
-            **verdict,
+        )
+    if cut_off:
+        return failed(
+            CUT_OFF,
+            "the engine stopped the answer at its output limit, so it is "
+            "incomplete",
         )
     if not text.strip():
-        return TranscriptionCheck(
-            passed=False,
-            failure=EMPTY,
-            reason="the output is blank",
-            **verdict,
+        return failed(EMPTY, "the output is blank")
+    if expect_record and record is None:
+        return failed(
+            NOT_A_RECORD,
+            "the vision transcription holds no transcription record",
         )
-    found = find_signature(text)
+    if record is not None and pages is not None and len(record.pages) < pages:
+        return failed(
+            PAGES_MISSING,
+            f"the record gives {len(record.pages)} of the media's {pages} "
+            "pages",
+        )
+    found = find_signature(text, FAIL)
     if found is not None:
         signature, phrase = found
         phrase = _cap(phrase)
-        what = (
-            "a tool or engine failure"
-            if signature.kind == TOOL_FAILURE
-            else "a refusal"
+        return failed(
+            signature.kind,
+            f"the output reads as {_what(signature)}, not a transcription "
+            f"(signature {signature.name}: {phrase!r})",
+            signature=signature.name,
+            matched=phrase,
         )
+    if chars < floor:
+        counted = (
+            f"{len(texts)} transcribed pages"
+            if record is not None
+            else f"{pages} pages"
+        )
+        return failed(
+            TOO_SHORT,
+            f"implausibly short: {chars} letters or digits for {counted}, "
+            f"below the floor of {floor} ({MIN_TEXT_CHARS_PER_PAGE} per "
+            "page)",
+        )
+    found = find_signature(text, FLAG)
+    if found is not None:
+        signature, phrase = found
+        phrase = _cap(phrase)
         return TranscriptionCheck(
-            passed=False,
-            failure=signature.kind,
+            passed=True,
+            flagged=True,
             signature=signature.name,
             matched=phrase,
             reason=(
-                f"the output reads as {what}, not a transcription "
-                f"(signature {signature.name}: {phrase!r})"
-            ),
-            **verdict,
-        )
-    if chars < floor:
-        return TranscriptionCheck(
-            passed=False,
-            failure=TOO_SHORT,
-            reason=(
-                f"implausibly short: {chars} letters or digits for "
-                f"{pages} pages, below the floor of {floor} "
-                f"({MIN_TEXT_CHARS_PER_PAGE} per page)"
+                f"the wording reads like {_what(signature)} (signature "
+                f"{signature.name}: {phrase!r}); flagged for review"
             ),
             **verdict,
         )
     return TranscriptionCheck(passed=True, **verdict)
+
+
+def check_answer(
+    answer: str,
+    pages: int | None = None,
+    tool_failures: Sequence[ToolFailure] = (),
+    *,
+    cut_off: bool = False,
+) -> tuple[TranscriptionCheck, TranscriptionRecord | None]:
+    """Judge an engine's answer to the transcription prompt: the verdict,
+    and the record it holds when it holds one. An answer that does not
+    parse as the record fails (`not-a-record`), and one that does is
+    judged by `check_transcription` on the record's text."""
+    if tool_failures or cut_off or not answer.strip():
+        return (
+            check_transcription(answer, pages, tool_failures, cut_off=cut_off),
+            None,
+        )
+    try:
+        record = parse_record(answer)
+    except RecordError as exc:
+        return (
+            TranscriptionCheck(
+                passed=False,
+                failure=NOT_A_RECORD,
+                reason=str(exc),
+                text_chars=text_char_count(answer),
+                pages=pages,
+                min_text_chars=minimum_text_chars(pages),
+            ),
+            None,
+        )
+    text, _spans = record_text(record.pages)
+    return check_transcription(text, pages, record=record), record
 
 
 def require_valid_transcription(

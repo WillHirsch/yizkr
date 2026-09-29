@@ -24,6 +24,7 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from tests.fixtures import pdfs
+from tests.fixtures.records import page_text, record_answer
 from tests.unit.test_llmcache import (
     CachedRun,
     Engine,
@@ -41,6 +42,7 @@ from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import llm, transcribe, transcription_check
+from yizkr.pipeline.language import detect_language
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     FAILED,
@@ -89,6 +91,13 @@ LETTER_IMAGE = pdfs.gray(300, 120)
 LETTER_SHA1 = hashlib.sha1(png(300, 120, 1, LETTER_IMAGE.data)).hexdigest()
 # an engine's refusal, which the transcription check fails
 REFUSAL = "I'm sorry, but I can't transcribe this document."
+
+
+class Raw(str):
+    """A reading the scripted engine answers as it stands, rather than as
+    the record of a page holding it."""
+
+
 TEXT_LAYER = "pdf-pages:pdf-text-layer/1"
 
 
@@ -140,7 +149,9 @@ class Reader(Engine):
     """The scripted engine, reading the file each vision call gives it
     from `readings`, by the file's name or stem: a whole PDF by its name, a
     page by ``page-<n>``, and an image by its SHA-1. A reading given as a
-    list is given in turn, its last one from then on. `read` logs each file
+    list is given in turn, its last one from then on. A reading is the
+    engine's answer, the transcription record, or text, which it answers
+    as the record of one page holding it. `read` logs each file
     read, by name, with the SHA-1 of its bytes."""
 
     def __init__(self, readings: dict[str, str | list[str]], **kwargs):
@@ -158,7 +169,12 @@ class Reader(Engine):
         (path,) = (Path(path) for path in image_paths)
         self.read.append((path.name, sha1_file(path)))
         readings = self.readings.get(path.name) or self.readings[path.stem]
-        return readings.pop(0) if len(readings) > 1 else readings[0]
+        reading = readings.pop(0) if len(readings) > 1 else readings[0]
+        # a reading given as text is the record of one page holding it
+        if isinstance(reading, Raw) or reading.startswith("{"):
+            return str(reading)
+        language, _confidence = detect_language(reading)
+        return record_answer(reading, languages=[language or "en"])
 
     def names(self) -> list[str]:
         return [name for name, _sha1 in self.read]
@@ -316,16 +332,19 @@ class TestTheRoute:
     def test_a_scanned_pdf_is_read_whole(self, tmp_path):
         """A PDF none of whose pages reads from its text layer is read by
         the one vision call it was always read with: the PDF itself. Its
-        view carries no page provenance."""
+        view's pages are its record's, each read by that call."""
         corpus = folder(tmp_path, birth_extract_1938=extract())
         reader = Reader({"birth-extract-1938.pdf": EXTRACT})
         doc = document(run(tmp_path, corpus, reader), "birth-extract-1938.pdf")
         assert reader.names() == ["birth-extract-1938.pdf"]
         assert reader.read[0][1] == doc.sha1
         stored = json.loads(doc.transcription.read_text())
-        assert stored["text"] == EXTRACT
+        assert stored["text"] == page_text(EXTRACT)
         assert stored["engine"] == "llm-vision:scripted/model-a"
-        assert "pages" not in stored
+        assert [
+            (page["page"], page["status"], page["provenance"]["method"])
+            for page in stored["pages"]
+        ] == [(1, "transcribed", "vision")]
         assert not (doc.dir / DERIVED_MEDIA).exists()
 
     def test_a_mixed_pdf_reads_each_page_by_its_method(self, tmp_path):
@@ -385,7 +404,7 @@ class TestTheRoute:
         self, tmp_path
     ):
         corpus = folder(tmp_path, family_history=history(scanned()))
-        reader = Reader({"page-2": REFUSAL})
+        reader = Reader({"page-2": Raw(REFUSAL)})
         orchestrator = run(tmp_path, corpus, reader)
         doc = document(orchestrator, "family-history.pdf")
         assert doc.state.status == FAILED
@@ -451,7 +470,9 @@ class TestTheRoute:
         reader = Reader({"scan.pdf": EXTRACT})
         doc = document(run(tmp_path, corpus, reader), "scan.pdf")
         assert reader.names() == ["scan.pdf"]
-        assert transcription_of(doc).pages is None
+        transcription = transcription_of(doc)
+        assert transcription.engine == "llm-vision:scripted/model-a"
+        assert transcription.text == page_text(EXTRACT)
 
 
 class TestImages:
@@ -480,7 +501,7 @@ class TestImages:
             derived_transcription(doc.dir, LETTER_SHA1).read_text()
         )
         assert kept.artifact.sha1 == LETTER_SHA1
-        assert kept.text == EXCERPT
+        assert kept.text == page_text(EXCERPT)
         assert kept.language == "de"
         # and the image is recorded as the booklet's derived medium
         record = read_derived_media(doc.dir)
@@ -546,7 +567,7 @@ class TestImages:
         so in the stage's attention; the booklet's own text goes on to its
         batch."""
         corpus = folder(tmp_path, booklet=booklet())
-        reader = Reader({LETTER_SHA1: REFUSAL})
+        reader = Reader({LETTER_SHA1: Raw(REFUSAL)})
         orchestrator = run(tmp_path, corpus, reader)
         doc = document(orchestrator, "booklet.pdf")
         assert doc.state.status == AWAITING_CLAIMS
@@ -557,7 +578,7 @@ class TestImages:
         ]
         (reason,) = done["attention"]
         assert reason.startswith(f"page 6, image 1 (sha1 {LETTER_SHA1[:12]})")
-        assert "(refusal)" in reason
+        assert "(not-a-record)" in reason
         assert not derived_transcription(doc.dir, LETTER_SHA1).exists()
         assert LETTER_SHA1 in read_derived_media(doc.dir).media
 
@@ -600,7 +621,7 @@ class TestImages:
         reading = transcription.reading
         (image,) = reading.images
         assert image.path.read_bytes() == png(300, 120, 1, LETTER_IMAGE.data)
-        assert image.transcription.text == EXCERPT
+        assert image.transcription.text == page_text(EXCERPT)
         reading.close()
         assert not image.path.exists()
 
@@ -631,7 +652,7 @@ class TestAScratchRun:
         assert transcription.engine == TEXT_LAYER
         assert transcription.pages[5].images == [LETTER_SHA1]
         kept = derived_transcription(doc.dir, LETTER_SHA1)
-        assert json.loads(kept.read_text())["text"] == EXCERPT
+        assert json.loads(kept.read_text())["text"] == page_text(EXCERPT)
         assert doc.critique.exists()
 
     def test_the_call_estimate_counts_it_and_writes_nothing(
@@ -726,7 +747,10 @@ def stricter_check(monkeypatch, phrase: str) -> None:
     """Make the transcription check stricter, as a change to it would:
     `phrase` becomes a failure's signature."""
     signature = transcription_check._signature(
-        "stricter", transcription_check.TOOL_FAILURE, re.escape(phrase)
+        "stricter",
+        transcription_check.TOOL_FAILURE,
+        re.escape(phrase),
+        tier=transcription_check.FAIL,
     )
     monkeypatch.setattr(
         transcription_check,
@@ -792,11 +816,13 @@ class TestReuse:
         assert aside["reason"].endswith(f"(image {LETTER_SHA1[:12]})")
         assert reader.names() == [f"{LETTER_SHA1}.png"] * 2
         kept = derived_transcription(doc.dir, LETTER_SHA1)
-        assert json.loads(kept.read_text())["text"] == "Liebes Pünktchen!"
+        assert json.loads(kept.read_text())["text"] == page_text(
+            "Liebes Pünktchen!"
+        )
         superseded = kept.with_name(
             f"{LETTER_SHA1}.transcription.superseded-1.json"
         )
-        assert json.loads(superseded.read_text())["text"] == EXCERPT
+        assert json.loads(superseded.read_text())["text"] == page_text(EXCERPT)
 
     def test_every_image_on_a_page_is_checked_again(
         self, tmp_path, monkeypatch
@@ -860,8 +886,9 @@ class TestReuse:
 
 
 class TestTheView:
-    def test_a_view_made_whole_is_written_as_it_always_was(self):
-        """No `pages` key: every transcription made whole keeps its bytes."""
+    def test_a_view_without_pages_is_written_as_it_always_was(self):
+        """No `pages`, `document_class` or `flag` key: a transcription
+        without a record (a text file's, say) keeps its bytes."""
         from yizkr.claims import ArtifactRef
 
         transcription = Transcription(
@@ -882,6 +909,7 @@ class TestTheView:
                 page=number,
                 start=start,
                 end=end,
+                status="transcribed",
                 provenance=PageProvenance(method="text-layer", engine="m"),
             )
 
@@ -905,24 +933,31 @@ class TestTheView:
 
     def test_provenance_is_no_part_of_the_content(self):
         """How a page was read is provenance, as the engine is, and is left
-        out of the content hash; where a page's text lies, and the images it
-        names, are content, as the text is (#389 hashes what extraction
-        reads of a page)."""
+        out of the content hash, as is the check's flag; where a page's text
+        lies, the images it names and the record's fields are content, as
+        the text is (#389 hashes what extraction reads of a page)."""
         from yizkr.claims import ArtifactRef
 
         ref = ArtifactRef(sha1="a" * 40)
         text = "[Page 1]\nRahel"
 
-        def made(method, made_by, *, end=14, annotations=0):
+        def made(
+            method, made_by, *, end=14, annotations=0, flag=None, **record
+        ):
             return Transcription(
                 artifact=ref,
                 text=text,
                 engine=made_by,
+                flag=flag,
                 pages=[
                     TranscribedPage(
                         page=1,
                         start=9,
                         end=end,
+                        status=record.get("status", "transcribed"),
+                        printed_page=record.get("printed_page"),
+                        languages=record.get("languages", []),
+                        notes=record.get("notes", ""),
                         provenance=PageProvenance(
                             method=method,
                             engine=made_by,
@@ -943,6 +978,18 @@ class TestTheView:
             made("vision", "llm-vision:scripted/model-a", annotations=2)
         )
         assert hashed(read) != hashed(made("text-layer", TEXT_LAYER, end=13))
+        assert hashed(read) == hashed(
+            made("text-layer", TEXT_LAYER, flag="refusal-short")
+        )
+        for field in (
+            {"printed_page": "12"},
+            {"status": "illegible"},
+            {"languages": ["de"]},
+            {"notes": "water damage"},
+        ):
+            assert hashed(read) != hashed(
+                made("text-layer", TEXT_LAYER, **field)
+            )
 
 
 # -- the keys -----------------------------------------------------------------
@@ -1061,7 +1108,7 @@ class TestKeys:
             )
             assert client.seed(
                 key,
-                reading,
+                record_answer(reading, document_class="certificate"),
                 {"model_identifier": "archived/model-z", "backfilled": True},
             )
         seeder._close_engines()
@@ -1072,7 +1119,7 @@ class TestKeys:
             "cache-hit: adopted": 1
         }
         stored = json.loads(scan.transcription.read_text())
-        assert stored["text"] == EXTRACT
+        assert stored["text"] == page_text(EXTRACT)
         assert stored["engine"] == "llm-vision:archived/model-z"
         typed_pages = document(after, "family-history-2008.pdf")
         assert calls_for(after, typed_pages, "transcribe") == {}

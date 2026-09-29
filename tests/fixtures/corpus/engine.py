@@ -41,8 +41,10 @@ from tests.fixtures.corpus.answers import (
     manifest,
     mistakes_in,
 )
+from tests.fixtures.records import record_answer
 
 from yizkr.pipeline.llm import ClaudeCodeClient
+from yizkr.pipeline.transcription_record import document_classes
 
 CLI = "9.9.9"
 # what each kind of call's prompt says, as the pipeline words it
@@ -212,7 +214,17 @@ class RecordedEngine:
             if recorded is None or not recorded.read:
                 raise NoAnswer("no recorded reading of this image")
             self.calls.log("vision", recorded.document)
-            return SOURCES[recorded.source].text
+            # the transcription record (ADR-0037): the source's class
+            # where it is one of the record's, else unclassified
+            source = SOURCES[recorded.source]
+            document_class = source.artifact_class
+            if document_class not in document_classes():
+                document_class = "unclassified"
+            return record_answer(
+                source.text,
+                document_class=document_class,
+                languages=[source.lang] if source.lang else [],
+            )
         if prompt.startswith(CRITIQUE_PROMPT):
             return self._critique(prompt)
         if MANIFEST_PROMPT in prompt:

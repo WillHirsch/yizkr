@@ -1,8 +1,10 @@
-"""The transcription check (#175): tool-failure and refusal outputs never
-pass as transcriptions, a near-empty multi-page output fails, and short
-genuine pages pass. A tool error the engine's own stream reports on the
-input fails the output whatever it says, with or without the LLM cache
-(#213).
+"""The transcription check (#175): a tool token or a bare announcement
+fails an output, and the phrases in the engine's voice flag it (#214,
+#389); a near-empty multi-page output fails, and short genuine pages
+pass. A tool error the engine's own stream reports on the input fails the
+output whatever it says, with or without the LLM cache (#213). The
+vision engine answers the transcription record (tests/unit/
+test_transcription_record.py covers the record itself).
 
 Every failure and refusal output below is invented engine text. Every
 genuine text is a source passage of the fictional universe
@@ -23,6 +25,7 @@ import time
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.records import page_text, record_answer
 from tests.unit.test_claude_code_pinning import (
     RENDERER_MISSING,
     TOO_MANY_PAGES,
@@ -56,6 +59,8 @@ from yizkr.pipeline.transcription_check import (
     CHECK_STAGE,
     CHECK_VERSION,
     EMPTY,
+    FAIL,
+    FLAG,
     MIN_TEXT_CHARS_PER_PAGE,
     REFUSAL,
     SHORT_OUTPUT_CHARS,
@@ -66,6 +71,7 @@ from yizkr.pipeline.transcription_check import (
     TranscriptionCheck,
     TranscriptionCheckFailed,
     check_transcription,
+    find_signature,
     media_page_count,
     minimum_text_chars,
     require_valid_transcription,
@@ -249,14 +255,39 @@ def a_caption() -> str:
     return min(universe_texts(), key=len)
 
 
+# each signature's tier, by its name
+TIERS = {signature.name: signature.tier for signature in SIGNATURES}
+
+
+def caught(text: str, pages: int | None = None) -> TranscriptionCheck | None:
+    """The verdict on `text` when a signature matched it: a failure, for a
+    signature of the fail tier, or a pass with a flag, for one of the flag
+    tier; None when none matched."""
+    check = check_transcription(text, pages=pages)
+    if check.signature is None:
+        return None
+    flagged = TIERS[check.signature] == FLAG
+    assert (check.passed, check.flagged) == (flagged, flagged)
+    return check
+
+
+def clean(text: str, pages: int | None = None) -> bool:
+    """Whether `text` passes the check with no flag."""
+    check = check_transcription(text, pages=pages)
+    return check.passed and not check.flagged
+
+
 class TestSignatures:
     @pytest.mark.parametrize(("name", "text"), FAILURES)
-    def test_failure_outputs_fail(self, name, text):
-        check = check_transcription(text, pages=1)
-        assert not check.passed
+    def test_each_signature_fails_or_flags_by_its_tier(self, name, text):
+        check = caught(text, pages=1)
         assert check.signature == name
-        assert check.failure in (TOOL_FAILURE, REFUSAL)
         assert name in check.reason
+        if TIERS[name] == FAIL:
+            assert check.failure in (TOOL_FAILURE, REFUSAL)
+        else:
+            assert (check.failure, check.flagged) == (None, True)
+            assert "flagged for review" in check.reason
 
     def test_every_signature_has_a_failing_example(self):
         # a new signature arrives with an example that exercises it
@@ -266,13 +297,34 @@ class TestSignatures:
     def test_kinds(self):
         assert check_transcription(FAILURES[0][1]).failure == TOOL_FAILURE
         refusal = "I'm unable to assist with this request."
-        assert check_transcription(refusal).failure == REFUSAL
+        assert find_signature(refusal)[0].kind == REFUSAL
+
+    def test_only_tokens_and_a_bare_announcement_fail(self):
+        """A token no source writes, and an output that is wholly the
+        engine's announcement, fail; the phrases in the engine's voice,
+        which a letter may also write, flag (#214)."""
+        assert {name for name, tier in TIERS.items() if tier == FAIL} == {
+            "pdf-renderer",
+            "traceback",
+            "shell-error",
+            "engine-error",
+            "narration-only",
+        }
+
+    def test_a_flagged_output_passes_whatever_its_pages(self):
+        """A flag never stops a transcription: it passes, with the
+        signature and the phrase recorded for review."""
+        check = check_transcription(
+            "I'm unable to assist with this request.", pages=1
+        )
+        assert (check.passed, check.flagged) == (True, True)
+        assert check.signature == "refusal-request"
+        assert check.matched == "I'm unable to assist with this request"
 
     @pytest.mark.parametrize("note", PAGE_FAILURES)
     def test_failure_partway_through_fails_the_whole_output(self, note):
         text = f"{a_page()}\n\n{note}\n"
-        check = check_transcription(text, pages=2)
-        assert not check.passed
+        check = caught(text, pages=2)
         assert check.signature == "media-unreadable"
 
     @pytest.mark.parametrize(
@@ -399,8 +451,7 @@ class TestSignatures:
         ],
     )
     def test_engine_note_opening_the_output_fails(self, name, text):
-        check = check_transcription(text, pages=1)
-        assert not check.passed
+        check = caught(text, pages=1)
         assert check.signature == name
 
     @pytest.mark.parametrize(
@@ -412,8 +463,7 @@ class TestSignatures:
         ],
     )
     def test_refusal_on_a_skipped_page_fails_after_text(self, note):
-        check = check_transcription(f"{a_page()}\n\n{note}", pages=2)
-        assert not check.passed
+        check = caught(f"{a_page()}\n\n{note}", pages=2)
         assert check.signature == "refusal-transcribe"
 
     def test_every_note_is_judged_not_only_the_first(self):
@@ -423,8 +473,7 @@ class TestSignatures:
             "Sorry, I wasn't able to open the PDF of the census page.\n\n"
             "Page 2: I could not open the image."
         )
-        check = check_transcription(text, pages=2)
-        assert not check.passed
+        check = caught(text, pages=2)
         assert check.signature == "media-unreadable"
 
     @pytest.mark.parametrize(
@@ -446,44 +495,44 @@ class TestSignatures:
         # transcription is worse than a visible failure, so a letter that
         # says so fails too
         line = "The last page could not be read, the ink had run."
-        assert not check_transcription(f"{a_page()}\n{line}", pages=2).passed
+        assert caught(f"{a_page()}\n{line}", pages=2)
 
     @pytest.mark.parametrize("line", TRANSCRIBING_LETTERS)
     def test_letter_declining_its_own_writing_passes(self, line):
         # a letter names the writing it cannot transcribe; the engine
         # declines the task's document ("this document", "it")
-        assert check_transcription(line, pages=1).passed
-        assert check_transcription(f"{a_page()}\n{line}", pages=2).passed
+        assert clean(line, pages=1)
+        assert clean(f"{a_page()}\n{line}", pages=2)
 
     @pytest.mark.parametrize("line", CORRESPONDENCE)
     def test_correspondence_about_its_own_media_passes(self, line):
         # an email or letter names its own attachment, or says it in the
         # middle of a message; alone, or after a page of text
-        assert check_transcription(line, pages=1).passed
-        assert check_transcription(f"{a_page()}\n{line}", pages=2).passed
+        assert clean(line, pages=1)
+        assert clean(f"{a_page()}\n{line}", pages=2)
 
     @pytest.mark.parametrize("line", REPLIES)
     def test_reply_declining_its_readers_request_passes(self, line):
         # an archive's or a registrar's reply names the request it declines
-        assert check_transcription(line, pages=1).passed
-        assert check_transcription(f"{a_page()}\n{line}", pages=2).passed
+        assert clean(line, pages=1)
+        assert clean(f"{a_page()}\n{line}", pages=2)
 
     def test_same_note_mid_text_passes_unless_it_names_a_page(self):
         # in the middle of a text, a note is a source's own sentence unless
         # it names the pages it skipped
         note = "I couldn't open the PDF."
-        assert not check_transcription(note, pages=1).passed
-        assert check_transcription(f"{a_page()}\n{note}", pages=2).passed
+        assert caught(note, pages=1)
+        assert clean(f"{a_page()}\n{note}", pages=2)
         skipped = f"{a_page()}\nI couldn't open page 2 of the PDF."
-        assert not check_transcription(skipped, pages=2).passed
+        assert caught(skipped, pages=2)
 
     @pytest.mark.parametrize("text", universe_texts())
     def test_universe_source_texts_pass(self, text):
         for pages in (None, 1):
-            assert check_transcription(text, pages=pages).passed
+            assert clean(text, pages=pages)
 
     def test_letter_with_refusal_words_passes(self):
-        assert check_transcription(LETTER, pages=1).passed
+        assert clean(LETTER, pages=1)
 
     @pytest.mark.parametrize(
         "text",
@@ -503,32 +552,32 @@ class TestSignatures:
     def test_surname_that_names_a_tool_passes(self, line):
         # a record may name a person Poppler; only the package's own
         # phrases ("poppler-utils", "install poppler") are a tool's words
-        assert check_transcription(line, pages=1).passed
-        assert check_transcription(f"{a_page()}\n{line}", pages=2).passed
+        assert clean(line, pages=1)
+        assert clean(f"{a_page()}\n{line}", pages=2)
 
     def test_letter_declining_a_task_passes(self):
         # declining a task is ordinary prose, alone or inside a letter
-        assert check_transcription(TASK_LETTER, pages=1).passed
-        assert check_transcription(f"{LETTER} {TASK_LETTER}", pages=1).passed
+        assert clean(TASK_LETTER, pages=1)
+        assert clean(f"{LETTER} {TASK_LETTER}", pages=1)
 
     def test_bare_decline_fails_only_as_a_short_whole_output(self):
         decline = "I am sorry, but I cannot help with that."
-        assert not check_transcription(decline).passed
+        assert caught(decline)
         # the same words opening a long letter are the letter's words
         letter = decline + " " + LETTER
         assert len(letter) > SHORT_OUTPUT_CHARS
-        assert check_transcription(letter).passed
+        assert clean(letter)
 
     def test_preamble_before_text_passes(self):
         # the claude-code engine joins its turns without a separator, so a
         # sentence announcing the read can run straight into the text
         text = f"Let me read the image file.{a_caption()}"
-        assert check_transcription(text, pages=1).passed
+        assert clean(text, pages=1)
 
     def test_bracketed_note_is_an_editorial_mark(self):
         # the prompt asks for unreadable passages to be marked in brackets
         text = f"{a_page()} [I cannot transcribe the stamp reliably]"
-        assert check_transcription(text, pages=1).passed
+        assert clean(text, pages=1)
 
     def test_tool_token_in_brackets_still_fails(self):
         text = f"{a_page()} [pdftoppm failed on page 2]"
@@ -695,6 +744,19 @@ def scan_file(tmp_path, name: str = "scan.png"):
     return path
 
 
+class Raw(str):
+    """An answer a fake engine gives as it stands, rather than as the
+    record of a page holding it."""
+
+
+def answered(response: str) -> str:
+    """What a fake engine answers for `response`: the record of one page
+    holding it, unless it is Raw or a record already."""
+    if isinstance(response, Raw) or response.startswith("{"):
+        return str(response)
+    return record_answer(response)
+
+
 class FakeLlm:
     model_identifier = "fake-model"
 
@@ -704,7 +766,7 @@ class FakeLlm:
 
     def complete(self, prompt, image_paths=()):
         self.calls += 1
-        return self.responses.pop(0)
+        return answered(self.responses.pop(0))
 
 
 class KeepingLlm(FakeLlm):
@@ -774,14 +836,14 @@ class TestPreflight:
         result = LlmVisionTranscriber(FakeLlm(STAMP)).transcribe(
             scan_file(tmp_path, "scan.pdf")
         )
-        assert result.text == STAMP
+        assert result.text == page_text(STAMP)
         assert asked == []
 
     def test_images_need_no_renderer(self, tmp_path, monkeypatch):
         monkeypatch.setattr(transcribe.shutil, "which", no_tools)
         llm = FakeLlm(STAMP)
         result = LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
-        assert result.text == STAMP
+        assert result.text == page_text(STAMP)
 
 
 class TestTranscribers:
@@ -797,7 +859,9 @@ class TestTranscribers:
         monkeypatch.setattr(
             transcription_check.subprocess, "run", FakeRun("Pages: 5\n")
         )
-        transcriber = LlmVisionTranscriber(FakeLlm("[illegible]"))
+        transcriber = LlmVisionTranscriber(
+            FakeLlm(record_answer(*["[illegible]"] * 5))
+        )
         with pytest.raises(TranscriptionCheckFailed) as caught:
             transcriber.transcribe(scan_file(tmp_path, "scan.pdf"))
         assert caught.value.check.failure == TOO_SHORT
@@ -828,16 +892,16 @@ class TestTranscribers:
         failing = FAILURES[0][1]
         llm = KeepingLlm(failing, a_page())
         result = LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
-        assert result.text == a_page()
+        assert result.text == page_text(a_page())
         assert llm.calls == 2
-        assert llm.rejected == [(failing, True)]
+        assert llm.rejected == [(answered(failing), True)]
 
     def test_the_engines_failing_answer_is_not_asked_for_again(self, tmp_path):
         llm = KeepingLlm(FAILURES[0][1], a_page(), kept=0)
         with pytest.raises(TranscriptionCheckFailed):
             LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert llm.calls == 1
-        assert llm.rejected == [(FAILURES[0][1], False)]
+        assert llm.rejected == [(answered(FAILURES[0][1]), False)]
 
     def test_a_kept_answer_is_asked_for_once_more_at_most(self, tmp_path):
         failing = FAILURES[0][1]
@@ -846,12 +910,22 @@ class TestTranscribers:
             LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert llm.calls == 2
 
-    def test_text_file_with_a_refusal_raises(self, tmp_path):
+    def test_text_file_with_a_tool_failure_raises(self, tmp_path):
         text_file = tmp_path / "external-tool-output.txt"
-        text_file.write_text("I'm sorry, but I can't help with that.\n")
+        text_file.write_text("cat: page-1.png: No such file or directory\n")
         transcriber = TextFileTranscriber(text_file)
         with pytest.raises(TranscriptionCheckFailed):
             transcriber.transcribe(text_file)
+
+    def test_text_file_with_a_refusal_passes_with_its_flag(self, tmp_path):
+        """A text file has no record, and its wording only flags it: it
+        goes on, and carries the flag (#214)."""
+        text_file = tmp_path / "external-tool-output.txt"
+        text_file.write_text("I'm sorry, but I can't help with that.\n")
+        transcriber = TextFileTranscriber(text_file)
+        result = transcriber.transcribe(text_file)
+        assert result.flag == "refusal-short"
+        assert transcriber.last_check.flagged
 
     def test_text_file_short_genuine_text_passes(self, tmp_path):
         text_file = tmp_path / "note.txt"
@@ -880,7 +954,7 @@ class ScriptedLlm(KeepingLlm):
         step = self.responses.pop(0)
         if isinstance(step, BaseException):
             raise step
-        return step
+        return answered(step)
 
 
 def tool_error(*errors: str, response: str | None = None) -> EngineToolError:
@@ -972,7 +1046,7 @@ class TestToolErrors:
             LlmVisionTranscriber(llm).transcribe(scan_file(tmp_path))
         assert caught.value.check.failure == TOOL_ERROR
         assert llm.calls == 2
-        assert llm.rejected == [(failing, True)]
+        assert llm.rejected == [(answered(failing), True)]
 
     def test_through_the_claude_code_engine(self, tmp_path, monkeypatch):
         """The signal decides whatever the answer says; the wording
@@ -981,18 +1055,18 @@ class TestToolErrors:
         scan = tmp_path / "scan.png"
         scan.write_bytes(b"png placeholder")
         transcriber = LlmVisionTranscriber(ClaudeCodeClient())
-        cli.answer = a_page()
+        cli.answer = record_answer(a_page())
         cli.tool_events = read_events(scan.resolve(), error=RENDERER_MISSING)
         with pytest.raises(TranscriptionCheckFailed) as caught:
             transcriber.transcribe(scan)
         assert caught.value.check.tool_error == "pdf-renderer-missing"
         cli.tool_events = read_events(scan.resolve())
-        cli.answer = FAILURES[0][1]
+        cli.answer = record_answer(FAILURES[0][1])
         with pytest.raises(TranscriptionCheckFailed) as caught:
             transcriber.transcribe(scan)
         assert caught.value.check.signature == "pdf-renderer"
-        cli.answer = a_page()
-        assert transcriber.transcribe(scan).text == a_page()
+        cli.answer = record_answer(a_page())
+        assert transcriber.transcribe(scan).text == page_text(a_page())
 
 
 class TestToolErrorsWithTheCache:
@@ -1025,7 +1099,7 @@ class TestToolErrorsWithTheCache:
 
     def test_an_answer_with_a_tool_error_is_never_kept(self, rig, tmp_path):
         cli, scan, cache, events, client = rig
-        cli.answer = a_page()
+        cli.answer = record_answer(a_page())
         cli.tool_events = read_events(scan.resolve(), error=RENDERER_MISSING)
         wrapped = client()
         with pytest.raises(TranscriptionCheckFailed) as caught:
@@ -1037,12 +1111,16 @@ class TestToolErrorsWithTheCache:
         assert events == [("cache-miss", "absent")]
         # the next run asks the engine again: nothing was kept, or rejected
         cli.tool_events = read_events(scan.resolve())
-        assert LlmVisionTranscriber(client()).transcribe(scan).text == a_page()
+        assert LlmVisionTranscriber(client()).transcribe(
+            scan
+        ).text == page_text(a_page())
         assert events[1:] == [("cache-miss", "absent")]
-        assert cache.get(key)["response"] == a_page()
+        assert cache.get(key)["response"] == record_answer(a_page())
         # an answer the engine read its input for is served from then on
         calls = len(cli.calls)
-        assert LlmVisionTranscriber(client()).transcribe(scan).text == a_page()
+        assert LlmVisionTranscriber(client()).transcribe(
+            scan
+        ).text == page_text(a_page())
         assert len(cli.calls) == calls
         assert events[-1] == ("cache-hit", "key match")
 
@@ -1054,7 +1132,7 @@ class TestToolErrorsWithTheCache:
         wrapped = client()
         key = wrapped.complete_key(TRANSCRIPTION_PROMPT, [scan])
         assert wrapped.seed(key, FAILURES[0][1], {"role": "transcribe"})
-        cli.answer = a_page()
+        cli.answer = record_answer(a_page())
         cli.tool_events = read_events(scan.resolve(), error=TOO_MANY_PAGES)
         with pytest.raises(TranscriptionCheckFailed) as caught:
             LlmVisionTranscriber(wrapped).transcribe(scan)
@@ -1079,14 +1157,16 @@ class TestToolErrorsWithTheCache:
         monkeypatch.setattr(transcribe, "media_page_count", lambda path: 34)
         scan = tmp_path / "scan.pdf"
         scan.write_bytes(b"%PDF-1.4 placeholder")
-        cli.answer = a_page()
+        # the record of each of its 34 pages
+        cli.answer = record_answer(*[a_caption()] * 34)
         cli.tool_events = (
             read_events(scan.resolve(), error=TOO_MANY_PAGES)
             + read_events(scan.resolve(), pages="1-20")
             + read_events(scan.resolve(), pages="21-34")
         )
-        assert LlmVisionTranscriber(client()).transcribe(scan).text == a_page()
-        assert LlmVisionTranscriber(client()).transcribe(scan).text == a_page()
+        for _run in range(2):
+            transcription = LlmVisionTranscriber(client()).transcribe(scan)
+            assert len(transcription.pages) == 34
         assert len(cli.calls) == 1
         assert events == [("cache-miss", "absent"), ("cache-hit", "key match")]
 
@@ -1217,12 +1297,14 @@ class TestOrchestratorContract:
             ]
             return status, doc, events
 
-        cli.answer = a_page()
+        cli.answer = record_answer(a_page())
         cli.tool_events = read_events(scan)
         status, doc, _ = run("state")
         assert status == BATCHED
         kept = role_entries(cache, "transcribe")
-        assert [entry["response"] for entry in kept.values()] == [a_page()]
+        assert [entry["response"] for entry in kept.values()] == [
+            record_answer(a_page())
+        ]
 
         cli.tool_events = read_events(scan, error=NOT_AN_IMAGE)
         status, doc, _ = run("state", refresh=("transcribe",))
@@ -1278,7 +1360,7 @@ class TestOrchestratorContract:
             ]
             return status, doc, events
 
-        cli.answer = a_page()
+        cli.answer = record_answer(a_page())
         cli.tool_events = read_events(
             (tmp_path / "docs" / "scan.png").resolve(), error=NOT_AN_IMAGE
         )
@@ -1295,7 +1377,9 @@ class TestOrchestratorContract:
         assert len(cli.calls) == 2
         assert doc.transcription.exists()
         kept = role_entries(cache, "transcribe")
-        assert [entry["response"] for entry in kept.values()] == [a_page()]
+        assert [entry["response"] for entry in kept.values()] == [
+            record_answer(a_page())
+        ]
 
         # the next run reuses the view, as the check's signatures pass it
         status, doc, events = run("state")
