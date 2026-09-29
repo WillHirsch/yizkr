@@ -1582,6 +1582,62 @@ class TestContent:
             "fallback": 1,
         }
 
+    def test_a_pdf_read_page_by_page_counts_its_pages(self, run):
+        """A PDF read page by page (#176) takes its own route, and its
+        pages count by the method that read each, as do its text-layer
+        pages that show annotations the text layer leaves unread. A page
+        whose method is no known one folds into OTHER, and one whose
+        provenance cannot be read counts nothing."""
+        postcard = run / slugify(Path(FILES[POSTCARD][0]).stem)
+        view = json.loads((postcard / "transcription.json").read_text())
+        text = view["text"]
+
+        def page(number, method, annotations=0):
+            provenance = {
+                "method": method,
+                "engine": "pdf-text-layer/1",
+                "annotations": annotations,
+            }
+            return {
+                "page": number,
+                "start": 0,
+                "end": len(text),
+                "images": [],
+                "provenance": provenance,
+            }
+
+        view |= {
+            "engine": "pdf-pages:pdf-text-layer/1",
+            "pages": [
+                page(1, "text-layer", annotations=2),
+                page(2, "text-layer"),
+                page(3, "vision", annotations=1),
+                page(4, "none"),
+                page(5, HOSTILE),
+                page(6, "text-layer", annotations=True),
+                {"page": 7},
+            ],
+        }
+        (postcard / "transcription.json").write_text(json.dumps(view))
+        documents = build(run, now=NOW)["aggregate"]["documents"]
+        assert documents["routes"] == {
+            "text-file": 3,
+            "llm-vision": 1,
+            "pdf-pages": 1,
+            "pptx-adapter": 1,
+        }
+        assert documents["pdf_pages"] == {
+            "text-layer": 3,
+            "vision": 1,
+            "none": 1,
+            OTHER: 1,
+        }
+        assert documents["pdf_pages_annotated"] == 1
+        text = render_markdown(build(run, now=NOW)["aggregate"])
+        assert (
+            "Pages of PDFs read page by page, by method: text-layer 3"
+        ) in text
+
     def test_failed_documents_each_once(self, made):
         documents = made["aggregate"]["documents"]
         assert documents["failed"] == 2

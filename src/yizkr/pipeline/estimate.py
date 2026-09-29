@@ -20,7 +20,13 @@ fails, an answer cut off before its sentinel), a call another document
 asks earlier in the run, which the run's cache answers by then, and the
 replay of a conversation whose session was not kept, for its forks. A
 chunk the cache cannot answer is answered empty, so that the chunks after
-it are keyed and counted too.
+it are keyed and counted too. So is a page or an image of a PDF read page
+by page (yizkr.pipeline.textlayer), each a call of its own: one the cache
+cannot answer is given a reading that stands in for the engine's, which
+the transcription check passes, so that every page and image after it is
+keyed and counted too, and the transcription is then the engine's to
+make. The images and pages such a reading keeps in a scratch folder are
+removed when its transcription is counted.
 
 **Estimated calls.** A call's key can depend on an answer the engine has
 yet to give: an extraction after a transcription the engine makes, the
@@ -120,6 +126,14 @@ FIRST_TURNS = 4
 # the answer the estimate gives a chunk the cache cannot answer: whole,
 # and empty, so that the chunks after it are keyed and counted too
 EMPTY_CHUNK = '{"done": true, "claims_emitted": 0, "gaps_emitted": 0}'
+# the reading the estimate gives a page or an image of a PDF read page by
+# page that the cache cannot answer: one the transcription check passes (a
+# single editorial mark), so that the calls after it are keyed and counted
+# too
+STAND_IN_READING = "[a reading the engine is to give]"
+# the files of such a page or image (yizkr.pipeline.textlayer), as against
+# a PDF read whole
+_READ_FILES = (".jpg", ".png")
 # the parts of an extraction the estimate counts apart
 _FIRST, _CHUNK_CALLS = "first turns", "chunks"
 
@@ -274,8 +288,11 @@ class _Keyed:
     """An engine's client as the LLM cache keys its calls, which answers
     none of them: its engine, model, effort, configuration hash, system
     prompt and call text are the client's own. A call the cache cannot
-    answer reaches it, and it ends the stage there (_Unanswered), or, for
-    a chunk, answers it empty (EMPTY_CHUNK), while `answering`."""
+    answer reaches it, and it ends the stage there (_Unanswered); or, for
+    a chunk, answers it empty (EMPTY_CHUNK), while `answering`; or, for a
+    page or an image of a PDF read page by page, while `reading_pages`,
+    stands in for the engine's reading (STAND_IN_READING), and counts it
+    in `stood_in`."""
 
     def __init__(self, client: Any) -> None:
         self.engine = getattr(client, "engine", type(client).__name__)
@@ -287,6 +304,8 @@ class _Keyed:
         self.model_identifier = getattr(client, "model_identifier", "")
         self.cli_version = getattr(client, "cli_version", None)
         self.answering = False
+        self.reading_pages = False
+        self.stood_in = 0
 
     def last_report(self) -> dict[str, Any]:
         return {}
@@ -294,6 +313,13 @@ class _Keyed:
     def complete(self, prompt: str, image_paths: Any = ()) -> str:
         if self.answering:
             return EMPTY_CHUNK
+        if (
+            self.reading_pages
+            and image_paths
+            and all(str(path).endswith(_READ_FILES) for path in image_paths)
+        ):
+            self.stood_in += 1
+            return STAND_IN_READING
         raise _Unanswered
 
     def close(self) -> None:
@@ -667,12 +693,28 @@ class Estimator(ScratchDriver):
         if method == "vision":
             self._engine_for("transcribe")
         made = _Made(tally=self._tally)
+        keyed = self._keyed.get("transcribe")
+        paged = keyed is not None and doc.source.suffix.lower() == ".pdf"
+        if paged:
+            keyed.reading_pages, keyed.stood_in = True, 0
         try:
             transcription, _resolution = self._transcribe(doc, method)
         except _Unanswered:
             return made
         except Exception as exc:
             made.fails = _why(exc)
+            return made
+        finally:
+            if paged:
+                keyed.reading_pages = False
+        # a PDF read page by page keeps its images in a scratch folder,
+        # which the estimate keeps nothing of
+        if transcription.reading is not None:
+            transcription.reading.close()
+            transcription.forget_reading()
+        if paged and keyed.stood_in:
+            # a reading stood in for the engine's: the transcription is the
+            # engine's to make, and the extraction after it is estimated
             return made
         made.view = transcription
         made.changed = content_hash(

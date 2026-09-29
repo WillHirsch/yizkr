@@ -7,6 +7,8 @@ embeds is an artifact of its own, `part of` the compilation, as the owner
 decided on #178: see Amendments.
 Amended by #103 (2026-09-29): the write registers the deck, its slides
 and its derived media, each by its SHA-1: see Amendments.
+Amended by #176 (2026-09-29): a PDF is read page by page, and each image
+placed within its text-layer pages is read on its own: see Amendments.
 
 ## Context
 
@@ -270,9 +272,10 @@ from one witness can cite the other.
 
 Still to do, each keeping the two witnesses separable:
 
-- **Transcription (#176).** Today the vision engine reads a PDF whole,
-  so an excerpt's text is read into the compilation's transcription and
-  every claim read from it cites the PDF: the two witnesses are merged.
+- **Transcription (#176; done, see the #176 amendment below).** Before
+  #176 the vision engine read a PDF whole,
+  so an excerpt's text was read into the compilation's transcription and
+  every claim read from it cited the PDF: the two witnesses were merged.
   #176 routes a PDF by page. The compilation's transcription holds the
   text of its own pages only, from their text layer or, for a scanned
   page, by vision, with page markers so that each claim carries its page.
@@ -441,3 +444,86 @@ time"):
 
 A compilation's excerpts are registered the same way once follow-up A
 records them.
+
+Amended by #176 (2026-09-29): **a PDF is read page by page, and each
+image placed within its text-layer pages is read on its own.** This does
+the #289 amendment's transcription item, and the part of its follow-up A
+that comes before the write. Where it says the owner decided, the owner
+did so on 2026-09-29, in the review of its PR.
+
+- **Page by page.** The vision route reads a PDF page by page when any
+  of its pages has a usable text layer: such a page from its text layer,
+  deterministically and without a model call; a page with nothing to read
+  by nothing; and any other page by a vision call of its own. The PDF's
+  transcription holds its own text only, page by page behind `[Page N]`
+  markers, and marks where each image sits by the image's SHA-1, as the
+  #289 amendment allows; its `pages` hold each page's method apart from
+  its content. A PDF none of whose pages has a usable text layer is read
+  whole, by one vision call that gives the engine the PDF itself, so a
+  scanned compilation stays as that amendment's third question leaves it.
+- **The definitions** the #289 amendment's seventh question asks for, as
+  the transcription uses them (`yizkr.pipeline.textlayer`):
+  - a page is a scan when images together cover at least 60% of it, as
+    the strips or tiles of one scan do, and the layers of a mixed raster
+    content page, and more of the letters and digits it draws visibly lie
+    over the images than beside them, as the owner decided. Text beside a
+    large image is a
+    typed page, whose image is a witness of its own; text over one, a
+    stamp or a header over a scan, or text laid over a picture that fills
+    the page, is a scan, read by vision. An OCR layer is drawn invisibly,
+    and is never the text layer;
+  - a page's one image is the page itself, given to the engine as held,
+    when it alone covers at least 90% of the page and the page draws
+    nothing else;
+  - an image under 24 pixels on a side, or under 10,000 pixels in all, is
+    decoration, and is not read.
+
+  Registration can take them as they stand; a change to them is a change
+  to the transcription stage, checked by a scratch diff (ADR-0025 §4).
+- **What else sends a page to vision.** A text layer whose replacement
+  character stands within a word is garbled, and its page is read by
+  vision. So is a page that shows text in an annotation, a free-text one
+  or a form field holding text; a text-layer page's
+  other annotations are left unread, and the run report counts the pages
+  that show them. Text a page hides, under an image, a filled path or an
+  annotation painted after it (a box or ink a viewer draws over a line,
+  a stamp, a redaction marked and not yet applied, but not a highlight,
+  an underline, a squiggle or a strike-out, which leave the text in
+  view), is never read from the text layer: its page is read by vision,
+  which reads what the page shows. Were a text layer ever given without
+  such text, `[redacted]` would stand where it lies, never nothing, as
+  the owner decided; #389's transcription record is to carry the mark
+  through what the vision engine writes too. Each of these is the
+  owner's decision.
+- **Known limits of hidden text** (from the review of #176): text hidden
+  in ways the page does not show as covering it is read from the text
+  layer as though it showed. That is text under a thick stroked line (a
+  marker drawn over it and flattened into the page), text a clip path
+  cuts out of view, text drawn in the colour behind it (white on a white
+  page), and text drawn at a fill opacity of 0. None is handled yet.
+- **Each image placed within a text-layer page** is recorded before the
+  write as a deck's derived media are: in the PDF's `derived-media.json`,
+  keyed by the SHA-1 of its bytes, named for its places (`page 6, image
+  1`), with the pages it is on. Its bytes are the JPEG file the PDF holds,
+  or else a PNG of its pixels, written by a deterministic encoder that a
+  test holds byte for byte. The never-ingest list is asked of its SHA-1
+  before it is read. It is read by a vision call of its own, once however
+  many times the PDF places it, and its transcription, which names it by
+  its SHA-1, is kept beside its bytes. An image on a page read by vision
+  is read with that page, as the compilation's page. An image the
+  never-ingest list names on such a page, or in a PDF read whole, reaches
+  the engine with the page: the owner decided that the case will never
+  arise and is not worth handling.
+- **Determinism.** PDFium is started afresh for each PDF and draws a font
+  the PDF does not embed with a built-in one, never the host's, so
+  a page's text layer, its rendering and an image's bytes, and so the keys
+  of the calls that read them, are the same on every host and in every
+  run; pyproject.toml pins the PDFium build, since another could decode or
+  render to other bytes. The owner accepts what reading each image on its
+  own costs in calls.
+- **Still to do** (follow-up A): extracting each image's transcription
+  into a batch of its own; registering the images at write time; and
+  content dedup across documents, since another document or excerpt that
+  brings the same bytes keeps a view of its own, though the LLM cache
+  answers its call. Until then no claim is read from an image, and every
+  claim read from a PDF cites the PDF and comes from its own text.

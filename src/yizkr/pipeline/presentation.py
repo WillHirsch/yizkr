@@ -16,12 +16,21 @@ the SHA-1 of its bytes, with the deck it is part of and the slides it is
 on, and its bytes kept beside the record. Nothing is read from the wiki
 or written to it then (ADR-0025 §2).
 
-The write registers them from that record
+The record is any container's: a PDF read page by page records the images
+placed within its pages in it too (`keep_derived_media`, called by
+yizkr.pipeline.orchestrate), each named for its places, "page 6, image
+1", with the pages it is on where a deck's image has its slides; and
+beside each image's bytes, its own transcription
+(`derived_transcription`), which names the image by its SHA-1.
+
+The write registers a deck's derived media from that record
 (`Registrar.register_derived_media` in yizkr.pipeline.registrar), after
 the deck itself: every statement a deck contributes to a derived item is
 referenced ``stated in -> that presentation`` (MODELING.md; ADR-0003).
 Derived items are keyed on content (ADR-0010), so an image shared by
-several decks is one item that is ``part of`` each of them.
+several decks is one item that is ``part of`` each of them. A PDF's images
+are recorded, and not registered: no claim cites them, since their
+transcriptions are not extracted (ADR-0008).
 """
 
 from __future__ import annotations
@@ -198,10 +207,12 @@ def slide_transcript(content: PresentationContent) -> str:
     return "\n".join(blocks)
 
 
-# The record of a deck's derived media in its document's directory, and
-# the folder beside it that keeps their bytes.
+# The record of a container's derived media in its document's directory,
+# and the folder beside it that keeps their bytes and, for a PDF's images,
+# their transcriptions.
 DERIVED_MEDIA = "derived-media.json"
 DERIVED_MEDIA_DIR = "derived-media"
+DERIVED_TRANSCRIPTION = ".transcription.json"
 
 Sha1 = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 # a medium's file: its SHA-1 and its suffix, in DERIVED_MEDIA_DIR
@@ -211,16 +222,17 @@ _MEDIUM_FILE = (
 
 
 class DerivedMedium(BaseModel):
-    """One distinct medium a deck embeds: its bytes, wherever the deck
-    uses them."""
+    """One distinct medium a container embeds: its bytes, wherever the
+    container uses them."""
 
     model_config = ConfigDict(extra="forbid")
 
-    # its names inside the deck's archive (image1.jpeg): the same bytes
-    # under several names are one medium
+    # its names: inside a deck's archive (image1.jpeg), or its places in a
+    # PDF ("page 6, image 1"); the same bytes under several names are one
+    # medium
     names: list[str]
-    # every slide it is on, by its 1-based position in presentation
-    # order: the page number of its `part of` the deck (ADR-0008)
+    # every slide (of a deck) or page (of a PDF) it is on, by its 1-based
+    # position: the page number of its `part of` the container (ADR-0008)
     slides: list[int]
     # the file that keeps its bytes, relative to the record's directory:
     # always in DERIVED_MEDIA_DIR, so a record never names a file outside
@@ -229,17 +241,18 @@ class DerivedMedium(BaseModel):
 
 
 class DerivedMediaRecord(BaseModel):
-    """A deck's derived media, recorded before the write for registration
-    at write time: each distinct medium by the SHA-1 of its bytes
-    (ADR-0010), part of the deck that the SHA-1 of the deck's own bytes
-    names. Nothing in it depends on an instance."""
+    """A container's derived media, recorded before the write for
+    registration at write time: each distinct medium by the SHA-1 of its
+    bytes (ADR-0010), part of the container (a deck, or a PDF read page by
+    page) that the SHA-1 of the container's own bytes names. Nothing in it
+    depends on an instance."""
 
     model_config = ConfigDict(extra="forbid")
 
-    # the deck, the artifact the media are part of
+    # the container, the artifact the media are part of
     source_sha1: Sha1
-    # the deck's title, which each medium's label begins with:
-    # "<deck title> — <media name>" (ADR-0008)
+    # the container's title, which each medium's label begins with:
+    # "<title> — <media name>" (ADR-0008)
     title: str
     # media SHA-1 -> the medium
     media: dict[Sha1, DerivedMedium] = {}
@@ -284,19 +297,42 @@ def record_derived_media(
             for sha1 in sorted(data)
         },
     )
-    # the bytes before the record, so a record never names a missing file
+    keep_derived_media(record, data, directory)
+    return record
+
+
+def keep_derived_media(
+    record: DerivedMediaRecord,
+    data: dict[str, bytes | Path],
+    directory: Path,
+) -> None:
+    """Keep a container's derived media in `directory`: each medium's
+    bytes (`data`, by its SHA-1: the bytes, or a file that holds them) in
+    the file the record names, then the record as `DERIVED_MEDIA`. The
+    bytes go first, so a record never names a missing file. Each file is
+    written in one step, and one that holds what it would be written with
+    already is left untouched (`read_derived_media` reads them back)."""
     for sha1, medium in record.media.items():
-        _keep(directory / medium.file, data[sha1])
+        held = data[sha1]
+        _keep(
+            directory / medium.file,
+            held.read_bytes() if isinstance(held, Path) else held,
+        )
     _keep(
         directory / DERIVED_MEDIA,
         record.model_dump_json(indent=2).encode("utf-8"),
     )
-    return record
+
+
+def derived_transcription(directory: Path, sha1: str) -> Path:
+    """Where the transcription of a PDF's image is kept, beside its bytes:
+    ``derived-media/<sha1>.transcription.json``."""
+    return directory / DERIVED_MEDIA_DIR / f"{sha1}{DERIVED_TRANSCRIPTION}"
 
 
 def read_derived_media(directory: Path) -> DerivedMediaRecord | None:
-    """The record of a deck's derived media kept in `directory`
-    (record_derived_media), when it is there whole and so is the file of
+    """The record of a container's derived media kept in `directory`
+    (keep_derived_media), when it is there whole and so is the file of
     every medium it names: a regular file, not a symlink, named for the
     medium's SHA-1 and holding the bytes that SHA-1 names. None
     otherwise, so a record whose files were lost, damaged, swapped or

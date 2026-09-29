@@ -403,8 +403,11 @@ and reference the artifact itself or the producing run.
   deck's: keyed by its SHA-1, `part_of` the PDF once per page it is on
   (page-number qualified), and labelled "<title> — page <n>, image <k>".
   An image that is a whole page, as a scanned page is, is that page.
-  Until #176 routes PDFs by page, a PDF is read whole, and every claim
-  read from it cites the PDF.
+  A PDF with a text layer is read page by page, and each image placed
+  within one of its text-layer pages has a transcription of its own
+  (ADR-0008 as amended by #176); until those transcriptions are
+  extracted, every claim read from a PDF cites the PDF, and is read from
+  its own text.
 - A claim cites the witness that asserts it. A claim read from the
   compilation's own text cites the compilation, with its page as the
   locator; a claim read from an excerpt cites the excerpt, with no page

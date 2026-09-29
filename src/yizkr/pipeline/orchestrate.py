@@ -37,8 +37,16 @@ cache folder, the refreshed roles and the epochs, and records the cache's
 events in the run directory. The transcription is routed per document
 (vision, text file, slide text); a curator's
 `<doc>/transcription.corrected.txt` routes it to the correction instead.
-The PDF renderer the vision engine and the transcription check need is
-checked once, before any document.
+A PDF on the vision route is read page by page when any of its pages has
+a usable text layer (yizkr.pipeline.textlayer): those pages from their
+text layer, without a model call, its other pages by the vision engine,
+and each image placed within a text-layer page by the vision engine on
+its own, as a witness of its own (ADR-0008). The images' bytes and their
+transcriptions are kept in the document's directory, recorded in
+`derived-media.json`, beside the PDF's own transcription. A PDF none of
+whose pages has one is read whole by the vision engine. The PDF renderer
+the vision engine and the transcription check need is checked once,
+before any document.
 
 Two steps use the wiki: resolve, which matches labels to the graph's
 items, and the write, which registers the document first
@@ -48,9 +56,10 @@ of its bytes, just before the claims that cite them are written.
 Everything else reads nothing from the wiki and writes nothing to it
 (ADR-0025 §2): the stages before the gates; a deck's derived media,
 which are recorded in its directory (`derived-media.json`) for the write
-to register; and the reconcile step, which has no roster to match a
-document's entities against, so it proposes nothing and the first gate
-has nothing to review.
+to register, and a PDF's images, recorded there by its transcription and
+not registered, since no claim cites them; and the reconcile step, which
+has no roster to match a document's entities against, so it proposes
+nothing and the first gate has nothing to review.
 
 Dependencies are make-style by content hash (`derivations.json`): the
 transcription is made from the correction, when there is one; the batch
@@ -211,10 +220,11 @@ BATCH_VOLATILE = (
     "extraction_run.model_identifier",
     "extraction_run.pipeline_version",
 )
-# the field of a transcription that names what made it (the route, and
-# the engine build), left out of its content hash: extraction reads only
-# the text, its language and the artifact
-TRANSCRIPTION_VOLATILE = ("engine",)
+# the fields of a transcription that say what made it (the route and the
+# engine build, and each page's provenance in a PDF read page by page),
+# left out of its content hash: a page's place in the text and the images
+# it names are content, as its text is
+TRANSCRIPTION_VOLATILE = ("engine", "pages.provenance")
 # the event that says a stage's view was current and stands
 REUSED = "reused"
 
@@ -236,7 +246,11 @@ def route_transcription(source: Path, correction: Path | None = None) -> str:
 
     A curator's correction wins; otherwise the source decides: slide text
     is data in a deck, a text file is its own transcription, and anything
-    else is read by the vision engine."""
+    else is read by the vision engine. The vision route reads a PDF page
+    by page when any of its pages has a usable text layer, each page by
+    its own method, chosen as deterministically
+    (yizkr.pipeline.textlayer); a PDF without one, and an image, it reads
+    whole."""
     if correction is not None and correction.is_file():
         return "correction"
     suffix = source.suffix.lower()
@@ -1262,7 +1276,7 @@ class Orchestrator:
         transcription, the routes whose transcribers check their output,
         is checked again when it is reused: the check may have become
         stricter since the view was made, and one it now fails is made
-        again."""
+        again (`_transcription_failure`)."""
         from yizkr.pipeline.transcribe import Transcription
 
         memo = (doc.sha1, doc.transcription.name)
@@ -1302,25 +1316,88 @@ class Orchestrator:
         self, doc: DocumentRun, transcription
     ) -> str | None:
         """Why the transcription check fails `transcription` of the
-        document now, or None when it passes."""
+        document now, or None when it passes. A PDF read page by page is
+        checked where the vision engine read it: the text of each page it
+        read, as the reading of one image, and the transcription of each
+        image placed within a page that the document's directory keeps
+        (`_image_failure`). Its text-layer pages are the document's own
+        text and are never checked. It reads files only, and writes none."""
+        from yizkr.pipeline.textlayer import VISION
         from yizkr.pipeline.transcription_check import (
             TranscriptionCheckFailed,
             check_transcription,
             media_page_count,
         )
 
-        check = check_transcription(
-            transcription.text, pages=media_page_count(doc.source)
+        if transcription.pages is None:
+            check = check_transcription(
+                transcription.text, pages=media_page_count(doc.source)
+            )
+            return (
+                None if check.passed else str(TranscriptionCheckFailed(check))
+            )
+        for page in transcription.pages:
+            if page.provenance.method == VISION:
+                check = check_transcription(
+                    transcription.page_text(page), pages=1
+                )
+                if not check.passed:
+                    return (
+                        f"{TranscriptionCheckFailed(check)} (page {page.page})"
+                    )
+            for sha1 in page.images:
+                failure = self._image_failure(doc, sha1)
+                if failure is not None:
+                    return failure
+        return None
+
+    def _image_failure(self, doc: DocumentRun, sha1: str) -> str | None:
+        """Why the check fails the transcription the document's directory
+        keeps of the image with this SHA-1, or None when it passes, or
+        when the directory keeps none: an image's reading that failed has
+        none, and nothing downstream reads one."""
+        from yizkr.pipeline.presentation import derived_transcription
+        from yizkr.pipeline.transcribe import Transcription
+        from yizkr.pipeline.transcription_check import (
+            TranscriptionCheckFailed,
+            check_transcription,
         )
-        return None if check.passed else str(TranscriptionCheckFailed(check))
+
+        path = derived_transcription(doc.dir, sha1)
+        image = f"image {sha1[:12]}"
+        try:
+            kept = Transcription.model_validate_json(path.read_text())
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, RecursionError) as exc:
+            return f"the transcription of {image} cannot be read ({_why(exc)})"
+        if kept.artifact.sha1 != sha1:
+            return f"the transcription of {image} names another image"
+        check = check_transcription(kept.text, pages=1)
+        if check.passed:
+            return None
+        return f"{TranscriptionCheckFailed(check)} ({image})"
 
     def _step_transcribe(self, doc: DocumentRun):
         """Transcribe the document by its route, record the language it
-        was found to be in, and write the transcription view."""
+        was found to be in, and write the transcription view. What a PDF
+        read page by page made beside its transcription, its images and
+        their transcriptions, is kept first (`_keep_reading`), and what
+        of it needs attention is the stage's attention."""
         method = route_transcription(doc.source, doc.correction)
         transcription, resolution = self._run_stage(
-            doc, "transcription", lambda: self._transcribe(doc, method)
+            doc,
+            "transcription",
+            lambda: self._transcribe(doc, method),
+            attention=_reading_attention,
         )
+        reading = transcription.reading
+        if reading is not None:
+            try:
+                self._keep_reading(doc, transcription)
+            finally:
+                reading.close()
+                transcription.forget_reading()
         # detection is a per-document choice with real graph effect (the
         # excerpt language tag): record it, and surface it when it was
         # inferred rather than forced, so a wrong guess is reviewable.
@@ -1334,6 +1411,8 @@ class Orchestrator:
         changed = _write_view(
             doc.transcription, transcription.model_dump_json(indent=2)
         )
+        if transcription.pages is not None and changed:
+            self.log(f"  {doc.source.name}: {_read_by_page(transcription)}")
         if self.language == "auto" and changed:
             self.log(f"  {doc.source.name}: language {resolution.describe()}")
         return transcription
@@ -1349,8 +1428,27 @@ class Orchestrator:
         return transcribe(doc)
 
     def _transcribe_vision(self, doc: DocumentRun):
-        from yizkr.pipeline.transcribe import LlmVisionTranscriber
+        """(transcription, language resolution) by the vision route: a PDF
+        page by page when any of its pages has a usable text layer
+        (transcribe.PdfPageTranscriber), and anything else whole. Nothing
+        is written: what the page-by-page reading made beside the
+        transcription rides on it (`Transcription.reading`) for
+        `_step_transcribe` to keep."""
+        from yizkr.pipeline.transcribe import (
+            LlmVisionTranscriber,
+            PdfPageTranscriber,
+        )
 
+        if doc.source.suffix.lower() == ".pdf":
+            paged = PdfPageTranscriber(
+                functools.partial(self._llm, "transcribe", doc),
+                language=self.language,
+                fallback_language=self.fallback_language,
+                excluded=self._excluded_image,
+            )
+            transcription = paged.transcribe(doc.source)
+            if transcription is not None:
+                return transcription, paged.last_resolution
         # the transcriber checks what the engine or the cache answers, and
         # rejects an answer that fails the check (ADR-0032)
         transcriber = LlmVisionTranscriber(
@@ -1360,6 +1458,58 @@ class Orchestrator:
         )
         transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
+
+    def _excluded_image(self, sha1: str) -> bool:
+        """Does the never-ingest list name an image a PDF places within a
+        page, by the SHA-1 of its bytes? Such an image is never read or
+        kept."""
+        return self.exclusions is not None and is_excluded(
+            self.exclusions, sha1=sha1
+        )
+
+    def _keep_reading(self, doc: DocumentRun, transcription) -> None:
+        """Keep what a PDF read page by page made beside its
+        transcription, in the document's directory: the images placed
+        within its pages, recorded as its derived media
+        (presentation.keep_derived_media), and each image's own
+        transcription beside its bytes (presentation.
+        derived_transcription). A kept transcription of an image that the
+        check fails now is moved aside first, never deleted, whether or
+        not a new one takes its place."""
+        from yizkr.pipeline.presentation import (
+            DERIVED_MEDIA_DIR,
+            DerivedMediaRecord,
+            DerivedMedium,
+            derived_transcription,
+            keep_derived_media,
+        )
+
+        reading = transcription.reading
+        record = DerivedMediaRecord(
+            source_sha1=transcription.artifact.sha1,
+            title=doc.state.title,
+            media={
+                image.sha1: DerivedMedium(
+                    names=image.names,
+                    slides=image.pages,
+                    file=f"{DERIVED_MEDIA_DIR}/{image.sha1}{image.suffix}",
+                )
+                for image in reading.images
+            },
+        )
+        keep_derived_media(
+            record,
+            {image.sha1: image.path for image in reading.images},
+            doc.dir,
+        )
+        for image in reading.images:
+            path = derived_transcription(doc.dir, image.sha1)
+            if path.exists() and self._image_failure(doc, image.sha1):
+                _supersede(path)
+            if image.transcription is not None:
+                _write_view(
+                    path, image.transcription.model_dump_json(indent=2)
+                )
 
     def _transcribe_text_file(self, doc: DocumentRun):
         from yizkr.pipeline.transcribe import TextFileTranscriber
@@ -2320,6 +2470,28 @@ def _supersede(path: Path) -> Path | None:
         n += 1
     path.rename(target)
     return target
+
+
+def _read_by_page(transcription) -> str:
+    """How a PDF read page by page was read, as counts: its pages by
+    method, and the images read on their own."""
+    methods = Counter(page.provenance.method for page in transcription.pages)
+    images = len(
+        {sha1 for page in transcription.pages for sha1 in page.images}
+    )
+    return "read page by page: " + ", ".join(
+        [f"{count} {method}" for method, count in sorted(methods.items())]
+        + [f"{images} image(s) read on their own"]
+    )
+
+
+def _reading_attention(result: tuple) -> list[str]:
+    """What of a page-by-page reading of a PDF needs attention
+    (transcribe.PdfReading.attention), for the transcription stage's
+    `done` event: nothing for any other transcription."""
+    transcription, _resolution = result
+    reading = transcription.reading
+    return reading.attention() if reading is not None else []
 
 
 def _findings(text: str) -> list:
