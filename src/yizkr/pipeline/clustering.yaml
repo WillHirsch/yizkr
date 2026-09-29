@@ -1,0 +1,51 @@
+# Thresholds of corpus clustering (yizkr.pipeline.clustering).
+#
+# The module docstring says what the stage does with each. This file is
+# the one place the thresholds live, and every value below is the
+# default. The defaults come from the corpus-clustering experiment
+# (scripts/experiments/cluster_calibration.py).
+#
+# A key this file does not have is refused, so a misspelt key never passes
+# silently. The identity map records the digest of the thresholds it was
+# made under, and the stage makes the map again when they change.
+
+version: 1
+
+blocking:
+  # A person's name tokens shorter than this (initials, particles) key
+  # nothing.
+  min-name-token: 3
+  # A place keys on each token of at least this many characters in the
+  # part of its name before the first comma; shared region and country
+  # tokens after it never key.
+  min-place-token: 4
+  # A mention that key-matches a mention of a GEDCOM export pairs with
+  # those GEDCOM anchors only, never with other mentions, and a person
+  # named by one token only is blocked against GEDCOM people alone.
+  gedcom-anchored: true
+  # A key more mentions of one kind share than this is blocked on by
+  # none of them, and is counted and listed: the mentions only it would
+  # join stay apart. A key that finds a mention of the GEDCOM export is
+  # never one, nor is a person's lone token.
+  max-key-mentions: 200
+
+evidence:
+  # Years a circa date is widened by, each way, before dates are
+  # compared.
+  circa-years: 5
+  # A date range wider than this many years (a century, an open "before"
+  # or "after") never corroborates a pair; it can still conflict.
+  max-corroborating-years: 20
+
+confident:
+  # The most GEDCOM anchors a mention may match and still link
+  # confidently to one: a person matching more is ambiguous with each.
+  # A place counts only the anchors it matches exactly, and those it
+  # nests in as one.
+  max-anchors: 1
+
+adjudication:
+  # Pairs per adjudication call, for the stage's estimate of the calls:
+  # a cluster's pairs stay together, and a cluster over the limit is
+  # split first.
+  pairs-per-call: 40
