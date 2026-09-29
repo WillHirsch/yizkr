@@ -12,7 +12,7 @@ derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance),
 and MODELING.md (a human decision's process is the MediaWiki edit history).
 Amended by #136 (2026-09-27): the disagreement report now pairs only values
 from different artifacts (§4).
-Superseded in part by [ADR-0035](0035-mention-records.md) (proposed; owner
+Superseded in part by [ADR-0035](0035-mention-records.md) (owner
 decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine
 judgement out of the graph. An extraction's judgement note, a category
 and one sentence, is written inside the extraction-run reference of the

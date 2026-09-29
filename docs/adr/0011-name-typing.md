@@ -3,7 +3,7 @@
 Status: accepted (typed name properties + GEDCOM emission + reconciler
 evidence implemented; given/family components and promoting the primary
 name to a referenced statement deferred, see "Consequences" and #171)
-Amended by [ADR-0035](0035-mention-records.md) (proposed; owner decision
+Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): the GEDCOM adapter no longer reads a bracketed part of
 a name as a nickname, since a bracket may hold a maiden name, a later
 name or a note; it becomes an alias with no type, counted, and only a

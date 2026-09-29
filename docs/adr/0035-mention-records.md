@@ -1,7 +1,8 @@
 # ADR-0035: Extraction hands over structure — mention records, participant roles and kinship classes
 
-Status: **proposed** — drafted for #385. Nothing implements it until the
-owner accepts it; #385's implementation does.
+Status: **accepted** (owner decision 2026-09-29, #385). Like ADR-0031
+and ADR-0036, the owner's merge of the PR that adds it records its
+acceptance; #385's implementation carries it out.
 
 **Decided by the owner (2026-09-29):**
 
@@ -626,7 +627,7 @@ run's note, or none. Earlier notes stay, never updated or removed.
   acceptance.
 
 **ADR-0023's dated line**, added with this ADR: "Superseded in part by
-ADR-0035 (proposed; owner decision 2026-09-29, #385): §2 and Ruling 1 no
+ADR-0035 (owner decision 2026-09-29, #385): §2 and Ruling 1 no
 longer keep every machine judgement out of the graph. An extraction's
 judgement note, a category and one sentence, is written inside the
 extraction-run reference of the statement it concerns, as process
@@ -1036,10 +1037,9 @@ whole names as now.
   - *Recordless mentions stay apart.* A document whose manifest falls back
     to line ranges merges nothing by name, and the report counts it.
 - **Dated lines.** This ADR adds them to ADR-0003, ADR-0007, ADR-0011,
-  ADR-0018, ADR-0022 and ADR-0023 (§4's text), and to ADR-0020 as a
-  proposal of its own. ADR-0013's (§A, type hints in English) waits for
-  #391, and ADR-0014's (the kinship class) for #398, since both edit
-  those headers.
+  ADR-0013 (§A, type hints in English), ADR-0018, ADR-0020, ADR-0022 and
+  ADR-0023 (§4's text). ADR-0014's (the kinship class) waits for #398,
+  which edits that header, and lands with #385's implementation.
 - **Docs that move with the implementation:** docs/MODELING.md ("Names",
   "Places", "Organizations", "Kinship", "Identity and reconciliation",
   "Reference pattern", "Living persons and privacy", and the "Machine

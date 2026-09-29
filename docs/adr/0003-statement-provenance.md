@@ -1,7 +1,7 @@
 # ADR-0003: Statement provenance conventions
 
 Status: accepted
-Amended by [ADR-0035](0035-mention-records.md) (proposed; owner decision
+Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): the extraction-run reference of a machine-written
 statement may carry a judgement note, a category and one sentence on how
 the extraction read the source, never used to rank or filter a value

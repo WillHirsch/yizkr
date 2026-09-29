@@ -8,7 +8,7 @@ Amended by #222 (2026-09-27): in "Reciprocal / dyadic naming", the
 example records the literal "Oma" as (A), `relative` + `kinship_type`, as
 Ruling 2 routes it, and the section tells the two statements apart by
 subject and ego (the `relative` object or the `perspective` qualifier).
-Amended by [ADR-0035](0035-mention-records.md) (proposed; owner decision
+Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): a `relative` claim gains a controlled `kinship_class`,
 with the side, degree and removes its term states, beside the verbatim
 `kinship_type` (ADR-0035 §3.3).

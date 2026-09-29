@@ -12,7 +12,7 @@ derive-don't-store discipline to name surface forms. Validation is the live
 review flow, not a synthetic eval (§Decision 7), **extended by ADR-0025** to
 whole-corpus scratch runs in the development stage. Renumbered from local
 ADR-0021 when reconciling with origin (#18); the GEDCOM ADR kept 0021.
-Amended by [ADR-0035](0035-mention-records.md) (proposed; owner decision
+Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): the entity manifest may say which part of a name is
 the given name and which the surname, read from the document's own
 conventions, and never writes that reading; the graph still has no
