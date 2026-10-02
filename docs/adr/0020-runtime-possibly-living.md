@@ -48,9 +48,23 @@ are all of unknown value is left out, failing closed, as ADR-0036 §6
 does for unions; "the events involving them" covers any link, so an
 event that names an item the export leaves out as the value, or a
 qualifier's value, of any of its statements is left out whole, through
-the same fixpoint; and the private site keeps its badge on the person
-named, without marking the statements the export drops whole, which the
-site paragraphs below list (§4, Ruling 6).
+the same fixpoint; a union (ADR-0036) is never an event for this rule:
+its events go with it, not it with them; and the private site keeps its
+badge on the person named, without marking the statements the export
+drops whole, which the site paragraphs below list (§4, Ruling 6).
+Amended by #364, orchestrator decisions on the re-review (2026-10-02):
+"participants all of unknown value" means at least one `participant`
+statement, every one of unknown value (or none); an event of no person
+kind with no `participant` statement at all names no one and stays,
+unless the link rule takes it, so impersonal events (a fire, a hearing
+that names only places or organizations) stay. The link rule follows
+only items left out to protect people: a possibly-living person, and an
+item left out as one that may be a person (an organization with person
+evidence, say). An item left out only as untyped, or as a family, takes
+no event with it; the statement naming it still goes whole, so a
+released person's birth at an untyped place, or a migration a family
+carried out, stays without that statement. And an item typed human, at
+normal or preferred rank, is never an event for these rules (§4).
 
 ## Context
 
@@ -379,12 +393,18 @@ keeps of the items it keeps follows:
   organization the export leaves out for its person evidence goes with
   it (`public-exclusions.json`: "a statement of it names an item the
   export leaves out (the QIDs): what this event records is theirs too";
-  `LINKED_LEFT_OUT`; the orchestrator, 2026-10-02). An event is an item
-  typed `event`, a subclass of it, or a person kind of event, at any
-  rank, or an item with a `participant` statement; but never a union (a
-  partnership or a marriage, ADR-0036), an entity whose events go with
-  it and not it with them: a released couple's marriage whose wedding
-  goes stays, without the statement naming the wedding. An event so left out
+  `LINKED_LEFT_OUT`; the orchestrator, 2026-10-02). It follows only
+  items left out to protect people, a possibly-living person or an item
+  that may be one: an item left out only as untyped, or as a family,
+  takes no event with it, though the statement naming it goes whole. An
+  event is an item typed `event`, a subclass of it (the manifest's, or
+  the dump's at any rank), or a person kind of event, at any rank, or an
+  item with a `participant` statement; but never a union (a partnership
+  or a marriage, or a class the dump makes a subclass of one, ADR-0036),
+  an entity whose events go with it and not it with them: a released
+  couple's marriage whose wedding goes stays, without the statement
+  naming the wedding. Nor is an item typed human, at normal or preferred
+  rank, an event for this rule or the next. An event so left out
   may itself be a participant, or an item an event names, so the rule
   applies again until no more go, and a redirect to such an event goes
   with it. An event all of whose participants, and all the items its
@@ -394,12 +414,15 @@ keeps of the items it keeps follows:
   no `participant` statement, or only one of unknown value, as a claim
   refused, left unconfirmed or cut short after the type leaves it,
   records a birth, a death or a marriage of someone unknown, who may be
-  living. So does an event of any kind whose `participant` statements
-  all hold an unknown value (or none): whom it involved is unknown, so
+  living. So does an event of any kind that has `participant`
+  statements, every one of an unknown value (or none): whom it involved
+  is unknown, so
   it fails closed, as ADR-0036 §6 does for unions (the orchestrator,
   2026-10-02; `public-exclusions.json`: "an event that names no
   participant (of a person kind), or whose participants are all of
-  unknown value: unknown means excluded"; `UNATTENDED`). What a
+  unknown value: unknown means excluded"; `UNATTENDED`). An event of no
+  person kind with no `participant` statement at all names no one and
+  stays, unless a link takes it. What a
   qualifier of such a statement names, the role it gives (`principal`)
   or an item it says took part, is no person evidence and attends no
   event on that alone (#364). Once #385's participant roles land, the

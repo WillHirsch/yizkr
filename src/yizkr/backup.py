@@ -49,12 +49,13 @@ closed:
   that statement names, whatever the statement's value, an unknown one
   or none included: what the event records, its date and place, is that
   participant's too. It drops every event that any of its statements
-  links to an item it drops, as the value or a qualifier's value,
-  whatever the property. So it drops every event of a person kind that
-  names no participant, and every event whose participants are all of
-  unknown value, as whom it happened to is unknown, and the events that
-  start and end a union it drops (ADR-0036), a partner's own death
-  aside.
+  links to a person it drops, or to an item it drops as one that may be
+  a person, as the value or a qualifier's value, whatever the property;
+  a union is no event (ADR-0036), nor is a person. It drops every event
+  of a person kind that names no participant, and every event that has
+  participant statements all of unknown value, as whom it happened to is
+  unknown; and the events that start and end a union it drops, a
+  partner's own death aside.
 * It drops the extractor's judgement notes, its remarks on its own
   reading, and any line it cannot read (``filter_public_export``), and
   refuses a dump that holds what it is not made to filter: a sitelink,
@@ -334,7 +335,8 @@ UNION_BOUNDS = ("started_by", "ended_by")
 # The class of every event, a key of the model manifest: an item typed with
 # it, or with a subclass of it, is linked to every item its statements name
 # (``read_dump``). The person kinds of event (``PERSON_EVENTS``) are events
-# too, and so is every item that has a `participant` statement.
+# too, and so is every item that has a `participant` statement; but never a
+# union (``UNION_CLASS``) or an item typed human.
 EVENT_CLASS = "event"
 
 
@@ -443,16 +445,19 @@ def read_dump(
     qualifier gives is vocabulary), and attends no event: an event of a
     person kind whose `participant` statements name no item as their
     value (none, or only ones whose value is unknown, however qualified)
-    is unattended, and so is any item whose `participant` statements all
-    hold an unknown value or none, whatever its kind.
+    is unattended, and so is any item that has `participant` statements,
+    all of an unknown value or none, whatever its kind; an item of no
+    person kind with no `participant` statement names no one, and is not.
 
     An event is an item typed, at any rank, with `event` (``EVENT_CLASS``)
     or a class the manifest makes a subclass of it (``event_kinds``), a
     person kind of event, or a class the dump makes a subclass of one, at
     any rank and through redirects; or an item with a `participant`
     statement; but never a union, an item typed, at normal or preferred
-    rank, as a partnership or a marriage (``UNION_CLASS``), whose events
-    go with it and not it with them.
+    rank, as a partnership, a marriage (``UNION_CLASS``) or a class the
+    dump makes a subclass of one, whose events go with it and not it with
+    them; and never an item typed human at normal or preferred rank, for
+    this rule or the unattended one.
     Each is linked to every item that any of its statements names, as its
     value or a qualifier's, at every rank (``links``).
 
@@ -611,10 +616,13 @@ def read_dump(
     # an event is attended by its participant statements' values alone; an
     # item a qualifier names takes part all the same, but a role names no
     # one who was there. An event of a person kind that names no item so is
-    # unattended, and so is any item whose participant statements all hold
-    # an unknown value (or none)
-    reading.unattended = (person_events | set(events.values())) - set(
-        reading.participants
+    # unattended, and so is any item that has participant statements, each
+    # of an unknown value or none; an item of no person kind with no
+    # participant statement names no one, and is not. An item typed human,
+    # at normal or preferred rank, is never an event for these rules
+    humans = typed_as({human}, ranked=True)
+    reading.unattended = (person_events | set(events.values())) - (
+        set(reading.participants) | humans
     )
     for statement, names in qualified.items():
         if statement in events:
@@ -635,21 +643,33 @@ def read_dump(
         for statement, kind in broader.items()
         if statement in narrows
     }
-    while wider := {
-        narrow
-        for narrow, kind in subclasses
-        if kind in event_classes and narrow not in event_classes
-    }:
-        event_classes |= wider
-    # an event is linked to every item that a statement of it names, as its
-    # value or a qualifier's, at any rank, whatever the property
+
+    def closed(kinds: set[str]) -> set[str]:
+        """`kinds` and every class the dump makes a subclass of one."""
+        kinds = set(kinds)
+        while wider := {
+            narrow
+            for narrow, kind in subclasses
+            if kind in kinds and narrow not in kinds
+        }:
+            kinds |= wider
+        return kinds
+
+    event_classes = closed(event_classes)
     # a union is no event, whatever its kind: a marriage is a person kind
-    # for the unattended rule, and its partners are its participants
+    # for the unattended rule, and its partners are its participants. Its
+    # classes are the manifest's and those the dump makes subclasses of one
     unions_typed = typed_as(
-        {items[key] for key in event_kinds(UNION_CLASS) if key in items},
+        closed(
+            {items[key] for key in event_kinds(UNION_CLASS) if key in items}
+        ),
         ranked=True,
     )
-    linked = (typed_as(event_classes) | set(events.values())) - unions_typed
+    # an event is linked to every item that a statement of it names, as its
+    # value or a qualifier's, at any rank, whatever the property
+    linked = (typed_as(event_classes) | set(events.values())) - (
+        unions_typed | humans
+    )
     for statement, event in owners.items():
         if event in linked and statement in named:
             reading.links.setdefault(event, set()).update(named[statement])
@@ -719,8 +739,10 @@ def public_exclusions(
     * each event that an item it drops takes part in, at any rank, as a
       `participant` statement's value or named in its qualifiers
       (``PARTICIPANT_LEFT_OUT``, naming them); each event that a statement
-      of names an item it drops, as its value or a qualifier's, whatever
-      the property (``LINKED_LEFT_OUT``, naming them); and each event that
+      of it names an item it drops, as its value or a qualifier's,
+      whatever the property, unless it drops that item only as untyped or
+      as a family, which protects no one (``LINKED_LEFT_OUT``, naming
+      them); and each event that
       starts or ends a union it drops (``BOUND_LEFT_OUT``, naming the
       union), read through redirects; and so on until no more go, as an
       event dropped so may itself be a participant, or a union.
@@ -747,6 +769,13 @@ def public_exclusions(
             return UNATTENDED
         return None
 
+    # what is left out only as untyped or as a family, and not as a person
+    # who may be living or an item that may be a person, protects no one, so
+    # an event that merely names it stays (the statement naming it goes)
+    impersonal = (reading.untyped | reading.families) - (
+        people - report.included
+    )
+
     excluded = {}
     candidates = (
         people | reading.untyped | reading.families | reading.unattended
@@ -765,12 +794,13 @@ def public_exclusions(
     # drops that it starts or ends; a redirect goes with the event
     while True:
         left_out = set(excluded)
+        shielding = {qid for qid in left_out if target(qid) not in impersonal}
         gone = {
             event: LINKED_LEFT_OUT.format(
-                ", ".join(sorted(named & left_out, key=_order))
+                ", ".join(sorted(named & shielding, key=_order))
             )
             for event, named in reading.links.items()
-            if event not in left_out and named & left_out
+            if event not in left_out and named & shielding
         }
         gone.update(
             (

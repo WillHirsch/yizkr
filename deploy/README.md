@@ -244,9 +244,10 @@ directory under `var/backups/` containing:
   vocabulary and the classes items are typed with aside), every family,
   whose people may include a living person, every event that any of
   these took part in (named as a participant, or in a participant
-  statement's qualifier) or that any statement of it names, every
-  person event that names no participant, every event whose
-  participant statements all hold an unknown value or none, and the
+  statement's qualifier) or that any statement of it names, unless it
+  is left out only as untyped or as a family, every
+  person event that names no participant, every event that has
+  participant statements, all of an unknown value or none, and the
   events that start and
   end a union it leaves out. Everything
   else leaves as it is, text included: whatever is recorded about a

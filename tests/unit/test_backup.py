@@ -1682,12 +1682,60 @@ class TestReadDump:
                 rank="Deprecated",
             )
             dump.says("Q450", "part_of", entity("Q455"))
+            # a civil wedding, two subclasses down in the manifest
+            dump.says("Q460", "instance_of", entity(items["civil_wedding"]))
+            dump.says("Q460", "carried_out_by", entity("Q454"))
+            # a class two subclasses down in the dump alone
+            dump.says("Q459", "subclass_of", entity("Q457"))
+            dump.says("Q461", "instance_of", entity("Q459"))
+            dump.says("Q461", "carried_out_by", entity("Q454"))
+            # a subclass of a redirect to `event`
+            dump.redirect("Q462", items["event"])
+            dump.says("Q463", "subclass_of", entity("Q462"))
+            dump.says("Q464", "instance_of", entity("Q463"))
+            dump.says("Q464", "carried_out_by", entity("Q454"))
+            # an event typed so at deprecated rank alone
+            dump.says(
+                "Q465",
+                "instance_of",
+                entity(items["event"]),
+                rank="Deprecated",
+            )
+            dump.says("Q465", "carried_out_by", entity("Q454"))
+            # a subclass of event at deprecated rank alone
+            dump.says(
+                "Q466",
+                "subclass_of",
+                entity(items["event"]),
+                rank="Deprecated",
+            )
+            dump.says("Q467", "instance_of", entity("Q466"))
+            dump.says("Q467", "carried_out_by", entity("Q454"))
+            # an event typed a marriage at deprecated rank alone is no union
+            dump.says("Q468", "instance_of", entity(items["event"]))
+            dump.says(
+                "Q468",
+                "instance_of",
+                entity(items["marriage"]),
+                rank="Deprecated",
+            )
+            dump.says("Q468", "carried_out_by", entity("Q454"))
+            # a union of a class the dump alone makes a subclass of
+            # partnership, and a property that is a subclass of nothing read
+            dump.says("Q469", "subclass_of", entity(items["partnership"]))
+            dump.says("Q470", "instance_of", entity("Q469"))
+            dump.says("Q470", "participant", entity("Q401"))
+            dump.says("Q470", "started_by", entity("Q453"))
+            dump.says("P26", "subclass_of", entity(items["event"]))
 
         found = self.one(tmp_path, vocabulary, build, reverse)
         assert "Q454" in found.links["Q452"]
         assert "Q455" in found.links["Q453"]
         assert "Q456" in found.links["Q458"]
         assert "Q450" not in found.links
+        for event in ("Q460", "Q461", "Q464", "Q465", "Q467", "Q468"):
+            assert "Q454" in found.links[event], event
+        assert "Q470" not in found.links
 
     def test_the_events_that_start_and_end_a_union(self, tmp_path, vocabulary):
         # by started_by and ended_by (ADR-0036), at every rank, once the
@@ -2431,9 +2479,15 @@ class TestExportPublic:
         dump.entity("Q472", "a hearing", revision=472)
         dump.says("Q472", "instance_of", entity(items["event"]))
         dump.says("Q472", "carried_out_by", entity("Q411"))
+        # a hearing carried out by Florence (Q405), who states no type but
+        # has person evidence: left out as one who may be a person, she
+        # takes it with her
+        dump.entity("Q473", "another hearing", revision=473)
+        dump.says("Q473", "instance_of", entity(items["event"]))
+        dump.says("Q473", "carried_out_by", entity("Q405"))
         self.export_of(tmp_path, dump, vocabulary)
         text, mentioned = self.public(tmp_path)
-        assert not {"Q470", "Q471"} & mentioned
+        assert not {"Q470", "Q471", "Q473"} & mentioned
         assert dated(1957) not in text
         assert "Q472" in mentioned
         exclusions = json.loads(
@@ -2446,6 +2500,70 @@ class TestExportPublic:
             backup.LINKED_LEFT_OUT.format("Q470")
         )
         assert "Q472" not in exclusions["excluded"]
+
+    @pytest.mark.parametrize(
+        "case",
+        ["unknown-participant", "stray-participant", "deprecated-event-type"],
+    )
+    def test_a_person_is_never_an_event(self, tmp_path, vocabulary, case):
+        # Gustav (Q401, typed human, released) with a participant statement
+        # of unknown value, a stray participant statement and a sibling
+        # Florence (Q405, left out), or a type `event` a curator deprecated
+        # and that sibling: he is no event, so he stays, and only the
+        # statement naming Florence goes whole
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        if case == "unknown-participant":
+            dump.says("Q401", "participant", "_:genid8")
+        else:
+            dump.says("Q401", "sibling", entity("Q405"))
+        if case == "stray-participant":
+            dump.says("Q401", "participant", entity("Q412"))
+        if case == "deprecated-event-type":
+            dump.says(
+                "Q401",
+                "instance_of",
+                entity(items["event"]),
+                rank="Deprecated",
+            )
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert "Q401" in mentioned
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert "Q401" not in exclusions["excluded"]
+        sibling = f"<{CONCEPT}/prop/{properties['sibling']}>"
+        assert f"{entity('Q401')} {sibling} " not in text
+
+    def test_an_item_left_out_as_untyped_or_a_family_takes_no_event(
+        self, tmp_path, vocabulary
+    ):
+        # Gustav's birth (Q401, released) at a place with no type (Q429),
+        # and a migration of his carried out by a family (Q446): untyped
+        # items and families are left out, but protect no one, so the
+        # events stay; the statements naming them go whole
+        properties, items = vocabulary
+        dump = export_dump(vocabulary)
+        dump.entity("Q480", "a birth", revision=480)
+        dump.says("Q480", "instance_of", entity(items["birth"]))
+        dump.says("Q480", "participant", entity("Q401"))
+        dump.says("Q480", "location", entity("Q429"))
+        dump.entity("Q481", "a migration", revision=481)
+        dump.says("Q481", "instance_of", entity(items["migration"]))
+        dump.says("Q481", "participant", entity("Q401"))
+        dump.says("Q481", "carried_out_by", entity("Q446"))
+        self.export_of(tmp_path, dump, vocabulary)
+        text, mentioned = self.public(tmp_path)
+        assert {"Q480", "Q481"} <= mentioned
+        exclusions = json.loads(
+            (tmp_path / "public-exclusions.json").read_text()
+        )
+        assert not {"Q480", "Q481"} & set(exclusions["excluded"])
+        location = f"<{CONCEPT}/prop/{properties['location']}>"
+        carried = f"<{CONCEPT}/prop/{properties['carried_out_by']}>"
+        assert f"{entity('Q480')} {location} " not in text
+        assert f"{entity('Q481')} {carried} " not in text
 
     @pytest.mark.parametrize("kind", ["marriage", "partnership"])
     def test_a_union_is_no_event_its_wedding_takes(
