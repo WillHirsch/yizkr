@@ -379,9 +379,9 @@ to time out is aborted when the timer runs, even when the wall clock
 stepped back or fell behind while it waited (a virtual machine's clock
 resynchronised under load, say), rather than found short of its timeout
 and looked at again. A check's look reads the wall clock as it is. The
-look holds the lock the control file's
-appenders take (rundir's `_append_line`) from its read to its abort, so
-no other process appends a request in between: an operator's resume
+look holds the lock the control file's appenders take (rundir's
+`_append_line`) from its read to its abort, so no other process appends
+a request in between: an operator's resume
 lands before the look, and is seen, or after the abort. The lock is
 POSIX's, so it does not hold against this process's own threads, nor
 after any descriptor on the file in this process is closed. A look that
