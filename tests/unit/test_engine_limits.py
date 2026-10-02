@@ -637,7 +637,9 @@ class TestAskingAgain:
             except UsageLimitReached as exc:
                 reasons.append(exc.reason)
 
-        thread = threading.Thread(target=call)
+        # a daemon, so a call close() never wakes fails the test and does
+        # not also keep the test process from exiting
+        thread = threading.Thread(target=call, daemon=True)
         thread.start()
         assert waiting.wait(HANG_GUARD)
         client.close()
