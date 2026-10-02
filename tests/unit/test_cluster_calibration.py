@@ -564,7 +564,9 @@ def test_report_is_aggregate_only(tmp_path):
     assert summary["verdicts"]["rows"] == 2
     kept = summary["verdicts"]["human_key_variants"]
     assert kept["final-surname"] == {"same": 1}
-    assert kept["kin-surnames"] == {"same": 2}
+    # the export's couple take part in a union, which the experiment does
+    # not lift as kin (ADR-0036), so Agnes keys on no married surname
+    assert kept["kin-surnames"] == {"same": 1}
     # GEDCOM ids derive from the export's xrefs: refs use positions
     assert summary["homonyms"]["examples"][0].count(":ged") == 2
 

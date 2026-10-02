@@ -3,6 +3,7 @@
 1 GEDC
 2 VERS 5.5.1
 1 CHAR UTF-8
+1 LANG English
 0 @I1@ INDI
 1 NAME Eugen /Löbig/
 2 TYPE birth
@@ -223,6 +224,7 @@
 1 CHIL @I9@
 1 CHIL @I8@
 1 MARR
+2 TYPE civil
 2 DATE 15 DEC 1905
 2 PLAC Flörburg, Hesse, Germany
 0 @F3@ FAM
@@ -241,6 +243,7 @@
 1 HUSB @I11@
 1 WIFE @I17@
 1 MARR
+2 TYPE civil
 2 DATE 8 FEB 1947
 2 PLAC Flörburg, Hesse, Germany
 1 DIV

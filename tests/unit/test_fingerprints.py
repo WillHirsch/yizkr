@@ -157,8 +157,8 @@ def test_a_manifest_numbered_otherwise_keeps_every_fingerprint():
 def test_a_gedcom_person_is_spanned_by_its_record_and_a_place_by_nothing():
     sha1, adapted = gedcom()
     mentions = {m.local_id: m for m in mentions_of(sha1, adapted)}
-    # Eugen's INDI record starts on line 6 of the export
-    assert mentions["i1"].span == (6,)
+    # Eugen's INDI record starts on line 7 of the export
+    assert mentions["i1"].span == (7,)
     assert mentions["i1"].label == "Eugen Löbig"
     # a place, an occupation and a media object have no line: an empty
     # span stands in, and their labels tell them apart
