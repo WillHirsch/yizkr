@@ -139,9 +139,11 @@ places.
   image's marker (`[Page 6, image 1: sha1:…]`) keeps its physical page
   and shows no number. `text` itself, the transcription's content, is
   unchanged, and a transcription whose record gives no printed number
-  is carried as it is, so its prompts are unchanged. The prompts ask for
-  `page_number` as the physical N of the marker, never the printed
-  number beside it.
+  is carried as it is: its prompt text is the text itself. The chunk
+  prompt and the single call's prompt ask for `page_number` as the
+  physical N of the marker, never the printed number beside it, a rule
+  both state for every document, whether its record gives printed
+  numbers or not.
 - **The locator.** After the model answers, the extractor sets each
   claim's printed page number itself, beside its source artifact
   (`cite_artifact`): the record's printed number for the page the claim
@@ -314,6 +316,11 @@ override):
   and is made again; with the prompt changed, its call misses the cache.
 - The prompt names the manifest's artifact classes, so a change to them
   changes the transcription calls' keys.
-- **Follow-ups.** A text with no record takes its class from the entity manifest, once the
-  manifest states one; the flag tier's signatures are revisited with the
+- The physical-page rule is in the chunk prompt and the single call's
+  prompt of every document, so every chunk and single-call key changes
+  once, printed numbers or not, as do the manifest and segmentation keys
+  of a document whose record gives printed numbers; the scratch diff
+  against main shows it (ADR-0025, ADR-0032).
+- **Follow-ups.** A text with no record takes its class from the entity
+  manifest, once the manifest states one; the flag tier's signatures are revisited with the
   first scratch runs' `transcription-flag` alerts (#214).

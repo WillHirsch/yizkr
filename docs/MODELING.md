@@ -194,8 +194,9 @@ Wikibase holds at most 400 characters in the text of a string,
 external-id or monolingual text value, a reference's page number,
 printed page number and region among them, and no text value with a
 line break or a tab in it, or whitespace at either end; it refuses the
-whole edit that sends a text it does not hold. It also cleans a text up, making each C0 control
-character but the tab, the line feed and the carriage return, and each
+whole edit that sends a text it does not hold. It also cleans a text
+up, making each C0 control character but the tab, the line feed and
+the carriage return, and each
 of the noncharacters U+FFFE and U+FFFF, U+FFFD: in a string or
 external-id value before it checks and stores it (so it changes a
 vertical tab or a form feed there, and refuses one in monolingual text),
@@ -203,8 +204,9 @@ and in every text its API gives back, monolingual text included. The
 writer checks each text in NFC, the form the instance keeps it in, and
 sends none that the instance would give back changed (#366, #384,
 #403). A page number, printed page number, region or excerpt goes on
-one line: whitespace at either end is dropped, a line break inside becomes " | ", a tab a space
-and each other character the instance cleans up U+FFFD, as the instance
+one line: whitespace at either end is dropped, a line break inside
+becomes " | ", a tab a space and each other character the instance
+cleans up U+FFFD, as the instance
 gives it back, so a re-run finds its reference block; one of whitespace
 alone is left out. One still over the limit is cut at
 a break between words and ends with " … sha1 " and the first 12 hex

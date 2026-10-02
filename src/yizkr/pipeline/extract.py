@@ -297,13 +297,20 @@ def printed_page_number(
     physical page, as its digits alone ("6"), and the record gives that
     page a printed number. Anything else, a range ("6-7"), a page given
     in words ("p. 6"), no page, or a page the record gives no number,
-    has none: a printed number is read from the record, never guessed."""
+    has none: a printed number is read from the record, never guessed.
+    A printed number of whitespace alone is none, as the writer would
+    write none for it (writer._locator_text). The digits are bounded
+    before they become an int, so a runaway `page_number` from the model
+    is a page with no number, never an error that would sink the
+    document's extraction."""
     if not isinstance(page_number, str):
         return None
     digits = page_number.strip()
-    if not re.fullmatch(r"[0-9]+", digits):
+    match = re.fullmatch(r"0*([0-9]{1,9})", digits)
+    if match is None:
         return None
-    return printed_pages.get(int(digits))
+    printed = printed_pages.get(int(match.group(1)))
+    return printed if printed and printed.strip() else None
 
 
 def _normalize_claim_shape(claim: dict) -> dict:

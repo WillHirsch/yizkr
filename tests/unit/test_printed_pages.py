@@ -460,6 +460,8 @@ class TestTheLocatorIsLookedUp:
         [
             ("6", "4"),
             ("06", "4"),
+            ("0" * 20 + "6", "4"),
+            ("9" * 5000, None),  # past int()'s digit limit, and no error
             ("\t6\n", "4"),
             ("6a", None),
             ("٦", None),  # a digit, though not an ASCII one
@@ -471,6 +473,18 @@ class TestTheLocatorIsLookedUp:
     def test_only_one_physical_page_is_looked_up(self, page, printed):
         assert printed_page_number(page, {6: "4"}) == printed
 
+    def test_a_printed_number_of_whitespace_alone_is_none(self):
+        """The writer writes nothing for it, so the claim carries none."""
+        assert printed_page_number("6", {6: "  "}) is None
+
+    @pytest.mark.parametrize("tier", TIERS)
+    def test_a_runaway_page_number_is_left_for_validation(self, tier):
+        """A page number too long to be a page costs no printed number and
+        never the document's extraction."""
+        (source,) = extracted(tier, [sibling("9" * 5000)])
+        assert source.printed_page_number is None
+        assert source.page_number == "9" * 5000
+
 
 class TestTheSourceSerialisesAsBefore:
     def test_a_source_without_a_printed_page_has_no_key(self):
@@ -481,6 +495,17 @@ class TestTheSourceSerialisesAsBefore:
         assert "printed_page_number" not in source.model_dump_json()
         printed = source.model_copy(update={"printed_page_number": "4"})
         assert printed.model_dump(mode="json")["printed_page_number"] == "4"
+        assert '"printed_page_number":"4"' in printed.model_dump_json()
+
+    def test_a_batch_dump_has_no_key_for_a_source_without_one(self):
+        """The key is left out of a source nested in a claim batch too,
+        in both dump paths."""
+        batch = ClaimBatch.model_validate(
+            {"extraction_run": RUN, "claims": [sibling("6")]}
+        )
+        dumped = batch.model_dump(mode="json")["claims"][0]["source"]
+        assert "printed_page_number" not in dumped
+        assert "printed_page_number" not in batch.model_dump_json()
 
     def test_a_claim_without_a_printed_page_keeps_its_id(self):
         batch = ClaimBatch.model_validate(
@@ -582,6 +607,20 @@ class TestTheWriter:
             "stated_in": ["Q23"],
             "page_number": ["5"],
         }
+
+    def test_the_printed_number_goes_on_one_line(self):
+        """It is a locator like the page number: cleaned up to one line
+        (writer._locator_text), so a re-run finds its block."""
+        wiki = FakeWiki({BOOKLET_REF.sha1: "Q23"}, detached=True)
+        result = BatchWriter(wiki).write_batch(
+            booklet_batch(
+                {"page_number": "6", "printed_page_number": " 4\n5 "}
+            )
+        )
+        (statement,) = wiki.wbi.item.get(
+            result.created_items["e1"]
+        ).claims.get(PROPERTIES["sibling"])
+        assert block(statement)["printed_page_number"] == ["4 | 5"]
 
     def test_a_rewrite_adds_nothing(self):
         wiki = FakeWiki({BOOKLET_REF.sha1: "Q23"}, detached=True)

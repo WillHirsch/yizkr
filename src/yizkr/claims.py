@@ -434,9 +434,16 @@ class SourceReference(StrictModel):
     # the class docstring is that schema's description. A source without
     # one serialises exactly as it would if the field did not exist, so
     # its content hashes are those of any other source.
-    printed_page_number: SkipJsonSchema[str | None] = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
+    printed_page_number: SkipJsonSchema[str | None] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_printed_page_number(
+        self, handler: SerializerFunctionWrapHandler
+    ):
+        data = handler(self)
+        if isinstance(data, dict) and self.printed_page_number is None:
+            data.pop("printed_page_number", None)
+        return data
 
 
 # A claim's subject: an entity reference, or the claim's own source
