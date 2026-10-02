@@ -6,29 +6,38 @@ Wikibase refuses a text value, a statement's, a qualifier's or a
 reference's, that holds a line break or a tab, or has whitespace at either
 end: its `illegal-string-chars` check, /^\\s|[\\v\\t]|\\s$/u, which PHP
 matches by Unicode property. It keeps a label, a description or an alias
-trimmed (StringNormalizer::trimToNFC), and refuses one of more than 250
-characters once trimmed. It refuses the whole edit that sends a text it
-does not hold. The unit fake refuses, and keeps terms, as the instance does
-(`_refuse_as_the_instance` and `_kept_term` in test_pipeline.py), its
-character classes written out apart from the writer's. The writer sends
-no text the instance would refuse:
+trimmed and cleaned up (StringNormalizer::trimToNFC), and refuses one of
+more than 250 characters once trimmed. It cleans up a string value before
+it stores it, and every text its API gives back (#403): each C0 control
+character but the tab, the line feed and the carriage return, and U+FFFE
+and U+FFFF, made U+FFFD. It refuses the whole edit that sends a text it
+does not hold. The unit fake refuses, keeps and serves text as the
+instance does (`_refuse_as_the_instance`, `_kept_term`, `_as_stored` and
+`_as_served` in test_pipeline.py), its character classes written out
+apart from the writer's. The writer sends no text the instance would
+refuse, or give back changed:
 
 * a claim whose own text, its value or a qualifier's, holds a line break
-  or a tab, or has whitespace at either end, is refused, never changed
-  (CLAUDE.md rule 5), as one over the limit is (test_writer_limits.py):
-  nothing of it is written, the result names it, and a warning says why,
-  quoting none of it. Every other claim is written;
+  or a tab, or has whitespace at either end, or holds a character the
+  instance cleans up, is refused, never changed (CLAUDE.md rule 5), as one
+  over the limit is (test_writer_limits.py): nothing of it is written, the
+  result names it, and a warning says why, quoting none of it. Every other
+  claim is written;
 * a reference's page number, region and excerpt go on one line:
-  whitespace at either end dropped, a line break inside made " | ", and a
-  tab a space. One of whitespace alone is left out, and one still over
-  the limit is cut, with the digest of the one-line text;
+  whitespace at either end dropped, a line break inside made " | ", a tab
+  a space, and each other character the instance cleans up U+FFFD. One of
+  whitespace alone is left out, and one still over the limit is cut, with
+  the digest of the one-line text;
 * an entity's type hint, free text the writer compares ignoring its
-  spacing, goes with its whitespace as single spaces;
+  spacing, goes with its whitespace as single spaces, cleaned up;
 * a label, a description or an alias goes as the instance keeps it, and
   one over 250 characters is cut as a page number is, with the digest of
   the whole: a label given in another form or at length finds its item
   again, two labels or aliases that agree up to the cut stay two, and the
   run item's label, which holds the model's identifier, is found again.
+
+The rule the writer and the registrar share for a term, and the probes of
+#403, are tested in test_writer_stored_terms.py.
 
 Every text comes from the fictional universe (docs/EXAMPLES.md).
 """
@@ -51,6 +60,7 @@ from tests.unit.test_pipeline import (
     TEXT_OF,
     TREE_SHA1,
     WIKIBASE_BREAK_OR_TAB,
+    WIKIBASE_CLEANED,
     WIKIBASE_SPACE,
     FakeWiki,
     _aliases,
@@ -62,6 +72,7 @@ from tests.unit.test_pipeline import (
     _labelled,
     _not_in_nfc,
     _places,
+    _snaks,
     _sources,
     _statements,
     _tree_batch,
@@ -239,6 +250,67 @@ class TestTheFakeRefusesWhatWikibaseRefuses:
         item.write()
 
         assert wiki.wbi.item.writes == 1
+
+    def test_a_term_is_kept_trimmed_then_cleaned_up(self):
+        # trimmed first, so U+FFFE after a space at its start is not
+        # trimmed, and then made U+FFFD, as trimToNFC does (#403)
+        wiki = FakeWiki(detached=True)
+        item = wiki.wbi.item.new()
+        item.labels.set("en", " \ufffeEugen\x01Löbig\uffff")
+        item.aliases.set("en", ["Muckel\uffff", "Muckel\ufffd"])
+
+        item.write()
+
+        (kept,) = wiki.wbi.item.store.values()
+        assert str(kept.labels.get("en")) == "\ufffdEugen Löbig\ufffd"
+        assert [str(alias) for alias in kept.aliases.get("en")] == [
+            "Muckel\ufffd"
+        ]
+
+    @pytest.mark.parametrize("where", ["value", "qualifier", "reference"])
+    def test_a_string_value_is_stored_cleaned_up(self, where):
+        # (#403) each character of WIKIBASE_CLEANED made U+FFFD, and the
+        # value held
+        text = f"Blatt{WIKIBASE_CLEANED.replace(chr(0x0B), '')}12"
+        wiki, item = _item_holding(where, "string", text)
+
+        item.write()
+
+        (stored,) = wiki.wbi.item.store.values()
+        cleaned = "Blatt" + "\ufffd" * (len(WIKIBASE_CLEANED) - 1) + "12"
+        assert cleaned in _held_texts(stored)
+        assert cleaned in _held_texts(wiki.wbi.item.get(stored.id))
+
+    @pytest.mark.parametrize("where", ["value", "qualifier", "reference"])
+    def test_a_monolingual_text_is_stored_as_sent_and_served_cleaned_up(
+        self, where
+    ):
+        # Wikibase checks and stores a monolingual text as it is sent, and
+        # its API cleans up every text it gives back (#403)
+        text = "Blatt\x01 12\uffff"
+        wiki, item = _item_holding(where, "monolingual", text)
+
+        item.write()
+
+        (stored,) = wiki.wbi.item.store.values()
+        assert text in _held_texts(stored)
+        served = _held_texts(wiki.wbi.item.get(stored.id))
+        assert "Blatt\ufffd 12\ufffd" in served and text not in served
+
+
+def _held_texts(item) -> list[str]:
+    """The text of every string or monolingual text snak of `item`'s
+    statements, as the item holds it."""
+    texts = []
+    for statements in item.get_json().get("claims", {}).values():
+        for statement in statements:
+            for snak in _snaks(statement):
+                value = (snak.get("datavalue") or {}).get("value")
+                if isinstance(value, dict) and "text" in value:
+                    texts.append(value["text"])
+                elif isinstance(value, str):
+                    texts.append(value)
+    return texts
 
 
 # -- a claim's own text: refused, never changed -------------------------------
@@ -905,13 +977,17 @@ CONTROLS = {
     f"U+{code:04X}": chr(code) for code in (*range(0x20), *range(0x7F, 0xA0))
 }
 SHAPED = {**SPACES, **CONTROLS}
+# each character Wikibase cleans up into U+FFFD, as the fake writes them out
+# (#403)
+CLEANED = {f"U+{ord(char):04X}": char for char in WIKIBASE_CLEANED}
 
 
 class TestEveryCharacterOfTheInstancesClasses:
     """Each character Wikibase counts as whitespace, or as a line break or
-    tab, as the fake writes its classes out, and each control character,
-    taken through a claim, a page number, an excerpt and a label: none
-    stops the batch, and each re-run finds what the first wrote."""
+    tab, as the fake writes its classes out, each control character, and
+    each character Wikibase cleans up into U+FFFD, taken through a claim, a
+    page number, an excerpt, a type hint and a label: none stops the batch,
+    and each re-run finds what the first wrote."""
 
     @pytest.mark.parametrize("at", ["start", "end"])
     @pytest.mark.parametrize("char", SPACES.values(), ids=SPACES)
@@ -987,6 +1063,95 @@ class TestEveryCharacterOfTheInstancesClasses:
         label = str(wiki.wbi.item.get(sebastian).labels.get("en"))
         assert label.startswith("Sebastian") and label.endswith("Löbig")
         assert _labelled(wiki, label) == [sebastian]
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert again.created_items["e01"] == sebastian
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("case", TEXT_CLAIMS, ids=TEXT_CLAIMS)
+    @pytest.mark.parametrize("char", CLEANED.values(), ids=CLEANED)
+    def test_a_cleaned_up_character_in_a_claim_refuses_it(self, char, case):
+        # (#403) a vertical tab or a form feed is a line break
+        words = TEXT_OF[case]
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(
+            _batch_of(_saying(case, words + char + words), BIRTH)
+        )
+
+        assert (written.written, len(written.refused)) == (1, 1)
+        (warning,) = written.warnings
+        if char in WIKIBASE_BREAK_OR_TAB:
+            assert "holds a line break," in warning
+            assert "U+FFFD" not in warning
+        else:
+            assert "holds a control character or a noncharacter" in warning
+
+    @pytest.mark.parametrize("where", ["page number", "excerpt"])
+    @pytest.mark.parametrize("char", CLEANED.values(), ids=CLEANED)
+    def test_a_cleaned_up_character_in_a_locator_is_sent_so(self, char, where):
+        # (#403) made U+FFFD, as the instance gives it back; a vertical tab
+        # or a form feed is a line break
+        given = f"{char}Blatt 12{char}Flörburg{char}"
+        inside = " | " if char in WIKIBASE_BREAK_OR_TAB else "\ufffd"
+        edge = "" if char in WIKIBASE_BREAK_OR_TAB else "\ufffd"
+        claim = _cause(given) if where == "page number" else _quoting(given)
+        batch = _batch_of(claim)
+        wiki = FakeWiki(MEDIA, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        (died,) = _statements(
+            wiki, written.created_items["e07"], "cause_of_death"
+        )
+        ((_, page, _, excerpt),) = _places(died)
+        kept = page if where == "page number" else excerpt
+        assert kept == f"{edge}Blatt 12{inside}Flörburg{edge}"
+        writes = wiki.wbi.item.writes
+        again = BatchWriter(wiki).write_batch(batch)
+        assert (again.written, again.referenced, again.skipped) == (0, 0, 1)
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("char", CLEANED.values(), ids=CLEANED)
+    def test_a_cleaned_up_character_in_a_type_hint_is_sent_so(self, char):
+        # (#403) the firm found by the directory's batch: its hint made
+        # U+FFFD, or a space for a vertical tab or a form feed
+        wiki = FakeWiki(
+            {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
+        )
+        BatchWriter(wiki).write_batch(_firm_batch())
+        directory = _directory_batch(
+            "unclassified_entity", type_hint=f"Hut{char}geschäft"
+        )
+
+        written = BatchWriter(wiki).write_batch(directory)
+
+        inside = " " if char in WIKIBASE_BREAK_OR_TAB else "\ufffd"
+        hints = set(
+            _by_value(
+                _statements(wiki, written.created_items["firm"], "type_hint")
+            )
+        )
+        assert hints == {"hat shop", f"Hut{inside}geschäft"}
+        writes = wiki.wbi.item.writes
+        BatchWriter(wiki).write_batch(directory)
+        assert wiki.wbi.item.writes == writes
+
+    @pytest.mark.parametrize("char", CLEANED.values(), ids=CLEANED)
+    def test_a_label_with_a_cleaned_up_character_finds_its_item(self, char):
+        # (#403) a control character is a space by the time Wikibase cleans
+        # a term up; U+FFFE and U+FFFF are made U+FFFD
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
+        batch = _named(_certificate_batch(), f"Sebastian{char}Löbig{char}")
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        sebastian = written.created_items["e01"]
+        if char in "\ufffe\uffff":
+            kept = "Sebastian\ufffdLöbig\ufffd"
+        else:
+            kept = SEBASTIAN
+        assert _labelled(wiki, kept) == [sebastian]
         writes = wiki.wbi.item.writes
         again = BatchWriter(wiki).write_batch(batch)
         assert again.created_items["e01"] == sebastian

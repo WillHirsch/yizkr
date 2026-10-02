@@ -12,6 +12,10 @@ placed within its text-layer pages is read on its own: see Amendments.
 Amended by #397 (2026-09-29): each image placed within a PDF's text-layer
 pages that has a reading of its own is extracted as a document of its
 own, an excerpt, and the write registers the images: see Amendments.
+Amended by #369 (2026-09-29): labels are compared and set by the one rule
+the writer keeps labels by: see Amendments (#103's).
+Amended by #403 (2026-09-29): that rule makes U+FFFE and U+FFFF U+FFFD
+once it has trimmed a label, as Wikibase does: see Amendments (#103's).
 
 ## Context
 
@@ -433,9 +437,11 @@ time"):
   archive>"`. Bytes the archive holds under several names are one
   medium: the first name labels it (`"<deck title> — <name>"`), and the
   others are its aliases. Labels are compared and set in the form
-  Wikibase stores them in (separators and control characters trimmed at
-  either end, each run of control characters inside made one space, then
-  NFC). A deck title that would push its images' or its slides' labels,
+  Wikibase stores them in, by the rule the writer keeps labels by (each
+  run of control characters, and each line or paragraph separator, made
+  one space, the separators and the Mongolian vowel separator trimmed at
+  either end, then U+FFFE and U+FFFF made U+FFFD, then NFC; ADR-0010,
+  #369, #403). A deck title that would push its images' or its slides' labels,
   or its slides' descriptions, past the 250 characters Wikibase takes is
   cut there, ending in "…", since those only display it; so is the list
   of slides in an image's description;
