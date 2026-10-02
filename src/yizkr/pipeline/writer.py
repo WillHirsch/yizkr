@@ -540,13 +540,19 @@ _EXTENDERS = (
 # the canonical combining class of a virama, which joins the letter after
 # it to the one before (an Indic conjunct)
 _VIRAMA = 9
+# an old Hangul syllable's leading jamo, which joins the leading jamo or
+# the precomposed syllable after it into one syllable
+_LEADING_JAMO = (range(0x1100, 0x1160), range(0xA960, 0xA980))
+_SYLLABLES = range(0xAC00, 0xD7A4)
 
 
 def extends(char: str, before: str) -> bool:
     """Whether `char`, coming right after `before`, belongs to the same
     letter, so that no cut falls between them: a combining mark
     (_is_mark), a character of _EXTENDERS, any character after a
-    zero-width joiner, or a letter after a virama. A narrower rule than
+    zero-width joiner, a letter after a virama, or a leading jamo or a
+    precomposed Hangul syllable after a leading jamo (_LEADING_JAMO,
+    _SYLLABLES). A narrower rule than
     Unicode's grapheme clusters (Unicode Standard Annex 29), which it
     follows for these sequences alone (ADR-0010). The writer's cuts and
     the registrar's keep to it."""
@@ -556,6 +562,13 @@ def extends(char: str, before: str) -> bool:
         or any(code in extenders for extenders in _EXTENDERS)
         or before == _JOINER
         or (char.isalpha() and unicodedata.combining(before) == _VIRAMA)
+        or (
+            any(ord(before) in leading for leading in _LEADING_JAMO)
+            and (
+                code in _SYLLABLES
+                or any(code in leading for leading in _LEADING_JAMO)
+            )
+        )
     )
 
 

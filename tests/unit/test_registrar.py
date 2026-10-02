@@ -54,6 +54,7 @@ from yizkr.pipeline.registrar import (
     _cites,
     _cut_to_fit,
     _ensure_referenced,
+    _fitted,
     _item_claim,
     _string_claim,
     _upload_name,
@@ -1906,6 +1907,17 @@ class TestCutsKeepWholeLetters:
         "\N{HANGUL JONGSEONG KIYEOK}"
     )
     JAMO_EXTENDED = "\N{HANGUL CHOSEONG KIYEOK}\N{HANGUL JUNGSEONG O-YEO}"
+    # old syllables that open with two or three leading jamo: one before
+    # a precomposed syllable, three before a vowel, and one of Hangul
+    # Jamo Extended-A before a precomposed syllable
+    OLD_DOUBLE = "\N{HANGUL CHOSEONG SIOS}\N{HANGUL SYLLABLE GA}"
+    OLD_CLUSTER = (
+        "\N{HANGUL CHOSEONG PIEUP}"
+        "\N{HANGUL CHOSEONG SIOS}"
+        "\N{HANGUL CHOSEONG KIYEOK}"
+        "\N{HANGUL JUNGSEONG ARAEA}"
+    )
+    OLD_EXTENDED = "\N{HANGUL CHOSEONG TIKEUT-MIEUM}\N{HANGUL SYLLABLE GA}"
     CONJUNCT = (
         "\N{DEVANAGARI LETTER KA}"
         "\N{DEVANAGARI SIGN VIRAMA}"
@@ -1943,6 +1955,23 @@ class TestCutsKeepWholeLetters:
                 f"Flörburg {JAMO_EXTENDED[0]}",
                 "Flörburg ",
             ),
+            # a leading jamo joins the leading jamo or the syllable after
+            # it, the precomposed one NFC makes of a modern pair
+            (
+                f"Flörburg {OLD_DOUBLE}",
+                f"Flörburg {OLD_DOUBLE[0]}",
+                "Flörburg ",
+            ),
+            (
+                f"Flörburg {OLD_CLUSTER}",
+                f"Flörburg {OLD_CLUSTER[:2]}",
+                "Flörburg ",
+            ),
+            (
+                f"Flörburg {OLD_EXTENDED}",
+                f"Flörburg {OLD_EXTENDED[0]}",
+                "Flörburg ",
+            ),
             # a letter after a virama belongs to the conjunct
             (f"Flörburg {CONJUNCT}", f"Flörburg {CONJUNCT[:2]}", "Flörburg "),
             # half a flag goes, a whole one stays
@@ -1975,6 +2004,19 @@ class TestCutsKeepWholeLetters:
         too, and no joiner is left before the "…"."""
         text = "x" * 223 + f"a{self.JOINER} " + "b" * 20
         assert _cut_to_fit(text, "…") == "x" * 223 + "…"
+
+    def test_a_fitted_cut_backed_off_to_a_space_ends_before_it(self):
+        """The room's 249 characters end in a flag's first tag character:
+        the flag goes, and so does the space before it."""
+        text = "x" * 246 + " " + self.ENGLAND
+        assert _fitted(text) == "x" * 246 + "…"
+
+    def test_a_fitted_cut_ending_in_a_space_backs_off_from_before_it(self):
+        """The room's 249 characters end in the space after a joiner: the
+        space is trimmed first, so the joiner, and the letter it joins, go
+        too, and no joiner is left before the "…"."""
+        text = "x" * 246 + f"a{self.JOINER} " + "b" * 20
+        assert _fitted(text) == "x" * 246 + "…"
 
     @pytest.mark.parametrize(
         "unit",

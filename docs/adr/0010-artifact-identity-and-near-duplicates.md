@@ -318,13 +318,18 @@ deploy/config changes none (`$wgLegalTitleChars`, `$wgIllegalFileChars`,
   never between a letter and its combining marks (a stressed Cyrillic
   vowel is a letter and U+0301: the cut steps back, and the whole letter
   goes), with `…` where the cut is. The same rule keeps these sequences
-  whole: a letter and a zero-width non-joiner or joiner after it, and
-  whatever a joiner joins (an emoji family); an emoji and its skin tone
-  (U+1F3FB to U+1F3FF); a flag's regional indicators, in pairs, and a
-  subdivision's flag and its tag characters (U+E0020 to U+E007F); a
-  halfwidth kana and its sound mark (U+FF9E, U+FF9F); an old Hangul
-  syllable's jamo, which NFC leaves apart (U+1160 to U+11FF, U+D7B0 to
-  U+D7FF); and an Indic conjunct, a letter after a virama. It is not
+  whole, and no others: a character and any combining mark (category M)
+  after it; a character and a zero-width non-joiner or joiner (U+200C,
+  U+200D) after it, and any character after a joiner (an emoji family);
+  an emoji and its skin tone (U+1F3FB to U+1F3FF); a flag's regional
+  indicators (U+1F1E6 to U+1F1FF), in pairs, and a subdivision's flag
+  and its tag characters (U+E0020 to U+E007F); a halfwidth kana and its
+  sound mark (U+FF9E, U+FF9F); an old Hangul syllable, whose jamo NFC
+  leaves apart: a character and a vowel or final jamo after it (U+1160
+  to U+11FF, U+D7B0 to U+D7FF), and a leading jamo (U+1100 to U+115F,
+  U+A960 to U+A97F) and a leading jamo or a precomposed syllable
+  (U+AC00 to U+D7A3) after it; and an Indic conjunct, a virama
+  (canonical combining class 9) and a letter after it. It is not
   Unicode's full grapheme cluster rule (UAX #29), and keeps only these
   sequences whole. It is the writer's rule (`writer.extends`,
   `writer.half_flag`), by which the writer also cuts a label or another

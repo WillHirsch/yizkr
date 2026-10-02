@@ -128,7 +128,7 @@ def _fitted(
     room = TERM_LIMIT - len(prefix) - len(suffix) - 1
     if len(whole) <= TERM_LIMIT or room < 1:
         return whole
-    cut = _whole_letters(text, text[:room])
+    cut = _whole_letters(text, text[:room].rstrip())
     if at is not None and at in cut:
         cut = cut.rsplit(at, 1)[0]
     return prefix + cut.rstrip() + "…" + suffix
