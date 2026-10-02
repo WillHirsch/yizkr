@@ -18,16 +18,26 @@ a wait other than 0. Uses inside the classes and functions named as exempt
 (the fakes, say), by qualified name (`TestX.test_y`) or by bare name
 wherever they sit, are left out.
 
+A `.join`'s or a selector's `.select`'s lone positional argument counts as
+a timeout when it gives a time: a number or a named hang guard, arithmetic
+on one with no sequence or string beside it (`HANG_GUARD / 10`, but not
+`[name] * 4`), a conditional giving one (`0.5 if slow else 1`), or a call
+that makes a number (`float("0.5")`, `min(HANG_GUARD, 5)`).
+
 What it cannot tell from a module's own code is left to review: a
-`.join` or a selector's `.select` given a timeout by a positional name (a
-str.join's iterable looks the same), a timeout given positionally to
+`.join` or a selector's `.select` given its timeout by another name, or
+by any other expression (a str.join's iterable looks the same), a timeout
+given positionally to
 `.wait_for`, `.acquire`, `.get` or `.put` (a dict.get's default, or a test
 helper's own argument, looks the same), a timeout given to any other call
 (`subprocess.run`, `communicate`, `urlopen`, ...), a clock reached through
 another name than the time module's, a datetime's, a date's or one a
-clock call is imported as (`T = threading.Timer`, `dt.now` after `from
-datetime import datetime as dt`), or through a default in `src/`, and a
-child's script held in a string.
+clock call is imported as (`T = threading.Timer`, or `dt.now` taken
+uncalled after `from datetime import datetime as dt`), or through a
+default in `src/`, a wait reached through another name (`s.select` after
+`import select as s`, `sl` after `from select import select as sl`, `B`
+after `from threading import Barrier as B`), and a child's script held in
+a string.
 """
 
 from __future__ import annotations
@@ -69,8 +79,8 @@ CURRENT_TIME["strftime"] = 1
 DATETIME_CLOCKS = frozenset({"now", "utcnow", "today"})
 # the calls that wait, up to a timeout: the position of the timeout
 # among their arguments, when it can be told from them (a `.join`'s and a
-# selector's `.select`'s at 0, only when it is a number), else None, and
-# only its `timeout` keyword counts
+# selector's `.select`'s at 0, only when it gives a time: _a_time), else
+# None, and only its `timeout` keyword counts
 WAITS = {
     "wait": 0,
     "join": 0,
@@ -112,16 +122,71 @@ def _zero(node: ast.expr | None) -> bool:
     )
 
 
-def _timeout(call: ast.Call, name: str) -> ast.expr | None:
+# the calls that make a number of what they are given (`float("0.5")`)
+NUMBER_CALLS = frozenset({"float", "int", "abs", "round", "min", "max"})
+
+
+# the expressions that never give a time: a sequence, a mapping, a
+# comprehension or a string (`[name] * 4` repeats a list)
+NOT_TIMES = (
+    ast.List,
+    ast.Tuple,
+    ast.Set,
+    ast.Dict,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+    ast.JoinedStr,
+)
+
+
+def _a_time(node: ast.expr, hang_guards: set[str]) -> bool:
+    """Whether `node`, a `.join`'s or a selector's lone argument, gives a
+    time: a number or a named hang guard, arithmetic on one (with no
+    sequence or string beside it) or a conditional giving one, or a call
+    that makes a number. A str.join's iterable, a name or a string, a
+    list or a comprehension, gives none."""
+    if _number(node):
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in hang_guards
+    if isinstance(node, ast.UnaryOp):
+        return _a_time(node.operand, hang_guards)
+    if isinstance(node, ast.BinOp):
+        sides = (node.left, node.right)
+        return not any(
+            isinstance(side, NOT_TIMES)
+            or (
+                isinstance(side, ast.Constant)
+                and isinstance(side.value, str | bytes)
+            )
+            for side in sides
+        ) and any(_a_time(side, hang_guards) for side in sides)
+    if isinstance(node, ast.IfExp):
+        return _a_time(node.body, hang_guards) or _a_time(
+            node.orelse, hang_guards
+        )
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in NUMBER_CALLS
+    )
+
+
+def _timeout(
+    call: ast.Call, name: str, hang_guards: set[str]
+) -> ast.expr | None:
     """The timeout a timed wait passes: its `timeout` keyword, or the
-    argument at its timeout's position (a `.join`'s only when it is a
-    number, since a str.join's iterable is no timeout)."""
+    argument at its timeout's position (a `.join`'s only when it gives a
+    time, since a str.join's iterable is no timeout)."""
     for keyword in call.keywords:
         if keyword.arg == "timeout":
             return keyword.value
     position = WAITS[name]
     # a selector's `.select(timeout)`, unlike `select.select`'s four
-    # arguments, and like a `.join`, counts only a number
+    # arguments, and like a `.join`, counts only an argument that gives a
+    # time
     selector = name == "select" and not (
         isinstance(call.func, ast.Name)
         or (
@@ -135,7 +200,7 @@ def _timeout(call: ast.Call, name: str) -> ast.expr | None:
         return None
     timeout = call.args[position]
     if (name == "join" or selector) and not (
-        len(call.args) == 1 and _number(timeout)
+        len(call.args) == 1 and _a_time(timeout, hang_guards)
     ):
         return None
     return timeout
@@ -273,7 +338,7 @@ def real_time_uses(
         if name in CLOCK_CALLS or reads_the_time:
             found.append(f"line {node.lineno}: {name}(")
         elif name in WAITS:
-            if not _untimed(_timeout(node, name), hang_guards):
+            if not _untimed(_timeout(node, name, hang_guards), hang_guards):
                 found.append(f"line {node.lineno}: {name}( with a timeout")
         elif name in real_timers and not _zero(
             node.args[0] if node.args else None

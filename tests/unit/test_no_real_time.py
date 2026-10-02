@@ -5,15 +5,18 @@ each use it finds fails here unless the allow-list below names it, with
 its reason.
 
 A wait kept only as a hang guard takes HANG_GUARD as its timeout, and
-every HANG_GUARD is a module-level number of at least MIN_HANG_GUARD
-seconds that no class or function binds again, so a hang guard is never a
-time a test waits out. Anomalies' real timer starter is checked to start
-its timers with a wait of 0, in every module. An entry that no longer
-matches a use is stale and fails, as does an entry naming a module that
-does not exist, and one limited to a name that names more than one class
-or function. A held module, which another open pull request edits, is
-left out whole until that request merges, and its entry is stale once the
-finder sees no use in it, so the list never grows to cover a new use.
+every HANG_GUARD is a module-level number of MIN_HANG_GUARD to
+MAX_HANG_GUARD seconds that no class or function binds again, so a hang
+guard is never a time a test waits out, and never so long that a missed
+event holds CI for hours. A name bound by a `match` capture, an `except
+... as`, a `def` or a `class` is left to review. Anomalies' real timer
+starter is checked to start its timers with a wait of 0, in every module.
+An entry that no longer matches a use is stale and fails, as does an
+entry naming a module that does not exist, and one limited to a name that
+names more than one class or function. A held module, which another open
+pull request edits, is left out whole until that request merges, and its
+entry is stale once the finder sees no use in it, so the list never grows
+to cover a new use.
 """
 
 from __future__ import annotations
@@ -31,8 +34,9 @@ from tests.fixtures.real_time import real_time_uses, scopes_named
 UNIT = Path(__file__).parent
 # the timeout a wait kept only as a hang guard names
 HANG_GUARDS = frozenset({"HANG_GUARD"})
-# the fewest seconds a hang guard bounds a wait by
+# the fewest seconds a hang guard bounds a wait by, and the most
 MIN_HANG_GUARD = 30
+MAX_HANG_GUARD = 600
 # the names a real timer is started by, which must ask for a wait of 0
 REAL_TIMERS = frozenset({"START_TIMER", "_start_timer"})
 # the call of an entry that holds its module whole
@@ -126,8 +130,9 @@ def _line(use: str) -> int:
 
 def hang_guard_problems(source: str) -> list[str]:
     """Each binding of a hang guard in `source` that is not a module-level
-    assignment of a number of at least MIN_HANG_GUARD seconds, as
-    'line N: why'."""
+    assignment of a number of MIN_HANG_GUARD to MAX_HANG_GUARD seconds,
+    as 'line N: why'. A name that a `match` capture, an `except ... as`, a
+    `def` or a `class` binds is left to review (docs/TESTING.md)."""
     tree = ast.parse(source)
     sound = {
         id(target)
@@ -141,7 +146,7 @@ def hang_guard_problems(source: str) -> list[str]:
         )
         if isinstance(statement.value, ast.Constant)
         and type(statement.value.value) in (int, float)
-        and statement.value.value >= MIN_HANG_GUARD
+        and MIN_HANG_GUARD <= statement.value.value <= MAX_HANG_GUARD
     }
     bindings = [
         node
@@ -164,7 +169,8 @@ def hang_guard_problems(source: str) -> list[str]:
     return sorted(
         (
             f"line {node.lineno}: a hang guard is bound other than at module"
-            f" level to a number of at least {MIN_HANG_GUARD} seconds"
+            f" level to a number of {MIN_HANG_GUARD} to {MAX_HANG_GUARD}"
+            " seconds"
             for node in bindings
             if id(node) not in sound
         ),
@@ -382,7 +388,7 @@ class TestTheGuard:
         assert problems(tmp_path, allowed) == []
         assert problems(tmp_path, ()) == [
             "test_held.py line 2: a hang guard is bound other than at module"
-            " level to a number of at least 30 seconds",
+            " level to a number of 30 to 600 seconds",
             "test_held.py line 3: sleep(: no allow-list entry names it",
         ]
 
@@ -415,6 +421,9 @@ class TestTheGuard:
         [
             ("HANG_GUARD = 0.2\n", 1),
             ("HANG_GUARD = 29.9\n", 1),
+            ("HANG_GUARD = 600.5\n", 1),
+            ("HANG_GUARD = 1e9\n", 1),
+            ("HANG_GUARD = 1e999\n", 1),
             ("HANG_GUARD = True\n", 1),
             ("HANG_GUARD = -60\n", 1),
             ("HANG_GUARD = 2 * 30\n", 1),
@@ -426,6 +435,7 @@ class TestTheGuard:
             ("for HANG_GUARD in (60,):\n    pass\n", 1),
             ("if True:\n    HANG_GUARD = 60\n", 2),
             ("from tests.fixtures import HANG_GUARD\n", 1),
+            ("from tests.fixtures.x import SECONDS as HANG_GUARD\n", 1),
             ("import HANG_GUARD\n", 1),
             ("HANG_GUARD = 60\ndef test_x():\n    HANG_GUARD = 0.2\n", 3),
             ("HANG_GUARD = 60\ndef test_x(HANG_GUARD=0.2):\n    pass\n", 2),
@@ -465,7 +475,7 @@ class TestTheGuard:
         )
         assert problems(tmp_path, ()) == [
             "test_x.py line 2: a hang guard is bound other than at module"
-            " level to a number of at least 30 seconds"
+            " level to a number of 30 to 600 seconds"
         ]
 
     def test_an_entry_inside_a_qualified_name_allows_only_that_scope(

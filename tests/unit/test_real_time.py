@@ -68,6 +68,9 @@ def uses(source: str, **options) -> list[str]:
         "from signal import alarm as wake\nwake(1)\n",
         "def f(selector):\n    selector.select(0.5)\n",
         "def f(selector):\n    selector.select(timeout=0.5)\n",
+        "def f(thread):\n    thread.join(float('0.5'))\n",
+        "def f(thread, slow):\n    thread.join(0.5 if slow else 1)\n",
+        "def f(thread):\n    thread.join(-0.5)\n",
         "from select import select\nselect([], [], [], 0.5)\n",
         "import datetime\ndatetime.datetime.now()\n",
         "from datetime import UTC, datetime\ndatetime.now(UTC)\n",
@@ -163,6 +166,22 @@ def test_a_from_time_import_is_found_whatever_it_imports():
     ]
 
 
+@pytest.mark.parametrize(
+    "call",
+    [
+        "thread.join(HANG_GUARD / 600)",
+        "selector.select(HANG_GUARD / 600)",
+        "thread.join(min(HANG_GUARD, seconds))",
+        "thread.join(HANG_GUARD if slow else seconds)",
+    ],
+)
+def test_a_lone_argument_that_makes_a_time_of_a_hang_guard_is_found(call):
+    """A `.join` or a selector's `.select` given a hang guard worked on
+    waits for less, or for longer, than the hang guard itself."""
+    source = f"HANG_GUARD = 60\n{call}\n"
+    assert len(uses(source, hang_guards={"HANG_GUARD"})) == 1
+
+
 def test_what_a_test_may_do_is_not_found():
     source = """
         import select
@@ -186,6 +205,13 @@ def test_what_a_test_may_do_is_not_found():
         threading.Barrier(2)
         "-".join(parts)
         separator.join(parts)
+        "".join(map(str, [1, 2]))
+        "".join(sorted(names))
+        "-".join(str(n) for n in range(3))
+        ", ".join(names if names else ["none"])
+        ", ".join([name] * 4)
+        " ".join([part] * (length // 2 + 1) + ([end] if end else []))
+        "".join(map(chr, (0x09, 0x20)))
         {}.get("key", 5)
         helper.wait_for("busy", 5)
         select.select([], [], [], HANG_GUARD)

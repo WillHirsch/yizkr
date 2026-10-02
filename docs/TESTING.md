@@ -81,16 +81,17 @@ itself in its own `--help`.
   in `tests/fixtures/real_time.py` (pinned by
   `tests/unit/test_real_time.py`), and fails, naming the file and line,
   on any use its allow-list `ALLOWED` does not name. It also fails on any
-  `HANG_GUARD` that is not a module-level assignment of a number of at
-  least 30 seconds, or that a class or function binds again, so a hang
-  guard is never a time a test waits out. Each entry names the module,
-  the use as the finder words it (or `*` for a whole module held until
-  another pull request merges), optionally the test it is limited to (by
-  its qualified name, `TestX.test_y`, or by its own name when that names
+  `HANG_GUARD` that is not a module-level assignment of a number of 30
+  to 600 seconds, or that a class or function binds again, so a hang
+  guard is never a time a test waits out, nor so long that a missed
+  event holds CI for hours. Each entry names the module, the use as the
+  finder words it (or `*` for a whole module held until another pull
+  request merges), optionally the test it is limited to (by its
+  qualified name, `TestX.test_y`, or by its own name when that names
   only one class or function), and its reason. An entry that no longer
-  matches a use, a held module in which the finder sees no use, an
-  entry limited to a name that names more than one class or function,
-  and an entry naming a module that does not exist all fail, so an entry can
+  matches a use, a held module in which the finder sees no use, an entry
+  limited to a name that names more than one class or function, and an
+  entry naming a module that does not exist all fail, so an entry can
   only be removed, never kept past its use, and a new use always needs a
   new entry with its reason. The finder reads only the module's own
   code, and finds exactly the spellings its docstring lists: a clock
@@ -101,18 +102,33 @@ itself in its own `--help`.
   `call_at`), or by a name it is imported as (`T` after `from threading
   import Timer as T`); a clock function of the time module, a datetime
   or a date taken uncalled; a `time.localtime()`-style read of the
-  current time;
-  any `from time import`; a timed wait (`.wait`, `.join`, `.wait_for`,
-  `.acquire`, `.get`, `.put`, `threading.Barrier`, `.settimeout`,
-  `select.select`, a selector's `.select`) whose timeout is not
-  `HANG_GUARD`, None or 0; and a real timer started by anomalies' timer
-  starter with a wait other than 0. Left to review are a `.join` or a selector's `.select` given its
-  timeout by a positional name, a timeout given positionally to
-  `.wait_for`, `.acquire`, `.get` or `.put`, a timeout given to any other
-  call (`subprocess.run`, `communicate`, `urlopen`, ...), a clock reached
-  through another name (`T = threading.Timer`, `dt.now` after `from
-  datetime import datetime as dt`) or through a default in `src/`, and a
-  child's script held in a string. One test is bounded only by the hang
+  current time; any `from time import`; a timed wait (`.wait`, `.join`,
+  `.wait_for`, `.acquire`, `.get`, `.put`, `threading.Barrier`,
+  `.settimeout`, `select.select`, a selector's `.select`) whose timeout
+  is not `HANG_GUARD`, None or 0; and a real timer started by anomalies'
+  timer starter with a wait other than 0. A `.join`'s or a selector's
+  `.select`'s lone positional argument is its timeout when it gives a
+  time: a number or `HANG_GUARD`, arithmetic on one with no sequence or
+  string beside it (`HANG_GUARD / 10`, but not `[name] * 4`), a
+  conditional giving one, or a call that makes a number (`float("0.5")`,
+  `min(HANG_GUARD, 5)`). Left to review are:
+  - a `.join` or a selector's `.select` given its timeout by another
+    name, or by any other expression (a str.join's iterable looks the
+    same);
+  - a timeout given positionally to `.wait_for`, `.acquire`, `.get` or
+    `.put`, and a timeout given to any other call (`subprocess.run`,
+    `communicate`, `urlopen`, ...);
+  - a clock reached through another name (`T = threading.Timer`, or
+    `dt.now` taken uncalled after `from datetime import datetime as dt`)
+    or through a default in `src/`;
+  - a wait reached through another name: `s.select` after `import select
+    as s`, `sl` after `from select import select as sl`, `B` after `from
+    threading import Barrier as B`;
+  - a `HANG_GUARD` bound by a `match` capture (`case HANG_GUARD:`), an
+    `except ... as`, a `def` or a `class`;
+  - a child's script held in a string.
+
+  One test is bounded only by the hang
   guard where it once had a few seconds of CPU of its own:
   `test_long_repetitive_text_checks_quickly` in
   `test_transcription_check.py`. It exists to catch catastrophic
