@@ -103,11 +103,7 @@ def _final_name(func: ast.expr) -> str | None:
 
 
 def _number(node: ast.expr) -> bool:
-    """Whether `node` is a number, or arithmetic on numbers."""
-    if isinstance(node, ast.UnaryOp):
-        return _number(node.operand)
-    if isinstance(node, ast.BinOp):
-        return _number(node.left) and _number(node.right)
+    """Whether `node` is a literal number (arithmetic on one: _a_time)."""
     return isinstance(node, ast.Constant) and isinstance(
         node.value, int | float
     )

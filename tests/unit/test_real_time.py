@@ -210,6 +210,8 @@ def test_what_a_test_may_do_is_not_found():
         "-".join(str(n) for n in range(3))
         ", ".join(names if names else ["none"])
         ", ".join([name] * 4)
+        "".join("ab" * 4)
+        "".join(4 * b"ab")
         " ".join([part] * (length // 2 + 1) + ([end] if end else []))
         "".join(map(chr, (0x09, 0x20)))
         {}.get("key", 5)
