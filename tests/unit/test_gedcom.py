@@ -5348,6 +5348,10 @@ class TestNamesWithoutWords:
         # the rest of the export adapts: Leopold keeps his entity
         assert unions(result.batch) == {}
 
+    def test_a_bracket_names_label_leaves_out_a_placeholder(self):
+        entity, _ = record_of(person("I7", "(Peppi) ?"), "i7")
+        assert entity.label == "(Peppi)"
+
     def test_brackets_without_a_word_beside_a_word(self):
         entity, outcomes = record_of(person("I7", "(Peppi) (?)"), "i7")
         assert (entity.label, entity.aliases) == ("(Peppi)", ["Peppi"])
@@ -5439,7 +5443,13 @@ class TestNamesWithoutWords:
         agnes, outcomes = record_of(text, "i17")
         assert agnes.aliases == []
         assert outcomes["NAME part without a word"] == count
+        assert "_MARNM without a surname" not in outcomes
         assert stated(text, "i17", "married_name") == []
+
+    def test_a_married_names_placeholder_is_left_out(self):
+        text = person("I17", "Agnes /Löbig/", "1 _MARNM Agnes ?")
+        agnes, _ = record_of(text, "i17")
+        assert parts(agnes.structure)["unsplit"] == ["Agnes"]
 
     def test_a_name_whose_only_word_is_a_suffix_gives_no_record(self):
         # 'Jr.' alone names no one by a given name or a surname: the
