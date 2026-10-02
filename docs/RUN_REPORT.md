@@ -101,7 +101,7 @@ snapshot, and says so.
 **Documents.** The documents planned (a SHA-1 planned twice is one
 document) by kind; languages, by the transcriptions read, and by kind;
 the transcription routes (vision, text file, slide text, correction) and
-how each language was resolved (detected, fallback, override); the
+how each language was resolved (record, detected, fallback, override); the
 documents that failed, each once: those whose stage failed, as their
 latest events leave them, and those the latest invocation failed outside
 their stages, with the class of the exception or the label their failure

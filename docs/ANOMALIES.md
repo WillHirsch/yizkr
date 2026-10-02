@@ -99,10 +99,23 @@ again). It fires on a transcription the check failed in the run, read
 from its stage's `failed` event, and on a reused transcription view the
 check fails again and the orchestrator sets aside, read from its
 `set-aside` event (carried). Value `true`; `failure` is the kind of
-failure (`tool-error`, `tool-failure`, `refusal`, `empty`, `too-short`),
-and `signature` the name of the signature that matched, when one did.
-Only the kind and the name are read from the reason; the rest of it can
-quote the output.
+failure (`tool-error`, `cut-off`, `not-a-record`, `pages-missing`,
+`pages-extra`, `tool-failure`, `empty`, `too-short`), and `signature`
+the name of the signature that matched, when one did. Only the kind and the name are read
+from the reason; the rest of it can quote the output. A recheck judges a
+stored vision transcription with its transcription record, and fails one
+without (ADR-0037).
+
+**`transcription-flag`**: a transcription the check passed with a flag:
+its wording matched a signature of the flag tier, a phrase in the
+engine's voice that a letter may also write (a refusal, a note that the
+media could not be read); for a transcription with a record, any
+signature, in a page's text or in its notes (ADR-0037 §3). The
+transcription goes on downstream; its stage output carries the flag
+(`flag`), which this check reads, for review. A stored transcription
+carries the flag of the check made now wherever it is read: a run's
+reuse of it, an excerpt made from a kept image reading, and a recheck
+(ADR-0037 §2). Value `true`; `signature` is the signature's name.
 
 **`transcription-sparse`**: a vision transcription with fewer letters and
 digits per page than `min-chars-per-page`, for a document of at least
@@ -196,23 +209,32 @@ share of one. Value: the share; `count`, `of`.
 ### Distributions
 
 A document's measure is compared with the median of the same measure over
-the documents of its kind: an outlier is more than `factor` times the
+the documents of its class: an outlier is more than `factor` times the
 median, or less than the median divided by it, with `smoothing` added to
 both, so that a median near zero does not make every value an outlier. A
-kind is judged once `min-samples` of its documents have the measure.
+class is judged once `min-samples` of its documents have the measure.
 While the run unfolds a document is compared with those before it; a
 recheck compares each with every other.
+
+A document's class is the one its transcription record gives
+(`document_class`, one of the manifest's artifact classes or
+`unclassified`; ADR-0037), so captions, certificates and registers are
+never measured against one another. A document without a record (a text
+file, a curator's correction, a deck, a GEDCOM export, a PDF read page by
+page) has no class yet: it is `unclassified`, and is compared within its
+kind among the unclassified documents. Each distribution alert says so:
+`document_class`, and `class_source`, `record` or `none`.
 
 **`entity-yield`**, **`claim-yield`**: entities, or claims, per page of a
 batch that has some (none at all is the zero checks' finding). A page is
 the medium's own (a PDF's pages, an image's one), a deck's slide, or, for
 a text file, `chars-per-page` characters of its transcription. A GEDCOM
 file's batch has no pages and is not measured. Value: the yield;
-`median`, `samples`.
+`median`, `samples`, `document_class`, `class_source`.
 
 **`critic-rate`** (on the critique): the critic's findings per item it
 reviewed (the batch's entities and claims). Value: the rate; `median`,
-`samples`.
+`samples`, `document_class`, `class_source`.
 
 ### Rates
 
@@ -415,7 +437,9 @@ again, under the thresholds as they are now (`--config` names a file of
 thresholds in place of the one `$YIZKR_ANOMALIES` names), without
 dispatching anything or recomputing any stage (`anomalies.recheck`).
 Each stored vision or text-file transcription meets the transcription
-check as it is now, as a run's reuse of it would, and every output meets
+check as it is now, as a run's reuse of it would, and each stored
+transcription, a PDF read page by page's included, carries the flag the
+check raises now, not the one stored with it; and every output meets
 the per-output checks and the distributions over the whole run. The rate
 checks, which read a run's dispatches and calls rather than its outputs,
 are not checked again. Its alerts, all carried, are appended to the
