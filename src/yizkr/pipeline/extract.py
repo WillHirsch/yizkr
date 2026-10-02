@@ -18,9 +18,10 @@ model proposes are `local` refs; resolution to existing items happens
 in the resolve step, never inside extraction. The model-driven
 extractors, this module's and yizkr.pipeline.chunking's, set every
 claim's source artifact themselves, to the content key of the document
-they read, whatever the model wrote there, and keep no review state the
-model wrote (`cite_artifact`); a prepared claims file's claims cite
-their artifacts themselves.
+they read, whatever the model wrote there, set each claim's printed
+page number from the transcription's record, never from the model, and
+keep no review state the model wrote (`cite_artifact`); a prepared
+claims file's claims cite their artifacts themselves.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -63,7 +64,9 @@ Rules — these mirror the archive's non-negotiable conventions:
   approximate values.
 - Every claim MUST include the source reference: the artifact
   {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
-  short verbatim transcription excerpt supporting it.
+  short verbatim transcription excerpt supporting it. The page number is
+  the N of the [Page N] (or [Slide N]) marker the text stands under,
+  never a printed page number shown beside that marker.
 - Refer to people, places, and events the document mentions with "local"
   references (stable local_id per entity within this batch, label as
   written, instance_of from: {kinds}).
@@ -235,13 +238,21 @@ def _parse_response(response: str) -> dict:
 REVIEW_STATE = ("curated", "row_approval")
 
 
-def cite_artifact(claims: Iterable, artifact: ArtifactRef) -> list:
+def cite_artifact(
+    claims: Iterable,
+    artifact: ArtifactRef,
+    printed_pages: Mapping[int, str] | None = None,
+) -> list:
     """The claims read from one document, as the machine extracted them:
     every claim's `source.artifact` becomes `artifact`, the document's
-    content key, whatever the model wrote there; the review-state fields
-    (REVIEW_STATE) are dropped, so every claim is a machine claim, which
-    the writer references to its extraction run (ADR-0003); and claims
-    that are then the same are kept once, in the order first given.
+    content key, whatever the model wrote there; every claim's
+    `source.printed_page_number` is the page number printed on the page it
+    cites, from `printed_pages` (the transcription's, by physical page,
+    Transcription.printed_pages), or absent (printed_page_number); the
+    review-state fields (REVIEW_STATE) are dropped, so every claim is a
+    machine claim, which the writer references to its extraction run
+    (ADR-0003); and claims that are then the same are kept once, in the
+    order first given.
 
     An extractor reads one document's transcription, so every claim it
     gives is an assertion of that document, and the extractor, handed the
@@ -250,6 +261,7 @@ def cite_artifact(claims: Iterable, artifact: ArtifactRef) -> list:
     reference the claim contract does not have. A claim whose source is
     not an object keeps it, for validation to reject, as a claim without
     its source is."""
+    printed = printed_pages or {}
     cited: list = []
     for claim in claims:
         if isinstance(claim, dict):
@@ -259,13 +271,39 @@ def cite_artifact(claims: Iterable, artifact: ArtifactRef) -> list:
                 if key not in REVIEW_STATE
             }
             if isinstance(claim.get("source"), dict):
-                claim["source"] = {
-                    **claim["source"],
-                    "artifact": artifact.model_dump(mode="json"),
+                source = {
+                    key: value
+                    for key, value in claim["source"].items()
+                    if key != "printed_page_number"
                 }
+                source["artifact"] = artifact.model_dump(mode="json")
+                number = printed_page_number(
+                    source.get("page_number"), printed
+                )
+                if number is not None:
+                    source["printed_page_number"] = number
+                claim["source"] = source
         if claim not in cited:
             cited.append(claim)
     return cited
+
+
+def printed_page_number(
+    page_number: object, printed_pages: Mapping[int, str]
+) -> str | None:
+    """The page number printed on the page a claim's `page_number` cites,
+    by `printed_pages` (physical page -> printed number, as the
+    transcription record gives them): only when `page_number` names one
+    physical page, as its digits alone ("6"), and the record gives that
+    page a printed number. Anything else, a range ("6-7"), a page given
+    in words ("p. 6"), no page, or a page the record gives no number,
+    has none: a printed number is read from the record, never guessed."""
+    if not isinstance(page_number, str):
+        return None
+    digits = page_number.strip()
+    if not re.fullmatch(r"[0-9]+", digits):
+        return None
+    return printed_pages.get(int(digits))
 
 
 def _normalize_claim_shape(claim: dict) -> dict:
@@ -482,7 +520,10 @@ class LlmClaimExtractor:
     ) -> ClaimBatch:
         """The batch the transcription's document asserts. Every claim
         cites `artifact`, the document's content key, by which the prompt
-        names the document too (cite_artifact)."""
+        names the document too, and the page number printed on the page it
+        cites, where the transcription's record gives one (cite_artifact).
+        The prompt carries the transcription's text with each printed page
+        number beside its page's marker (Transcription.prompt_text)."""
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
             schema=claim_schema_prompt_text(),
@@ -491,20 +532,26 @@ class LlmClaimExtractor:
             kinds=entity_kind_prompt_lines()[0],
             artifact_sha1=artifact.sha1,
             language=transcription.language,
-            text=transcription.text,
+            text=transcription.prompt_text(),
         )
+        printed_pages = transcription.printed_pages()
         try:
-            return self._extract(prompt, artifact)
+            return self._extract(prompt, artifact, printed_pages)
         except _KeptAnswerRejected:
-            return self._extract(prompt, artifact, again=True)
+            return self._extract(prompt, artifact, printed_pages, again=True)
 
     def _extract(
-        self, prompt: str, artifact: ArtifactRef, again: bool = False
+        self,
+        prompt: str,
+        artifact: ArtifactRef,
+        printed_pages: Mapping[int, str],
+        again: bool = False,
     ) -> ClaimBatch:
-        """The batch one answer gives, each claim citing `artifact`. A
-        rejected answer the client kept from an earlier call raises
-        _KeptAnswerRejected, unless this is the call made `again` after
-        one."""
+        """The batch one answer gives, each claim citing `artifact` and
+        the page number printed on its page, where `printed_pages` gives
+        one (cite_artifact). A rejected answer the client kept from an
+        earlier call raises _KeptAnswerRejected, unless this is the call
+        made `again` after one."""
 
         def reject_answer(response: str, reason: str) -> None:
             if reject_response(self.client, response, reason) and not again:
@@ -527,7 +574,7 @@ class LlmClaimExtractor:
             obj.get("done") is True for obj in scan_json_objects(response)
         )
         batch, rejects = salvage_valid_claims(
-            cite_artifact(payload.get("claims", []), artifact),
+            cite_artifact(payload.get("claims", []), artifact, printed_pages),
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
         )
         if self.rejects_dump is not None:

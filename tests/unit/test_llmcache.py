@@ -2182,8 +2182,12 @@ LETTER_REF = ArtifactRef.from_bytes(b"fictional scan: a Loebig letter")
 
 def person(prompt: str) -> tuple[str, int]:
     """The first word and year of a prompt's first numbered line, past
-    a page marker."""
-    match = re.search(r"^\d+: (?!\[Page \d+\]$)(.*)$", prompt, re.M)
+    a page marker, with the printed page number beside it or without."""
+    match = re.search(
+        r"^\d+: (?!\[Page \d+\](?: \(printed page number .*\))?$)(.*)$",
+        prompt,
+        re.M,
+    )
     line = match.group(1) if match else ""
     words = re.findall(r"[A-Za-z]+", line)
     year = re.search(r"\b(1[5-9]\d\d)\b", line)

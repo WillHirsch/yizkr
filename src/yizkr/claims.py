@@ -426,6 +426,17 @@ class SourceReference(StrictModel):
     page_number: str | None = None
     region: RegionPercent | None = None
     transcription_excerpt: MonolingualText | None = None
+    # The page number printed on the page `page_number` names, exactly as
+    # the transcription record gives it (ADR-0037), beside the physical
+    # page. The extractor sets it from the record, never the model
+    # (extract.cite_artifact): the JSON Schema that extraction prompts
+    # carry leaves it out, and it is documented in this comment because
+    # the class docstring is that schema's description. A source without
+    # one serialises exactly as it would if the field did not exist, so
+    # its content hashes are those of any other source.
+    printed_page_number: SkipJsonSchema[str | None] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 # A claim's subject: an entity reference, or the claim's own source

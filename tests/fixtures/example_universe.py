@@ -49,7 +49,10 @@ it sets an image of the top of a 1939 letter from Sebastian to Klara,
 an artifact of its own, beside a translation made with translation
 software, which misreads the address the letter gives for Rahel,
 Angerring 11, as Angerring 71.  The two are witnesses of one text that
-disagree (ADR-0008, as amended by #289).
+disagree (ADR-0008, as amended by #289).  The booklet numbers its pages
+from its third, after the title page and the note on its translations,
+so its sixth page, which sets the image, is printed as page 4: a
+printed page number apart from the physical page (ADR-0037, #424).
 
 Nicholas also typed two pages of family history in 2008, which name both
 Ursula Löbigs and give his birth and his father's death in two-digit years
@@ -1159,7 +1162,9 @@ SOURCES = (
             "A compilation, holding its own text only: the image beside "
             "the translation is letter-excerpt-1939, an artifact of its own "
             "(ADR-0008). The translation misreads Rahel's Angerring 11 as "
-            "71."
+            "71. Its pages are numbered from its third, after the title "
+            "page and the note on its translations, so its physical page 6 "
+            "carries the printed page number 4."
         ),
     ),
     Source(

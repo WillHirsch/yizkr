@@ -62,6 +62,7 @@ class TestRealManifest:
             "page_number",
             "relative_position_within_image",
             "transcription_excerpt",
+            "printed_page_number",
         ):
             assert key in manifest.properties, key
 

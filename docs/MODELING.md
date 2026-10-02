@@ -149,6 +149,21 @@ Every statement carries at least one reference with:
 - locator qualifier(s): page number, and/or region given as a
   percentage bounding box "x%,y%,w%,h%" (W1/W3) or a IIIF
   canvas+xywh URI (W2)
+- the printed page number, where there is one: the page number printed
+  on the page the `page number` locator names, exactly as printed
+  (`printed page number`, a reference property). The page number stays
+  the physical page, the page's place in the media from 1, so a claim
+  read from page 6 of *Our Family from Germany*, whose sixth page is
+  printed as page 4, cites `page number` 6 with `printed page number` 4.
+  The extractor sets it from the transcription record (ADR-0037), never
+  from the model: only for a claim whose page number is one physical
+  page whose record gives a printed number. A range, a page given in
+  words, a page the record gives no printed number and a transcription
+  with no record (a text file's, a deck's slide text) get none; none is
+  ever guessed (#424). An excerpt's claims read the excerpt's own
+  transcription, so they never take the printed number of the page that
+  places it, and its `part of` the container keeps the container's
+  physical page (ADR-0008)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
   takes each document's language from its transcription by default
@@ -176,10 +191,10 @@ gives the rule). The kinds and type hints the writer records after the
 claims, from an entity manifest or a ref, follow ADR-0007 instead.
 
 Wikibase holds at most 400 characters in the text of a string,
-external-id or monolingual text value, a reference's page number and
-region among them, and no text value with a line break or a tab in it,
-or whitespace at either end; it refuses the whole edit that sends a text
-it does not hold. It also cleans a text up, making each C0 control
+external-id or monolingual text value, a reference's page number,
+printed page number and region among them, and no text value with a
+line break or a tab in it, or whitespace at either end; it refuses the
+whole edit that sends a text it does not hold. It also cleans a text up, making each C0 control
 character but the tab, the line feed and the carriage return, and each
 of the noncharacters U+FFFE and U+FFFF, U+FFFD: in a string or
 external-id value before it checks and stores it (so it changes a
@@ -187,8 +202,8 @@ vertical tab or a form feed there, and refuses one in monolingual text),
 and in every text its API gives back, monolingual text included. The
 writer checks each text in NFC, the form the instance keeps it in, and
 sends none that the instance would give back changed (#366, #384,
-#403). A page number, region or excerpt goes on one line: whitespace at
-either end is dropped, a line break inside becomes " | ", a tab a space
+#403). A page number, printed page number, region or excerpt goes on
+one line: whitespace at either end is dropped, a line break inside becomes " | ", a tab a space
 and each other character the instance cleans up U+FFFD, as the instance
 gives it back, so a re-run finds its reference block; one of whitespace
 alone is left out. One still over the limit is cut at

@@ -595,6 +595,7 @@ class TestReferenceProperties:
         "inferred_from_extraction_run",
         "judgement",
         "judgement_note",
+        "printed_page_number",
     }
 
     def test_the_manifest_marks_them(self, manifest):
