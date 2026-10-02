@@ -102,7 +102,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, get_args
 
-from yizkr.claims import JudgementNote, load_vocabulary
+from yizkr.claims import (
+    JudgementNote,
+    PersonStructure,
+    PlaceStructure,
+    load_vocabulary,
+)
 from yizkr.pipeline.anomalies import ERROR_EVENT, RECHECK_EVENT, Checks, route
 from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
 from yizkr.pipeline.critique import entry as critique_entry
@@ -258,6 +263,12 @@ NOTE_SET_ASIDE = "note"
 NOTE_CATEGORIES = frozenset(
     get_args(JudgementNote.model_fields["category"].annotation)
 )
+# a mention record's label statuses (ADR-0035 §2.1, §2.2)
+RECORD_STATUSES = frozenset(
+    status
+    for model in (PersonStructure, PlaceStructure)
+    for status in get_args(model.model_fields["status"].annotation)
+)
 MAP_STATES = frozenset({"read", "missing", "unreadable"})
 # the leading labels of the reasons stages give an output that needs
 # attention: the extraction's fallback tiers and empty batches, and the
@@ -345,15 +356,22 @@ def _count(value: Any) -> int:
     return max(0, value)
 
 
+def _counted(value: Any) -> int | None:
+    """A count an output gives: a whole number, at least 0; else None."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 def _tally(value: Any) -> dict[str, int] | None:
-    """A {name: count} an output gives, each count as `_count` reads it;
-    None when it gives none."""
+    """A {name: count} an output gives, less each entry whose count is no
+    count (`_counted`); None when it gives none."""
     if not isinstance(value, dict):
         return None
     return {
-        name: _count(count)
+        name: count
         for name, count in value.items()
-        if isinstance(name, str)
+        if isinstance(name, str) and _counted(count) is not None
     }
 
 
@@ -1023,9 +1041,11 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
 
 def _records(coverage: dict) -> dict[str, Any]:
     """The mention records and judgement notes an extraction's coverage
-    counts (ADR-0035 §4, §5): the records given, the mentions recordless,
-    and the reasons records were set aside by, by category; and the notes
-    by category, and the notes set aside.
+    counts (ADR-0035 §4, §5): the records given, by status, and the
+    unsplit name forms they hold, the mentions recordless, the records set
+    aside and the reasons they were set aside by, by category; and the
+    notes by category, and the notes set aside. Each name is folded into
+    the report's fixed vocabulary, OTHER for one it does not know.
 
     The coverage's `set_aside` counts reasons, not records: a record that
     does not parse counts once, as `schema`, one of the wrong kind once,
@@ -1034,7 +1054,9 @@ def _records(coverage: dict) -> dict[str, Any]:
     here as a note set aside.
     The extraction writes its records and its notes together, so both
     are None unless the coverage holds both, as the line-range tier's and
-    one written before these counts do not: absent, never zero."""
+    one written before these counts do not: absent, never zero. The
+    records set aside and the unsplit forms are each None when the
+    coverage, though it holds both, gives no count of them."""
     records, notes = coverage.get("records"), _tally(coverage.get("notes"))
     if not isinstance(records, dict) or notes is None:
         return {"records": None, "notes": None}
@@ -1044,9 +1066,22 @@ def _records(coverage: dict) -> dict[str, Any]:
         "records": {
             "given": _count(records.get("given")),
             "recordless": _count(records.get("recordless")),
-            "set_aside_by_reason": reasons,
+            "by_status": _folded(
+                _tally(records.get("by_status")) or {},
+                lambda value: _known(value, RECORD_STATUSES),
+            ),
+            "unsplit_forms": _counted(records.get("unsplit_forms")),
+            "set_aside_records": _counted(records.get("set_aside_records")),
+            "set_aside_by_reason": _folded(
+                reasons, lambda value: _known(value, SET_ASIDE_REASONS)
+            ),
         },
-        "notes": {"by_category": notes, "set_aside": noted},
+        "notes": {
+            "by_category": _folded(
+                notes, lambda value: _known(value, NOTE_CATEGORIES)
+            ),
+            "set_aside": noted,
+        },
     }
 
 
@@ -2066,9 +2101,11 @@ def _aggregate_content(
     by_axis: Counter = Counter()
     by_category: Counter = Counter()
     set_aside: Counter = Counter()
+    statuses: Counter = Counter()
     notes: Counter = Counter()
     absent: Counter = Counter()
     record_extractions = records_given = recordless = notes_set_aside = 0
+    records_set_aside = unsplit_forms = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -2104,6 +2141,15 @@ def _aggregate_content(
                 record_extractions += 1
                 records_given += records["given"]
                 recordless += records["recordless"]
+                statuses.update(records["by_status"])
+                if records["set_aside_records"] is None:
+                    absent["set_aside_records"] += 1
+                else:
+                    records_set_aside += records["set_aside_records"]
+                if records["unsplit_forms"] is None:
+                    absent["unsplit_forms"] += 1
+                else:
+                    unsplit_forms += records["unsplit_forms"]
                 set_aside.update(records["set_aside_by_reason"])
                 notes.update(noted["by_category"])
                 notes_set_aside += noted["set_aside"]
@@ -2153,20 +2199,22 @@ def _aggregate_content(
             "extractions": record_extractions,
             "given": records_given,
             "recordless": recordless,
+            # each document's names are folded already (`_records`)
+            "by_status": _by_count(statuses),
+            "unsplit_forms": unsplit_forms,
+            "set_aside_records": records_set_aside,
             "set_aside_reasons": set_aside.total(),
-            "set_aside_by_reason": _folded(
-                set_aside, lambda value: _known(value, SET_ASIDE_REASONS)
-            ),
+            "set_aside_by_reason": _by_count(set_aside),
             "absent": {
                 "predating": absent["predating"],
                 "line_range": absent["line_range"],
+                "set_aside_records": absent["set_aside_records"],
+                "unsplit_forms": absent["unsplit_forms"],
             },
         },
         "notes": {
             "total": notes.total(),
-            "by_category": _folded(
-                notes, lambda value: _known(value, NOTE_CATEGORIES)
-            ),
+            "by_category": _by_count(notes),
             "set_aside": notes_set_aside,
         },
         "critic": {
@@ -2380,6 +2428,14 @@ def _pct(share: float | None) -> str:
 
 def _time_of(seconds: float | None) -> str:
     return "-" if seconds is None else _duration(seconds)
+
+
+def _absent(count: int | None) -> str:
+    """A document's count, or why it has none: its coverage gives none
+    (it predates the count, or what it gives is no count)."""
+    if count is None:
+        return "not counted (its coverage gives no count of it)"
+    return _n(count)
 
 
 def _listed(counts: Mapping[str, int], none: str = "none") -> str:
@@ -2865,7 +2921,10 @@ def _records_blocks(
             f"records given: {_n(records['given'])}; recordless mentions "
             "(no record given, or it was set aside): "
             f"{_n(records['recordless'])}",
-            "Reasons records were set aside: "
+            "Unsplit name forms in the records given: "
+            f"{_n(records['unsplit_forms'])}",
+            f"Records set aside: {_n(records['set_aside_records'])}; "
+            "reasons records were set aside: "
             f"{_n(records['set_aside_reasons'])} (a record can give "
             "several)",
             f"Judgement notes: {_n(notes['total'])}; notes set aside: "
@@ -2874,8 +2933,20 @@ def _records_blocks(
             f"{_n(absent['predating'])} whose coverage predates these "
             f"counts; {_n(absent['line_range'])} that fell back to line "
             "ranges (all their mentions recordless)",
+            "Extractions counted whose coverage gives no count of it, so "
+            "left out of that count: records set aside "
+            f"{_n(absent['set_aside_records'])}; unsplit name forms "
+            f"{_n(absent['unsplit_forms'])}",
         ]
     ]
+    if records["by_status"]:
+        blocks.append(
+            _table(
+                ("Record status", "Records"),
+                records["by_status"].items(),
+                numbers=(1,),
+            )
+        )
     if records["set_aside_by_reason"]:
         blocks.append(
             _table(
@@ -3406,8 +3477,12 @@ def _html_document(document: Mapping[str, Any]) -> str:
             )
         else:
             items.append(
-                f"Mention records given: {records['given']}; recordless: "
-                f"{records['recordless']}; reasons set aside: "
+                f"Mention records given: {records['given']}, by status: "
+                f"{_listed(_by_count(records['by_status']))}; unsplit name "
+                f"forms: {_absent(records['unsplit_forms'])}; recordless: "
+                f"{records['recordless']}; records set aside: "
+                f"{_absent(records['set_aside_records'])}; reasons set "
+                "aside: "
                 f"{_listed(_by_count(records['set_aside_by_reason']))}; "
                 "judgement notes: "
                 f"{_listed(_by_count(notes['by_category']))}; notes set "

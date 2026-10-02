@@ -442,6 +442,8 @@ class TestTheManifestsRecords:
             "given": 3,
             "recordless": 0,
             "by_status": {"name": 2, "toponym": 1},
+            "unsplit_forms": 0,
+            "set_aside_records": 0,
             "set_aside": {},
         }
 
@@ -468,6 +470,8 @@ class TestTheManifestsRecords:
             "given": 0,
             "recordless": 3,
             "by_status": {},
+            "unsplit_forms": 0,
+            "set_aside_records": 3,
             "set_aside": {"addition": 1, "kind": 1, "schema": 1},
         }
         # the claims are extracted as ever
@@ -497,7 +501,62 @@ class TestTheManifestsRecords:
         assert notes["e1"] is None
         assert notes["e2"].category == "identity"
         assert coverage["records"]["set_aside"] == {"note": 1}
+        # a note set aside sets no record aside
+        assert coverage["records"]["set_aside_records"] == 0
         assert coverage["notes"] == {"identity": 1}
+
+    def test_the_records_set_aside_are_counted_once_each(self, tmp_path):
+        """A record that gives several reasons is one record set aside:
+        Hildegard's gives three given names no form of hers holds
+        (Klara, Ida and the initial H.) and the initial's standard
+        form, four reasons in all. Flörburg's toponym with no name is
+        the second record set aside. A note set aside on the same
+        entity sets no further record aside. The unsplit forms are
+        counted in the records given, and only there."""
+        _batch, coverage = extract(
+            tmp_path,
+            HILDEGARD
+            | {
+                "structure": {
+                    "kind": "human",
+                    "status": "name",
+                    "given": [
+                        {"written": "Klara"},
+                        {"written": "Ida"},
+                        {
+                            "written": "H.",
+                            "initial": True,
+                            "standard": "Hilde",
+                        },
+                    ],
+                    "unsplit": ["Hildegard Löbig"],
+                },
+                "note": {"category": "guess", "text": "read as Hildegard"},
+            },
+            SEBASTIAN
+            | {
+                "structure": {
+                    "kind": "human",
+                    "status": "name",
+                    "unsplit": ["Sebastian Löbig", "Sebastian"],
+                }
+            },
+            FLOERBURG | {"structure": {"kind": "place", "status": "toponym"}},
+        )
+        assert coverage["records"] == {
+            "given": 1,
+            "recordless": 2,
+            "by_status": {"name": 1},
+            "unsplit_forms": 2,
+            "set_aside_records": 2,
+            "set_aside": {
+                "addition": 3,
+                "initial": 1,
+                "no toponym": 1,
+                "note": 1,
+            },
+        }
+        assert "Klara" not in json.dumps(coverage)
 
     def test_a_manifest_with_bad_records_is_never_refused(self):
         parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
@@ -510,6 +569,7 @@ class TestTheManifestsRecords:
         assert problems == []
         assert [e.id for e in parsed.entities] == ["e1", "e2"]
         assert parsed.set_aside == {"note": 1, "schema": 1}
+        assert parsed.set_aside_records == 1
 
     def test_no_capitalised_token_check(self, tmp_path):
         """Capitals are no sign of a name in every language, so coverage

@@ -515,7 +515,12 @@ class TestAScratchRun:
         # the PDF's does (#420)
         records = report["aggregate"]["content"]["records"]
         assert records["extractions"] == 2
-        assert records["absent"] == {"predating": 0, "line_range": 0}
+        assert records["absent"] == {
+            "predating": 0,
+            "line_range": 0,
+            "set_aside_records": 0,
+            "unsplit_forms": 0,
+        }
         text = render_markdown(report["aggregate"])
         assert (
             "Images placed within PDFs read page by page and read on their "

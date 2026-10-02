@@ -29,15 +29,20 @@ set aside and counted in `coverage.json` (`records`, `notes`), and a
 claim whose note fails is a counted reject.
 
 Amended by #420 (2026-09-29): the run report sums each extraction's
-`coverage.json` records (given, recordless, and the reasons records were
+`coverage.json` records (given, by status, the `unsplit` forms they
+hold, recordless, the records set aside, and the reasons records were
 set aside by, by category: a record that parses, of its entity's kind,
 gives one for each problem found in it, so these count reasons, not
 records) and notes (by category, and those set aside, each counted there
 as one `note` reason), and counts apart, never as zero, an extraction
 whose coverage holds none: one that fell back to line ranges, and one
 whose coverage predates these counts (or holds only one half of them).
-The number of records set aside, records by status, `unsplit` forms and
-notes written wait for their own issues.
+`coverage.json`'s `records` now also carries `set_aside_records`, the
+records set aside, once each, and `unsplit_forms`, the `unsplit` forms
+in the records given (§5); a coverage written before them still counts
+its other figures, and the report counts apart, never as zero, the
+extractions that lack each. The notes written are the writer's count,
+and wait for #410, which writes judgement notes to the wiki.
 
 **Decided by the owner (2026-09-29):**
 
@@ -624,7 +629,8 @@ run's note, or none. Earlier notes stay, never updated or removed.
   subject's rows, as `critique_notes` does. An edited note changes the
   row's `claim_id` (`pipeline/review.py:133-147`), so the sheet fails
   loudly.
-- The run report counts notes by category, and notes written, as
+- The run report counts notes by category, and notes written (the
+  writer's count, with #410, which writes the notes to the wiki), as
   aggregates (docs/RUN_REPORT.md).
 - The non-privileged export (`public.nt.gz`) drops both note snaks, in
   any form: `backup.DROPPED_PROPERTIES` names both properties (#363;
@@ -711,7 +717,12 @@ surname types, roles, classes and note categories. Beyond the schema:
 **Omissions and inconsistencies are flagged, never repaired by parsing.**
 An omitted optional field is empty. A structure that fails validation is
 set aside, never the whole manifest: the entity keeps its label, aliases
-and kind, and the reason is counted in the extraction's `coverage.json`.
+and kind, and the reason is counted in the extraction's `coverage.json`
+(`records.set_aside`, by category), as is the record
+(`records.set_aside_records`, once however many reasons it gives); the
+same `records` counts the records given, by status
+(`records.by_status`), the `unsplit` forms they hold
+(`records.unsplit_forms`) and the recordless mentions.
 Such a mention, like one of a batch without a manifest (the line-range
 fallback of ADR-0007), is *recordless* (§7, rule 1), and is counted in
 the identity map's summary and the run report. The capitalised-token
