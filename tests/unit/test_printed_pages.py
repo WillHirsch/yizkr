@@ -283,6 +283,10 @@ class TestThePromptText:
             ("4\n5", '"4\\n5"'),
             ("4 5", '"4\\u20285"'),
             ('4 "a"', '"4 \\"a\\""'),
+            ("4\x855", '"4\\u00855"'),
+            ("4\u20295", '"4\\u20295"'),
+            # a number in another script stands as printed, unescaped
+            ("с. 4", '"с. 4"'),
         ],
     )
     def test_a_printed_number_is_shown_as_given_on_one_line(
@@ -396,6 +400,21 @@ class TestTheLocatorIsLookedUp:
     def test_page_6_is_printed_as_4(self, tier):
         (source,) = extracted(tier, [sibling("6")])
         assert (source.page_number, source.printed_page_number) == ("6", "4")
+
+    def test_the_single_call_asked_again_looks_it_up_too(self):
+        """A kept answer that is rejected is asked for once more; the
+        answer to that call has its printed page set as the first's
+        would have."""
+
+        class KeepingLlm(ScriptedLlm):
+            def reject(self, response: str, reason: str) -> bool:
+                return True  # the rejected answer was a kept one
+
+        llm = KeepingLlm(["no claims here", ndjson([sibling("6")])])
+        batch = LlmClaimExtractor(llm).extract(booklet(), BOOKLET_REF)
+        (claim,) = batch.claims
+        assert claim.source.printed_page_number == "4"
+        assert len(llm.calls) == 2
 
     @pytest.mark.parametrize("tier", TIERS)
     @pytest.mark.parametrize(
