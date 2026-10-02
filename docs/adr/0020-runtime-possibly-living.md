@@ -62,9 +62,22 @@ only items left out to protect people: a possibly-living person, and an
 item left out as one that may be a person (an organization with person
 evidence, say). An item left out only as untyped, or as a family, takes
 no event with it; the statement naming it still goes whole, so a
-released person's birth at an untyped place, or a migration a family
-carried out, stays without that statement. And an item typed human, at
-normal or preferred rank, is never an event for these rules (§4).
+released person's birth at an untyped place, or a released person's
+migration that a family carried out, stays without that statement. An
+untyped item or a family that the participant or unattended rule would
+also leave out, or that may be a person (read through redirects), is
+not left out only as untyped or as a family. And an item typed human, at
+normal or preferred rank, is never an event for the participant, link or
+unattended rule (§4).
+Amended by #364, orchestrator decision J (2026-10-02, privacy first): a
+family protects people, and so takes with it an event that names it,
+unless every one of its members is released. Its members are read from
+the dump: the family's own `participant` statements, and the `member
+of` statements that name it, through redirects, at any rank. So
+"Departure of the Lobigs, 1975", carried out by a family with a
+possibly-living member, goes whole; a family whose members are all
+released, or that names none, is left out only as a family and takes no
+event with it, as decision I says (§4).
 
 ## Context
 
@@ -395,16 +408,21 @@ keeps of the items it keeps follows:
   export leaves out (the QIDs): what this event records is theirs too";
   `LINKED_LEFT_OUT`; the orchestrator, 2026-10-02). It follows only
   items left out to protect people, a possibly-living person or an item
-  that may be one: an item left out only as untyped, or as a family,
-  takes no event with it, though the statement naming it goes whole. An
+  that may be one: an item left out only as untyped, or as a family
+  whose members are all released (decision J), takes no event with it,
+  though the statement naming it goes whole. An untyped item or a family
+  that may be a person (read through redirects), or that the
+  participant or unattended rule leaves out too, is not left out only so.
+  An
   event is an item typed `event`, a subclass of it (the manifest's, or
   the dump's at any rank), or a person kind of event, at any rank, or an
   item with a `participant` statement; but never a union (a partnership
-  or a marriage, or a class the dump makes a subclass of one, ADR-0036),
+  or a marriage, or a class the dump makes a subclass of one at any
+  rank, ADR-0036),
   an entity whose events go with it and not it with them: a released
   couple's marriage whose wedding goes stays, without the statement
   naming the wedding. Nor is an item typed human, at normal or preferred
-  rank, an event for this rule or the next. An event so left out
+  rank, an event for the participant, link or unattended rule. An event so left out
   may itself be a participant, or an item an event names, so the rule
   applies again until no more go, and a redirect to such an event goes
   with it. An event all of whose participants, and all the items its

@@ -51,7 +51,10 @@ closed:
   participant's too. It drops every event that any of its statements
   links to a person it drops, or to an item it drops as one that may be
   a person, as the value or a qualifier's value, whatever the property;
-  a union is no event (ADR-0036), nor is a person. It drops every event
+  a union is no event (ADR-0036), nor is an item typed human at normal
+  or preferred rank. An item it drops only as untyped, or as a family
+  whose members it all released, protects no one and takes no event with
+  it. It drops every event
   of a person kind that names no participant, and every event that has
   participant statements all of unknown value, as whom it happened to is
   unknown; and the events that start and end a union it drops, a
@@ -370,7 +373,9 @@ class DumpReading:
     `participants`, the items that take part in each event, at every
     rank, those a qualifier of a `participant` statement names included;
     `links`, the items that each event's statements name, as their value
-    or a qualifier's, at every rank, whatever the property;
+    or a qualifier's, at every rank, whatever the property; `members`, the
+    items each item is named a `member of` by, at every rank, through
+    redirects;
     `unattended`, every event of a person kind whose `participant`
     statements name no item as their value, and every item whose
     `participant` statements all hold an unknown value or none; `bounds`,
@@ -386,6 +391,7 @@ class DumpReading:
     families: set[str] = field(default_factory=set)
     participants: dict[str, set[str]] = field(default_factory=dict)
     links: dict[str, set[str]] = field(default_factory=dict)
+    members: dict[str, set[str]] = field(default_factory=dict)
     unattended: set[str] = field(default_factory=set)
     bounds: dict[str, set[str]] = field(default_factory=dict)
     redirects: dict[str, str] = field(default_factory=dict)
@@ -455,9 +461,10 @@ def read_dump(
     any rank and through redirects; or an item with a `participant`
     statement; but never a union, an item typed, at normal or preferred
     rank, as a partnership, a marriage (``UNION_CLASS``) or a class the
-    dump makes a subclass of one, whose events go with it and not it with
-    them; and never an item typed human at normal or preferred rank, for
-    this rule or the unattended one.
+    dump makes a subclass of one at any rank, whose events go with it and
+    not it with them; and never an item typed human at normal or
+    preferred rank, for the participant, link or unattended rule. Who is
+    a `member of` each item is read too, at every rank (``members``).
     Each is linked to every item that any of its statements names, as its
     value or a qualifier's, at every rank (``links``).
 
@@ -470,6 +477,7 @@ def read_dump(
     instance_of = properties["instance_of"]
     subclass_of = properties["subclass_of"]
     participant = properties["participant"]
+    member_of = properties.get("member_of")
     bound_links = {
         properties[key] for key in UNION_BOUNDS if key in properties
     }
@@ -493,6 +501,9 @@ def read_dump(
     ] = {}  # statement -> items it or a qualifier names
     narrows: dict[str, str] = {}  # statement -> the class it makes a subclass
     broader: dict[str, str] = {}  # statement -> the class it is a subclass of
+    memberships: dict[
+        str, str
+    ] = {}  # statement -> what it makes one a member of
     unions: dict[str, str] = {}  # statement -> the union it bounds
     bounds: dict[str, str] = {}  # statement -> the event it points to
     deprecated: set[str] = set()  # statements a curator deprecated
@@ -578,6 +589,8 @@ def read_dump(
                 broader[subject] = item
             if pid == participant:
                 participants[subject] = item
+            if pid == member_of:
+                memberships[subject] = item
             if pid in bound_links:
                 bounds[subject] = item
 
@@ -619,16 +632,24 @@ def read_dump(
     # unattended, and so is any item that has participant statements, each
     # of an unknown value or none; an item of no person kind with no
     # participant statement names no one, and is not. An item typed human,
-    # at normal or preferred rank, is never an event for these rules
+    # at normal or preferred rank, is never an event for the participant,
+    # link or unattended rule
     humans = typed_as({human}, ranked=True)
     reading.unattended = (person_events | set(events.values())) - (
         set(reading.participants) | humans
     )
+    for person in humans:
+        reading.participants.pop(person, None)
     for statement, names in qualified.items():
-        if statement in events:
+        if statement in events and events[statement] not in humans:
             reading.participants.setdefault(events[statement], set()).update(
                 names
             )
+    for statement, group in memberships.items():
+        if statement in owners:
+            reading.members.setdefault(
+                _redirected(reading.redirects, group), set()
+            ).add(owners[statement])
     # the event classes: `event` and the manifest's subclasses of it, the
     # person kinds, and every class the dump makes a subclass of one of
     # them, at any rank, read through redirects
@@ -740,9 +761,11 @@ def public_exclusions(
       `participant` statement's value or named in its qualifiers
       (``PARTICIPANT_LEFT_OUT``, naming them); each event that a statement
       of it names an item it drops, as its value or a qualifier's,
-      whatever the property, unless it drops that item only as untyped or
-      as a family, which protects no one (``LINKED_LEFT_OUT``, naming
-      them); and each event that
+      whatever the property, unless it drops that item only as untyped, or
+      as a family whose members it all released, which protects no one: an
+      item that may be a person, through redirects, or that the participant
+      or unattended rule drops too, is not dropped only so
+      (``LINKED_LEFT_OUT``, naming them); and each event that
       starts or ends a union it drops (``BOUND_LEFT_OUT``, naming the
       union), read through redirects; and so on until no more go, as an
       event dropped so may itself be a participant, or a union.
@@ -769,11 +792,25 @@ def public_exclusions(
             return UNATTENDED
         return None
 
-    # what is left out only as untyped or as a family, and not as a person
-    # who may be living or an item that may be a person, protects no one, so
-    # an event that merely names it stays (the statement naming it goes)
-    impersonal = (reading.untyped | reading.families) - (
-        people - report.included
+    # what is left out only as untyped or as a family protects no one, so an
+    # event that merely names it stays (the statement naming it goes): not
+    # an item that may be a person, read through redirects, nor one the
+    # unattended rule leaves out, nor a family any of whose members (its
+    # participants, and those named a member of it) the check did not
+    # release; and the participant rule's are read in the loop below
+    unreleased = {target(qid) for qid in people} - report.included
+    released_families = {
+        family
+        for family in reading.families
+        if {
+            target(member)
+            for member in reading.members.get(family, set())
+            | reading.participants.get(family, set())
+        }
+        <= report.included
+    }
+    impersonal = (reading.untyped | released_families) - (
+        unreleased | reading.unattended
     )
 
     excluded = {}
@@ -794,7 +831,12 @@ def public_exclusions(
     # drops that it starts or ends; a redirect goes with the event
     while True:
         left_out = set(excluded)
-        shielding = {qid for qid in left_out if target(qid) not in impersonal}
+        shielding = {
+            qid
+            for qid in left_out
+            if target(qid) not in impersonal
+            or reading.participants.get(target(qid), set()) & left_out
+        }
         gone = {
             event: LINKED_LEFT_OUT.format(
                 ", ".join(sorted(named & shielding, key=_order))

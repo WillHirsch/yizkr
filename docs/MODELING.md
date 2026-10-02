@@ -1062,12 +1062,17 @@ not a signal to grow the schema on.
   whatever the property: a divorce `carried out by` an organization left
   out for its person evidence goes with it (the orchestrator,
   2026-10-02). The rule follows only items left out to protect people:
-  an untyped place or a family names no one, so a released person's
-  birth at an untyped place stays, without the statement naming it. An
+  an untyped place, or a family whose members are all released, names no
+  one, so a released person's birth at an untyped place stays, without
+  the statement naming it; a family with a member who may be living
+  takes the event with it, and so does an untyped item that may be a
+  person (through redirects) or that the participant or unattended rule
+  leaves out too. An
   event is an item typed `event`, a subclass of it or a person kind of
   event, or an item with a `participant` statement, but never a union (a
   partnership or a marriage, or a subclass of one), whose events go with
-  it and not it with them, nor an item typed human. An
+  it and not it with them, nor an item typed human at normal or
+  preferred rank (for the participant rule too). An
   event so left out may itself be a participant, or named by another
   event, and the rule applies again. An event of a person kind that
   names no participant (none, or only one of unknown value, however
