@@ -4207,6 +4207,22 @@ class TestExportNonprivileged:
             self.export(tmp_path, vocabulary)
         assert self.written(tmp_path) == set()
 
+    def test_a_failure_moving_the_exclusions_leaves_no_dump(
+        self, tmp_path, vocabulary, monkeypatch
+    ):
+        # the dump takes its name only after its exclusions have theirs
+        replace = os.replace
+
+        def failing(source, target):
+            if Path(target).name == "nonprivileged-exclusions.json":
+                raise OSError(errno.EIO, "Input/output error")
+            return replace(source, target)
+
+        monkeypatch.setattr(backup.os, "replace", failing)
+        with pytest.raises(OSError, match="Input/output"):
+            self.export(tmp_path, vocabulary)
+        assert self.written(tmp_path) == set()
+
 
 class TestTheBackupsNonprivilegedExport:
     """`yizkr backup` writes its non-privileged export as
