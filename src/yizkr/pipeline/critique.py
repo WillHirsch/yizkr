@@ -67,11 +67,12 @@ CATEGORIES: dict[str, str] = {
         "MOTHER, FATHER, CHILD, INFORMANT, BRIDE, GROOM, WITNESS"
     ),
     "kinship_term_alias": (
-        'a kinship term recorded as an alias ("my husband", "our great '
-        'grandmother", "Oma", "Nana Maisie"): it is not a name; suggest '
-        "`relative` + `kinship_type` (a literal kinship term) or "
-        "`referred_to_as` (any other relational appellation), NOT an alias "
-        "(ADR-0018)"
+        "a kinship term or other relational appellation recorded as an "
+        'alias ("my husband", "our great grandmother", "Oma", "Nana '
+        'Maisie", "Bubele"): it is not a name; suggest `relative` + '
+        "`kinship_type` (a literal kinship term), a marriage (a spousal "
+        "term) or `referred_to_as` (any other relational appellation), NOT "
+        "an alias (ADR-0018)"
     ),
     "deictic_alias": (
         'a deictic or generic reference recorded as an alias ("the '

@@ -380,6 +380,10 @@ APPELLATION_RULE = (
     '("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: '
     "never an alias and never a record nickname."
 )
+GREETING_RULE = (
+    "A name a writer simply uses for someone, in a greeting "
+    '("Liebes Pünktchen!") or a mention, is their name.'
+)
 _MANIFEST_ALIASES, _RECORD = flat(ENTITY_MANIFEST_PROMPT).split(
     "The mention record (ADR-0035)"
 )
@@ -399,6 +403,12 @@ class TestNicknamesAndAppellations:
     def test_a_relational_name_is_referred_to_as(self, site):
         assert APPELLATION_RULE in site
 
+    @NAME_ROUTING_SITES
+    def test_a_name_a_writer_uses_is_their_name(self, site):
+        """The postcard's "Liebes Pünktchen!" uses Klara's nickname: a
+        greeting is no perspective that makes it relational."""
+        assert GREETING_RULE in site
+
     def test_the_chunk_types_a_nickname_by_what_the_person_is_called(self):
         assert (
             "nickname (a name marked as what the person is called, such as "
@@ -407,6 +417,9 @@ class TestNicknamesAndAppellations:
 
     def test_the_chunk_routes_a_relational_name_to_referred_to_as(self):
         assert (
+            '"Aunt Pünktchen", "Mem" is NOT a name and never an alias.'
+        ) in flat(CHUNK_PROMPT)
+        assert (
             "If it is NOT a literal relation (a courtesy title such as a "
             '"Tante" who is no aunt, "Nana Maisie", or a name one person '
             'calls another, "Bubele"), record it as `referred_to_as`'
@@ -414,8 +427,9 @@ class TestNicknamesAndAppellations:
 
     def test_an_alias_is_no_relational_appellation(self):
         assert (
-            "a literal kinship term becomes `relative` + `kinship_type`; any "
-            "other relational appellation becomes `referred_to_as`"
+            "a literal kinship term becomes `relative` + `kinship_type`; a "
+            "spousal term gives a marriage; any other relational appellation "
+            "becomes `referred_to_as`"
         ) in _MANIFEST_ALIASES
 
     def test_a_courtesy_label_is_a_relational_appellation(self):
@@ -461,8 +475,14 @@ class TestNicknamesAndAppellations:
             "person is called, by anyone"
         ) in properties
         assert (
-            "never what one person calls another, and never a name that names "
-            "the person through a relation (`referred_to_as`)"
+            'or a writer simply uses for them ("Liebes Pünktchen!"); never '
+            "their formal name, never what one person calls another, and "
+            "never a name through a relation (`referred_to_as`)"
+        ) in properties
+        assert (
+            "the person or family whose relational term it is (a child who "
+            'calls a non-relative "Nana Maisie"); a family\'s own name for a '
+            "member is a nickname."
         ) in properties
         assert (
             "referred_to_as: monolingualtext — a name the source gives as "
@@ -473,6 +493,13 @@ class TestNicknamesAndAppellations:
         ) in properties
 
     def test_the_critic_routes_any_other_appellation_to_referred_to_as(self):
+        category = critique.CATEGORIES["kinship_term_alias"]
+        assert category.startswith(
+            "a kinship term or other relational appellation recorded as an "
+            "alias"
+        )
+        assert '"Nana Maisie", "Bubele"' in category
+        assert "a marriage (a spousal term)" in category
         assert (
             "`referred_to_as` (any other relational appellation)"
             in (critique.CATEGORIES["kinship_term_alias"])
@@ -486,6 +513,8 @@ class TestNicknamesAndAppellations:
             "family/pet",
             "courtesy/pet",
             "informal/pet",
+            "endearment",
+            "familiar name",
         ],
     )
     def test_no_prompt_gives_a_pet_name_two_homes(self, ambiguous):

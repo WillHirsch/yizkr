@@ -673,7 +673,8 @@ the notes by category.
 "our great grandmother", "meine Oma", "Nana Maisie", "my husband" describe
 a relationship or viewpoint, so they never enter the alias bag. A literal
 kinship term is a `relative` + `kinship_type` claim with the ego as
-object (§Kinship); any other relational appellation (a name the
+object (§Kinship); a spousal term ("my husband") gives a marriage
+(ADR-0036); any other relational appellation (a name the
 source gives as what one person calls another, with or without a stated
 perspective, or that names the person through a relation: a courtesy
 title, "Bubele", "Рудольфиха") is a

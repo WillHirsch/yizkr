@@ -16,13 +16,20 @@ Amended by #434 (2026-10-02): a name is placed by whether it is absolute
 or relational, never by whether it is a pet name. A name the source
 gives as what the person is called, by anyone ("Peppi", "Gustl"), is a
 nickname: an alias, a record nickname (ADR-0035 §2.1), and a `nickname`
-claim only where the source marks the type. A name the source gives as
-what one person calls another, with or without a stated perspective, or
-that names the person through a relation but is no literal kinship term
-("Bubele", "Nana Maisie", "Рудольфиха", "Rudolf's wife"), is
-`referred_to_as` (B): never an alias and never a record nickname. The chunk, manifest and record prompts say
-this in the same words, and the two properties' manifest descriptions
-state the same rule.
+claim only where the source marks the type; so is a name a family or
+other group calls the person ("Gustl" at home), and a name a writer
+simply uses for someone, in a greeting ("Liebes Pünktchen!") or a
+mention. A name the source gives as what one person calls another, with
+or without a stated perspective, or that names the person through a
+relation but is no literal kinship term ("Bubele", "Nana Maisie", and
+"Рудольфиха", "Rudolf's wife"), is `referred_to_as` (B): never an alias
+and never a record nickname. A literal kinship term stays (A), and a
+spousal term ("my husband") gives a marriage (ADR-0036). (B)'s
+"family-specific term of address" below means only a relational one,
+such as what a family calls a non-relative; `perspective` names that
+family only then. The chunk, manifest and record prompts say this in
+the same words, and the two properties' manifest descriptions state the
+same rule.
 
 ## Context
 

@@ -272,7 +272,8 @@ Rules — these mirror the archive's non-negotiable conventions:
   calls another, with or without a stated perspective, or that names the
   person through a relation but is no literal kinship term ("Bubele",
   "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an alias and
-  never a record nickname.
+  never a record nickname. A name a writer simply uses for someone, in a
+  greeting ("Liebes Pünktchen!") or a mention, is their name.
 - Relational / perspectival appellations (ADR-0018): a reference like
   "our great grandmother", "meine Oma", "Aunt Pünktchen", "Mem" is NOT a
   name and never an alias. Two cases:
@@ -496,8 +497,9 @@ Aliases are actual NAMES the document uses for the entity. They are NOT:
   husband", "Aunt Pünktchen", "Oma", "Mem", "the deceased". These
   describe a relationship or viewpoint, not a name; they are captured as
   claims at extraction, not as aliases (a literal kinship term becomes
-  `relative` + `kinship_type`; any other relational appellation becomes
-  `referred_to_as`). Never record any of these as an alias (ADR-0018);
+  `relative` + `kinship_type`; a spousal term gives a marriage; any other
+  relational appellation becomes `referred_to_as`). Never record any of
+  these as an alias (ADR-0018);
 - for a place, a deictic or locative reference back to it ("dort",
   "hier", "daselbst", "ebenda", "there") or a generic one ("the
   village"): a place's alias is a toponym;
@@ -509,7 +511,8 @@ claim only where the source marks the type. A name the source gives as what
 one person calls another, with or without a stated perspective, or that
 names the person through a relation but is no literal kinship term
 ("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: never an
-alias and never a record nickname.
+alias and never a record nickname. A name a writer simply uses for someone,
+in a greeting ("Liebes Pünktchen!") or a mention, is their name.
 A person the document does not name is labelled with the document's own
 words for them: the postcard's writer signs "Dein Vater", so that is his
 label. Only where the document has no words for a person at all do you
@@ -574,9 +577,11 @@ not settle: each is optional.
     stated perspective, or that names the person through a relation but
     is no literal kinship term ("Bubele", "Nana Maisie", "Рудольфиха"),
     is `referred_to_as`: never an alias and never a record nickname. A
-    nickname that is a form of a given name ("Gustl", "Gus") is also
-    that given name, with its standard form where the document supports
-    it; one that stands for no given name ("Peppi") has no standard form.
+    name a writer simply uses for someone, in a greeting ("Liebes
+    Pünktchen!") or a mention, is their name. A nickname that is a form
+    of a given name ("Gustl", "Gus") is also that given name, with its
+    standard form where the document supports it; one that stands for no
+    given name ("Peppi") has no standard form.
   * A patronymic, a name formed from the father's given name, is a part
     of its own, never a surname. Titles (Mrs, Dr., Fräulein, Mefrou) and
     suffixes (generational and status words, such as "Wwe.") never name
