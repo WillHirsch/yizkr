@@ -21,6 +21,11 @@ write time").
 Amended by #397 (2026-09-29): a written excerpt, an image a PDF places
 read as a document of its own (ADR-0008), seeds content dedup across
 runs as a written document does (§1).
+Amended by #373 (2026-09-29): a file is uploaded under a name in the form
+MediaWiki takes as it is, every letter kept, within MediaWiki's 240-byte
+limit with room for the content tag, and the description registration
+writes is cut to the 250 characters Wikibase takes (§1, "Two writes" and
+"File names MediaWiki takes").
 
 ## Context
 
@@ -151,7 +156,8 @@ register every document on the instance its reset emptied (#200).
   write registers the deck, then its images from the record, each by its
   own SHA-1 under the #50 rules above and the upload rules below. Their
   bytes are uploaded from the file the record keeps, under the name
-  `"<deck title> <name in the archive>"`.
+  `"<deck title> <name in the archive>"`, in the form MediaWiki takes
+  (amended by #373; "File names MediaWiki takes" below).
 - **The never-ingest list** (`yizkr.core.corpus`) is asked first. A file
   it names, by name or by SHA-1, is refused before the wiki is read or
   written and before anything is uploaded; a derived medium it names is
@@ -161,12 +167,16 @@ register every document on the instance its reset emptied (#200).
   claims do not cite.
 - **Two writes, and a registration cut short.** An artifact's own
   statements cite the item itself, so it is made in two writes: first
-  with its description alone, then with its label and statements. A
-  registration cut short between them leaves an item with no label and
-  no statement, which no lookup finds and which takes no label from the
-  artifact registered after it. Adopting such an item by its title,
-  which this removes, was what kept it from lingering; a curator may
-  delete it, and a scratch run's reset removes it.
+  with its description alone, then with its label and statements. The
+  description is cut, ending in "…", to the 250 characters Wikibase
+  takes (amended by #373): the one `ingest run` writes, ``"ingested by
+  `yizkr ingest run` from <file name>"``, passes that for a file name of
+  more than 214 characters, and Wikibase refused it, so no item was
+  made. A registration cut short between the two writes leaves an item
+  with no label and no statement, which no lookup finds and which takes
+  no label from the artifact registered after it. Adopting such an item
+  by its title, which this removes, was what kept it from lingering; a
+  curator may delete it, and a scratch run's reset removes it.
 
 **Media files** (amended by #186, 2026-09-27). The blob deduplication
 the context above takes for granted was not in effect: the upload sent
@@ -212,6 +222,106 @@ now, one for the registrar and for derived media:
   not the plain form of the item's own content-tagged label, so a
   changed source's item never takes the title of the artifact it was
   tagged against, and a re-run writes nothing.
+
+**File names MediaWiki takes** (amended by #373, 2026-09-29). An
+artifact's file was uploaded under its corpus file's name as it was, and
+a derived medium's under a name whose title kept only its ASCII letters,
+digits and ` _.-`: a deck titled "Familie Löbig" uploaded `Familie Lbig
+image1.png`, and a title in Russian left only the container's kind. A
+name longer than MediaWiki takes, or holding a sequence a title refuses,
+was refused. A file is now uploaded under its own name (an artifact) or
+`"<title> <name>"` (a derived medium: its container's title and its own
+first name, with its file's suffix when that has none), each part in the
+form MediaWiki takes as it is. The rules follow the source of MediaWiki
+1.45.4, the release the deployed `wikibase/wikibase:7` image runs, and of
+UtfNormal 4.0.0, the release it pins. Of the settings they read,
+deploy/config changes none (`$wgLegalTitleChars`, `$wgIllegalFileChars`,
+`$wgProhibitedFileExtensions`); it adds file types to
+`$wgFileExtensions`, which decides only a name's last part, its type.
+
+- **Every letter is kept.** `$wgLegalTitleChars`
+  (includes/MainConfigSchema.php) takes every byte from 0x80 to 0xFF, so
+  every character beyond ASCII. The name is sent in NFC, the form the
+  request's normalisation gives every parameter
+  (includes/Request/WebRequest.php, `normalizeUnicode`, through
+  UtfNormal's `Validator::cleanUp`).
+- **Each character a file name cannot hold becomes `-`**, as MediaWiki's
+  upload makes it (includes/GlobalFunctions.php,
+  `wfStripIllegalFilenameChars`): the ASCII outside the legal title
+  characters, `# < > [ ] { } |` and the controls (a tab or a line feed,
+  whitespace, becomes a space, as below), and `: / \`
+  (`$wgIllegalFileChars`). So do the replacement character U+FFFD, and
+  U+FFFE and U+FFFF, which the request's normalisation makes it
+  (UtfNormal) and a title refuses; the controls beyond ASCII, which show
+  as nothing; and a lone surrogate, the form a byte that is no UTF-8
+  takes in a corpus file's name. Of the ASCII controls, MediaWiki itself
+  replaces only tab, line feed, carriage return and DEL: the request's
+  normalisation makes the others U+FFFD, and the upload is refused.
+- **The start of each sequence a title refuses becomes `-`**
+  (includes/title/TitleParser.php, `getTitleInvalidRegex` and
+  `splitTitleString`): `%` and two hex digits, a character reference
+  (`&amp;`, and `&Сартина;` too: the pattern takes every byte beyond
+  ASCII among its letters), and three tildes.
+- **What a title changes is changed first:** its bidirectional marks are
+  left out, before the name is put in NFC, each run of whitespace and
+  underscores is one space (a title's `_`), and no part starts or ends
+  with a space.
+- **No part starts with a dot: a `-` goes before one, and the dot
+  stays.** A name starting with a dot would make the file a hidden one
+  on the wiki's disk, and MediaWiki refuses a name with nothing before
+  its extension's dot (`getTitle`, `MIN_LENGTH_PARTNAME`,
+  `filename-tooshort`). The dot may be the extension's: `..png` under a
+  title is `-..png`, `.jpg` alone `-.jpg`, and `_.png`, a title's
+  `.png`, is `-.png`.
+- **A name is never empty.** A medium's name of which these rules leave
+  nothing (whitespace, underscores and bidirectional marks alone) lets
+  the title stand as the name, and the container's kind stands for a
+  title of which they leave nothing. With neither, the name is `-`:
+  `upload_file` would read an empty name as the corpus file's own name,
+  as it is.
+- **The dot before a part MediaWiki refuses as an extension becomes
+  `-`, but for the last part.** MediaWiki splits the name, as its title
+  holds it (each space a `_`), at every dot, and refuses the upload
+  (`filetype-banned`) when any part after the first, in ASCII lower case
+  (`strtolower`), is in `$wgProhibitedFileExtensions` (`getTitle`,
+  `splitExtensions`, `checkFileExtensionList`; the default list, which
+  deploy/config leaves as it is): `Hutmacherei zum Blauen Hut.com.pdf`
+  is refused for its `com`, and a title `Flörburg St.Pl.Dok` for its
+  `Pl`. They become `Hutmacherei zum Blauen Hut-com.pdf` and `Flörburg
+  St-Pl.Dok`; `Hutmacherei.com .pdf` is taken as it is, its part `com_`.
+  The parts are those of the whole name as it is uploaded, cut: a cut
+  that ends a title at `St.Pl` leaves `Pl… image1`, which MediaWiki
+  takes. A `-` takes the dot's one byte, so no name grows. The last part
+  is the file's extension, its type: one MediaWiki refuses (`Brief.exe`)
+  is a matter of the file's type, which no name changes, and is left as
+  it is, so the upload is refused.
+- **It takes at most 231 bytes in UTF-8.** MediaWiki refuses a name of
+  more than 240 (includes/upload/UploadBase.php, `getTitle`,
+  `FILENAME_TOO_LONG`: an archived version's name adds a timestamp and
+  `!` within 255 bytes), counted on the name asked for, and the
+  content-tagged name `upload_file` asks for when the name holds other
+  bytes is 9 bytes longer. A longer name is cut at a character's end,
+  counted in bytes, with `…` where the cut is: the title first, as far
+  as `"… <name>"`, so the medium's own name stays whole; past that, the
+  name alone, the title left out, when it fits, so a name that fits on
+  its own is never cut; a longer name before its extension; and, should
+  the extension leave no room, the name at its end.
+
+The name depends on the title and the name alone, so a re-run asks for
+the same one, and MediaWiki takes it with no warning about its form
+(`badfilename`). A name with no dot at all, such as `-`, is the one
+exception: MediaWiki adds the extension of the file's type, and warns
+`badfilename`, which `upload_file` answers by uploading under the name
+MediaWiki gives ("Media files" above). A name with no extension but a
+dot before its end, such as a corpus file's `Bd. 2` with no suffix, or
+a title with a dot before a medium's name with none, is not made
+legal: MediaWiki reads its last part as the file's type and refuses
+the upload (`filetype-missing` or `filetype-banned`), a file-type
+matter, as it did before. A derived medium's name ends in its file's
+suffix whenever the record's file has one. The file page a `media file`
+names is the name MediaWiki stores, its first letter a capital. A file
+uploaded before keeps its name: registration uploads only bytes no file
+of the item holds.
 
 The orchestrator adds **content dedup** ahead of the expensive steps. It
 hashes each file at the top of `advance`, and a file whose bytes were

@@ -224,9 +224,13 @@ re-running one step in isolation — but for a normal ingest you only ever run
 `ingest run` and fill the two gates above.
 
 - **register** — uploads media (idempotent by content; a wiki file is
-  never overwritten or stored twice, ADR-0010), ensures the
-  artifact item (`instance of`, `media file`, `media SHA-1`) and optional
-  page fragments (`part of` + page qualifier). Statement provenance:
+  never overwritten or stored twice, ADR-0010) under a name in the form
+  MediaWiki takes as it is (every letter kept, `-` for each character it
+  refuses, cut to fit its 240-byte limit with room for a content tag;
+  ADR-0010 as amended by #373), ensures the artifact item
+  (`instance of`, `media file`, `media SHA-1`; its description cut to
+  the 250 characters Wikibase takes) and optional page fragments
+  (`part of` + page qualifier). Statement provenance:
   `stated in → the artifact itself` (see docs/MODELING.md, "Artifacts
   and registration"). Claims cite an artifact by the SHA-1 of its media,
   never by QID, and the write resolves that key through the `media
