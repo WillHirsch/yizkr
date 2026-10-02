@@ -185,9 +185,12 @@ rechecks.
   (`kind`, `relation`, `date_reading`, `identity`, `other`, the
   categories of `claims.JudgementNote`); and the notes set aside. Counts
   only, never a label, a reason's text or a note's text.
-  `coverage.json` counts reasons, not records: a record gives one for
-  each problem found in it (two names no form of the entity holds give
-  `addition` twice), so the reasons can outnumber the records set aside,
+  `coverage.json` counts reasons, not records: a record that does not
+  parse gives one `schema`, and one of the wrong kind one `kind`, but
+  any other record gives one for each problem found in it (each part of
+  a name that no form of the entity holds gives its own `addition`, and
+  a place's name is checked as written and again by its toponym and its
+  head), so the reasons can outnumber the records set aside,
   and no count of those records is kept; counting them would change what
   the extraction writes, a stage before write, so it waits for its own
   issue. A record set aside on a mention of a kind that takes one (a
@@ -205,8 +208,9 @@ rechecks.
   records, and all its mentions are recordless), and one whose coverage
   predates these counts (or holds its records without its notes, or its
   notes without its records, which the extraction never writes). So the
-  clustering stage's recordless figure, which also counts the line-range
-  fallback's mentions, need not equal the records' recordless count. An
+  recordless mentions the clustering stage counts, once #409 adds that
+  figure, also include the line-range fallback's mentions, and that
+  figure need not equal the records' recordless count. An
   extraction whose `coverage.json` is missing, cannot be read or holds no
   object is in none of these figures, as in none of the rejects'.
   Each document's own counts are in `report.json` and `report.html`, and

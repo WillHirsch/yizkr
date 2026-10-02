@@ -30,11 +30,12 @@ claim whose note fails is a counted reject.
 
 Amended by #420 (2026-09-29): the run report sums each extraction's
 `coverage.json` records (given, recordless, and the reasons records were
-set aside by, by category: a record gives one for each problem found in
-it, so these count reasons, not records) and notes (by category, and
-those set aside, each counted there as one `note` reason), and counts
-apart, never as zero, an extraction whose coverage holds none: one that
-fell back to line ranges, and one whose coverage predates these counts.
+set aside by, by category: a record that parses, of its entity's kind,
+gives one for each problem found in it, so these count reasons, not
+records) and notes (by category, and those set aside, each counted there
+as one `note` reason), and counts apart, never as zero, an extraction
+whose coverage holds none: one that fell back to line ranges, and one
+whose coverage predates these counts (or holds only one half of them).
 The number of records set aside, records by status, `unsplit` forms and
 notes written wait for their own issues.
 

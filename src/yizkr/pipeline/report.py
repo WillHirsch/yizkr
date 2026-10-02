@@ -1027,9 +1027,11 @@ def _records(coverage: dict) -> dict[str, Any]:
     and the reasons records were set aside by, by category; and the notes
     by category, and the notes set aside.
 
-    The coverage's `set_aside` counts reasons, not records: a record
-    counts once for each problem found in it, and an entity's note set
-    aside once, as `note`, which is told apart here as a note set aside.
+    The coverage's `set_aside` counts reasons, not records: a record that
+    does not parse counts once, as `schema`, one of the wrong kind once,
+    as `kind`, and any other once for each problem found in it; an
+    entity's note set aside counts once, as `note`, which is told apart
+    here as a note set aside.
     The extraction writes its records and its notes together, so both
     are None unless the coverage holds both, as the line-range tier's and
     one written before these counts do not: absent, never zero."""

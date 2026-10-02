@@ -2049,7 +2049,7 @@ class TestContent:
         rewrite(POSTCARD, lambda v: v.pop("records"))
         made = build(path, now=NOW)
         content = made["aggregate"]["content"]
-        # the card and the deck, each counting nothing
+        # the card, counting nothing, and the deck, one record given
         assert content["records"] == {
             "extractions": 2,
             "given": 1,
@@ -2092,9 +2092,9 @@ class TestContent:
             ) in drilled(made, half)
 
     def test_counts_of_other_shapes_count_nothing(self, tmp_path):
-        """A records object whose counts are no count, and a note count
-        keyed by no name, count as zero; a records or notes that is no
-        object is absent."""
+        """A records object whose counts are no count, and a note
+        category whose count is no count, count as zero; a records or
+        notes that is no object is absent."""
         path = record(tmp_path / "run")
 
         def rewrite(sha1, change) -> None:
@@ -2198,7 +2198,8 @@ class TestContent:
         """The reasons the record checks give, on an input that triggers
         each, are the ones the report names; the note check's is the one
         it counts as a note set aside; and the note categories are the
-        ones docs/RUN_REPORT.md lists."""
+        five docs/RUN_REPORT.md lists, so a change to JudgementNote's
+        fails here."""
         listed = {"kind", "relation", "date_reading", "identity", "other"}
         assert listed == report.NOTE_CATEGORIES
         person = {"id": "e1", "label": "Hildegard Laudler", "kind": "human"}
