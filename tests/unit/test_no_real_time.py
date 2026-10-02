@@ -53,6 +53,16 @@ ALLOWED = (
         " the clamp on the wait is checked without a thread",
         inside="test_a_timer_waits_at_most_the_longest_wait_a_thread_can",
     ),
+    *(
+        Allowed(
+            "test_wdqs_sandbox.py",
+            f"{name} uncalled",
+            "checks that the seam defaults to the real clock function by"
+            " identity, and calls it never",
+            inside="test_the_waits_default_to_the_real_clock",
+        )
+        for name in ("monotonic", "sleep")
+    ),
     Allowed("test_backup.py", HELD, "phase 2 of #437, after PR #429 merges"),
     Allowed("test_llmcache.py", HELD, "phase 2 of #437, after PR #439 merges"),
     Allowed(

@@ -35,6 +35,30 @@ def uses(source: str, **options) -> list[str]:
         "def f(event, seconds):\n    event.wait(timeout=seconds)\n",
         "def f(event):\n    event.wait(False)\n",
         "def f(thread):\n    thread.join(timeout=0.001)\n",
+        "def f(event, seconds):\n    event.wait(seconds)\n",
+        "DELAY = 0.5\n\ndef f(event):\n    event.wait(DELAY)\n",
+        "def f(event):\n    event.wait(0.1 * 5)\n",
+        "def f(thread):\n    thread.join(-1 + 2)\n",
+        "def f(event):\n    event.wait(timeout=None or 5)\n",
+        "import threading\nthreading.Barrier(2, timeout=30)\n",
+        "import threading\nthreading.Barrier(2, None, 30)\n",
+        "def f(c, p):\n    c.wait_for(p, timeout=5)\n",
+        "def f(lock):\n    lock.acquire(timeout=0.5)\n",
+        "def f(q):\n    q.get(timeout=0.5)\n",
+        "def f(q):\n    q.put(1, timeout=0.5)\n",
+        "def f(s):\n    s.settimeout(5)\n",
+        "import select\nselect.select([], [], [], 0.5)\n",
+        "import signal\nsignal.alarm(1)\n",
+        "import signal\nsignal.setitimer(signal.ITIMER_REAL, 1)\n",
+        "import time\ntime.localtime()\n",
+        "import time as t\nt.gmtime()\n",
+        "import time\ntime.ctime()\n",
+        "import time\ntime.asctime()\n",
+        "import time\ntime.strftime('%Y')\n",
+        "import time\nclock = time.monotonic\n",
+        "import time as t\nf(sleep=t.sleep)\n",
+        "from datetime import datetime\nf = datetime.now\n",
+        "import datetime\nf = datetime.date.today\n",
         "START_TIMER(0.05, print)\n",
         "START_TIMER(seconds, print)\n",
         "START_TIMER(False, print)\n",
@@ -56,7 +80,9 @@ def test_a_from_time_import_is_found_whatever_it_imports():
 
 def test_what_a_test_may_do_is_not_found():
     source = """
+        import select
         import threading
+        import time
         from datetime import UTC, datetime, timedelta
 
         HANG_GUARD = 60
@@ -69,6 +95,25 @@ def test_what_a_test_may_do_is_not_found():
         START_TIMER(0.0, print)
         threading.Event().wait(0)
         threading.Thread(target=print).join(timeout=0.0)
+        threading.Event().wait(None)
+        threading.Event().wait(timeout=None)
+        threading.Barrier(2, timeout=HANG_GUARD)
+        threading.Barrier(2)
+        "-".join(parts)
+        separator.join(parts)
+        {}.get("key", 5)
+        helper.wait_for("busy", 5)
+        select.select([], [], [], HANG_GUARD)
+        select.select([], [], [], 0)
+        sock.settimeout(HANG_GUARD)
+        sock.settimeout(None)
+        time.localtime(0)
+        time.gmtime(0)
+        time.strftime("%Y", time.gmtime(0))
+        stamp.strftime("%Y")
+        clock.now
+        clock.sleep
+        start.today
     """
     assert (
         uses(source, hang_guards={"HANG_GUARD"}, real_timers={"START_TIMER"})

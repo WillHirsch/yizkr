@@ -85,9 +85,17 @@ itself in its own `--help`.
   until another pull request merges), optionally the test it is limited
   to, and its reason. An entry that no longer matches a use, or names a
   module that does not exist, fails too, so the list only shrinks. The
-  finder reads only the module's own code: a child's script held in a
-  string, a timeout given to `subprocess.run` or `communicate`, and a
-  real clock reached through a default in `src/` are left to review.
+  finder reads only the module's own code, and only the spellings its
+  docstring lists: a clock call or a clock function taken uncalled, a
+  `time.localtime()`-style read of the current time, `signal.alarm` and
+  `setitimer`, and a timed wait (`.wait`, `.join`, `.wait_for`,
+  `.acquire`, `.get`, `.put`, `threading.Barrier`, `.settimeout`,
+  `select.select`) whose timeout is not `HANG_GUARD`, None or 0. Left to
+  review are a `.join` given its timeout by a positional name, a timeout
+  given positionally to `.wait_for`, `.acquire`, `.get` or `.put`, a
+  timeout given to any other call (`subprocess.run`, `communicate`,
+  `urlopen`, ...), a clock reached through another name or through a
+  default in `src/`, and a child's script held in a string.
 - **The offline end-to-end scratch run**
   (`tests/unit/test_fixture_corpus.py`, a unit test like the rest) takes
   the fixture corpus (`tests/fixtures/corpus/`, docs/EXAMPLES.md) through
