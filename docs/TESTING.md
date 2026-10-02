@@ -80,22 +80,44 @@ itself in its own `--help`.
   in `tests/unit`, conftest.py and new modules included, with the finder
   in `tests/fixtures/real_time.py` (pinned by
   `tests/unit/test_real_time.py`), and fails, naming the file and line,
-  on any use its allow-list `ALLOWED` does not name. Each entry names the
-  module, the use as the finder words it (or `*` for a whole module held
-  until another pull request merges), optionally the test it is limited
-  to, and its reason. An entry that no longer matches a use, or names a
-  module that does not exist, fails too, so the list only shrinks. The
-  finder reads only the module's own code, and only the spellings its
-  docstring lists: a clock call or a clock function taken uncalled, a
-  `time.localtime()`-style read of the current time, `signal.alarm` and
-  `setitimer`, and a timed wait (`.wait`, `.join`, `.wait_for`,
+  on any use its allow-list `ALLOWED` does not name. It also fails on any
+  `HANG_GUARD` that is not a module-level assignment of a number of at
+  least 30 seconds, or that a class or function binds again, so a hang
+  guard is never a time a test waits out. Each entry names the module,
+  the use as the finder words it (or `*` for a whole module held until
+  another pull request merges), optionally the test it is limited to (by
+  its qualified name, `TestX.test_y`, or by its own name when that names
+  only one class or function), and its reason. An entry that no longer
+  matches a use, a held module in which the finder sees no use, an
+  entry limited to a name that names more than one class or function,
+  and an entry naming a module that does not exist all fail, so an entry can
+  only be removed, never kept past its use, and a new use always needs a
+  new entry with its reason. The finder reads only the module's own
+  code, and finds exactly the spellings its docstring lists: a clock
+  call, by its final name whatever it is called on (`time.sleep`,
+  `t.sleep` after `import time as t`, `time.monotonic`,
+  `time.clock_gettime` and the rest, `datetime.now`, `date.today`,
+  `threading.Timer`, `signal.alarm`, `setitimer`, `loop.call_later`,
+  `call_at`), or by a name it is imported as (`T` after `from threading
+  import Timer as T`); a clock function of the time module, a datetime
+  or a date taken uncalled; a `time.localtime()`-style read of the
+  current time;
+  any `from time import`; a timed wait (`.wait`, `.join`, `.wait_for`,
   `.acquire`, `.get`, `.put`, `threading.Barrier`, `.settimeout`,
-  `select.select`) whose timeout is not `HANG_GUARD`, None or 0. Left to
-  review are a `.join` given its timeout by a positional name, a timeout
-  given positionally to `.wait_for`, `.acquire`, `.get` or `.put`, a
-  timeout given to any other call (`subprocess.run`, `communicate`,
-  `urlopen`, ...), a clock reached through another name or through a
-  default in `src/`, and a child's script held in a string.
+  `select.select`, a selector's `.select`) whose timeout is not
+  `HANG_GUARD`, None or 0; and a real timer started by anomalies' timer
+  starter with a wait other than 0. Left to review are a `.join` or a selector's `.select` given its
+  timeout by a positional name, a timeout given positionally to
+  `.wait_for`, `.acquire`, `.get` or `.put`, a timeout given to any other
+  call (`subprocess.run`, `communicate`, `urlopen`, ...), a clock reached
+  through another name (`T = threading.Timer`, `dt.now` after `from
+  datetime import datetime as dt`) or through a default in `src/`, and a
+  child's script held in a string. One test is bounded only by the hang
+  guard where it once had a few seconds of CPU of its own:
+  `test_long_repetitive_text_checks_quickly` in
+  `test_transcription_check.py`. It exists to catch catastrophic
+  backtracking, and still does, since a backtracking pattern takes hours
+  on its text; a pattern merely a few times slower goes unnoticed.
 - **The offline end-to-end scratch run**
   (`tests/unit/test_fixture_corpus.py`, a unit test like the rest) takes
   the fixture corpus (`tests/fixtures/corpus/`, docs/EXAMPLES.md) through

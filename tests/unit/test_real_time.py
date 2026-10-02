@@ -5,10 +5,47 @@ timer is found, and what a test may do is not."""
 from __future__ import annotations
 
 import textwrap
+import time
 
 import pytest
 
-from tests.fixtures.real_time import real_time_uses
+from tests.fixtures.real_time import (
+    CLOCK_CALLS,
+    DATETIME_CLOCKS,
+    real_time_uses,
+    scopes_named,
+)
+
+# the time module's clock functions, each found called and uncalled
+TIME_CLOCKS = (
+    "sleep",
+    "time",
+    "time_ns",
+    "monotonic",
+    "monotonic_ns",
+    "perf_counter",
+    "perf_counter_ns",
+    "process_time",
+    "process_time_ns",
+    "thread_time",
+    "thread_time_ns",
+    "clock_gettime",
+    "clock_gettime_ns",
+)
+# a call of each clock call the finder must find, written out by name so
+# that taking a name out of CLOCK_CALLS fails its case
+CALLED = {
+    **{name: f"import time\ntime.{name}()\n" for name in TIME_CLOCKS},
+    **{
+        name: f"from datetime import datetime\ndatetime.{name}()\n"
+        for name in ("now", "utcnow", "today")
+    },
+    "Timer": "import threading\nthreading.Timer(1, print)\n",
+    "alarm": "import signal\nsignal.alarm(1)\n",
+    "setitimer": "import signal\nsignal.setitimer(signal.ITIMER_REAL, 1)\n",
+    "call_later": "def f(loop):\n    loop.call_later(1, print)\n",
+    "call_at": "def f(loop):\n    loop.call_at(when, print)\n",
+}
 
 
 def uses(source: str, **options) -> list[str]:
@@ -23,6 +60,15 @@ def uses(source: str, **options) -> list[str]:
         "import time\ntime.time()\n",
         "import time\ntime.monotonic_ns()\n",
         "import time\ntime.perf_counter()\n",
+        "import time\ntime.clock_gettime(time.CLOCK_MONOTONIC)\n",
+        "import time as t\nt.clock_gettime_ns(t.CLOCK_REALTIME)\n",
+        "import time\nclock = time.clock_gettime\n",
+        "import time as t\nf(clock=t.clock_gettime_ns)\n",
+        "from threading import Timer as Later\nLater(1, print)\n",
+        "from signal import alarm as wake\nwake(1)\n",
+        "def f(selector):\n    selector.select(0.5)\n",
+        "def f(selector):\n    selector.select(timeout=0.5)\n",
+        "from select import select\nselect([], [], [], 0.5)\n",
         "import datetime\ndatetime.datetime.now()\n",
         "from datetime import UTC, datetime\ndatetime.now(UTC)\n",
         "from datetime import datetime\ndatetime.utcnow()\n",
@@ -68,6 +114,45 @@ def test_each_spelling_of_a_real_clock_is_found(source):
     assert len(uses(source, real_timers={"START_TIMER"})) == 1
 
 
+def test_each_clock_call_has_a_case_here():
+    assert set(CALLED) == CLOCK_CALLS
+    assert {"now", "utcnow", "today"} == DATETIME_CLOCKS
+    assert all(hasattr(time, name) for name in TIME_CLOCKS)
+
+
+@pytest.mark.parametrize("name", sorted(CALLED))
+def test_each_clock_call_is_found_called(name):
+    assert [use.split(": ", 1)[1] for use in uses(CALLED[name])] == [
+        f"{name}("
+    ]
+
+
+@pytest.mark.parametrize("name", TIME_CLOCKS)
+def test_each_clock_function_of_the_time_module_is_found_uncalled(name):
+    assert uses(f"import time as t\nclock = t.{name}\n") == [
+        f"line 2: {name} uncalled"
+    ]
+
+
+@pytest.mark.parametrize("name", ["now", "utcnow", "today"])
+def test_each_clock_of_a_datetime_or_a_date_is_found_uncalled(name):
+    for receiver in ("datetime", "date"):
+        source = (
+            f"from datetime import {receiver}\nclock = {receiver}.{name}\n"
+        )
+        assert uses(source) == [f"line 2: {name} uncalled"]
+
+
+def test_a_clock_call_imported_under_another_name_is_found_by_its_own():
+    source = """
+        from threading import Thread as Worker, Timer as Later
+
+        Worker(target=print)
+        Later(1, print)
+    """
+    assert uses(source) == ["line 5: Timer("]
+
+
 def test_a_from_time_import_is_found_whatever_it_imports():
     assert uses("from time import sleep\nsleep(0)\n") == [
         "line 1: from time import sleep",
@@ -105,6 +190,11 @@ def test_what_a_test_may_do_is_not_found():
         helper.wait_for("busy", 5)
         select.select([], [], [], HANG_GUARD)
         select.select([], [], [], 0)
+        selector.select()
+        selector.select(None)
+        selector.select(HANG_GUARD)
+        selector.select(seconds)
+        soup.select("a.link")
         sock.settimeout(HANG_GUARD)
         sock.settimeout(None)
         time.localtime(0)
@@ -140,6 +230,36 @@ def test_the_exempt_classes_and_functions_are_left_out():
         exempt={"FakeClock", "test_unstarted"},
         real_timers={"START_TIMER"},
     ) == ["line 12: sleep("]
+
+
+def test_an_exempt_name_with_dots_leaves_out_only_that_scope():
+    source = """
+        import time
+
+        class TestA:
+            def test_x(self):
+                time.sleep(1)
+
+        class TestB:
+            def test_x(self):
+                time.sleep(1)
+
+        def test_x():
+            time.sleep(1)
+    """
+    assert uses(source, exempt={"TestA.test_x"}) == [
+        "line 10: sleep(",
+        "line 13: sleep(",
+    ]
+    assert uses(source, exempt={"test_x"}) == []
+    assert uses(source, exempt={"TestB"}) == [
+        "line 6: sleep(",
+        "line 13: sleep(",
+    ]
+    source = textwrap.dedent(source)
+    assert scopes_named(source, "test_x") == 3
+    assert scopes_named(source, "TestA.test_x") == 1
+    assert scopes_named(source, "TestC.test_x") == 0
 
 
 def test_the_uses_come_in_line_order():
