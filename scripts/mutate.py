@@ -176,6 +176,7 @@ import tomllib
 import traceback
 import warnings
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
@@ -750,14 +751,21 @@ def tail(output: str) -> str:
     return "\n".join(output.rstrip().splitlines()[-TAIL:])
 
 
-def exited(child: subprocess.Popen, timeout: float) -> bool:
-    """Whether the child has exited, or does within `timeout` seconds.
+def exited(
+    child: subprocess.Popen,
+    timeout: float,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Whether the child has exited, or does within `timeout` seconds, as
+    `monotonic` reads them, looking again after each `sleep`.
 
     The child is left unreaped, so its pid, and with it the id of the
     process group it leads, cannot be given to another process yet."""
     if child.returncode is not None:
         return True
-    deadline = time.monotonic() + timeout
+    deadline = monotonic() + timeout
     flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
     while True:
         try:
@@ -765,9 +773,9 @@ def exited(child: subprocess.Popen, timeout: float) -> bool:
                 return True
         except ChildProcessError:
             return True
-        if time.monotonic() >= deadline:
+        if monotonic() >= deadline:
             return False
-        time.sleep(0.01)
+        sleep(0.01)
 
 
 def signal_group(child: subprocess.Popen, signum: int) -> None:
@@ -843,10 +851,19 @@ def table(results: list[Result]) -> str:
 
 
 class Harness:
-    """Runs the mutations of one spec, one at a time."""
+    """Runs the mutations of one spec, one at a time. `monotonic` and
+    `sleep` time each run, its --timeout and its --grace."""
 
-    def __init__(self, args: argparse.Namespace) -> None:
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.args = args
+        self.monotonic = monotonic
+        self.sleep = sleep
         self.root: Path | None = None
         self.signum: int | None = None
         self.results: list[Result] = []
@@ -1022,11 +1039,11 @@ class Harness:
     def _mutate(self, result: Result, position: str) -> None:
         mutation = result.mutation
         path = mutation.path
-        started = time.monotonic()
+        started = self.monotonic()
         read, problem = self._read(mutation)
         if read is None:
             result.result, result.detail = ERROR, problem
-            result.seconds = time.monotonic() - started
+            result.seconds = self.monotonic() - started
             self._say(f"{position} {mutation.name}: error ({problem})")
             return
         stat, data, mutant = read
@@ -1047,7 +1064,7 @@ class Harness:
                     run = self.run_tests(mutation.tests, mutation.live)
         finally:
             problem = restore(path, data, stat)
-        result.seconds = time.monotonic() - started
+        result.seconds = self.monotonic() - started
         if problem is not None:
             self.unrestored.append(mutation.rel)
             self._problem(
@@ -1090,7 +1107,7 @@ class Harness:
         whole group on a timeout or a signal, and kill whatever is left in
         it once pytest has exited. A live run shares the harness's hold on
         the live-stack lock."""
-        started = time.monotonic()
+        started = self.monotonic()
         env = pytest_environment()
         shared: tuple[int, ...] = ()
         if live and self.lock_fd is not None:
@@ -1119,7 +1136,7 @@ class Harness:
                     self._halt(child)
             output.seek(0)
             text = output.read().decode("utf-8", "replace")
-        seconds = time.monotonic() - started
+        seconds = self.monotonic() - started
         return Run(child.returncode, text, seconds, stopped)
 
     def _wait(self, child: subprocess.Popen, deadline: float) -> str | None:
@@ -1128,11 +1145,11 @@ class Harness:
             if self.signum is not None:
                 self._halt(child)
                 return "signal"
-            remaining = deadline - time.monotonic()
+            remaining = deadline - self.monotonic()
             if remaining <= 0:
                 self._halt(child)
                 return "timeout"
-            if exited(child, min(remaining, POLL)):
+            if self._exited(child, min(remaining, POLL)):
                 self._reap(child)
                 return None
 
@@ -1141,8 +1158,13 @@ class Harness:
         fixtures down. Once pytest exits, or the grace period is over,
         SIGKILL to what is left of the group."""
         signal_group(child, signal.SIGINT)
-        exited(child, self.args.grace)
+        self._exited(child, self.args.grace)
         self._reap(child)
+
+    def _exited(self, child: subprocess.Popen, timeout: float) -> bool:
+        return exited(
+            child, timeout, monotonic=self.monotonic, sleep=self.sleep
+        )
 
     def _reap(self, child: subprocess.Popen) -> None:
         # pytest is unreaped, so its pid still names its process group:
@@ -1305,14 +1327,21 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return args
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    """Run the harness with `argv`; `monotonic` and `sleep` time its runs
+    (Harness)."""
     # An ignored SIGCHLD survives exec. With it, the kernel reaps pytest
     # as soon as it exits, and its exit status reads as 0: every run,
     # however its tests fail, would pass.
     if hasattr(signal, "SIGCHLD"):
         signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     args = parse_args(argv)
-    harness = Harness(args)
+    harness = Harness(args, monotonic=monotonic, sleep=sleep)
     with stopping_on_signals(harness.on_signal):
         try:
             return harness.run()
