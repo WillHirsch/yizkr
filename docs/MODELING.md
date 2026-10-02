@@ -572,19 +572,22 @@ Names are modelled in **two layers**:
   ("Cäcilie 'Cilli' Tarle"). A bracketed part ("Ida (Peppi) Sörne") may
   hold a nickname, a maiden name or a note, so it is an alias and an
   unsplit form of the mention record, typed as nothing and counted, and
-  the label leaves it out, save where the value gives a name only in
-  brackets that hold a word ("(Peppi)") and no other NAME of the person
-  gives one, when the person keeps the brackets as its label; a NAME
+  the label leaves it out; a NAME
   without slashes, whose parts no GIVN or SURN gives, is an unsplit form
   too, and its TYPE gives no claim, and one with only a GIVN or only a
   SURN keeps its whole value as an unsplit form beside that part. A
   `_MARNM` gives a married-name claim only where its slashes hold a
-  surname; otherwise it is an unsplit form too (ADR-0035 §6). A name or
-  part that holds no letter or digit ("?", "()") names nothing: it is
-  counted, not placed, so "Eugen /?/" is labelled "Eugen", and a person
-  whose NAMEs give no word is skipped, as one with an empty NAME is. The
-  adapter's texts are in the export's language (HEAD.LANG, mapped to BCP
-  47), or undetermined (`und`) where it states none. Typed names also feed reconciliation: a married
+  surname; otherwise it is an unsplit form too (ADR-0035 §6). A word
+  that holds no letter or digit ("?", "_", "()") is a placeholder, in a
+  value, a bracket, a quote, a part or a NICK: it names nothing, so it
+  is counted, not placed ("Eugen /?/" is labelled "Eugen"), and a typed
+  name that held one gives no typed claim. Where no NAME gives a name,
+  the label falls back to brackets that hold a word ("(Peppi)"), then a
+  GIVN's quotes or brackets, then a NICK, then a `_MARNM`; a person with
+  none of these words is skipped and counted, as one with an empty NAME
+  is. The adapter's texts are in the export's language (HEAD.LANG,
+  mapped to BCP 47), or undetermined (`und`) where it states none.
+  Typed names also feed reconciliation: a married
   name matching another's birth name (a marriage name change) is strong
   identity evidence.
 
@@ -782,7 +785,9 @@ the children's parent) is a `marriage` when a `MARR` of it states a
 wedding, or when a `DIV` or `ANUL` states its end with no such `MARR`
 (a marriage with no wedding, counted), otherwise a `partnership` (the
 export gives Felix and Ida no `MARR`, so theirs is a partnership); its
-couple are its participants with the role `spouse` or `partner`. A `MARR` states its
+couple are its participants with the role `spouse` or `partner`. A family
+whose `HUSB` and `WIFE` name the same person gives no union and no
+parent claim, counted. A `MARR` states its
 wedding as a `DIV` its divorce, by a `Y` or a `DATE` or `PLAC` with a
 value: a `MARR N`, or one that states nothing, makes no wedding and is
 counted. The family's `MARR`s of one kind are one wedding, which the

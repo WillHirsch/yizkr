@@ -49,11 +49,7 @@ without a name`). A particle that the value's surname holds is no
 particle without a surname. A `_MARNM` gives a `married` surname and a
 `married_name` claim only where its slashes hold a surname; otherwise it
 is `unsplit`, counted, with no typed-name claim, as a NAME without
-slashes gives none. A name or a name part that holds no letter or digit
-("?", "-", "()") names nothing, so it is counted (`NAME part without a
-word`), not placed: "Eugen /?/" is labelled "Eugen" with no surname, and
-a record left with no given name, surname, nickname or unsplit form is
-none. HEAD.LANG maps GEDCOM 5.5.1's language names to BCP 47 where the
+slashes gives none. HEAD.LANG maps GEDCOM 5.5.1's language names to BCP 47 where the
 instance is known to take the code; an absent or unmapped one gives
 `und`. The live
 GEDCOM tests check that the instance takes `und` and every mapped code
@@ -66,32 +62,65 @@ override): a NAME without slashes that has only a GIVN or only a SURN
 keeps its whole value as an `unsplit` form beside that part, counted
 (`NAME without slashes, one part given`), so that no word the part does
 not place is dropped silently. The table's `unsplit` row is the NAME
-with neither. A HEAD.LANG that is already one of the map's codes ("de"),
-or `und`, is taken as it is. The export's `NICK Gustl` is a nickname and
+with neither. A HEAD.LANG that is already one of the map's codes ("de")
+is taken as it is. The export's `NICK Gustl` is a nickname and
 an alias in Gustav's record, which clustering (#409) meets the postcard's
 "Gustl" on.
 
 Amended by #408 (2026-10-02; decided by the orchestrator, the owner may
-override):
+override). The rule behind each: never drop a person who has a word, and
+never narrow or guess.
 
-- A NAME made only of a placeholder with no letters ("?", "-", "…"), or
-  of brackets that hold no word ("()", "(?)"), names no one: a person with
-  no other NAME that gives a word is skipped with the adapter's warning,
-  as one whose NAME is empty is, since the writer finds an item by its
-  label and would make every person labelled "?" one item.
-- Brackets give a person's label only when none of the person's NAMEs
-  gives a name otherwise: `1 NAME (Peppi)` then `1 NAME Ida /Sörne/` is
-  labelled "Ida Sörne", with "Peppi" an alias.
-- A quoted word after the surname ("Eugen /Löbig/ 'Muckel'") is a
-  nickname, not a suffix. A `_MARNM`'s unsplit form leaves its brackets
-  out ("(Peppi)" gives "Peppi"). A GIVN's quoted or bracketed part ("Ida
-  (Peppi)") is a nickname beside the given name. A bracket name keeps an
-  NPFX or NSFX beside it as a title or suffix, its full form an alias
-  ("Frau Peppi"). An NPFX that is the whole given part ("Eugen /Löbig/" +
-  NPFX Eugen) stays a given name, and is counted (`NPFX that is the given
-  name`). An NPFX the value states in part ("Dr. Eugen" + NPFX "Dr.
-  med.") gives the form "Dr. med. Eugen Löbig", and a prefix is matched
-  by its words folded ("Dr med" is "Dr. med.").
+- **A placeholder names nothing.** A word that holds no letter or digit
+  ("?", "-", "…", "_", "()", "(?)") is a placeholder for an unknown name
+  or part. Wherever it stands, in a NAME's value, a bracket, a quote, a
+  GIVN, SURN, NPFX, NSFX or SPFX piece, a NICK or a `_MARNM`, it is left
+  out and counted (`NAME part without a word`), never placed: "Eugen
+  /?/" is labelled "Eugen" with no surname, `GIVN Eugen ?` gives the
+  given name Eugen, and a record left with no given name, surname,
+  nickname or unsplit form is none. A bracket or a quote keeps its marks
+  around the words left in it ("(Peppi ?)" is "(Peppi)", "'? Muckel'" is
+  "'Muckel'"), and one with none left goes whole. Leaving a placeholder
+  out can give two people one label ("Eugen ? /Löbig/" and "Eugen
+  /Löbig/" are both "Eugen Löbig"), as exact namesakes already share one.
+- **A typed name with a placeholder gives no typed claim.** A NAME with a
+  TYPE, or a `_MARNM`, whose value or parts held a placeholder gives no
+  typed-name claim, counted (`typed NAME with a placeholder`): "Eugen
+  /?/" + TYPE birth is no complete birth name. Its forms stay aliases.
+- **The label falls back, tier by tier, to any word.** A person's label
+  is the first name form a NAME gives. Where none gives one, it is the
+  first of: a NAME value's brackets that hold a word ("(Peppi)", so that
+  `1 NAME (Peppi)` then `1 NAME Ida /Sörne/` is labelled "Ida Sörne",
+  with "Peppi" an alias); a GIVN's quoted or bracketed part (`GIVN
+  (Peppi)` gives "Peppi"); a NICK; a `_MARNM`. A person with any word in
+  any name keeps an entity and its claims. A person none of these gives
+  a word is skipped with the adapter's warning, as one whose NAME is
+  empty is, and counted (`person without a name`): the writer finds an
+  item by its label and would make every person labelled "?" one item.
+  A prefix, a suffix or a particle alone gives no label, since "Wwe."
+  would make everyone it stood for one item too.
+- **An NPFX is a title, as the export tags it.** An NPFX the value
+  restates is a title, whatever the word: `Dr. /Löbig/` + NPFX Dr. gives
+  the title Dr. and no given name, and so does `Eugen /Löbig/` + NPFX
+  Eugen, counted (`NPFX restated as the whole given part`); telling a
+  mis-tagged given name from a title would need a word list (§10). An
+  NPFX the value states in part ("Dr. Eugen" + NPFX "Dr. med.", or
+  "Eugen" + NPFX "Dr. Eugen") gives the form "Dr. med. Eugen Löbig" or
+  "Dr. Eugen Löbig", writing no word twice, and a prefix is matched by
+  its words folded ("Dr med" is "Dr. med.").
+- **Quotes and brackets.** A quoted word after the surname ("Eugen
+  /Löbig/ 'Muckel'") is a nickname, and each run of words between such
+  quotes is a suffix of its own. A slashless NAME with a quoted word
+  between its words ("Eugen 'Muckel' Löbig") keeps the form without it
+  ("Eugen Löbig") as an alias beside its unsplit form. A `_MARNM`'s
+  unsplit form leaves its brackets out ("(Peppi)" gives "Peppi"). A
+  GIVN's quoted or bracketed part ("Ida (Peppi)", "'Ida, Peppi'") is
+  one nickname beside the given name, read before the GIVN is split at
+  its commas. A bracket within a bracket is read by the outermost pair
+  ("(Pep(pi))" gives "Peppi"), and a bracket never closed is none. A
+  bracket name keeps an NPFX or NSFX beside it as a title or suffix, its
+  full form an alias ("Frau Peppi").
+- **Language.** A HEAD.LANG of `und` is taken as it is, uncounted.
 
 **Decided by the owner (2026-09-29):**
 

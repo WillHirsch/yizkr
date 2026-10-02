@@ -91,8 +91,9 @@ the record is), occupations (OCCU, minted as occupation items with the
 source's wording), number of children (NCHI), residences (place, dated
 when the record is), parent-child relations, and unions (union_claims;
 ADR-0036 §5): a family with two partners is a partnership, or a marriage
-when a MARR of it states a wedding, started by its weddings and ended by
-its divorce or annulment. Source citations (SOUR) are folded into the
+when a MARR of it states a wedding or a DIV or ANUL of it states its
+event (a marriage with no wedding, counted), started by its weddings and
+ended by its divorce or annulment. Source citations (SOUR) are folded into the
 reference of each claim that the record they stand beneath gives
 (ADR-0021): the event, fact or NAME a claim cites; the family record,
 for its parent claims and its couple's; each MARR, DIV or ANUL, for its
@@ -146,17 +147,21 @@ maps) they are counted as MARR, DIV and ANUL: no claim names the other
 partner, and a claim has no unknown value to name them with. A MARR, a
 DIV or an ANUL states its event as a DEAT does (below); one that states
 none (a MARR N, a bare DIV) is counted as MARR, DIV or ANUL, and a
-family whose MARRs state none is a partnership. A DEAT states the death
+family whose MARRs, DIVs and ANULs state none is a partnership; one
+whose HUSB and WIFE name the same person gives no union and no parent
+claim, counted. A DEAT states the death
 only as GEDCOM 5.5.1 has an event asserted, by a DATE or PLAC with a
 value (a DATE the grammar cannot parse, only when the DEAT's own line
 has none), or else by a Y on that line: one that states none (a bare
 DEAT, or one with only a SOUR, NOTE, AGE or CAUS) gives no claim, since
 a death event or a cause of death would mark the person as not possibly
-living (ADR-0020), and is counted as DEAT. A person none of whose NAMEs
-gives a name (a placeholder with no letter, '?', gives none; brackets
-that hold a word give their own, where no other NAME gives one) is
-skipped, with a warning, and the family links that name them give no
-claim.
+living (ADR-0020), and is counted as DEAT. A person's label is the
+first name form a NAME gives; where none gives one, the brackets that
+hold a word of a NAME's value give it, then a GIVN's quotes or
+brackets, then a NICK, then a `_MARNM`. A person none of these gives a
+word (a placeholder with no letter or digit, '?' or '_', gives none) is
+skipped, with a warning, counted, and the family links that name them
+give no claim.
 
 The texts the adapter writes (excerpts, names, causes of death) are in
 the language HEAD.LANG names, mapped to BCP 47 (GEDCOM_LANGUAGES) or
@@ -457,31 +462,134 @@ def _clean_name(name: str) -> str:
 _NAME_PARTS = ("NPFX", "GIVN", "SPFX", "SURN", "NSFX")
 
 
-def _worded(text: str) -> str:
+def _has_word(text: str) -> bool:
+    """Whether `text` holds a letter or a digit. A part that holds none
+    ('?', '-', '…', '_') is a placeholder for an unknown name or part,
+    and names nothing."""
+    return bool(re.search(r"[^\W_]", text))
+
+
+def _bracket_spans(text: str) -> list[tuple[int, int]]:
+    """The spans of `text`'s outermost brackets, each from its '(' to the
+    ')' that closes it: a bracket nested in another ('(Pep(pi))') is read
+    within it, and a '(' never closed, or a ')' never opened, is none, so
+    that a part of the text reads its brackets as the whole text does."""
+    pairs: list[tuple[int, int]] = []
+    opened: list[int] = []
+    for index, char in enumerate(text):
+        if char == "(":
+            opened.append(index)
+        elif char == ")" and opened:
+            pairs.append((opened.pop(), index + 1))
+    return sorted(
+        (start, end)
+        for start, end in pairs
+        if not any(
+            outer < start and end < outer_end for outer, outer_end in pairs
+        )
+    )
+
+
+def _brackets(text: str) -> list[str]:
+    """What `text`'s outermost brackets hold, each less the brackets
+    nested in it ('(Pep(pi))' -> 'Peppi')."""
+    return [
+        re.sub(r"[()]", "", text[start + 1 : end - 1])
+        for start, end in _bracket_spans(text)
+    ]
+
+
+def _sub_brackets(text: str, replace: Callable[[str], str]) -> str:
+    """`text` with each outermost bracket replaced by `replace` of what
+    it holds (_brackets)."""
+    out: list[str] = []
+    last = 0
+    for (start, end), held in zip(
+        _bracket_spans(text), _brackets(text), strict=True
+    ):
+        out += [text[last:start], replace(held)]
+        last = end
+    return "".join([*out, text[last:]])
+
+
+def _worded_count(text: str) -> tuple[str, int]:
     """`text`, cleaned, less each of its words that holds no letter or
-    digit ('Eugen ?' -> 'Eugen'): a placeholder for an unknown name or
-    part ('?', '-', '…') names nothing."""
-    return " ".join(word for word in _clean_name(text).split() if _words(word))
+    digit ('Eugen ?' -> 'Eugen'), and how many it leaves out. A bracket
+    or a quote keeps its marks around the words left in it ('(Peppi ?)'
+    -> '(Peppi)'), and one with none left goes whole ('(?)', "'?'",
+    '()'), counted once at least."""
+    dropped = 0
+
+    def within(held: str, opening: str, closing: str) -> str:
+        nonlocal dropped
+        words = _clean_name(held).split()
+        kept = [word for word in words if _has_word(word)]
+        if not kept:
+            dropped += max(len(words), 1)
+            return " "
+        dropped += len(words) - len(kept)
+        return f" {opening}{' '.join(kept)}{closing} "
+
+    text = _sub_brackets(text, lambda held: within(held, "(", ")"))
+    text = _QUOTED_NAME.sub(
+        lambda quote: within(
+            quote.group(1), quote.group(0)[0], quote.group(0)[-1]
+        ),
+        text,
+    )
+    words = _clean_name(text).split()
+    kept = [word for word in words if _has_word(word)]
+    return " ".join(kept), dropped + len(words) - len(kept)
 
 
-def _name_pieces(name: Record, wordless: bool = False) -> dict[str, list[str]]:
+def _worded(text: str) -> str:
+    """`text` less its placeholders (_worded_count)."""
+    return _worded_count(text)[0]
+
+
+def _name_pieces(name: Record) -> tuple[dict[str, list[str]], int]:
     """Each part tag of a NAME (_NAME_PARTS) -> its comma-separated
-    pieces, cleaned, in order: those that hold a word, or, with
-    `wordless`, those that hold none ('?'). A GIVN piece leaves out its
-    quoted and bracketed parts, which read_name takes as nicknames."""
+    pieces, cleaned and less their placeholders (_worded_count), in
+    order, a piece left with no word dropped; and how many placeholders
+    they held. A GIVN leaves out its quoted and bracketed parts, which
+    are nicknames (_givn_nicknames), before it is split at its commas."""
     found: dict[str, list[str]] = {}
+    dropped = 0
     for tag in _NAME_PARTS:
         found[tag] = []
         for part in name.all(tag):
-            for piece in part.value.split(","):
-                if tag == "GIVN":
-                    piece = _QUOTED_NAME.sub(
-                        " ", _BRACKETED_NAME.sub(" ", piece)
-                    )
-                text = _clean_name(piece)
-                if text and bool(_words(text)) != wordless:
+            value = part.value
+            if tag == "GIVN":
+                value = _QUOTED_NAME.sub(
+                    " ", _sub_brackets(value, lambda held: " ")
+                )
+            for piece in value.split(","):
+                text, count = _worded_count(piece)
+                dropped += count
+                if text:
                     found[tag].append(text)
-    return found
+    return found, dropped
+
+
+def _givn_nicknames(name: Record) -> tuple[list[str], int]:
+    """The nicknames a NAME's GIVNs give in quotes or brackets ('Ida
+    (Peppi)' -> 'Peppi'), each less its placeholders and kept only if a
+    word is left, and how many placeholders they held."""
+    found: list[str] = []
+    dropped = 0
+    for part in name.all("GIVN"):
+        unbracketed = _sub_brackets(part.value, lambda held: " ")
+        for held in [
+            *_brackets(part.value),
+            *_QUOTED_NAME.findall(unbracketed),
+        ]:
+            text, count = _worded_count(held)
+            if text:
+                found.append(text)
+                dropped += count
+            else:
+                dropped += max(count, 1)
+    return found, dropped
 
 
 def _parts_text(pieces: dict[str, list[str]]) -> str:
@@ -504,42 +612,34 @@ def _parts_text(pieces: dict[str, list[str]]) -> str:
 # form, typed as nothing. A quote opens a word and closes one, so an
 # apostrophe inside a name ("O'Neil") is no quote.
 _QUOTED_NAME = re.compile(r"(?:(?<=\s)|^)[‘'\"“]([^‘’'\"“”]+)[’'\"”](?=\s|$)")
-_BRACKETED_NAME = re.compile(r"\(([^()]*)\)")
 # a NAME value's given part, its surname between slashes, and what follows
 _SLASHED_NAME = re.compile(r"^([^/]*)/([^/]*)/([^/]*)$")
 
 
 def _name_display(value: str) -> str:
     """A NAME value's display form: cleaned, without its bracketed parts
-    and its words that hold no letter or digit ('Ida (Peppi) /Sörne/' ->
-    'Ida Sörne', 'Eugen /?/' -> 'Eugen')."""
-    return _worded(_BRACKETED_NAME.sub(" ", value))
+    and its placeholders ('Ida (Peppi) /Sörne/' -> 'Ida Sörne', 'Eugen
+    /?/' -> 'Eugen')."""
+    return _worded(_sub_brackets(value, lambda held: " "))
 
 
 def _name_text(name: Record) -> str:
     """A NAME's display form: its value's (_name_display), or, when the
     value gives none (it is empty, '//', '?', or brackets alone), the
     name its parts give (_parts_text). Empty when neither gives a name."""
-    return _name_display(name.value) or _parts_text(_name_pieces(name))
+    return _name_display(name.value) or _parts_text(_name_pieces(name)[0])
 
 
 def _bracket_text(name: Record) -> str:
     """The display form of a NAME whose value gives a name only in
     brackets that hold a word ('(Peppi)'): the value, cleaned, less its
-    brackets that hold none and its words that hold no letter or digit.
-    A person's label falls back to it only when none of the person's
-    NAMEs gives a name otherwise (_name_text), so that a person named
-    only so keeps an entity. Empty when no bracket holds a word."""
-    if not any(_words(text) for text in _BRACKETED_NAME.findall(name.value)):
+    placeholders and its brackets that hold no word. A person's label
+    falls back to it only when none of the person's NAMEs gives a name
+    otherwise (_name_text), so that a person named only so keeps an
+    entity. Empty when no bracket holds a word."""
+    if not any(_has_word(held) for held in _brackets(name.value)):
         return ""
-    return _worded(
-        _BRACKETED_NAME.sub(
-            lambda bracket: (
-                bracket.group(0) if _words(bracket.group(1)) else " "
-            ),
-            name.value,
-        )
-    )
+    return _worded(name.value)
 
 
 # GEDCOM NAME TYPE -> the surname type of the NAME's mention record
@@ -588,15 +688,20 @@ def _prefix_length(prefix: str, words: list[str]) -> int:
 
 
 def _stated_lead(prefixes: list[str], display: str) -> int:
-    """How many of the display form's first words the prefixes state in
-    part ('Dr.' of 'Dr. med.' in 'Dr. Eugen Löbig'), so that the form an
-    unrestated prefix completes does not write them twice."""
+    """How many of the display form's first words, never all of them,
+    the prefixes already write, at their start ('Dr.' of 'Dr. med.' in
+    'Dr. Eugen Löbig') or at their end ('Eugen' of 'Dr. Eugen' in 'Eugen
+    Löbig'), so that the form an unrestated prefix completes does not
+    write them twice."""
     wanted = _words(" ".join(prefixes))
     words = display.split()
     lead = 0
     for length in range(1, len(words)):
         stated = _words(" ".join(words[:length]))
-        if stated and wanted[: len(stated)] == stated:
+        if stated and stated in (
+            wanted[: len(stated)],
+            wanted[len(wanted) - len(stated) :],
+        ):
             lead = length
     return lead
 
@@ -608,9 +713,9 @@ def read_name(name: Record) -> NameReading:
       it starts with and less its quoted parts, which are nicknames; the
       part between them a surname, typed by the NAME's TYPE; the part
       after them a suffix, unless an NSFX gives the suffixes, and less its
-      quoted parts, which are nicknames too. An NPFX that is the whole
-      given part ('Eugen /Löbig/' + NPFX Eugen) stays a given name, and
-      is counted.
+      quoted parts, which are nicknames too. An NPFX is a title, as the
+      export tags it, even where it is the whole given part ('Eugen
+      /Löbig/' + NPFX Eugen), which is counted.
     * A value without slashes, where no GIVN or SURN gives the parts, is
       an `unsplit` form, and gives no typed-name claim; where only a GIVN
       or only a SURN gives its part, the value is an `unsplit` form beside
@@ -631,16 +736,15 @@ def read_name(name: Record) -> NameReading:
       of the person's, counted. A NAME with no value, whose parts give no
       given name or surname, names no one: its prefix or suffix is
       counted instead. So is a particle with no surname.
-    * A part that holds no letter or digit ('?', '-', '()') names
-      nothing: it is counted, not placed (person_entity drops what the
-      value's own words give so).
+    * A word that holds no letter or digit ('?', '-', '_'), in the value,
+      a bracket, a quote, a part or a NICK, is a placeholder: it names
+      nothing, so it is left out and counted. A typed NAME that held one
+      in its value or parts gives no typed-name claim, counted, since the
+      name left would read as the whole of what the source types.
     """
     reading = NameReading()
     value = name.value
-    pieces = _name_pieces(name)
-    for tag in _NAME_PARTS:
-        for _ in _name_pieces(name, wordless=True)[tag]:
-            reading.counts.append("NAME part without a word")
+    pieces, placeholders = _name_pieces(name)
     props = [
         _NAME_TYPE_PROPERTY.get(kind.value.strip().lower())
         for kind in name.all("TYPE")
@@ -654,63 +758,68 @@ def read_name(name: Record) -> NameReading:
     ) or ["other"]
     nickname_type = "nickname" in props
 
+    unnamed = 0  # the placeholders of brackets, GIVN nicknames and NICKs
     brackets: list[str] = []
-    for bracket in _BRACKETED_NAME.findall(value):
-        if _words(text := _clean_name(bracket)):
+    for held in _brackets(value):
+        text, count = _worded_count(held)
+        if text:
             brackets.append(text)
             reading.forms.append(text)
             reading.unsplit.append(text)
             reading.counts.append("NAME bracketed part")
+            unnamed += count
         else:
-            reading.counts.append("NAME part without a word")
+            unnamed += max(count, 1)
     # a GIVN's quoted and bracketed parts are nicknames, as a NICK is
-    for part in name.all("GIVN"):
-        for text in [
-            *_QUOTED_NAME.findall(part.value),
-            *_BRACKETED_NAME.findall(part.value),
-        ]:
-            reading.quoted.append(text)
-            if _words(text):
-                reading.forms.append(_clean_name(text))
-    bare = _BRACKETED_NAME.sub(" ", value)
-    display = _worded(bare)
+    givn_nicknames, count = _givn_nicknames(name)
+    unnamed += count
+    reading.nicknames += givn_nicknames
+    reading.forms += givn_nicknames
+    bare = _sub_brackets(value, lambda held: " ")
+    display, count = _worded_count(bare)
+    placeholders += count
     given: list[str] = []
     surname = ""
-    npfx = list(pieces["NPFX"])
+    quoted: list[str] = []
     slashed = _SLASHED_NAME.match(bare)
     if slashed:
-        before, surname, after = (_clean_name(p) for p in slashed.groups())
-        reading.quoted += _QUOTED_NAME.findall(before)
-        reading.quoted += _QUOTED_NAME.findall(after)
-        after = _clean_name(_QUOTED_NAME.sub(" ", after))
-        words = _QUOTED_NAME.sub(" ", before).split()
+        before, surname, after = slashed.groups()
+        quoted += _QUOTED_NAME.findall(before) + _QUOTED_NAME.findall(after)
+        words = [
+            word
+            for word in _clean_name(_QUOTED_NAME.sub(" ", before)).split()
+            if _has_word(word)
+        ]
+        surname = _worded(surname)
+        # each run of words between the quotes after the slashes is a
+        # suffix of its own ('Jr. 'Muckel' Sr.' gives 'Jr.' and 'Sr.')
+        afters = [
+            text
+            for run in _QUOTED_NAME.sub("\0", after).split("\0")
+            if (text := _worded(run))
+        ]
         for prefix in pieces["NPFX"]:
             length = _prefix_length(prefix, words)
-            if length and length == len(words):
-                # the whole given part: a given name, not a title
-                npfx.remove(prefix)
-                reading.counts.append("NPFX that is the given name")
-            elif length:
-                words = words[length:]
+            if length == len(words) and length:
+                # the export tags the whole given part as a prefix
+                reading.counts.append("NPFX restated as the whole given part")
+            words = words[length:]
         given += words
         if surname:
             reading.surnames += [(surname, kind) for kind in types]
-        if after and not pieces["NSFX"]:
-            reading.suffixes.append(after)
+        if not pieces["NSFX"]:
+            reading.suffixes += afters
     else:
-        reading.quoted += _QUOTED_NAME.findall(bare)
-        unquoted = _QUOTED_NAME.sub(" ", bare)
-        unsplit = _worded(unquoted)
-        reading.counts += [
-            "NAME part without a word"
-            for word in _clean_name(unquoted).split()
-            if not _words(word)
-        ]
+        quoted += _QUOTED_NAME.findall(bare)
+        unsplit = _worded(_QUOTED_NAME.sub(" ", bare))
         # where a GIVN and a SURN give the parts, they say which is which;
         # where only one of them does, the value stays an unsplit form
         # beside it, so that no word the part does not place is lost
         if unsplit and not (pieces["GIVN"] and pieces["SURN"]):
             reading.unsplit.append(unsplit)
+            if not _restated(unsplit, display):
+                # a quoted word between its words: the form without it
+                reading.forms.append(unsplit)
             if pieces["GIVN"] or pieces["SURN"]:
                 reading.counts.append("NAME without slashes, one part given")
             else:
@@ -736,15 +845,16 @@ def read_name(name: Record) -> NameReading:
     ):
         reading.counts.append("SPFX without a surname")
     parts_text = _parts_text(pieces)
-    if display:
-        unrestated = [
-            piece
-            for tag in _NAME_PARTS
-            for piece in pieces[tag]
-            if not _restated(piece, display)
-        ]
-    else:
-        unrestated = [piece for tag in _NAME_PARTS for piece in pieces[tag]]
+    # each part as its field holds it, a surname with its particle
+    held = [
+        *pieces["NPFX"],
+        *pieces["GIVN"],
+        *(parts_surnames or pieces["SPFX"]),
+        *pieces["NSFX"],
+    ]
+    unrestated = [
+        piece for piece in held if not (display and _restated(piece, display))
+    ]
     # the name a prefix or a suffix beside the value stands with: the
     # value's own, or else what its brackets give
     named = display or " ".join(brackets)
@@ -753,7 +863,7 @@ def read_name(name: Record) -> NameReading:
         reading.surnames += [
             (s, kind) for s in parts_surnames for kind in types
         ]
-        reading.titles += npfx
+        reading.titles += pieces["NPFX"]
         reading.suffixes += pieces["NSFX"]
         if display and unrestated:
             reading.forms.append(parts_text)
@@ -763,10 +873,10 @@ def read_name(name: Record) -> NameReading:
         # field whether the value restates it or not; the name an
         # unrestated one completes is a name form of the person's,
         # counted, less the words of the name that the prefixes already
-        # state. A particle is counted as one with no surname.
-        prefixes = [p for p in npfx if not _restated(p, named)]
+        # write. A particle is counted as one with no surname.
+        prefixes = [p for p in pieces["NPFX"] if not _restated(p, named)]
         suffixes = [p for p in pieces["NSFX"] if not _restated(p, named)]
-        reading.titles += npfx
+        reading.titles += pieces["NPFX"]
         reading.suffixes += pieces["NSFX"]
         if prefixes or suffixes:
             rest = named.split()[_stated_lead(prefixes, named) :]
@@ -780,22 +890,25 @@ def read_name(name: Record) -> NameReading:
             if piece not in pieces["SPFX"]:
                 reading.counts.append("NAME part without a name")
     reading.display = display or parts_text
-    quoted = [_clean_name(text) for text in reading.quoted]
-    reading.quoted = [text for text in quoted if _words(text)]
-    reading.counts += [
-        "NAME part without a word" for text in quoted if not _words(text)
-    ]
+    # each quote's placeholders are counted with the value's
+    reading.quoted = [text for text in map(_worded, quoted) if text]
     reading.nicknames += reading.quoted
     if nickname_type:
         reading.nicknames += given
     else:
         reading.given += given
     for nick in name.all("NICK"):
-        if text := _nick_text(nick.value):
+        text, count = _nick_count(nick.value)
+        unnamed += count
+        if text:
             reading.nicknames.append(text)
             reading.forms.append(text)
-        elif nick.value.strip():
-            reading.counts.append("NAME part without a word")
+    if placeholders and any(props):
+        # what the source types held a placeholder: what is left of it
+        # is not the whole typed name
+        reading.typed = False
+        reading.counts.append("typed NAME with a placeholder")
+    reading.counts += ["NAME part without a word"] * (placeholders + unnamed)
     return reading
 
 
@@ -803,15 +916,23 @@ def read_name(name: Record) -> NameReading:
 _QUOTE_PAIRS = {"'": "'", '"': '"', "‘": "’", "“": "”"}
 
 
-def _nick_text(value: str) -> str:
+def _nick_count(value: str) -> tuple[str, int]:
     """A NICK's nickname: its value, whitespace collapsed, less one pair
     of matching quotes that encloses it ("'Cilli'" -> 'Cilli'), as a
-    quoted part of a NAME value gives it. Empty when it holds no letter
-    or digit ("''", '?'), as such a NICK names nothing."""
+    quoted part of a NAME value gives it, and less its placeholders
+    (_worded_count), which are counted; empty when none of it is a word
+    ("''", '?'), as such a NICK names nothing."""
     text = " ".join(value.split())
     if len(text) > 2 and _QUOTE_PAIRS.get(text[0]) == text[-1]:
         text = " ".join(text[1:-1].split())
-    return text if _words(text) else ""
+    if not text:
+        return "", 0
+    return _worded_count(text)
+
+
+def _nick_text(value: str) -> str:
+    """A NICK's nickname (_nick_count)."""
+    return _nick_count(value)[0]
 
 
 def read_married_name(marnm: Record) -> NameReading:
@@ -820,18 +941,21 @@ def read_married_name(marnm: Record) -> NameReading:
     them, is `unsplit`, counted, and gives no typed-name claim, as a NAME
     without slashes gives none. Either way its display form, its brackets
     left out but not what they hold ('(Peppi)' -> 'Peppi'), is a name
-    form of the person's. A value that holds no letter or digit ('/?/')
-    gives nothing, and is counted."""
-    unbracketed = _BRACKETED_NAME.sub(r" \1 ", marnm.value)
-    reading = NameReading(display=_worded(unbracketed))
+    form of the person's. Its placeholders ('?') are left out and
+    counted, and one that held any gives no typed-name claim, counted."""
+    unbracketed = _sub_brackets(marnm.value, lambda held: f" {held} ")
+    display, placeholders = _worded_count(unbracketed)
+    reading = NameReading(display=display)
+    reading.counts += ["NAME part without a word"] * placeholders
     if not reading.display:
-        if marnm.value.strip():
-            reading.counts.append("NAME part without a word")
         return reading
     reading.forms.append(reading.display)
     slashed = _SLASHED_NAME.match(unbracketed)
     if slashed and (surname := _worded(slashed.group(2))):
         reading.surnames.append((surname, "married"))
+        if placeholders:
+            reading.typed = False
+            reading.counts.append("typed NAME with a placeholder")
     else:
         reading.unsplit.append(reading.display)
         reading.typed = False
@@ -1139,20 +1263,33 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     # upstream source a citation cites; OBJE = a multimedia object (ADR-0021)
     sources = {r.xref: r for r in roots if r.tag == "SOUR" and r.xref}
     media_records = {r.xref: r for r in roots if r.tag == "OBJE" and r.xref}
+
     # each person's names, from the NAMEs that give one; a person with none
-    # is skipped, so `people` holds the xrefs of those the batch holds;
-    # brackets give a name only where no NAME of the person gives one
-    names_of = {
-        xref: [
-            text for name in record.all("NAME") if (text := _name_text(name))
-        ]
-        or [
-            text
-            for name in record.all("NAME")
-            if (text := _bracket_text(name))
-        ]
-        for xref, record in individuals.items()
-    }
+    # is skipped, so `people` holds the xrefs of those the batch holds.
+    # Where no NAME gives one, the next of these that gives a word does,
+    # so that a person with any word in any name keeps an entity: the
+    # brackets of a NAME's value, the quotes and brackets of its GIVN,
+    # its NICKs, then the person's `_MARNM`s (ADR-0035 §6).
+    def named(record: Record) -> list[str]:
+        names = record.all("NAME")
+        return (
+            [text for name in names if (text := _name_text(name))]
+            or [text for name in names if (text := _bracket_text(name))]
+            or [text for name in names for text in _givn_nicknames(name)[0]]
+            or [
+                text
+                for name in names
+                for nick in name.all("NICK")
+                if (text := _nick_text(nick.value))
+            ]
+            or [
+                text
+                for marnm in record.all("_MARNM")
+                if (text := read_married_name(marnm).display)
+            ]
+        )
+
+    names_of = {xref: named(record) for xref, record in individuals.items()}
     people = {xref for xref, names in names_of.items() if names}
     warnings: list[str] = []
     unsupported: dict[str, int] = {}
@@ -1827,7 +1964,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                         form
                         for reading in readings
                         for form in reading.forms
-                        if _words(form)
+                        if _has_word(form)
                     ),
                 ]
             )
@@ -1839,7 +1976,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             each of which is counted."""
             kept = []
             for value in dict.fromkeys(values):
-                if _words(word(value)):
+                if _has_word(word(value)):
                     kept.append(value)
                 else:
                     outcome("NAME part without a word")
@@ -2163,6 +2300,7 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 f"{xref}: no NAME gives a name; skipped entirely, with the "
                 "family links that name it"
             )
+            outcome("person without a name")
             continue
         # every date the record gives a birth or a death, as it gives them,
         # save a DEAT's that states no death
@@ -2334,6 +2472,11 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
     for fam in families.values():
         husband = fam.text("HUSB")
         wife = fam.text("WIFE")
+        if husband and husband == wife:
+            # one person as both father and mother is no reading the
+            # record can mean, so neither is guessed, and no union is made
+            outcome("FAM one person as HUSB and WIFE")
+            continue
         for child in fam.all("CHIL"):
             for parent_xref, prop in ((husband, "father"), (wife, "mother")):
                 if parent_xref in people and child.value in people:

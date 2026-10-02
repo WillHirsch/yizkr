@@ -17,7 +17,8 @@ MARR must become a marriage item whose couple are its participants with
 the role spouse, started by a wedding item that holds each MARR's date
 as a statement of its own, the citation beneath a MARR in its reference,
 and ended by a divorce item that holds the DIV's date and place
-(ADR-0036 §5). A DEAT that gives
+(ADR-0036 §5); a family whose only event is a DIV must become a marriage
+item with no wedding. A DEAT that gives
 no date, place or cause must become a death event: an item that is an
 instance of `death`, with the person as its principal participant, which
 is what the possibly-living check reads as death evidence (ADR-0020 §2).
@@ -95,6 +96,14 @@ TEMPLATE = """\
 1 DIV
 2 DATE 1980
 2 PLAC Integration Court Town {marker}
+0 @I3@ INDI
+1 NAME Gedcom Former /Tester {marker}/
+1 FAMS @F2@
+0 @F2@ FAM
+1 HUSB @I1@
+1 WIFE @I3@
+1 DIV
+2 DATE 1970
 0 TRLR
 """
 
@@ -421,6 +430,37 @@ def test_gedcom_family_is_a_marriage_bounded_by_its_events(
     assert [
         v["id"] for v in _claim_values(client, divorce_qid, "location")
     ] == [court_town_qid]
+
+
+def test_gedcom_divorce_without_a_wedding_is_of_a_marriage(
+    client, gedcom_artifact
+):
+    """A family whose only event is a dated DIV lands as a marriage item,
+    its couple spouses, ended by a divorce of 1970 and started by
+    nothing: a divorce ends a marriage, whose wedding the export does
+    not state (ADR-0036, #408)."""
+    _, export = gedcom_artifact
+    write = BatchWriter(client).write_batch(
+        adapt_gedcom(GEDCOM, artifact=export).batch
+    )
+    union_qid = write.created_items["f2"]
+    divorce_qid = write.created_items["f2-divorce"]
+    _, items = client.vocabulary()
+    assert {
+        v["id"] for v in _claim_values(client, union_qid, "instance_of")
+    } == {items["marriage"]}
+    assert _claim_values(client, union_qid, "started_by") == []
+    assert {v["id"] for v in _claim_values(client, union_qid, "ended_by")} == {
+        divorce_qid
+    }
+    roles = [
+        _qualifier_values(client, statement, "object_has_role")
+        for statement in _statements(client, union_qid, "participant")
+    ]
+    assert roles == [[items["spouse"]], [items["spouse"]]]
+    assert [
+        v["time"] for v in _claim_values(client, divorce_qid, "point_in_time")
+    ] == ["+1970-00-00T00:00:00Z"]
 
 
 def test_gedcom_excerpts_of_an_export_without_a_language_are_undetermined(

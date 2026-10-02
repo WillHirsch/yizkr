@@ -475,7 +475,8 @@ statements it dates carry; its marker changes with it.
 
 Amended by #408 (2026-09-29): **a family is a union, and its events are
 items.** ADR-0036 §5 makes a coupled family a `marriage` (a MARR that
-states a wedding) or a `partnership`, started by its wedding and ended
+states a wedding, or a DIV or ANUL that states its event, a marriage
+with no wedding) or a `partnership`, started by its wedding and ended
 by its divorce or annulment, and the adapter writes no spouse claim. So
 what #308, #323 and #324 say of the spouse claims is superseded:
 
@@ -494,10 +495,12 @@ what #308, #323 and #324 say of the spouse claims is superseded:
   ANUL;
 - a family with no WIFE and two HUSBs, or no HUSB and two WIFEs, has
   those two as its couple, so its second HUSB or WIFE is read as a
-  partner; it is never the children's parent, which the first HUSB and
-  first WIFE alone are, since mapping a second "would give each child a
-  second parent, which the record cannot mean" (#322 above); a further
-  one is still counted;
+  partner; a further one is still counted. Decided by the orchestrator
+  (2026-10-02; the owner may override): the second is never the
+  children's parent, which the first HUSB and first WIFE alone are,
+  since mapping a second "would give each child a second parent, which
+  the record cannot mean" (#322 above); and a family whose HUSB and WIFE
+  name one person gives no parent claim, counted (ADR-0036);
 - the HEAD's LANG gives the language of every excerpt and name the
   adapter writes (ADR-0035 §6), `und` where the export states none the
   adapter knows.

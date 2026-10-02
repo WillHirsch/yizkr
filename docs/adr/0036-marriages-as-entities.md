@@ -28,7 +28,8 @@ override):
 - **A MARR states its wedding as a DIV states its divorce.** `MARR N`,
   and a MARR that states nothing (no Y, and no DATE or PLAC with a
   value), makes no wedding and is counted as `MARR`, and a family with
-  no MARR that states one is a partnership.
+  no MARR that states one is a partnership, unless a DIV or ANUL of it
+  states its event (below, 2026-10-02).
 - **Weddings are grouped by kind, not by TYPE.** The table's "MARRs of
   one TYPE" reads "of one kind": MARRs whose TYPEs name one kind of
   ceremony (`civil` and `Standesamt` alike) are one wedding, and a MARR
@@ -50,6 +51,13 @@ DIV or ANUL states its event, with no MARR that states a wedding, is a
 marriage without a wedding`; the source asserts the end of a marriage,
 not of a partnership. A family whose HUSB and WIFE name one person has
 no couple, as two HUSBs naming one person have none.
+
+Amended by #408 (2026-10-02; decided by the orchestrator, the owner may
+override): **one person as HUSB and WIFE.** A family whose HUSB and WIFE
+name the same person gives no union and no parent claim for its
+children, counted as `FAM one person as HUSB and WIFE`: one person as
+both father and mother is a reading the record cannot mean, so it is not
+guessed.
 
 ## Context
 
@@ -151,7 +159,7 @@ can still generate P26 so qualified. #394 adds the new classes' ids.
 
 | The export gives | The adapter makes |
 |---|---|
-| a family with two partners | a union: a `marriage` when the family has a MARR, otherwise a `partnership`, which may be a marriage the export does not identify |
+| a family with two partners | a union: a `marriage` when the family has a MARR (or, amended by #408, a DIV or ANUL that states its event: a marriage with no wedding, counted), otherwise a `partnership`, which may be a marriage the export does not identify |
 | each MARR | a wedding. A TYPE that names a civil or a religious ceremony gives that kind; any other TYPE stays in the excerpt and is counted. A family's MARRs of one TYPE, or of none, are one wedding, each alternative date or place a statement of its own (ADR-0021) |
 | each DIV, each ANUL | a divorce, an annulment (a family's DIVs are one divorce), with its PLAC as the event's `location` |
 | a DATE's range or circa | the range or circa of that event's own date |
