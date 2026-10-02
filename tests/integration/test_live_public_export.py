@@ -33,10 +33,13 @@ fixture's content (test_live_privacy.py's write_fixture):
   property ADR-0036 retired, which a graph may still hold), and an
   appellation ("referred to as") whose `perspective` qualifier is them,
   each with an excerpt of its own;
-* a talk, an event of no person kind dated 1938, whose one participant
-  statement is of unknown value, with a `said to be the same as`
-  qualifier naming "Named In Text" (added through WikibaseIntegrator, as
-  the writer writes no unknown value);
+* a talk, an event of no person kind dated 1938, that the released
+  person took part in, with another participant statement of unknown
+  value whose `said to be the same as` qualifier names "Named In Text"
+  (added through WikibaseIntegrator, as the writer writes no unknown
+  value);
+* a hearing, an event of no person kind dated 1957, carried out by the
+  organization born in 1990;
 * two children of the released person, of unknown value, added so too:
   one with a `said to be the same as` qualifier naming "Named In Text",
   one with no qualifier.
@@ -54,39 +57,40 @@ person, but a `human` type at any rank does. An item that states no type
 is left out, whatever else it holds, and a redirect goes with the item it
 redirects to. An event that one of those left out takes part in is left
 out too: the migration, for its vessel typed human, and the birth; so is
-a person event that names no participant, the unrecorded birth, and an
+a person event that names no participant, the unrecorded birth; an
 event whose one participant left out is named only in a qualifier, the
-talk. A statement of the released person whose value, or a qualifier's
+talk; and an event another of whose statements names one left out, the
+hearing. A statement of the released person whose value, or a qualifier's
 value, is an item left out goes whole: its node, its rank, its
 qualifiers, its dates among them, the reference that holds its excerpt,
 and the truthy triple it gave; the run's reference, which the released
 person's death cites too, stays. Of the two children of unknown value,
 the one said to be "Named In Text" goes whole, and the truthy triple it
 gave goes with it; which truthy triple of unknown value a statement gave
-cannot be read from the dump, so the other's goes too, and its statement
-stays. Every text about what the export keeps
-stays, one naming a possibly living person included (owner,
-2026-09-29).
+is not read from the dump (the export does not reproduce Wikibase's
+blank-node labels), so the other's goes too, and its statement stays.
+Every text about what the export keeps stays, one naming a possibly
+living person included (owner, 2026-09-29).
 
-The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes the
-export from it, and reads public.nt.gz: it mentions the released person,
-the plain vessel, the letter and its page by QID, and none of the others,
-the label-only item, the family, the redirect, the migration, both births
-and the talk included. Of the released person's two statements that name
-"Named In Text", no triple of their nodes leaves, nor the truthy triple
-either gave, nor their excerpts, nor a reference or value node that only
-they used. Of the two children of unknown value, the one said to be
-"Named In Text" leaves no triple of its node, the other's node leaves,
-and no truthy child of unknown value does. The released person's
-description and death excerpt,
+The test dumps the graph as `yizkr backup` does (dumpRdf.php), writes
+the export from it, and reads public.nt.gz: it mentions the released
+person, the plain vessel, the letter and its page by QID, and none of
+the others, the label-only item, the family, the redirect, the
+migration, both births, the talk and the hearing included. Of the
+released person's two statements that name "Named In Text", no triple of
+their nodes leaves, nor the truthy triple either gave, nor their
+excerpts, nor a reference or value node that only they used. Of the two
+children of unknown value, the one said to be "Named In Text" leaves no
+triple of its node, the other's node leaves, and no truthy child of
+unknown value does. The released person's description and death excerpt,
 the letter's title and its page's label and description leave as
 written, "Named In Text" and all; the labels of the person named and of
 both births, and the family's description, do not; and the vocabulary
 keeps its terms. The export first waits for the query service to hold
 the dump's revision of every item and property, a redirect's aside, so
 on a stack at rest, a merge included, the export must run, not refuse.
-The site lists the eight that have person evidence, and badges the
-seven the export drops.
+The site lists the eight that have person evidence, and badges the seven
+the export drops.
 
 Like every live test it writes fictional data to the one instance, so
 the session that runs it ends by clearing the recorded instance-contents
@@ -105,6 +109,7 @@ from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from yizkr.backup import (
     FAMILY,
+    LINKED_LEFT_OUT,
     NO_TYPE,
     PARTICIPANT_LEFT_OUT,
     UNATTENDED,
@@ -183,9 +188,13 @@ ENTITIES = {
         kind="birth",
         label=f"Birth of {NAMED}, participant unrecorded",
     ),
-    # an event of no person kind whose one participant, of unknown value,
-    # a qualifier says is "Named In Text"
+    # an event of no person kind that the released person took part in,
+    # with another participant, of unknown value, that a qualifier says is
+    # "Named In Text"
     "talk": local("talk", kind="event"),
+    # an event of no person kind carried out by the organization born in
+    # 1990, which the export leaves out
+    "hearing": local("hearing", kind="event"),
 }
 # the excerpts and the appellation of the released person's statements
 # that name "Named In Text", which go whole with them
@@ -325,10 +334,11 @@ def add_unknown(
 ) -> None:
     """A statement of `key` of unknown value on `subject`, with a `said to
     be the same as` qualifier naming `same_as` when one is given, stated
-    in the artifact `artifact_qid` (rule 1): the writer writes no unknown
+    in the artifact `artifact_qid` on its first page (rule 1, ADR-0003):
+    the writer writes no unknown
     value, so it is added here. Idempotent: it is not added again when
     `subject` holds one of unknown value of `key`, so qualified or not."""
-    from wikibaseintegrator.datatypes import Item
+    from wikibaseintegrator.datatypes import Item, String
     from wikibaseintegrator.models import Qualifiers, Reference, References
     from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseSnakType
 
@@ -347,6 +357,7 @@ def add_unknown(
         qualifiers.add(Item(prop_nr=said, value=same_as))
     reference = Reference()
     reference.add(Item(prop_nr=properties["stated_in"], value=artifact_qid))
+    reference.add(String(prop_nr=properties["page_number"], value="1"))
     references = References()
     references.add(reference)
     entity.claims.add(
@@ -500,6 +511,24 @@ def fixture_graph(client, config):
                 {"type": "time", "year": 1938},
                 source.ref,
             ),
+            claim(
+                "talk",
+                "participant",
+                {"type": "item", "value": ENTITIES["released"]},
+                source.ref,
+            ),
+            claim(
+                "hearing",
+                "carried_out_by",
+                {"type": "item", "value": ENTITIES["organization born"]},
+                source.ref,
+            ),
+            claim(
+                "hearing",
+                "point_in_time",
+                {"type": "time", "year": 1957},
+                source.ref,
+            ),
         ],
     )
     qids = {
@@ -645,6 +674,11 @@ def test_the_exclusions_name_whom_the_export_drops(fixture_graph, exported):
         assert exclusions["excluded"][fixture_graph[event]] == (
             PARTICIPANT_LEFT_OUT.format(fixture_graph[part])
         )
+    # an event goes with an item another statement of it names: the
+    # hearing, with the organization born in 1990 that carried it out
+    assert exclusions["excluded"][fixture_graph["hearing"]] == (
+        LINKED_LEFT_OUT.format(fixture_graph["organization born"])
+    )
     # and a person event that names no participant goes: unknown means
     # excluded
     assert exclusions["excluded"][fixture_graph["unrecorded birth"]] == (
@@ -736,6 +770,7 @@ def test_a_statement_naming_one_left_out_goes_whole(
         # it alone cites, goes; the run's, which the released person's
         # death cites too when one write made both, stays with the death
         assert [r for r in statement.references if r.snaks.get(excerpt)]
+        assert {r.hash for r in statement.references} & death_cites
         for reference in statement.references:
             cited = f"<{concept}/reference/{reference.hash}>"
             assert f"{node} {derived} {cited} ." in held
@@ -763,9 +798,10 @@ def test_a_truthy_triple_of_unknown_value_goes_with_every_one(
 ):
     # the released person's two children of unknown value: the one said
     # to be "Named In Text" goes whole, with the truthy triple it gave.
-    # Each unknown value is a blank node of its own, and which truthy one
-    # a statement gave cannot be read from the dump, so the other child's
-    # truthy triple goes too, while its statement stays (#364)
+    # Each unknown value is a blank node of its own, and the export does
+    # not read which truthy one a statement gave (it does not reproduce
+    # Wikibase's labels), so the other child's truthy triple goes too,
+    # while its statement stays (#364)
     properties, _ = client.vocabulary()
     full = dump_lines(exported, "full.nt.gz")
     lines = public_lines(exported)

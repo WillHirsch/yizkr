@@ -974,15 +974,17 @@ not a signal to grow the schema on.
   a raw source quotation — leaves only with a statement it attests. A
   statement whose value, or any qualifier's value, is an item left out
   goes whole, on a kept item too, with its rank, qualifiers and
-  references (ADR-0020, as amended by #364): a released person's spouse
-  statement naming a possibly living partner takes its start time, the
-  wedding's date, and its excerpt with it, and an appellation whose
-  `perspective` is left out goes, its text included. Its truthy triple
-  goes too, unless a kept statement of the same item and property, at
-  normal or preferred rank, gives the same value; a statement of
-  unknown value that goes takes every truthy triple of unknown value of
-  its item and property, as which one it gave cannot be read from the
-  dump. A reference or value node that a kept statement uses too stays.
+  references (ADR-0020, as amended by #364): an appellation of a
+  released person whose `perspective` is a possibly living relative
+  goes, its text included, and a statement naming a possibly living
+  partner takes its start time and its excerpt with it. Its truthy
+  triple goes too, unless a kept statement of the same item and
+  property, at normal or preferred rank, gives the same value; a
+  statement of unknown value that goes takes every truthy triple of
+  unknown value of its item and property, as the export does not read
+  which one it gave (it does not reproduce Wikibase's blank-node
+  labels). A reference or value node that a kept statement uses too
+  stays, its excerpt included.
 - **Who is a person fails closed too** (ADR-0020, as amended by #344).
   An item is a person when it has any person evidence, read at every
   rank, deprecated included: a `human` type; a statement of a property
@@ -1032,12 +1034,21 @@ not a signal to grow the schema on.
   whatever its kind, that has a `participant` statement at any rank
   whose value it leaves out, a redirect to one included, or one with a
   qualifier that names such an item, whatever the statement's value, an
-  unknown one or none included (#364). An event so left out may itself
-  be a participant, and the rule applies again. An event of a person
-  kind that names no participant (none, or only one of unknown value,
-  however qualified: what a qualifier names, a role included, is no
-  person evidence and attends no event on that alone) is left out too:
-  whom it happened to is unknown. And the events that start and end a
+  unknown one or none included (#364). An event goes, too, with any item
+  that one of its statements names, as its value or a qualifier's,
+  whatever the property: a divorce `carried out by` an organization left
+  out for its person evidence goes with it (the orchestrator,
+  2026-10-02). An event is an item typed `event`, a subclass of it or a
+  person kind of event, or an item with a `participant` statement. An
+  event so left out may itself be a participant, or named by another
+  event, and the rule applies again. An event of a person kind that
+  names no participant (none, or only one of unknown value, however
+  qualified: what a qualifier names, a role included, is no person
+  evidence and attends no event on that alone) is left out too: whom it
+  happened to is unknown; and so is an event of any kind whose
+  participants are all of unknown value (the orchestrator, 2026-10-02,
+  failing closed as ADR-0036 §6 does for unions). And the events that
+  start and end a
   union it leaves out go with the union (`started_by`, `ended_by`;
   ADR-0036 §6), a partner's own death aside.
 - **Everything about a released person stays, text included** (ADR-0020,

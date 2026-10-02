@@ -35,11 +35,22 @@ Amended by #364 (2026-09-29): a statement whose value, or any
 qualifier's value, is an item the export leaves out is left out whole:
 its node, rank, qualifiers (a wedding's date among them) and references
 (one a kept statement cites too stays with that one), and the truthy
-triple only it gave, even on an item the export keeps.
+triple it gave (for a statement of unknown value, every truthy triple of
+unknown value of its item and property), even on an item the export
+keeps.
 An item named in a qualifier of an event's `participant` statement,
 whatever the statement's value, an unknown one or none included, takes
 part in that event for the event rule, without being person evidence or
 attending a person event on that alone (§4, Ruling 6).
+Amended by #364, orchestrator decisions (2026-10-02, privacy first, on
+the questions the review of #364 raised): an event whose participants
+are all of unknown value is left out, failing closed, as ADR-0036 §6
+does for unions; "the events involving them" covers any link, so an
+event that names an item the export leaves out as the value, or a
+qualifier's value, of any of its statements is left out whole, through
+the same fixpoint; and the private site keeps its badge on the person
+named, without marking the statements the export drops whole, which the
+site paragraphs below list (§4, Ruling 6).
 
 ## Context
 
@@ -158,11 +169,12 @@ is renamed **`critique_notes`** to reflect its now-single role (ADR-0013).
   still dropped. (Amended by #363: the export is a non-privileged view,
   and an excerpt leaves with the statement it attests; see below.
   Amended by #364: a statement naming an item left out, as its value or
-  a qualifier's, goes whole.)
+  a qualifier's, goes whole, and so does an event that any of its
+  statements links to an item left out.)
 - **Private static site** (`yizkr publish-site`): includes everyone but
   badges each subject the export would drop ("possibly living — never in
   public exports"), computed at render time with the same births query
-  and predicate — the private site therefore shows exactly what the
+  and predicate — the private site therefore shows exactly whom the
   public export would remove, derived, never stored. (Amended by #344:
   except a person with no type, whom the export leaves out even when
   released; the site shows no badge. A family is always badged. See
@@ -294,9 +306,13 @@ from the database while the check reads the query service. Now:
   the export's own rule, and a badge for it would need a wording of its
   own. The export also drops what the site lists as no person: an item
   that states no type and has no person evidence, a family with no person
-  evidence, a redirect, an event that an item it drops took part in, a
-  person event that names no participant, and an event that starts or
-  ends a union it drops.
+  evidence, a redirect, an event that an item it drops took part in or
+  that any of its statements links to such an item, a person event that
+  names no participant, an event whose participants are all of unknown
+  value, an event that starts or ends a union it drops, and a statement
+  of an item it keeps that names one it drops, as its value or a
+  qualifier's (amended by #364; the orchestrator, 2026-10-02: the site
+  badges the person named, not the statement).
 
 The rulings dated 2026-09-29 are the owner's, on the questions this
 amendment raised.
@@ -337,13 +353,14 @@ keeps of the items it keeps follows:
   that statement. A truthy triple goes with the statement that gave it,
   unless a kept statement of the same item and property, at normal or
   preferred rank, holds the same value ("no value" counts as one). An
-  unknown value is a blank node of its own statement's, and the truthy
-  triple's is another, so which truthy triple of unknown value a
-  statement gave cannot be read from the dump: when a statement of
-  unknown value goes, every truthy triple of unknown value of that item
-  and property goes with it, a kept statement's included, whose node
-  stays (the export does not reproduce how Wikibase labels its blank
-  nodes). An item named only in a reference's snak
+  unknown value is a blank node (or a skolem IRI) of its own
+  statement's, and the truthy triple's is another, so which truthy
+  triple of unknown value a statement gave is not read from the dump
+  (the export does not reproduce Wikibase's blank-node labels): when a
+  statement of unknown value goes, every truthy triple of unknown value
+  of that item and property goes with it, a kept statement's included,
+  whose node stays. A deprecated statement gives no truthy triple, so
+  one that goes takes none. An item named only in a reference's snak
   of a kept statement loses that snak alone, and
   `public-exclusions.json` lists items only.
 - **An event goes with its participants** (#363). An event stands for
@@ -356,17 +373,30 @@ keeps of the items it keeps follows:
   (the QIDs): what this event records is theirs too";
   `PARTICIPANT_LEFT_OUT`). An item that a qualifier of a `participant`
   statement names takes part as much, whatever the statement's value,
-  an unknown one or none included (#364). An event so left out may
-  itself be a participant, so the rule applies again until no more go,
-  and a redirect to such an event goes with it. An event whose
-  participants are all kept stays.
+  an unknown one or none included (#364). And an event goes with every
+  item any of its statements names, as its value or a qualifier's,
+  whatever the property, at any rank: a divorce carried out by an
+  organization the export leaves out for its person evidence goes with
+  it (`public-exclusions.json`: "a statement of it names an item the
+  export leaves out (the QIDs): what this event records is theirs too";
+  `LINKED_LEFT_OUT`; the orchestrator, 2026-10-02). An event is an item
+  typed `event`, a subclass of it, or a person kind of event, at any
+  rank, or an item with a `participant` statement. An event so left out
+  may itself be a participant, or an item an event names, so the rule
+  applies again until no more go, and a redirect to such an event goes
+  with it. An event all of whose participants, and all the items its
+  statements name, are kept stays.
 - **A person event that names no participant goes** (#363; unknown means
   excluded, Ruling 2). An event of a person kind (`PERSON_EVENTS`) with
   no `participant` statement, or only one of unknown value, as a claim
   refused, left unconfirmed or cut short after the type leaves it,
   records a birth, a death or a marriage of someone unknown, who may be
-  living (`public-exclusions.json`: "an event of a person kind that
-  names no participant: unknown means excluded"; `UNATTENDED`). What a
+  living. So does an event of any kind whose `participant` statements
+  all hold an unknown value (or none): whom it involved is unknown, so
+  it fails closed, as ADR-0036 §6 does for unions (the orchestrator,
+  2026-10-02; `public-exclusions.json`: "an event that names no
+  participant (of a person kind), or whose participants are all of
+  unknown value: unknown means excluded"; `UNATTENDED`). What a
   qualifier of such a statement names, the role it gives (`principal`)
   or an item it says took part, is no person evidence and attends no
   event on that alone (#364). Once #385's participant roles land, the
@@ -439,9 +469,10 @@ is strictly safer, since the determination is now absence-of-death only.
    the events that start and end a union it drops, and the judgement
    notes; and it refuses a dump that holds a sitelink or a property of
    another type than the model's (amended by #363). A statement whose
-   value or a qualifier's value is an item it drops goes whole, and an
-   item a participant statement's qualifier names takes part in the
-   event (amended by #364).
+   value or a qualifier's value is an item it drops goes whole; an item a
+   participant statement's qualifier names takes part in the event; an
+   event goes with every item its statements name; and an event whose
+   participants are all of unknown value goes (amended by #364).
 
 ## Consequences
 
@@ -486,16 +517,19 @@ is strictly safer, since the determination is now absence-of-death only.
   name them (#363). A kept item may so lose a statement whose own value
   is kept: an appellation whose perspective is a possibly living person,
   or a type whose qualifier names an untyped item, and with it the
-  truthy triple, unless another kept statement gives the same value.
+  truthy triple, unless another kept statement of the same item and
+  property, at normal or preferred rank, gives the same value.
   While every family is left out, a released person's `member of`
   statement naming a family goes whole too, with its dates and
   references, and so does an appellation from a family's perspective. A
   statement of unknown value that goes takes every truthy triple of
   unknown value of its item and property, a kept statement's included,
-  whose node stays. An
-  event goes when a participant it leaves out is named only in a
-  qualifier of a `participant` statement, as an identity judgement on a
-  participant of unknown value names one.
+  whose node stays. An event goes when a participant it leaves out is
+  named only in a qualifier of a `participant` statement, as an identity
+  judgement on a participant of unknown value names one; when another
+  statement of it names an item left out (a divorce carried out by an
+  organization left out); and when its participants are all of unknown
+  value, whatever its kind.
 - Docs move with the code: MODELING.md "Living persons and privacy",
   `deploy/README.md`, and `pipeline/README.md` are updated in the same
   change; ADR-0018's exclusion note now points here.

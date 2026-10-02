@@ -235,7 +235,8 @@ directory under `var/backups/` containing:
   including other people's claims about them and orphaned provenance
   nodes — and a statement whose value or a qualifier's value is an item
   left out goes whole, with its dates, qualifiers and references, even
-  on an item kept. Who counts as a person fails closed as well: every
+  on an item kept (a reference a kept statement cites too stays with
+  it, its excerpt included). Who counts as a person fails closed as well: every
   item with person evidence in the dump, at any rank (a `human` type, a
   birth, kinship, a part in a death...), is dropped unless the check
   released it, and so is every item that states no type, no
@@ -243,8 +244,10 @@ directory under `var/backups/` containing:
   vocabulary and the classes items are typed with aside), every family,
   whose people may include a living person, every event that any of
   these took part in (named as a participant, or in a participant
-  statement's qualifier), every person event that names no participant,
-  and the events that start and end a union it leaves out. Everything
+  statement's qualifier) or that any statement of it names, every
+  person event that names no participant, every event whose
+  participants are all of unknown value, and the events that start and
+  end a union it leaves out. Everything
   else leaves as it is, text included: whatever is recorded about a
   released person (their labels, descriptions, names, and the source
   excerpts of their statements) and about the other items it keeps
