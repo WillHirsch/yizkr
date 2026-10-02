@@ -14,7 +14,7 @@ everything needed to rebuild the instance, plus a non-privileged export:
   privacy"). Nothing about a possibly-living person leaves the instance
   in it: every triple that mentions an excluded person — as subject,
   statement node, or object of someone else's claim — is dropped, and a
-  statement whose value or a qualifier's value names an item left out
+  statement whose value, or a qualifier's value, is an item left out
   goes whole, with its rank, dates, qualifiers and references. All else
   leaves as it is, text included: whatever is recorded about a person
   the check releases, and about the other items it keeps.
@@ -45,12 +45,13 @@ closed:
 * It drops every family too, released or not: a family stands for its
   people, any of whom may be living (``privacy.FAMILY_CLASS``).
 * It drops every event that an item it drops took part in, at any rank,
-  as a `participant` statement's value or as an item a qualifier of that
-  statement names, whatever its value, an unknown one included: what the
-  event records, its date and place, is that participant's too. So it
-  drops every event of a person kind that names no participant,
-  as whom it happened to is unknown, and the events that start and end
-  a union it drops (ADR-0036), a partner's own death aside.
+  as a `participant` statement's value or as an item a qualifier of
+  that statement names, whatever the statement's value, an unknown one
+  or none included: what the event records, its date and place, is that
+  participant's too. So it drops every event of a person kind that
+  names no participant, as whom it happened to is unknown, and the
+  events that start and end a union it drops (ADR-0036), a partner's own
+  death aside.
 * It drops the extractor's judgement notes, its remarks on its own
   reading, and any line it cannot read (``filter_public_export``), and
   refuses a dump that holds what it is not made to filter: a sitelink,
@@ -401,15 +402,15 @@ def read_dump(
     The items that take part in each event are read at every rank,
     whatever the event's type: every item a `participant` statement's
     value names, and every item a qualifier of such a statement names,
-    whatever its value, an unknown one included. Taking part so is no
-    person evidence of its own (a role such a qualifier gives is
-    vocabulary), and attends no event: an event of a person kind whose
-    `participant` statements name no item as their value (none, or only
-    ones whose value is unknown, however qualified) is unattended. So are
-    read, at every rank, the events that start and end each union
-    (``UNION_BOUNDS``), but a `death` event, which is a partner's own; and
-    each property's type, and every sitelink, whose page is anything but
-    an entity's data node.
+    whatever the statement's value, an unknown one or none included.
+    Taking part so is no person evidence of its own (a role such a
+    qualifier gives is vocabulary), and attends no event: an event of a
+    person kind whose `participant` statements name no item as their
+    value (none, or only ones whose value is unknown, however qualified)
+    is unattended. So are read, at every rank, the events that start and
+    end each union (``UNION_BOUNDS``), but a `death` event, which is a
+    partner's own; and each property's type, and every sitelink, whose
+    page is anything but an entity's data node.
 
     Lines are read as they end, at a newline alone."""
     instance_of = properties["instance_of"]
@@ -847,22 +848,30 @@ _TRIPLE = re.compile(
     rf"(?:@[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|\^\^{_IRI})?) \."
 )
 
-# The statement links the export reads to tell which statements go whole:
-# a statement's value (``ps:``) and its normalized value (``psn:``), a
-# qualifier's value (``pq:``), and the truthy triples of a best-ranked
-# statement (``wdt:``, ``wdtn:``), each with its property.
+# The statement links the export reads to tell which statements go whole,
+# each with its property: an entity's link to its statement (``p:``), the
+# statement's value (``ps:``) and its normalized value (``psn:``), and a
+# qualifier's value (``pq:``). A best-ranked statement also gives its
+# value to its entity as a truthy triple (``wdt:``, and ``wdtn:`` for the
+# normalized value). A statement of no value types its node with its
+# property's "no value" class (``wdno:``), and so the entity it is
+# best-ranked on.
 _CLAIM_NORMALIZED = re.compile(
     r"<[^<>]*/prop/statement/value-normalized/(P[1-9]\d*)>"
 )
 _TRUTHY = re.compile(r"<[^<>]*/prop/direct(-normalized)?/(P[1-9]\d*)>")
+_NO_VALUE = re.compile(r"<[^<>]*/prop/novalue/(P[1-9]\d*)>")
+_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
 
 
 def _statement_link(predicate: str) -> tuple[str, str] | None:
     """What a predicate links a statement to, with its property: "claim"
-    (an item to its statement), "value", "normalized", "qualifier" or
-    "rank"; None for anything else."""
+    (an entity to its statement), "value", "normalized" or "qualifier";
+    "rank" or "type", with none; None for anything else."""
     if predicate == _RANK:
         return "rank", ""
+    if predicate == _TYPE:
+        return "type", ""
     for role, pattern in (
         ("claim", _CLAIM),
         ("value", _CLAIM_VALUE),
@@ -881,22 +890,34 @@ def statements_left_out(
     that go with them.
 
     A statement goes whole when its value, or the value of any of its
-    qualifiers, is an item of `excluded`, at any rank: its node and all
-    it holds (the returned statement node IRIs). A truthy triple of an
-    item goes with such a statement when the statement gave it: when its
-    value (or its normalized value, for a normalized truthy triple) is the
-    one a statement left out of that item and property holds, and no kept
-    statement of theirs, at normal or preferred rank, holds it too. Each
-    is returned as (item, property, "" or "-normalized", value as the
-    dump writes it).
+    qualifiers, is an item of `excluded`, at any rank: its node and every
+    triple that holds it (the returned node IRIs). A truthy triple goes
+    with it when it gave it, and no statement that stays gives it too:
+    when the entity, the property and the value (the normalized value,
+    for a normalized truthy triple; the "no value" class, for a statement
+    of no value) are those of a statement that goes, and of no statement
+    of that entity and property that stays at normal or preferred rank.
+    An unknown value is a blank node of its statement's own, and so is
+    the one its truthy triple holds, under another label: which truthy
+    triple of unknown value a statement gave cannot be read from the
+    dump, so when a statement of unknown value goes, every truthy triple
+    of unknown value of its entity and property goes with it, a kept
+    statement's included, whose own node stays ("_:" stands for any
+    such value). Each is returned as (entity IRI, property, "" or
+    "-normalized", value).
 
-    The lines may come in any order: each statement is joined to its item
+    The lines may come in any order: a statement is joined to its entity
     once the whole dump is read."""
-    owners: dict[str, tuple[str, str]] = {}  # statement -> item, property
-    values: dict[tuple[str, str], str] = {}  # (statement, form) -> value
-    deprecated: set[str] = set()
+    owners: dict[str, tuple[str, str]] = {}  # statement -> entity, property
+    # (statement, form, value): its value (any unknown one as "_:"), its
+    # normalized value, and each "no value"
+    # class its node is typed with, its own or a qualifier's (whose
+    # property is another, so it matches no truthy triple)
+    values: set[tuple[str, str, str]] = set()
+    deprecated: set[str] = set()  # statements a curator deprecated
     left_out: set[str] = set()
     links: dict[str, tuple[str, str] | None] = {}
+    no_values: dict[str, bool] = {}  # a type -> whether it is "no value"
     with gzip.open(full_dump, "rt", encoding="utf-8", newline="\n") as source:
         for line in source:
             triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
@@ -909,32 +930,40 @@ def statements_left_out(
             if link is None:
                 continue
             role, pid = link
-            if role == "rank":
+            if role == "claim":
+                owners[value] = (subject, pid)
+            elif role == "rank":
                 if value == _DEPRECATED:
                     deprecated.add(subject)
-            elif role == "claim":
-                if item := _item(subject):
-                    owners[value] = (item, pid)
+            elif role == "type":
+                if value not in no_values:
+                    no_values[value] = bool(_NO_VALUE.fullmatch(value))
+                if no_values[value]:
+                    values.add((subject, "", value))
             else:
                 if role in ("value", "qualifier") and _item(value) in excluded:
                     left_out.add(subject)
-                if role in ("value", "normalized"):
-                    form = "" if role == "value" else "-normalized"
-                    values[(subject, form)] = value
+                if role == "qualifier":
+                    continue
+                if value.startswith("_:"):
+                    value = "_:"
+                form = "-normalized" if role == "normalized" else ""
+                values.add((subject, form, value))
 
-    def truthy(kept: bool) -> set[tuple[str, str, str, str]]:
-        return {
-            (*owners[statement], form, value)
-            for (statement, form), value in values.items()
-            if statement in owners
-            and (
-                statement not in left_out and statement not in deprecated
-                if kept
-                else statement in left_out
-            )
-        }
-
-    return left_out, truthy(False) - truthy(True)
+    # what the statements that go give their entities, and what those that
+    # stay at normal or preferred rank do; an unknown value is no other
+    # statement's, so a kept one keeps no truthy triple of one that goes
+    gone: set[tuple[str, str, str, str]] = set()
+    kept: set[tuple[str, str, str, str]] = set()
+    for statement, form, value in values:
+        if statement not in owners:
+            continue
+        given = (*owners[statement], form, value)
+        if statement in left_out:
+            gone.add(given)
+        elif statement not in deprecated and not value.startswith("_:"):
+            kept.add(given)
+    return left_out, gone - kept
 
 
 # The properties whose snaks the export drops, wherever one is written:
@@ -984,14 +1013,42 @@ def filter_public_export(
     and the excerpts of the references their statements keep.
 
     Returns (kept, dropped) line counts. Streams the gzipped dump four
-    times, holding in memory node-hash sets and, while it reads which
-    statements go, each statement's item, property and value.
+    times (three when `excluded` is empty). It holds in memory the nodes
+    of the statements that go, the truthy triples that go with them and
+    the hashes of the provenance nodes kept; and, while it reads which
+    statements go, each statement's entity, property and value, and the
+    statements deprecated.
     """
     dropped_predicates = tuple(f"/{pid}>" for pid in dropped_pids)
-    left_out, truthy_left_out = (set(), set())
-    if excluded:
-        left_out, truthy_left_out = statements_left_out(full_dump, excluded)
-    truthy_links: dict[str, re.Match | None] = {}
+    left_out, truthy_left_out = (
+        statements_left_out(full_dump, excluded)
+        if excluded
+        else (set(), set())
+    )
+    # what each predicate of a truthy triple gives, and whether each type
+    # is a property's "no value" class, read once
+    forms: dict[str, tuple[str, str] | None] = {}
+    no_values: dict[str, re.Match | None] = {}
+
+    def truthy(subject: str, predicate: str, value: str) -> tuple | None:
+        """The triple as ``statements_left_out`` returns a truthy one, an
+        unknown value as "_:", or None when it is none."""
+        if predicate == _TYPE:
+            if value not in no_values:
+                no_values[value] = _NO_VALUE.fullmatch(value)
+            no_value = no_values[value]
+            if no_value is None:
+                return None
+            return subject, no_value.group(1), "", value
+        if predicate not in forms:
+            match = _TRUTHY.fullmatch(predicate)
+            forms[predicate] = (
+                (match.group(2), match.group(1) or "") if match else None
+            )
+        form = forms[predicate]
+        if form is None:
+            return None
+        return subject, *form, "_:" if value.startswith("_:") else value
 
     def suppressed(line: str) -> bool:
         triple = _TRIPLE.fullmatch(line.removesuffix("\n"))
@@ -1004,21 +1061,10 @@ def filter_public_export(
         subject, predicate, value = triple.groups()
         if subject in left_out or value in left_out:
             return True
-        if truthy_left_out:
-            if predicate not in truthy_links:
-                truthy_links[predicate] = _TRUTHY.fullmatch(predicate)
-            truthy = truthy_links[predicate]
-            if (
-                truthy is not None
-                and (
-                    _item(subject),
-                    truthy.group(2),
-                    truthy.group(1) or "",
-                    value,
-                )
-                in truthy_left_out
-            ):
-                return True
+        if truthy_left_out and truthy(subject, predicate, value) in (
+            truthy_left_out
+        ):
+            return True
         return "/prop/" in predicate and predicate.endswith(dropped_predicates)
 
     def subject_hash(line: str) -> str | None:
