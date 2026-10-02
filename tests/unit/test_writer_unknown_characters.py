@@ -22,8 +22,10 @@ character rather than send a text the instance may keep in another form:
 * an entity whose label holds one is neither found nor minted, and every
   claim that mentions it is refused;
 * the run item's label or description holding one raises ValueError
-  before anything is read or written;
-* the registrar never makes an alias of a title that holds one.
+  before anything is read or written, as the place-hierarchy pass's run
+  item's label does;
+* the registrar never makes an alias of a title that holds one, and
+  always content-tags a new item's label made from one.
 
 Here the fake keeps text as an instance with Unicode 15.0's tables would
 (`newer_tables`), so a writer that sent such a text would be caught by a
@@ -62,6 +64,7 @@ from tests.unit.test_pipeline import (
 )
 from tests.unit.test_writer_limits import MEDIA, _quotes, _with_properties
 from yizkr.claims import ClaimBatch, RegionPercent
+from yizkr.pipeline.places import ensure_places_run_item
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import (
     INSTANCE_UNICODE,
@@ -69,6 +72,7 @@ from yizkr.pipeline.writer import (
     TEXT_LIMIT,
     BatchWriter,
     _term_text,
+    _unknown_fault,
     unknown_characters,
 )
 
@@ -155,7 +159,12 @@ def newer_tables(monkeypatch):
     """The fakes keep and serve text as an instance whose NFC follows
     Unicode 15.0's tables: the writer's (test_pipeline._cleaned_up, which
     every term, value and served text goes through) and the registrar's
-    (test_registrar.stored)."""
+    (test_registrar.stored). A sufficient fake, not a complete one: it
+    puts each run of marks in 15.0's order, which is all a test here needs
+    to see a text kept in another form than it was sent, but it composes
+    by Python's tables, so it composes nothing across one of the ten
+    marks as 15.0's NFC does (`a`, U+1E4EE and U+0301 stay as they are,
+    where 15.0 makes them `á` and U+1E4EE)."""
     cleaned_up = test_pipeline._cleaned_up
     stored = test_registrar.stored
     monkeypatch.setattr(
@@ -236,6 +245,27 @@ class TestUnknownCharacters:
     )
     def test_each_combining_mark_unicode_15_assigns_is_unknown(self, code):
         assert unknown_characters(f"Нина{chr(code)}") == [chr(code)]
+
+    @pytest.mark.skipif(
+        unicodedata.category("\u0897") != "Cn",
+        reason=(
+            f"this interpreter's Unicode {VERSION} tables assign U+0897, so "
+            f"it is no character they do not know"
+        ),
+    )
+    def test_a_mark_unicode_16_assigns_is_unknown(self):
+        # U+0897, the Arabic pepet, a combining mark Unicode 16.0 assigns:
+        # the rule is every character the tables leave unassigned, not
+        # the ten marks of 15.0, so an instance whose ICU moves on to 16.0
+        # is kept from text Python 3.11 to 3.13 does not know too
+        assert unknown_characters("Нина\u0897") == ["\u0897"]
+
+    def test_a_code_point_is_named_in_four_digits_at_least(self):
+        # U+0378, which no version of Unicode assigns yet
+        assert unknown_characters("Нина\u0378") == ["\u0378"]
+        assert _unknown_fault(["\u0378"]).startswith(
+            "holds U+0378, a character "
+        )
 
     @knows_the_mark
     def test_each_is_named_once_in_its_order(self):
@@ -401,6 +431,42 @@ class TestClaimsRefused:
             f"change would alter what the source says"
         ]
 
+    def test_a_text_gives_one_clause(self):
+        # the mark twice in the value: one clause names it, once
+        batch = _batch_of(_named(f"Нина {MARKED} {MARKED}"), MARRIED)
+        wiki = FakeWiki(LETTER, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.warnings == [
+            f"claim {claim_id(batch.claims[0])} (birth_name) is refused, and "
+            f"nothing of it is written: its value {FAULT}. A cut or any "
+            f"other change would alter what the source says"
+        ]
+
+    def test_a_value_and_a_qualifier_give_a_clause_each(self):
+        # the mark in the value and in a qualifier: one clause per text
+        claim = dict(
+            _named(f"Нина {MARKED}"),
+            qualifiers=[
+                {
+                    "property": "kinship_type",
+                    "value": {"type": "string", "value": f"вдова {MARKED}"},
+                }
+            ],
+        )
+        batch = _batch_of(claim, MARRIED)
+        wiki = FakeWiki(LETTER, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.warnings == [
+            f"claim {claim_id(batch.claims[0])} (birth_name) is refused, and "
+            f"nothing of it is written: its value {FAULT}; its kinship_type "
+            f"qualifier {FAULT}. A cut or any other change would alter what "
+            f"the source says"
+        ]
+
     def test_a_dry_run_refuses_the_same_and_writes_nothing(self):
         batch = _batch_of(
             _named(f"Нина {MARKED}"),
@@ -482,6 +548,39 @@ class TestLabels:
         again, unchanged = _written_again(wiki, batch)
         assert unchanged
         assert _same_counts(written, again)
+
+    def test_the_characters_of_every_ref_are_named(self):
+        # one ref gives her label with the mark, a later one with the Kawi
+        # killer: the label is named by the characters of both
+        batch = _batch_of(
+            _named("Лёбиг", "married_name", label=f"Нина {MARKED}"),
+            _widow(label="Нина Сартина\U00011f41"),
+        )
+        wiki = FakeWiki(LETTER, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.refused_terms == ["nina: label"]
+        assert written.warnings[-1] == (
+            f"entity 'nina' has a label that holds U+1E08F and U+11F41, "
+            f"characters Python's Unicode {VERSION} tables do not know, "
+            f"which the instance may put in another order in NFC: no item "
+            f"is found or made by it, and any claim that mentions it is "
+            f"refused"
+        )
+
+    def test_an_entity_mentioned_twice_gives_one_clause(self):
+        # a claim that names her as its subject and as its value
+        label = f"Нина {MARKED}"
+        claim = dict(
+            _widow(label=label), value={"type": "item", "value": _nina(label)}
+        )
+        batch = _batch_of(claim, MARRIED)
+        wiki = FakeWiki(LETTER, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.warnings[0].count("it mentions entity 'nina'") == 1
 
     def test_a_clean_record_label_outranks_a_marked_ref(self):
         # the manifest record names Nina cleanly, and the writer names her
@@ -686,6 +785,86 @@ class TestTermsLeftOut:
         assert unchanged
         assert _same_counts(written, again)
 
+    @pytest.mark.parametrize(
+        "marked_first", [True, False], ids=["marked first", "clean first"]
+    )
+    def test_the_first_refs_description_is_the_one_counted(self, marked_first):
+        # no manifest, two refs to Nina in claims the writer writes: the
+        # first gives the description the writer sends, and only it is
+        # named when it holds the mark
+        marked = _named("Лёбиг", "married_name", description=f"born {MARKED}")
+        clean = _named("Нина Сартина", description="вдова Рудольфа")
+        batch = _batch_of(
+            *((marked, clean) if marked_first else (clean, marked))
+        )
+        wiki = FakeWiki(LETTER, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert (written.written, written.refused) == (2, [])
+        assert written.refused_terms == (
+            ["nina: description"] if marked_first else []
+        )
+        nina = wiki.wbi.item.get(written.created_items["nina"])
+        sent = nina.descriptions.get("en")
+        assert (str(sent) if sent else None) == (
+            None if marked_first else "вдова Рудольфа"
+        )
+        again, unchanged = _written_again(wiki, batch)
+        assert unchanged
+        assert _same_counts(written, again)
+
+    def test_a_record_only_a_refused_claim_mentions_names_no_description(
+        self,
+    ):
+        # her one claim is refused for its value, so no item is minted for
+        # her and her description would never be sent: it is not named.
+        # Her alias still is, as the writer may send it to an item the
+        # resolve step matched her record to
+        batch = _batch_of(
+            _named(f"Нина {MARKED}"),
+            entities=(
+                {
+                    "id": "nina",
+                    "label": NINA,
+                    "kind": "human",
+                    "summary": f"Rudolf's widow, born {MARKED}",
+                    "aliases": [f"Нина {MARKED}"],
+                },
+            ),
+        )
+        wiki = FakeWiki(LETTER, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.refused == [claim_id(batch.claims[0])]
+        assert written.refused_terms == ["nina: alias"]
+        assert "nina" not in written.created_items
+
+    def test_each_term_left_out_is_named(self):
+        # two aliases with the mark: each is named, and warned of, so the
+        # count is of the terms left out
+        batch = _batch_of(
+            MARRIED,
+            entities=(
+                {
+                    "id": "nina",
+                    "label": NINA,
+                    "kind": "human",
+                    "aliases": [f"Нина {MARKED}", f"Нина Васильевна {MARKED}"],
+                },
+            ),
+        )
+        wiki = FakeWiki(LETTER, detached=True)
+
+        written = BatchWriter(wiki).write_batch(batch)
+
+        assert written.refused_terms == ["nina: alias", "nina: alias"]
+        assert (
+            written.warnings
+            == [f"entity 'nina' has an alias that {FAULT}: it is left out"] * 2
+        )
+
     @pytest.mark.parametrize("found", [False, True], ids=["minted", "found"])
     def test_a_type_hint_is_left_out(self, found):
         # (here) the directory's heading for the firm's trade, which a
@@ -866,6 +1045,19 @@ def test_a_run_item_term_refuses_the_batch_before_any_read(given, term):
     assert (wiki.index_reads, wiki.wbi.item.writes) == (0, 0)
 
 
+@knows_the_mark
+def test_a_place_hierarchy_run_label_refuses_before_any_read():
+    # the place-hierarchy pass's run item is found by its label, which
+    # holds the model's identifier
+    wiki = test_registrar.Untouchable()
+
+    with pytest.raises(ValueError, match="U\\+1E08F") as refused:
+        ensure_places_run_item(wiki, "0a9afd5746", f"fixture model {MARKED}")
+
+    assert "place-hierarchy run's label" in str(refused.value)
+    assert wiki.asked == []
+
+
 # -- the registrar ------------------------------------------------------------
 
 
@@ -885,7 +1077,71 @@ def test_a_title_registered_again_sends_no_edit(tmp_path, newer_tables):
     assert again.artifact_qid == first.artifact_qid
     assert wiki.writes == writes
     entity = wiki.entities[first.artifact_qid]
+    # a label made from a marked title is always tagged (the test below)
+    tag = hashlib.sha1(b"\x89PNG synthetic: Nina's letter").hexdigest()[:8]
     assert entity["labels"]["en"]["value"] == (
-        f"Letter of Нина {MARKED_KEPT} to Leopold"
+        f"Letter of Нина {MARKED_KEPT} to Leopold [{tag}]"
     )
     assert entity.get("aliases", {}).get("en", []) == []
+
+
+# two scans of the copy of Nina's letter, each in a folder of its own
+# under the same file name: two artifacts, one title
+LETTER_SCAN = b"\x89PNG synthetic scan of the copy of Nina's letter"
+SECOND_SCAN = b"\x89PNG synthetic scan of the copy of Nina's letter, 1959"
+
+
+@knows_the_mark
+def test_same_named_copies_under_a_marked_title_both_register(
+    tmp_path, newer_tables
+):
+    # the orchestrator gives both the same title and description, from
+    # the file name: the instance keeps the first one's label in its own
+    # order, which the second's would match unseen, and Wikibase would
+    # refuse the second's label and description as the first's, after the
+    # item is made. A marked title always takes the content tag, so each
+    # copy registers, with its page, under a label of its own
+    wiki = test_registrar.StoringWiki()
+    title = f"Letter of Нина {MARKED} to Leopold"
+    paths = [
+        test_registrar.scan(tmp_path, data, "letter-1958.png", folder)
+        for data, folder in ((LETTER_SCAN, "letters"), (SECOND_SCAN, "copies"))
+    ]
+
+    def register_all():
+        return [
+            test_registrar.register_artifact(
+                wiki,
+                media_path=path,
+                artifact_type="photograph",
+                title=title,
+                description=(
+                    "ingested by `yizkr ingest run` from letter-1958.png"
+                ),
+                pages=1,
+            )
+            for path in paths
+        ]
+
+    first = register_all()
+
+    # two artifacts and their two pages, and no item without a label
+    assert len(wiki.entities) == 4
+    assert all(test_registrar.label_of(wiki, qid) for qid in wiki.entities)
+    kept = f"Letter of Нина {MARKED_KEPT} to Leopold"
+    for result, data in zip(first, (LETTER_SCAN, SECOND_SCAN), strict=True):
+        tag = hashlib.sha1(data).hexdigest()[:8]
+        assert test_registrar.label_of(wiki, result.artifact_qid) == (
+            f"{kept} [{tag}]"
+        )
+        # a page's label shows its artifact's, tag and all, and is not
+        # tagged again
+        assert test_registrar.label_of(wiki, result.fragment_qids[1]) == (
+            f"{kept} [{tag}], page 1"
+        )
+    writes, snapshot = wiki.writes, copy.deepcopy(wiki.entities)
+
+    again = register_all()
+
+    assert [r.artifact_qid for r in again] == [r.artifact_qid for r in first]
+    assert (wiki.writes, wiki.entities) == (writes, snapshot)

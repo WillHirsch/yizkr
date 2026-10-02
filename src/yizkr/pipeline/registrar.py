@@ -91,11 +91,14 @@ an agreeing source's (ADR-0002); nothing existing is changed or removed
 (CLAUDE.md rule 3). A title, or a derived medium's name, that holds a
 character Python's Unicode tables do not know never becomes an alias
 (writer.unknown_characters): the instance may keep it in another form,
-and it would look missing on every registration. The bytes are uploaded
-only when no file of the item holds them, and an upload never overwrites
-a wiki file or stores bytes the wiki already holds
-(`WikiClient.upload_file`), so every `media file` holds the bytes its
-item's `media SHA-1` names.
+and it would look missing on every registration. A new item's label
+made from such a title always takes the media's content tag, as a label
+another item has does (Registrar._free_label), so that two same-named
+copies never share a label and description the instance refuses. The
+bytes are uploaded only when no file of the item holds them, and an
+upload never overwrites a wiki file or stores bytes the wiki already
+holds (`WikiClient.upload_file`), so every `media file` holds the bytes
+its item's `media SHA-1` names.
 """
 
 from __future__ import annotations
@@ -833,16 +836,27 @@ class Registrar:
         """The label `title + suffix`, or, when another item has that as
         its label, with the media's content tag at its end: labels stay
         unique per kind. `title` and `suffix` are in the form Wikibase
-        stores terms in (_stored_term). The title is cut, ending in "…",
-        so that the label fits the TERM_LIMIT characters Wikibase takes,
-        tagged or not (_fitted). A label that still does not fit, its
-        suffix taking all the room, is refused here, before anything is
-        written, so that a write Wikibase would refuse leaves no
-        half-made item behind."""
+        stores terms in (_stored_term). A label that holds a character
+        Python's Unicode tables do not know (unknown_characters) takes
+        the tag too, unless it bears it already, as a fragment label made
+        from its artifact's tagged label does: the instance may keep the
+        other items' labels in another form than this one, so whether it
+        is free cannot be told, and a label and description Wikibase
+        refused as another item's would leave an item without a label
+        behind. The title is cut, ending in "…", so that the label fits
+        the TERM_LIMIT characters Wikibase takes, tagged or not
+        (_fitted). A label that still does not fit, its suffix taking all
+        the room, or whose tagged form another item has too, is refused
+        here, before anything is written, so that a write Wikibase would
+        refuse leaves no half-made item behind. The tagged form is looked
+        for as written, so a marked one the instance keeps in another
+        form is not seen; another item holds it only by a clash of the
+        content tag's eight hex digits."""
         labels = self._read().labels
+        tag = f"[{content_sha1[:8]}]"
         label = _fitted(title, suffix)
-        if label in labels:
-            tagged = _fitted(title, f"{suffix} [{content_sha1[:8]}]")
+        if label in labels or (unknown_characters(label) and tag not in label):
+            tagged = _fitted(title, f"{suffix} {tag}")
             if tagged in labels:
                 raise RuntimeError(
                     f"the labels {label!r} and {tagged!r} both name other "
@@ -907,9 +921,11 @@ class Registrar:
         in (_stored_term), and one blank in that form is refused. The
         bytes are uploaded under the file's name in the form MediaWiki
         takes as it is (_upload_name). A new item's label is the title,
-        content-tagged when another item has it, and cut to fit, ending in
-        "…", when longer than the TERM_LIMIT characters Wikibase takes
-        (_free_label), and its description is cut so too (_new_artifact).
+        content-tagged when another item has it or when it holds a
+        character Python's Unicode tables do not know, and cut to fit,
+        ending in "…", when longer than the TERM_LIMIT characters
+        Wikibase takes (_free_label), and its description is cut so too
+        (_new_artifact).
         The result's `flags` are what the item, made or found, is flagged
         for (Registrar._flags), as `self.flags` gathers them.
         """

@@ -48,7 +48,16 @@
   a type hint that holds one is left out, never changed, and the write's
   result names it in `refused_terms`, with a warning. An entity whose label
   holds one is neither found nor minted, and each claim that mentions
-  it is refused. The registrar makes no alias of a title that holds one.
+  it is refused. The registrar makes no alias of a title that holds one,
+  and content-tags a new item's label made from one, as it does a taken
+  label, so two same-named copies stay two items whatever form the
+  instance keeps the first one's label in. A description is named in
+  `refused_terms` only when a claim the writer writes mentions its
+  entity, as only the item such a claim mints would take it. A run
+  item's label holding one, an extraction run's or the place-hierarchy
+  pass's, or an extraction run's description, raises ValueError before
+  the run item is looked up, and so before anything is written, as a
+  re-run would not find the item by it.
   The interpreter's tables must be no newer than the instance's, which a
   unit test checks (writer's INSTANCE_UNICODE; ADR-0010, #431).
 - Schema-level statements (e.g. the subclass hierarchy) carry
@@ -334,11 +343,12 @@ artifact a new QID, changes neither.
   *n* is the item that is an `instance of artifact fragment` and `part
   of` the artifact with `page number` *n*, whatever its label. A new one
   is labelled `"<artifact label>, page <n>"` (content-tagged if that label
-  is taken, and the artifact's label cut to end in "…" if the whole would
-  pass 250 characters) and made in one write with both statements, each
-  stated in the artifact. So same-titled artifacts never share a
-  fragment, and a derived medium, `part of` its container with a page
-  qualifier too, is never taken for one.
+  is taken, or if it holds a character Python's Unicode tables do not
+  know and bears no tag yet; the artifact's label cut to end in "…" if
+  the whole would pass 250 characters) and made in one write with both
+  statements, each stated in the artifact. So same-titled artifacts
+  never share a fragment, and a derived medium, `part of` its container
+  with a page qualifier too, is never taken for one.
 - Machine-proposed entities (people, places) get their `instance of`
   statement referenced to the artifact that mentions them. A later
   source that names the entity adds its own references (the artifact and

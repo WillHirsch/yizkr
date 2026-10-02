@@ -30,6 +30,16 @@ the second: on an instance that kept the mark in Python's order, a
 rewrite would send no edit whatever the writer refused. Every test here
 is skipped on an interpreter whose tables know U+1E08F.
 
+A fourth test registers two copies of the letter's scan, different bytes
+under one file name in two folders, with one title that holds the mark
+and one description, as the orchestrator gives them: the instance keeps
+the first one's label in its own order, so the registrar cannot tell
+whether the label is free, and gives each copy's label its content tag.
+Both register, each write makes no item but the two artifacts, and a
+second registration sends no edit. Their bytes and title carry a marker
+over the registrar's source too, so each version of the registrar meets
+them as a first registration does.
+
 Every entity's label carries a marker: six hex digits of a hash over the
 fixture, its cited SHA-1 replaced by "A", and over the writer's source, as
 test_live_stored_terms.py's labels do, so each version of the fixture and
@@ -51,11 +61,12 @@ import pytest
 from wikibaseintegrator.entities.baseentity import BaseEntity
 
 from yizkr.claims import ClaimBatch
-from yizkr.pipeline import writer
+from yizkr.pipeline import registrar, writer
+from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
 
-from .conftest import register_fictional
+from .conftest import fictional_png, register_fictional
 
 pytestmark = pytest.mark.live
 
@@ -297,3 +308,73 @@ def test_the_instance_keeps_the_mark_in_another_order(client):
     # 15.0's tables, is not Python's, by its own
     assert kept == f"Нина {MARKED_KEPT}"
     assert kept != unicodedata.normalize("NFC", sent)
+
+
+def copies_marker() -> str:
+    """The marker of the copies' fixture: over the batch's marker and the
+    registrar's source, so each version of the registrar meets the copies
+    as a first registration does."""
+    return hashlib.sha256(
+        fixture_marker().encode() + Path(registrar.__file__).read_bytes()
+    ).hexdigest()[:6]
+
+
+@knows_the_mark
+def test_same_named_copies_under_a_marked_title_both_register(
+    client, tmp_path, monkeypatch
+):
+    marker = copies_marker()
+    title = f"{prefix_of(marker)}letter of Нина {MARKED}"
+    name = f"unknown-character-letter-{marker}.png"
+    paths = []
+    for copy in ("letters", "copies"):
+        path = tmp_path / copy / name
+        path.parent.mkdir()
+        path.write_bytes(
+            fictional_png(
+                f"yizkr live test: unknown character {copy} {marker}"
+            )
+        )
+        paths.append(path)
+    written: list[str | None] = []
+    write = BaseEntity._write
+
+    def counted(entity, *args, **kwargs):
+        result = write(entity, *args, **kwargs)
+        written.append(result.get("id"))
+        return result
+
+    monkeypatch.setattr(BaseEntity, "_write", counted)
+
+    def register_both():
+        return [
+            register_artifact(
+                client,
+                media_path=path,
+                artifact_type="artifact",
+                title=title,
+                description="written by tests/integration; safe to delete",
+            )
+            for path in paths
+        ]
+
+    # the first registration of this version makes both; a later
+    # session's finds them
+    first = register_both()
+
+    qids = [result.artifact_qid for result in first]
+    assert len(set(qids)) == 2
+    # every write went to one of the two artifacts: no item was left
+    # without its label by a write Wikibase refused
+    assert set(written) <= set(qids)
+    for qid, path in zip(qids, paths, strict=True):
+        tag = hashlib.sha1(path.read_bytes()).hexdigest()[:8]
+        assert english(entity(client, qid), "labels") == (
+            f"{prefix_of(marker)}letter of Нина {MARKED_KEPT} [{tag}]"
+        )
+    written.clear()
+
+    again = register_both()
+
+    assert [result.artifact_qid for result in again] == qids
+    assert written == []

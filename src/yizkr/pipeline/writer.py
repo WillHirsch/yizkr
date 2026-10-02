@@ -174,16 +174,18 @@ before it are written:
 * a reference's page number and region only place the claim in its
   source, as its excerpt only helps a reader check it there, so each is
   put on one line, cleaned up and cut to the limit rather than refused
-  (`_locator_text`): whitespace at either end goes, a line break inside
-  becomes " | ", visibly, a tab a space, and each other character the
-  instance cleans up U+FFFD, as the instance would give it back. A text
-  still over the limit is cut at a break between words and ends with
-  CUT_MARK (" …"), "sha1" and the first 12 hex digits of the SHA-1 of
-  the whole text (`_cut`). A locator or excerpt with nothing left is
-  left out. Each depends on the text alone, so a re-run builds the block
-  the instance keeps, and is skipped (step 4). The digest keeps two page
-  numbers, regions or excerpts that agree up to the cut apart, so the
-  two places a source asserts a value in stay two reference blocks;
+  (`_locator_text`; one holding a character Python's Unicode tables do
+  not know refuses its claim, as below): whitespace at either end goes,
+  a line break inside becomes " | ", visibly, a tab a space, and each
+  other character the instance cleans up U+FFFD, as the instance would
+  give it back. A text still over the limit is cut at a break between
+  words and ends with CUT_MARK (" …"), "sha1" and the first 12 hex
+  digits of the SHA-1 of the whole text (`_cut`). A locator or excerpt
+  with nothing left is left out. Each depends on the text alone, so a
+  re-run builds the block the instance keeps, and is skipped (step 4).
+  The digest keeps two page numbers, regions or excerpts that agree up
+  to the cut apart, so the two places a source asserts a value in stay
+  two reference blocks;
 * a label, a description or an alias the writer makes goes in the form
   the instance keeps a term in (`stored_term`: trimmed, cleaned up and
   in NFC, in that order, as Wikibase's trimToNFC does it), and one still
@@ -211,7 +213,9 @@ before it are written:
   holds one is refused whole, as above. A description, an alias or a
   type hint that holds one is left out, never changed, and the result's
   `refused_terms` names it ("<local id>: <term>"), with a warning that
-  names its characters by their code points. An entity whose label
+  names its characters by their code points; a description is named
+  only when a claim the writer writes mentions its entity, as it goes
+  only on the item such a claim mints. An entity whose label
   holds one has no item the writer can find or mint by it: each claim
   that mentions it, as its subject, its value or a qualifier's, is
   refused before the first write, and `refused_terms` names the label;
@@ -467,7 +471,9 @@ class WriteResult:
     # each label, description, alias or type hint of the batch's entities
     # left out because it holds a character Python's Unicode tables do not
     # know (unknown_characters), named "<local id>: <term>", in the order
-    # write_batch finds them before its first write; a warning names each
+    # write_batch finds them before its first write; a warning names each.
+    # A description is named only when a claim the writer writes mentions
+    # its entity, as only the item such a claim mints would take it
     refused_terms: list[str] = field(default_factory=list)
 
 
@@ -1205,8 +1211,10 @@ class BatchWriter:
         # the locators and the excerpt only place the claim in its source
         # and help a reader check it there: each goes in NFC, on one line,
         # cleaned up as the instance gives it back and cut to what the
-        # instance holds, never failing the write, and one of whitespace
-        # alone is left out (_locator_text)
+        # instance holds, never failing the write (one holding a
+        # character Python's Unicode tables do not know has refused its
+        # claim before: _refusals), and one of whitespace alone is left
+        # out (_locator_text)
         source = claim.source if claim is not None else None
         page = _locator_text(source.page_number or "") if source else ""
         if page:
@@ -1623,11 +1631,15 @@ class BatchWriter:
         (_unnamed): their label is named, and nothing else of them, as
         nothing else of them is sent. An approved equivalence's record
         gives its label as an alias of its item, and no description, as
-        the writer sends none to an item it names. A local id without a
-        manifest record gives the description of the first ref to it in a
-        claim the writer writes, as `_unknown_kinds` reads its kind;
-        `refused` holds the places in the batch of the claims the writer
-        refuses."""
+        the writer sends none to an item it names. A description goes
+        only on the item a ref mints, so one is named only when a claim
+        the writer writes mentions its local id: a record's own, and for
+        a local id without a manifest record, that of the first ref to it
+        in such a claim, as `_unknown_kinds` reads its kind. A record's
+        aliases and type hint are named whether or not such a claim
+        mentions it, as the writer may send them to an item the resolve
+        step matched the record to. `refused` holds the places in the
+        batch of the claims the writer refuses."""
         named: list[str] = []
         warnings: list[str] = []
 
@@ -1648,28 +1660,26 @@ class BatchWriter:
                 f"{_unknown_fault(unknown)}: no item is found or made by it, "
                 f"and any claim that mentions it is refused"
             )
-        for record in self._entity_records.values():
-            if record.id in unnamed:
-                continue
-            if record.qid:
-                leave_out(record.id, "label", record.label)
-            else:
-                leave_out(record.id, "description", record.summary)
-            for alias in record.aliases:
-                leave_out(record.id, "alias", alias)
-            leave_out(record.id, "type hint", record.type_hint)
         first: dict[str, LocalRef] = {}
         for index, claim in enumerate(batch.claims):
             if index in refused:
                 continue
             for ref in self._refs(claim):
-                if (
-                    isinstance(ref, LocalRef)
-                    and ref.local_id not in self._entity_records
-                ):
+                if isinstance(ref, LocalRef):
                     first.setdefault(ref.local_id, ref)
+        for record in self._entity_records.values():
+            if record.id in unnamed:
+                continue
+            if record.qid:
+                leave_out(record.id, "label", record.label)
+            elif record.id in first:
+                leave_out(record.id, "description", record.summary)
+            for alias in record.aliases:
+                leave_out(record.id, "alias", alias)
+            leave_out(record.id, "type hint", record.type_hint)
         for local_id, ref in first.items():
-            leave_out(local_id, "description", ref.description)
+            if local_id not in self._entity_records:
+                leave_out(local_id, "description", ref.description)
         return named, warnings
 
     def _unknown_kinds(
