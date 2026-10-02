@@ -364,6 +364,141 @@ class TestTheChunkPrompt:
         )
 
 
+# -- nicknames and relational appellations (ADR-0018) ------------------------
+
+# One distinction, in the same words in every prompt that routes a name
+# (#434): an absolute name is a nickname, a relational one `referred_to_as`.
+NICKNAME_RULE = (
+    "A name the source gives as what the person is called, by anyone, is a "
+    'nickname ("Peppi", "Gustl"): an alias, a record nickname, and a '
+    "`nickname` claim only where the source marks the type."
+)
+APPELLATION_RULE = (
+    "A name the source gives as what one person calls another, with or "
+    "without a stated perspective, or that names the person through a "
+    "relation but is no literal kinship term "
+    '("Bubele", "Nana Maisie", "Рудольфиха"), is `referred_to_as`: '
+    "never an alias and never a record nickname."
+)
+_MANIFEST_ALIASES, _RECORD = flat(ENTITY_MANIFEST_PROMPT).split(
+    "The mention record (ADR-0035)"
+)
+NAME_ROUTING_SITES = pytest.mark.parametrize(
+    "site",
+    [flat(CHUNK_PROMPT), _MANIFEST_ALIASES, _RECORD],
+    ids=["chunk", "manifest-aliases", "record"],
+)
+
+
+class TestNicknamesAndAppellations:
+    @NAME_ROUTING_SITES
+    def test_an_absolute_name_is_a_nickname(self, site):
+        assert NICKNAME_RULE in site
+
+    @NAME_ROUTING_SITES
+    def test_a_relational_name_is_referred_to_as(self, site):
+        assert APPELLATION_RULE in site
+
+    def test_the_chunk_types_a_nickname_by_what_the_person_is_called(self):
+        assert (
+            "nickname (a name marked as what the person is called, such as "
+            'an "aka")'
+        ) in flat(CHUNK_PROMPT)
+
+    def test_the_chunk_routes_a_relational_name_to_referred_to_as(self):
+        assert (
+            "If it is NOT a literal relation (a courtesy title such as a "
+            '"Tante" who is no aunt, "Nana Maisie", or a name one person '
+            'calls another, "Bubele"), record it as `referred_to_as`'
+        ) in flat(CHUNK_PROMPT)
+
+    def test_an_alias_is_no_relational_appellation(self):
+        assert (
+            "a literal kinship term becomes `relative` + `kinship_type`; any "
+            "other relational appellation becomes `referred_to_as`"
+        ) in _MANIFEST_ALIASES
+
+    def test_a_courtesy_label_is_a_relational_appellation(self):
+        assert (
+            "`courtesy`, a courtesy title or other relational appellation "
+            'that is no literal relation ("Nana Maisie")'
+        ) in _RECORD
+
+    def test_a_diminutive_nickname_is_also_a_given_name(self):
+        assert (
+            'A nickname that is a form of a given name ("Gustl", "Gus") is '
+            "also that given name, with its standard form where the document "
+            'supports it; one that stands for no given name ("Peppi") has no '
+            "standard form."
+        ) in _RECORD
+
+    @NAME_ROUTING_SITES
+    def test_the_size_of_the_calling_group_routes_no_name(self, site):
+        """The family's "Gustl at home" is a nickname: what makes a name
+        relational is that it names the person through someone, never how
+        many call them so."""
+        assert "or group" not in site
+
+    def test_an_unsure_term_is_referred_to_as(self):
+        assert (
+            "When unsure whether a term is literal kinship, prefer "
+            "`referred_to_as`"
+        ) in flat(CHUNK_PROMPT)
+
+    def test_no_relational_appellation_is_an_alias(self):
+        assert (
+            "Never record any of these as an alias (ADR-0018);"
+            in _MANIFEST_ALIASES
+        )
+
+    def test_the_vocabulary_draws_the_same_line(self):
+        """The single-call prompt names the two properties only through the
+        manifest's descriptions, which use the same words."""
+        assert "{property_keys}" in EXTRACTION_PROMPT
+        properties, _items = vocabulary_prompt_lines()
+        assert (
+            "nickname: monolingualtext — a name the source gives as what the "
+            "person is called, by anyone"
+        ) in properties
+        assert (
+            "never what one person calls another, and never a name that names "
+            "the person through a relation (`referred_to_as`)"
+        ) in properties
+        assert (
+            "referred_to_as: monolingualtext — a name the source gives as "
+            "what one person calls another, with or without a stated "
+            "perspective, or that names the person through a relation, no "
+            "literal kinship term; verbatim, qualified with `perspective` "
+            "when the ego is known"
+        ) in properties
+
+    def test_the_critic_routes_any_other_appellation_to_referred_to_as(self):
+        assert (
+            "`referred_to_as` (any other relational appellation)"
+            in (critique.CATEGORIES["kinship_term_alias"])
+        )
+
+    @pytest.mark.parametrize(
+        "ambiguous",
+        [
+            "pet name",
+            "pet appellation",
+            "family/pet",
+            "courtesy/pet",
+            "informal/pet",
+        ],
+    )
+    def test_no_prompt_gives_a_pet_name_two_homes(self, ambiguous):
+        properties, _items = vocabulary_prompt_lines()
+        texts = {
+            **PROMPTS,
+            "vocabulary": properties,
+            "critic": str(critique.CATEGORIES),
+        }
+        for name, text in texts.items():
+            assert ambiguous not in flat(text), name
+
+
 # -- the manifest: records and notes set aside, and counted ------------------
 
 

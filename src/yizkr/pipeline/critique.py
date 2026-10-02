@@ -70,7 +70,8 @@ CATEGORIES: dict[str, str] = {
         'a kinship term recorded as an alias ("my husband", "our great '
         'grandmother", "Oma", "Nana Maisie"): it is not a name; suggest '
         "`relative` + `kinship_type` (a literal kinship term) or "
-        "`referred_to_as` (a courtesy or pet name), NOT an alias (ADR-0018)"
+        "`referred_to_as` (any other relational appellation), NOT an alias "
+        "(ADR-0018)"
     ),
     "deictic_alias": (
         'a deictic or generic reference recorded as an alias ("the '

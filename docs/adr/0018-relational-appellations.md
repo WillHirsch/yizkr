@@ -12,6 +12,17 @@ Amended by [ADR-0035](0035-mention-records.md) (owner decision
 2026-09-29, #385): a `relative` claim gains a controlled `kinship_class`,
 with the side, degree and removes its term states, beside the verbatim
 `kinship_type` (ADR-0035 §3.3).
+Amended by #434 (2026-10-02): a name is placed by whether it is absolute
+or relational, never by whether it is a pet name. A name the source
+gives as what the person is called, by anyone ("Peppi", "Gustl"), is a
+nickname: an alias, a record nickname (ADR-0035 §2.1), and a `nickname`
+claim only where the source marks the type. A name the source gives as
+what one person calls another, with or without a stated perspective, or
+that names the person through a relation but is no literal kinship term
+("Bubele", "Nana Maisie", "Рудольфиха", "Rudolf's wife"), is
+`referred_to_as` (B): never an alias and never a record nickname. The chunk, manifest and record prompts say
+this in the same words, and the two properties' manifest descriptions
+state the same rule.
 
 ## Context
 

@@ -51,6 +51,15 @@ record, so its English signatures only flag one; the answer is the text
 after the last tool result; and detection reads a text outside its
 editorial marks.
 
+Amended by #434 (2026-10-02): a record nickname is a name the source
+gives as what the person is called, by anyone, and so also an alias; a
+name the source gives as what one person calls another, or that names
+the person through a relation but is no literal kinship term, is
+ADR-0018's `referred_to_as`, never an alias and never a record nickname
+(§2.1). A nickname that is a form of a given name is also that given
+name. The `courtesy` status is a courtesy title or other relational
+appellation that is no literal relation.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of
@@ -258,8 +267,14 @@ to `toponym`, and a surname's type to `other`.
   The postcard's lone "Gustl" never spells the full form, so it gets
   none, and its written form stands in. A full name is its own standard
   form. A standard form is never a translation, and an initial has none.
-  A pet name that stands for no given name ("Peppi", "Muckel") is a
-  nickname, with no standard form.
+  A name the source gives as what the person is called, by anyone, is a
+  nickname. One that is a form of a given name ("Gustl", "Gus") is also
+  that given name, with its standard form where the document supports
+  it; one that stands for no given name ("Peppi", "Muckel") has no
+  standard form. A name the source gives as what one person calls
+  another, or that names the person through a relation but is no
+  literal kinship term ("Bubele", "Nana Maisie", "Рудольфиха"), is no
+  nickname: it is `referred_to_as` (ADR-0018), never an alias.
 - **A patronymic** is a name part of its own, never a surname. The
   relation it states is a `father` claim where the source names the
   father (§3.1). (An example follows when #400 adds a patronymic to the
@@ -279,9 +294,9 @@ to `toponym`, and a surname's type to `other`.
   - `role`: a role or form-field label, such as INFORMANT or MOTHER
     (ADR-0013);
   - `kinship`: a literal kinship term (ADR-0018 (A));
-  - `courtesy`: a courtesy title or pet appellation that is no literal
-    relation, such as "Nana Maisie" where a document names her no other
-    way (ADR-0018 (B));
+  - `courtesy`: a courtesy title or other relational appellation that
+    is no literal relation, such as "Nana Maisie" where a document names
+    her no other way (ADR-0018 (B));
   - `placeholder`: the source's stand-in for a name it does not know,
     such as "N.N. Löbig";
   - `description`: a label the model composes for someone the document
