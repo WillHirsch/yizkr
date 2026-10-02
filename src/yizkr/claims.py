@@ -436,6 +436,20 @@ class SourceReference(StrictModel):
     # its content hashes are those of any other source.
     printed_page_number: SkipJsonSchema[str | None] = None
 
+    @model_validator(mode="after")
+    def _a_printed_page_beside_its_page(self) -> SourceReference:
+        """A printed page number names the page `page_number` names, so a
+        source that gives one gives that page too: a prepared claims
+        file's as much as an extractor's."""
+        if (
+            self.printed_page_number is not None
+            and not (self.page_number or "").strip()
+        ):
+            raise ValueError(
+                "a printed page number needs the page number it stands beside"
+            )
+        return self
+
     @model_serializer(mode="wrap")
     def _omit_absent_printed_page_number(
         self, handler: SerializerFunctionWrapHandler

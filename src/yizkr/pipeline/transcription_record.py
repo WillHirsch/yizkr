@@ -76,6 +76,9 @@ EDITORIAL_MARKS = (ILLEGIBLE, UNCERTAIN, REDACTED)
 # bracketed runs are left alone.
 EDITORIAL_MARK = re.compile(r"\[[^\[\]\n]{0,200}\]")
 
+# a UTF-16 surrogate standing alone, which no UTF-8 text can hold
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
 TRANSCRIBED = "transcribed"
 BLANK = "blank"
 ILLEGIBLE_PAGE = "illegible"
@@ -155,6 +158,9 @@ class RecordPage(BaseModel):
             if not math.isfinite(value):
                 raise ValueError("the printed page number is not finite")
             return str(int(value)) if float(value).is_integer() else str(value)
+        if isinstance(value, str) and _LONE_SURROGATE.search(value):
+            # a transcription's text refuses one, so its page number does
+            raise ValueError("the printed page number holds a lone surrogate")
         return value
 
     @field_validator("text", "notes", mode="before")
@@ -330,12 +336,14 @@ def prompt_text(text: str, pages: Iterable[object]) -> str:
     between the end of the page before and the start of the page's text,
     where its opening lies, as a whole line; the image markers there
     (`[Page N, image k: sha1:...]`) are left as they are, and a page whose
-    marker is not found there shows no number. With no printed page
-    number, the text is returned as it is."""
+    marker is not found there shows no number. A printed page number of
+    whitespace alone is none, as no claim is ever given it
+    (extract.printed_page_number). With no printed page number, the
+    text is returned as it is."""
     pieces, cursor, last = [], 0, 0
     for page in pages:
         printed = getattr(page, "printed_page", None)
-        if printed:
+        if printed and printed.strip():
             marker = page_marker(page.page)
             at = _marker_line(text, marker, last, page.start)
             if at is not None:

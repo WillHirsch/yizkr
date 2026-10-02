@@ -153,6 +153,15 @@ places.
   record and a transcription with no record get none, and whatever the
   model wrote there is dropped. The claim schema the prompts carry does
   not show the field, and a source without one serialises as before.
+  The number describes the physical page the `page number` names: a
+  page that shows a spread with only one half numbered keeps that one
+  number for every claim read from it, the unnumbered half's included,
+  since a PDF read page by page and one read whole give that page the
+  same number. A printed number of whitespace alone is none, in the
+  prompt as in the locator. Validation refuses a source that gives a
+  printed page number without a page number, so a prepared claims file
+  cannot write one alone. A `printed_page` holding a lone surrogate
+  fails the record, as page text holding one fails the transcription.
   The writer puts it in the claim's `stated in` block beside the page
   number, as the reference property `printed page number` (MODELING.md,
   "Reference pattern"; ADR-0003). An excerpt is extracted from its own

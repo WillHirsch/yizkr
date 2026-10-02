@@ -66,6 +66,16 @@ class TestRealManifest:
         ):
             assert key in manifest.properties, key
 
+    def test_the_printed_page_number_is_a_reference_string(self, manifest):
+        """The writer sends it as a string snak of a reference block, and
+        bootstrap mints it by its label."""
+        printed = manifest.properties["printed_page_number"]
+        assert (printed.label, printed.datatype, printed.reference) == (
+            "printed page number",
+            "string",
+            True,
+        )
+
     def test_uncertainty_properties_present(self, manifest):
         """Uncertainty is structural (docs/MODELING.md)."""
         for key in ("earliest_date", "latest_date", "sourcing_circumstances"):

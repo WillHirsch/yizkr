@@ -20,6 +20,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from tests.fixtures import pdfs
 from tests.fixtures.records import record_page
@@ -71,7 +72,9 @@ from yizkr.pipeline.transcribe import (
 )
 from yizkr.pipeline.transcription_record import (
     UNCLASSIFIED,
+    RecordError,
     TranscriptionRecord,
+    parse_record,
     prompt_text,
 )
 from yizkr.pipeline.writer import BatchWriter
@@ -221,6 +224,20 @@ class TestThePromptText:
         assert transcription.prompt_text() == transcription.text
         plain = Transcription(artifact=BOOKLET_REF, text=SIX, engine="t")
         assert plain.prompt_text() == SIX
+
+    @pytest.mark.parametrize("blank", ["  ", "\t"])
+    def test_a_printed_number_of_whitespace_alone_shows_none(self, blank):
+        """No claim is ever given one, so no prompt shows one."""
+        transcription = booklet(p6=blank)
+        assert transcription.prompt_text() == transcription.text
+
+    def test_a_last_page_of_its_marker_alone_shows_its_number(self):
+        """The booklet's back page is blank but printed: the text ends
+        with its marker, which still shows the number."""
+        page = SimpleNamespace(page=1, start=8, end=8, printed_page="1")
+        assert prompt_text("[Page 1]", [page]) == (
+            '[Page 1] (printed page number "1")'
+        )
 
     def test_each_page_shows_its_own_number(self):
         transcription = booklet(p3="1", p6="4")
@@ -521,6 +538,14 @@ class TestTheLocatorIsLookedUp:
     def test_only_one_physical_page_is_looked_up(self, page, printed):
         assert printed_page_number(page, {6: "4"}) == printed
 
+    def test_a_page_past_999_is_looked_up(self):
+        assert printed_page_number("1000", {1000: "998"}) == "998"
+
+    def test_the_printed_number_is_kept_as_given(self):
+        """The record's number exactly as given, which the claim's id
+        hashes; the writer cleans it to one line as it writes it."""
+        assert printed_page_number("6", {6: " 4 "}) == " 4 "
+
     def test_a_printed_number_of_whitespace_alone_is_none(self):
         """The writer writes nothing for it, so the claim carries none."""
         assert printed_page_number("6", {6: "  "}) is None
@@ -532,6 +557,56 @@ class TestTheLocatorIsLookedUp:
         (source,) = extracted(tier, [sibling("9" * 5000)])
         assert source.printed_page_number is None
         assert source.page_number == "9" * 5000
+
+
+class TestTheSourceIsValidated:
+    @pytest.mark.parametrize("page", [None, "", "  "])
+    def test_a_printed_page_without_its_page_is_refused(self, page):
+        """A prepared claims file cannot cite a printed page alone: it
+        names the page `page_number` names."""
+        located = {} if page is None else {"page_number": page}
+        with pytest.raises(ValidationError, match="page number it stands"):
+            SourceReference.model_validate(
+                {
+                    "artifact": BOOKLET_REF.model_dump(mode="json"),
+                    "printed_page_number": "4",
+                    **located,
+                }
+            )
+
+    def test_a_prepared_batch_with_one_alone_is_refused(self):
+        with pytest.raises(ValidationError, match="page number it stands"):
+            booklet_batch({"printed_page_number": "4"})
+
+    def test_a_printed_page_beside_its_page_is_kept(self):
+        (claim,) = booklet_batch(
+            {"page_number": "6", "printed_page_number": "4"}
+        ).claims
+        assert claim.source.printed_page_number == "4"
+
+
+class TestTheRecordRefusesALoneSurrogate:
+    def test_a_printed_page_holding_one_fails_the_record(self):
+        """As page text holding one fails the transcription; the reason
+        never quotes the value."""
+        answer = json.dumps(
+            {
+                "document_class": UNCLASSIFIED,
+                "pages": [record_page(1, SIX, printed_page="4\ud800")],
+            }
+        )
+        with pytest.raises(RecordError, match="lone surrogate") as raised:
+            parse_record(answer)
+        assert "\ud800" not in str(raised.value)
+
+    def test_a_printed_page_without_one_passes(self):
+        answer = json.dumps(
+            {
+                "document_class": UNCLASSIFIED,
+                "pages": [record_page(1, SIX, printed_page="4")],
+            }
+        )
+        assert parse_record(answer).pages[0].printed_page == "4"
 
 
 class TestTheSourceSerialisesAsBefore:

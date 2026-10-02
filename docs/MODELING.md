@@ -160,10 +160,15 @@ Every statement carries at least one reference with:
   page whose record gives a printed number. A range, a page given in
   words, a page the record gives no printed number and a transcription
   with no record (a text file's, a deck's slide text) get none; none is
-  ever guessed (#424). An excerpt's claims read the excerpt's own
-  transcription, so they never take the printed number of the page that
-  places it, and its `part of` the container keeps the container's
-  physical page (ADR-0008)
+  ever guessed (#424). It describes the physical page: a page that
+  shows a spread with one half numbered keeps that one number for
+  every claim read from it, as both ways of reading a PDF give it the
+  same (ADR-0037 §2). A source that gives a printed page number gives
+  its page number too: validation refuses one without the other, in a
+  prepared claims file as in an extractor's batch. An excerpt's claims
+  read the excerpt's own transcription, so they never take the printed
+  number of the page that places it, and its `part of` the container
+  keeps the container's physical page (ADR-0008)
 - optional short transcription excerpt supporting human verification,
   tagged with the language it is written in (BCP-47). `yizkr ingest run`
   takes each document's language from its transcription by default
