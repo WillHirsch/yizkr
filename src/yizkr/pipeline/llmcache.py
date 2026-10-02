@@ -235,7 +235,8 @@ def _dump(entry: Mapping[str, Any]) -> str:
 
 
 def _read(path: Path, key: str) -> dict | None:
-    """The entry at `path` if it is a whole entry for `key`, else None."""
+    """The entry at `path` if it is a whole entry for `key`, else None.
+    An entry whose ``gave_up`` is there but no boolean is damaged."""
     try:
         entry = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -244,6 +245,7 @@ def _read(path: Path, key: str) -> dict | None:
         not isinstance(entry, dict)
         or entry.get("key") != key
         or not isinstance(entry.get("response"), str)
+        or not isinstance(entry.get("gave_up", False), bool)
     ):
         return None
     return entry
@@ -1388,21 +1390,23 @@ class CachingClient:
         Whatever `ask` raises propagates, and nothing is stored, but for
         an attempt's give-up at the output limit (OutputLimitReached),
         which is kept as a give-up entry (_gave_up_entry). A hit on a
-        give-up entry raises OutputLimitReached, as the engine did, and
-        asks nothing."""
+        give-up entry, whose event says ``gave_up``, raises
+        OutputLimitReached, as the engine did, and asks nothing."""
         key = call_key(components)
         refresh = self.cache.refreshing(self.role, key)
         if not refresh:
             entry = self.cache.get(key)
             if entry is not None:
                 origin = entry.get("origin", ENGINE)
+                gave_up = entry.get("gave_up") is True
                 self._emit(
                     HIT,
                     call=call,
                     key=key,
                     reason=KEY_MATCH if origin == ENGINE else origin,
+                    **({"gave_up": True} if gave_up else {}),
                 )
-                if entry.get("gave_up") is True:
+                if gave_up:
                     raise OutputLimitReached()
                 return CachedResponse(
                     entry["response"],

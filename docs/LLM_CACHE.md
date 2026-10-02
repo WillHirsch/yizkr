@@ -377,8 +377,11 @@ has `rejected` from the start. An attempt the claude CLI gave up on at
 the output limit is kept as a give-up entry (Attempts, below): its
 `response` is empty, `gave_up` is `true`, and its provenance holds what
 the call's stream reported (`llm.ClaudeCodeClient.last_stream`), its
-`stop_reason` and `api_error` among them. An entry is served only under
-the key it records.
+`stop_reason` and `api_error` among them; an entry whose `gave_up` is
+anything but a boolean is damaged, read as no entry, so the call misses,
+and the next entry stored under its key moves it aside as replaced. An
+entry is served only
+under the key it records.
 
 **Writes are atomic, and nothing is overwritten.** An entry is written to
 a staging file beside it, flushed, and published by a link that fails
@@ -593,8 +596,17 @@ attempt from the cache, takes the same fallback, and gives the same
 batch, whatever the engine would answer now. An attempt the claude CLI
 gave up on at the output limit is kept alike (#390), as a give-up entry
 (Layout, above): a later call under its key is a `cache-hit` (`key
-match`) that raises `OutputLimitReached` again, with no call, so the run
-takes the same fallback. Only attempts keep their give-ups: a chunk's
+match`, with `gave_up: true`) that raises `OutputLimitReached` again,
+with no call, so the run takes the same fallback; the run report counts
+such hits per stage in its cache section, apart from the calls stopped
+at the output limit (docs/RUN_REPORT.md). Only the exact key replays it:
+another model, effort, config, epoch, attempt or prompt asks the engine.
+Attempt 0 is keyed as the client's own calls are, so a call made outside
+`llm.for_attempt` whose components are identical to attempt 0's is
+served attempt 0's give-up, and raises `OutputLimitReached` with no
+call; no caller makes such a call, as only the extraction's first
+turns (the entity manifest and the segmentation) are asked in attempts,
+with prompts of their own. Only attempts keep their give-ups: a chunk's
 retries share one key, and a give-up kept there would fail every retry
 from the cache in every run. `--refresh extract` asks again, and the
 give-up entry is moved aside as replaced by what the refreshed call
@@ -969,7 +981,7 @@ in, and the kind of call:
 | `refreshed` | in a scratch run, a stage's view made under a refresh of its role (`--refresh`) was saved: the run's later invocations that refresh the role reuse it | `role` |
 | `set-aside` | a document directory was moved aside and started afresh; or, with `stage`, a transcription view that fails the check again was moved aside, to be made again | `file` (a directory's), `reason` (`content changed`, no `derivations.json`, or no `state.json`; or the check's reason), `kept` |
 | `document-failed` | a document failed, and only it: a stage failed (with its own `failed` event too), or something outside its stages, such as its source or `state.json` that could not be read, its first record, or a step between the stages | `file`, `reason` |
-| `cache-hit` | the cache answered a call | `reason`: `key match`, or an adoption's reason |
+| `cache-hit` | the cache answered a call | `reason`: `key match`, or an adoption's reason; `gave_up` (`true`) when the entry is an attempt's give-up at the output limit, replayed with no call (Attempts) |
 | `cache-miss` | the engine was asked (a fork: once its session is held) | `reason`: `absent`, `rejected` or `refresh` |
 | `cache-resume` | a conversation was resumed exactly for a fork | |
 | `cache-replay` | a conversation's opening turn was replayed for a fork's session | `matches` |
@@ -1013,8 +1025,9 @@ outcome `error`, its `error` is `OutputLimitReached`, its `api_error` is
 such a chunk call as a truncation, never as a failed call
 (docs/ANOMALIES.md), and the run report counts it, per stage, among the
 calls stopped at the output limit (docs/RUN_REPORT.md). A give-up an
-attempt replays from the cache is a hit, and no call. A call that crashed or timed out after the CLI
-printed the notice carries the same `api_error` under another `error`:
+attempt replays from the cache is a hit, and no call: the report counts
+it in its cache section instead. A call that crashed or timed out after
+the CLI printed the notice carries the same `api_error` under another `error`:
 it failed. A replay is a call, and carries what the replay
 used; when it answers as the cache did, the opening turn's entry keeps
 what the original call's stream reported. A call the cache answers, by
