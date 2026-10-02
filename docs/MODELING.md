@@ -805,7 +805,7 @@ not a signal to grow the schema on.
   label's wording (ADR-0035 §7): a person's given names by their standard
   forms and as written, with its surnames and its kin's; a place's names
   and address as written, its containers (its record's, and those its
-  manifest's `part_of` claims give) compared as one set; an
+  manifest's `part_of` and `location` claims give) compared as one set; an
   organisation's proper names, else its kind with its places, which agree
   only when they would link as places or one lies in the other; an umlaut
   also written out (DIN 5007-2). A person, place, organisation or family

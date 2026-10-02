@@ -117,9 +117,11 @@ by deterministic evidence alone:
 - a person pair is confident when they share a key (`key`), and kin that
   agree, or dates that agree, corroborate it. A shared key counts only
   through given parts that may be one name: not two given names whose
-  records give standard forms that share no key, nor a nickname of two
-  people whose records give given names that share no key (a shared key
-  that does not count is `weak`). A key only a GEDCOM
+  records give standard forms that share no key; not two nicknames of
+  people whose records give given names that share no key; and not a
+  given name against a nickname where the given name states a standard
+  form that shares no key with the nickname holder's given names (a
+  shared key that does not count is `weak`). A key only a GEDCOM
   `unsplit` form gives (`weak`) and a lone given name (`given`) never
   make a link confident. Stated sexes that differ, or civil statuses
   that cannot both hold (`unmarried` at a date wholly after a `married`,
@@ -139,11 +141,13 @@ by deterministic evidence alone:
   (`exact` or `nested`; ADR-0035 §7, rule 6); a place without a record,
   which cannot link, leaves them unknown where it shares an exact name
   with the other's. Places its record names carry no containers: as one
-  list of parts, against the other's (its record's, or the places with
-  records its location claims reach and every place they lie in), they
-  agree when one list lies among the other; they differ when they share
-  a part but neither lies among the other; a name shared only with a
-  place without a record leaves them unknown. Places differ when both
+  list of parts, against the other's (its record's, or the places its
+  location claims reach and every place they lie in, one without a
+  record by its exact names), they agree when one list lies among the
+  other and a part with a record is shared, and are unknown when only a
+  part without one is; otherwise they differ, whether they share a part
+  (a namesake in another district, or places named at different levels)
+  or nothing. Places differ when both
   state places and none of that holds, and places that differ keep a
   pair ambiguous whatever its name;
 - a family pair never: every pair goes to adjudication;
@@ -766,9 +770,9 @@ class _Node:
     org_closure: frozenset[str] = frozenset()
     # the places it is in as one list of parts, from its record's places
     # or from the places with records its location claims reach; and the
-    # exact names of those without records
+    # places without records they reach, each by its exact names
     org_set: tuple[Part, ...] = ()
-    org_loose: frozenset[str] = frozenset()
+    org_loose: tuple[Part, ...] = ()
     # a family's surnames
     family: frozenset[str] = frozenset()
     # a recordless mention's (or one of a kind without records) every
@@ -1168,11 +1172,10 @@ def _derive_organization(
             if by_id[place_id].record is not None
             for part in (*by_id[place_id].place_names, *by_id[place_id].within)
         )
-        node.org_loose = frozenset(
-            key
-            for place_id in seen
-            if by_id[place_id].record is None
-            for key in by_id[place_id].exact
+        node.org_loose = tuple(
+            by_id[place_id].exact
+            for place_id in sorted(seen)
+            if by_id[place_id].record is None and by_id[place_id].exact
         )
         node.org_places = tuple(sorted(node.places))
         node.org_closure = frozenset(seen)
@@ -1435,13 +1438,25 @@ def _apart(first: _Node, second: _Node) -> bool:
 def _one_given(a: _Node, one: _Given, b: _Node, other: _Given) -> bool:
     """Whether two given parts that share a key may be one name
     (ADR-0035 §7, rules 1 and 3): not two given names whose records give
-    standard forms that share no key, nor a nickname of two people whose
-    records give given names that share no key."""
-    if one.nickname or other.nickname:
+    standard forms that share no key; not two nicknames of people whose
+    records give given names that share no key; and not a given name
+    against a nickname where the given name states a standard form that
+    shares no key with the nickname holder's given names."""
+    if one.nickname and other.nickname:
         return not (
             a.given_names
             and b.given_names
             and not a.given_names & b.given_names
+        )
+    if one.nickname or other.nickname:
+        # a given part against the other's nickname: it counts unless
+        # it states a standard form the nickname holder's given names
+        # share no key with
+        given, named = (other, a) if one.nickname else (one, b)
+        return not (
+            given.standard
+            and named.given_names
+            and not given.standard & named.given_names
         )
     return not (
         one.standard and other.standard and not one.standard & other.standard
@@ -1570,24 +1585,23 @@ class _Judge:
     def _listed(a: _Node, b: _Node) -> str:
         """Whether two organisations' places agree where a record names
         one's places (ADR-0035 §7, rule 6, as rule 5 would let them): as
-        one list of parts, with the places with records a location claim
-        reaches and every place they lie in. They agree when one list
-        lies among the other, as a place nests; they differ when they
-        share a part but neither lies among the other (a namesake in
-        another district), or share nothing; and they are `unknown` when
-        only the exact name of a place without a record is shared."""
-        ours, theirs = a.org_set, b.org_set
+        one list of parts, with the places a location claim reaches and
+        every place they lie in, a place without a record by its exact
+        names. When one list lies among the other, as a place nests, they
+        agree if a part with a record is shared, and are `unknown` if only
+        a part without one is. Otherwise they differ: a namesake in
+        another district, or nothing shared."""
+        ours = a.org_set + a.org_loose
+        theirs = b.org_set + b.org_loose
         among = [
             bool(one) and all(any(p & q for q in two) for p in one)
             for one, two in ((ours, theirs), (theirs, ours))
         ]
-        if any(among):
-            return "agree"
-        if any(p & q for p in ours for q in theirs):
+        if not any(among):
             return "differ"
-        if (_all(ours) | a.org_loose) & (_all(theirs) | b.org_loose):
-            return "unknown"
-        return "differ"
+        if any(p & q for p in a.org_set for q in b.org_set):
+            return "agree"
+        return "unknown"
 
     def _organizations(self, a: _Node, b: _Node) -> tuple[str, str]:
         """(name, places) of two organisations. The name is `exact` for a

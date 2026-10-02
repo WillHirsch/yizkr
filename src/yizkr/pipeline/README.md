@@ -505,15 +505,17 @@ refuses). The module docstring is the full account; in short:
   and `reconcile.impossible_pair` (ADR-0017) then rules out a pair one of
   them joins (hard). Dates never rule a pair out.
 - **Links.** A pair is a confident link only on corroborated evidence:
-  for people a shared key with kin that agree (kin that share a key,
-  never a surname alone) or dates that agree, a key counting only
-  through given parts that may be one name (never two standard forms
-  that share no key, nor one nickname of two people whose given names
-  share none) (a century or an open
-  "before" agrees with nothing), while stated sexes that differ, or a
+  for people a shared key, counting only through given parts that may
+  be one name (never two standard forms that share no key, nor one
+  nickname of two people whose given names share none, nor a given name
+  whose standard form shares no key with the given names of the other's
+  nickname holder), with kin that agree (kin that share a key, never a
+  surname alone) or dates that agree (a century or an open "before"
+  agrees with nothing), while stated sexes that differ, or a
   civil status `unmarried` stated after a marriage another source
   states, keep it ambiguous; for places a shared name whose containers
-  (a record's `within` and the places `part_of` claims put it in) are
+  (a record's `within` and the places `part_of` and `location` claims
+  put it in) are
   one set or nest, compared as one set; for organisations a shared
   proper name of two words or more, one of one word only with places
   that agree, or, with no proper name, a shared kind with places that
@@ -521,7 +523,8 @@ refuses). The module docstring is the full account; in short:
   agree when they would link as places, or one lies in the other by the
   manifests' containment; a recordless one is compared by its exact
   names, and never agrees; places a record names agree only when one
-  list lies among the other, as a place nests); for families
+  list lies among the other, as a place nests, and a part with a record
+  is shared); for families
   never, since a surname
   names many; for unions a couple of two whose members merged, and
   weddings whose dates do not conflict (ADR-0036 §3); for a union's

@@ -63,7 +63,10 @@ confident link is not):
   registers that misread the sisters "Löbig Ursula" and "Löbig Klara",
   daughters of Hildegard Laudler, with "Löbig" as a given name, never key
   (Löbig, Laudler), whether their father is named with a record, without
-  one, or not at all.
+  one, or not at all. A child named after a parent without a record (a
+  "Sebastian" whose father is a "Sebastian Löbig" without one) pairs
+  with no kin's surname either, so two such registers may never pair:
+  the safe direction.
 - Rule 3: a given name also keys by its written form, not only its
   standard form, so a "Gustl" whose record gives the standard form
   Gustav meets a "Gustl" whose record gives none. Meeting is not
@@ -76,21 +79,34 @@ confident link is not):
 Amended by #409 (2026-10-02), decided by the orchestrator (the owner may
 override; conservative as above):
 
-- Rules 3 and 8: where both records give standard forms for a given part
-  and those forms share no key, the written form they share neither
-  makes a link confident nor makes kin agree. A "Gustl" read as Gustav
-  and a "Gustl" read as another name meet, and stay ambiguous. So does a
-  shared nickname where both records give given names that share no
-  key: two brothers with two given names and one family nickname never
-  merge. A "Gustl" read as Gustav and a "Gustl" with no standard form
-  still meet, and merge only on corroboration.
+- Rules 3 and 8: a shared key neither makes a link confident nor makes
+  kin agree when it joins two given parts that cannot be one name:
+  - two given names whose records give standard forms that share no
+    key: a "Gustl" read as Gustav and a "Gustl" read as another name
+    meet, and stay ambiguous;
+  - two nicknames, where both records give given names that share no
+    key: two brothers with two given names and one family nickname
+    never merge;
+  - a given name against a nickname, only where the given name states a
+    standard form that shares no key with the nickname holder's given
+    names. So "Gustav 'Gustl' Löbig" against a "Gustl Löbig" whose
+    record gives no standard form, or Gustav, merges on corroboration
+    (a shared father), and against a "Gustl" read as Xxx stays
+    ambiguous.
+
+  A "Gustl" read as Gustav and a "Gustl" with no standard form still
+  meet, and merge only on corroboration.
 - Rule 6, places a record names: they agree with the other's only as
-  rule 5 would let them, as one list of parts with the places with
-  records the other's location claims reach and every place those lie
-  in. One list lying among the other agrees; a shared name whose other
-  stated places differ ("Fläckfeld, Kreis Mockburg" against "Fläckfeld,
-  Kreis Peiltal") differs; a name shared only with a place without a
-  record reads `unknown`.
+  rule 5 would let them. Each side is one list of parts: a record's
+  places, or the places the other's location claims reach and every
+  place those lie in, a place without a record counting by its exact
+  names. Where one list lies among the other, the places agree if a part
+  with a record is shared, and read `unknown` if only a part without one
+  is. Otherwise they differ: a shared name whose other stated places
+  differ ("Fläckfeld, Kreis Mockburg" against "Fläckfeld, Kreis
+  Peiltal"), whether or not the located side's district has a record,
+  and lists naming places at different levels (`["Flörburg", "Hesse"]`
+  against `["Kreis Peiltal", "Hesse"]`).
 - Rule 6, this ADR's own clause "on a proper name of one word only with
   a shared kind or place": the decision of 2026-09-29 above narrows it to
   "only with a place that agrees". It is recorded here as an in-place
@@ -100,7 +116,13 @@ override; conservative as above):
   give a place, through the places its manifest puts it in, as well as
   its record's `within`. Two Fläckfelds that such claims put in Kreis
   Mockburg and in Kreis Peiltal stay ambiguous, and so do nameless
-  organisations at each.
+  organisations at each, whether or not the districts have records; a
+  claimed container is one part, its own containers apart. Containers
+  stated at different levels keep a pair apart too: a Flörburg that
+  part_of puts in Kreis Peiltal and one located in Hesse stay
+  ambiguous, the safe direction. A place whose record and claims give
+  contradictory containers (Kreis Peiltal and Kreis Mockburg) nests in
+  both namesakes; its component stays ambiguous, which is safe.
 
 **Decided by the owner (2026-09-29):**
 
