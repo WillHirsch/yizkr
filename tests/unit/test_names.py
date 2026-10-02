@@ -6,6 +6,7 @@ from yizkr.claims import (
     OrganizationStructure,
     PersonStructure,
     PlaceStructure,
+    set_aside_structure,
 )
 from yizkr.pipeline.names import normalize_aliases, normalize_entity_dict
 
@@ -172,6 +173,26 @@ class TestNormalizeEntityDict:
             assert (
                 normalize_entity_dict(entity)["aliases"] == entity["aliases"]
             )
+
+    def test_standing_is_judged_once_before_the_cleanup(self):
+        """ADR-0035 §5 before §8: Ida's record, titled Frau, stands on
+        her alias bag as it comes. The cleanup drops 'Frau Löbig', the
+        only form holding the title, and the record is kept: standing is
+        never judged again on the cleaned bag, and a second cleaning
+        changes nothing."""
+        record = person(
+            given=[{"written": "Ida"}],
+            surnames=[{"written": "Löbig"}],
+            titles=["Frau"],
+            nicknames=["Peppi"],
+        ).model_dump()
+        entity = self.entity(structure=record)
+        entity["aliases"] = ["Frau Löbig", "Peppi"]
+        assert set_aside_structure(entity) == (entity, [])
+        cleaned = normalize_entity_dict(entity)
+        assert cleaned["aliases"] == ["Peppi"]
+        assert cleaned["structure"] == record
+        assert normalize_entity_dict(cleaned) == cleaned
 
     def test_missing_fields_do_not_raise(self):
         assert normalize_entity_dict({"kind": "human"}) == {

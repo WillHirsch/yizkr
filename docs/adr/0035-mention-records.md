@@ -17,33 +17,39 @@ record gives (never on a recordless kin's name), and the couple of a
 union count as each other's spouses. A lone given name, and a key only a
 GEDCOM `unsplit` form gives, pair but never make a link confident; a
 document's own `unsplit` form keys like its typed parts. Two places that
-share a name with containers neither equal nor nested stay ambiguous.
-Rule 6's places stand as written: a place an organisation's `location`
-claims name agrees with the other's when the two would link under rule 5
-(`exact` or `nested`), or when one would link so with a place the other
-lies in by the `part_of` and `location` claims of its manifest;
-a place without a record, which rule 5 cannot link, is compared by its
-exact names, which leave the places unknown when shared and differ
-otherwise. Places a record names carry no containers, and agree on a
-name shared with the other's places or the places those lie in. Places
-differ when both sides state places and none of this holds. An
-organisation without a proper name keys and links on kind and place only
-against another without one. Clustering sets aside a document's record
-that fails §5's checks, as extraction does, so its mention is
-recordless; an export's records are its tags' (§6), which no model
-wrote. A birth or death with no principal, or several, is nobody's own
-and meets nothing through its other participants (§3.2; rule 9). The
-alias cleanup (§8) leaves an entity without a standing record its
-aliases, blanks and duplicates aside, and §5's verdict on a record is
-taken before that cleanup. The run report counts recordless mentions;
-#420 counts the records and the judgement notes of §4 in it.
+share a name with containers neither equal nor nested stay ambiguous;
+their containers are a record's `within` and the places the manifest's
+`part_of` and `location` claims put them in. Rule 6's places stand as
+written: a place an organisation's `location` claims name agrees with the
+other's when the two would link under rule 5 (`exact` or `nested`), or
+when one would link so with a place the other lies in by the `part_of`
+and `location` claims of its manifest. A place without a record, which
+rule 5 cannot link, is compared by its exact names, which leave the
+places unknown when shared and differ otherwise; it never makes them
+agree. Containment that only a record's `within` states does not count
+here: a civil registry at "Fläckfeld, Kreis Mockburg" and one located at
+Kreis Mockburg stay apart, the safe direction. Places a record names
+carry no containers, and agree with the other's places only as rule 5
+would let them (below), counting only places with records. Places differ
+when both sides state places and none of this holds. An organisation
+without a proper name keys and links on kind and place only against
+another without one. §5's verdict on a record is extraction's, taken on
+the alias bag before the cleanup of §8 and never again after it;
+clustering reads any record of the entity's kind. A birth or death with
+no principal, or several, or one whose own date of that kind conflicts
+with it, is nobody's own and meets nothing through its other
+participants (§3.2; rule 9). The alias cleanup (§8) leaves an entity
+without a standing record its aliases, blanks and duplicates aside. The
+run report counts recordless mentions; #420 counts the records and the
+judgement notes of §4 in it.
 
 Amended by #409 (2026-09-29), decided by the orchestrator (the owner may
 override; conservative, since a missed merge is safe and a false
 confident link is not):
 
-- Rule 6 on places stays as written above; a place name the two share is
-  not enough for their places to agree.
+- Rule 6 on places stays as written above for places that location
+  claims name: a place name the two share is not enough for their places
+  to agree.
 - Two organisations named only by a kind, or by a kind and a proper name
   of one word (such as "Firma Löbig"), never link confidently where
   either states no place: a proper name of one word links only on places
@@ -52,9 +58,12 @@ confident link is not):
   agrees: a nameless Landgericht at Rekau, which its manifest puts in
   Hesse, links with a nameless Landgericht at Hesse.
 - Rule 1: a given part that folds like any of the person's own surnames
-  or a kin's pairs with no kin's surname. Two registers that misread the
-  sisters "Löbig Ursula" and "Löbig Klara", daughters of Hildegard
-  Laudler, with "Löbig" as a given name, never key (Löbig, Laudler).
+  or a kin's pairs with no kin's surname; a kin without a record lends
+  the words of its label to that test, and to nothing else. Two
+  registers that misread the sisters "Löbig Ursula" and "Löbig Klara",
+  daughters of Hildegard Laudler, with "Löbig" as a given name, never key
+  (Löbig, Laudler), whether their father is named with a record, without
+  one, or not at all.
 - Rule 3: a given name also keys by its written form, not only its
   standard form, so a "Gustl" whose record gives the standard form
   Gustav meets a "Gustl" whose record gives none. Meeting is not
@@ -63,6 +72,35 @@ confident link is not):
   gives both "Bad Flörburg" (with the head "Bad") and "Flörburg" drops
   "Flörburg" as a short form, so it never meets a plain Flörburg. That
   keeps two mentions apart, which is safe.
+
+Amended by #409 (2026-10-02), decided by the orchestrator (the owner may
+override; conservative as above):
+
+- Rules 3 and 8: where both records give standard forms for a given part
+  and those forms share no key, the written form they share neither
+  makes a link confident nor makes kin agree. A "Gustl" read as Gustav
+  and a "Gustl" read as another name meet, and stay ambiguous. So does a
+  shared nickname where both records give given names that share no
+  key: two brothers with two given names and one family nickname never
+  merge. A "Gustl" read as Gustav and a "Gustl" with no standard form
+  still meet, and merge only on corroboration.
+- Rule 6, places a record names: they agree with the other's only as
+  rule 5 would let them, as one list of parts with the places with
+  records the other's location claims reach and every place those lie
+  in. One list lying among the other agrees; a shared name whose other
+  stated places differ ("Fläckfeld, Kreis Mockburg" against "Fläckfeld,
+  Kreis Peiltal") differs; a name shared only with a place without a
+  record reads `unknown`.
+- Rule 6, this ADR's own clause "on a proper name of one word only with
+  a shared kind or place": the decision of 2026-09-29 above narrows it to
+  "only with a place that agrees". It is recorded here as an in-place
+  amendment for the owner to confirm at merge, or to move to a new ADR
+  (AGENT_PROTOCOL §8).
+- Rule 5 compares the containers that `part_of` and `location` claims
+  give a place, through the places its manifest puts it in, as well as
+  its record's `within`. Two Fläckfelds that such claims put in Kreis
+  Mockburg and in Kreis Peiltal stay ambiguous, and so do nameless
+  organisations at each.
 
 **Decided by the owner (2026-09-29):**
 

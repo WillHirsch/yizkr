@@ -464,8 +464,9 @@ refuses). The module docstring is the full account; in short:
   their standard forms and as written (never by prefix: "Gustl" meets
   "Gustav" only where its document gives that standard form) and
   nicknames, each with the person's own surnames and patronymics and its
-  kin's surnames (a given name that folds like any of those surnames
-  pairs with no kin's surname); a
+  kin's surnames (a given name that folds like any of those surnames, or
+  like a word of a kin's label where the kin has no record, pairs with
+  no kin's surname); a
   place's names and address as written, save a short form that is
   another name's toponym ("Klurnau" beside "Lager Klurnau"); an
   organisation's proper names, or else each kind with each of its places;
@@ -477,9 +478,10 @@ refuses). The module docstring is the full account; in short:
   time written out (DIN 5007-2: "Floerburg" meets "Flörburg"). A mention
   of those kinds without a record is *recordless*: it keys on its exact
   normalised name, meets only mentions without a record, never links
-  confidently, and is counted; so is a document's mention whose record
-  fails ADR-0035 §5's checks, which clustering sets aside. No word list
-  and no token length remains.
+  confidently, and is counted. Whether a record stands (ADR-0035 §5) is
+  extraction's verdict, taken before the alias cleanup; clustering reads
+  any record of its entity's kind. No word list and no token length
+  remains.
 - **Blocking** proposes pairs by those keys, never by one shared token.
   Events and unions meet through their people: a birth or a death its
   principal's own through that principal, a union through its couple,
@@ -504,17 +506,22 @@ refuses). The module docstring is the full account; in short:
   them joins (hard). Dates never rule a pair out.
 - **Links.** A pair is a confident link only on corroborated evidence:
   for people a shared key with kin that agree (kin that share a key,
-  never a surname alone) or dates that agree (a century or an open
+  never a surname alone) or dates that agree, a key counting only
+  through given parts that may be one name (never two standard forms
+  that share no key, nor one nickname of two people whose given names
+  share none) (a century or an open
   "before" agrees with nothing), while stated sexes that differ, or a
   civil status `unmarried` stated after a marriage another source
   states, keep it ambiguous; for places a shared name whose containers
-  are one set or nest, compared as one set; for organisations a shared
+  (a record's `within` and the places `part_of` claims put it in) are
+  one set or nest, compared as one set; for organisations a shared
   proper name of two words or more, one of one word only with places
   that agree, or, with no proper name, a shared kind with places that
   agree, and never with places that differ (places a location claim names
   agree when they would link as places, or one lies in the other by the
   manifests' containment; a recordless one is compared by its exact
-  names; places a record names agree on a shared name); for families
+  names, and never agrees; places a record names agree only when one
+  list lies among the other, as a place nests); for families
   never, since a surname
   names many; for unions a couple of two whose members merged, and
   weddings whose dates do not conflict (ADR-0036 §3); for a union's
@@ -522,7 +529,8 @@ refuses). The module docstring is the full account; in short:
   that agree; for two births or two deaths, each its principal's own
   (its date, if any, not conflicting with the date the person's own
   claims give), principals that merged, and never for one that is
-  nobody's own (no principal, or several); for other events every
+  nobody's own (no principal, several, or one whose own date conflicts
+  with it); for other events every
   participant of the one with fewer merged into one cluster with a
   participant of the other, and dates that agree; otherwise an exact
   name. A recordless mention never links confidently, nor does one of no

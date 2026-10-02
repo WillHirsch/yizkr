@@ -63,6 +63,7 @@ from yizkr.pipeline.clustering import (
 )
 from yizkr.pipeline.fingerprints import cluster_id
 from yizkr.pipeline.gedcom import adapt_gedcom
+from yizkr.pipeline.names import normalize_entity_dict
 
 SOURCES = {source.key: source for source in u.SOURCES}
 RUN = {
@@ -807,6 +808,16 @@ def links_of(identity: dict) -> dict[frozenset[str], tuple[str, str]]:
     }
 
 
+def judge_of(*docs):
+    """The judge of a corpus of `docs`, and each mention's node by its
+    document and local id."""
+    config = load_config()
+    corpus = clustering._corpus([doc.manifest for doc in docs], config)
+    judge = clustering._Judge(corpus.index, {}, config)
+    nodes = {(node.sha1, node.mention.local_id): node for node in corpus.nodes}
+    return judge, lambda doc, local_id: nodes[(doc.sha1, local_id)]
+
+
 class TestExportRecords:
     def test_the_export_reads_as_the_adapter_fills_it(self):
         """The test's stand-in for the adapter's records follows ADR-0035
@@ -1015,6 +1026,124 @@ class TestKeys:
         )
         pairs = blocked_pairs([plain.manifest, docs[0].manifest])
         assert pair(plain, "e1", docs[0], "e1") in pairs
+
+        def variant(key: str, name: str, father, own=()) -> Doc:
+            return register(
+                f"{key} {name}",
+                [
+                    human(
+                        "e1",
+                        f"Löbig {name}",
+                        givens=["Löbig", name],
+                        surnames=list(own),
+                    ),
+                    human("e3", "Hildegard Laudler"),
+                    *([father] if father else []),
+                ],
+                [("e1", "mother", item("e3"))]
+                + ([("e1", "father", item("e2"))] if father else []),
+                {"e1": name, "e2": "sebastian-loebig", "e3": "hildegard"},
+            )
+
+        for key, father, own in (
+            # the father spelt as the naturalisation spells him
+            ("Lobig", human("e2", "Sebastian Lobig"), ()),
+            # Löbig her own surname too, with only her mother named
+            ("own", None, ("Löbig",)),
+            # a father without a record: his label's words bar it too
+            ("recordless", entity("e2", "Sebastian Löbig"), ()),
+        ):
+            docs = [variant(key, n, father, own) for n in ("Ursula", "Klara")]
+            pairs = blocked_pairs([doc.manifest for doc in docs])
+            assert pair(docs[0], "e1", docs[1], "e1") not in pairs, key
+        # a given name that folds like a kin's surname still pairs with
+        # its own surname: two registers' Zzz Yyy, child of Www Zzz, merge
+        zzz = [
+            register(
+                f"zzz {n}",
+                [human("e1", "Zzz Yyy"), human("e2", "Www Zzz")],
+                [("e1", "mother", item("e2"))],
+                {"e1": "zzz", "e2": "www"},
+            )
+            for n in range(2)
+        ]
+        assert {"zzz"} in merged(zzz, identity_of(*zzz))
+
+    def test_a_written_form_two_standard_forms_part_never_decides(self):
+        """Two 'Gustl Löbig', sons of Sebastian Löbig, one whose record
+        gives the standard form Gustav and one Xxx: they meet on the
+        written form, and stay ambiguous, since the standard forms share
+        no key (decided 2026-10-02). So do two Gustav Löbigs whose
+        fathers are 'Wastl' read as Sebastian and as Xxx: the fathers'
+        kin agree on nothing. Two brothers, Xxx and Gustav, each called
+        Gustl at home, never merge on the nickname."""
+
+        def son(key: str, child: dict, father: dict) -> Doc:
+            return register(
+                key,
+                [child, father],
+                [("e1", "father", item("e2"))],
+                {"e1": key, "e2": "sebastian-loebig"},
+            )
+
+        def gustl(standard: str) -> dict:
+            return human(
+                "e1",
+                "Gustl Löbig",
+                givens=[given("Gustl", standard)],
+                surnames=["Löbig"],
+            )
+
+        sebastian = human("e2", "Sebastian Löbig")
+        docs = [
+            son("Gustav", gustl("Gustav"), sebastian),
+            son("Xxx", gustl("Xxx"), sebastian),
+        ]
+        identity = identity_of(*docs)
+        sons = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[sons] == (AMBIGUOUS, "weak/unknown/agree")
+        assert_no_false_merge(docs, identity)
+
+        def wastl(standard: str) -> dict:
+            return human(
+                "e2",
+                "Wastl Löbig",
+                givens=[given("Wastl", standard)],
+                surnames=["Löbig"],
+            )
+
+        docs = [
+            register(
+                f"son of {standard}",
+                [human("e1", "Gustav Löbig"), wastl(standard)],
+                [("e1", "father", item("e2"))],
+                {"e1": "gustav-loebig", "e2": f"father {standard}"},
+            )
+            for standard in ("Sebastian", "Xxx")
+        ]
+        identity = identity_of(*docs)
+        children = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[children][0] == AMBIGUOUS
+        assert_no_false_merge(docs, identity)
+        brothers = [
+            son(
+                name,
+                human(
+                    "e1",
+                    f"{name} Löbig",
+                    aliases=["Gustl"],
+                    givens=[name],
+                    surnames=["Löbig"],
+                    nicknames=["Gustl"],
+                ),
+                sebastian,
+            )
+            for name in ("Gustav", "Xxx")
+        ]
+        identity = identity_of(*brothers)
+        both = frozenset(doc.fingerprint("e1", identity) for doc in brothers)
+        assert links_of(identity)[both] == (AMBIGUOUS, "weak/unknown/agree")
+        assert_no_false_merge(brothers, identity)
 
     def test_given_names_match_by_standard_form_never_by_prefix(self):
         """Hilde never meets Hildegard by its first letters, nor Gustl
@@ -1473,34 +1602,82 @@ class TestRecordless:
         pairs = blocked_pairs([first.manifest, aliased.manifest])
         assert pairs == {pair(first, "e1", aliased, "e1")}
 
-    def test_a_record_that_cannot_stand_is_set_aside(self):
-        """ADR-0035 §5: a record that gives the naturalisation's Gustave
-        the surname Sörne, which no form of his holds, is set aside, and
-        the mention is recordless: it keys on its exact name, and never
-        meets a Gustave Sörne through (Gustave, Sörne)."""
-        papers = register(
-            "added",
-            [
-                human(
-                    "e1",
-                    "Gustave Lobig",
-                    givens=["Gustave"],
-                    surnames=["Lobig", "Sörne"],
-                )
-            ],
-            [],
-            {"e1": "gustav-loebig"},
+    def test_records_that_stand_before_the_cleanup_stay_records(self):
+        """ADR-0035 §5's verdict is extraction's, taken on the alias bag
+        before the cleanup of §8. The cleanup drops 'Frau Löbig' beside
+        Ida Löbig, the widow's 'Löbig, Ursula, Wwe.', and 'die
+        Hutmacherei' beside 'zum Blauen Hut', and with them the only form
+        holding a title, a suffix or a kind: their records still stand in
+        clustering, which reads only their kind."""
+        ida = human(
+            "e1",
+            "Ida Löbig",
+            aliases=["Frau Löbig"],
+            givens=["Ida"],
+            surnames=["Löbig"],
+            titles=["Frau"],
         )
-        sorne = register(
-            "sorne",
-            [human("e1", "Gustave Sörne")],
-            [],
-            {"e1": "someone"},
+        widow = human(
+            "e2",
+            "Ursula Löbig",
+            aliases=["Löbig, Ursula, Wwe."],
+            givens=["Ursula"],
+            surnames=["Löbig"],
+            suffixes=["Wwe."],
         )
-        identity = identity_of(papers, sorne)
-        assert identity["summary"]["recordless_by_kind"] == {"human": 1}
-        pairs = blocked_pairs([papers.manifest, sorne.manifest])
-        assert pairs == set()
+        shop = organization(
+            "e3",
+            "zum Blauen Hut",
+            aliases=["die Hutmacherei"],
+            names=["zum Blauen Hut"],
+            kinds=["Hutmacherei"],
+        )
+        cleaned = [normalize_entity_dict(e) for e in (ida, widow, shop)]
+        assert [e["aliases"] for e in cleaned] == [[], [], []]
+        doc = register(
+            "cleaned",
+            cleaned,
+            [],
+            {"e1": "ida-loebig", "e2": "ursula-loebig", "e3": "shop"},
+        )
+        identity = identity_of(doc)
+        assert identity["summary"]["recordless_by_kind"] == {}
+
+        # so a mother whose date conflicts still keeps her sons apart
+        def leopold(key: str, born: int, **mother) -> Doc:
+            return register(
+                key,
+                [
+                    human("e1", "Leopold Löbig"),
+                    normalize_entity_dict(
+                        human("e2", "Ida Löbig", **mother)
+                        if mother
+                        else human("e2", "Ida Löbig")
+                    ),
+                ],
+                [
+                    ("e1", "date_of_birth", day(1914)),
+                    ("e1", "mother", item("e2")),
+                    ("e2", "date_of_birth", day(born)),
+                ],
+                {"e1": "leopold-loebig", "e2": f"ida {born}"},
+            )
+
+        docs = [
+            leopold(
+                "titled",
+                1881,
+                aliases=["Frau Löbig"],
+                givens=["Ida"],
+                surnames=["Löbig"],
+                titles=["Frau"],
+            ),
+            leopold("plain", 1850),
+        ]
+        identity = identity_of(*docs)
+        sons = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[sons][0] == AMBIGUOUS
+        assert merged(docs, identity) == []
 
     def test_a_recordless_place_organisation_or_family_never_links(self):
         docs = [
@@ -3257,6 +3434,10 @@ class TestNoFalseMerge:
         assert {"landgericht-rekau"} in merged(docs, identity)
         courts = frozenset(doc.fingerprint("e1", identity) for doc in docs)
         assert identity["mentions"][min(courts)]["method"] == CONFIDENT
+        # in either order
+        judge, node = judge_of(*docs)
+        a, b = node(rekau, "e1"), node(hesse, "e1")
+        assert judge._located(a, b) == judge._located(b, a) == "agree"
         nowhere = court("nowhere", [], "landgericht-somewhere")
         docs = [rekau, nowhere]
         identity = identity_of(*docs)
@@ -3265,26 +3446,103 @@ class TestNoFalseMerge:
             fingerprint = doc.fingerprint("e1", identity)
             assert identity["mentions"][fingerprint]["method"] != CONFIDENT
 
+    def test_sibling_places_in_one_district_differ(self):
+        """Flörburg, Kredfeld and Peiltal all lie in Kreis Peiltal. Nameless
+        civil registries at Flörburg and at Kredfeld, each of whose
+        manifests puts its town in Kreis Peiltal, stay apart: a shared
+        container is no shared place. So do two 'zum Blauen Hut' shops at
+        Flörburg and at Peiltal. A bare Fläckfeld and one in Kreis
+        Mockburg nest, and registries at each merge."""
+
+        def at(key: str, org: dict, town: str, district=None) -> Doc:
+            return register(
+                key,
+                [org, place("p0", town), place("p1", "Kreis Peiltal")]
+                if district is None
+                else [
+                    org,
+                    place(
+                        "p0",
+                        f"{town}, {district}",
+                        names=[town],
+                        within=[district],
+                    ),
+                ],
+                [("e1", "location", item("p0"))]
+                + (
+                    [("p0", "part_of", item("p1"))] if district is None else []
+                ),
+                {"e1": key, "p0": town, "p1": "kreis-peiltal"}
+                if district is None
+                else {"e1": "registry", "p0": town},
+            )
+
+        def registry() -> dict:
+            return organization("e1", "Standesamt", kinds=["Standesamt"])
+
+        def blue_hat() -> dict:
+            return organization(
+                "e1",
+                "Hutmacherei zum Blauen Hut",
+                names=["zum Blauen Hut"],
+                kinds=["Hutmacherei"],
+            )
+
+        docs = [
+            at("Flörburg", registry(), "Flörburg"),
+            at("Kredfeld", registry(), "Kredfeld"),
+        ]
+        identity = identity_of(*docs)
+        both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[both] == (
+            AMBIGUOUS,
+            "none/unknown/differ",
+        )
+        docs = [
+            at("shop Flörburg", blue_hat(), "Flörburg"),
+            at("shop Peiltal", blue_hat(), "Peiltal"),
+        ]
+        identity = identity_of(*docs)
+        both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[both] == (
+            AMBIGUOUS,
+            "exact/unknown/differ",
+        )
+        docs = [
+            register(
+                "bare Fläckfeld",
+                [registry(), place("p0", "Fläckfeld")],
+                [("e1", "location", item("p0"))],
+                {"e1": "registry", "p0": "Fläckfeld"},
+            ),
+            at("in Kreis Mockburg", registry(), "Fläckfeld", "Kreis Mockburg"),
+        ]
+        identity = identity_of(*docs)
+        assert {"registry"} in merged(docs, identity)
+
     def test_a_shop_at_a_recordless_place_is_placed_by_its_name(self):
         """Two registers each name 'Hutmacherei zum Blauen Hut', one at
-        Flörburg and one at Fläckfeld, and both towns' records are set
-        aside (ADR-0035 §5: each adds a container its forms do not hold).
-        The towns are recordless, so the shops' places fall back to the
-        towns' exact names: they differ, and the two shops stay apart
-        (rule 6's own case). At two recordless Flörburgs nothing says the
-        places differ, and the shops link on their long name."""
+        Flörburg and one at Fläckfeld, towns without records. The shops'
+        places fall back to the towns' exact names: they differ, and the
+        two shops stay apart (rule 6's own case). At two recordless
+        Flörburgs nothing says the places differ, and the shops link on
+        their long name; so does one at a Flörburg with a record. Two
+        nameless shops at recordless Flörburgs meet, and stay ambiguous:
+        a recordless place agrees with nothing."""
 
-        def shop(key: str, town: str, truth: str) -> Doc:
+        def shop(key: str, town: str, truth: str, nameless=False) -> Doc:
             return register(
                 key,
                 [
-                    organization(
+                    organization("e1", "Hutmacherei", kinds=["Hutmacherei"])
+                    if nameless
+                    else organization(
                         "e1",
                         "Hutmacherei zum Blauen Hut",
                         names=["zum Blauen Hut"],
                         kinds=["Hutmacherei"],
                     ),
-                    place("p0", town, within=["Hesse"]),
+                    entity("p0", town, "place"),
                 ],
                 [("e1", "location", item("p0"))],
                 {"e1": truth, "p0": town},
@@ -3297,22 +3555,6 @@ class TestNoFalseMerge:
         identity = identity_of(*docs)
         assert identity["summary"]["recordless_by_kind"] == {"place": 2}
         assert merged(docs, identity) == []
-        # a nameless shop at a recordless town still keys on its kind
-        # with the town's exact name, and meets one at a namesake
-        nameless = [
-            register(
-                f"nameless {n}",
-                [
-                    organization("e1", "Hutmacherei", kinds=["Hutmacherei"]),
-                    place("p0", "Flörburg", within=["Hesse"]),
-                ],
-                [("e1", "location", item("p0"))],
-                {"e1": "hat shop", "p0": "Flörburg"},
-            )
-            for n in range(2)
-        ]
-        pairs = blocked_pairs([doc.manifest for doc in nameless])
-        assert pair(nameless[0], "e1", nameless[1], "e1") in pairs
         shops = frozenset(doc.fingerprint("e1", identity) for doc in docs)
         assert links_of(identity)[shops] == (
             AMBIGUOUS,
@@ -3324,6 +3566,214 @@ class TestNoFalseMerge:
         ]
         identity = identity_of(*docs)
         assert {"zum-blauen-hut"} in merged(docs, identity)
+        recorded = register(
+            "in Flörburg, Hesse",
+            [
+                organization(
+                    "e1",
+                    "Hutmacherei zum Blauen Hut",
+                    names=["zum Blauen Hut"],
+                    kinds=["Hutmacherei"],
+                ),
+                place(
+                    "p0",
+                    "Flörburg, Hesse",
+                    names=["Flörburg"],
+                    within=["Hesse"],
+                ),
+            ],
+            [("e1", "location", item("p0"))],
+            {"e1": "zum-blauen-hut", "p0": "floerburg"},
+        )
+        docs = [recorded, shop("in Flörburg", "Flörburg", "zum-blauen-hut")]
+        identity = identity_of(*docs)
+        assert {"zum-blauen-hut"} in merged(docs, identity)
+        # nameless, at two recordless Flörburgs: they meet, unknown
+        nameless = [
+            shop(f"nameless {n}", "Flörburg", "hat shop", nameless=True)
+            for n in range(2)
+        ]
+        identity = identity_of(*nameless)
+        pair_ = frozenset(doc.fingerprint("e1", identity) for doc in nameless)
+        assert links_of(identity).get(pair_) == (
+            AMBIGUOUS,
+            "none/unknown/unknown",
+        )
+
+    def test_a_recordless_place_never_agrees_with_a_record_string(self):
+        """A nameless Hutmacherei at a Flörburg without a record, and one
+        whose record names Flörburg: a place without a record agrees with
+        nothing, so the two stay ambiguous. So do a Standesamt at a 'Lager
+        Klurnau' without a record (known also as Klurnau) and one whose
+        record names Klurnau, the camp's short form."""
+        cases = [
+            ("Hutmacherei", "Flörburg", [], "Flörburg"),
+            ("Standesamt", "Lager Klurnau", ["Klurnau"], "Klurnau"),
+        ]
+        for kind, town, aliases, written in cases:
+            located = register(
+                f"{kind} at {town}",
+                [
+                    organization("e1", kind, kinds=[kind]),
+                    entity("p0", town, "place", aliases=aliases),
+                ],
+                [("e1", "location", item("p0"))],
+                {"e1": f"{kind} 1", "p0": town},
+            )
+            listed = register(
+                f"{kind} in {written}",
+                [organization("e1", kind, kinds=[kind], places=[written])],
+                [],
+                {"e1": f"{kind} 2"},
+            )
+            docs = [located, listed]
+            identity = identity_of(*docs)
+            assert merged(docs, identity) == []
+            both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+            assert links_of(identity)[both] == (
+                AMBIGUOUS,
+                "none/unknown/unknown",
+            )
+
+    def test_record_places_and_location_claims_agree_as_rule_5_lets_them(
+        self,
+    ):
+        """A nameless Städtische Realschule whose record names Flörburg,
+        and one located at Xxxstrasse 1, which its manifest puts in
+        Flörburg: one's places lie among the other's, in either order, and
+        they merge. 'zum Blauen Hut' whose record names Flörburg against
+        one located at Fläckfeld: the places differ, and they stay apart;
+        against one located at Flörburg they merge."""
+        listed = register(
+            "school in Flörburg",
+            [
+                organization(
+                    "e1",
+                    "Städtische Realschule",
+                    kinds=["Realschule"],
+                    places=["Flörburg"],
+                )
+            ],
+            [],
+            {"e1": "realschule-f"},
+        )
+        street = register(
+            "school on a street",
+            [
+                organization(
+                    "e1", "Städtische Realschule", kinds=["Realschule"]
+                ),
+                place("p0", "Xxxstrasse 1"),
+                place("p1", "Flörburg"),
+            ],
+            [
+                ("e1", "location", item("p0")),
+                ("p0", "part_of", item("p1")),
+            ],
+            {"e1": "realschule-f", "p0": "Xxxstrasse 1", "p1": "floerburg"},
+        )
+        docs = [listed, street]
+        judge, node = judge_of(*docs)
+        a, b = node(listed, "e1"), node(street, "e1")
+        assert judge._organizations(a, b) == ("kind", "agree")
+        assert judge._organizations(b, a) == ("kind", "agree")
+        assert {"realschule-f"} in merged(docs, identity_of(*docs))
+
+        def shop(key: str, town: str | None, truth: str) -> Doc:
+            return register(
+                key,
+                [
+                    organization(
+                        "e1",
+                        "Hutmacherei zum Blauen Hut",
+                        names=["zum Blauen Hut"],
+                        kinds=["Hutmacherei"],
+                        places=[] if town else ["Flörburg"],
+                    ),
+                    *([place("p0", town)] if town else []),
+                ],
+                [("e1", "location", item("p0"))] if town else [],
+                {"e1": truth, **({"p0": town} if town else {})},
+            )
+
+        named = shop("named Flörburg", None, "zum-blauen-hut")
+        docs = [named, shop("at Fläckfeld", "Fläckfeld", "another")]
+        identity = identity_of(*docs)
+        both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[both] == (
+            AMBIGUOUS,
+            "exact/unknown/differ",
+        )
+        docs = [named, shop("at Flörburg", "Flörburg", "zum-blauen-hut")]
+        assert {"zum-blauen-hut"} in merged(docs, identity_of(*docs))
+
+    def test_record_places_in_two_districts_do_not_agree(self):
+        """Two nameless civil registries whose records name 'Fläckfeld,
+        Kreis Mockburg' and 'Fläckfeld, Kreis Peiltal': the shared name
+        is not enough, since neither list lies among the other, and they
+        stay apart (decided 2026-10-02). One whose record names Fläckfeld
+        alone lies among either, and links."""
+
+        def registry(key: str, places: list[str], truth: str) -> Doc:
+            return register(
+                key,
+                [
+                    organization(
+                        "e1", "Standesamt", kinds=["Standesamt"], places=places
+                    )
+                ],
+                [],
+                {"e1": truth},
+            )
+
+        docs = [
+            registry("Mockburg", ["Fläckfeld", "Kreis Mockburg"], "m"),
+            registry("Peiltal", ["Fläckfeld", "Kreis Peiltal"], "p"),
+        ]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == []
+        both = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[both] == (AMBIGUOUS, "none/unknown/differ")
+        docs = [
+            registry("Mockburg", ["Fläckfeld", "Kreis Mockburg"], "m"),
+            registry("bare", ["Fläckfeld"], "m"),
+        ]
+        assert merged(docs, identity_of(*docs)) == [{"m"}]
+
+    def test_districts_from_part_of_claims_keep_namesakes_apart(self):
+        """Two Fläckfelds that part_of claims put in Kreis Mockburg and in
+        Kreis Peiltal: rule 5 compares the containers their manifests
+        give, so the places stay ambiguous, and so do nameless civil
+        registries at each (decided 2026-10-02)."""
+
+        def registry(key: str, district: str) -> Doc:
+            return register(
+                key,
+                [
+                    organization("e1", "Standesamt", kinds=["Standesamt"]),
+                    place("p0", "Fläckfeld"),
+                    place("p1", district),
+                ],
+                [
+                    ("e1", "location", item("p0")),
+                    ("p0", "part_of", item("p1")),
+                ],
+                {"e1": key, "p0": f"Fläckfeld {key}", "p1": district},
+            )
+
+        docs = [
+            registry("Mockburg", "Kreis Mockburg"),
+            registry("Peiltal", "Kreis Peiltal"),
+        ]
+        identity = identity_of(*docs)
+        assert merged(docs, identity) == []
+        towns = frozenset(doc.fingerprint("p0", identity) for doc in docs)
+        assert links_of(identity)[towns] == (AMBIGUOUS, "key/unknown/unknown")
+        registries = frozenset(doc.fingerprint("e1", identity) for doc in docs)
+        assert links_of(identity)[registries] == (
+            AMBIGUOUS,
+            "none/unknown/differ",
+        )
 
     def test_a_proper_name_of_two_words_links_alone(self):
         """Two registers name 'the Blue Hat', a proper name of two words,
@@ -3339,9 +3789,10 @@ class TestNoFalseMerge:
         ]
         identity = identity_of(*docs)
         assert merged(docs, identity) == [{"zum-blauen-hut"}]
-        assert set(links_of(identity).values()) <= {
-            (CONFIDENT, "exact/unknown/unknown")
-        }
+        assert {
+            identity["mentions"][doc.fingerprint("e1", identity)]["method"]
+            for doc in docs
+        } == {CONFIDENT}
 
     def test_record_places_come_before_location_claims(self):
         """A shop whose record names Flörburg is in Flörburg, whatever
@@ -3670,6 +4121,42 @@ class TestNoFalseMerge:
         same = born("same year", 1912)
         identity = identity_of(widow, same)
         assert len(merged([widow, same], identity)) == 1
+        # the year after is
+        next_year = born("next year", 1913)
+        identity = identity_of(widow, next_year)
+        assert merged([widow, next_year], identity) == []
+
+        # a decade on either side is all its years
+        def decade(name: str, status: str, year: int) -> Doc:
+            return register(
+                name,
+                [human("e1", "Ursula Löbig")],
+                [
+                    (
+                        "e1",
+                        "civil_status",
+                        vocab(status),
+                        (
+                            "point_in_time",
+                            {
+                                "type": "time",
+                                "year": year,
+                                "precision": "decade",
+                            },
+                        ),
+                    ),
+                    ("e1", "date_of_birth", day(1850)),
+                ],
+                {"e1": name},
+            )
+
+        unmarried = decade("unmarried 1910s", "unmarried", 1910)
+        identity = identity_of(widow, unmarried)
+        assert len(merged([widow, unmarried], identity)) == 1
+        widowed = decade("widowed 1910s", "widowed", 1910)
+        unwed = born("in 1915", 1915)
+        identity = identity_of(widowed, unwed)
+        assert len(merged([widowed, unwed], identity)) == 1
 
 
 # -- the homonym --------------------------------------------------------------
@@ -4541,6 +5028,13 @@ class TestIdentityMap:
         assert summary["recordless_mentions"] == 2
         assert summary["conflicting_hard"] == 0
         assert summary["within_manifest_pairs"] == 0
+
+
+def test_two_test_documents_of_one_sha1_are_refused():
+    """The test helper refuses two documents of one SHA-1, which the
+    corpus would read as one, so that no test compares nothing."""
+    with pytest.raises(AssertionError, match="share a SHA-1"):
+        identity_of(directory(), directory())
 
 
 def test_a_corpus_of_no_document_is_an_empty_map():

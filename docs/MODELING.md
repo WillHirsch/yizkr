@@ -804,17 +804,19 @@ not a signal to grow the schema on.
   ADR-0025). It keys and judges on each mention's record, never on a
   label's wording (ADR-0035 §7): a person's given names by their standard
   forms and as written, with its surnames and its kin's; a place's names
-  and address as written, its containers compared as one set; an
+  and address as written, its containers (its record's, and those its
+  manifest's `part_of` claims give) compared as one set; an
   organisation's proper names, else its kind with its places, which agree
   only when they would link as places or one lies in the other; an umlaut
   also written out (DIN 5007-2). A person, place, organisation or family
-  without a record (none given, or one set aside under ADR-0035 §5) meets
-  only its exact name, and never merges; the kinds that take no record
-  (occupations, vessels and the like) still merge on an exact name. A
-  union is keyed by its couple, and its weddings and ends by union, kind
-  and date (ADR-0036 §3). A birth's or a death's date belongs to its
-  principal alone, and one with no principal, or several, is nobody's and
-  merges with none.
+  without a record (none given, or one extraction set aside under
+  ADR-0035 §5, before the alias cleanup) meets only its exact name, and
+  never merges; the kinds that take no record (occupations, vessels and
+  the like) still merge on an exact name. A union is keyed by its couple,
+  and its weddings and ends by union, kind and date (ADR-0036 §3). A
+  birth's or a death's date belongs to its principal alone, and one with
+  no principal, several, or one whose own date of that kind conflicts
+  with it, is nobody's and merges with none.
 - Machine-proposed equivalences (within or across documents) are
   reviewed by a human before they take effect — identity is never
   auto-confirmed. Approved matches resolve new claims to the existing

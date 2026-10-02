@@ -28,9 +28,8 @@ extraction are clustered; the others are each a cluster of their own
 extraction says its names are made of (`EntityRecord.structure`,
 ADR-0035 §2), never on the wording, word order or punctuation of its
 label. A person, a place, an organisation or a family without a record
-(none given, a batch without a manifest, or a document's record that
-fails the checks of ADR-0035 §5, `structure_problems`, which clustering
-sets aside too; an export's records are its tags') is *recordless*
+(none given, one extraction set aside under ADR-0035 §5, a record of
+another kind, or a batch without a manifest) is *recordless*
 (ADR-0035 §7, rule 1): it keys on its exact normalised name, from its
 label and each alias, meets only mentions without a record, and never
 links confidently. The summary counts recordless mentions by kind.
@@ -63,9 +62,10 @@ spelling is never turned back into an umlaut.
   standard form and as written, and each nickname, with each of its own
   surnames and patronymics and each surname of the kin its document
   names. No key pairs two parts that share a key, and a given part that
-  shares a key with any of those surnames (a surname misread as a given
-  name) pairs with no kin's surname. An
-  `unsplit` form keys each ordered pair of its distinct words, never
+  shares a key with any of those surnames, or with a word of the label of
+  a kin without a record (a surname misread as a given name), pairs with
+  no kin's surname. An `unsplit` form keys each ordered pair of its
+  distinct words, never
   with a kin's surname, and a one-word one counts as a given name. With
   no surname of either kind, its given names alone (`lone`), which pair
   only with the GEDCOM export's people of that given name. Any other
@@ -115,28 +115,37 @@ pair (ADR-0002, ADR-0017).
 by deterministic evidence alone:
 
 - a person pair is confident when they share a key (`key`), and kin that
-  agree, or dates that agree, corroborate it. A key only a GEDCOM
+  agree, or dates that agree, corroborate it. A shared key counts only
+  through given parts that may be one name: not two given names whose
+  records give standard forms that share no key, nor a nickname of two
+  people whose records give given names that share no key (a shared key
+  that does not count is `weak`). A key only a GEDCOM
   `unsplit` form gives (`weak`) and a lone given name (`given`) never
   make a link confident. Stated sexes that differ, or civil statuses
   that cannot both hold (`unmarried` at a date wholly after a `married`,
   `widowed` or `divorced` one), keep a pair ambiguous and never
   corroborate;
-- a place pair when they share a name and their containers are equal
-  (`exact`) or one's are all among the other's (`nested`); a shared name
-  with containers that differ (`key`) stays ambiguous;
+- a place pair when they share a name and their containers (a record's
+  `within`, and the places its manifest's `part_of` and `location`
+  claims put it in) are equal (`exact`) or one's are all among the
+  other's (`nested`); a shared name with containers that differ (`key`)
+  stays ambiguous;
 - an organisation pair on a shared proper name of two words or more
   (`exact`); on a shared proper name of one word (`key`) only with places
   that agree, a shared kind notwithstanding; and, when neither has a
   proper name, on a shared kind with places that agree (`kind`). Places
   its `location` claims name agree when a place of one would link with a
   place of the other, or with a place that one lies in, as places do
-  (`exact` or `nested`; ADR-0035 §7, rule 6); a
-  place without a record, which cannot link, leaves them unknown where it
-  shares an exact name with the other's. Places its record names carry
-  no containers, and agree when a place of one is among the other's
-  places or the places they lie in. Places differ when both state places
-  and none of that holds, and places that differ keep a pair ambiguous
-  whatever its name;
+  (`exact` or `nested`; ADR-0035 §7, rule 6); a place without a record,
+  which cannot link, leaves them unknown where it shares an exact name
+  with the other's. Places its record names carry no containers: as one
+  list of parts, against the other's (its record's, or the places with
+  records its location claims reach and every place they lie in), they
+  agree when one list lies among the other; they differ when they share
+  a part but neither lies among the other; a name shared only with a
+  place without a record leaves them unknown. Places differ when both
+  state places and none of that holds, and places that differ keep a
+  pair ambiguous whatever its name;
 - a family pair never: every pair goes to adjudication;
 - a union pair when both name a couple of two and each of one's couple
   merged with one of the other's, and their weddings' dates do not
@@ -241,7 +250,6 @@ from yizkr.claims import (
     PlaceStructure,
     TimeValue,
     VocabRef,
-    structure_problems,
 )
 from yizkr.pipeline.fingerprints import (
     Mention,
@@ -688,6 +696,17 @@ class Manifest:
     source: str = DOCUMENT
 
 
+@dataclass(frozen=True)
+class _Given:
+    """A given part of a person's record: its keys, the keys of the
+    standard form its record gives (empty without one), and whether it is
+    a nickname."""
+
+    keys: Part
+    standard: Part = frozenset()
+    nickname: bool = False
+
+
 @dataclass(eq=False)
 class _Node:
     """A mention, with its record, what its manifest says about it lifted
@@ -727,9 +746,14 @@ class _Node:
     strong: frozenset[Pair] = frozenset()
     lone: frozenset[str] = frozenset()
     givens: frozenset[str] = frozenset()
-    # a place's keyed names and its containers
+    # a person's given parts (_Given), and the keys of its given names
+    given_parts: tuple[_Given, ...] = ()
+    given_names: frozenset[str] = frozenset()
+    # a place's keyed names, its containers as its record writes them,
+    # and those with every place its manifest puts it in (_contain)
     place_names: tuple[Part, ...] = ()
     within: tuple[Part, ...] = ()
+    containing: tuple[Part, ...] = ()
     # an organisation's proper names (with their word counts), kinds, the
     # keys of the places it is in, and of those with every place they lie
     # in; and, for places its location claims name, the places by
@@ -740,6 +764,11 @@ class _Node:
     org_all: frozenset[str] = frozenset()
     org_places: tuple[str, ...] = ()
     org_closure: frozenset[str] = frozenset()
+    # the places it is in as one list of parts, from its record's places
+    # or from the places with records its location claims reach; and the
+    # exact names of those without records
+    org_set: tuple[Part, ...] = ()
+    org_loose: frozenset[str] = frozenset()
     # a family's surnames
     family: frozenset[str] = frozenset()
     # a recordless mention's (or one of a kind without records) every
@@ -804,15 +833,14 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
     mention space."""
     batch = manifest.batch
     mentions = mentions_of(manifest.sha1, batch)
-    # a document's record that cannot stand (ADR-0035 §5) is set aside,
-    # and its mention is recordless; an export's records are its tags'
-    # (§6), which no model wrote
+    # whether a record stands (ADR-0035 §5) is extraction's verdict,
+    # taken on the alias bag before the cleanup of §8; a record of another
+    # kind is read as none
     records = {
         entity.id: entity.structure
         for entity in batch.entities
         if entity.structure is not None
         and entity.structure.kind == entity.kind
-        and (manifest.source == GEDCOM or not structure_problems(entity))
     }
     if batch.entities:
         aliases = {
@@ -976,6 +1004,9 @@ def _derive(nodes: Sequence[_Node]) -> None:
             node.family = _all(part_keys(name) for name in record.surnames)
             node.raw = frozenset(("family", key) for key in node.family)
     for node in nodes:
+        if isinstance(node.record, PlaceStructure):
+            _contain(node, by_id)
+    for node in nodes:
         if isinstance(node.record, OrganizationStructure):
             _derive_organization(node, node.record, by_id)
 
@@ -992,9 +1023,17 @@ def _derive_person(
         if isinstance(kin := by_id[kin_id].record, PersonStructure)
         for part in _person_names(kin)[1]
     ]
+    # the words of a kin's label where it has no record, which may be its
+    # surname: they only keep a given part from pairing
+    unread = [
+        part_keys(word)
+        for kin_id in sorted(node.kin_ids)
+        if by_id[kin_id].record is None and by_id[kin_id].kind == HUMAN
+        for word in _words(by_id[kin_id].label)
+    ]
     # a given part that folds like any surname, its own or a kin's (a
     # surname misread as a given name), pairs with no kin's surname
-    surname_keys = _all(surnames + kin_surnames)
+    surname_keys = _all(surnames + kin_surnames + unread)
     typed = _pairs(givens, surnames) | _pairs(
         [part for part in givens if not part & surname_keys], kin_surnames
     )
@@ -1013,6 +1052,26 @@ def _derive_person(
     strong = typed if node.source == GEDCOM else typed | unsplit
     node.keys = frozenset(typed | unsplit)
     node.strong = frozenset(strong)
+    node.given_parts = tuple(
+        [
+            _Given(
+                part_keys(name.written) | part_keys(name.standard or ""),
+                part_keys(name.standard or ""),
+            )
+            for name in record.given
+        ]
+        + [_Given(part_keys(name), nickname=True) for name in record.nicknames]
+        + [
+            _Given(word)
+            for form in record.unsplit
+            for word in _distinct_words(form)
+        ]
+    )
+    node.given_names = _all(
+        part.keys
+        for part in node.given_parts[: len(record.given)]
+        if part.keys
+    )
     node.givens = _all(givens + alone)
     node.lone = frozenset() if node.keys else node.givens
     node.raw = frozenset(
@@ -1049,6 +1108,31 @@ def _derive_place(node: _Node, record: PlaceStructure) -> None:
     node.raw = frozenset(("place", key) for key in _all(names))
 
 
+def _closure(start: Iterable[str], by_id: Mapping[str, _Node]) -> set[str]:
+    """The places given, and every place their manifest puts them in."""
+    seen: set[str] = set()
+    stack = sorted(start)
+    while stack:
+        place_id = stack.pop()
+        if place_id in seen:
+            continue
+        seen.add(place_id)
+        stack.extend(sorted(by_id[place_id].containers))
+    return seen
+
+
+def _contain(node: _Node, by_id: Mapping[str, _Node]) -> None:
+    """A place's containers for rule 5: its record's `within`, and each
+    place its manifest's `part_of` and `location` claims put it in, as
+    one part each (a recordless one by its exact names)."""
+    containing = list(node.within)
+    for place_id in sorted(_closure(node.containers, by_id) - {node.id}):
+        keys = _place_names(by_id[place_id])
+        if keys and not any(keys & seen for seen in containing):
+            containing.append(keys)
+    node.containing = tuple(containing)
+
+
 def _place_names(node: _Node) -> frozenset[str]:
     """The keys a place is named by: a recordless one's exact names."""
     return _all(node.place_names) or node.exact
@@ -1070,20 +1154,26 @@ def _derive_organization(
     )
     node.org_kinds = _all(part_keys(kind) for kind in record.kinds)
     if record.places:
-        node.org_primary = node.org_all = _all(
-            part_keys(place) for place in record.places
+        node.org_set = tuple(
+            keys for place in record.places if (keys := part_keys(place))
         )
+        node.org_primary = node.org_all = _all(node.org_set)
     else:
         # the places its location claims name, and every place its
         # manifest puts one of them inside
-        seen: set[str] = set()
-        stack = sorted(node.places)
-        while stack:
-            place_id = stack.pop()
-            if place_id in seen:
-                continue
-            seen.add(place_id)
-            stack.extend(sorted(by_id[place_id].containers))
+        seen = _closure(node.places, by_id)
+        node.org_set = tuple(
+            part
+            for place_id in sorted(seen)
+            if by_id[place_id].record is not None
+            for part in (*by_id[place_id].place_names, *by_id[place_id].within)
+        )
+        node.org_loose = frozenset(
+            key
+            for place_id in seen
+            if by_id[place_id].record is None
+            for key in by_id[place_id].exact
+        )
         node.org_places = tuple(sorted(node.places))
         node.org_closure = frozenset(seen)
         node.org_primary = frozenset(
@@ -1342,6 +1432,35 @@ def _apart(first: _Node, second: _Node) -> bool:
 # -- evidence -----------------------------------------------------------------
 
 
+def _one_given(a: _Node, one: _Given, b: _Node, other: _Given) -> bool:
+    """Whether two given parts that share a key may be one name
+    (ADR-0035 §7, rules 1 and 3): not two given names whose records give
+    standard forms that share no key, nor a nickname of two people whose
+    records give given names that share no key."""
+    if one.nickname or other.nickname:
+        return not (
+            a.given_names
+            and b.given_names
+            and not a.given_names & b.given_names
+        )
+    return not (
+        one.standard and other.standard and not one.standard & other.standard
+    )
+
+
+def _strong_shared(a: _Node, b: _Node) -> bool:
+    """Whether two people share a key that may make a link confident,
+    through given parts that may be one name (_one_given)."""
+    return any(
+        _one_given(a, one, b, other)
+        for given, _surname in sorted(a.strong & b.strong)
+        for one in a.given_parts
+        if given in one.keys
+        for other in b.given_parts
+        if given in other.keys
+    )
+
+
 def _one_event(first: str, second: str) -> bool:
     """Whether two event or union kinds can be one: the same kind, or
     two unions of any class; a wedding
@@ -1390,7 +1509,7 @@ class _Judge:
         if a.record is None or b.record is None:
             return "exact" if a.exact & b.exact else "none"
         if a.kind == HUMAN:
-            if a.strong & b.strong:
+            if _strong_shared(a, b):
                 return "key"
             if a.keys & b.keys:
                 return "weak"
@@ -1405,8 +1524,9 @@ class _Judge:
 
     @staticmethod
     def _places(a: _Node, b: _Node) -> str:
-        """Two places sharing a name: `exact` when their containers are
-        one set, `nested` when one's are all among the other's, `key`
+        """Two places sharing a name: `exact` when their containers (its
+        record's `within` and the places its manifest puts it in) are one
+        set, `nested` when one's are all among the other's, `key`
         otherwise; `none` without a shared name."""
         if not any(
             one & other for one in a.place_names for other in b.place_names
@@ -1414,7 +1534,10 @@ class _Judge:
             return "none"
         among = [
             all(any(one & other for other in theirs) for one in ours)
-            for ours, theirs in ((a.within, b.within), (b.within, a.within))
+            for ours, theirs in (
+                (a.containing, b.containing),
+                (b.containing, a.containing),
+            )
         ]
         if all(among):
             return "exact"
@@ -1443,23 +1566,42 @@ class _Judge:
                         return "agree"
         return "unknown" if unknown else "differ"
 
+    @staticmethod
+    def _listed(a: _Node, b: _Node) -> str:
+        """Whether two organisations' places agree where a record names
+        one's places (ADR-0035 §7, rule 6, as rule 5 would let them): as
+        one list of parts, with the places with records a location claim
+        reaches and every place they lie in. They agree when one list
+        lies among the other, as a place nests; they differ when they
+        share a part but neither lies among the other (a namesake in
+        another district), or share nothing; and they are `unknown` when
+        only the exact name of a place without a record is shared."""
+        ours, theirs = a.org_set, b.org_set
+        among = [
+            bool(one) and all(any(p & q for q in two) for p in one)
+            for one, two in ((ours, theirs), (theirs, ours))
+        ]
+        if any(among):
+            return "agree"
+        if any(p & q for p in ours for q in theirs):
+            return "differ"
+        if (_all(ours) | a.org_loose) & (_all(theirs) | b.org_loose):
+            return "unknown"
+        return "differ"
+
     def _organizations(self, a: _Node, b: _Node) -> tuple[str, str]:
         """(name, places) of two organisations. The name is `exact` for a
         shared proper name of two words or more, `key` for one of one
         word, `kind` for a shared kind where neither has a proper name
         and their places agree, else `none`. The places are `unknown`
-        when either states none. Places its location claims name agree
-        as `_located` says; places its record names, which carry no
-        containers, agree when one's are among the other's places or the
-        places those lie in. Otherwise they differ."""
+        when either states none. Places both name by location claims
+        agree as `_located` says; otherwise as `_listed` says."""
         if not a.org_primary or not b.org_primary:
             places = "unknown"
         elif a.org_places and b.org_places:
             places = self._located(a, b)
-        elif a.org_primary & b.org_all or b.org_primary & a.org_all:
-            places = "agree"
         else:
-            places = "differ"
+            places = self._listed(a, b)
         shared = [
             words
             for name, words in a.org_names
@@ -1504,7 +1646,7 @@ class _Judge:
         make a link confident (never a surname alone), without dates that
         conflict."""
         return any(
-            first.strong & second.strong
+            _strong_shared(first, second)
             and self.life(first, second) != "conflict"
             for first, second in self._kin_pairs(a, b)
         )
@@ -1685,6 +1827,8 @@ class _Judge:
                 of.strong,
                 of.lone,
                 of.givens,
+                of.given_parts,
+                of.given_names,
                 dates(of.births),
                 dates(of.deaths),
             )
@@ -1694,12 +1838,15 @@ class _Judge:
             person(node),
             frozenset(node.place_names),
             frozenset(node.within),
+            frozenset(node.containing),
             frozenset(node.org_names),
             node.org_kinds,
             node.org_primary,
             node.org_all,
             node.org_places,
             node.org_closure,
+            node.org_set,
+            node.org_loose,
             node.family,
             frozenset(node.sexes),
             tuple(sorted((s, i.start, i.end) for s, i in node.civil)),
