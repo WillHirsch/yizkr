@@ -923,7 +923,7 @@ def _nick_count(value: str) -> tuple[str, int]:
     ("''", '?'), as such a NICK names nothing."""
     text = " ".join(value.split())
     if len(text) > 2 and _QUOTE_PAIRS.get(text[0]) == text[-1]:
-        text = " ".join(text[1:-1].split())
+        text = text[1:-1]
     if not text:
         return "", 0
     return _worded_count(text)
