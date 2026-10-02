@@ -27,6 +27,7 @@ import shutil
 import tracemalloc
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -44,7 +45,14 @@ from tests.unit.test_scratch import (  # noqa: F401
     runs_dir,
     small,
 )
+from yizkr.claims import (
+    EntityRecord,
+    JudgementNote,
+    set_aside_structure,
+    structure_problems,
+)
 from yizkr.pipeline import llm, report
+from yizkr.pipeline.chunking import _set_aside_note
 from yizkr.pipeline.monitor import RunMonitor
 from yizkr.pipeline.orchestrate import slugify
 from yizkr.pipeline.report import (
@@ -625,7 +633,20 @@ def batch(sha1, entities, claims) -> dict:
     }
 
 
-def coverage(chunks, claims, rejected=0, unread=0, fallback=None) -> dict:
+def coverage(
+    chunks,
+    claims,
+    rejected=0,
+    unread=0,
+    fallback=None,
+    records=None,
+    notes=None,
+) -> dict:
+    """An extraction's coverage.json; with no `records` and `notes`, as
+    one written before it counted them (#420)."""
+    counted = {} if records is None else {"records": records}
+    if notes is not None:
+        counted["notes"] = notes
     return {
         "strategy": "entity",
         "chunks": chunks,
@@ -634,6 +655,16 @@ def coverage(chunks, claims, rejected=0, unread=0, fallback=None) -> dict:
         "unread_objects": unread,
         "fallback": fallback or {},
         "entities_without_claims": ["e3"],
+        **counted,
+    }  # fmt: skip
+
+
+def records(given, recordless, set_aside, by_status=None) -> dict:
+    return {
+        "given": given,
+        "recordless": recordless,
+        "by_status": by_status or {},
+        "set_aside": set_aside,
     }
 
 
@@ -695,7 +726,16 @@ def views() -> dict[str, dict[str, object]]:
                     "why": ["entity: Field required"],
                 },
             ],
-            "extraction/coverage.json": coverage(3, 3, rejected=2, unread=1),
+            "extraction/coverage.json": coverage(
+                3,
+                3,
+                rejected=2,
+                unread=1,
+                records=records(
+                    3, 1, {"addition": 1, "note": 1}, {"name": 2, "toponym": 1}
+                ),
+                notes={"identity": 1, "date_reading": 2},
+            ),
             "detail": {"code": "de", "source": "detected", "confidence": 1},
         },
         DIRECTORY: {
@@ -741,7 +781,9 @@ def views() -> dict[str, dict[str, object]]:
             "critique.json": [
                 finding("e1", "subject", "wrong_kind", "Blauen Hut")
             ],
-            "extraction/coverage.json": coverage(1, 1),
+            "extraction/coverage.json": coverage(
+                1, 1, records=records(1, 0, {}), notes={}
+            ),
             "detail": {"code": "de", "source": "override", "confidence": 1},
         },
         TREE: {
@@ -775,7 +817,12 @@ def views() -> dict[str, dict[str, object]]:
                 ],
             ),
             "critique.json": [],
-            "extraction/coverage.json": coverage(1, 2),
+            "extraction/coverage.json": coverage(
+                1,
+                2,
+                records=records(0, 1, {"no toponym": 1}),
+                notes={"relation": 1},
+            ),  # fmt: skip
             "detail": {"code": "de", "source": "fallback", "confidence": 0.2},
         },
         CARD: {
@@ -1090,7 +1137,12 @@ def hostile(tmp_path) -> Path:
         lambda v: v["detail"]["language"].update(source=HOSTILE),
     )
     rewrite(
-        "extraction/coverage.json", lambda v: v.update(fallback={HOSTILE: 1})
+        "extraction/coverage.json",
+        lambda v: v.update(
+            fallback={HOSTILE: 1},
+            records=records(1, 0, {HOSTILE: 1}),
+            notes={HOSTILE: 1},
+        ),
     )
     rewrite(
         "critique.json",
@@ -1291,6 +1343,8 @@ class TestAggregateOnly:
         assert aggregate["documents"]["failed_by_label"][OTHER] == 1
         content = aggregate["content"]
         assert content["fallbacks"][OTHER] == 1
+        assert content["records"]["set_aside_by_reason"][OTHER] == 1
+        assert content["notes"]["by_category"][OTHER] == 1
         assert content["critic"]["by_axis"][OTHER] == 1
         assert content["critic"]["by_category"][OTHER] == 1
         calls = aggregate["calls"]
@@ -1796,6 +1850,211 @@ class TestContent:
             "1, value 1; by category: deictic_alias 1, misapplied_property "
             "1, wrong_kind 1"
         ) in page
+
+    def test_mention_records_and_judgement_notes(self, made):
+        """Each extraction's coverage counts summed (#420): records given,
+        recordless and set aside by reason, and notes by category. The
+        card's coverage predates the counts and the directory's manifest
+        fell back to line ranges: both are counted apart, never as
+        zero."""
+        content = made["aggregate"]["content"]
+        assert content["records"] == {
+            "extractions": 3,
+            "given": 4,
+            "recordless": 2,
+            "set_aside": 3,
+            "set_aside_by_reason": {
+                "addition": 1,
+                "no toponym": 1,
+                "note": 1,
+            },
+            "absent": {"predating": 1, "line_range": 1},
+        }
+        assert content["notes"] == {
+            "total": 4,
+            "by_category": {"date_reading": 2, "identity": 1, "relation": 1},
+        }
+        text = render_markdown(made["aggregate"])
+        assert (
+            "Mention records given: 4; recordless: 2; set aside: 3; "
+            "judgement notes: 4; in 3 extractions. Not counted: 1 "
+            "extractions whose coverage predates these counts, and 1 that "
+            "fell back to line ranges"
+        ) in text
+        assert "| Reason set aside | Records |" in text
+        assert "| no toponym | 1 |" in text and "| note | 1 |" in text
+        assert "| Note category | Notes |" in text
+        assert "| date_reading | 2 |" in text
+        # each document's own counts, in the local report
+        cert = document(made, CERT)["coverage"]
+        assert cert["records"] == {
+            "given": 3,
+            "recordless": 1,
+            "set_aside": {"addition": 1, "note": 1},
+        }
+        assert cert["notes"] == {"identity": 1, "date_reading": 2}
+        assert document(made, DECK)["coverage"]["records"] == {
+            "given": 1,
+            "recordless": 0,
+            "set_aside": {},
+        }
+        assert document(made, DECK)["coverage"]["notes"] == {}
+        for absent in (CARD, DIRECTORY):
+            view = document(made, absent)["coverage"]
+            assert (view["records"], view["notes"]) == (None, None)
+        page = report.render_html(made)
+        assert (
+            "Mention records given: 3; recordless: 1; set aside: addition "
+            "1, note 1; judgement notes: date_reading 2, identity 1"
+        ) in page
+        assert (
+            "Mention records given: 1; recordless: 0; set aside: none; "
+            "judgement notes: none"
+        ) in page
+        assert (
+            page.count(
+                "Mention records and judgement notes: its coverage counts none"
+            )
+            == 2
+        )
+
+    def test_a_coverage_that_counts_zero_is_not_absent(self, tmp_path):
+        """Records and notes that count nothing are counted as zero; a
+        coverage with records but no notes, or notes but no records,
+        counts as absent."""
+        path = record(tmp_path / "run")
+
+        def rewrite(sha1, change) -> None:
+            name = slugify(Path(FILES[sha1][0]).stem)
+            target = path / name / "extraction" / "coverage.json"
+            value = json.loads(target.read_text())
+            change(value)
+            target.write_text(json.dumps(value))
+
+        rewrite(CARD, lambda v: v.update(records=records(0, 0, {}), notes={}))
+        rewrite(CERT, lambda v: v.pop("notes"))
+        rewrite(POSTCARD, lambda v: v.pop("records"))
+        made = build(path, now=NOW)
+        counted = made["aggregate"]["content"]["records"]
+        # the card and the deck, each counting nothing
+        assert counted["extractions"] == 2
+        assert (counted["given"], counted["recordless"]) == (1, 0)
+        assert counted["set_aside_by_reason"] == {}
+        assert counted["absent"] == {"predating": 2, "line_range": 1}
+        assert made["aggregate"]["content"]["notes"] == {
+            "total": 0,
+            "by_category": {},
+        }
+        text = render_markdown(made["aggregate"])
+        assert "Reason set aside" not in text and "Note category" not in text
+        assert document(made, CARD)["coverage"]["records"] == {
+            "given": 0,
+            "recordless": 0,
+            "set_aside": {},
+        }
+
+    def test_counts_of_other_shapes_count_nothing(self, tmp_path):
+        """A records object whose counts are no count, and a note count
+        keyed by no name, count as zero; a records or notes that is no
+        object is absent."""
+        path = record(tmp_path / "run")
+        cert = path / slugify(Path(FILES[CERT][0]).stem)
+        target = cert / "extraction" / "coverage.json"
+        value = json.loads(target.read_text())
+        value["records"] = {
+            "given": "3",
+            "recordless": -2,
+            "set_aside": {"note": True, "schema": 2.5, "kind": 1},
+        }
+        value["notes"] = {"identity": None, "kind": 2}
+        target.write_text(json.dumps(value))
+        deck = path / slugify(Path(FILES[DECK][0]).stem)
+        target = deck / "extraction" / "coverage.json"
+        value = json.loads(target.read_text())
+        value["records"] = [1, 2]
+        target.write_text(json.dumps(value))
+        made = build(path, now=NOW)
+        assert document(made, CERT)["coverage"]["records"] == {
+            "given": 0,
+            "recordless": 0,
+            "set_aside": {"note": 0, "schema": 0, "kind": 1},
+        }
+        content = made["aggregate"]["content"]
+        assert content["records"]["given"] == 0
+        assert content["records"]["recordless"] == 1
+        assert content["records"]["set_aside_by_reason"] == {
+            "kind": 1,
+            "no toponym": 1,
+            "note": 0,
+            "schema": 0,
+        }
+        assert content["records"]["absent"]["predating"] == 2
+        assert content["notes"]["by_category"] == {
+            "kind": 2,
+            "relation": 1,
+            "identity": 0,
+        }
+
+    def test_a_run_with_no_extraction_counts_none(self, tmp_path):
+        """Documents set aside or never extracted count toward neither
+        the records nor what is absent."""
+        path = record(tmp_path / "run")
+        for sha1 in (CERT, DIRECTORY, DECK, POSTCARD, CARD):
+            directory = path / slugify(Path(FILES[sha1][0]).stem)
+            directory.rename(path / f".{directory.name}.superseded-9")
+        made = build(path, now=NOW)
+        content = made["aggregate"]["content"]
+        assert content["records"] == {
+            "extractions": 0,
+            "given": 0,
+            "recordless": 0,
+            "set_aside": 0,
+            "set_aside_by_reason": {},
+            "absent": {"predating": 0, "line_range": 0},
+        }
+        assert content["notes"] == {"total": 0, "by_category": {}}
+        render_markdown(made["aggregate"])
+
+    def test_the_vocabularies_are_the_writers(self):
+        """Every reason an extraction sets a record or note aside by, and
+        every note category, is one the report names: a new one fails
+        here rather than fold into OTHER."""
+        categories = JudgementNote.model_fields["category"].annotation
+        assert set(get_args(categories)) == report.NOTE_CATEGORIES
+        person = {"id": "e1", "label": "Hildegard Laudler", "kind": "human"}
+        records_given = [
+            {"kind": "place", "status": "toponym"},
+            {
+                "kind": "human",
+                "status": "name",
+                "given": [{"written": "Klara"}],
+            },
+            {
+                "kind": "human",
+                "status": "name",
+                "given": [
+                    {"written": "H.", "initial": True, "standard": "Hildegard"}
+                ],
+            },  # fmt: skip
+            {"kind": "human", "status": "name"},
+        ]
+        reasons = set()
+        for structure in records_given:
+            entity = {**person, "structure": structure}
+            _, found = set_aside_structure(entity)
+            reasons |= {reason.split(":", 1)[0] for reason in found}
+        town = {"id": "e2", "label": "Flörburg", "kind": "place"}
+        place = EntityRecord.model_validate(
+            {**town, "structure": {"kind": "place", "status": "toponym"}}
+        )
+        reasons |= {r.split(":", 1)[0] for r in structure_problems(place)}
+        _, found = set_aside_structure(
+            {**person, "structure": {"kind": "human", "status": 7}}
+        )
+        reasons |= {reason.split(":", 1)[0] for reason in found}
+        _, found = _set_aside_note({**person, "note": {"category": "?"}})
+        reasons |= {reason.split(":", 1)[0] for reason in found}
+        assert reasons == report.SET_ASIDE_REASONS
 
     def test_a_view_that_cannot_be_read_counts_nothing_and_is_noted(
         self, made
@@ -2437,6 +2696,17 @@ class TestAScratchRun:
         content = made["aggregate"]["content"]
         assert content["entities"]["by_kind"] == {"human": 4}
         assert content["claims"]["by_property"] == {"date_of_birth": 4}
+        # the counts of mention records and notes the extraction writes
+        # (#420): read from each, none absent; the fake manifest gives
+        # its person no record
+        assert content["records"] == {
+            "extractions": 4,
+            "given": 0,
+            "recordless": 4,
+            "set_aside": 0,
+            "set_aside_by_reason": {},
+            "absent": {"predating": 0, "line_range": 0},
+        }
         assert made["aggregate"]["run"]["complete"] is True
         assert made["aggregate"]["run"]["barrier"] == {
             "documents": 4,

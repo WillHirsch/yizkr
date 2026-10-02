@@ -177,6 +177,27 @@ rechecks.
   stays with its document, in `report.html` and `report.json`;
 - zero-claim documents, by kind, and batches with no entity; the chunks
   and the fallback tiers taken;
+- mention records and judgement notes, summed from each extraction's
+  `coverage.json` (ADR-0035 §4, §5, #420): the records given, recordless
+  and set aside, the set-aside reasons by category (`schema`, `kind`,
+  `addition`, `initial`, `no name part`, `no toponym`, and `note` for a
+  judgement note set aside; `report.SET_ASIDE_REASONS`), and the notes by
+  category (`kind`, `relation`, `date_reading`, `identity`, `other`, the
+  categories of `claims.JudgementNote`). Counts only, never a label, a
+  reason's text or a note's text. An extraction whose coverage holds no
+  such counts is counted apart, never as zero, and the report says how
+  many there were of each: one whose entity manifest fell back to line
+  ranges (the line-range tier counts no records, and all its mentions are
+  recordless), and one whose coverage predates these counts. So the
+  clustering stage's recordless figure, which also counts the line-range
+  fallback's mentions, need not equal the records' recordless count.
+  Each document's own counts are in `report.json` and `report.html`, and
+  `report.json`'s `aggregate.content.records` (`extractions`, `given`,
+  `recordless`, `set_aside`, `set_aside_by_reason`, `absent.predating`,
+  `absent.line_range`) and `aggregate.content.notes` (`total`,
+  `by_category`) sit beside the rejects, chunks and fallback tiers, where
+  the run-to-run diff (#198) is to compare them with the other extraction
+  counts;
 - critic findings by axis and by category: the statement-part each
   doubts (subject, predicate, value or existence, ADR-0023) and its
   category from the critic's fixed list (`critique.CATEGORIES`), and the
@@ -236,7 +257,9 @@ a label, an excerpt, a quote, or a number a document gives
 
 - every name in them is checked against a fixed vocabulary (stages,
   kinds, roles, statuses, reasons, outcomes, holds, requesters, the
-  anomaly checks' names, the critic's axes and categories) or against the model
+  anomaly checks' names, the critic's axes and categories, the reasons a
+  mention record is set aside by, the judgement notes' categories) or
+  against the model
   manifest (claim properties and entity kinds), and one it does not know
   is counted as `other`;
 - a reason is shown by its leading label only, and only when the label is
@@ -259,7 +282,8 @@ fields and identity map carry names from the example universe
 appear in `report.md` or in any string of the aggregates. The same run
 carries a name in every field the aggregates name something by (a stage,
 a kind, a role, a reason, an outcome, a hold, an error, a requester, a
-route, a fallback tier, a critic's axis and category, the mode, the state, the engine,
+route, a fallback tier, a critic's axis and category, a set-aside reason,
+a note category, the mode, the state, the engine,
 a model, the code's version), and each must fold into `other`. And the
 run rewritten, with every document's name and SHA-1 replaced in every file
 of its directory, must give a `report.md` the same byte for byte. Still,

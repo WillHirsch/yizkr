@@ -100,9 +100,9 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
-from yizkr.claims import load_vocabulary
+from yizkr.claims import JudgementNote, load_vocabulary
 from yizkr.pipeline.anomalies import ERROR_EVENT, RECHECK_EVENT, Checks, route
 from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
 from yizkr.pipeline.critique import entry as critique_entry
@@ -245,6 +245,24 @@ HOLDS = frozenset(
 REQUESTERS = frozenset({"operator", "monitor", "anomaly"})
 ACTIONS = frozenset({"pause", "resume", "abort"})
 FALLBACK_TIERS = frozenset({"manifest", "segmentation"})
+# the leading labels of the reasons an extraction sets a mention record or
+# a judgement note aside by (ADR-0035 §5): claims.set_aside_structure's
+# `schema`, claims.structure_problems' own, and the note check's `note`
+SET_ASIDE_REASONS = frozenset(
+    {
+        "schema",
+        "kind",
+        "addition",
+        "initial",
+        "no name part",
+        "no toponym",
+        "note",
+    }
+)
+# a judgement note's categories (ADR-0035 §4)
+NOTE_CATEGORIES = frozenset(
+    get_args(JudgementNote.model_fields["category"].annotation)
+)
 MAP_STATES = frozenset({"read", "missing", "unreadable"})
 # the leading labels of the reasons stages give an output that needs
 # attention: the extraction's fallback tiers and empty batches, and the
@@ -330,6 +348,18 @@ def _count(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
     return max(0, value)
+
+
+def _tally(value: Any) -> dict[str, int] | None:
+    """A {name: count} an output gives, each count as `_count` reads it;
+    None when it gives none."""
+    if not isinstance(value, dict):
+        return None
+    return {
+        name: _count(count)
+        for name, count in value.items()
+        if isinstance(name, str)
+    }
 
 
 def _list(value: Any) -> list:
@@ -933,9 +963,10 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
     """What the document's views hold, for each stage that completed: the
     transcription's language, route and how its language was resolved;
     the batch's entities by kind and claims by property; the extraction's
-    coverage (chunks, rejects, fallback tiers); and the critique's
-    findings by class. A view that is missing or cannot be read counts
-    nothing, and is noted."""
+    coverage (chunks, rejects, fallback tiers, and the mention records
+    and judgement notes it counts: None for each when it counts none);
+    and the critique's findings by class. A view that is missing or
+    cannot be read counts nothing, and is noted."""
     document.directory = directory.name
     views = document.views
     detail = state.get("detail")
@@ -985,6 +1016,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 )
                 if isinstance(fallback, dict)
                 else [],
+                **_records(coverage),
             }
     if document.completed("critique"):
         findings = _view(
@@ -992,6 +1024,25 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
         )
         if findings is not None:
             views["critique"] = _critique(findings)
+
+
+def _records(coverage: dict) -> dict[str, Any]:
+    """The mention records and judgement notes an extraction's coverage
+    counts (ADR-0035 §4, §5): the records given, recordless and set aside
+    by reason, and the notes by category. Each is None when the coverage
+    holds no such count, as the line-range tier's and one written before
+    these counts do: absent, never zero."""
+    records = coverage.get("records")
+    return {
+        "records": {
+            "given": _count(records.get("given")),
+            "recordless": _count(records.get("recordless")),
+            "set_aside": _tally(records.get("set_aside")) or {},
+        }
+        if isinstance(records, dict)
+        else None,
+        "notes": _tally(coverage.get("notes")),
+    }
 
 
 def _critique(findings: list) -> dict[str, Any]:
@@ -2000,6 +2051,10 @@ def _aggregate_content(
     fallbacks: Counter = Counter()
     by_axis: Counter = Counter()
     by_category: Counter = Counter()
+    set_aside: Counter = Counter()
+    notes: Counter = Counter()
+    absent: Counter = Counter()
+    record_extractions = records_given = recordless = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
@@ -2028,6 +2083,18 @@ def _aggregate_content(
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
+            records = coverage.get("records")
+            if records is None or coverage.get("notes") is None:
+                # the line-range tier counts no records: its mentions are
+                # all recordless
+                line_range = "manifest" in coverage["fallback"]
+                absent["line_range" if line_range else "predating"] += 1
+            else:
+                record_extractions += 1
+                records_given += records["given"]
+                recordless += records["recordless"]
+                set_aside.update(records["set_aside"])
+                notes.update(coverage["notes"])
         failed_rejecting += document.unusable is not None
         if "critique" in document.views:
             critique = document.views["critique"]
@@ -2070,6 +2137,25 @@ def _aggregate_content(
         "zero_entities": zero_entities,
         "chunks": chunks,
         "fallbacks": _by_count(fallbacks),
+        "records": {
+            "extractions": record_extractions,
+            "given": records_given,
+            "recordless": recordless,
+            "set_aside": set_aside.total(),
+            "set_aside_by_reason": _folded(
+                set_aside, lambda value: _known(value, SET_ASIDE_REASONS)
+            ),
+            "absent": {
+                "predating": absent["predating"],
+                "line_range": absent["line_range"],
+            },
+        },
+        "notes": {
+            "total": notes.total(),
+            "by_category": _folded(
+                notes, lambda value: _known(value, NOTE_CATEGORIES)
+            ),
+        },
         "critic": {
             "critiques": critiques,
             "findings": findings,
@@ -2697,6 +2783,11 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             3,
         ),
         _Section(
+            "Mention records and judgement notes",
+            _records_blocks(content["records"], content["notes"]),
+            3,
+        ),
+        _Section(
             "Zero-claim documents",
             [
                 f"{_n(zero['documents'])} of {_n(content['batches'])} batches "
@@ -2749,6 +2840,39 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
         ),
     ]
     return sections
+
+
+def _records_blocks(
+    records: Mapping[str, Any], notes: Mapping[str, Any]
+) -> list[Any]:
+    absent = records["absent"]
+    blocks: list[Any] = [
+        f"Mention records given: {_n(records['given'])}; recordless: "
+        f"{_n(records['recordless'])}; set aside: "
+        f"{_n(records['set_aside'])}; judgement notes: "
+        f"{_n(notes['total'])}; in {_n(records['extractions'])} "
+        "extractions. Not counted: "
+        f"{_n(absent['predating'])} extractions whose coverage predates "
+        f"these counts, and {_n(absent['line_range'])} that fell back to "
+        "line ranges (all their mentions recordless)."
+    ]
+    if records["set_aside_by_reason"]:
+        blocks.append(
+            _table(
+                ("Reason set aside", "Records"),
+                records["set_aside_by_reason"].items(),
+                numbers=(1,),
+            )
+        )
+    if notes["by_category"]:
+        blocks.append(
+            _table(
+                ("Note category", "Notes"),
+                notes["by_category"].items(),
+                numbers=(1,),
+            )
+        )
+    return blocks
 
 
 def _cluster_blocks(clusters: Mapping[str, Any]) -> list[Any]:
@@ -3250,6 +3374,18 @@ def _html_document(document: Mapping[str, Any]) -> str:
             f"{coverage['unread_objects']}; fallback tiers: "
             f"{', '.join(coverage['fallback']) or 'none'}"
         )
+        records, notes = coverage.get("records"), coverage.get("notes")
+        if records is None or notes is None:
+            items.append(
+                "Mention records and judgement notes: its coverage counts none"
+            )
+        else:
+            items.append(
+                f"Mention records given: {records['given']}; recordless: "
+                f"{records['recordless']}; set aside: "
+                f"{_listed(_by_count(records['set_aside']))}; judgement "
+                f"notes: {_listed(_by_count(notes))}"
+            )
     if document["critique"] is not None:
         critique = document["critique"]
         items.append(

@@ -28,6 +28,13 @@ less `judgement_`. An entity's record or note that fails validation is
 set aside and counted in `coverage.json` (`records`, `notes`), and a
 claim whose note fails is a counted reject.
 
+Amended by #420 (2026-09-29): the run report sums each extraction's
+`coverage.json` records (given, recordless, and set aside by reason) and
+notes by category, and counts apart, never as zero, an extraction whose
+coverage holds none: one that fell back to line ranges, and one whose
+coverage predates these counts. Records by status, `unsplit` forms and
+notes written wait for their own issues.
+
 **Decided by the owner (2026-09-29):**
 
 - Before scratch run 1 (#145), extraction hands over the structure of
