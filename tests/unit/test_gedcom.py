@@ -5024,10 +5024,11 @@ class TestQuotesAndSlashes:
         assert parts(caecilie.structure)["nicknames"] == ["Cilli"]
         assert stated(text, "i2", "nickname") == [("Cilli", [])]
 
-    def test_a_nick_with_unmatched_quotes_keeps_them(self):
+    def test_a_nick_in_mixed_quotes_loses_them(self):
+        # as a NAME value's quote does: any opening and any closing mark
         text = person("I2", "Cäcilie /Tarle/", "2 NICK 'Cilli”")
         caecilie, _ = record_of(text, "i2")
-        assert parts(caecilie.structure)["nicknames"] == ["'Cilli”"]
+        assert parts(caecilie.structure)["nicknames"] == ["Cilli"]
 
     def test_a_name_with_two_pairs_of_slashes_is_unsplit(self):
         text = person("I2", "Cäcilie /Löbig/ /Tarle/")
@@ -6464,3 +6465,124 @@ class TestRound5:
         eugen, outcomes = record_of(text, "i1")
         assert parts(eugen.structure)["given"] == ["Eugen", "Ida"]
         assert outcomes["NAME part without a word"] == 1
+
+
+class TestRound6:
+    """Re-review 5's cheap items: a quote against a slash, SPFX and SURN
+    paired by slot, a quoted bracket before a GIVN's comma, a NICK in
+    mixed quotes, a nested placeholder counted once, and pins."""
+
+    def test_a_quote_against_a_slash_is_a_quote(self):
+        text = person("I1", "Eugen - 'Muckel'/Löbig/", "2 TYPE birth")
+        eugen, outcomes = record_of(text, "i1")
+        assert eugen.label == "Eugen 'Muckel' Löbig"
+        assert parts(eugen.structure)["nicknames"] == ["Muckel"]
+        assert stated(text, "i1", "birth_name") == []
+        assert outcomes["typed NAME with a placeholder"] == 1
+        assert outcomes["NAME part without a word"] == 1
+
+    def test_a_quoted_placeholder_against_a_slash_leaves_no_mark(self):
+        ida, outcomes = record_of(person("I7", "Ida '? Muckel'/Sörne/"), "i7")
+        assert ida.label == "Ida 'Muckel' Sörne"
+        assert parts(ida.structure)["nicknames"] == ["Muckel"]
+        assert outcomes["NAME part without a word"] == 1
+
+    @pytest.mark.parametrize(
+        ("spfx", "surnames", "label"),
+        [
+            ("von,", ["von Löbig", "Sörne"], "Eugen von Löbig Sörne"),
+            ("?, de", ["Löbig", "de Sörne"], "Eugen Löbig de Sörne"),
+            (", de", ["Löbig", "de Sörne"], "Eugen Löbig de Sörne"),
+        ],
+    )
+    def test_spfx_and_surn_pair_slot_by_slot(self, spfx, surnames, label):
+        text = person("I1", "", "2 GIVN Eugen", f"2 SPFX {spfx}",
+                      "2 SURN Löbig, Sörne")  # fmt: skip
+        eugen, outcomes = record_of(text, "i1")
+        assert [s for s, _ in parts(eugen.structure)["surnames"]] == surnames
+        assert eugen.label == label
+        assert "SPFX particles not matching SURN pieces" not in outcomes
+
+    def test_an_empty_surn_slot_takes_no_particle(self):
+        text = person("I1", "", "2 GIVN Eugen", "2 SPFX von, de",
+                      "2 SURN , Sörne")  # fmt: skip
+        eugen, _ = record_of(text, "i1")
+        assert [s for s, _ in parts(eugen.structure)["surnames"]] == [
+            "de Sörne"
+        ]
+
+    @pytest.mark.parametrize(
+        ("lines", "counted"),
+        [
+            (["2 SURN Löbig"], False),
+            (["2 SPFX von"], False),
+            (["2 SPFX von, de", "2 SURN Löbig"], True),
+        ],
+    )
+    def test_the_mismatch_count_needs_both_parts(self, lines, counted):
+        text = person("I1", "", "2 GIVN Eugen", *lines)
+        _, outcomes = record_of(text, "i1")
+        assert (
+            "SPFX particles not matching SURN pieces" in outcomes
+        ) is counted
+
+    def test_a_givn_quoted_bracket_before_a_comma_is_read(self):
+        text = person("I1", "Eugen /Löbig/", "2 TYPE birth",
+                      "2 GIVN Ida '(Peppi)', Agnes")  # fmt: skip
+        eugen, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "birth_name") == [("Eugen Löbig", [])]
+        assert "NAME part without a word" not in outcomes
+        assert parts(eugen.structure)["unsplit"] == ["Peppi"]
+
+    @pytest.mark.parametrize(
+        "nick", ["„Peppi”", "„Peppi“", "‚Peppi‘", "»Peppi«", "«Peppi»"]
+    )
+    def test_a_nick_in_any_quotes_loses_them(self, nick):
+        text = person("I7", "Ida /Sörne/", f"2 NICK {nick}")
+        ida, _ = record_of(text, "i7")
+        assert parts(ida.structure)["nicknames"] == ["Peppi"]
+        assert ida.aliases == ["Peppi"]
+
+    @pytest.mark.parametrize(
+        ("name", "count"),
+        [
+            ("Ida (Peppi (?)) /Sörne/", 1),
+            ("Ida (Peppi ()) /Sörne/", 1),
+            ("Ida (Peppi (())) /Sörne/", 1),
+            ("Ida (Peppi () ()) /Sörne/", 2),
+        ],
+    )
+    def test_a_nested_placeholder_is_counted_once(self, name, count):
+        ida, outcomes = record_of(person("I7", name), "i7")
+        assert outcomes["NAME part without a word"] == count
+        assert ida.aliases == ["Peppi"]
+
+    @pytest.mark.parametrize("quoted", ["„Peppi“", "‚Peppi‘", "»Peppi«",
+                                        "«Peppi»"])  # fmt: skip
+    def test_each_german_quote_marks_a_nickname(self, quoted):
+        text = person("I7", f"Ida {quoted} /Sörne/")
+        ida, _ = record_of(text, "i7")
+        assert parts(ida.structure)["nicknames"] == ["Peppi"]
+        assert stated(text, "i7", "nickname") == [("Peppi", [])]
+
+    def test_a_quoted_bracket_at_the_start_is_read(self):
+        text = person("I7", "'(Peppi)' Ida /Sörne/", "2 TYPE birth")
+        _, outcomes = record_of(text, "i7")
+        assert stated(text, "i7", "birth_name") == [("Ida Sörne", [])]
+        assert "NAME part without a word" not in outcomes
+
+    def test_a_married_name_with_a_dash_after_its_bracket_is_blocked(self):
+        text = person(
+            "I1", "Agnes /Löbig/", "1 _MARNM Agnes (Peppi) - Cilli /Löbig/"
+        )
+        _, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "married_name") == []
+        assert outcomes["typed NAME with a placeholder"] == 1
+        assert outcomes["NAME part without a word"] == 1
+
+    def test_a_givn_dash_after_its_quote_is_blocked(self):
+        text = person("I1", "Agnes Cilli /Löbig/", "2 TYPE birth",
+                      "2 GIVN Agnes 'Peppi' - Cilli")  # fmt: skip
+        _, outcomes = record_of(text, "i1")
+        assert stated(text, "i1", "birth_name") == []
+        assert outcomes["typed NAME with a placeholder"] == 1

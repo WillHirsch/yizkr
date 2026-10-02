@@ -171,11 +171,15 @@ never narrow or guess.
   ("(Pep(pi))" gives "Peppi"); a '(' never closed or a ')' never opened
   is left out, counted. A quote whose only content is a bracket ("Ida
   '(Peppi)'") is the bracket, its marks no placeholder; such a quote
-  opens and closes a word as any quote does, so a bracket between two
+  opens and closes a word as any quote does, or stands against a slash
+  or a GIVN's comma ("Ida '(Peppi)', Agnes"), so a bracket between two
   quotes ("Eugen 'Muckel' (Peppi) 'Cilli' /Löbig/") leaves both
-  nicknames, Muckel and Cilli. German low quotes ("„Peppi“", "‚Peppi‘")
+  nicknames, Muckel and Cilli. Any quote may stand against a slash
+  ("Eugen 'Muckel'/Löbig/"). German low quotes ("„Peppi“", "‚Peppi‘")
   and guillemets ("»Peppi«", "«Peppi»") mark a nickname as the others
-  do. A malformed nest ("Ida (Pep(pi) /Sörne/") is read by the pair that
+  do, and a NICK loses any opening and closing mark around it, matched
+  or not ("„Peppi”"), as a quote in a value does. A placeholder in a
+  nested bracket ("(Peppi (?))") is counted once. A malformed nest ("Ida (Pep(pi) /Sörne/") is read by the pair that
   closes ("(pi)" an alias, "Pep" a given name) and its stray '(' counted:
   the adapter does not guess which bracket the tree meant. A bracket name
   keeps an NPFX or NSFX beside it as a title or suffix, its full form an
@@ -192,9 +196,11 @@ never narrow or guess.
   connectors (decision W): a word made only of them is a placeholder,
   since in German trees "+" often marks a death, which is no part of a
   name.
-- **Particles** (decision X). As many SPFX pieces (comma-separated) as
-  SURN pieces pair in order ("von, de" + "Löbig, Sörne" gives "von
-  Löbig" and "de Sörne"). Otherwise the SPFX pieces together go on each
+- **Particles** (decision X). As many SPFX slots (comma-separated, an
+  empty one or one holding only a placeholder included) as SURN slots
+  pair by position ("von, de" + "Löbig, Sörne" gives "von Löbig" and
+  "de Sörne"; "von," gives "von Löbig" and "Sörne"; "?, de" gives
+  "Löbig" and "de Sörne"), an empty slot giving no particle. Otherwise the SPFX pieces together go on each
   SURN piece ("von" + "Löbig, Sörne" gives "von Löbig" and "von
   Sörne"), and the mismatch is counted (`SPFX particles not matching
   SURN pieces`).

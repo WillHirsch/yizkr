@@ -638,8 +638,8 @@ Names are modelled in **two layers**:
   name that held one anywhere but in a NICK, a stray bracket included,
   gives no typed claim; a single dash or "&" between two words of one
   field is a connector, kept, and one against a slash, a bracket or a
-  quote, a "+" or a run ("--") is a placeholder. As many SPFX pieces as
-  SURN pieces pair in order. German low quotes and guillemets mark a
+  quote, a "+" or a run ("--") is a placeholder. As many SPFX slots as
+  SURN slots pair by position, empty slots included. German low quotes and guillemets mark a
   nickname as other quotes do. Where no NAME gives a
   name, the label falls back, marks and all, to brackets that hold a word
   ("(Peppi)"), then a GIVN's quotes or brackets, then a NICK, then a
