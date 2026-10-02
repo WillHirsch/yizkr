@@ -92,6 +92,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -570,21 +571,53 @@ def runs_holder(runs: Path) -> str | None:
     return held
 
 
-def new_run_id(runs: Path) -> str:
+def _run_id(moment: datetime, step: int) -> str:
+    return f"{moment:%Y%m%dT%H%M%SZ}-{step:06x}"
+
+
+def _run_id_after(name: str) -> str | None:
+    """The first run id that sorts after `name`, when `name` is a run id
+    (new_run_id): the next microsecond's, or the next second's first;
+    None for any other name."""
+    if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}", name):
+        return None
+    try:
+        second = datetime.strptime(name[:16], "%Y%m%dT%H%M%SZ")
+    except ValueError:
+        return None
+    step = int(name[17:], 16) + 1
+    if step < 1_000_000:
+        return _run_id(second, step)
+    return _run_id(second + timedelta(seconds=1), 0)
+
+
+def new_run_id(
+    runs: Path, *, clock: Callable[[], datetime] | None = None
+) -> str:
     """A new run's id, the name of its directory in `runs`: the UTC time
-    it starts, to the second, then the microsecond in six hex digits, so
-    that the runs in a runs directory sort as they started. An id a
-    directory there has already is not taken."""
-    while True:
-        now = datetime.now(UTC)
-        run_id = f"{now:%Y%m%dT%H%M%SZ}-{now.microsecond:06x}"
-        if not (Path(runs) / run_id).exists():
-            return run_id
+    `clock` reads (the system's by default), to the second, then the
+    microsecond in six hex digits. It sorts after every run id a
+    directory entry in `runs` has, run or not: when the clock reads at or
+    before the latest of them (a second id in one microsecond, a clock
+    set back), the id is the first after that latest, so that the runs in
+    a runs directory sort as they were started, however the clock moves.
+    One driver at a time takes a new run there (hold), so the id is not
+    taken by another before its directory is made."""
+    now = (clock or (lambda: datetime.now(UTC)))().astimezone(UTC)
+    run_id = _run_id(now, now.microsecond)
+    runs = Path(runs)
+    if runs.is_dir():
+        after = (_run_id_after(path.name) for path in runs.iterdir())
+        first = max((name for name in after if name), default=None)
+        if first is not None and first > run_id:
+            run_id = first
+    return run_id
 
 
 def runs_in(runs: Path) -> list[Path]:
     """The run directories in `runs` (each with its run.json), oldest
-    first (new_run_id)."""
+    first: by name, which for run ids is the order the runs were started
+    in (new_run_id)."""
     runs = Path(runs)
     if not runs.is_dir():
         return []
@@ -624,17 +657,22 @@ def is_complete(run: Path) -> bool:
 
 
 def choose_run(
-    runs: Path, *, resume: str | None = None, new: bool = False
+    runs: Path,
+    *,
+    resume: str | None = None,
+    new: bool = False,
+    clock: Callable[[], datetime] | None = None,
 ) -> Path:
     """The run directory a `scratch run` invocation takes, in `runs`: a
     new one (`new`); the run `resume` names (LATEST, the latest), which
     must be a scratch run in `runs`, the directory whose hold (hold)
     keeps a second driver off it; otherwise the latest run when it has
     not been taken to the end, so that running the same command again
-    resumes it, and a new one when it has."""
+    resumes it, and a new one when it has. A new one's id is read from
+    `clock` (new_run_id)."""
     runs = Path(runs)
     if new:
-        return runs / new_run_id(runs)
+        return runs / new_run_id(runs, clock=clock)
     if resume is not None:
         path = resolve_run(runs, resume)
         if os.path.realpath(path.parent) != os.path.realpath(runs):
@@ -656,7 +694,7 @@ def choose_run(
     ]
     if found and not is_complete(found[-1]):
         return found[-1]
-    return runs / new_run_id(runs)
+    return runs / new_run_id(runs, clock=clock)
 
 
 # -- the driver ---------------------------------------------------------------
@@ -1713,5 +1751,7 @@ def scratch_run(
     command names (choose_run), and run it (ScratchDriver). Returns the
     exit status."""
     with hold(runs):
-        run_dir = choose_run(runs, resume=resume, new=new)
+        run_dir = choose_run(
+            runs, resume=resume, new=new, clock=options.get("clock")
+        )
         return driver(folder, run_dir, **options).run()
